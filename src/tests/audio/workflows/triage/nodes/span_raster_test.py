@@ -507,7 +507,25 @@ class TestTheConsensusAlignmentBlock:
         )
         # "hello" reads identically at its own extent on both sources (overlaps); "world" is timed
         # at 3.0-3.5s by both sources while its derived extent lands near 0.9-1.2s (off-source).
-        assert lines[offset + 2] == "  uncertainty: sum 2.30s · median 1.15s · >1s 1 words · off-source extent 1/2"
+        assert lines[offset + 2] == "  uncertainty: sum 2.30s · median 1.15s · >1s 1 word · off-source extent 1/2"
+
+    def test_a_count_of_exactly_one_is_not_pluralised(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None]
+    ) -> None:
+        """Every word count in the block reads singular at 1, not just plural counts.
+
+        A single seeded word read by only one of the two sources makes that source's own row
+        report ``1 word`` while the other source's row, which read nothing, reports ``0 words``
+        -- the same formatting path, exercised at both ends.
+        """
+        from senselab.audio.workflows.triage.nodes.figure import consensus_alignment_lines
+
+        seed_preprocess_store(store, words=[{"text": "solo", "sources": ["asr_crisperwhisper"]}])
+
+        lines = consensus_alignment_lines(store)
+
+        assert any(line.startswith("    asr_crisperwhisper: 1 word (") for line in lines)
+        assert any(line.startswith("    asr_qwen: 0 words (") for line in lines)
 
     def test_it_states_absence_when_no_consensus_reached_the_store(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None]

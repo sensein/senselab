@@ -1512,6 +1512,11 @@ def _asr_lane_panel(
         )
 
 
+def _plural(n: int, noun: str) -> str:
+    """Render a count with its noun, singular when the count is exactly one."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
 def consensus_alignment_lines(store: ProvStore) -> list[str]:
     """How the consensus transcript was aligned, and how much to trust its timings.
 
@@ -1534,13 +1539,13 @@ def consensus_alignment_lines(store: ProvStore) -> list[str]:
 
     attributes = measurement.attributes
     lines.append(
-        f"  {attributes.get('algorithm')} · {attributes.get('n_sources')} sources"
+        f"  {attributes.get('algorithm')} · {_plural(int(attributes.get('n_sources') or 0), 'source')}"
         f" · reference {attributes.get('reference_source')}"
     )
     for row in attributes.get("sources") or []:
         model = row.get("timestamp_model")
         timing = str(row.get("timestamp_source")) + (f" via {model}" if model else "")
-        lines.append(f"    {row.get('name')}: {row.get('n_words')} words ({timing})")
+        lines.append(f"    {row.get('name')}: {_plural(int(row.get('n_words') or 0), 'word')} ({timing})")
 
     outcomes: dict[str, Any] = attributes.get("outcomes") or {}
     total = int(attributes.get("n_words") or 0)
@@ -1559,9 +1564,9 @@ def consensus_alignment_lines(store: ProvStore) -> list[str]:
 
     shifted = attributes.get("n_words_time_shifted")
     max_shift = attributes.get("max_time_shift_s")
-    shifted_text = "absent" if shifted is None else str(shifted)
+    shifted_text = "absent words" if shifted is None else _plural(int(shifted), "word")
     shift_text = "absent" if max_shift is None else f"{float(max_shift):.2f}s"
-    lines.append(f"  time fit: {shifted_text} words shifted, max shift {shift_text}")
+    lines.append(f"  time fit: {shifted_text} shifted, max shift {shift_text}")
 
     stats = _consensus_word_stats(store)
     if stats is None:
@@ -1570,7 +1575,7 @@ def consensus_alignment_lines(store: ProvStore) -> list[str]:
         lines.append(
             f"  uncertainty: sum {stats['uncertainty_sum_s']:.2f}s"
             f" · median {stats['uncertainty_median_s']:.2f}s"
-            f" · >1s {stats['n_uncertain_over_1s']} words"
+            f" · >1s {_plural(int(stats['n_uncertain_over_1s']), 'word')}"
             f" · off-source extent {stats['n_off_source']}/{stats['n_words']}"
         )
     return lines
