@@ -903,6 +903,7 @@ class TestTheConsensusTranscript:
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         assert "align" not in seen
         assert find_measurement(store, "alignment") is None
+        assert not (tmp_path / "derivatives" / "alignment.json").exists()
         words = live_entities(store, "word")
         assert [w.attributes["index"] for w in words] == [0, 1]
         for word in words:
