@@ -229,23 +229,28 @@ def _surface(group: Sequence[_Member]) -> str:
     return group[0].display
 
 
-def _column_word(members: Sequence[_Member], n_sources: int) -> tuple[str, Outcome, tuple[Variant, ...], float, bool]:
+def _is_bracket_override(group: Sequence[_Member]) -> bool:
+    """Whether a group is a bracketed token outvoting a plain twin sharing its key."""
+    return any(is_bracketed(m.display) for m in group) and not all(is_bracketed(m.display) for m in group)
+
+
+def _column_word(members: Sequence[_Member], n_sources: int) -> tuple[str, Outcome, tuple[Variant, ...], float, int]:
     groups: dict[str, list[_Member]] = {}
     for member in members:
         groups.setdefault(member.key, []).append(member)
     ordered = sorted(groups.values(), key=lambda group: -len(group))
     largest = ordered[0]
     agreement = len(largest) / n_sources
+    overrides = sum(1 for group in ordered if _is_bracket_override(group))
     if len(ordered) > 1:
         variants = tuple(
             Variant(text=_surface(group), sources=tuple(m.source for m in group), share=len(group) / n_sources)
             for group in ordered
         )
-        return variants[0].text, "variant", variants, agreement, False
+        return variants[0].text, "variant", variants, agreement, overrides
     text = _surface(largest)
     outcome: Outcome = "agreement" if len(largest) == n_sources else "insertion"
-    override = any(is_bracketed(m.display) for m in largest) and not all(is_bracketed(m.display) for m in largest)
-    return text, outcome, (), agreement, override
+    return text, outcome, (), agreement, overrides
 
 
 def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]) -> Consensus:
@@ -304,9 +309,9 @@ def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]
     overrides = 0
     max_shift = 0.0
     for index, column in enumerate(columns):
-        text, outcome, variants, agreement, override = _column_word(column, n_sources)
+        text, outcome, variants, agreement, column_overrides = _column_word(column, n_sources)
         outcomes[outcome] += 1
-        overrides += int(override)
+        overrides += column_overrides
         starts = [m.start for m in column]
         ends = [m.end for m in column]
         onset, offset = onsets[index], offsets[index]

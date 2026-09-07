@@ -286,6 +286,19 @@ class TestSourceOrderAndBrackets:
             assert cough.readings == {"a": "[COUGH]", "b": "cough"}
             assert consensus.provenance["bracket_overrides_n"] == 1
 
+    def test_a_bracket_override_inside_a_variant_column_is_still_counted(self) -> None:
+        """A bracketed/plain split can occur inside one of several groups in a variant column.
+
+        Three sources land in one column: two share the key ``cough`` (one bracketed, one plain --
+        an override) and the third reads the unrelated ``cuff``. The column is a variant (more than
+        one key present), but the override inside its winning group must still be tallied.
+        """
+        consensus = _align(_source("a", "[COUGH]"), _source("b", "cough"), _source("c", "cuff"))
+        word = consensus.words[0]
+        assert word.outcome == "variant"
+        assert word.text == "[COUGH]" and word.bracketed
+        assert consensus.provenance["bracket_overrides_n"] == 1
+
     def test_a_bracketed_insertion_is_not_an_override(self) -> None:
         """Test 9."""
         consensus = _align(_source("a", "I [UM] think"), _source("b", "I think"))
