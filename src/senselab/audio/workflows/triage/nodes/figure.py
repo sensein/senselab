@@ -525,6 +525,41 @@ def _word_hull(word: dict[str, Any]) -> tuple[float, float]:
     return min(start for start, _ in spans), max(end for _, end in spans)
 
 
+def _consensus_word_stats(store: ProvStore) -> dict[str, float | int] | None:
+    """Read-only aggregates over the consensus word stream, for the cover's alignment block.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{n_words, uncertainty_sum_s, uncertainty_median_s, n_uncertain_over_1s, n_off_source}``,
+        or None when no consensus word reached the store.
+    """
+    words = consensus_words(store)
+    if not words:
+        return None
+    uncertainties = sorted(float(word.attributes["temporal_uncertainty_s"]) for word in words)
+    count = len(uncertainties)
+    median = (
+        uncertainties[count // 2] if count % 2 else (uncertainties[count // 2 - 1] + uncertainties[count // 2]) / 2.0
+    )
+    n_off_source = 0
+    for word in words:
+        if word.extent is None:
+            continue
+        onset, offset = word.extent
+        timings = list((word.attributes.get("timings") or {}).values())
+        if timings and not any(float(start) < offset and onset < float(end) for start, end in timings):
+            n_off_source += 1
+    return {
+        "n_words": count,
+        "uncertainty_sum_s": sum(uncertainties),
+        "uncertainty_median_s": median,
+        "n_uncertain_over_1s": sum(1 for value in uncertainties if value > 1.0),
+        "n_off_source": n_off_source,
+    }
+
+
 def _squim_by_span(store: ProvStore) -> dict[str, dict[str, float | None]]:
     """SQUIM's three metrics per span.
 
@@ -1366,11 +1401,76 @@ def _asr_lane_panel(
         )
 
 
+def consensus_alignment_lines(store: ProvStore) -> list[str]:
+    """How the consensus transcript was aligned, and how much to trust its timings.
+
+    Reads the ``consensus_transcript`` measurement's own record and the word stream it produced;
+    nothing here is computed beyond formatting. A single-recognizer run writes no consensus, and
+    this states that absence rather than printing a table of zeros.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The lines, in print order, headed by ``CONSENSUS ALIGNMENT``.
+    """
+    lines: list[str] = ["CONSENSUS ALIGNMENT"]
+    measurement = find_measurement(store, "consensus_transcript")
+    if measurement is None:
+        reason = _absent_reasons(store).get("consensus_transcript", "no reason recorded")
+        lines.append(f"  absent: {reason}")
+        return lines
+
+    attributes = measurement.attributes
+    lines.append(
+        f"  {attributes.get('algorithm')} · {attributes.get('n_sources')} sources"
+        f" · reference {attributes.get('reference_source')}"
+    )
+    for row in attributes.get("sources") or []:
+        model = row.get("timestamp_model")
+        timing = str(row.get("timestamp_source")) + (f" via {model}" if model else "")
+        lines.append(f"    {row.get('name')}: {row.get('n_words')} words ({timing})")
+
+    outcomes: dict[str, Any] = attributes.get("outcomes") or {}
+    total = int(attributes.get("n_words") or 0)
+
+    def _count_and_pct(key: str) -> str:
+        n = int(outcomes.get(key, 0))
+        pct = f"{100.0 * n / total:.0f}%" if total else "—"
+        return f"{n} ({pct})"
+
+    lines.append(
+        f"  outcomes: agreement {_count_and_pct('agreement')}"
+        f"  variant {_count_and_pct('variant')}"
+        f"  insertion {_count_and_pct('insertion')}"
+        f"  of {total}"
+    )
+
+    shifted = attributes.get("n_words_time_shifted")
+    max_shift = attributes.get("max_time_shift_s")
+    shifted_text = "absent" if shifted is None else str(shifted)
+    shift_text = "absent" if max_shift is None else f"{float(max_shift):.2f}s"
+    lines.append(f"  time fit: {shifted_text} words shifted, max shift {shift_text}")
+
+    stats = _consensus_word_stats(store)
+    if stats is None:
+        lines.append("  uncertainty: absent — no consensus word in the store")
+    else:
+        lines.append(
+            f"  uncertainty: sum {stats['uncertainty_sum_s']:.2f}s"
+            f" · median {stats['uncertainty_median_s']:.2f}s"
+            f" · >1s {stats['n_uncertain_over_1s']} words"
+            f" · off-source extent {stats['n_off_source']}/{stats['n_words']}"
+        )
+    return lines
+
+
 def cover_lines(store: ProvStore, panel_lines: list[str]) -> list[str]:
-    """The cover's lines: the recording's full path over the whole-file summary.
+    """The cover's lines: the source, the consensus's own alignment record, then the summary.
 
     The path is wrapped no wider than the summary's own widest line, so it cannot reach further
-    right than the panel already does.
+    right than the panel already does. The alignment block sits between the two, so a reader learns
+    what the transcript is worth before reading what was found in it.
 
     Args:
         store: The provenance store.
@@ -1379,12 +1479,16 @@ def cover_lines(store: ProvStore, panel_lines: list[str]) -> list[str]:
     Returns:
         The lines, in print order.
     """
+    lines: list[str] = []
     source = _source_path(store)
-    if not source:
-        return list(panel_lines)
-    width = max((len(line) for line in panel_lines), default=_SUMMARY_COLUMN_WIDTH)
-    wrapped = textwrap.wrap(source, width=max(width - 2, 40), break_on_hyphens=False, break_long_words=True)
-    return ["SOURCE", *(f"  {part}" for part in wrapped), "", *panel_lines]
+    if source:
+        width = max((len(line) for line in panel_lines), default=_SUMMARY_COLUMN_WIDTH)
+        wrapped = textwrap.wrap(source, width=max(width - 2, 40), break_on_hyphens=False, break_long_words=True)
+        lines.extend(["SOURCE", *(f"  {part}" for part in wrapped), ""])
+    lines.extend(consensus_alignment_lines(store))
+    lines.append("")
+    lines.extend(panel_lines)
+    return lines
 
 
 def _taxonomy_panel(axis: Axes, lines: list[str], style: FigureStyle) -> Text:
