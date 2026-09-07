@@ -27,14 +27,19 @@ from senselab.audio.tasks.plotting.plotting import (
     plot_aligned_panels,
 )
 from senselab.audio.workflows.triage.config import MIN_AST_HOP_S, TriageConfig
-from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities, resolve_stream
+from senselab.audio.workflows.triage.nodes.common import (
+    consensus_words,
+    find_measurement,
+    live_entities,
+    resolve_stream,
+)
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, GRAPH_ORDER
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "REPORT"
 SUMMARY_STEM = "summary"
 FORMATS = ("png", "pdf")
-REPORT_SCHEMA_VERSION = "triage-summary/v2"
+REPORT_SCHEMA_VERSION = "triage-summary/v3"
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
@@ -194,18 +199,34 @@ def _redacted_text(marks: dict[str, list[Entity]], word: Entity, *, scanned: boo
 
 
 def _words(store: ProvStore) -> list[Entity]:
-    """The consensus words in the order PREPROCESS fused them.
+    """The consensus stream, in ``index`` order.
 
     Args:
         store: The provenance store.
 
     Returns:
-        Live ``word`` entities sorted by their recorded index, then by their extent.
+        :func:`consensus_words`' result.
     """
-    return sorted(
-        live_entities(store, "word"),
-        key=lambda word: (int(word.attributes.get("index") or 0), word.extent or (0.0, 0.0)),
-    )
+    return consensus_words(store)
+
+
+def _display_text(word: Entity) -> str:
+    """A word as the lanes and the marked transcript show it: every reading of a variant, joined by ``/``.
+
+    Args:
+        word: A consensus ``word`` entity.
+
+    Returns:
+        ``a/b`` for a variant, else the word's ``text``.
+    """
+    if word.attributes.get("outcome") == "variant":
+        return "/".join(str(variant["text"]) for variant in word.attributes.get("variants") or [])
+    return str(word.attributes.get("text") or "")
+
+
+def _is_agreement(word: Entity) -> bool:
+    """Whether every source produced this word."""
+    return word.attributes.get("outcome") == "agreement"
 
 
 def _consensus_transcript(store: ProvStore) -> str:
@@ -222,6 +243,21 @@ def _consensus_transcript(store: ProvStore) -> str:
         The consensus words joined in their stored order, or an empty string when none were written.
     """
     return " ".join(str(word.attributes.get("text") or "") for word in _words(store))
+
+
+def _marked_transcript(store: ProvStore) -> str:
+    """The consensus transcript with agreement in ``**bold**`` and every reading of a variant.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The words in stream order; an agreement word wrapped in ``**``, a variant as ``a/b``, an
+        insertion bare. Empty when none were written.
+    """
+    return " ".join(
+        f"**{_display_text(word)}**" if _is_agreement(word) else _display_text(word) for word in _words(store)
+    )
 
 
 def _redacted_transcript(store: ProvStore, marks: dict[str, list[Entity]]) -> str:
@@ -324,7 +360,7 @@ def _lane(name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _token_lane(
     name: str,
-    entries: Iterable[tuple[tuple[float, float], str, object]],
+    entries: Iterable[tuple[tuple[float, float], str, object, bool]],
     *,
     report_lane: str | None = None,
     expand_label_slots: bool = False,
@@ -333,7 +369,8 @@ def _token_lane(
 
     Args:
         name: The lane's name, drawn as the panel's y-label.
-        entries: ``(extent, text, confidence)`` tuples, one per token, in the order they are drawn.
+        entries: ``(extent, text, agreement, bold)`` tuples, one per token, in the order they are
+            drawn.
         report_lane: The semantic lane key when its reader-facing label carries a context qualifier.
         expand_label_slots: Whether short labels may use unused horizontal room in their cycling row.
 
@@ -346,9 +383,10 @@ def _token_lane(
             "start": float(extent[0]),
             "end": float(extent[1]),
             "row": _TOKEN_CYCLE_ROWS[index % len(_TOKEN_CYCLE_ROWS)],
-            "color": _consensus_word_color(confidence),
+            "color": _consensus_word_color(agreement),
+            "bold": bold,
         }
-        for index, (extent, text, confidence) in enumerate(entries)
+        for index, (extent, text, agreement, bold) in enumerate(entries)
     ]
     return (
         [
@@ -367,15 +405,16 @@ def _token_lane(
     )
 
 
-def _consensus_word_color(confidence: object) -> str:
-    """A light, confidence-ordered fill for an authoritative consensus word.
+def _consensus_word_color(agreement: object) -> str:
+    """A light fill ordered by a word's ``agreement`` — the share of sources that produced it.
 
-    This is presentation only: word confidence remains a numeric field in the summary JSON and is
-    never thresholded or used to change the transcript.
+    Presentation only: ``agreement`` remains a numeric field in the summary JSON and is never
+    thresholded or used to change the transcript. A non-numeric or non-finite value takes the
+    neutral fill.
     """
-    if not isinstance(confidence, (int, float)) or not np.isfinite(confidence):
+    if not isinstance(agreement, (int, float)) or not np.isfinite(agreement):
         return "#e5e7eb"
-    value = float(np.clip(confidence, 0.0, 1.0))
+    value = float(np.clip(agreement, 0.0, 1.0))
     low, high = (254, 242, 242), (220, 252, 231)
     channels = [round(low[channel] + (high[channel] - low[channel]) * value) for channel in range(3)]
     return "#" + "".join(f"{channel:02x}" for channel in channels)
@@ -654,12 +693,9 @@ def _panels(
     panels += _token_lane(
         _WORDS_LANE_LABEL,
         (
-            (
-                word.extent,
-                str(word.attributes.get("text") or ""),
-                word.attributes.get("existence_confidence"),
-            )
+            (word.extent, _display_text(word), word.attributes.get("agreement"), _is_agreement(word))
             for word in words
+            if word.extent is not None
         ),
         report_lane="words",
         expand_label_slots=True,
@@ -680,15 +716,24 @@ def _panels(
             if span.extent is not None
         ),
     )
-    redacted_words = []
+    redacted_words: list[tuple[tuple[float, float], str, object, bool]] = []
     for word in words:
+        if word.extent is None:
+            continue
         original = str(word.attributes.get("text") or "")
         text = _redacted_text(marks, word, scanned=scanned)
-        # A placeholder's fill must not borrow the confidence of the word it replaced: that
-        # confidence describes ASR evidence for text this lane no longer shows.
-        confidence = word.attributes.get("existence_confidence") if text == original else None
-        redacted_words.append((word.extent, text, confidence))
-    if any(text != str(word.attributes.get("text") or "") for word, (_, text, _) in zip(words, redacted_words)):
+        # A placeholder's fill and weight must not borrow the word it replaced: they describe ASR
+        # evidence for text this lane no longer shows.
+        kept = text == original
+        redacted_words.append(
+            (
+                word.extent,
+                _display_text(word) if kept else text,
+                word.attributes.get("agreement") if kept else None,
+                _is_agreement(word) if kept else False,
+            )
+        )
+    if any(text != _display_text(word) for word, (_, text, _, _) in zip(words, redacted_words)):
         panels += _token_lane(
             "redacted transcript",
             redacted_words,
@@ -1177,17 +1222,21 @@ def _report_document(
     reasons = list(verdict.get("reasons") or [])
 
     def _token_record(word: Entity, text: str) -> dict[str, Any]:
+        attributes = word.attributes
         return {
             "entity_id": word.id,
             "text": text,
+            "bracketed": bool(attributes.get("bracketed")),
+            "outcome": attributes.get("outcome"),
+            "sources": list(attributes.get("sources") or []),
+            "readings": dict(attributes.get("readings") or {}),
+            "timings": {source: list(span) for source, span in (attributes.get("timings") or {}).items()},
+            "variants": [dict(variant) for variant in attributes.get("variants") or []],
+            "agreement": attributes.get("agreement"),
             "timing": _timing(word),
-            "timing_authority": "consensus",
-            "confidence": word.attributes.get("confidence"),
-            "existence_confidence": word.attributes.get("existence_confidence"),
-            "temporal_confidence": word.attributes.get("temporal_confidence"),
-            "coverage": word.attributes.get("coverage"),
-            "recognizers": list(word.attributes.get("recognizers") or []),
-            "timing_sources": word.attributes.get("timing_sources"),
+            "onset_spread_s": attributes.get("onset_spread_s"),
+            "offset_spread_s": attributes.get("offset_spread_s"),
+            "temporal_uncertainty_s": attributes.get("temporal_uncertainty_s"),
             "provenance": {"node": "PREPROCESS", "step": "consensus_transcript"},
         }
 
@@ -1233,8 +1282,9 @@ def _report_document(
         "steps": steps,
         "transcript": {
             "text": _consensus_transcript(store),
+            "marked_text": _marked_transcript(store),
             "redacted_text": _redacted_transcript(store, marks),
-            "words_n": len(transcript_words),
+            "tokens_n": len(transcript_words),
         },
         "categories": _categories(store),
         "provenance": _provenance(store, config, store.run_id),
@@ -1611,7 +1661,7 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
         lines.append(
             f"  {classifier}{marker}:" + summary_marker + " " + ", ".join(f"{label} ({n})" for label, n in top)
         )
-    lines.append("  transcript tokens: " + str(document["transcript"]["words_n"]))
+    lines.append("  transcript tokens: " + str(document["transcript"]["tokens_n"]))
 
     lines += ["", "ABSENT (a lane not drawn is not a measured absence)"]
     absences = document["evidence"]["preprocess_absences"]
@@ -1631,9 +1681,10 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
 
     scan = document["evidence"]["transcript_scan"]
     consensus = document["transcript"]["text"]
+    marked = document["transcript"]["marked_text"]
     redacted = document["transcript"].get("redacted_text") or ""
-    lines += ["", "CONSENSUS TRANSCRIPT"]
-    display_consensus = consensus or "no consensus transcript is in the store"
+    lines += ["", "CONSENSUS TRANSCRIPT (**agreed** | a/b contested | bare single-source)"]
+    display_consensus = marked or "no consensus transcript is in the store"
     lines += ["  " + wrapped for wrapped in textwrap.wrap(display_consensus, width=_BLOCK_COLUMNS)]
     if redacted != consensus:
         lines += ["", "REDACTED TRANSCRIPT"]
@@ -1723,9 +1774,9 @@ def _decision_blocks(document: dict[str, Any]) -> list[str]:
         top = list(counts.items())[:_TOP_CATEGORIES]
         if top:
             lines.append(f"  {classifier}: " + ", ".join(f"{label} ({count})" for label, count in top))
-    transcript = str(document["transcript"].get("text") or "")
+    transcript = str(document["transcript"].get("marked_text") or "")
     if transcript:
-        lines += ["", "CONSENSUS TRANSCRIPT"]
+        lines += ["", "CONSENSUS TRANSCRIPT (**agreed** | a/b contested | bare single-source)"]
         lines += ["  " + line for line in textwrap.wrap(transcript, width=_BLOCK_COLUMNS - 2)]
     scan = document["evidence"]["transcript_scan"]
     if not scan["complete"]:

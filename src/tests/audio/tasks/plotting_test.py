@@ -439,6 +439,24 @@ class TestTheTokenLane:
         """One drawn artist's extent, in the display space bars and labels share."""
         return artist.get_window_extent(cls._renderer(figure))
 
+    def test_a_bold_token_is_drawn_bold_and_the_others_normal(self) -> None:
+        """A token's ``bold`` key sets the label's weight; absent means normal."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [
+                {
+                    "type": "tokens",
+                    "name": "words",
+                    "tokens": [
+                        {"text": "agreed", "start": 0.1, "end": 0.35, "bold": True},
+                        {"text": "alone", "start": 0.4, "end": 0.65},
+                    ],
+                }
+            ],
+        )
+        weights = {label.get_text(): label.get_fontweight() for label in self._placed(figure)}
+        assert weights == {"agreed": "bold", "alone": "normal"}
+
     def test_a_token_carries_its_text_on_the_axis(self) -> None:
         """The text belongs on the bar; as a y-tick, 40 words collapse into one unreadable stack."""
         figure = plot_aligned_panels(
