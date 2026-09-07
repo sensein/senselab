@@ -1,14 +1,15 @@
 """The SPEECH branch: the consensus transcript, diarization, an enrolled target, PII, quality.
 
-It runs no ASR and never re-transcribes: PREPROCESS produced the consensus with
-``fuse_consensus_words`` and this branch reads it. Speech spans come from consensus word timings,
-never the envelope, and pyannote sees only ``[first word start, last word end]``. The second
+It runs no ASR and never re-transcribes: PREPROCESS wrote the consensus text stream with
+``senselab.audio.workflows.triage.consensus.align_sources`` and this branch reads it. Speech spans
+come from the lexical consensus words' timings, never the envelope, and pyannote sees only
+``[first word start, last word end]``. The second
 diarizer runs only when pyannote's count is not 1; separation runs only when
 ``speech.separation_backend`` names a backend. The target speaker is identified by a caller-supplied
 enrollment, not by a per-file hint, and an enrollment is refused rather than compared unless its
 model and its resolved commit are both the probe's. The PII scan reads the consensus transcript and
-nothing else, once, and marks every occurrence of what it finds. This branch marks; it removes
-nothing.
+each recognizer's own transcript, once, and marks every occurrence of what it finds on the
+consensus words. This branch marks; it removes nothing.
 
 Every parameter's derivation is in ``data/config/default.yaml``; the design is in
 ``specs/20260817-triage-workflow-dag/branch-speech.md``.
@@ -39,6 +40,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     clamp_extent,
     find_measurement,
+    live_entities,
     resolve_stream,
     software_agent,
     write_verdict,
@@ -190,8 +192,8 @@ def _norm_token(token: str) -> str:
     return token.casefold().strip(".,;:!?\"'()[]{}")
 
 
-def _locate(finding_text: str, words: list[Entity]) -> list[tuple[int, int]]:
-    """Every place the finding's tokens match the consensus words, as contiguous runs (N11).
+def _locate(finding_text: str, haystack_tokens: list[str]) -> list[tuple[int, int]]:
+    """Every place the finding's tokens match the haystack, as contiguous runs (N11).
 
     Every occurrence, not the first: the scan dedupes by ``(category, text, source)``, so a name
     said twice arrives as one finding, and locating only its first match leaves the second
@@ -199,14 +201,14 @@ def _locate(finding_text: str, words: list[Entity]) -> list[tuple[int, int]]:
 
     Args:
         finding_text: The detector's matched text.
-        words: The consensus word entities, in transcript order.
+        haystack_tokens: The scanned text's tokens, one per word, in the order they were scanned.
 
     Returns:
-        ``[(first index, last index), ...]``, non-overlapping and in transcript order. Empty when
-        nothing matches.
+        ``[(first index, last index), ...]`` into ``haystack_tokens``, non-overlapping and in order.
+        Empty when nothing matches.
     """
     tokens = [_norm_token(token) for token in finding_text.split()]
-    haystack = [_norm_token(str(word.attributes.get("text") or "")) for word in words]
+    haystack = [_norm_token(token) for token in haystack_tokens]
     if not tokens or not haystack or len(tokens) > len(haystack):
         return []
     matches: list[tuple[int, int]] = []
@@ -218,6 +220,58 @@ def _locate(finding_text: str, words: list[Entity]) -> list[tuple[int, int]]:
         else:
             start += 1
     return matches
+
+
+def _reading(word: Entity, haystack: str) -> str:
+    """The token this word contributed to one scanned text.
+
+    Args:
+        word: A consensus ``word`` entity.
+        haystack: ``"consensus"`` for the consensus text, else a source name.
+
+    Returns:
+        The word's ``text`` for the consensus haystack, else that source's own reading of it.
+    """
+    if haystack == "consensus":
+        return str(word.attributes.get("text") or "")
+    return str(word.attributes["readings"][haystack])
+
+
+def _timings_hull(words: list[Entity], covered: list[int]) -> tuple[float, float]:
+    """The hull of the covered words' per-source timings: every recognizer's placement of them.
+
+    Args:
+        words: The consensus words, in stream order.
+        covered: The positions a finding covers.
+
+    Returns:
+        ``(min member start, max member end)`` over every source timing of every covered word.
+    """
+    spans = [span for index in covered for span in words[index].attributes["timings"].values()]
+    return min(float(span[0]) for span in spans), max(float(span[1]) for span in spans)
+
+
+def _hypotheses(store: ProvStore, source_names: list[str]) -> dict[str, Entity]:
+    """The live ``asr_hypothesis`` measurement of each consensus source, latest write per source.
+
+    Args:
+        store: The provenance store.
+        source_names: The sources the consensus was aligned over.
+
+    Returns:
+        ``{source name: measurement entity}``.
+
+    Raises:
+        LookupError: If a source has no live hypothesis measurement in the store.
+    """
+    found: dict[str, Entity] = {}
+    for measurement in live_entities(store, "measurement"):
+        if measurement.attributes.get("role") == "asr_hypothesis":
+            found[str(measurement.attributes["source"])] = measurement
+    missing = [name for name in source_names if name not in found]
+    if missing:
+        raise LookupError(f"no asr_hypothesis measurement for consensus source(s) {missing}")
+    return {name: found[name] for name in source_names}
 
 
 def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -464,7 +518,11 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         raise LookupError("no consensus_transcript in the store; PREPROCESS has not run")
     words = [store.get_entity(word_id) for word_id in consensus.attributes["word_ids"]]
     words = [word for word in words if not store.is_invalidated(word.id)]
+    lexical_index = [position for position, word in enumerate(words) if not word.attributes["bracketed"]]
+    lexical = [words[position] for position in lexical_index]
     transcript_text = str(consensus.attributes["text"])
+    source_names = [str(row["name"]) for row in consensus.attributes["sources"]]
+    hypotheses = _hypotheses(store, source_names)
 
     transcript = store.activity(node=NODE, step="transcript", parameters={"read": "consensus_transcript"})
     store.was_associated_with(transcript, software)
@@ -479,7 +537,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "which was supplied and is not read"
         )
 
-    if not words:
+    if not lexical:
         why = "no consensus word; this branch has no subject"
         outcome = Outcome.FAIL
         verdict_id, verdict = write_verdict(
@@ -504,12 +562,12 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         )
         return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)
 
-    single_source = [word.id for word in words if len(word.attributes.get("recognizers") or []) == 1]
+    single_source = [word.id for word in lexical if word.attributes["outcome"] == "insertion"]
     if single_source:
         flags.append(f"{len(single_source)} single-recognizer word(s) survive as fabrication candidates")
 
-    # Step 2 — speech spans from consensus word timings, in memory until corroborated.
-    word_extents = [word.extent or (0.0, 0.0) for word in words]
+    # Step 2 — speech spans from the lexical words' timings, in memory until corroborated.
+    word_extents = [word.extent or (0.0, 0.0) for word in lexical]
     grouped = group_extents_into_runs(word_extents)
     span_extents = [clamp_extent((start, end), plain) for start, end, _ in grouped]
     speech_s = sum(end - start for start, end in span_extents)
@@ -814,7 +872,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     # The span elements, carrying every conclusion drawn over them. Nothing here is invalidated.
     span_ids: list[str] = []
     for position, ((start, end), (_, _, members)) in enumerate(zip(span_extents, grouped)):
-        owners = {word_speakers[index] for index in members}
+        owners = {word_speakers[lexical_index[index]] for index in members}
         attributed_to = owners.pop() if len(owners) == 1 else None
         span_id = store.entity(
             prov_type="span",
@@ -837,40 +895,44 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         span_ids.append(span_id)
         view.append(span_id)
 
-    # Step 7 — PII: one scan, one text, and that text is the consensus transcript.
-    pii_act = store.activity(node=NODE, step="pii", parameters={"text": "consensus_transcript"})
+    # Step 7 — PII: one scan over the consensus transcript and each recognizer's own transcript.
+    haystacks: list[tuple[str, str, list[int]]] = [("consensus", transcript_text, list(range(len(words))))]
+    for name in source_names:
+        positions = [position for position, word in enumerate(words) if name in word.attributes["readings"]]
+        haystacks.append((name, str(hypotheses[name].attributes["transcript"]), positions))
+    pii_act = store.activity(
+        node=NODE, step="pii", parameters={"text": ["consensus_transcript", *(f"asr:{name}" for name in source_names)]}
+    )
     store.was_associated_with(pii_act, software)
     store.used(pii_act, consensus.id)
-    raw_scans = scan_for_pii([transcript_text])
+    for name in source_names:
+        store.used(pii_act, hypotheses[name].id)
+    raw_scans = scan_for_pii([text for _, text, _ in haystacks])
     scans: list[PiiScan] = raw_scans if isinstance(raw_scans, list) else [raw_scans]
     failures: dict[str, str] = {}
     scanned_by: set[str] = set()
     findings: list[dict[str, Any]] = []
-    for scan in scans:
+    recorded: set[tuple[str, int, int]] = set()
+    for (haystack, _, positions), scan in zip(haystacks, scans):
         failures.update(scan.failures)
         scanned_by.update(scan.detectors_used)
+        tokens = [_reading(words[position], haystack) for position in positions]
         for finding in scan.spans:
             # One occurrence, one finding: the scan dedupes by (category, text, source), so a name
             # said twice arrives here once and must still be marked at both places it was said.
-            located = _locate(str(finding.text or ""), words)
+            located = [(positions[first], positions[last]) for first, last in _locate(str(finding.text or ""), tokens)]
             if not located:
                 flags.append(f"pii_unlocated ({finding.category})")
                 occurrences = [(0, len(words) - 1)]
             else:
                 occurrences = located
             for first, last in occurrences:
+                if (str(finding.category), first, last) in recorded:
+                    continue
+                recorded.add((str(finding.category), first, last))
                 covered = list(range(first, last + 1))
-                extent = (
-                    (span_extents[0][0], span_extents[-1][1])
-                    if not located
-                    else (
-                        float((words[first].extent or (0.0, 0.0))[0]),
-                        float((words[last].extent or (0.0, 0.0))[1]),
-                    )
-                )
-                recognizers = sorted(
-                    {str(name) for index in covered for name in (words[index].attributes.get("recognizers") or [])}
-                )
+                extent = (span_extents[0][0], span_extents[-1][1]) if not located else _timings_hull(words, covered)
+                sources = sorted({str(name) for index in covered for name in words[index].attributes["sources"]})
                 speakers = {word_speakers[index] for index in covered}
                 resolved = len(speakers) == 1 and None not in speakers
                 pii_id = store.entity(
@@ -879,7 +941,8 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     attributes={
                         "category": finding.category,
                         "source": finding.source,
-                        "recognizers": recognizers,
+                        "haystack": haystack,
+                        "sources": sources,
                         "occurrence": occurrences.index((first, last)),
                         "occurrences_n": len(occurrences),
                         "detectors_used": sorted(scan.detectors_used),
@@ -1010,7 +1073,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     detail: dict[str, Any] = {
         "speaker_count": count,
         "diarization": diarization_state,
-        "words_n": len(words),
+        "words_n": len(lexical),
         "speech_s": speech_s,
         "nontarget_speech_s": nontarget_speech_s,
         "pii": {

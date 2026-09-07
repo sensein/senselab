@@ -107,11 +107,11 @@ class TestTheThreeKinds:
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["speech"] == "absent"
 
-    def test_a_bracketed_event_carries_no_lexical_evidence(
+    def test_a_bracketed_word_carries_no_lexical_evidence(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """PREPROCESS wrote only events, so the authoritative consensus remains lexically empty."""
-        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=[], events=["[COUGH]", "[COUGH]", "ahem"])
+        """PREPROCESS wrote only bracketed words, so the consensus is lexically empty."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["[COUGH]", "[COUGH]", "[AHEM]"])
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["speech"] == "absent"
 

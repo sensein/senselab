@@ -36,6 +36,7 @@ from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
+    consensus_words,
     find_measurement,
     live_entities,
     resolve_stream,
@@ -220,18 +221,6 @@ def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
     return a[0] < b[1] and a[1] > b[0]
 
 
-def _consensus_words(store: ProvStore) -> list[Entity]:
-    """The consensus words, in time order; a word the store places nowhere sorts first.
-
-    Args:
-        store: The provenance store.
-
-    Returns:
-        The live ``word`` entities PREPROCESS authored, oldest-extent first.
-    """
-    return sorted(live_entities(store, "word"), key=lambda w: w.extent or (-1.0, -1.0))
-
-
 def _pii_marking_assertions(store: ProvStore) -> list[Entity]:
     """Every live ``label``/``pii`` assertion, which is the whole of what the marking read consults.
 
@@ -292,13 +281,14 @@ def _matches_surviving(word: Entity, category: str, planned: list[RedactionExten
 def _transcript(words: list[Entity], planned: list[RedactionExtent]) -> tuple[str, int]:
     """The transcript with every planned extent's words rendered as one ``[CATEGORY]`` placeholder.
 
-    A word overlapping a planned extent is replaced along with its padded-in neighbours, matching
-    what the audio lost. A word the store places nowhere overlaps no extent, so it is rendered as
-    the category-less placeholder rather than released verbatim. No timestamps, no ids, no matched
-    text.
+    Words are released in stream order. A word overlapping a planned extent is replaced along with
+    its padded-in neighbours, matching what the audio lost; the placeholder is emitted at the first
+    overlapping position and later overlapping positions are dropped. A word the store places
+    nowhere overlaps no extent, so it is rendered as the category-less placeholder rather than
+    released verbatim. No timestamps, no ids, no matched text.
 
     Args:
-        words: PREPROCESS's consensus words, in time order.
+        words: PREPROCESS's consensus words, in stream order.
         planned: The padded, merged extents.
 
     Returns:
@@ -389,7 +379,7 @@ def redact(
     scan_incomplete = bool(scan_failed) or bool(scan_missing) or not scanned_by
     findings = _findings(store)
     extents = _extents_from_findings(findings)
-    words = _consensus_words(store)
+    words = consensus_words(store)
     consensus = find_measurement(store, "consensus_transcript")
     consulted = _pii_marking_assertions(store)
     marked = _pii_marked_words(store)

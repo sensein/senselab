@@ -42,6 +42,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
     find_measurements,
+    lexical_words,
     live_entities,
     software_agent,
     write_measurement,
@@ -124,7 +125,7 @@ def _acoustic_line(store: ProvStore, family: set[str]) -> dict[str, Any]:
 
 
 def _lexical_line(store: ProvStore) -> dict[str, Any]:
-    """The lexical line: consensus ``word`` entities. Bracketed and onomatopoeic events are not words.
+    """The lexical line: the consensus words that are not bracketed.
 
     Args:
         store: The provenance store.
@@ -134,26 +135,23 @@ def _lexical_line(store: ProvStore) -> dict[str, Any]:
     """
     if find_measurement(store, "consensus_transcript") is None:
         return {"available": False, "n_words": 0, "element_ids": []}
-    words = live_entities(store, "word")
+    words = lexical_words(store)
     return {"available": True, "n_words": len(words), "element_ids": [w.id for w in words]}
 
 
 def _transcribed_span_ids(store: ProvStore) -> set[str]:
-    """Every live general span a live consensus word overlaps.
+    """Every live general span a lexical consensus word overlaps.
 
-    ASR is the strongest content evidence there is, stronger than any acoustic classifier — a span
-    a word already explains is lexical content, not an airway candidate, whatever HeAR or YAMNet
-    also fired on it. Mirrors AIRWAY's own ``_is_transcribed`` check exactly (same overlap rule),
-    kept here too so TAXONOMY's evidence and AIRWAY's branch never disagree about which spans are
-    already explained by the transcript.
+    The same overlap rule as AIRWAY's ``_is_transcribed``, so TAXONOMY's evidence and AIRWAY's
+    branch agree about which spans the transcript already explains.
 
     Args:
         store: The provenance store.
 
     Returns:
-        The ids of every live, family-less span overlapping at least one live ``word`` entity.
+        The ids of every live, family-less span overlapping at least one lexical ``word`` entity.
     """
-    words = live_entities(store, "word")
+    words = lexical_words(store)
     if not words:
         return set()
     transcribed: set[str] = set()

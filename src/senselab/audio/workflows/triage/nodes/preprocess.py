@@ -65,12 +65,20 @@ from senselab.audio.tasks.spans.api import (
 )
 from senselab.audio.tasks.spectral_continuity.api import spectral_continuity
 from senselab.audio.tasks.speech_to_text.api import transcribe_audios
-from senselab.audio.workflows.audio_analysis.asr import fuse_consensus_words
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.consensus import (
+    ROUTINE,
+    SOURCE_ORDER,
+    SourceHypothesis,
+    align_sources,
+    render_transcript,
+    vocabulary_key,
+)
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     describe_exception,
+    live_entities,
     software_agent,
     write_verdict,
 )
@@ -130,31 +138,6 @@ def _bound_to_duration(start: float, end: float, duration_s: float) -> tuple[flo
     if start >= duration_s:
         return None
     return start, min(end, duration_s)
-
-
-def _norm_token(token: str) -> str:
-    """A token normalised for vocabulary matching: casefolded, edge punctuation stripped."""
-    return token.casefold().strip(".,;:!?\"'()")
-
-
-def _as_non_word(text: str, onomatopoeic: set[str]) -> tuple[str | None, str | None]:
-    """The bracketed form of a non-lexical token, or ``(None, None)`` when the token is a word.
-
-    Args:
-        text: The token as the recognizer produced it.
-        onomatopoeic: The normalised ``words.onomatopoeic_tokens`` vocabulary; empty while it is null.
-
-    Returns:
-        ``(bracketed, origin)`` where ``origin`` is ``"bracketed"`` or ``"onomatopoeic"``, or
-        ``(None, None)``.
-    """
-    stripped = text.strip()
-    if stripped.startswith("[") and stripped.endswith("]"):
-        return stripped, "bracketed"
-    normalised = _norm_token(stripped)
-    if normalised and normalised in onomatopoeic:
-        return f"[{normalised.upper()}]", "onomatopoeic"
-    return None, None
 
 
 def _confident_labels(
@@ -683,7 +666,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 
         asr: list[Span] = []
         if "consensus" in state:
-            word_extents = [(float(word["start"]), float(word["end"])) for word in state["consensus"]]
+            word_extents = [word.extent for word in state["consensus"] if not word.bracketed]
             asr_candidates = [
                 Span(start=start, end=end, peak_over_floor_db=float("nan"), merged_proposals=len(members))
                 for start, end, members in group_extents_into_runs(word_extents)
@@ -1177,8 +1160,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     ) -> None:
         """One recognizer: its transcript and its own word list, retained as the consensus's evidence.
 
-        No ``word`` entity is written here. PREPROCESS writes those once, over the consensus, so a
-        consumer never has to disambiguate two populations of ``word`` by generating activity.
+        No ``word`` entity is written here; PREPROCESS writes those once, over the consensus.
         """
         model = factory()
         agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
@@ -1199,86 +1181,89 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 continue
             words.append({"text": chunk.text, "start": span[0], "end": span[1], "score": chunk.score})
         meta: dict[str, Any] = {
-            "recognizer": str(model.path_or_uri),
+            "role": "asr_hypothesis",
+            "source": name,
+            "model_id": str(model.path_or_uri),
+            "commit_sha": model.commit_sha,
             "transcript": line.text or "",
             "words": words,
+            "n_words": len(words),
             "untimed_chunks_n": untimed_chunks_n,
             "out_of_bounds_chunks_n": out_of_bounds_chunks_n,
             "timestamp_source": source_kind,
+            "timestamp_model": timing_model,
+            "duration_s": duration_s,
         }
-        if timing_model is not None:
-            meta["timestamp_model"] = timing_model
         entity_id = _measurement(
             store, activity, agent, name=name, signal="plain", attributes=meta, derived_from=(plain_id,)
         )
         derivatives[name] = entity_id
         view.append(entity_id)
-        state[name] = line
-        state[name + "_id"] = entity_id
 
     def _consensus() -> None:
-        """The consensus over both recognizers, by the audio-analysis routine, plus its word entities."""
-        if "asr_crisperwhisper" not in state or "asr_qwen" not in state:
-            raise LookupError("both recognizers are needed")
+        """The consensus stream over every ``asr_hypothesis`` measurement in the store, plus its words."""
+        hypotheses: dict[str, Entity] = {}
+        for measurement in live_entities(store, "measurement"):
+            if measurement.attributes.get("role") == "asr_hypothesis":
+                hypotheses[str(measurement.attributes["source"])] = measurement
+        sources = [
+            SourceHypothesis(
+                name=source,
+                words=tuple(
+                    (str(word["text"]), float(word["start"]), float(word["end"]))
+                    for word in measurement.attributes["words"]
+                ),
+                timestamp_source=str(measurement.attributes["timestamp_source"]),
+                timestamp_model=measurement.attributes.get("timestamp_model"),
+            )
+            for source, measurement in hypotheses.items()
+        ]
+        onomatopoeic = {vocabulary_key(str(token)) for token in (config.get("words.onomatopoeic_tokens") or [])}
+        consensus = align_sources(sources, onomatopoeic=onomatopoeic)
+        names = [row["name"] for row in consensus.provenance["sources"]]
+        measurement_ids = tuple(hypotheses[name].id for name in names)
         activity = _step(
-            "consensus",
-            {
-                "systems": [CRISPERWHISPER_ID, QWEN_ID],
-                "routine": "fuse_consensus_words",
-                "timing_authority": "consensus_asr",
-            },
-            (state["asr_crisperwhisper_id"], state["asr_qwen_id"]),
-            software,
+            "consensus", {"routine": ROUTINE, "source_order": SOURCE_ORDER, "sources": names}, measurement_ids, software
         )
-        fused, provenance = fuse_consensus_words(
-            {CRISPERWHISPER_ID: state["asr_crisperwhisper"], QWEN_ID: state["asr_qwen"]}
-        )
-        if not provenance:
-            provenance = {"operator": "consensus_words/resample", "sources": [], "n_words": 0}
-        onomatopoeic = {_norm_token(str(token)) for token in (config.get("words.onomatopoeic_tokens") or [])}
         word_ids: list[str] = []
-        event_ids: list[str] = []
-        kept: list[dict[str, Any]] = []
-        for entry in fused:
-            span = _bound_to_duration(float(entry["start"]), float(entry["end"]), duration_s)
-            if span is None:
-                continue
-            text = str(entry.get("text") or "")
-            recognizers = [str(s) for s in (entry.get("sources") or [])]
-            bracketed, origin = _as_non_word(text, onomatopoeic)
-            if bracketed is not None:
-                event_id = store.entity(
-                    prov_type="event",
-                    extent=span,
-                    attributes={
-                        "bracketed": bracketed,
-                        "raw": text,
-                        "origin": origin,
-                        "recognizers": recognizers,
-                    },
-                )
-                store.was_generated_by(event_id, activity)
-                store.was_attributed_to(event_id, software)
-                event_ids.append(event_id)
-                continue
+        for word in consensus.words:
             word_id = store.entity(
                 prov_type="word",
-                extent=span,
+                extent=word.extent,
                 attributes={
-                    "text": text,
-                    "confidence": entry.get("confidence"),
-                    "existence_confidence": entry.get("existence_confidence"),
-                    "temporal_confidence": entry.get("temporal_confidence"),
-                    "coverage": entry.get("coverage"),
-                    "recognizers": recognizers,
-                    "timing_sources": entry.get("timing_sources"),
-                    "index": len(kept),
+                    "text": word.text,
+                    "bracketed": word.bracketed,
+                    "outcome": word.outcome,
+                    "sources": list(word.sources),
+                    "readings": dict(word.readings),
+                    "timings": {source: list(span) for source, span in word.timings.items()},
+                    "onset_spread_s": word.onset_spread_s,
+                    "offset_spread_s": word.offset_spread_s,
+                    "temporal_uncertainty_s": word.temporal_uncertainty_s,
+                    "variants": [asdict(variant) for variant in word.variants],
+                    "agreement": word.agreement,
+                    "index": word.index,
                 },
             )
             store.was_generated_by(word_id, activity)
             store.was_attributed_to(word_id, software)
+            for source in word.sources:
+                store.was_derived_from(word_id, hypotheses[source].id)
             word_ids.append(word_id)
-            kept.append({**entry, "start": span[0], "end": span[1]})
+        rows: list[dict[str, Any]] = []
+        for row in consensus.provenance["sources"]:
+            hypothesis = hypotheses[row["name"]]
+            generating = store.generated_by(hypothesis.id)
+            agents = store.associated_with(generating) if generating is not None else []
+            rows.append(
+                {
+                    **row,
+                    "model_id": hypothesis.attributes.get("model_id"),
+                    "commit_sha": hypothesis.attributes.get("commit_sha"),
+                    "measurement_id": hypothesis.id,
+                    "agent_id": agents[0] if agents else None,
+                }
+            )
         entity_id = _measurement(
             store,
             activity,
@@ -1286,21 +1271,18 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             name="consensus_transcript",
             signal="plain",
             attributes={
-                "words": kept,
-                "provenance": provenance,
-                "systems": [CRISPERWHISPER_ID, QWEN_ID],
-                "timing_authority": "consensus_asr",
+                "role": "consensus",
+                **consensus.provenance,
+                "sources": rows,
                 "word_ids": word_ids,
-                "event_ids": event_ids,
-                "text": " ".join(str(entry.get("text") or "") for entry in kept),
+                "text": render_transcript(consensus.words, strong=("", "")),
             },
-            derived_from=(state["asr_crisperwhisper_id"], state["asr_qwen_id"]),
+            derived_from=measurement_ids,
         )
         derivatives["consensus_transcript"] = entity_id
         view.append(entity_id)
         view.extend(word_ids)
-        view.extend(event_ids)
-        state.update(consensus=kept, consensus_id=entity_id, consensus_word_ids=word_ids)
+        state.update(consensus=consensus.words, consensus_id=entity_id)
 
     def _phonation_tracks() -> None:
         """F0 and formant tracks over the whole stream — measured once, localised nowhere.

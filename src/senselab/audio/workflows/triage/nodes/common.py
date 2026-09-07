@@ -219,6 +219,33 @@ def live_entities(store: ProvStore, prov_type: PROV_TYPE) -> list[Entity]:
     return [e for e in store.entities(prov_type) if not store.is_invalidated(e.id)]
 
 
+def consensus_words(store: ProvStore) -> list[Entity]:
+    """The consensus stream: every live ``word`` entity, in ``index`` order.
+
+    ``index`` is the position PREPROCESS's consensus emitted the word at, and it is the only order a
+    reader may use; a word's extent is metadata on the position, never a sort key.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The live ``word`` entities, sorted by their ``index`` attribute.
+    """
+    return sorted(live_entities(store, "word"), key=lambda word: int(word.attributes["index"]))
+
+
+def lexical_words(store: ProvStore) -> list[Entity]:
+    """The consensus words that are not bracketed, in ``index`` order.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The subset of :func:`consensus_words` whose ``bracketed`` attribute is False.
+    """
+    return [word for word in consensus_words(store) if not word.attributes["bracketed"]]
+
+
 def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Audio]:
     """Load a stream the graph wrote earlier, by its name.
 

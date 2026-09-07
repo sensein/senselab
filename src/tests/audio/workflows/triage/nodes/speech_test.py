@@ -241,9 +241,8 @@ def _seed_speech_store(
     store: ProvStore,
     tmp_path: Path,
     *,
-    words: Optional[list[str]] = None,
+    words: Optional[list[Any]] = None,
     word_extents: Optional[list[tuple[float, float]]] = None,
-    events: Optional[list[str]] = None,
     yamnet_labels: Optional[list[list[str]]] = None,
     spans: Optional[list[tuple[float, float, float]]] = None,
     speakers: int = 1,
@@ -256,9 +255,9 @@ def _seed_speech_store(
     Args:
         store: The store to seed.
         tmp_path: The run directory the streams and sidecars go under.
-        words: The consensus word texts.
+        words: The consensus words: texts, or dicts in the shared seeder's shape (``text`` plus any of
+            ``outcome``, ``sources``, ``readings``, ``timings``, ``variants``, ``extent``).
         word_extents: Extents overriding the layout ``speakers`` would have produced.
-        events: Bracketed or onomatopoeic non-words.
         yamnet_labels: One retained label set per YAMNet window, on the shared seeder's grid.
             ``None`` writes no classification at all.
         spans: PREPROCESS's envelope spans, ``[(start, end, peak_over_floor_db), ...]``, which a
@@ -272,16 +271,16 @@ def _seed_speech_store(
     assert _SEEDER is not None, "the shared seeder is bound by the autouse fixture"
     placed: Optional[list[Any]] = None
     if words is not None:
-        placed = (
-            [(text, extent) for text, extent in zip(words, word_extents)]
-            if word_extents is not None
-            else list(_place(words, speakers, duration_s))
-        )
+        texts = [str(entry["text"]) if isinstance(entry, dict) else str(entry) for entry in words]
+        extents = word_extents if word_extents is not None else [e for _, e in _place(texts, speakers, duration_s)]
+        placed = [
+            {**entry, "extent": entry.get("extent") or extent} if isinstance(entry, dict) else (text, extent)
+            for entry, text, extent in zip(words, texts, extents)
+        ]
     _SEEDER(
         store,
         duration_s=duration_s,
         words=placed,
-        events=list(events) if events is not None else None,
         yamnet_labels=yamnet_labels,
         spans=spans,
         disruptions_file=disruptions_file,
@@ -533,6 +532,7 @@ def _stub_pii(
     *,
     findings: list[tuple[str, str]],
     detectors_used: Optional[list[str]] = None,
+    only_where_present: bool = False,
 ) -> list[str]:
     """Fake the PII scan and return the list of texts it was handed.
 
@@ -540,6 +540,8 @@ def _stub_pii(
         monkeypatch: The patcher.
         findings: ``[(category, text), ...]`` the scan reports for every input.
         detectors_used: Which detectors ran; the module's default set when None.
+        only_where_present: Report a finding only on inputs whose text contains it, as a real
+            detector would, rather than on every input.
 
     Returns:
         The mutable log of scanned texts.
@@ -555,11 +557,12 @@ def _stub_pii(
                 spans=[
                     PiiSpan(text=text, category=category, source="presidio", asr_model="consensus_transcript")
                     for category, text in findings
+                    if not only_where_present or text in str(scanned_text)
                 ],
                 detectors_used=list(used),
                 failures={},
             )
-            for _ in texts
+            for scanned_text in texts
         ]
 
     monkeypatch.setattr(speech_module, "scan_for_pii", _fake)
@@ -663,11 +666,51 @@ class TestItReadsTheConsensusAndReFusesNothing:
         assert not hasattr(speech_module, "fuse_word_streams")
         assert not hasattr(speech_module, "fuse_consensus_words")
 
-    def test_an_event_is_not_a_word(self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path) -> None:
-        """Bracketed and onomatopoeic events count toward no word total and no span extent."""
-        _seed_speech_store(store, tmp_path, words=["hello"], events=["[COUGH]", "[BREATH]"])
+    def test_a_bracketed_word_is_not_a_lexical_word(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Bracketed words count toward no word total and no span extent."""
+        _seed_speech_store(store, tmp_path, words=["hello", "[COUGH]", "[BREATH]"])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert _verdict_entity(store, "SPEECH").attributes["words_n"] == 1
+        [span] = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        assert span.attributes["words_n"] == 1
+        hello = next(w for w in live_entities(store, "word") if w.attributes["text"] == "hello")
+        assert span.extent == hello.extent
+
+    def test_a_store_of_only_bracketed_words_has_no_subject(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Test 27a: [COUGH] [UM] clears no guard; the branch fails as it does with no word at all."""
+        _seed_speech_store(store, tmp_path, words=["[COUGH]", "[UM]"])
+        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert result.verdict.outcome is Outcome.FAIL
+        assert "no consensus word" in result.verdict.why
+        assert find_measurement(store, "pii_scan") is None
+
+    def test_the_single_recognizer_flag_counts_lexical_insertions_only(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test 27d: a bracketed insertion is no fabrication candidate; a lexical one is."""
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _seed_speech_store(
+            store, tmp_path, words=["hello", {"text": "[UM]", "sources": ["asr_crisperwhisper"]}, "world"]
+        )
+        quiet = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert not [
+            flag for flag in _verdict_entity(store, "SPEECH").attributes["flags"] if "single-recognizer" in flag
+        ]
+        assert quiet.verdict.outcome is not Outcome.FAIL
+
+        other = ProvStore(run_id="other")
+        _seed_speech_store(
+            other, tmp_path, words=["hello", {"text": "maybe", "sources": ["asr_crisperwhisper"]}, "world"]
+        )
+        speech(other, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert (
+            "1 single-recognizer word(s) survive as fabrication candidates"
+            in _verdict_entity(other, "SPEECH").attributes["flags"]
+        )
 
     def test_no_consensus_word_fails_and_writes_no_pii_scan(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
@@ -1133,15 +1176,105 @@ class TestSeparationIsMeasurementGated:
 class TestPiiOnTheConsensus:
     """One scan, one text, and the decision is speaker-scoped while the redaction is not."""
 
-    def test_the_scan_reads_the_consensus_transcript_only(
+    def test_the_scan_reads_the_consensus_text_and_each_sources_transcript(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Exactly one text is scanned, and it is the consensus text PREPROCESS wrote."""
+        """One call; the consensus text PREPROCESS wrote first, then each recognizer's own transcript."""
         _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         scanned = _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert scanned == ["my name is alice"]
+        assert scanned == ["my name is alice", "my name is alice", "my name is alice"]
+        pii_act = next(a for a in store.activities("SPEECH") if a.step == "pii")
+        assert pii_act.parameters["text"] == ["consensus_transcript", "asr:asr_crisperwhisper", "asr:asr_qwen"]
+
+    def test_the_same_finding_from_three_haystacks_is_one_finding(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test 27f: pii.n counts occurrences, not the texts that raised them."""
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert len(live_entities(store, "pii")) == 1
+        assert _verdict_entity(store, "SPEECH").attributes["pii"]["n"] == 1
+        assert live_entities(store, "pii")[0].attributes["haystack"] == "consensus"
+
+    def test_a_name_only_one_recognizer_heard_is_located_and_marked(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test 27c: the consensus text shows 'alyssa'; Qwen alone heard 'alice', and it is still cut."""
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=[
+                "hi",
+                {
+                    "text": "alyssa",
+                    "readings": {"asr_crisperwhisper": "alyssa", "asr_qwen": "alice"},
+                    "variants": [
+                        {"text": "alyssa", "sources": ["asr_crisperwhisper"], "share": 0.5},
+                        {"text": "alice", "sources": ["asr_qwen"], "share": 0.5},
+                    ],
+                },
+            ],
+        )
+        assert find_measurement(store, "consensus_transcript").attributes["text"] == "hi alyssa"  # type: ignore[union-attr]
+        assert find_measurement(store, "asr_qwen").attributes["transcript"] == "hi alice"  # type: ignore[union-attr]
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")], only_where_present=True)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        [finding] = live_entities(store, "pii")
+        assert finding.attributes["haystack"] == "asr_qwen"
+        assert finding.attributes["sources"] == ["asr_crisperwhisper", "asr_qwen"]
+        variant = next(w for w in live_entities(store, "word") if w.attributes["text"] == "alyssa")
+        marks = [e for e in live_entities(store, "assertion") if e.attributes.get("label") == "pii"]
+        assert [store.derived_from(m.id) for m in marks] == [[variant.id]]
+        assert "pii_unlocated" not in " ".join(_verdict_entity(store, "SPEECH").attributes["flags"])
+
+    def test_the_finding_extent_is_the_hull_of_the_sources_timings(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test 27e: the derived extent can sit where no source put the word; the cut covers both."""
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=[
+                "hello",
+                {
+                    "text": "alice",
+                    "extent": (2.0, 2.2),
+                    "timings": {"asr_crisperwhisper": (1.0, 1.2), "asr_qwen": (3.0, 3.2)},
+                },
+            ],
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        [finding] = live_entities(store, "pii")
+        assert finding.extent == (1.0, 3.2)
+
+    def test_a_bracketed_word_stays_in_the_haystack_so_positions_line_up(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test 27b: my [UM] name is alice — four lexical words, and the finding lands on the fifth entity."""
+        _seed_speech_store(store, tmp_path, words=["my", "[UM]", "name", "is", "alice"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        verdict = _verdict_entity(store, "SPEECH")
+        assert verdict.attributes["words_n"] == 4
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        assert sum(int(span.attributes["words_n"]) for span in spans) == 4
+        um = next(w for w in live_entities(store, "word") if w.attributes["text"] == "[UM]")
+        assert um.extent is not None
+        assert not any(
+            s.extent is not None and s.extent[0] <= um.extent[0] and s.extent[1] >= um.extent[1] for s in spans
+        )
+        alice = next(w for w in live_entities(store, "word") if w.attributes["index"] == 4)
+        assert alice.attributes["text"] == "alice"
+        marks = [e for e in live_entities(store, "assertion") if e.attributes.get("label") == "pii"]
+        assert [store.derived_from(m.id) for m in marks] == [[alice.id]]
 
     def test_a_finding_carries_category_and_extent_never_text(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1157,7 +1290,7 @@ class TestPiiOnTheConsensus:
         assert "alice" not in str(finding.attributes)
         assert "alice" not in result.verdict.why
 
-    def test_a_finding_names_the_recognizers_behind_the_words_it_rests_on(
+    def test_a_finding_names_the_sources_behind_the_words_it_rests_on(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A finding resting on one recognizer alone must be legible as such."""
@@ -1166,7 +1299,14 @@ class TestPiiOnTheConsensus:
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         finding = live_entities(store, "pii")[0]
-        assert len(finding.attributes["recognizers"]) == 2
+        assert finding.attributes["sources"] == ["asr_crisperwhisper", "asr_qwen"]
+        assert "recognizers" not in finding.attributes
+
+        alone = ProvStore(run_id="alone")
+        _seed_speech_store(alone, tmp_path, words=["my", "name", {"text": "alice", "sources": ["asr_qwen"]}])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")], only_where_present=True)
+        speech(alone, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert live_entities(alone, "pii")[0].attributes["sources"] == ["asr_qwen"]
 
     def test_a_finding_marks_the_word_elements(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

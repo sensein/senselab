@@ -40,7 +40,7 @@ class TestSeeder:
         seed_preprocess_store(store, words=[], yamnet_labels=[], phonation=[])
         consensus = find_measurement(store, "consensus_transcript")
         assert consensus is not None
-        assert consensus.attributes["words"] == []
+        assert consensus.attributes["n_words"] == 0 and consensus.attributes["word_ids"] == []
         pooled = find_measurement(store, "yamnet_windows")
         assert pooled is not None
         assert pooled.attributes["n_windows"] == 0
@@ -51,18 +51,19 @@ class TestSeeder:
     ) -> None:
         """The whole point of the fixture: `[]` leaves a mark on the store and `None` leaves none.
 
-        ``spans`` and ``events`` used to collapse the two through an ``or []``, which made a seeded
-        "the pass ran and proposed nothing" indistinguishable from "the pass never ran" — the exact
-        distinction six downstream suites read as ``absent`` against ``unavailable``.
+        ``spans`` used to collapse the two through an ``or []``, which made a seeded "the pass ran
+        and proposed nothing" indistinguishable from "the pass never ran" — the exact distinction
+        six downstream suites read as ``absent`` against ``unavailable``.
         """
-        seed_preprocess_store(store, spans=[], events=[], ast_labels=[], hear_labels=[])
+        seed_preprocess_store(store, spans=[], words=[], ast_labels=[], hear_labels=[])
         assert _steps(store).count("spans") == 1
         assert _steps(store).count("consensus") == 1
         assert live_entities(store, "span") == []
-        assert live_entities(store, "event") == []
+        assert live_entities(store, "word") == []
         assert find_measurement(store, "ast_windows") is not None
         assert find_measurement(store, "hear_windows") is not None
-        assert find_measurement(store, "consensus_transcript") is None
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None and consensus.attributes["n_words"] == 0
 
     def test_none_writes_no_marker_for_any_argument(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None]
@@ -118,8 +119,7 @@ class TestSeeder:
             yamnet_labels=[["Speech"], [], ["Cough", "Speech"]],
             ast_labels=[["Speech"]],
             hear_labels=[["Cough"], []],
-            words=["hello", ("world", (2.0, 2.4))],
-            events=["[COUGH]"],
+            words=["hello", ("world", (2.0, 2.4)), "[COUGH]", {"text": "um", "sources": ["asr_crisperwhisper"]}],
             phonation=[(1.0, 3.0, "voiced"), (4.0, 4.5, "unvoiced")],
             spans=[(1.0, 1.2, 30.0)],
             span_merged=2,
@@ -132,10 +132,20 @@ class TestSeeder:
         assert len(pooled.attributes["windows_by_label"]["Speech"]) == 2
         assert len(find_measurements(store, "hear_window")) == 2
         words: list[Any] = live_entities(store, "word")
-        assert [w.attributes["text"] for w in words] == ["hello", "world"]
+        assert [w.attributes["text"] for w in words] == ["hello", "world", "[COUGH]", "um"]
         assert words[1].extent == (2.0, 2.4)
-        events = live_entities(store, "event")
-        assert events[0].attributes["bracketed"] == "[COUGH]"
+        assert [w.attributes["bracketed"] for w in words] == [False, False, True, False]
+        assert [w.attributes["outcome"] for w in words] == ["agreement", "agreement", "agreement", "insertion"]
+        assert words[3].attributes["sources"] == ["asr_crisperwhisper"]
+        assert words[3].attributes["agreement"] == 0.5
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        assert consensus.attributes["text"] == "hello world [COUGH] um"
+        assert consensus.attributes["outcomes"] == {"agreement": 3, "variant": 0, "insertion": 1}
+        for name in ("asr_crisperwhisper", "asr_qwen"):
+            hypothesis = find_measurement(store, name)
+            assert hypothesis is not None and hypothesis.attributes["role"] == "asr_hypothesis"
+        assert find_measurement(store, "asr_qwen").attributes["transcript"] == "hello world [COUGH]"  # type: ignore[union-attr]
         phonation = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
         assert [e.attributes["production"] for e in phonation] == ["voiced", "unvoiced"]
         assert [e.attributes["duration_s"] for e in phonation] == [2.0, 0.5]

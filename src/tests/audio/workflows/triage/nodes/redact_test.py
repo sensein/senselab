@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 SR = 16000
 EDGE = 0.001
@@ -146,7 +147,7 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
         word_id = store.entity(
             prov_type="word",
             extent=_word_extent(index),
-            attributes={"text": text, "confidence": 0.9, "coverage": 1.0, "index": index},
+            attributes=word_attributes(text, _word_extent(index), index=index),
         )
         store.was_generated_by(word_id, consensus)
         word_ids.append(word_id)
@@ -156,12 +157,9 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
         attributes={
             "name": "consensus_transcript",
             "signal": "plain",
-            "words": [
-                {"text": text, "start": _word_extent(i)[0], "end": _word_extent(i)[1]} for i, text in enumerate(words)
-            ],
-            "provenance": {"operator": "consensus_words/resample", "n_words": len(words)},
+            "role": "consensus",
+            "n_words": len(words),
             "word_ids": word_ids,
-            "event_ids": [],
             "text": " ".join(words),
         },
     )
@@ -868,14 +866,37 @@ class TestTheTranscriptArtifact:
         """Text whose location is unknown overlaps no redaction, so it cannot be shown to be safe."""
         _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         consensus = next(a for a in store.activities("PREPROCESS") if a.step == "consensus")
-        floating = store.entity(prov_type="word", extent=None, attributes={"text": "unplaceable-sentinel"})
-        store.was_generated_by(floating, consensus)
+        floating = store.entity(
+            prov_type="word",
+            extent=None,
+            attributes={**word_attributes("unplaceable-sentinel", (0.0, 0.0), index=99), "timings": {}},
+        )
+        store.was_generated_by(floating, consensus.id)
         _stub_pii(monkeypatch, findings=[])
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         text = result.artifacts["transcript"].read_text()
         assert "unplaceable-sentinel" not in text
         assert "[UNPLACED]" in text
         assert _verdict_entity(store, "REDACT").attributes["unplaced_words_n"] == 1
+
+    def test_words_are_released_in_stream_order_not_time_order(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test 31 (C-7): extents that disagree with the index must not reorder the released text."""
+        _seed_redact_store(store, tmp_path, words=["one", "two", "three"], findings=[("PERSON", (0.0, 0.5))])
+        by_text = {w.attributes["text"]: w for w in store.entities("word")}
+        consensus = next(a for a in store.activities("PREPROCESS") if a.step == "consensus")
+        withdraw = store.activity(node="PREPROCESS", step="withdraw", parameters={})
+        store.was_invalidated_by(by_text["two"].id, withdraw)
+        late = store.entity(prov_type="word", extent=(9.0, 9.5), attributes=word_attributes("two", (9.0, 9.5), index=1))
+        store.was_generated_by(late, consensus.id)
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.artifacts["transcript"].read_text().split() == ["[PERSON]", "two", "three"]
 
     def test_a_placed_transcript_counts_no_unplaced_words(
         self,
