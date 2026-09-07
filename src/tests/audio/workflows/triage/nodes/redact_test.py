@@ -898,6 +898,44 @@ class TestTheTranscriptArtifact:
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.artifacts["transcript"].read_text().split() == ["[PERSON]", "two", "three"]
 
+    def test_a_word_whose_derived_extent_misses_its_sources_is_masked_by_the_hull(
+        self,
+        store: ProvStore,
+    ) -> None:
+        """The derived extent is a fitted estimate and can fall outside every source's reading.
+
+        Deciding the mask on it would release the name and blank the silence between the two
+        placements, so the transcript decides on the hull of the sources' own timings.
+        """
+        from senselab.audio.tasks.redaction.api import RedactionExtent
+        from senselab.audio.workflows.triage.nodes.redact import _transcript
+
+        pre = store.activity(node="PREPROCESS", step="consensus", parameters={})
+        # The sources place "alice" at 1.0-1.2 and 5.4-5.8; the fit derives 3.0-3.2, between them.
+        ids = [
+            store.entity(
+                prov_type="word",
+                extent=extent,
+                attributes=word_attributes(text, extent, index=index, timings=timings),
+            )
+            for index, (text, extent, timings) in enumerate(
+                [
+                    ("one", (0.1, 0.4), {"asr_a": (0.1, 0.4), "asr_b": (0.1, 0.4)}),
+                    ("alice", (3.0, 3.2), {"asr_a": (1.0, 1.2), "asr_b": (5.4, 5.8)}),
+                ]
+            )
+        ]
+        for word_id in ids:
+            store.was_generated_by(word_id, pre)
+        words = [store.get_entity(word_id) for word_id in ids]
+        planned = [RedactionExtent(start=0.9, end=1.3, category="PERSON")]
+
+        text, unplaced = _transcript(words, planned)
+
+        assert "alice" not in text, "the name survived because the mask read the fitted extent"
+        assert text == "one [PERSON]"
+        assert unplaced == 0
+
     def test_a_placed_transcript_counts_no_unplaced_words(
         self,
         store: ProvStore,
