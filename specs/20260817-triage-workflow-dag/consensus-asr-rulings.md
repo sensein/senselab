@@ -82,31 +82,42 @@ transcript itself.
 A consequence worth stating: a span consumer that wants a different grouping is free to compute it,
 and doing so cannot change the transcript.
 
-## R-5. The product is a linear consensus text stream; timing is word-level metadata on it
+## R-5. The stream is linear, its times are monotonic, and conflict is recorded as uncertainty
 
-Consensus produces a **consensus text stream**: one linear sequence of words. Each position in that
-sequence carries word-level metadata — the text, which sources produced it, each source's own
-reading, each source's own timing, and the onset/offset derived from them.
+Consensus produces a **consensus text stream**: one linear sequence. Each position carries
+word-level metadata — the text, which sources produced it, each source's own reading, each
+source's own timing, and a derived onset/offset.
 
-The sequence is the artifact. Timing is metadata attached to positions in it, never the thing that
-orders it.
+Four rules, in priority order:
 
-**Onsets are not monotonic along the stream, and no consumer may assume they are.** Measured on
-`sub-1f4ea26f…task-Story-recall-(v2)`: 7 of 226 columns open earlier than the column before them.
-Every one is a single-source disfluency whose timing overlaps the agreed word that follows it —
+1. **Sequence alignment is authoritative** for what matches what and for the order of the stream.
+2. **Each source's own timing is recorded verbatim**, per source, on the word.
+3. **The derived onset/offset is monotonically non-decreasing along the stream.** Speech is
+   monotonic, and every source is internally monotonic — measured on
+   `sub-1f4ea26f…task-Story-recall-(v2)`, zero backwards onsets within CrisperWhisper's 225 words
+   or Qwen's 213.
+4. **Where the sources disagree about a word's time, or where rule 3 has to move one, the word
+   carries a correspondingly high temporal uncertainty.** The conflict is recorded. It is never
+   resolved by discarding a source's reading, and never by rejecting the alignment.
+
+**A timing conflict is not proof that the alignment is wrong.** The recognizer and its forced
+aligner can each be wrong, and a wide disagreement is a statement about confidence in the time, not
+about the sequence.
+
+The case that settles it:
 
 ```
-col 34  a-    9.60 < 9.88    then  gets   (agreed)
-col 44  the  12.64 < 12.79   then  and    (agreed)
-col 47  d-   12.80 < 13.29   then  the    (agreed)
-col 93  [UM] 31.20 < 31.52   then  the    (agreed)
-col135  ba-  47.76 < 48.04   then  loses  (agreed)
-col150  [UM] 52.16 < 52.24   then  the    (agreed)
-col165  But  58.07 < 58.08   then  at     (agreed)
+CW:   The@31.30   [UM]@31.52   the@35.30   little@35.36   boy@35.58
+Qwen: the@31.20                            little@35.28   boy@35.60
 ```
 
-which is what a verbatim recognizer produces for a stumble immediately before a word. Three of the
-seven are the duplicate pairs that prompted this work.
+Alignment pairs CW's `the`@35.30 with Qwen's `the`@31.20 — 4.1 s apart. It is tempting to call that
+a mispairing, and it may be: Qwen has no token at all between 31.20 and 35.28, so its `the`@31.20
+may correspond to CW's `The`@31.30, or to CW's `[UM]`@31.52, since a hesitation and a reduced
+article are both schwa. But CW's `the`@35.30 is 60 ms long and butts exactly against `little`@35.36
+— the signature of a forced aligner squeezing a token into a gap. The timestamp is at least as
+suspect as the alignment.
 
-The linear order therefore cannot be recovered from the timings, and any consumer that sorts words
-by onset scrambles the transcript. That is the entire defect, stated once.
+So the two `the`s stay aligned in sequence, and the word carries a high temporal uncertainty. The
+alignment is kept because the sequence evidence supports it; the 4.1 s spread is reported because
+it is real and a downstream reader must be able to see it.
