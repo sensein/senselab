@@ -185,6 +185,10 @@ def ensure_venv(
     Stage 2's transitive resolution against PyPI can split them across
     mismatched local-version tags.
 
+    The venv directory name reflects the resolved install: ``name`` unchanged for a
+    torch-free backend, ``f"{name}-{tag}"`` (e.g. ``"crisperwhisper-cu128"``) for a
+    torch-bearing one, where ``tag`` is the resolved ``TorchIndex.tag``.
+
     Args:
         name: Unique identifier for this venv (e.g., "coqui", "ppgs").
         requirements: List of pip install specs (e.g., ["coqui-tts~=0.27"]).
@@ -198,7 +202,20 @@ def ensure_venv(
     Returns:
         Path to the venv directory.
     """
-    venv_dir = _cache_dir() / name
+    # Resolved before the directory is named -- see specs/20260907-venv-dir-keyed-by-index/
+    # for why. A torch-free backend resolves no index and keeps the bare ``name``; a
+    # torch-bearing backend's directory carries the resolved ``TorchIndex.tag``.
+    torch_specs = _torch_install_specs(requirements)
+    host_cuda: Optional[HostCuda] = None
+    torch_index: Optional[TorchIndex] = None
+    if torch_specs:
+        env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
+        probed = detect_host_cuda()
+        host_cuda = probed
+        torch_index = pick_torch_index(probed, env_override=env_override, max_cuda_version=max_cuda_version)
+
+    dir_name = f"{name}-{torch_index.tag}" if torch_index is not None else name
+    venv_dir = _cache_dir() / dir_name
     marker = venv_dir / ".senselab-installed"
 
     # SharedFileLock derives its own ".lock" / ".heartbeat" paths from venv_dir by
@@ -234,24 +251,10 @@ def ensure_venv(
             )
             continue
     try:
-        # Auto-detect whether this venv routes torch through the CUDA
-        # index: any caller-declared torch / torchaudio spec triggers the
-        # probe + Stage-1 install. A backend that pins neither (yamnet,
-        # continuous-ser, or future torch-free venvs) skips the probe
-        # entirely — no ``nvidia-smi`` shellout, no ``torchaudio`` forced
-        # into the install. The probe still runs (when triggered) even
-        # with ``SENSELAB_TORCH_INDEX_URL`` set so its result can be
-        # surfaced in the diagnostic when an install failure wraps into
-        # ``SenselabCudaCompatibilityError``.
-        torch_specs = _torch_install_specs(requirements)
-        host_cuda: Optional[HostCuda] = None
-        torch_index: Optional[TorchIndex] = None
-        if torch_specs:
-            env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
-            probed = detect_host_cuda()
-            host_cuda = probed
-            torch_index = pick_torch_index(probed, env_override=env_override, max_cuda_version=max_cuda_version)
-
+        # Defensive check, not load-bearing: `dir_name` already carries the resolved
+        # `torch_index.tag`, so two different indexes can no longer collide on one
+        # `venv_dir`. A mismatch here means `dir_name` itself is wrong -- see the
+        # `logger.error` below and specs/20260907-venv-dir-keyed-by-index/.
         expected_index_url = torch_index.url if torch_index is not None else None
         if marker.is_file():
             stored = json.loads(marker.read_text())
@@ -259,6 +262,17 @@ def ensure_venv(
             if stored.get("requirements") == sorted(requirements) and stored_index_url == expected_index_url:
                 logger.debug("Reusing existing venv: %s", venv_dir)
                 return venv_dir
+            if stored.get("requirements") == sorted(requirements) and stored_index_url != expected_index_url:
+                logger.error(
+                    "Venv '%s' at %s has a stale torch_index (%r != %r) despite a device-keyed "
+                    "directory name -- this means the directory key ('%s') no longer reflects "
+                    "the resolved index, not that a legitimate device change occurred.",
+                    name,
+                    venv_dir,
+                    stored_index_url,
+                    expected_index_url,
+                    dir_name,
+                )
 
         uv = _find_uv()
         py_ver = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"

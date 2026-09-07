@@ -211,7 +211,7 @@ def test_marker_without_torch_index_triggers_rebuild(
 ) -> None:
     """An existing marker from the pre-fix code (no ``torch_index`` key) must rebuild."""
     name = "t-no-index"
-    venv_dir = fake_cache_dir / name
+    venv_dir = fake_cache_dir / f"{name}-cu128"
     venv_dir.mkdir(parents=True)
     (venv_dir / ".senselab-installed").write_text(
         json.dumps({"requirements": ["torch>=2.8,<2.9"], "python_version": "3.12"})
@@ -240,7 +240,7 @@ def test_marker_with_matching_torch_index_is_cache_hit(
 ) -> None:
     """A marker whose requirements + ``torch_index.url`` match → no install, no rebuild."""
     name = "t-cache-hit"
-    venv_dir = fake_cache_dir / name
+    venv_dir = fake_cache_dir / f"{name}-cu128"
     venv_dir.mkdir(parents=True)
     (venv_dir / ".senselab-installed").write_text(
         json.dumps(
@@ -272,9 +272,17 @@ def test_marker_with_different_torch_index_triggers_rebuild(
     force_cu128: TorchIndex,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A marker with a different ``torch_index.url`` (e.g. resolution changed) must rebuild."""
+    """A marker whose stored index disagrees with the directory's own key must still rebuild.
+
+    With the directory itself keyed by ``torch_index.tag``, two different indexes can no
+    longer collide on one ``venv_dir`` -- a resolved ``cu128`` lands in ``t-different-
+    index-cu128``, never in a directory holding a ``cu121`` marker. This exercises the
+    defensive fallback for a marker that disagrees with its own directory's key anyway
+    (e.g. hand-edited, or a bug in the key computation): it must still rebuild rather than
+    trust a stale marker.
+    """
     name = "t-different-index"
-    venv_dir = fake_cache_dir / name
+    venv_dir = fake_cache_dir / f"{name}-cu128"
     venv_dir.mkdir(parents=True)
     (venv_dir / ".senselab-installed").write_text(
         json.dumps(
@@ -326,6 +334,113 @@ def test_a_takeover_during_build_refuses_to_certify_the_venv(
         ensure_venv(name, ["some-pure-python-pkg==1.0"], python_version="3.12")
 
     assert not venv_dir.exists(), "a venv that lost its lock must be removed, not left half-certified"
+
+
+# ── Directory keyed by dependency (device-keyed venv directories) ─────
+
+
+def test_torch_free_dir_is_stable_across_calls_and_carries_no_tag_suffix(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A torch-free backend's directory is the bare ``name`` -- no tag, no host dependence.
+
+    The probe never runs for a torch-free ``requirements`` list, so nothing about the
+    host or an env override can affect which directory it resolves to: a CPU node and a
+    GPU node build the identical venv and must share it, never rebuild over each other.
+    """
+    name = "t-torch-free-stable"
+    monkeypatch.setattr(
+        subprocess_venv,
+        "detect_host_cuda",
+        lambda: (_ for _ in ()).throw(AssertionError("torch-free venv must not invoke the probe")),
+    )
+
+    recorder = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+    out = ensure_venv(name, ["some-pure-python-pkg==1.0"], python_version="3.12")
+
+    assert out == fake_cache_dir / name
+    assert out.name == name, "a torch-free venv directory must carry no tag suffix"
+
+    # A second call (cache hit -- zero subprocess invocations) resolves the same directory.
+    recorder2 = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder2)
+    out2 = ensure_venv(name, ["some-pure-python-pkg==1.0"], python_version="3.12")
+    assert out2 == out
+    assert recorder2.calls == []
+
+
+def test_torch_bearing_dir_differs_by_resolved_index(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two different resolved indexes for the same backend name land in two different directories.
+
+    Driven entirely through ``SENSELAB_TORCH_INDEX_URL`` so no GPU is needed: unset, a
+    torch-bearing backend on a host with no CUDA resolves the ``cpu`` index; with the
+    override set, it resolves ``override`` -- two different tags, two different
+    directories, never one directory that both builds fight over.
+    """
+    name = "t-index-dir"
+    monkeypatch.setattr(subprocess_venv, "detect_host_cuda", lambda: HostCuda(version=None, source="none", raw=""))
+
+    recorder = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+    cpu_dir = ensure_venv(name, ["torch>=2.8,<2.9"], python_version="3.12")
+    assert cpu_dir == fake_cache_dir / f"{name}-cpu"
+
+    monkeypatch.setenv("SENSELAB_TORCH_INDEX_URL", "https://pypi.internal.example.com/pytorch/cu128")
+    recorder2 = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder2)
+    override_dir = ensure_venv(name, ["torch>=2.8,<2.9"], python_version="3.12")
+    assert override_dir == fake_cache_dir / f"{name}-override"
+
+    assert override_dir != cpu_dir
+    assert cpu_dir.exists()
+    assert override_dir.exists()
+
+
+def test_dir_name_carries_every_tag_pick_torch_index_can_produce(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every tag ``pick_torch_index`` can return folds into a valid, single-path-component directory name.
+
+    Enumerated from the source rather than hand-listed: the static CUDA-index map
+    (``cu128``/``cu126``/``cu124``/``cu121``) plus the two tags ``pick_torch_index``
+    returns outside that map (``cpu`` for no host CUDA, ``override`` for an operator's
+    ``SENSELAB_TORCH_INDEX_URL``). Adding a future ``cuXXX`` entry to the map is picked
+    up automatically -- this test does not hardcode the tag list.
+    """
+    from senselab.utils.cuda_probe import _PYTORCH_INDEX_MAP
+
+    tags = {tag for tag, _ in _PYTORCH_INDEX_MAP} | {"cpu", "override"}
+    assert tags == {"cu128", "cu126", "cu124", "cu121", "cpu", "override"}, (
+        "the static CUDA-index map grew or shrank -- update this test's expectations, not just the map"
+    )
+
+    for tag in sorted(tags):
+        idx = TorchIndex(url=f"https://example.invalid/{tag}", tag=tag, cuda_version=None, source="static-map")
+        monkeypatch.setattr(subprocess_venv, "detect_host_cuda", lambda: HostCuda(version=None, source="none", raw=""))
+        monkeypatch.setattr(
+            subprocess_venv,
+            "pick_torch_index",
+            lambda host_cuda, env_override=None, max_cuda_version=None, idx=idx: idx,
+        )
+        recorder = _SubprocessRecorder()
+        monkeypatch.setattr(subprocess, "run", recorder)
+
+        out = ensure_venv(f"t-tag-{tag}", ["torch>=2.8,<2.9"], python_version="3.12")
+
+        assert out.name == f"t-tag-{tag}-{tag}"
+        # A valid single path component: no separators, and not "." / "..".
+        assert os.sep not in out.name
+        assert out.name not in (".", "..")
+        assert out.parent == fake_cache_dir
 
 
 # ── Install argv routing ───────────────────────────────────────────
@@ -508,29 +623,37 @@ def test_adding_torch_to_requirements_invalidates_torch_free_cache(
     force_cu128: TorchIndex,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A venv built without torch must rebuild if the requirements later grow a torch spec.
+    """A venv built without torch is left alone when requirements later grow a torch spec.
 
-    The torch-free marker has no ``torch_index`` field; when a torch-
-    requiring call sees its expected ``torch_index.url`` differs from
-    the stored ``None``, the marker mismatches and the venv rebuilds.
+    Directories are keyed by dependency, so a torch-free venv (bare ``name``) and a
+    torch-bearing one (``f"{name}-{tag}"``) are simply two different directories -- the
+    torch-requiring call never touches, invalidates, or rebuilds the old torch-free
+    directory. It builds fresh under the tag-suffixed name instead, orphaning the old
+    one (see the migration note in specs/20260907-venv-dir-keyed-by-index/).
     """
     name = "t-switch-to-torch"
-    venv_dir = fake_cache_dir / name
-    venv_dir.mkdir(parents=True)
-    (venv_dir / ".senselab-installed").write_text(
+    old_venv_dir = fake_cache_dir / name
+    old_venv_dir.mkdir(parents=True)
+    (old_venv_dir / ".senselab-installed").write_text(
         json.dumps({"requirements": ["some-pure-python-pkg==1.0"], "python_version": "3.12"})
     )
 
     recorder = _SubprocessRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)
 
-    # Same name, but requirements now include a torch pin → Stage 1 must fire.
-    ensure_venv(name, ["some-pure-python-pkg==1.0", "torch>=2.8,<2.9"], python_version="3.12")
+    # Same name, but requirements now include a torch pin → resolves a new, tag-suffixed directory.
+    out = ensure_venv(name, ["some-pure-python-pkg==1.0", "torch>=2.8,<2.9"], python_version="3.12")
 
-    # uv venv + Stage 1 + Stage 2 — full rebuild kicked in.
+    new_venv_dir = fake_cache_dir / f"{name}-cu128"
+    assert out == new_venv_dir
+    assert out != old_venv_dir
+    # uv venv + Stage 1 + Stage 2 — a full install into the new directory.
     assert len(recorder.calls) == 3
-    written = json.loads((venv_dir / ".senselab-installed").read_text())
+    written = json.loads((new_venv_dir / ".senselab-installed").read_text())
     assert written["torch_index"]["url"] == force_cu128.url
+    # The old torch-free directory is untouched -- orphaned, not invalidated in place.
+    old_written = json.loads((old_venv_dir / ".senselab-installed").read_text())
+    assert "torch_index" not in old_written
 
 
 def test_yamnet_style_requirements_omit_torchaudio_from_install(
@@ -598,8 +721,11 @@ def test_env_override_routes_through_override_url_and_still_probes_for_diagnosti
     install_argv = recorder.calls[1]
     idx_pos = install_argv.index("--index-url")
     assert install_argv[idx_pos + 1] == override_url
+    # The venv directory itself carries the "override" tag.
+    venv_dir = fake_cache_dir / f"{name}-override"
+    assert venv_dir.is_dir()
     # Marker records the override source.
-    written = json.loads((fake_cache_dir / name / ".senselab-installed").read_text())
+    written = json.loads((venv_dir / ".senselab-installed").read_text())
     assert written["torch_index"]["source"] == "env-override"
     assert written["torch_index"]["tag"] == "override"
 
@@ -621,7 +747,7 @@ def test_env_override_empty_string_does_not_short_circuit(
 
     ensure_venv(name, ["torch>=2.8,<2.9"], python_version="3.12")
 
-    written = json.loads((fake_cache_dir / name / ".senselab-installed").read_text())
+    written = json.loads((fake_cache_dir / f"{name}-cu124" / ".senselab-installed").read_text())
     assert written["torch_index"]["source"] == "static-map"
     assert written["torch_index"]["tag"] == "cu124"
 
@@ -662,8 +788,8 @@ def test_no_matching_distribution_failure_wraps_into_compatibility_error(
     err = excinfo.value
     assert err.attempted_index.url == force_cu128.url
     assert any("torch>=2.8,<2.9" in p for p in err.failing_packages)
-    # Half-built venv must be wiped.
-    assert not (fake_cache_dir / name).exists()
+    # Half-built venv must be wiped -- at its resolved, tag-suffixed directory.
+    assert not (fake_cache_dir / f"{name}-cu128").exists()
 
 
 def test_unrelated_install_failure_passes_through_as_called_process_error(
@@ -692,7 +818,7 @@ def test_unrelated_install_failure_passes_through_as_called_process_error(
     with pytest.raises(subprocess.CalledProcessError):
         ensure_venv(name, ["torch>=2.8,<2.9"], python_version="3.12")
     # The half-built venv is also wiped for unrelated failures so next run starts clean.
-    assert not (fake_cache_dir / name).exists()
+    assert not (fake_cache_dir / f"{name}-cu128").exists()
 
 
 # ── _classify_uv_failure unit tests ────────────────────────────────
