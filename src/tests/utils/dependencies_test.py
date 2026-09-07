@@ -234,10 +234,10 @@ def test_heartbeat_lock_class_removed() -> None:
 def test_ensure_hf_model_locks_via_shared_file_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The slow path in ensure_hf_model must acquire via SharedFileLock, not a bare filelock.FileLock.
 
-    SharedFileLock is what stamps a JSON holder identity (user/host/pid) into the lock file
-    while it is held; a bare `filelock.FileLock` never writes any content there. Reading that
-    identity back from *inside* the locked `snapshot_download` call proves the real class is
-    wired in as the thing serialising the download, not merely imported and unused.
+    SharedFileLock is what stamps a JSON holder identity (user/host/pid) into the ``.holder``
+    file while it is held; a bare `filelock.FileLock` never writes any content there. Reading
+    that identity back from *inside* the locked `snapshot_download` call proves the real class
+    is wired in as the thing serialising the download, not merely imported and unused.
     """
     monkeypatch.setattr(dep, "_senselab_cache_dir", lambda: tmp_path)
     monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: False)
@@ -249,8 +249,8 @@ def test_ensure_hf_model_locks_via_shared_file_lock(tmp_path: Path, monkeypatch:
     captured: dict = {}
 
     def fake_snapshot_download(**kwargs: object) -> None:
-        lock_path = tmp_path / f"{dep._safe_key('org/model', 'main')}.lock"
-        captured["holder"] = lock_holder(lock_path)
+        holder_path = tmp_path / f"{dep._safe_key('org/model', 'main')}.holder"
+        captured["holder"] = lock_holder(holder_path)
 
     monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 

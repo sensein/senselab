@@ -184,8 +184,75 @@ def _find_uv() -> str:
 
 # ── Venv management ──────────────────────────────────────────────────
 
+# Overrides the build-lock timeout below; see
+# specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md for the
+# derivation of the packaged default from measured cold-build times.
+_VENV_LOCK_TIMEOUT_ENV = "SENSELAB_VENV_LOCK_TIMEOUT"
+_DEFAULT_VENV_LOCK_TIMEOUT = 1200.0
+
+# Bounded retries for the rare case where a completed build finds it no longer owns the lock
+# (see `_VenvLockLost`) -- not a threshold fitted to data, just a small ceiling so a genuine
+# takeover gets a few chances to reuse whoever won before giving up.
+_MAX_LOCK_LOST_RETRIES = 3
+
+
+def _venv_lock_timeout() -> float:
+    """Return the configured venv-build lock timeout, in seconds."""
+    return float(os.environ.get(_VENV_LOCK_TIMEOUT_ENV, str(_DEFAULT_VENV_LOCK_TIMEOUT)))
+
+
+class _VenvLockLost(RuntimeError):
+    """A just-completed build found it no longer owns the lock it built under.
+
+    Raised by :func:`_ensure_venv_once` and retried a bounded number of times by
+    :func:`ensure_venv`. See
+    specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md.
+    """
+
 
 def ensure_venv(
+    name: str,
+    requirements: list[str],
+    python_version: Optional[str] = None,
+    max_cuda_version: Optional[tuple[int, int]] = None,
+) -> Path:
+    """Create or reuse an isolated virtual environment, retrying a lost-lock build a few times.
+
+    Delegates to :func:`_ensure_venv_once` for one attempt. If that attempt's own build
+    completes but then finds another process took over the lock in the meantime
+    (:class:`_VenvLockLost`), the attempt is retried up to ``_MAX_LOCK_LOST_RETRIES`` times: a
+    fresh attempt re-acquires the lock and re-checks the completion marker first, so it reuses
+    whatever the other process finished instead of rebuilding, unless no marker is present yet.
+
+    Args:
+        name: Unique identifier for this venv (e.g., "coqui", "ppgs").
+        requirements: List of pip install specs (e.g., ["coqui-tts~=0.27"]).
+        python_version: Python version (e.g., "3.11"). Defaults to current.
+        max_cuda_version: Optional ceiling on the CUDA wheel index for this venv, forwarded to
+            ``pick_torch_index``. ``None`` applies no cap.
+
+    Returns:
+        Path to the venv directory.
+    """
+    last_error: Optional[_VenvLockLost] = None
+    for attempt in range(1, _MAX_LOCK_LOST_RETRIES + 1):
+        try:
+            return _ensure_venv_once(name, requirements, python_version, max_cuda_version)
+        except _VenvLockLost as exc:
+            last_error = exc
+            logger.warning(
+                "ensure_venv('%s'): lost the lock during build (attempt %d/%d); re-acquiring and "
+                "checking for a completed venv before rebuilding: %s",
+                name,
+                attempt,
+                _MAX_LOCK_LOST_RETRIES,
+                exc,
+            )
+    assert last_error is not None  # the loop above always sets this before falling through
+    raise last_error
+
+
+def _ensure_venv_once(
     name: str,
     requirements: list[str],
     python_version: Optional[str] = None,
@@ -238,27 +305,17 @@ def ensure_venv(
     venv_dir = _cache_dir() / dir_name
     marker = venv_dir / ".senselab-installed"
 
-    # SharedFileLock derives its own ".lock" / ".heartbeat" paths from venv_dir by
-    # appending (never Path.with_suffix, which would collide two venv names differing
-    # only after a dot -- see file_lock.py's class docstring). timeout=600 matches this
-    # module's original FileLock timeout and is in fact the case SharedFileLock's own
-    # default was derived from: a venv install can legitimately take minutes. Unlike the
-    # plain FileLock this replaces, a holder that dies mid-install is detected on the
-    # next uncontended acquire (stale heartbeat) rather than blocking every waiter for
-    # the full 600s and then raising.
-    #
-    # Reaching `except TimeoutError` below proves the opposite: SharedFileLock's contract
-    # is that a timeout means the flock was held *continuously* for the whole window, which
-    # a crashed process cannot do (its flock is kernel-released the instant it exits) -- so
-    # this is always a live holder, however stale its heartbeat looks. These venvs install
-    # torch + torchaudio (~2.5 GB) from the PyTorch wheel index, which can legitimately
-    # exceed 600s on a congested shared filesystem or a slow mirror. Failing here instead of
-    # retrying would turn "someone else is still installing" into a hard error for every
-    # waiter -- functionally the same failure this task removed, just with a better
-    # diagnostic. SharedFileLock deliberately never retries this internally (see
-    # file_lock.py), so the unbounded wait lives here, mirroring ensure_hf_model's pattern
-    # in dependencies.py: a proven-live holder means wait longer, never take over.
-    lock = SharedFileLock(venv_dir, timeout=600)
+    # SharedFileLock derives its own ".lock" / ".heartbeat" / ".holder" paths from venv_dir by
+    # appending (never Path.with_suffix, which would collide two venv names differing only
+    # after a dot -- see file_lock.py's class docstring). See
+    # specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md for the
+    # timeout's derivation and for why `except TimeoutError` below retries unboundedly rather
+    # than raising: a timeout only proves a live holder (SharedFileLock's contract -- a crashed
+    # process's flock is kernel-released the instant it exits, so it cannot hold continuously
+    # through a whole timeout window), and this mirrors ensure_hf_model's identical pattern in
+    # dependencies.py.
+    lock_timeout = _venv_lock_timeout()
+    lock = SharedFileLock(venv_dir, timeout=lock_timeout)
     while True:
         try:
             lock.__enter__()
@@ -267,7 +324,7 @@ def ensure_venv(
             logger.info(
                 "Still waiting for another process to build venv '%s' (lock held for the last %.0fs)",
                 name,
-                600.0,
+                lock_timeout,
             )
             continue
     try:
@@ -470,7 +527,7 @@ def ensure_venv(
                 venv_dir,
             )
             shutil.rmtree(venv_dir, ignore_errors=True)
-            raise RuntimeError(f"Venv '{name}' lost its lock to a concurrent process during build; retry.")
+            raise _VenvLockLost(f"Venv '{name}' lost its lock to a concurrent process during build; retry.")
 
         # Strictly before the marker write: a hard kill (OOM, CI timeout) between chmod and
         # the marker would otherwise leave `.senselab-installed` present with the chmod pass

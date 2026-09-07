@@ -336,6 +336,90 @@ def test_a_takeover_during_build_refuses_to_certify_the_venv(
     assert not venv_dir.exists(), "a venv that lost its lock must be removed, not left half-certified"
 
 
+def test_stampede_on_a_slow_build_lets_every_late_arrival_reuse_the_winners_venv(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Several concurrent callers race one never-before-built backend: one builds, the rest reuse.
+
+    Reproduces the shape of the ORCD stampede
+    (specs/20260817-triage-workflow-dag/benchmarks/orcd-scheduling-2026-09-08.md, diagnosed in
+    specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md): several
+    processes race ``ensure_venv`` for one backend while the (stubbed) build outlasts a lock
+    timeout shorter than it -- the same shape as 600s against measured 590-800s
+    ``crisperwhisper`` cold builds, at test scale. Threads, not processes: ``time.sleep``
+    releases the GIL and ``fcntl.flock`` treats distinct open file descriptions (one per
+    ``filelock`` poll attempt) independently even within one process, so this gets genuine
+    OS-level lock contention without subprocess/env-var plumbing.
+
+    Before the fix (holder identity stored inside the same ``.lock`` file ``filelock``
+    truncates on every failed poll, verified by running this test against the code at
+    ``d349b216``): the eventual winner's own ``owns()`` check reads back no identity -- wiped
+    by the other threads' concurrent polling -- so it raises "lost its lock" and deletes the
+    venv it just finished, even though it never actually lost the OS-level flock; this
+    reproduces as one or more ``RuntimeError`` results below and more than one real "install"
+    call. After the fix, ``owns()`` reads the separate ``.holder`` file that only a genuine new
+    holder ever writes, so the winner certifies normally and every other thread's own eventual
+    acquire hits the marker fast path: zero errors, one real build.
+    """
+    import threading
+    import time as time_module
+
+    name = "t-stampede"
+    build_seconds = 1.0
+    n_workers = 6
+    install_calls: list[int] = []
+    install_lock = threading.Lock()
+    start_barrier = threading.Barrier(n_workers)
+
+    def fake_run(
+        argv: list[str],
+        check: bool = False,
+        capture_output: bool = False,
+        text: bool = False,
+        **_: object,
+    ) -> subprocess.CompletedProcess:
+        if len(argv) >= 5 and argv[1] == "venv" and argv[2] == "--python":
+            Path(argv[4]).mkdir(parents=True, exist_ok=True)
+        elif len(argv) >= 3 and argv[1] == "pip" and argv[2] == "install":
+            with install_lock:
+                install_calls.append(threading.get_ident())
+            time_module.sleep(build_seconds)  # releases the GIL -- see the docstring above
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    # Shorter than build_seconds -- the ORCD ratio (timeout < build) at test scale.
+    monkeypatch.setenv("SENSELAB_VENV_LOCK_TIMEOUT", "0.3")
+
+    results: list[tuple[str, object]] = []
+    results_lock = threading.Lock()
+
+    def worker() -> None:
+        start_barrier.wait()
+        try:
+            out = ensure_venv(name, ["some-pure-python-pkg==1.0"], python_version="3.12")
+            with results_lock:
+                results.append(("ok", out))
+        except Exception as exc:  # noqa: BLE001 -- capture every failure shape for the assertion below
+            with results_lock:
+                results.append(("error", exc))
+
+    threads = [threading.Thread(target=worker) for _ in range(n_workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+        assert not t.is_alive(), "a worker thread did not finish within 30s"
+
+    errors = [exc for kind, exc in results if kind == "error"]
+    assert not errors, f"{len(errors)}/{n_workers} calls raised instead of reusing a completed build: {errors}"
+    assert len(results) == n_workers
+    outs = {out for kind, out in results if kind == "ok"}
+    assert outs == {fake_cache_dir / name}
+    assert len(install_calls) == 1, f"expected exactly one real build, got {len(install_calls)}: {install_calls}"
+
+
 # ── Directory keyed by dependency (device-keyed venv directories) ─────
 
 

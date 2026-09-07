@@ -27,6 +27,16 @@ def _heartbeat_file(resource: Path) -> Path:
     return Path(str(resource) + ".heartbeat")
 
 
+def _holder_file(resource: Path) -> Path:
+    """Mirror SharedFileLock's own derivation: append, not `Path.with_suffix`.
+
+    Holder identity (user/host/pid/token) lives here, never in `.lock` itself -- see
+    specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md for why
+    `filelock`'s own polling makes `.lock`'s content unfit to carry it.
+    """
+    return Path(str(resource) + ".holder")
+
+
 def test_lock_and_heartbeat_files_are_group_writable(tmp_path: Path) -> None:
     """A second user must be able to refresh the heartbeat and break a stale lock.
 
@@ -39,8 +49,10 @@ def test_lock_and_heartbeat_files_are_group_writable(tmp_path: Path) -> None:
     with SharedFileLock(resource):
         lock_file = _lock_file(resource)
         heartbeat = _heartbeat_file(resource)
+        holder = _holder_file(resource)
         assert stat.S_IMODE(lock_file.stat().st_mode) & 0o060 == 0o060
         assert stat.S_IMODE(heartbeat.stat().st_mode) & 0o060 == 0o060
+        assert stat.S_IMODE(holder.stat().st_mode) & 0o060 == 0o060
 
 
 def test_lock_directory_is_setgid_and_group_writable(tmp_path: Path) -> None:
@@ -87,7 +99,7 @@ def test_holder_identity_is_recorded_while_held(tmp_path: Path) -> None:
     """
     resource = tmp_path / "thing"
     with SharedFileLock(resource):
-        holder = lock_holder(_lock_file(resource))
+        holder = lock_holder(_holder_file(resource))
         assert holder is not None
         assert holder["pid"] == os.getpid()
         assert holder["user"] and holder["host"]
@@ -99,7 +111,7 @@ def test_holder_is_cleared_on_release(tmp_path: Path) -> None:
     resource = tmp_path / "thing"
     with SharedFileLock(resource):
         pass
-    assert lock_holder(_lock_file(resource)) is None
+    assert lock_holder(_holder_file(resource)) is None
 
 
 def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -112,16 +124,16 @@ def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, caplog: pytest.LogCaptu
     import logging
 
     resource = tmp_path / "thing"
-    lock_file = _lock_file(resource)
+    holder_file = _holder_file(resource)
     heartbeat = _heartbeat_file(resource)
     resource.parent.mkdir(parents=True, exist_ok=True)
-    lock_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": 0}))
+    holder_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": 0}))
     heartbeat.touch()
     os.utime(heartbeat, (0, 0))  # aged, not slept
 
     with caplog.at_level(logging.WARNING):
         with SharedFileLock(resource, timeout=1.0, stale_after=60.0):
-            holder = lock_holder(lock_file)
+            holder = lock_holder(holder_file)
             assert holder is not None
             assert holder["pid"] == os.getpid()
     message = " ".join(r.message for r in caplog.records)
@@ -325,10 +337,10 @@ def test_a_holder_without_a_heartbeat_yet_is_not_taken_over(tmp_path: Path, capl
     import time
 
     resource = tmp_path / "thing"
-    lock_file = _lock_file(resource)
+    holder_file = _holder_file(resource)
     heartbeat = _heartbeat_file(resource)
     resource.parent.mkdir(parents=True, exist_ok=True)
-    lock_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time()}))
+    holder_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time()}))
     assert not heartbeat.exists()
 
     with caplog.at_level(logging.WARNING):
@@ -353,10 +365,12 @@ def test_a_holder_mid_long_install_without_a_readable_heartbeat_is_not_taken_ove
     import time
 
     resource = tmp_path / "thing"
-    lock_file = _lock_file(resource)
+    holder_file = _holder_file(resource)
     heartbeat = _heartbeat_file(resource)
     resource.parent.mkdir(parents=True, exist_ok=True)
-    lock_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time() - 400}))
+    holder_file.write_text(
+        json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time() - 400})
+    )
     assert not heartbeat.exists()
 
     with caplog.at_level(logging.WARNING):
@@ -378,15 +392,17 @@ def test_a_holder_with_no_heartbeat_and_an_old_taken_at_is_eventually_taken_over
     import time
 
     resource = tmp_path / "thing"
-    lock_file = _lock_file(resource)
+    holder_file = _holder_file(resource)
     heartbeat = _heartbeat_file(resource)
     resource.parent.mkdir(parents=True, exist_ok=True)
-    lock_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time() - 700}))
+    holder_file.write_text(
+        json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time() - 700})
+    )
     assert not heartbeat.exists()
 
     with caplog.at_level(logging.WARNING):
         with SharedFileLock(resource, stale_after=120.0, timeout=600.0):
-            holder = lock_holder(lock_file)
+            holder = lock_holder(holder_file)
             assert holder is not None
             assert holder["pid"] == os.getpid()
     message = " ".join(r.message for r in caplog.records)

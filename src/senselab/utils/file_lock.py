@@ -140,9 +140,12 @@ def lock_holder(lock_path: Path) -> Optional[dict]:
 class SharedFileLock:
     """A cross-user file lock with a heartbeat that stale-detection actually reads.
 
-    ``path`` names the resource being guarded; the lock itself lives at
-    ``path`` with ``.lock`` appended and the heartbeat at ``path`` with
-    ``.heartbeat`` appended -- string concatenation, not ``Path.with_suffix``.
+    ``path`` names the resource being guarded; the lock itself lives at ``path`` with ``.lock``
+    appended, the heartbeat at ``path`` with ``.heartbeat`` appended, and the holder identity
+    (user/host/pid/token) at ``path`` with ``.holder`` appended -- string concatenation, not
+    ``Path.with_suffix``. The identity lives in its own file, never inside ``.lock`` itself: see
+    ``specs/20260907-shared-lock-heartbeat-inf/`` for why ``filelock``'s own polling makes the
+    ``.lock`` file's content unfit to carry anything this class needs to read back.
 
     ``with_suffix`` *replaces* everything from the resource name's last dot
     onward rather than appending after it, and both prior lock implementations
@@ -209,6 +212,7 @@ class SharedFileLock:
         # Path.with_suffix here used to produce.
         self._lock_path = Path(str(path) + ".lock")
         self._heartbeat_path = Path(str(path) + ".heartbeat")
+        self._holder_path = Path(str(path) + ".holder")
         self._timeout = timeout
         self._heartbeat_interval = heartbeat_interval
         self._stale_after = stale_after
@@ -270,17 +274,29 @@ class SharedFileLock:
             "taken_at": time.time(),
             "token": self._token,
         }
-        self._lock_path.write_text(json.dumps(payload))
+        self._holder_path.write_text(json.dumps(payload))
+        # write_text recreates the inode on some filesystems, which can drop the
+        # group-writable bit _touch_shared set up before acquisition; reassert it.
+        try:
+            os.chmod(self._holder_path, LOCK_FILE_MODE)
+        except OSError:
+            pass
 
     def owns(self) -> bool:
-        """Return whether this instance is still the identity recorded at the lock path.
+        """Return whether this instance is still the identity recorded at the holder path.
 
         A takeover elsewhere overwrites that identity without contacting this process, so a
         caller doing long-running work under the lock should call this before an
         irreversible step (e.g. declaring a build complete) rather than assume that holding
         this Python object still means holding the resource.
+
+        Reads ``.holder``, never ``.lock``: unlike the lock file, nothing but an actual new
+        holder's own ``_write_holder()`` call ever writes to ``.holder``, so a waiter's failed,
+        non-blocking poll attempts -- which truncate ``.lock`` on every single one, per
+        ``lock_holder``'s docstring -- cannot erase this instance's own identity out from under
+        it while it is still the genuine, live holder.
         """
-        current = lock_holder(self._lock_path)
+        current = lock_holder(self._holder_path)
         return current is not None and self._token is not None and current.get("token") == self._token
 
     def _warn_stale_takeover(self, holder: dict, age: float, basis: str, bound: float) -> None:
@@ -308,9 +324,11 @@ class SharedFileLock:
 
         See ``specs/20260907-shared-lock-heartbeat-inf/`` for why the ``else`` branch
         gates on *how long the acquire took* rather than re-reading holder content
-        afterward: ``filelock`` truncates the lock file on every attempt (including a
+        afterward: ``filelock`` truncates the ``.lock`` file on every attempt (including a
         contender's failed polls), so content read post-acquire cannot distinguish a
-        clean release from a crash leftover, but elapsed wait time can.
+        clean release from a crash leftover, but elapsed wait time can. Holder identity
+        itself lives in the separate ``.holder`` file precisely so this reasoning about
+        the ``.lock`` file's content doesn't have to extend to identity too.
 
         Returns:
             This instance, for use as a context manager.
@@ -321,10 +339,12 @@ class SharedFileLock:
         """
         _ensure_dir(self._lock_path.parent, manage_mode=self._manage_dir_mode)
         _touch_shared(self._lock_path)
-        # Read whatever identity is on disk *before* any acquire attempt: `filelock`
-        # truncates the lock file with O_TRUNC on every `_acquire()` call it makes,
-        # including a failed poll, so this is the only read guaranteed to precede that.
-        previous_holder: Optional[dict] = lock_holder(self._lock_path)
+        _touch_shared(self._holder_path)
+        # Read whatever identity is on disk before any acquire attempt. `.holder` is never
+        # touched by `filelock`'s own polling (unlike `.lock`, which it truncates on every
+        # `_acquire()` call, including a failed poll -- see `lock_holder`'s docstring), so
+        # this snapshot stays valid for the whole attempt, not just up to the first poll.
+        previous_holder: Optional[dict] = lock_holder(self._holder_path)
         acquire_started = time.monotonic()
         try:
             self._lock.acquire(timeout=self._timeout)
@@ -348,7 +368,7 @@ class SharedFileLock:
                 f"Timed out after {self._timeout:.1f}s waiting for lock at {self._lock_path}: {detail}. "
                 "The OS-level lock was held for the entire wait, which a crashed process cannot do, so this "
                 "is a live holder even though its heartbeat may look stale -- it is not broken automatically. "
-                "If that process is confirmed dead, remove the .lock file by hand."
+                "If that process is confirmed dead, remove the .lock and .holder files by hand."
             ) from None
         else:
             # A measurable wait means the flock was actually held until moments ago: a
@@ -374,13 +394,6 @@ class SharedFileLock:
                     self._warn_stale_takeover(previous_holder, age, basis, bound)
 
         self._write_holder()
-        # The lock file's mode survives write_text (it rewrites content, not the
-        # inode), but re-assert it: some filesystems/implementations recreate
-        # the inode on write, which would silently drop the group-writable bit.
-        try:
-            os.chmod(self._lock_path, LOCK_FILE_MODE)
-        except OSError:
-            pass
         self._stop_event.clear()
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
@@ -393,17 +406,5 @@ class SharedFileLock:
         if self._heartbeat_thread is not None:
             self._heartbeat_thread.join(timeout=5)
         self._heartbeat_path.unlink(missing_ok=True)
-        try:
-            # `filelock.UnixFileLock._release()` (called below) unconditionally
-            # attempts to unlink the lock file itself, so this content does not
-            # normally survive past this call -- the next acquirer's
-            # `_touch_shared` recreates the file from nothing, not from what we
-            # leave here. Truncating first is a backstop for the case where
-            # that unlink silently fails (`_release()` suppresses `OSError`,
-            # e.g. a permission or network hiccup on a shared tree): even then,
-            # `lock_holder()` reads the leftover file as unheld rather than
-            # reporting our identity indefinitely.
-            self._lock_path.write_text("")
-        except OSError:
-            pass
+        self._holder_path.unlink(missing_ok=True)
         self._lock.release()
