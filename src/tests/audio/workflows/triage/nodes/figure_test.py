@@ -383,9 +383,18 @@ class TestTheWordLaneDrawsEachSourceInItsOwnBand:
             self._word(1, "uh", "insertion", {"a": (0.8, 0.9)}, (0.8, 0.9)),
         ]
         axis, _, _ = self._draw(words)
-        assert axis.get_title() == "consensus ASR — a: #fdae6b, b: #6baed6"
-        weights = {text.get_text(): text.get_fontweight() for text in axis.texts}
-        assert weights == {"I": "bold", "uh": "normal"}
+        from matplotlib.colors import to_rgba
+
+        assert axis.get_title() == "consensus ASR", "the legend belongs beside the lane, not in the title"
+        # The legend is placed in axes coordinates; the words are placed in data coordinates.
+        in_axes = [text for text in axis.texts if text.get_transform() == axis.transAxes]
+        in_data = [text for text in axis.texts if text.get_transform() != axis.transAxes]
+        assert {text.get_text(): to_rgba(text.get_color()) for text in in_axes} == {
+            "a": to_rgba("#fdae6b"),
+            "b": to_rgba("#6baed6"),
+        }, "each source must be named in its own colour, never as a hex string"
+        assert not any("#" in text.get_text() for text in axis.texts), "a hex code reached the page"
+        assert {text.get_text(): text.get_fontweight() for text in in_data} == {"I": "bold", "uh": "normal"}
 
     def test_words_reads_the_stream_by_index_and_the_source_order(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None]
