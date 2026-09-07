@@ -303,7 +303,7 @@ that mechanism. Every design decision, deviation and measurement behind this mod
 </span><span id="L-127"><a href="#L-127"><span class="linenos">127</span></a><span class="sd">    Attributes:</span>
 </span><span id="L-128"><a href="#L-128"><span class="linenos">128</span></a><span class="sd">        name: Upstream model name. Doubles as the HuggingFace repository name under</span>
 </span><span id="L-129"><a href="#L-129"><span class="linenos">129</span></a><span class="sd">            :data:`CLEARVOICE_HF_ORG` and as the key ``network_wrapper`` dispatches on.</span>
-</span><span id="L-130"><a href="#L-130"><span class="linenos">130</span></a><span class="sd">        upstream_task: The ``task`` string ``clearvoice.ClearerVoice`` takes.</span>
+</span><span id="L-130"><a href="#L-130"><span class="linenos">130</span></a><span class="sd">        upstream_task: The ``task`` string ``clearvoice.ClearVoice`` takes.</span>
 </span><span id="L-131"><a href="#L-131"><span class="linenos">131</span></a><span class="sd">        sampling_rate: Rate the checkpoint was trained at. Inputs are resampled to it on the host,</span>
 </span><span id="L-132"><a href="#L-132"><span class="linenos">132</span></a><span class="sd">            and outputs come back at it.</span>
 </span><span id="L-133"><a href="#L-133"><span class="linenos">133</span></a><span class="sd">        expected_outputs: Signals per input this checkpoint is *expected* to produce — 2 for the</span>
@@ -405,7 +405,7 @@ that mechanism. Every design decision, deviation and measurement behind this mod
 </span><span id="L-229"><a href="#L-229"><span class="linenos">229</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return every ClearerVoice checkpoint for one upstream task, in table order.</span>
 </span><span id="L-230"><a href="#L-230"><span class="linenos">230</span></a>
 </span><span id="L-231"><a href="#L-231"><span class="linenos">231</span></a><span class="sd">    Args:</span>
-</span><span id="L-232"><a href="#L-232"><span class="linenos">232</span></a><span class="sd">        upstream_task: One of the four ``task`` strings ``clearvoice.ClearerVoice`` accepts.</span>
+</span><span id="L-232"><a href="#L-232"><span class="linenos">232</span></a><span class="sd">        upstream_task: One of the four ``task`` strings ``clearvoice.ClearVoice`` accepts.</span>
 </span><span id="L-233"><a href="#L-233"><span class="linenos">233</span></a>
 </span><span id="L-234"><a href="#L-234"><span class="linenos">234</span></a><span class="sd">    Returns:</span>
 </span><span id="L-235"><a href="#L-235"><span class="linenos">235</span></a><span class="sd">        The matching specs.</span>
@@ -573,7 +573,7 @@ that mechanism. Every design decision, deviation and measurement behind this mod
 </span><span id="L-397"><a href="#L-397"><span class="linenos">397</span></a>
 </span><span id="L-398"><a href="#L-398"><span class="linenos">398</span></a><span class="s2">    cvnet.SpeechModel.__init__ = _patched_init</span>
 </span><span id="L-399"><a href="#L-399"><span class="linenos">399</span></a>
-</span><span id="L-400"><a href="#L-400"><span class="linenos">400</span></a><span class="s2">    from clearvoice import ClearerVoice</span>
+</span><span id="L-400"><a href="#L-400"><span class="linenos">400</span></a><span class="s2">    from clearvoice import ClearVoice</span>
 </span><span id="L-401"><a href="#L-401"><span class="linenos">401</span></a>
 </span><span id="L-402"><a href="#L-402"><span class="linenos">402</span></a><span class="s2">    if args[&quot;mode&quot;] == &quot;tse&quot;:</span>
 </span><span id="L-403"><a href="#L-403"><span class="linenos">403</span></a><span class="s2">        import clearvoice.utils.video_process as vp</span>
@@ -598,7 +598,7 @@ that mechanism. Every design decision, deviation and measurement behind this mod
 </span><span id="L-422"><a href="#L-422"><span class="linenos">422</span></a><span class="s2">        if not s3fd_weights.exists():</span>
 </span><span id="L-423"><a href="#L-423"><span class="linenos">423</span></a><span class="s2">            os.symlink(args[&quot;s3fd_weights&quot;], s3fd_weights)</span>
 </span><span id="L-424"><a href="#L-424"><span class="linenos">424</span></a>
-</span><span id="L-425"><a href="#L-425"><span class="linenos">425</span></a><span class="s2">        cv = ClearerVoice(task=args[&quot;task&quot;], model_names=[model_name])</span>
+</span><span id="L-425"><a href="#L-425"><span class="linenos">425</span></a><span class="s2">        cv = ClearVoice(task=args[&quot;task&quot;], model_names=[model_name])</span>
 </span><span id="L-426"><a href="#L-426"><span class="linenos">426</span></a><span class="s2">        outputs = []</span>
 </span><span id="L-427"><a href="#L-427"><span class="linenos">427</span></a><span class="s2">        for video_path in args[&quot;video_paths&quot;]:</span>
 </span><span id="L-428"><a href="#L-428"><span class="linenos">428</span></a><span class="s2">            cv(input_path=video_path, online_write=True, output_path=args[&quot;output_dir&quot;])</span>
@@ -609,7 +609,7 @@ that mechanism. Every design decision, deviation and measurement behind this mod
 </span><span id="L-433"><a href="#L-433"><span class="linenos">433</span></a><span class="s2">        print(json.dumps({&quot;output_paths&quot;: outputs, &quot;device&quot;: str(device)}))</span>
 </span><span id="L-434"><a href="#L-434"><span class="linenos">434</span></a><span class="s2">        sys.exit(0)</span>
 </span><span id="L-435"><a href="#L-435"><span class="linenos">435</span></a>
-</span><span id="L-436"><a href="#L-436"><span class="linenos">436</span></a><span class="s2">    cv = ClearerVoice(task=args[&quot;task&quot;], model_names=[model_name])</span>
+</span><span id="L-436"><a href="#L-436"><span class="linenos">436</span></a><span class="s2">    cv = ClearVoice(task=args[&quot;task&quot;], model_names=[model_name])</span>
 </span><span id="L-437"><a href="#L-437"><span class="linenos">437</span></a><span class="s2">    net = cv.models[0]</span>
 </span><span id="L-438"><a href="#L-438"><span class="linenos">438</span></a>
 </span><span id="L-439"><a href="#L-439"><span class="linenos">439</span></a><span class="s2">    from clearvoice.dataloader.dataloader import audio_norm</span>
@@ -1044,7 +1044,7 @@ that mechanism. Every design decision, deviation and measurement behind this mod
 </span><span id="ClearVoiceModelSpec-128"><a href="#ClearVoiceModelSpec-128"><span class="linenos">128</span></a><span class="sd">    Attributes:</span>
 </span><span id="ClearVoiceModelSpec-129"><a href="#ClearVoiceModelSpec-129"><span class="linenos">129</span></a><span class="sd">        name: Upstream model name. Doubles as the HuggingFace repository name under</span>
 </span><span id="ClearVoiceModelSpec-130"><a href="#ClearVoiceModelSpec-130"><span class="linenos">130</span></a><span class="sd">            :data:`CLEARVOICE_HF_ORG` and as the key ``network_wrapper`` dispatches on.</span>
-</span><span id="ClearVoiceModelSpec-131"><a href="#ClearVoiceModelSpec-131"><span class="linenos">131</span></a><span class="sd">        upstream_task: The ``task`` string ``clearvoice.ClearerVoice`` takes.</span>
+</span><span id="ClearVoiceModelSpec-131"><a href="#ClearVoiceModelSpec-131"><span class="linenos">131</span></a><span class="sd">        upstream_task: The ``task`` string ``clearvoice.ClearVoice`` takes.</span>
 </span><span id="ClearVoiceModelSpec-132"><a href="#ClearVoiceModelSpec-132"><span class="linenos">132</span></a><span class="sd">        sampling_rate: Rate the checkpoint was trained at. Inputs are resampled to it on the host,</span>
 </span><span id="ClearVoiceModelSpec-133"><a href="#ClearVoiceModelSpec-133"><span class="linenos">133</span></a><span class="sd">            and outputs come back at it.</span>
 </span><span id="ClearVoiceModelSpec-134"><a href="#ClearVoiceModelSpec-134"><span class="linenos">134</span></a><span class="sd">        expected_outputs: Signals per input this checkpoint is *expected* to produce — 2 for the</span>
@@ -1077,7 +1077,7 @@ that mechanism. Every design decision, deviation and measurement behind this mod
 <ul>
 <li><strong>name:</strong>  Upstream model name. Doubles as the HuggingFace repository name under
 <code><a href="#CLEARVOICE_HF_ORG">CLEARVOICE_HF_ORG</a></code> and as the key <code>network_wrapper</code> dispatches on.</li>
-<li><strong>upstream_task:</strong>  The <code>task</code> string <code>clearvoice.ClearerVoice</code> takes.</li>
+<li><strong>upstream_task:</strong>  The <code>task</code> string <code>clearvoice.ClearVoice</code> takes.</li>
 <li><strong>sampling_rate:</strong>  Rate the checkpoint was trained at. Inputs are resampled to it on the host,
 and outputs come back at it.</li>
 <li><strong>expected_outputs:</strong>  Signals per input this checkpoint is <em>expected</em> to produce — 2 for the
@@ -1331,7 +1331,7 @@ than <code>expected_task</code>.</li>
 </span><span id="clearvoice_models_for_task-230"><a href="#clearvoice_models_for_task-230"><span class="linenos">230</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return every ClearerVoice checkpoint for one upstream task, in table order.</span>
 </span><span id="clearvoice_models_for_task-231"><a href="#clearvoice_models_for_task-231"><span class="linenos">231</span></a>
 </span><span id="clearvoice_models_for_task-232"><a href="#clearvoice_models_for_task-232"><span class="linenos">232</span></a><span class="sd">    Args:</span>
-</span><span id="clearvoice_models_for_task-233"><a href="#clearvoice_models_for_task-233"><span class="linenos">233</span></a><span class="sd">        upstream_task: One of the four ``task`` strings ``clearvoice.ClearerVoice`` accepts.</span>
+</span><span id="clearvoice_models_for_task-233"><a href="#clearvoice_models_for_task-233"><span class="linenos">233</span></a><span class="sd">        upstream_task: One of the four ``task`` strings ``clearvoice.ClearVoice`` accepts.</span>
 </span><span id="clearvoice_models_for_task-234"><a href="#clearvoice_models_for_task-234"><span class="linenos">234</span></a>
 </span><span id="clearvoice_models_for_task-235"><a href="#clearvoice_models_for_task-235"><span class="linenos">235</span></a><span class="sd">    Returns:</span>
 </span><span id="clearvoice_models_for_task-236"><a href="#clearvoice_models_for_task-236"><span class="linenos">236</span></a><span class="sd">        The matching specs.</span>
@@ -1345,7 +1345,7 @@ than <code>expected_task</code>.</li>
 <h6 id="arguments">Arguments:</h6>
 
 <ul>
-<li><strong>upstream_task:</strong>  One of the four <code>task</code> strings <code>clearvoice.ClearerVoice</code> accepts.</li>
+<li><strong>upstream_task:</strong>  One of the four <code>task</code> strings <code>clearvoice.ClearVoice</code> accepts.</li>
 </ul>
 
 <h6 id="returns">Returns:</h6>
