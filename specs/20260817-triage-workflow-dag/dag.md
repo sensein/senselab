@@ -6,7 +6,7 @@ prose. Where an older spec doc disagrees with what is written here, the code is 
 the older doc is stale. Re-verify against those files (not against this one) after any change to
 them; nothing enforces that this stays current.
 
-Regenerated 2026-09-05 at `673c43e0`, from the code rather than by patching the previous text.
+Regenerated 2026-09-07 at `f62f716e`, from the code rather than by patching the previous text.
 
 ## The goal this graph exists to serve
 
@@ -30,13 +30,14 @@ read against that.
 **Headline finding, stated up front because everything else is downstream of it.** Today the graph
 **flags every recording it can measure**, whatever that recording contains. `voice` has had no
 evidence source since the phonation-span detector was retired on 2026-09-04, so its line is always
-`unavailable` and its kind always `uncertain` (`taxonomy.py:313`, `:605`). TAXONOMY's `fail`
+`unavailable` and its kind always `uncertain` (`taxonomy.py:311`, `:603`). TAXONOMY's `fail`
 ("every kind is absent") and `pass` ("nothing uncertain") are therefore both unreachable
-(`taxonomy.py:636-643`), TAXONOMY always writes `flag`, and that flag reaches the file fold as a
+(`taxonomy.py:634-641`), TAXONOMY always writes `flag`, and that flag reaches the file fold as a
 reason, so `Triage.PASS` and the acoustically-empty `Triage.DISCARD` are unreachable too
 (`vocabulary.py`, `fold_file_verdict`'s ladder). `Triage.DISCARD` remains reachable by one route
 only: an ADMIT `fail`, which is tested before the flag row. Two tests pin the unreachability rather
-than asserting outcomes that cannot occur (`taxonomy_test.py:215-232`). This lifts when voice is
+than asserting outcomes that cannot occur (`TestTheOutcome`, `taxonomy_test.py:216`, at `:227` and
+`:256`). This lifts when voice is
 reworked onto `consensus_taxonomy`; it is a consequence of the retirement, not of any recording.
 
 ## How to read this document
@@ -48,14 +49,14 @@ path into `data/config/default.yaml`.
 
 `null` there means declared but unmeasured. Which of two readers is used matters and is called out
 throughout: `config.require(...)` **raises** on a null, and inside PREPROCESS that raise is caught
-and recorded as an absent derivative (`preprocess.py:1483-1497`) while the node still returns
+and recorded as an absent derivative (`preprocess.py:1947-1961`) while the node still returns
 normally; `config.get(...)` returns `None` and the caller carries on **silently**. The second is
 the more dangerous of the two. Its worst instance — a null silently deleting the whole ASR span
 source — was closed on 2026-09-05 by deleting the key (see PREPROCESS below); the pattern survives
 in `taxonomy.speech_labels`, read `get ... or []` by both its readers, where a null empties the
 speech family without a word anywhere.
 
-The config is **207 lines, 105 keys, 38 of them null**. It carries a short `#` description per
+The config is **215 lines, 108 keys, 38 of them null**. It carries a short `#` description per
 section and per key and nothing longer. There is no `derivation:` key: it used to hold 50 kB of
 prose, and because the loader hashes the merged mapping that prose sat inside `config_hash`, so
 correcting a word of it made two behaviourally identical runs report different identities. The
@@ -106,8 +107,9 @@ A branch that raises is recorded `errored` and its siblings still run: none read
 
 ### 1. ADMIT — is this file measurable at all
 
-Decodes the recording and admits it. **The only rejections are decode failure, all samples zero,
-and a constant signal** (`admit.py:1-6`). No thresholds, no models, no derived audio, and **no
+Decodes the recording and admits it. **The only rejections are decode failure, zero decoded
+frames, all samples zero, and a constant signal** (`admit.py:1-6`; zero frames is its own case at
+`:83`, distinct from all-samples-zero). No thresholds, no models, no derived audio, and **no
 `flag` outcome** — `pass` or `fail` only (`admit.py:70`, `:102-107`). It reads **no config key at
 all**, which it shares with VERDICT alone.
 
@@ -116,12 +118,14 @@ all**, which it shares with VERDICT alone.
 ### 2. PREPROCESS — condition once, measure everything, decide nothing
 
 The one conditioning pass. Every model answering a whole-file question runs here — YAMNet, AST,
-HeAR, both recognizers, SQUIM — and **no later node re-runs one** (`preprocess.py:1-16`).
+HeAR, both recognizers, SQUIM, and FRCRN (a fourth model class, `preprocess.py:1661`) — and **no
+later node re-runs one**, though YAMNet, AST and HeAR each run once *per stream* rather than once
+per file (`preprocess.py:1936-1941`) (`preprocess.py:1-16`).
 
 It takes no pass/flag/fail decision, but it is not guaranteed to complete. Each block runs in its
 own `try`/`except`: a block whose config value is null, or whose upstream prerequisite is missing,
 records that derivative **absent** and the pass continues; any *other* exception is collected and,
-after every remaining block has run, re-raised as one summary (`preprocess.py:1483-1497`). So
+after every remaining block has run, re-raised as one summary (`preprocess.py:1947-1961`). So
 "unmeasured because unconfigured" and "unmeasured because broken" are different outcomes, and only
 the second stops the graph.
 
@@ -130,25 +134,60 @@ The blocks, in execution order (`preprocess.py`, the `blocks` list):
 `clip_spans`, `yamnet_scores`, `yamnet_windows`, `silence`, `ast_scores`, `ast_windows`,
 `hear_scores`, `hear_windows`, `level`, `disruptions_file`, `asr_crisperwhisper`, `asr_qwen`,
 `consensus_transcript`, `phonation_tracks`, `energy_envelope`, `normalized_envelope`,
-`spectrogram_wideband`, `spectrogram_narrowband`, `continuity_trace`, `spans`, `squim`,
-`span_hear`, `span_yamnet`, `gammatone`.
+`spectrogram_wideband`, `spectrogram_narrowband`, `continuity_trace`, `spans`, `residual`,
+`enhanced_yamnet`, `enhanced_ast`, `enhanced_hear`, `residual_yamnet`, `residual_ast`,
+`residual_hear`, `squim`, `span_hear`, `span_yamnet`, `gammatone`. The six classifier blocks are
+`_stream_yamnet`/`_stream_ast`/`_stream_hear` (`preprocess.py:1853`, `:1872`, `:1893`) parameterised
+by stream prefix (`enhanced`, `residual`).
+
+**Residual.** FRCRN_SE_16K (`FRCRN_ID`, `preprocess.py:102`) runs on `plain`
+(`preprocess.py:1630-1775`), is cross-correlation lag-aligned via `compute_residual`
+(`speech_enhancement/residual.py:176`), and both the aligned enhancement and `plain − g·enhanced`
+are written as streams (`preprocess.py:1687`, `:1707`). One `residual` measurement records
+`lag_ms`, `gain_db`, `energy_fraction`, `correlation_*`, `peak_dbfs`, `rms_dbfs`, per-band energy
+fractions, and the speech preconditions `speech_present`/`n_consensus_words`/
+`speech_coverage_fraction` (`preprocess.py:1737-1758`). It decides nothing. No meaning or energy
+gate decides whether the streams are written: `speech_present`/`speech_coverage_fraction` are
+preconditions on interpretation, not gates (`preprocess.py:1640-1655`, `:1737-1758`), and speech
+regions come from `_speech_regions` (`:1612-1628`) — the consensus's lexical words' per-source
+timings when a consensus exists, else this pass's own amplitude-source spans, with
+`speech_overlap_source` naming which.
+
+`residual.enabled` is **false** in the packaged config (`data/config/default.yaml:209`), so
+`_residual` raises `ValueError("residual.enabled is false")` (`preprocess.py:1657-1658`) and is
+recorded as an absent derivative (`:1951-1954`), and the six stream-classifier blocks then raise
+`LookupError(f"{prefix} is absent")` (`:1792`). This absence has a different cause from the
+null-threshold absences below and is not the same kind of gap.
+
+Name the twelve `{prefix}_{classifier}_summary_all` / `_summary_speech_free` derivatives
+(`_stream_classifier_summaries`, `preprocess.py:1822-1851`). `speech_free` is the windows with
+`speech_overlap == 0.0` (`:1833`) — no new threshold; each window carries a `speech_overlap`
+fraction (`:1797`). The pair exists to separate the enhancer's speech-shaped artefact from real
+background.
 
 **Streams.** The recognizers, aligner, SQUIM, level and the window classifiers read the plain
 resampled signal; the envelope, spans, spectrograms, gammatone and the phonation tracks read the
-pre-emphasised one; `disruptions_file` reads the original recording (`preprocess.py:3-7`).
+pre-emphasised one; `disruptions_file` reads the original recording (`preprocess.py:3-7`); and
+`enhanced` and `residual` are each read by their own three classifier blocks
+(`preprocess.py:1789-1793`). Streams persist as FLAC through one shared writer —
+`STREAM_SUFFIX = ".flac"` (`common.py:18`), `write_stream` with `out_of_range="normalize"`
+(`common.py:301-323`) — whose returned gain every caller records as the stream entity's
+`write_gain` (`preprocess.py:435`, `:1696`, `:1716`). `plain` additionally records `peak_scale`
+from a pre-write peak normalisation (`:420-423`); these are the only record that samples were
+scaled.
 
 Points that decide something, or that are currently deciding something by omission:
 
 **Raw scores and thresholded labels are two different things, and only one of them survives a
 null.** `<classifier>_scores` persists every window's raw score and reads no threshold.
 `_windows(classifier)` then folds thresholds over those stored scores into per-window label sets —
-and it uses `config.require(f"windows.{classifier}.default_threshold")` (`preprocess.py:769`). All
+and it uses `config.require(f"windows.{classifier}.default_threshold")` (`preprocess.py:888`). All
 three thresholds are null, so **`yamnet_windows`, `ast_windows` and `hear_windows` are all absent
 under the packaged config**, while the raw scores they were folded from are present.
 
-**The per-span passes no longer share that fate.** `_span_hear` (`preprocess.py:1014`) and
-`_span_yamnet` (`:1085`) read the same key with `config.get`, so they run whatever the
-configuration says. `_span_window_attributes` (`:228-266`) then writes `raw_scores`
+**The per-span passes no longer share that fate.** `_span_hear` (`preprocess.py:1116`) and
+`_span_yamnet` (`:1185`) read the same key with `config.get`, so they run whatever the
+configuration says. `_span_window_attributes` (`:282-327`) then writes `raw_scores`
 unconditionally — the model ran, so its output is a measurement — and writes `labels`/`scores` only
 when a threshold existed, with a `labelled` flag distinguishing **"no threshold was set"**
 (`labelled: false`, no labels) from **"nothing cleared the bar"** (`labelled: true`, empty labels).
@@ -156,8 +195,18 @@ This asymmetry between the per-span passes and the whole-file fold is deliberate
 side and simply not yet applied on the other; it is why airway's lines have data today and
 speech's `acoustic` line does not.
 
+A short span borrows from the whole-file YAMNet pass instead: `_covering_window_attribution`
+(`preprocess.py:330-363`) computes `score[label] = Σ(score_w · overlap_w) / Σ overlap_w` over
+whole-file `yamnet_scores` windows intersecting the span. A span shorter than the native window
+(`SpanTooShortForYAMNet`) is scored this way and carries `attribution: "covering_windows"`,
+`covering_windows_n`, `covering_seconds` (`:1227-1254`); a natively classified span carries
+`attribution: "native"` (`:1291`). A short span with no covering window is marked
+`no_covering_window`; a missing whole-file pass is `yamnet_scores_absent`. HeAR still centres a
+short span in a silent 2 s buffer instead (`:1119-1121`, `span_hear_input`) and writes no
+`attribution` field.
+
 **Per-span classification is batched.** Both passes build every span's input first, then make **one
-call per classifier** (`_classify_spans_in_batch`, `preprocess.py:194-225`). A batch is used only
+call per classifier** (`_classify_spans_in_batch`, `preprocess.py:248-280`). A batch is used only
 when it returns exactly one result per input — a short return is treated as a failure rather than
 aligned by position, since misattributing one span's scores to another is worse than failing — and
 a batch that raises falls back to one call per span, recording `"<Error> (after batch failed:
@@ -204,7 +253,7 @@ with their own timestamps, so grouping them needs no gap threshold, and
 the deletion also unblocked SPEECH, which had been `require`-ing the same null key.
 
 **`phonation_tracks` does not run under the packaged config.** It requires `voice.f0_range_hz`
-(`preprocess.py:1284`), which is null, so it raises and is recorded absent. What it *would* measure
+(`preprocess.py:1445`), which is null, so it raises and is recorded absent. What it *would* measure
 is F0 over the pre-emphasised stream and the first four formants over `plain`, per frame — a
 measurement with no boundary decided. The five surviving `phonation_spans.*` keys (`hop_s`,
 `max_formants`, `formant_max_hz`, `formant_window_s`, `formant_preemphasis_hz`) are its Praat
@@ -230,20 +279,25 @@ absent**.
 | `voice` | `phonation` | **none — retired** | n/a |
 
 Which classifier labels count as speech at all is `taxonomy.speech_labels`, **null**, read as
-`config.get(...) or []` in both readers (`taxonomy.py:566`, `speech.py:530`). So the speech family
+`config.get(...) or []` in both readers (`taxonomy.py:564`, `speech.py:588`). So the speech family
 is the empty set and the `acoustic` line has no label that could express its kind — a second,
-independent reason it cannot report, on top of its own null floor.
+independent reason it cannot report, on top of its own null floor. None of that decides the kind,
+though: **speech's state is decided by the lexical line alone**. `_fold_speech_lines`
+(`taxonomy.py:293-310`) is a thin wrapper over `_fold_authoritative_line(lines, "lexical")`, so the
+acoustic line — and so `taxonomy.speech_labels` — has no effect on the state and is recorded as
+corroboration only.
 
 **Airway's lines read per-span measurements, not the pooled whole-file windows** that speech's
 `acoustic` line uses. A span already carrying a live consensus word is excluded from both, since
 ASR is strictly stronger content evidence and an ASR-explained span is not airway evidence whatever
 HeAR or YAMNet also say about it. The two are **not** folded by equal-weight agreement:
 `health_acoustic` (HeAR, the domain-specific detector) is authoritative and `acoustic` (YAMNet
-alone) only corroborates — `_fold_authoritative_line` (`taxonomy.py:235`). Corroboration count is
-never read as evidence strength: a span's `corroborated_by` says other *sources* proposed something
-overlapping it, not that its *content* is more certain.
+alone) only corroborates — `_fold_authoritative_line` (`taxonomy.py:233`), the same
+authoritative/corroboration shape as speech above. Corroboration count is never read as evidence
+strength: a span's `corroborated_by` says other *sources* proposed something overlapping it, not
+that its *content* is more certain.
 
-**Voice's line is a placeholder that says so.** `_retired_voice_line` (`taxonomy.py:313-338`)
+**Voice's line is a placeholder that says so.** `_retired_voice_line` (`taxonomy.py:311-336`)
 returns `state: unavailable`, `evidence: 0`, and a `why` naming the retirement — "the phonation-span
 source was retired; voice is pending a rework onto consensus_taxonomy". The `why` exists so a report
 or figure prints a deliberate gap rather than a bare `uncertain` a reader would take for evidence.
@@ -251,25 +305,26 @@ or figure prints a deliberate gap rather than a bare `uncertain` a reader would 
 
 Two **file-scoped measurements** are written here, both `extent=None`:
 
-- **`<classifier>_label_summary`** (`_write_label_summaries`, `taxonomy.py:504`) — per label, peak,
+- **`<classifier>_label_summary`** (`_write_label_summaries`, `taxonomy.py:502`) — per label, peak,
   median and window count over the whole file, read from the verbatim scores sidecar so it needs no
   threshold. A classifier that never ran gets no summary, which keeps "absent" distinct from
   "measured nothing".
-- **`consensus_taxonomy`** (`_write_consensus_taxonomy`, `taxonomy.py:435`) — the per-span labels of
+- **`consensus_taxonomy`** (`_write_consensus_taxonomy`, `taxonomy.py:433`) — the per-span labels of
   every per-span classifier (`PER_SPAN_CLASSIFIERS` = `{yamnet: span_yamnet, hear: span_hear}`,
-  `:382`) consolidated into one file-level taxonomy for downstream to read instead of re-deriving.
+  `:380`) consolidated into one file-level taxonomy for downstream to read instead of re-deriving.
   One row per label with `peak`, `peak_by_classifier`, `classifiers` and `n_classifiers`, ranked by
   peak. **Disagreement is recorded, not resolved**: a label only one vocabulary contains is not a
   vote against it, so `n_classifiers` counts corroboration only. It is a measurement — no floor
   turning it into present/absent. Empty when no per-span classifier produced scores, so "no
   consensus" and "a consensus over nothing" stay distinguishable.
 
-`taxonomy.consolidation_floor` (0.2, owner-directed) drops a label scoring under it, **for every
-classifier**. On the reference recording it took the YAMNet raster's per-file union of each span's
-top-4 from 17 rows to 2 (`Silence`, `Speech`): with 521 labels, a span where nothing fires still
-contributes its four highest, and those are near-zero.
+`taxonomy.consolidation_floor` (0.2, owner-directed) drops a label scoring under it in
+`_consolidate` (`taxonomy.py:406`), for every classifier — a floor only, with no top-K of its own.
+The per-span top-4 union that turns into a raster's rows is FIGURE's own choice
+(`style.top_labels`, `figure.py:165`, used at `:1800-1801`), not something `_consolidate` does; with
+521 labels, a span where nothing fires still contributes its four highest, and those are near-zero.
 
-**TAXONOMY's own outcome** (`taxonomy.py:636-643`): `fail` when every kind is absent, `flag` when
+**TAXONOMY's own outcome** (`taxonomy.py:634-641`): `fail` when every kind is absent, `flag` when
 any is uncertain, `pass` otherwise. As above, only `flag` is reachable today.
 
 *Goals served*: 2, by deciding whether the airway/speech content is there at all. The floors that
@@ -511,7 +566,7 @@ never rewrites the classification, never removes a branch and never relaxes a th
 verdict is always `pass` — an empty execution set is recorded on the decisions for VERDICT to read,
 not flagged here.
 
-The rule (`routing.py:178-187`): `by_classification = state != absent`; `forced_by_hint` is true
+The rule (`routing.py:185-187`): `by_classification = state != absent`; `forced_by_hint` is true
 only when the hint named the kind **and** classification did not already select it; `will_run` is
 the disjunction. Since no kind can be `absent` while voice is uncertain and the floors are null,
 **every branch runs on every recording** today.
@@ -525,28 +580,32 @@ lives only in that campaign's override.
 
 ### 5a. AIRWAY — confirm or contest PREPROCESS's per-span HeAR labels
 
-Reads the per-span HeAR labels over the general span set and confirms or contests them
-(`airway.py:1`). Config: `airway.labels_of_interest` (`Cough`, `Breathe`), `airway.confirmation_map`
-(which YAMNet labels confirm which HeAR label), `taxonomy.audioset_airway_labels`, and
-`airway.contest_labels` (**null**; when supplied it is refused at load if it intersects the
-confirmation map).
+Reads the per-span HeAR labels over the general span set — excluding any span carrying a `family`
+— and confirms or contests them (`airway.py:1`). It also reads PREPROCESS's `silence` windows
+(`_inside_certified_silence`, `airway.py:26`, used `:161-164`). Config:
+`airway.labels_of_interest` (`Cough`, `Breathe`), `airway.confirmation_map` (which YAMNet labels
+confirm which HeAR label), `taxonomy.audioset_airway_labels`, and `airway.contest_labels` (**null**;
+when supplied it is refused, at branch execution (`airway.py:156`), if it intersects
+`taxonomy.audioset_airway_labels` rather than `airway.confirmation_map`).
 
 *Goals served*: 2.
 
 ### 5b. SPEECH — the branch carrying two of the three goals
 
 Runs no ASR and never re-transcribes: PREPROCESS produced the consensus and this branch reads it
-(`speech.py:1-12`). Speech spans come from consensus word timings, never the envelope, and pyannote
+(`speech.py:1-16`). Speech spans come from consensus word timings, never the envelope, and pyannote
 sees only `[first word start, last word end]`. The second diarizer runs only when pyannote's count
 is not 1; separation runs only when `speech.separation_backend` names one (**null**). The target
 speaker is identified by a caller-supplied **enrollment**, not by a per-file hint, and an enrollment
 is refused rather than compared unless its model and resolved commit are both the probe's. **This
-branch marks; it removes nothing.**
+branch marks; it removes nothing.** The PII scan is one `scan_for_pii` call over the consensus
+transcript and each recognizer's own transcript together (`speech.py:899-911`); a finding is marked
+on every occurrence in the consensus stream.
 
 Null keys that disable paths here: `speech.second_diarizer`, `speech.separation_backend`,
 `speech.separation_sound_class`, `speech.target_match_cosine`, `speech.enrollment_model`,
 `speech.speech_test_stoi_floor`, `speech.speech_test_si_sdr_floor`, and all three
-`speech.nontarget.*` legs (read via an f-string at `speech.py:997`). It used to `require`
+`speech.nontarget.*` legs (read via an f-string at `speech.py:1058`). It used to `require`
 `speech.word_gap_ms` as well, which is why this branch errored on every recording of the 112-file
 collection; that key is now deleted and **SPEECH passes under the packaged config**.
 
@@ -556,9 +615,9 @@ collection; that key is now deleted and **SPEECH passes under the packaged confi
 
 Runs only when SPEECH ran **and** its scan found live PII (`run.py:261-268`,
 `_speech_found_pii`). It reads **four** config keys, every one of them through a module constant
-(`redact.py:51-54`) rather than a literal, so a grep for `config.require("redaction` finds none of
-them: `redaction.padding_ms` (`require`, `:114`), `redaction.fill` (`require`, `:375`),
-`redaction.bleep_hz` (`get`, `:376`) and `pii.required_detectors` (`require`, `:378`).
+(`redact.py:53-56`) rather than a literal, so a grep for `config.require("redaction` finds none of
+them: `redaction.padding_ms` (`require`, `:116`), `redaction.fill` (`require`, `:368`),
+`redaction.bleep_hz` (`get`, `:369`) and `pii.required_detectors` (`require`, `:371`).
 
 **`redaction.padding_ms` and `redaction.fill` are both null and both `require`d, so REDACT cannot
 run at all — it raises on the first of them it reaches.** It is unreachable by configuration, like
@@ -566,7 +625,9 @@ the `pass` and `discard` rows of the fold's ladder. The raise is caught: the cal
 `_attempt` (`run.py:262-266`), which records the node `ERRORED` with the message and returns `None`
 (`run.py:185-187`), so the failure is an operational fact about the run and changes no verdict.
 `pii.required_detectors` and `redaction.bleep_hz` are populated (`[gliner, presidio, rules]` and
-`1000.0`) and are not what stops it.
+`1000.0`) and are not what stops it. REDACT plans and re-plans on `word_hull(word)` — the union of
+the fitted extent and every source's own reading (`common.py:253-258`, used `redact.py:279`,
+`:307`) — a deliberate widening for safety.
 
 *Goals served*: 3, in intent. None reached, since the node cannot execute.
 
@@ -603,7 +664,9 @@ The triage ladder, in order (`fold_file_verdict`):
 
 Reasons accumulate rather than being reduced to the deciding one: a PREPROCESS or ROUTING raise, a
 `bad_map_values` entry, an unread declaration, a classification/branch mismatch, a branch asked to
-run that stayed silent, and a hint claim nothing found.
+run that stayed silent, and a hint claim nothing found. `_agreement` (`vocabulary.py:216-236`)
+returns `resolved`, not `mismatch`, when TAXONOMY classified `uncertain` — so today's `FLAG` comes
+from TAXONOMY's own verdict entity, not from this mismatch reason, which cannot currently fire.
 
 ### 8. REPORT — render only
 
@@ -618,7 +681,9 @@ them, since REPORT writes its JSON before it draws.
 ### 9. FIGURE — a renderer the runner does not call
 
 `preprocess_figure(store, figure_dir, config, *, run_dir, style=None, stem=None)`
-(`figure.py:1297`). Draws PREPROCESS's and TAXONOMY's output from the store, one image per page.
+(`figure.py:1725`). Draws PREPROCESS's and TAXONOMY's output from the store. The primary product is
+one multi-page PDF; per-page PNGs are written only when `style.also_write_pngs` is set, and a
+`taxonomy_summary.json` is always written alongside it (`figure.py:1936-1946`).
 
 **It is deliberately not wired into `run_triage`** — `run.py` does not import it, and grep finds no
 mention of `figure` there. It reads a finished store and **writes nothing back**, so it can be
@@ -628,12 +693,19 @@ It **recomputes nothing**: everything it draws is a store read or a display tran
 is why `continuity_trace` had to be persisted. A structural test sweeps FIGURE's imports and fails
 on anything that measures.
 
+**The cover page** is `cover_lines` (`figure.py:1583-1605`): `SOURCE` (the recording's path,
+wrapped), then `consensus_alignment_lines` (`:1519-1580`), then `summary_panel_lines`
+(`:840-861`) — whole-file classification, the residual block, then kind states. The residual block
+(`:818-837`) renders **YAMNet and AST only** (`_RESIDUAL_SUMMARISED_CLASSIFIERS`, `figure.py:65`);
+HeAR and the `speech_free` variant stay unrendered, and the `enhanced` stream's summaries are not
+rendered at all.
+
 The pipeline configuration is **read and never overridden** — a standing rule, because a threshold
 set to make a panel draw would produce a picture of a pipeline that is not the one in production. A
 panel whose element is absent names the missing derivative and prints the reason the producing node
-recorded. Config: `spans.k_db` (`figure.py:1420`), `spectrogram.wideband_window_ms` and
-`spectrogram.hop_ms` (`figure.py:1359-1360`), and `taxonomy.consolidation_floor`
-(`figure.py:1364`).
+recorded. Config: `spans.k_db` (`figure.py:1882`), `spectrogram.wideband_window_ms` and
+`spectrogram.hop_ms` (`figure.py:1780`, `:1793-1794`), and `taxonomy.consolidation_floor`
+(`figure.py:1798`).
 
 Its own drawing choices live in a `FigureStyle` dataclass, disjoint from anything the pipeline
 reads, and a test asserts no style field name can shadow a pipeline key.
@@ -644,7 +716,7 @@ reads, and a test asserts no style field name can shadow a pipeline key.
 | --- | --- | --- | --- |
 | 1. bad quality | yes — SQUIM, level, `disruptions_file`, per-span SQUIM | **no** | `quality.stoi_floor`, `quality.pesq_floor`, `quality.disruption_clipped_s_max`, `quality.disruption_dropout_s_max` are read by **nothing in `src/senselab`**; the gate they describe is unimplemented |
 | 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | partially | every `taxonomy.presence_floor.*` is null, so no kind can be `present` or `absent`; the ASR span source is silently absent; `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design |
-| 3. PII | yes — the consensus transcript is scanned once | **yes** | the one goal fully wired to a decision, and the only one whose acting node cannot run: `redaction.padding_ms` and `redaction.fill` are null and both `require`d, so REDACT raises. SPEECH marks PII; nothing releases a redacted product |
+| 3. PII | yes — the consensus transcript and each recognizer's own transcript are scanned in one call | **yes** | the one goal fully wired to a decision, and the only one whose acting node cannot run: `redaction.padding_ms` and `redaction.fill` are null and both `require`d, so REDACT raises. SPEECH marks PII; nothing releases a redacted product |
 
 ## Cross-cutting tensions
 
@@ -655,13 +727,16 @@ triage verdicts downstream is reading a constant.
 **`require` and `get` are not interchangeable, and the choice is currently inconsistent.**
 `windows.*.default_threshold` is `require` in the whole-file fold (three
 derivatives absent) and `get` in the per-span passes (raw scores kept). `taxonomy.speech_labels` is
-`get ... or []` in both its readers (`taxonomy.py:566`, `speech.py:530`), so a null empties the
+`get ... or []` in both its readers (`taxonomy.py:564`, `speech.py:588`), so a null empties the
 speech family without a word anywhere. The per-span behaviour is the intended one; the others have
-not been brought to it.
+not been brought to it. `residual.enabled` is `require`d and false (`preprocess.py:1657`), so an
+intentionally-off block reports through the same absent-derivative channel as an unmeasured null.
 
-**Six keys are read by nothing**: the four `quality.*`, plus `taxonomy.voice_min_duration_s` and
-`taxonomy.voice_uncertain_duration_s`, orphaned by the voice retirement. Pre-alpha says delete
-outright; they are the only written record of gates nobody built.
+**Eight keys are read by nothing**: the four `quality.*`; `taxonomy.voice_min_duration_s` and
+`taxonomy.voice_uncertain_duration_s`, orphaned by the voice retirement; and `voice.hint_tags` and
+`speech.hint_tags` (`default.yaml:142`, `:154`, both self-described "unread as of v2" —
+`routing.py:184`'s own `hint_tags` is a local built from `hint_kind_map`, not this key). Pre-alpha
+says delete outright; they are the only written record of gates nobody built.
 
 **Hints are extractable but inert.** `routing.hint_kind_map` is null in the packaged config, so a
 correctly extracted hint forces nothing. See [`benchmarks/open.md`](benchmarks/open.md), "Hints:
