@@ -19,7 +19,15 @@ import pytest
 
 from senselab.utils import subprocess_venv
 from senselab.utils.cuda_probe import HostCuda, SenselabCudaCompatibilityError, TorchIndex
-from senselab.utils.subprocess_venv import _classify_uv_failure, ensure_venv
+from senselab.utils.subprocess_venv import (
+    _classify_uv_failure,
+    _normalize_package_name,
+    _venv_dist_info,
+    _venv_python_version,
+    ensure_venv,
+    record_venv_use,
+    venv_environment,
+)
 
 # ── Fixtures + helpers ─────────────────────────────────────────────
 
@@ -1177,3 +1185,141 @@ def test_a_file_ref_lock_leaves_the_callers_directory_mode_alone(
     assert lock_seen == [True], "expected a .lock beside the input file; the FileRef lock path did not run"
     assert mode_while_held == [0o700], f"caller dir was widened while held: {[oct(m) for m in mode_while_held]}"
     assert stat.S_IMODE(data_dir.stat().st_mode) == 0o700
+
+
+# ── Environment capture ───────────────────────────────────────────
+
+
+def _make_fake_venv(root: Path, python_dir: str = "python3.12") -> Path:
+    """Build a minimal on-disk venv tree: pyvenv.cfg plus a handful of dist-info directories."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "pyvenv.cfg").write_text("home = /fake\nimplementation = CPython\nversion_info = 3.12.11\n")
+    site_packages = root / "lib" / python_dir / "site-packages"
+    site_packages.mkdir(parents=True)
+    for name, version in [
+        ("torch", "2.14.0"),
+        ("transformers", "5.16.1"),
+        ("crisperwhisper", "2.0.1"),
+        ("ctranslate2", "4.6.0"),
+        ("tensorflow_hub", "0.16.1"),
+    ]:
+        (site_packages / f"{name}-{version}.dist-info").mkdir()
+    return root
+
+
+class TestRecordVenvUse:
+    """``record_venv_use`` captures the venv directory each ``ensure_venv`` call resolves to."""
+
+    def test_a_cache_hit_is_still_recorded(
+        self, fake_cache_dir: Path, fake_uv: str, force_cu128: TorchIndex, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fast cache-hit path (zero subprocess calls) still notes what it returned."""
+        name = "t-record"
+        venv_dir = fake_cache_dir / f"{name}-cu128"
+        venv_dir.mkdir(parents=True)
+        (venv_dir / ".senselab-installed").write_text(
+            json.dumps(
+                {
+                    "requirements": ["torch>=2.8,<2.9"],
+                    "python_version": "3.12",
+                    "torch_index": {"tag": force_cu128.tag, "url": force_cu128.url, "source": force_cu128.source},
+                }
+            )
+        )
+        monkeypatch.setattr(subprocess, "run", _SubprocessRecorder())
+
+        with record_venv_use() as used:
+            out = ensure_venv(name, ["torch>=2.8,<2.9"], python_version="3.12")
+
+        assert used == {name: venv_dir}
+        assert out == venv_dir
+
+    def test_outside_the_context_manager_nothing_is_recorded(
+        self, fake_cache_dir: Path, fake_uv: str, force_cu128: TorchIndex, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller that never opens ``record_venv_use`` pays nothing and gets no dict back."""
+        name = "t-unrecorded"
+        venv_dir = fake_cache_dir / f"{name}-cu128"
+        venv_dir.mkdir(parents=True)
+        (venv_dir / ".senselab-installed").write_text(
+            json.dumps(
+                {
+                    "requirements": ["torch>=2.8,<2.9"],
+                    "python_version": "3.12",
+                    "torch_index": {"tag": force_cu128.tag, "url": force_cu128.url, "source": force_cu128.source},
+                }
+            )
+        )
+        monkeypatch.setattr(subprocess, "run", _SubprocessRecorder())
+
+        # No error, and the module-level recorder stays unset.
+        ensure_venv(name, ["torch>=2.8,<2.9"], python_version="3.12")
+        assert subprocess_venv._VENV_USE_RECORDER.get() is None
+
+    def test_two_venvs_used_in_one_context_are_both_recorded(
+        self, fake_cache_dir: Path, fake_uv: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A run that reaches several backends collects one entry per backend name."""
+        for name in ("yamnet", "hear"):
+            venv_dir = fake_cache_dir / name
+            venv_dir.mkdir(parents=True)
+            (venv_dir / ".senselab-installed").write_text(json.dumps({"requirements": [], "python_version": "3.12"}))
+        monkeypatch.setattr(subprocess, "run", _SubprocessRecorder())
+
+        with record_venv_use() as used:
+            ensure_venv("yamnet", [], python_version="3.12")
+            ensure_venv("hear", [], python_version="3.12")
+
+        assert set(used) == {"yamnet", "hear"}
+        assert used["yamnet"] == fake_cache_dir / "yamnet"
+        assert used["hear"] == fake_cache_dir / "hear"
+
+
+class TestVenvEnvironment:
+    """``venv_environment`` reads a venv's python version and installed distributions from disk."""
+
+    def test_python_version_comes_from_pyvenv_cfg(self, tmp_path: Path) -> None:
+        """The ``version_info`` line, not a directory-name guess, names the interpreter."""
+        venv_dir = _make_fake_venv(tmp_path / "v")
+        assert _venv_python_version(venv_dir) == "3.12.11"
+
+    def test_missing_pyvenv_cfg_reports_unknown_rather_than_raising(self, tmp_path: Path) -> None:
+        """A venv tree with no ``pyvenv.cfg`` degrades to ``"unknown"`` rather than an OSError."""
+        venv_dir = tmp_path / "no-cfg"
+        venv_dir.mkdir()
+        assert _venv_python_version(venv_dir) == "unknown"
+
+    def test_dist_info_names_are_parsed_into_name_and_version(self, tmp_path: Path) -> None:
+        """Every ``*.dist-info`` directory becomes one name/version pair, nothing dropped."""
+        venv_dir = _make_fake_venv(tmp_path / "v")
+        found = _venv_dist_info(venv_dir)
+        assert found["torch"] == "2.14.0"
+        assert found["transformers"] == "5.16.1"
+        assert found["tensorflow_hub"] == "0.16.1"
+        assert len(found) == 5
+
+    def test_underscore_and_hyphen_spellings_normalize_the_same(self) -> None:
+        """``tensorflow_hub`` on disk must match a declared ``tensorflow-hub``."""
+        assert _normalize_package_name("tensorflow_hub") == _normalize_package_name("tensorflow-hub")
+
+    def test_declared_subset_excludes_unlisted_packages(self, tmp_path: Path) -> None:
+        """ctranslate2 is installed but not a declared package, so it is not stored in full."""
+        venv_dir = _make_fake_venv(tmp_path / "v")
+        record = venv_environment("crisperwhisper", venv_dir)
+        assert "ctranslate2" not in record["dependencies"]
+        assert record["dependencies"]["torch"] == "2.14.0"
+        assert record["dependencies"]["crisperwhisper"] == "2.0.1"
+
+    def test_label_is_the_resolved_directory_name(self, tmp_path: Path) -> None:
+        """The device key lives in the directory name, e.g. a ``-cpu``/``-cu128`` suffix."""
+        venv_dir = _make_fake_venv(tmp_path / "crisperwhisper-cpu")
+        record = venv_environment("crisperwhisper", venv_dir)
+        assert record["label"] == "crisperwhisper-cpu"
+
+    def test_the_digest_changes_when_the_full_listing_does(self, tmp_path: Path) -> None:
+        """A package the declared subset excludes still moves the digest, so a mismatch is visible."""
+        base = _make_fake_venv(tmp_path / "a")
+        same = _make_fake_venv(tmp_path / "b")
+        assert venv_environment("x", base)["dependencies_digest"] == venv_environment("x", same)["dependencies_digest"]
+        (base / "lib" / "python3.12" / "site-packages" / "extra-1.0.dist-info").mkdir()
+        assert venv_environment("x", base)["dependencies_digest"] != venv_environment("x", same)["dependencies_digest"]

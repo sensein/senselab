@@ -1,6 +1,8 @@
 """The shared node helpers: verdict-key shadowing, the read rule, and a written file's digest."""
 
 import hashlib
+import platform
+from importlib.metadata import version
 from pathlib import Path
 from typing import Callable
 
@@ -9,10 +11,13 @@ import pytest
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.nodes.common import (
+    HOST_ENV_PACKAGES,
     STREAM_SUFFIX,
+    capture_environments,
     clamp_extent,
     consensus_words,
     find_measurement,
+    host_environment,
     lexical_words,
     path_attributes,
     resolve_stream,
@@ -64,6 +69,50 @@ class TestWriteVerdict:
             detail={"kinds": {"speech": "present"}},
         )
         assert store.get_entity(entity_id).attributes["kinds"] == {"speech": "present"}
+
+
+class TestHostEnvironment:
+    """host_environment captures the host interpreter, replacing the terse version string."""
+
+    def test_records_python_version_platform_and_senselab_version(self, store: ProvStore) -> None:
+        """The three fields the brief named are exactly what lands on the host record."""
+        eid = host_environment(store)
+        got = store.get_environment(eid)
+        assert got.kind == "host"
+        assert got.python_version == platform.python_version()
+        assert got.operating_system == platform.platform()
+        assert got.senselab_version == version("senselab")
+
+    def test_only_installed_packages_from_the_named_list_are_recorded(self, store: ProvStore) -> None:
+        """The host list bounds what is recorded; a name outside it never shows up."""
+        eid = host_environment(store)
+        dependencies = store.get_environment(eid).dependencies
+        assert set(dependencies) <= set(HOST_ENV_PACKAGES)
+        assert "not-a-real-package" not in dependencies
+
+
+class TestCaptureEnvironments:
+    """capture_environments adds the host plus one entry per venv the run actually used."""
+
+    def test_the_host_is_always_captured(self, store: ProvStore) -> None:
+        """A run that never reached a subprocess venv still gets its host environment."""
+        ids = capture_environments(store, {})
+        assert len(ids) == 1
+        assert store.get_environment(ids[0]).kind == "host"
+
+    def test_one_environment_per_used_venv(self, store: ProvStore, tmp_path: Path) -> None:
+        """A venv named in ``used_venvs`` becomes its own venv-kind environment record."""
+        venv_dir = tmp_path / "crisperwhisper-cpu"
+        (venv_dir / "lib" / "python3.12" / "site-packages" / "torch-2.14.0.dist-info").mkdir(parents=True)
+        venv_dir.joinpath("pyvenv.cfg").write_text("version_info = 3.12.11\n")
+        ids = capture_environments(store, {"crisperwhisper": venv_dir})
+        kinds = {store.get_environment(eid).kind for eid in ids}
+        assert kinds == {"host", "venv"}
+        [venv_id] = [eid for eid in ids if store.get_environment(eid).kind == "venv"]
+        got = store.get_environment(venv_id)
+        assert got.label == "crisperwhisper-cpu"
+        assert got.dependencies["torch"] == "2.14.0"
+        assert got.dependencies_digest is not None
 
 
 class TestFindMeasurement:

@@ -164,6 +164,111 @@ class TestAgents:
         assert s.associations_of(a) == []
 
 
+class TestEnvironments:
+    """A host environment and a per-venv environment are their own record kind."""
+
+    def test_a_host_environment_round_trips_by_id(self) -> None:
+        """environment() returns an id get_environment() resolves back to the same record."""
+        s = _store()
+        eid = s.environment(
+            kind="host",
+            label="host",
+            python_version="3.12.11",
+            operating_system="macOS-15.0-arm64-arm-64bit",
+            dependencies={"torch": "2.8.0"},
+            senselab_version="1.3.1",
+        )
+        got = s.get_environment(eid)
+        assert got.kind == "host"
+        assert got.dependencies == {"torch": "2.8.0"}
+        assert got.senselab_version == "1.3.1"
+
+    def test_a_venv_environment_carries_a_digest_and_no_senselab_version(self) -> None:
+        """A venv environment names a declared subset plus a digest, not the host's own version."""
+        s = _store()
+        eid = s.environment(
+            kind="venv",
+            label="crisperwhisper-cpu",
+            python_version="3.12.11",
+            dependencies={"torch": "2.14.0", "transformers": "5.16.1"},
+            dependencies_digest="a" * 64,
+        )
+        got = s.get_environment(eid)
+        assert got.kind == "venv"
+        assert got.operating_system is None
+        assert got.senselab_version is None
+        assert got.dependencies_digest == "a" * 64
+
+    def test_environments_are_enumerable_by_kind(self) -> None:
+        """A reader collecting a run's venv environments must not have to know the ids in advance."""
+        s = _store()
+        host = s.environment(kind="host", label="host", python_version="3.12.11")
+        venv = s.environment(kind="venv", label="hear", python_version="3.11.15")
+        assert [e.id for e in s.environments("host")] == [host]
+        assert [e.id for e in s.environments("venv")] == [venv]
+        assert {e.id for e in s.environments()} == {host, venv}
+
+    def test_two_venvs_of_the_same_backend_at_different_device_keys_are_distinct(self) -> None:
+        """The resolved directory name -- which carries the device key -- is part of the id."""
+        s = _store()
+        cpu = s.environment(kind="venv", label="crisperwhisper-cpu", python_version="3.12.11")
+        gpu = s.environment(kind="venv", label="crisperwhisper-cu128", python_version="3.12.11")
+        assert cpu != gpu
+
+    def test_round_trips_through_jsonl(self, tmp_path: Path) -> None:
+        """write_jsonl / read_jsonl preserve every environment field."""
+        s = _store()
+        s.environment(
+            kind="host",
+            label="host",
+            python_version="3.12.11",
+            operating_system="macOS-15.0-arm64-arm-64bit",
+            dependencies={"torch": "2.8.0", "numpy": "2.4.4"},
+            senselab_version="1.3.1",
+        )
+        s.environment(
+            kind="venv",
+            label="hear",
+            python_version="3.11.15",
+            dependencies={"tensorflow": "2.21.0", "keras": "3.15.1"},
+            dependencies_digest="b" * 64,
+        )
+        path = tmp_path / "prov.jsonl"
+        s.write_jsonl(path)
+        back = ProvStore.read_jsonl(path)
+        assert back._environments == s._environments
+        assert back.fingerprint() == s.fingerprint()
+
+    def test_a_store_with_no_environment_lines_still_reads(self, tmp_path: Path) -> None:
+        """A store written before environment capture existed reads back with none, not an error."""
+        s = _store()
+        s.agent(agent_type="software", version="senselab 1.3.1")
+        path = tmp_path / "prov.jsonl"
+        s.write_jsonl(path)
+        assert "environment" not in {json.loads(ln)["record"] for ln in path.read_text().splitlines()}
+        back = ProvStore.read_jsonl(path)
+        assert back.environments() == []
+
+    def test_an_unknown_kind_is_refused_on_read(self, tmp_path: Path) -> None:
+        """A hand-edited kind outside host/venv fails the read instead of loading quietly."""
+        s = _store()
+        s.environment(kind="host", label="host", python_version="3.12.11")
+        path = tmp_path / "prov.jsonl"
+        s.write_jsonl(path)
+        _rewrite_records(path, "environment", lambda rec: rec.update(kind="container"))
+        with pytest.raises(ValueError, match="container"):
+            ProvStore.read_jsonl(path)
+
+    def test_merge_unions_environments(self) -> None:
+        """merge() carries environments across, the same as entities/activities/agents."""
+        a = _store()
+        a.environment(kind="host", label="host", python_version="3.12.11")
+        b = _store()
+        b.environment(kind="venv", label="yamnet", python_version="3.12.0")
+        merged = ProvStore.merge([a, b])
+        assert len(merged.environments()) == 2
+
+
 class TestInvalidation:
     """Withdrawal keeps the entity."""
 

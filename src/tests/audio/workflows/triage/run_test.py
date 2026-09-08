@@ -262,6 +262,18 @@ class TestHappyPath:
         assert sorted(result.released) == ["audio", "transcript"]
         assert all(path.parent == result.artifacts_dir for path in result.released.values())
 
+    def test_the_store_carries_a_host_environment(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Every run captures its host environment, whether or not it reached a subprocess venv."""
+        graph()
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        store = ProvStore.read_jsonl(result.store_path)
+        hosts = store.environments("host")
+        assert len(hosts) == 1
+        assert hosts[0].python_version
+        assert hosts[0].senselab_version
+
     def test_the_summary_sits_beside_the_store_and_never_under_released(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import platform
 from dataclasses import dataclass
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +12,18 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Triage
 from senselab.utils.portable_audio_io import NORMALIZE, AudioWriteReport
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore, file_attributes
+from senselab.utils.subprocess_venv import venv_environment
 
 MESSAGE_CAP = 200
 """How much of an exception's message is recorded. The bound on what a message can leak."""
 
 STREAM_SUFFIX = ".flac"
 """Container a persisted stream gets. See ``specs/20260907-triage-stream-compression/design.md``."""
+
+HOST_ENV_PACKAGES = ("torch", "torchaudio", "torchcodec", "transformers", "numpy", "scipy", "librosa")
+"""The packages named for the host environment: the ones that decide numerical results.
+
+See ``specs/20260908-triage-prov-bep028/design.md``."""
 
 
 def describe_exception(error: BaseException) -> str:
@@ -66,6 +73,49 @@ def software_agent(store: ProvStore) -> str:
         The agent's id.
     """
     return store.agent(agent_type="software", version=f"senselab {version('senselab')}")
+
+
+def host_environment(store: ProvStore) -> str:
+    """Add the host interpreter's environment: python version, platform, and senselab's own version.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The environment's id.
+    """
+    dependencies: dict[str, str] = {}
+    for name in HOST_ENV_PACKAGES:
+        try:
+            dependencies[name] = version(name)
+        except PackageNotFoundError:
+            continue
+    return store.environment(
+        kind="host",
+        label="host",
+        python_version=platform.python_version(),
+        operating_system=platform.platform(),
+        dependencies=dependencies,
+        senselab_version=version("senselab"),
+    )
+
+
+def capture_environments(store: ProvStore, used_venvs: dict[str, Path]) -> list[str]:
+    """Add one environment entity for the host, plus one for each subprocess venv actually used.
+
+    Args:
+        store: The provenance store.
+        used_venvs: Venv backend name to resolved directory, collected by wrapping the run's node
+            execution in :func:`~senselab.utils.subprocess_venv.record_venv_use`. Empty when the run
+            never reached a subprocess venv (e.g. it failed at ADMIT).
+
+    Returns:
+        The ids added, host first, then one per venv in name order.
+    """
+    ids = [host_environment(store)]
+    for name, venv_dir in sorted(used_venvs.items()):
+        ids.append(store.environment(kind="venv", **venv_environment(name, venv_dir)))
+    return ids
 
 
 def write_verdict(

@@ -20,6 +20,7 @@ from senselab.utils.prov_store import (
     Activity,
     Agent,
     Entity,
+    Environment,
     ProvStore,
 )
 
@@ -207,6 +208,24 @@ def _agent_record(agent: Agent, *, dataset: str) -> dict[str, Any]:
     return record
 
 
+def _environment_record(environment: Environment, *, dataset: str) -> dict[str, Any]:
+    """One ``Environments`` object."""
+    record: dict[str, Any] = {
+        "Id": bids_uri(environment.id, dataset=dataset),
+        "Label": environment.label,
+        _term("python_version"): environment.python_version,
+    }
+    if environment.operating_system is not None:
+        record["OperatingSystem"] = environment.operating_system
+    if environment.dependencies:
+        record["Dependencies"] = environment.dependencies
+    if environment.dependencies_digest is not None:
+        record[_term("dependencies_digest")] = environment.dependencies_digest
+    if environment.senselab_version is not None:
+        record[_term("senselab_version")] = environment.senselab_version
+    return record
+
+
 def to_bep028_graph(store: ProvStore, *, dataset: str = "", label: str = "triage") -> dict[str, Any]:
     """Serialize a store as one aggregated BEP028 provenance graph.
 
@@ -217,7 +236,8 @@ def to_bep028_graph(store: ProvStore, *, dataset: str = "", label: str = "triage
 
     Returns:
         A JSON-LD document: an ``@context`` and a ``Records`` object holding ``Files``,
-        ``prov:Entity``, ``Activities`` and ``Software`` arrays.
+        ``prov:Entity``, ``Activities``, ``Software`` and ``Environments`` arrays. ``Environments``
+        is present only when the store recorded one — never invented at conversion time.
     """
     outgoing: dict[str, dict[str, list[str]]] = {}
     for relation, source, target in store.relations():
@@ -243,6 +263,9 @@ def to_bep028_graph(store: ProvStore, *, dataset: str = "", label: str = "triage
     software = [_agent_record(agent, dataset=dataset) for agent in store.agents()]
     if software:
         records["Software"] = software
+    environments = [_environment_record(environment, dataset=dataset) for environment in store.environments()]
+    if environments:
+        records["Environments"] = environments
     return {
         "@context": [BEP028_CONTEXT, SENSELAB_CONTEXT],
         "Records": records,
