@@ -18,7 +18,7 @@ from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.utils.prov_store import ProvStore
 
 
-def _seed_residual_header(
+def _seed_stream_header(
     store: ProvStore,
     *,
     gain_db: float = 0.03,
@@ -26,7 +26,10 @@ def _seed_residual_header(
     energy_fraction: float = 0.014,
     speech_present: bool = True,
 ) -> None:
-    """The ``residual`` measurement alone, in the shape PREPROCESS writes it."""
+    """The ``residual`` measurement alone, in the shape PREPROCESS writes it.
+
+    Both the ``enhanced`` and ``residual`` cover sections read this one entity.
+    """
     store.entity(
         prov_type="measurement",
         extent=None,
@@ -40,18 +43,25 @@ def _seed_residual_header(
     )
 
 
-def _seed_residual_summary(
-    store: ProvStore, classifier: str, labels: dict[str, dict[str, float]], n_windows: int
+def _seed_stream_summary(
+    store: ProvStore,
+    prefix: str,
+    classifier: str,
+    labels: dict[str, dict[str, float]],
+    n_windows: int,
+    *,
+    suffix: str = "all",
+    n_windows_total: int | None = None,
 ) -> None:
-    """One classifier's ``residual_<classifier>_summary_all`` measurement."""
+    """One classifier's ``{prefix}_{classifier}_summary_{suffix}`` measurement."""
     store.entity(
         prov_type="measurement",
         extent=None,
         attributes={
-            "name": f"residual_{classifier}_summary_all",
+            "name": f"{prefix}_{classifier}_summary_{suffix}",
             "classifier": classifier,
             "n_windows": n_windows,
-            "n_windows_total": n_windows,
+            "n_windows_total": n_windows_total if n_windows_total is not None else n_windows,
             "labels": labels,
         },
     )
@@ -205,9 +215,10 @@ class TestTheSummaryFits:
 
         seed_preprocess_store(store, yamnet_labels=[["Speech"], ["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
-        _seed_residual_header(store)
-        _seed_residual_summary(
+        _seed_stream_header(store)
+        _seed_stream_summary(
             store,
+            "residual",
             "yamnet",
             {
                 "a-label-name-long-enough-to-probe-the-declared-width-limit": {
@@ -218,8 +229,9 @@ class TestTheSummaryFits:
             },
             n_windows=12,
         )
-        _seed_residual_summary(
+        _seed_stream_summary(
             store,
+            "residual",
             "ast",
             {"Buzz": {"max_score": 0.5, "mean_score": 0.3, "n_windows": 4}},
             n_windows=4,
@@ -280,9 +292,10 @@ class TestTheSummaryFits:
             ],
         )
         taxonomy(store, "plain", config, run_dir=tmp_path)
-        _seed_residual_header(store)
-        _seed_residual_summary(
+        _seed_stream_header(store)
+        _seed_stream_summary(
             store,
+            "residual",
             "yamnet",
             {
                 "a-label-name-long-enough-to-probe-the-declared-width-limit": {
@@ -293,8 +306,8 @@ class TestTheSummaryFits:
             },
             n_windows=12,
         )
-        _seed_residual_summary(
-            store, "ast", {"Buzz": {"max_score": 0.5, "mean_score": 0.3, "n_windows": 4}}, n_windows=4
+        _seed_stream_summary(
+            store, "residual", "ast", {"Buzz": {"max_score": 0.5, "mean_score": 0.3, "n_windows": 4}}, n_windows=4
         )
         style = FigureStyle()
         figure, axis = plt.subplots(figsize=(style.figure_inches[0], 2.0))
@@ -308,8 +321,8 @@ class TestTheSummaryFits:
         assert extent.x1 <= axis_extent.x1 + 1.0, "the cover overruns the right edge of its axis"
 
 
-class TestTheResidualSummary:
-    """The residual stream's own whole-file classification summary, on the cover page."""
+class TestTheStreamSummaries:
+    """The enhanced and residual streams' own whole-file classification summaries, on the cover page."""
 
     def test_it_sits_between_the_main_summary_and_the_kind_states(
         self,
@@ -321,17 +334,22 @@ class TestTheResidualSummary:
         """The slot a previous pass identified as having ample room."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
-        _seed_residual_header(store)
-        _seed_residual_summary(store, "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2)
-        _seed_residual_summary(store, "ast", {"Hum": {"max_score": 0.5, "mean_score": 0.3, "n_windows": 3}}, 3)
+        _seed_stream_header(store)
+        _seed_stream_summary(
+            store, "residual", "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2
+        )
+        _seed_stream_summary(
+            store, "residual", "ast", {"Hum": {"max_score": 0.5, "mean_score": 0.3, "n_windows": 3}}, 3
+        )
 
         lines = summary_panel_lines(store, FigureStyle())
         top = lines.index("WHOLE-FILE CLASSIFICATION SUMMARY")
         bottom = lines.index("KIND STATES AND EVIDENCE LINES")
+        enhanced = next(i for i, line in enumerate(lines) if line.strip().startswith("ENHANCED"))
         residual = next(i for i, line in enumerate(lines) if line.strip().startswith("RESIDUAL"))
-        assert top < residual < bottom
+        assert top < enhanced < residual < bottom
 
-    def test_the_header_states_the_residuals_own_provenance(
+    def test_the_header_states_the_streams_own_provenance(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -341,11 +359,15 @@ class TestTheResidualSummary:
         """Gain, both energy fractions, and whether speech was present, read straight off the store."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
-        _seed_residual_header(
+        _seed_stream_header(
             store, gain_db=0.03, enhanced_energy_fraction=0.98, energy_fraction=0.014, speech_present=True
         )
-        _seed_residual_summary(store, "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2)
-        _seed_residual_summary(store, "ast", {"Hum": {"max_score": 0.5, "mean_score": 0.3, "n_windows": 3}}, 3)
+        _seed_stream_summary(
+            store, "residual", "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2
+        )
+        _seed_stream_summary(
+            store, "residual", "ast", {"Hum": {"max_score": 0.5, "mean_score": 0.3, "n_windows": 3}}, 3
+        )
 
         text = "\n".join(summary_panel_lines(store, FigureStyle()))
         assert "+0.03 dB" in text
@@ -353,29 +375,64 @@ class TestTheResidualSummary:
         assert "1.4%" in text
         assert "speech present" in text
 
-    def test_it_reports_yamnet_and_ast_but_never_hear_or_the_speech_free_variant(
+    def test_it_now_reports_hear_as_well_as_yamnet_and_ast(
         self,
         store: ProvStore,
         config: TriageConfig,
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """The owner's ruling: just the all-windows YAMNet/AST summary, kept simple."""
+        """The former owner's ruling excluding HeAR from the residual block has been reversed."""
         seed_preprocess_store(
             store, yamnet_labels=[["Speech"]], ast_labels=[["Speech"]], hear_labels=[["Cough"]], scores_only=()
         )
         taxonomy(store, "plain", config, run_dir=tmp_path)
-        _seed_residual_header(store)
-        _seed_residual_summary(store, "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2)
-        _seed_residual_summary(store, "ast", {"Hum": {"max_score": 0.5, "mean_score": 0.3, "n_windows": 3}}, 3)
+        _seed_stream_header(store)
+        _seed_stream_summary(
+            store, "residual", "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2
+        )
+        _seed_stream_summary(
+            store, "residual", "ast", {"Hum": {"max_score": 0.5, "mean_score": 0.3, "n_windows": 3}}, 3
+        )
+        _seed_stream_summary(
+            store, "residual", "hear", {"Cough": {"max_score": 0.8, "mean_score": 0.6, "n_windows": 2}}, 2
+        )
 
         lines = summary_panel_lines(store, FigureStyle())
         residual_start = next(i for i, line in enumerate(lines) if line.strip().startswith("RESIDUAL"))
         residual_end = next(i for i in range(residual_start, len(lines)) if lines[i] == "")
         residual_text = "\n".join(lines[residual_start:residual_end])
         assert "yamnet" in residual_text and "ast" in residual_text
-        assert "hear" not in residual_text
-        assert "speech_free" not in residual_text and "speech-free" not in residual_text
+        assert "Cough" in residual_text, "hear must now be drawn, not left in the store unrendered"
+
+    def test_the_speech_free_variant_is_a_compact_line_per_classifier(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        seed_preprocess_store: Callable[..., None],
+        tmp_path: Path,
+    ) -> None:
+        """The windows where the target is not speaking are the diagnostically interesting ones."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
+        taxonomy(store, "plain", config, run_dir=tmp_path)
+        _seed_stream_header(store)
+        _seed_stream_summary(
+            store, "residual", "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2
+        )
+        _seed_stream_summary(
+            store,
+            "residual",
+            "yamnet",
+            {"Hum": {"max_score": 0.7, "mean_score": 0.5, "n_windows": 1}},
+            1,
+            suffix="speech_free",
+            n_windows_total=2,
+        )
+
+        text = "\n".join(summary_panel_lines(store, FigureStyle()))
+        assert "speech-free" in text
+        assert "Hum 0.70" in text
+        assert "(1/2 win)" in text
 
     def test_a_disabled_block_states_that_reason_not_zeros(
         self,
@@ -384,7 +441,11 @@ class TestTheResidualSummary:
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """A store built with ``residual.enabled: false`` still reads this way -- that path stays live."""
+        """A store built with ``residual.enabled: false`` still reads this way -- that path stays live.
+
+        Both the ``enhanced`` and ``residual`` sections read the same absent ``residual``
+        measurement, so neither states a value it never had.
+        """
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
         _seed_preprocess_verdict(
@@ -396,8 +457,9 @@ class TestTheResidualSummary:
             },
         )
 
-        text = "\n".join(summary_panel_lines(store, FigureStyle()))
-        assert "residual.enabled is false" in text
+        lines = summary_panel_lines(store, FigureStyle())
+        text = "\n".join(lines)
+        assert text.count("residual.enabled is false") == 2, "both stream sections must state the same absence"
         assert "0.00 dB" not in text
         assert "0.0%" not in text
 
@@ -438,9 +500,11 @@ class TestTheResidualSummary:
         """A residual too short to yield one AST window is not the same fact as the block never running."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
-        _seed_residual_header(store)
-        _seed_residual_summary(store, "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2)
-        _seed_residual_summary(store, "ast", {}, 0)
+        _seed_stream_header(store)
+        _seed_stream_summary(
+            store, "residual", "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2
+        )
+        _seed_stream_summary(store, "residual", "ast", {}, 0)
 
         text = "\n".join(summary_panel_lines(store, FigureStyle()))
         assert "produced no windows" in text
@@ -456,13 +520,36 @@ class TestTheResidualSummary:
         """The residual itself ran; only AST's own pass over it failed."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
-        _seed_residual_header(store)
-        _seed_residual_summary(store, "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2)
+        _seed_stream_header(store)
+        _seed_stream_summary(
+            store, "residual", "yamnet", {"Buzz": {"max_score": 0.6, "mean_score": 0.4, "n_windows": 2}}, 2
+        )
         _seed_preprocess_verdict(store, {"residual_ast": "RuntimeError: worker timed out"})
 
         text = "\n".join(summary_panel_lines(store, FigureStyle()))
         assert "ast: absent" in text
         assert "worker timed out" in text
+
+    def test_the_enhanced_stream_is_drawn_alongside_residual(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        seed_preprocess_store: Callable[..., None],
+        tmp_path: Path,
+    ) -> None:
+        """The gap this feature closes: the enhanced stream reached only the residual's own header line."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
+        taxonomy(store, "plain", config, run_dir=tmp_path)
+        _seed_stream_header(store)
+        _seed_stream_summary(
+            store, "enhanced", "yamnet", {"Speech": {"max_score": 0.95, "mean_score": 0.8, "n_windows": 5}}, 5
+        )
+
+        lines = summary_panel_lines(store, FigureStyle())
+        enhanced_start = next(i for i, line in enumerate(lines) if line.strip().startswith("ENHANCED"))
+        enhanced_end = next(i for i in range(enhanced_start, len(lines)) if lines[i] == "")
+        enhanced_text = "\n".join(lines[enhanced_start:enhanced_end])
+        assert "Speech" in enhanced_text
 
 
 class TestTheConsensusAlignmentBlock:

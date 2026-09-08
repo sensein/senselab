@@ -60,9 +60,11 @@ _LINE_SOURCE: dict[tuple[str, str], tuple[str, ...]] = {
 
 _SUMMARISED_CLASSIFIERS = ("yamnet", "ast", "hear")
 
-#: The residual block summarises only these two — HeAR and the speech-free variant stay in the
-#: store, unrendered, by the owner's ruling.
-_RESIDUAL_SUMMARISED_CLASSIFIERS = ("yamnet", "ast")
+#: One title per stream section, keyed by the ``enhanced``/``residual`` prefix PREPROCESS writes.
+_STREAM_TITLES: dict[str, str] = {
+    "enhanced": "ENHANCED — SPEECH ISOLATED BY FRCRN",
+    "residual": "RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL",
+}
 
 # E=envelope (primary amplitude), C=continuity, A=asr, S=normalization (supplementary amplitude),
 # G=gap, the complement PREPROCESS writes so the background between proposals is measured too.
@@ -102,6 +104,8 @@ class FigureStyle:
             every page draws the same rows in the same order, so a label can be scanned down
             across pages and a page carrying none of a row's label shows that row empty.
         summary_labels: How many labels the whole-file taxonomy panel lists per classifier.
+        speech_free_labels: How many labels the speech-free one-line summary lists per
+            stream/classifier.
         colour_primary: Envelope and primary-amplitude spans.
         colour_supplement: Normalization-derived spans.
         colour_continuity: The continuity trace and its spans.
@@ -170,6 +174,7 @@ class FigureStyle:
     raster_rows_scope: str = "file"
     raster_row_ratio: float = 0.075
     summary_labels: int = 6
+    speech_free_labels: int = 3
     colour_primary: str = "steelblue"
     colour_supplement: str = "darkorange"
     colour_continuity: str = "mediumseagreen"
@@ -746,21 +751,27 @@ def _columns(blocks: list[list[str]]) -> list[str]:
     return lines
 
 
-def _residual_header_line(store: ProvStore) -> tuple[str, bool]:
-    """The residual stream's own provenance line, read off the ``residual`` measurement.
+def _stream_header_line(store: ProvStore, prefix: str) -> tuple[str, bool]:
+    """One stream's own provenance line, read off the shared ``residual`` measurement.
+
+    ``enhanced`` and ``residual`` are written by the same PREPROCESS block from the same FRCRN
+    pass and share that one measurement, so both stream sections read gain / enhanced % /
+    residual % / speech-present off it and differ only in title.
 
     Args:
         store: The provenance store.
+        prefix: ``"enhanced"`` or ``"residual"``.
 
     Returns:
         ``(line, present)``. ``present`` is False when the line states an absence — PREPROCESS's own
         recorded reason, covering the block never having run, having been gated out, or an upstream
         failure — in which case no classifier block follows it.
     """
+    title = _STREAM_TITLES[prefix]
     measurement = find_measurement(store, "residual")
     if measurement is None:
         reason = _absent_reasons(store).get("residual", "no reason recorded")
-        return f"RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL: absent — {reason}", False
+        return f"{title}: absent — {reason}", False
     attributes = measurement.attributes
     gain_db = attributes.get("gain_db")
     enhanced_fraction = attributes.get("enhanced_energy_fraction")
@@ -769,19 +780,17 @@ def _residual_header_line(store: ProvStore) -> tuple[str, bool]:
     enhanced_text = f"{float(enhanced_fraction) * 100.0:.1f}%" if enhanced_fraction is not None else "—"
     energy_text = f"{float(energy_fraction) * 100.0:.1f}%" if energy_fraction is not None else "—"
     speech_text = "speech present" if attributes.get("speech_present") else "no speech detected"
-    line = (
-        "RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL   "
-        f"gain {gain_text} · enhanced {enhanced_text} · residual {energy_text} · {speech_text}"
-    )
+    line = f"{title}   gain {gain_text} · enhanced {enhanced_text} · residual {energy_text} · {speech_text}"
     return line, True
 
 
-def _residual_classifier_block(store: ProvStore, classifier: str, style: FigureStyle) -> list[str]:
-    """One classifier's residual label summary, over every window, read off ``residual_<classifier>_summary_all``.
+def _stream_classifier_block(store: ProvStore, prefix: str, classifier: str, style: FigureStyle) -> list[str]:
+    """One classifier's label summary over one stream, read off ``{prefix}_{classifier}_summary_all``.
 
     Args:
         store: The provenance store.
-        classifier: ``"yamnet"`` or ``"ast"``.
+        prefix: ``"enhanced"`` or ``"residual"``.
+        classifier: ``"yamnet"``, ``"ast"`` or ``"hear"``.
         style: The drawing configuration, for how many labels to list.
 
     Returns:
@@ -789,14 +798,14 @@ def _residual_classifier_block(store: ProvStore, classifier: str, style: FigureS
         absent summary states PREPROCESS's own reason, and a summary over zero windows says so
         rather than printing an empty label list.
     """
-    summary = find_measurement(store, f"residual_{classifier}_summary_all")
+    summary = find_measurement(store, f"{prefix}_{classifier}_summary_all")
     if summary is None:
-        reason = _absent_reasons(store).get(f"residual_{classifier}")
+        reason = _absent_reasons(store).get(f"{prefix}_{classifier}")
         return [f"{classifier}: absent", f"  {reason}" if reason else "  no reason recorded"]
     attributes = summary.attributes
     n_windows = int(attributes.get("n_windows") or 0)
     if n_windows == 0:
-        return [f"{classifier}: 0 win", "  residual produced no windows to classify"]
+        return [f"{classifier}: 0 win", f"  {prefix} produced no windows to classify"]
     labels: dict[str, dict[str, float]] = attributes.get("labels") or {}
     block = [f"{classifier}: {n_windows} win, {len(labels)} labels"]
     ranked = sorted(
@@ -815,25 +824,67 @@ def _residual_classifier_block(store: ProvStore, classifier: str, style: FigureS
     return block
 
 
-def _residual_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
-    """The residual stream's whole-file classification summary: YAMNet and AST, over all windows.
+def _stream_speech_free_line(store: ProvStore, prefix: str, classifier: str, style: FigureStyle) -> str:
+    """One classifier's speech-free label summary, read off ``{prefix}_{classifier}_summary_speech_free``.
 
-    Laid out with :func:`_columns`, the same machinery :func:`summary_panel_lines` uses for the
-    other classifiers. The speech-free variant is not rendered here.
+    The speech-free subset is exactly the windows PREPROCESS recorded with ``speech_overlap ==
+    0.0`` — the target is not speaking in them, so a label appearing here is background, not
+    speech-shaped enhancement artefact.
 
     Args:
         store: The provenance store.
+        prefix: ``"enhanced"`` or ``"residual"``.
+        classifier: ``"yamnet"``, ``"ast"`` or ``"hear"``.
+        style: The drawing configuration, for how many labels to list.
+
+    Returns:
+        One line: the classifier's own name, then its top speech-free labels; states the absence
+        reason when the summary never reached the store, or that no window was speech-free.
+    """
+    summary = find_measurement(store, f"{prefix}_{classifier}_summary_speech_free")
+    if summary is None:
+        reason = _absent_reasons(store).get(f"{prefix}_{classifier}")
+        return f"{classifier}: absent — {reason}" if reason else f"{classifier}: absent — no reason recorded"
+    attributes = summary.attributes
+    n_windows = int(attributes.get("n_windows") or 0)
+    n_total = int(attributes.get("n_windows_total") or 0)
+    if n_windows == 0:
+        return f"{classifier}: no window free of speech (0/{n_total})"
+    labels: dict[str, dict[str, float]] = attributes.get("labels") or {}
+    ranked = sorted(
+        ((name, stats) for name, stats in labels.items() if float(stats["max_score"]) > 0.0),
+        key=lambda item: (float(item[1]["max_score"]), float(item[1]["mean_score"])),
+        reverse=True,
+    )
+    if not ranked:
+        return f"{classifier}: every label scored 0.000 ({n_windows}/{n_total} win)"
+    top = ", ".join(f"{label} {float(stats['max_score']):.2f}" for label, stats in ranked[: style.speech_free_labels])
+    return f"{classifier}: {top} ({n_windows}/{n_total} win)"
+
+
+def _stream_summary_lines(store: ProvStore, prefix: str, style: FigureStyle) -> list[str]:
+    """One stream's whole-file classification summary: yamnet, ast and hear, over all windows.
+
+    Laid out with :func:`_columns`, the same machinery :func:`summary_panel_lines` uses for the
+    other classifiers, followed by each classifier's own speech-free top labels as one line apiece.
+
+    Args:
+        store: The provenance store.
+        prefix: ``"enhanced"`` or ``"residual"``.
         style: The drawing configuration.
 
     Returns:
-        The lines, headed by the residual's own provenance line, alone when the block is absent.
+        The lines, headed by the stream's own provenance line, alone when the block is absent.
     """
-    header, present = _residual_header_line(store)
+    header, present = _stream_header_line(store, prefix)
     lines = [header]
     if not present:
         return lines
-    blocks = [_residual_classifier_block(store, classifier, style) for classifier in _RESIDUAL_SUMMARISED_CLASSIFIERS]
+    blocks = [_stream_classifier_block(store, prefix, classifier, style) for classifier in _SUMMARISED_CLASSIFIERS]
     lines.extend(_columns(blocks))
+    lines.append("  speech-free (windows with no target speech):")
+    for classifier in _SUMMARISED_CLASSIFIERS:
+        lines.append(f"    {_stream_speech_free_line(store, prefix, classifier, style)}")
     return lines
 
 
@@ -854,7 +905,9 @@ def summary_panel_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     lines: list[str] = ["WHOLE-FILE CLASSIFICATION SUMMARY"]
     lines.extend(_columns(blocks))
     lines.append("")
-    lines.extend(_residual_summary_lines(store, style))
+    lines.extend(_stream_summary_lines(store, "enhanced", style))
+    lines.append("")
+    lines.extend(_stream_summary_lines(store, "residual", style))
     lines.append("")
     lines.append("KIND STATES AND EVIDENCE LINES")
     lines.extend(kind_lines)
