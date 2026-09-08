@@ -27,7 +27,6 @@ export PATH="$HOME/.local/bin:$PATH"
 # Keep the installed editable package aligned with the checked-out workflow code.
 export UV_PROJECT_ENVIRONMENT="$REPO_DIR/.venv"
 export UV_CACHE_DIR="$SCRATCH/uv-cache"
-module load ffmpeg/5.1.4 >/dev/null 2>&1 || true
 export LD_LIBRARY_PATH="$SCRATCH/miniforge/lib:${LD_LIBRARY_PATH:-}"
 export HF_HOME=/orcd/data/satra/002/huggingface
 export HF_HUB_CACHE="$HF_HOME/hub"
