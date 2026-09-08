@@ -174,6 +174,8 @@ def windows_config(tmp_path: Path) -> TriageConfig:
         "  hear:\n"
         "    default_threshold: 0.5\n"
         "    label_thresholds: {}\n"
+        "residual:\n"
+        "  enabled: false\n"
     )
     return load_triage_config(override)
 
@@ -195,7 +197,7 @@ def phonation_config(tmp_path: Path) -> TriageConfig:
     phonation-span criteria this fixture also used to supply went with the detector that read them.
     """
     override = tmp_path / "phonation.yaml"
-    override.write_text("voice:\n  f0_range_hz: [75.0, 500.0]\n")
+    override.write_text("voice:\n  f0_range_hz: [75.0, 500.0]\nresidual:\n  enabled: false\n")
     return load_triage_config(override)
 
 
@@ -224,6 +226,8 @@ def spans_config(tmp_path: Path) -> TriageConfig:
         "  ceiling: 0.95\n"
         "spans:\n"
         "  k_db: 12.0\n"
+        "residual:\n"
+        "  enabled: false\n"
     )
     return load_triage_config(override)
 
@@ -254,6 +258,8 @@ def asr_span_config(tmp_path: Path) -> TriageConfig:
         "spans:\n"
         "  k_db: 12.0\n"
         "speech:\n"
+        "residual:\n"
+        "  enabled: false\n"
     )
     return load_triage_config(override)
 
@@ -291,6 +297,8 @@ def span_quality_config(tmp_path: Path) -> TriageConfig:
         "  yamnet:\n"
         "    default_threshold: 0.5\n"
         "    label_thresholds: {Speech: 0.4}\n"
+        "residual:\n"
+        "  enabled: false\n"
     )
     return load_triage_config(override)
 

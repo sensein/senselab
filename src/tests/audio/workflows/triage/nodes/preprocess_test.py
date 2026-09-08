@@ -33,6 +33,20 @@ from tests.audio.workflows.triage.nodes.conftest import (
 )
 
 
+@pytest.fixture
+def config(tmp_path: Path) -> TriageConfig:
+    """The packaged config, with the residual block off.
+
+    Overrides the module-scoped ``config`` fixture from ``conftest.py`` for this file: every test
+    here that isn't ``TestResidualStep`` is about some other PREPROCESS block, and none of them stub
+    FRCRN, so leaving the packaged default (on) would make them run it for real. ``TestResidualStep``
+    builds its own configs explicitly and does not use this fixture.
+    """
+    override = tmp_path / "no_residual.yaml"
+    override.write_text("residual:\n  enabled: false\n")
+    return load_triage_config(override)
+
+
 def _clipped_at_44k() -> np.ndarray:
     """2 s of a 220 Hz tone driven 3.5 dB past full scale, so it clips in flat plateaus."""
     grid = np.arange(int(2.0 * 44100)) / 44100
@@ -1257,7 +1271,7 @@ class TestWordsAreBracketAware:
     ) -> None:
         """With the vocabulary supplied, 'khh' becomes [KHH] and the raw token stays in the readings."""
         override = tmp_path / "tokens.yaml"
-        override.write_text("words:\n  onomatopoeic_tokens: [khh, ahem]\n")
+        override.write_text("words:\n  onomatopoeic_tokens: [khh, ahem]\nresidual:\n  enabled: false\n")
         config = load_triage_config(override)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello khh world"), qwen=_line("hello khh world"))
@@ -1539,17 +1553,19 @@ class TestResidualBandsAndSpeechOverlap:
 
 
 class TestResidualStep:
-    """PREPROCESS's background-residual block: off by default, no meaning gate, classified both ways."""
+    """PREPROCESS's background-residual block: on by default, no meaning gate, classified both ways."""
 
-    def test_disabled_by_default_is_absent_and_harmless(
+    def test_disabled_is_absent_and_harmless(
         self,
         store: ProvStore,
-        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The packaged config never runs FRCRN, and every other derivative is untouched by that."""
+        """With ``residual.enabled: false`` set explicitly, FRCRN never runs and every other derivative is untouched."""
+        override = tmp_path / "residual.yaml"
+        override.write_text("residual:\n  enabled: false\n")
+        config = load_triage_config(override)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch)
         result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)

@@ -204,9 +204,9 @@ redaction:
 
 # Background residual: FRCRN_SE_16K's enhancement, lag-aligned and gain-fitted, subtracted from
 # `plain`. Both the enhancement and the residual are written and classified; no energy-fraction
-# gate decides whether either is produced. Off by default -- ~22 s of GPU work per recording.
+# gate decides whether either is produced.
 residual:
-  enabled: false                       # whether this PREPROCESS block runs at all
+  enabled: true                        # whether this PREPROCESS block runs at all
   max_lag_ms: 200.0                    # cross-correlation search half-window against the enhanced output
   bands_hz: [[0, 200], [200, 1000], [1000, 4000], [4000, 8000]]  # band split the residual is reported over
 
