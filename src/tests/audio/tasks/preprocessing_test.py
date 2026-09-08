@@ -14,6 +14,7 @@ from senselab.audio.tasks.preprocessing import (
     evenly_segment_audios,
     extract_segments,
     pad_audios,
+    resample_audios,
     select_channel_from_audios,
 )
 
@@ -24,7 +25,11 @@ def test_resample_audios(
     resampled_mono_audio_sample: Audio,
     resampled_stereo_audio_sample: Audio,
 ) -> None:
-    """Tests functionality for resampling Audio objects."""
+    """Tests functionality for resampling Audio objects.
+
+    Covers the genuine-resample path (48 kHz -> 16 kHz, via the `resampled_*_audio_sample`
+    fixtures); the same-rate paths are covered separately below.
+    """
     resample_rate = 16000
 
     for sample, resampled_sample in zip(
@@ -34,6 +39,54 @@ def test_resample_audios(
         assert math.ceil(expected_size) == resampled_sample.waveform.shape[1], (
             f"Expected size {math.ceil(expected_size)}, but got {resampled_sample.waveform.shape[1]}"
         )
+
+
+def _sine(duration_s: float, sampling_rate: int, freq: float = 440.0) -> Audio:
+    """A mono sine tone at a known rate, for tests that need a synthetic waveform.
+
+    Args:
+        duration_s: Tone duration in seconds.
+        sampling_rate: Sampling rate in Hz.
+        freq: Tone frequency in Hz.
+
+    Returns:
+        The audio.
+    """
+    t = torch.arange(int(duration_s * sampling_rate), dtype=torch.float32) / sampling_rate
+    waveform = (0.5 * torch.sin(2 * math.pi * freq * t)).unsqueeze(0)
+    return Audio(waveform=waveform, sampling_rate=sampling_rate)
+
+
+def test_resample_audios_same_rate_is_a_no_op() -> None:
+    """When `lowcut` is `None`, an audio already at `resample_rate` is returned unchanged."""
+    audio = _sine(1.0, 16000)
+    [out] = resample_audios([audio], resample_rate=16000)
+    assert out.sampling_rate == 16000
+    assert torch.equal(out.waveform, audio.waveform)
+
+
+def test_resample_audios_same_rate_with_explicit_lowcut_still_filters() -> None:
+    """An explicit `lowcut` is honored even when the rate already matches."""
+    audio = _sine(1.0, 16000)
+    [out] = resample_audios([audio], resample_rate=16000, lowcut=2000.0)
+    assert out.sampling_rate == 16000
+    assert out.waveform.shape == audio.waveform.shape
+    assert not torch.equal(out.waveform, audio.waveform)
+
+
+def test_resample_audios_mixed_batch_only_resamples_what_needs_it() -> None:
+    """A batch mixing an already-correct rate with a different one resamples only the latter."""
+    already_correct = _sine(1.0, 16000)
+    needs_resampling = _sine(1.0, 48000)
+
+    [out_correct, out_resampled] = resample_audios([already_correct, needs_resampling], resample_rate=16000)
+
+    assert out_correct.sampling_rate == 16000
+    assert torch.equal(out_correct.waveform, already_correct.waveform)
+
+    assert out_resampled.sampling_rate == 16000
+    expected_size = needs_resampling.waveform.shape[1] / needs_resampling.sampling_rate * 16000
+    assert math.ceil(expected_size) == out_resampled.waveform.shape[1]
 
 
 def test_downmix_audios(mono_audio_sample: Audio, stereo_audio_sample: Audio) -> None:
