@@ -100,7 +100,7 @@ the in-tree runner never calls it, though the pipeline as actually run does, rig
 - **PREPROCESS** cannot flag or fail, but it can raise, and everything after it reads what it
   measured — so a raise skips TAXONOMY, routing, every branch and REDACT (`run.py:243-247`).
 - **ROUTING** is a dependency gate: if it raises, no branch has an authorised decision, so every
-  branch is `skipped` (`run.py:249-259`).
+  branch is `skipped` (`run.py:249-260`).
 
 A branch that raises is recorded `errored` and its siblings still run: none reads another's output.
 
@@ -636,7 +636,11 @@ lives only in that campaign's override.
 
 Reads the per-span HeAR labels over the general span set — excluding any span carrying a `family`
 — and confirms or contests them (`airway.py:1`). It also reads PREPROCESS's `silence` windows
-(`_inside_certified_silence`, `airway.py:26`, used `:161-164`). Config:
+(`_inside_certified_silence`, `airway.py:26`; the windows are gathered at `:161-164` and the test
+applied per span at `:232`), the lexical consensus words, which exclude an already-transcribed span
+from the evidence set (`_is_transcribed`, `airway.py:64-79`, used `:216`, and again in the
+lexical-contamination check at `:306-336`), and YAMNet's whole-file per-window labels, which drive
+the confirm/contest verb (`_windows_covering`, `airway.py:46-61`, used `:258`). Config:
 `airway.labels_of_interest` (`Cough`, `Breathe`), `airway.confirmation_map` (which YAMNet labels
 confirm which HeAR label), `taxonomy.audioset_airway_labels`, and `airway.contest_labels` (**null**;
 when supplied it is refused, at branch execution (`airway.py:156`), if it intersects
@@ -679,9 +683,12 @@ the `pass` and `discard` rows of the fold's ladder. The raise is caught: the cal
 `_attempt` (`run.py:262-266`), which records the node `ERRORED` with the message and returns `None`
 (`run.py:185-187`), so the failure is an operational fact about the run and changes no verdict.
 `pii.required_detectors` and `redaction.bleep_hz` are populated (`[gliner, presidio, rules]` and
-`1000.0`) and are not what stops it. REDACT plans and re-plans on `word_hull(word)` — the union of
-the fitted extent and every source's own reading (`common.py:253-258`, used `redact.py:279`,
-`:307`) — a deliberate widening for safety.
+`1000.0`) and are not what stops it. The initial plan uses each PII finding's own extent
+(`_extents_from_findings`, `redact.py:160-183`), computed upstream in SPEECH; the **re-plan** widens
+to `word_hull(word)` (`redact.py:407`) — the union of the fitted extent and every source's own
+reading (`common.py:253-258`) — a deliberate widening for safety. `word_hull` is also read by the
+widening gate (`redact.py:279`) and by the verification transcript (`:307`), neither of which plans
+an extent.
 
 *Goals served*: 3, in intent. None reached, since the node cannot execute.
 
@@ -737,7 +744,7 @@ them, since REPORT writes its JSON before it draws.
 | goal | measured | decides anything | where it stops |
 | --- | --- | --- | --- |
 | 1. bad quality | yes — SQUIM, level, `disruptions_file`, per-span SQUIM | **no** | `quality.stoi_floor`, `quality.pesq_floor`, `quality.disruption_clipped_s_max`, `quality.disruption_dropout_s_max` are read by **nothing in `src/senselab`**; the gate they describe is unimplemented |
-| 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | partially | every `taxonomy.presence_floor.*` is null, so no kind can be `present` or `absent`; the ASR span source is silently absent; `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design |
+| 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | partially | every `taxonomy.presence_floor.*` is null, so no kind can be `present` or `absent`; `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design |
 | 3. PII | yes — the consensus transcript and each recognizer's own transcript are scanned in one call | **yes** | the one goal fully wired to a decision, and the only one whose acting node cannot run: `redaction.padding_ms` and `redaction.fill` are null and both `require`d, so REDACT raises. SPEECH marks PII; nothing releases a redacted product |
 
 ## Cross-cutting tensions
