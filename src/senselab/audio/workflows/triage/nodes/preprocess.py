@@ -83,6 +83,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     describe_exception,
     live_entities,
     software_agent,
+    write_stream,
     write_verdict,
 )
 from senselab.audio.workflows.triage.nodes.common import (
@@ -421,16 +422,17 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     if peak_scale != 1.0:
         plain = Audio(waveform=plain.waveform * peak_scale, sampling_rate=target_hz)
     duration_s = plain.waveform.shape[-1] / target_hz
-    plain.save_to_file(str(run_dir / "streams" / "plain.wav"))
+    plain_path, plain_report = write_stream(plain, run_dir, "plain")
     plain_id = store.entity(
         prov_type="stream",
         extent=(0.0, duration_s),
         attributes={
             "name": "plain",
-            "path": "streams/plain.wav",
+            "path": plain_path,
             "sampling_rate": target_hz,
             "channels": 1,
             "peak_scale": peak_scale,
+            "write_gain": plain_report.gain,
         },
     )
     store.was_generated_by(plain_id, condition)
@@ -442,16 +444,17 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         x = plain.waveform
         emphasised = torch.cat([x[:, :1], x[:, 1:] - coefficient * x[:, :-1]], dim=1)
         sharp = Audio(waveform=emphasised, sampling_rate=target_hz)
-        sharp.save_to_file(str(run_dir / "streams" / "preemphasised.wav"))
+        sharp_path, sharp_report = write_stream(sharp, run_dir, "preemphasised")
         sharp_id = store.entity(
             prov_type="stream",
             extent=(0.0, duration_s),
             attributes={
                 "name": "preemphasised",
-                "path": "streams/preemphasised.wav",
+                "path": sharp_path,
                 "sampling_rate": target_hz,
                 "channels": 1,
                 "coefficient": coefficient,
+                "write_gain": sharp_report.gain,
             },
         )
         store.was_generated_by(sharp_id, condition)
@@ -610,15 +613,16 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             floor_dbfs=parameters["floor_dbfs"],
             ceiling=parameters["ceiling"],
         )
-        normalized.save_to_file(str(run_dir / "streams" / "normalized.wav"))
+        normalized_path, normalized_report = write_stream(normalized, run_dir, "normalized")
         normalized_id = store.entity(
             prov_type="stream",
             extent=(0.0, duration_s),
             attributes={
                 "name": "normalized",
-                "path": "streams/normalized.wav",
+                "path": normalized_path,
                 "sampling_rate": target_hz,
                 "channels": 1,
+                "write_gain": normalized_report.gain,
             },
         )
         store.was_generated_by(normalized_id, activity)
@@ -1699,15 +1703,16 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         residual_audio = Audio(
             waveform=torch.from_numpy(computation.residual.astype(np.float32)).unsqueeze(0), sampling_rate=target_hz
         )
-        residual_audio.save_to_file(str(run_dir / "streams" / "residual.wav"))
+        residual_path, residual_report = write_stream(residual_audio, run_dir, "residual")
         residual_id = store.entity(
             prov_type="stream",
             extent=(0.0, residual_duration_s),
             attributes={
                 "name": "residual",
-                "path": "streams/residual.wav",
+                "path": residual_path,
                 "sampling_rate": target_hz,
                 "channels": 1,
+                "write_gain": residual_report.gain,
             },
         )
         store.was_generated_by(residual_id, activity)
