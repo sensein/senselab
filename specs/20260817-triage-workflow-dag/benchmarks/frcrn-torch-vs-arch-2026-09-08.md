@@ -148,14 +148,94 @@ reproduces "cluster ~1.000."
 
 This means the "cluster passes non-speech through" fact that motivated this task is **not
 reproducible today**, under any tested combination of torch version, CPU architecture, or physical
-node — including the cluster's own current production installation. One concrete, dated fact narrows
-where to look next: the cluster's production `clearvoice-cpu` venv carries a completion marker
-(`.senselab-installed`) timestamped **2026-09-07 17:27:08 -0400**, i.e. it was (re)built earlier today,
-by some other process in this same session's timeframe. If the original "cluster ~1.000" measurement
-predates that rebuild, whatever the venv looked like before 17:27 today is gone and unrecoverable from
-here — the venv this report measured against is necessarily the *post*-rebuild one. This is offered as
-the most concrete lead, not a confirmed mechanism: nothing in this session captured the pre-rebuild
-venv's dependency versions to compare directly.
+node — including the cluster's own current production installation.
+
+### The venv-rebuild lead is refuted
+
+This report originally offered the cluster venv's rebuild as the most concrete lead: its
+`.senselab-installed` marker is timestamped **2026-09-07 17:27:08 -0400**, so if the "cluster ~1.000"
+measurement predated that rebuild, the environment that produced it would be gone. **The timeline
+rules this out.** The measurement that established cluster pass-through is the 388-recording triage
+battery, Slurm array `22232242`, which was submitted at **17:37:06** and started at **17:37:42** —
+ten minutes *after* the marker. The battery therefore ran on the very venv this report measured, and
+that venv nulls these files today. There is no lost pre-rebuild environment to recover.
+
+Two further facts close off the remaining environmental explanations. The battery ran on
+`mit_preemptable` with `billing=8,cpu=8,mem=32G` and no `gres=gpu`, so it was **CPU**, like every cell
+in the 2x2 — device is not the untested axis. And `clearvoice-cpu` under
+`/orcd/scratch/bcs/002/satra/senselab-venvs` is the only clearvoice venv on the cluster; the second
+venv root (`/orcd/scratch/orcd/013/satra/senselab-venvs`) holds only `crisperwhisper`, `hear`,
+`pii-detection`, `qwen-asr` and `yamnet`, so the battery cannot have used a different one.
+
+### What the divergence is actually between
+
+Same venv, same architecture, same device, same task types, opposite outcome — so the variable is the
+**calling code**, not the environment. The battery ran at commit `568cc1c4` (17:35). The residual
+implementation was rewritten afterwards, in `233a3ea4` (20:25, one residual implementation, gates
+removed), `3ce2f63e` (20:39, FLAC streams) and `d06e9eff` (21:03, shared read/write path) — all three
+land between the battery and every measurement in this report.
+
+ClearVoice has **two entry modes that hand the network different waveforms for the same source
+file**. `__init__.py:44-50` dispatches on argument type: a `str` path goes to `call_io_mode`, an
+`np.ndarray` or `torch.Tensor` goes to `call_t2t_mode`. The IO path reads through `DataReader`, which
+calls `audio_norm` (`dataloader/dataloader.py:47`, `:115-116`); that function rescales the waveform to
+-25 dB RMS in two stages (`:132-169`), resamples inside the reader (`:126`), and `networks.py:292-299`
+multiplies the output back by the inverse scalar. The T2T path (`decode_data`, `networks.py:222-236`)
+does none of that.
+
+**senselab uses neither.** `src/senselab/audio/tasks/clearvoice.py:82` writes the waveform to a WAV via
+`save_to_file` and hands the subprocess worker a path; the worker
+(`src/senselab/utils/clearvoice.py`) reads it back, applies its **own** -25 dBFS RMS normalisation
+gated by `spec.rms_normalises_input` (`:136`, `:146`, `:640`; `True` for FRCRN), and then calls
+`net.decode()` directly (`:456`), bypassing upstream's dispatch entirely. Only the video/TSE branch
+goes through `ClearVoice.__call__` (`:428`). So the mode dispatch is not in play on this path, and
+absolute input level is normalised away in senselab's worker just as it is in upstream's IO path.
+Whether senselab's reimplementation is *equivalent* to the supported IO path — which also does
+segmented decoding and the reader's own resample — has not been established, and is the open
+structural question.
+
+### The refactor commits are excluded too
+
+Running 568cc1c4 and d06e9eff against the same four files in the same local venv gives **bit-identical
+energy fractions** (`s3_breath` 0.06345/0.59285, `s1_fivebreaths1` 0.00152/0.92553,
+`s2_threequickbreaths1` 0.01139/0.92232, `s3_hardcough` 0.96106/0.00182, enhanced/residual in each
+pair). The `Audio`-to-ClearVoice bridge and the worker module carry **identical git blob hashes** at
+both commits; the three refactor commits changed only how streams are persisted afterwards and
+whether the block raises, not what tensor FRCRN receives. Both endpoints reproduce today's NULL, not
+the batch's pass-through.
+
+### The divergence is real, measured in the batch's own audio
+
+The batch directories under `frcrn_cluster_residuals_20260907/` hold `plain.wav` (the exact tensor fed
+to FRCRN) and `residual.wav`. Their run-id timestamps are **UTC**, so `...-215051` is 17:50 EDT and
+these are the 17:37 batch's outputs. Measured residual-to-input energy ratios on nine respiration
+recordings:
+
+| task | residual / input |
+|---|---|
+| `(v2)-HardCough` | 0.0629, 0.0379 |
+| `(v2)-ThreeBreaths` | 0.0536 |
+| `(v2)-ThreeBreathsNose` | 0.0806 |
+| `Breath-1` | 0.0263 |
+| `Cough-1` | 0.2391, 0.0098 |
+| `Cough-2` | 0.0057 |
+| `ThreeQuickBreaths-1` | 0.1059 |
+
+Against 0.59-0.93 for the same class of recording today. The batch really did pass these through and
+current code really does null them, in audio rather than only in a summary column.
+
+### What remains
+
+With environment, device, venv identity and calling code all eliminated by measurement, two
+hypotheses are still standing. **The code path into the model**: senselab's `net.decode()` bypass has
+never been compared against upstream's supported IO entry point. **The checkpoint**: FRCRN is loaded
+via `HFModel(revision="main")`, which re-resolves over the network at call time, so the weights the
+batch used need not be the weights loaded today — and only one snapshot
+(`3766e6a64b0d8cb58f08d913d617bf129f11ed53`) is cached locally, which neither confirms nor rules this
+out. Note that loading through a ref rather than a pinned SHA is exactly the failure mode
+`CLAUDE.md` warns about, independent of whether it caused this flip. A 2x2x2 crossing torch version,
+architecture and code path, on one identical staged file set with the resolved checkpoint SHA recorded
+per cell, is the experiment that separates them.
 
 ## Verdict
 
@@ -184,10 +264,9 @@ Separately, and worth flagging even though it falls outside this report's disamb
 >=2.0.1` with no upper bound already let the production venv's resolved torch drift to 2.14.0 on both
 machines with nobody deciding that version — consistent with the concern in the task background,
 independent of whether that drift caused the original contradiction. If the *next* investigation
-wants to pin something, it should be aimed at reproducing the pre-17:27-today cluster environment
-(if that state can be recovered from anywhere — a job log with a package list, a lockfile, a build
-artifact) rather than at another architecture/torch sweep, since this session's sweep has now
-covered that space and found it flat.
+wants to pin something, it should be aimed at the feed path — what the residual refactor changed
+about the waveform handed to FRCRN — rather than at another architecture/torch sweep, since this
+session's sweep has now covered that space and found it flat.
 
 **FRCRN's behavior on duration-filling non-speech input remains untrustworthy regardless of this
 result.** The existing register (`residual-without-speech-2026-09-08.md`) already documents that this
