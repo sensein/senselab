@@ -278,3 +278,128 @@ entire non-speech recording rather than isolate noise from it — the mechanism 
 described for a cough, realised here for a breath. `s2_cough1__frcrn.wav` against
 `s2_cough1__residual.wav` is the second recording worth hearing: both contain an audible cough,
 which is the duplication failure mode rather than the silence one.
+
+## 2026-09-07 update — one implementation, the local/cluster contradiction, and what it settles
+
+Two things happened after this benchmark first shipped: the gates it fed
+(`residual.min_enhanced_energy_fraction`/`max_energy_fraction`/`min_energy_fraction`) were removed
+from the config outright (the owner decided PREPROCESS should measure, not judge whether a residual
+means "background" — see `config-derivations.md`'s `residual` section), and a 388-recording cluster
+run of the same PREPROCESS block found the *opposite* of what this benchmark measured on breath/
+long-cough recordings: 61 of 70 non-speech recordings had FRCRN's residual retain ~0.0000 of the
+input's energy (hitting `min_energy_fraction`'s absent-below-minimum gate, back when that gate still
+existed), where this benchmark measured 57–94% retained on exactly that recording shape. This section
+records what settled that contradiction.
+
+### The residual computation is now one implementation
+
+Lag search, gain fit, subtraction, band split and correlation were extracted into
+`senselab.audio.tasks.speech_enhancement.residual` (`find_lag`, `align`, `fit_gain`,
+`band_energy_fractions`, `correlation`, `compute_residual`); PREPROCESS's `_residual` block and this
+benchmark's own script (`scripts/residual_without_speech.py`) both call it now, and
+`~/Downloads/buzz_separation_20260906/residual/subtract.py` — the owner's separate working
+tool — was ported to call the same shared functions for the parts that overlap (lag/align/gain/bands/
+correlation), keeping its own broader scope (multi-stream summing, the spectral-subtraction
+alternative, its CLI) that the pipeline's residual block does not need. `subtract.py` is not
+superseded; it still does things `compute_residual` does not.
+
+**Rerunning `residual_without_speech.py` against the shared library reproduces every number in the
+table above exactly** — gain (dB), correlation, residual energy fraction and its dB figure, for all
+ten recordings, to the same rounding shown. The refactor changed no behaviour; this benchmark's
+original numbers stand as measured.
+
+### Diagnosing the contradiction: raw input vs. the pipeline's `plain` stream — ruled out
+
+The leading candidate going in was that this benchmark feeds FRCRN the **raw** recording, while
+PREPROCESS feeds it the **`plain`** stream — mono-downmixed, run through `resample_audios` (a
+Butterworth low-pass at `target_hz/2 - 100` Hz plus a resample, applied even when the rate already
+matches), then peak-scaled if needed. A low-pass filter removing high-frequency turbulent breath
+energy before FRCRN ever sees it is a plausible reason the model's behaviour could differ.
+
+Tested directly: for all eight non-speech recordings, both the raw file and a locally-reconstructed
+`plain` stream (the exact construction `preprocess.py` performs) were run through FRCRN in one batched
+call and each fed to `compute_residual` independently.
+
+| key | feed | gain (dB) | enhanced energy frac | residual energy frac | corr(input, enhanced) | corr(input, residual) |
+| --- | --- | --- | --- | --- | --- | --- |
+| s1_cough1 | raw | 0.20 | 0.9412 | 0.0151 | 0.992 | 0.123 |
+| s1_cough1 | plain | 0.20 | 0.9467 | 0.0098 | 0.995 | 0.099 |
+| s1_cough2 | raw | 0.10 | 0.9677 | 0.0103 | 0.995 | 0.102 |
+| s1_cough2 | plain | 0.09 | 0.9728 | 0.0057 | 0.997 | 0.075 |
+| s1_fivebreaths1 | raw | 15.45 | 0.0018 | 0.9364 | 0.252 | 0.968 |
+| s1_fivebreaths1 | plain | 16.91 | 0.0015 | 0.9255 | 0.273 | 0.962 |
+| s2_cough1 | raw | 18.27 | 0.0019 | 0.8717 | 0.358 | 0.934 |
+| s2_cough1 | plain | 18.16 | 0.0019 | 0.8739 | 0.355 | 0.935 |
+| s2_breath1 | raw | 36.04 | 0.0001 | 0.6575 | 0.586 | 0.811 |
+| s2_breath1 | plain | 36.17 | 0.0001 | 0.6550 | 0.588 | 0.810 |
+| s2_threequickbreaths1 | raw | 8.41 | 0.0111 | 0.9227 | 0.280 | 0.962 |
+| s2_threequickbreaths1 | plain | 8.34 | 0.0114 | 0.9223 | 0.280 | 0.961 |
+| s3_hardcough | raw | 0.15 | 0.9654 | 0.0015 | 0.999 | 0.039 |
+| s3_hardcough | plain | 0.16 | 0.9611 | 0.0018 | 0.999 | 0.043 |
+| s3_breath | raw | 8.05 | 0.0671 | 0.5724 | 0.654 | 0.757 |
+| s3_breath | plain | 8.07 | 0.0635 | 0.5928 | 0.638 | 0.770 |
+
+**Raw and `plain` agree to within noise on every recording, every quantity.** The pass-through cases
+(`s1_cough1`, `s1_cough2`, `s3_hardcough`) stay pass-through under both feeds; the null cases
+(`s1_fivebreaths1`, `s2_cough1`, `s2_breath1`, `s2_threequickbreaths1`, `s3_breath`) stay null under
+both, with `enhanced_energy_fraction` still under 2% and often under 0.2%. The low-pass filter
+`resample_audios` applies is not the mechanism: it changes nothing about which side of FRCRN's
+null/pass-through split a recording lands on. **This rules out "what is fed to FRCRN" as the cause of
+the local/cluster contradiction.**
+
+Script: `raw_vs_plain_diagnosis.py` (run ad hoc, not checked in — the comparison above is the
+artifact that matters). Audio written to `~/Downloads/frcrn_raw_vs_plain_20260907/`: for each of the
+16 (recording × feed) combinations, `<key>__<feed>__input.wav`, `__enhanced.wav`, `__residual.wav`
+(16 kHz PCM_16, no clipping), plus `raw_vs_plain_report.json` carrying every number in the table
+above.
+
+### Cross-checking against the cluster's own files
+
+`~/Downloads/frcrn_cluster_residuals_20260907/` holds `plain.wav`/`residual.wav` for the 98 (of 388)
+cluster recordings whose residual passed both gates and was written — of the three subjects measured
+locally, only `sub-17578482`'s `Respiration-and-cough-Cough-1`/`-2` runs are among them; every
+breath/long-cough run for these three subjects on the cluster hit the `min_energy_fraction` gate and
+so left no `residual.wav` (or `enhanced.wav` — not written at all until this session's Job 2) to
+inspect directly.
+
+Computing `energy(residual)/energy(plain)` straight from the cluster's own two files, no rerun
+needed: `Cough-1` 0.98%, `Cough-2` 0.57% — matching this benchmark's local numbers for the same two
+recordings (1.51%, 1.03%) to within the same noise band the speech comparators showed. **The cluster
+and this machine agree closely on every recording where FRCRN passes the input through.** The
+disagreement is confined to the recordings where FRCRN nulls the input locally — exactly the ones the
+cluster has no retained artifact for, because the old gate discarded them before Job 2's fix.
+
+### What this leaves as the explanation, and what it does not settle
+
+Raw-vs-`plain` conditioning is ruled out directly, by measurement, above. What is left, by
+elimination rather than by direct comparison (no GPU was available in this session to test on): FRCRN
+runs on CPU in every local measurement in this file (`device=worker's choice` resolves to the
+`clearvoice-cpu` venv here); the cluster run most likely ran on a GPU node (ORCD's own senselab
+recipe targets GPU partitions). A speech-enhancement model given a recording outside its training
+distribution — turbulent, broadband, non-speech breath/cough content the model was never asked to
+separate anything from — is exactly the regime where CPU/GPU floating-point non-associativity,
+cuDNN's algorithm selection, or a differing torch/ClearerVoice build can flip a qualitative outcome
+that sits near a decision boundary, while leaving the *in-distribution* cases (clear speech, isolated
+percussive coughs against silence) robust across environments — which is precisely the pattern
+measured: cough and speech recordings agree closely between this machine and the cluster; only the
+duration-filled breath recordings disagree, and only in which direction FRCRN's near-degenerate
+output falls.
+
+**This is the best-supported remaining account, not a confirmed mechanism.** Nothing in this session
+directly ran the pipeline's FRCRN call on a GPU to reproduce the cluster's own pass-through numbers;
+that comparison is the next step if the contradiction needs closing further, and it is a cheap one —
+`raw_vs_plain_diagnosis.py`'s method, rerun once with a CUDA-visible `enhance_audios` call over the
+same eight recordings, is sufficient.
+
+### Does the 0.50 gate's derivation survive?
+
+**No, independent of the gate now being removed from config.** `min_enhanced_energy_fraction: 0.50`
+was fitted to an 87-point gap this benchmark measured between "FRCRN passes non-speech through"
+(94–98% enhanced-energy retained) and "FRCRN nulls it" (0.01–6.7%) — a gap this session's local
+measurements (both the original benchmark and this update's raw/plain rerun) continue to reproduce
+exactly. But the cluster measured the opposite split on the same recording family (residual retaining
+~0.0000, i.e. FRCRN keeping the input, not nulling it) for the majority of its non-speech recordings.
+A threshold fitted to a gap that does not reproduce across the two environments the pipeline actually
+runs in is not a derived value any more, whether or not a gate still reads it. The gates are gone from
+config; if they are ever reintroduced, this measurement alone cannot be their derivation without also
+explaining why the cluster's non-speech recordings land on the other side of the gap.

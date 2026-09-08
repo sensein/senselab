@@ -773,9 +773,9 @@ how loud a released artifact's redactions are without anyone having measured whi
 
 ## residual
 
-The background-residual PREPROCESS block: `plain` minus a lag-aligned, gain-fitted FRCRN_SE_16K
-enhancement, classified. See `preprocess.md`'s own section for the algorithm and
-`benchmarks/residual-without-speech-2026-09-08.md` for the measurement behind every threshold below.
+The background-residual PREPROCESS block: `plain` and a lag-aligned, gain-fitted FRCRN_SE_16K
+enhancement, both written as streams and both classified. See `preprocess.md`'s own section for the
+algorithm. There is no energy-fraction gate here any more -- see the note below.
 
 residual.enabled false. Off by default: ~22 s of GPU work per recording, and the residual is not
 wired into any branch or decision yet -- the owner has not taken that decision -- so it would cost
@@ -786,22 +786,32 @@ residual.max_lag_ms 200.0. The cross-correlation search half-window FRCRN's outp
 recording measured, both in the buzz-separation comparison and the no-speech benchmark), so it is a
 safety margin rather than a value read off data.
 
-residual.min_enhanced_energy_fraction 0.50, provisional. The primary gate, derived in
-`residual-without-speech-2026-09-08.md`: FRCRN's enhanced output, before any gain fit, retained
-94-98% of a passed-through recording's energy and 0.01-6.7% of a nulled one, an 87-point gap with
-nothing observed inside it. 0.50 sits in the middle of that gap; any value between roughly 7% and
-94% separates the two groups measured there with the same result.
-
-residual.max_energy_fraction 0.90 and residual.min_energy_fraction 0.005, provisional and
-secondary. `max_energy_fraction` is not, by itself, a reliable check for a nulled input: the same
-benchmark found four of five nulled non-speech recordings sitting between 50% and 84% residual
-energy, comfortably under the 0.90 ceiling -- it is kept as a secondary check, not presented as
-protective on its own. `min_energy_fraction` catches the opposite failure, the model absorbing
-everything (measured 1.57% on the buzz-separation reference recording, comfortably above 0.005).
-
 residual.bands_hz `[[0, 200], [200, 1000], [1000, 4000], [4000, 8000]]`. The same four-band split
 `subtract.py`'s own reporting uses in the buzz-separation comparison, reused rather than refitted so
 the residual's band report reads against that comparison's own numbers directly.
+
+**No gate here any more.** This section previously carried three energy-fraction keys
+(`min_enhanced_energy_fraction: 0.50`, `max_energy_fraction: 0.90`, `min_energy_fraction: 0.005`)
+derived from `residual-without-speech-2026-09-08.md`'s eight-recording local measurement. The owner
+removed them: PREPROCESS measures, it does not judge whether a residual means "background" -- that
+question is answered by looking at what `enhanced` and `residual` were each classified as
+(`enhanced_yamnet`/`ast`/`hear` and `residual_yamnet`/`ast`/`hear`), which now exist for every run
+this block completes, not by a threshold on an energy ratio computed before any classifier runs.
+The bimodal local behaviour the 0.50 gate was fitted to (94-98% enhanced-energy retained when FRCRN
+passes an input through, 0.01-6.7% when it nulls one, nothing observed in between) is still true as
+an observation -- reproduced again this session, unchanged, both by rerunning the original benchmark
+against the now-shared library and by an independent raw-vs-`plain`-feed rerun. But it is no longer
+reconciled with the cluster run: 61 of 70 non-speech recordings there had FRCRN's enhanced output
+retain ~100% (pass-through), not null, where this session's local measurement -- on the identical
+recordings, both fed raw and fed the pipeline's own `plain` conditioning -- keeps nulling them.
+Feeding FRCRN the raw file vs. the `plain` stream was tested directly and ruled out as the cause (see
+`benchmarks/residual-without-speech-2026-09-08.md`'s 2026-09-07 update); the best-supported remaining
+account is a difference in FRCRN's execution environment between this machine (CPU) and the cluster
+(most likely GPU), surfacing only on non-speech input that sits outside the model's training
+distribution -- not confirmed by directly reproducing the cluster's numbers on a GPU in this session.
+**The 0.50 gate's derivation does not survive**, independent of the gate being removed: it was fitted
+on a measurement that does not reproduce across the two environments the pipeline actually runs in,
+and no account has been confirmed for why.
 
 The `speech_present`, `n_consensus_words` and `speech_coverage_fraction` fields this block writes on
 the `residual` measurement carry no config key of their own: `speech_present` is

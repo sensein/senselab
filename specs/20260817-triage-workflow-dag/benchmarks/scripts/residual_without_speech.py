@@ -4,13 +4,19 @@
 
 Runs FRCRN_SE_16K (senselab's ClearerVoice enhancement backend) over a fixed list of b2ai
 recordings -- eight respiration/cough recordings across three subjects plus two Story-recall
-(speech) comparators -- then reuses the existing, already-validated alignment/gain-fit/subtraction
-script (``~/Downloads/buzz_separation_20260906/residual/subtract.py``) to compute the residual for
-each, and runs one batched YAMNet call over every original/enhanced/residual file.
+(speech) comparators -- then calls `senselab.audio.tasks.speech_enhancement.residual.compute_residual`
+directly for the lag search, gain fit, subtraction and band split, and runs one batched YAMNet call
+over every original/enhanced/residual file.
+
+This used to go through ``~/Downloads/buzz_separation_20260906/residual/subtract.py`` (imported
+from its path at runtime) rather than duplicating its logic. That script now itself calls
+``compute_residual`` rather than reimplementing the same math, so calling either would compute the
+same numbers; this script now calls the library function directly, per the same one-implementation
+rule, rather than going through a second script that also delegates to it.
 
 Writes:
     - ``<out-dir>/<key>__original.wav``, ``__frcrn.wav``, ``__residual.wav`` (16 kHz PCM_16)
-    - ``<out-dir>/subtract_reports.json``  (one subtract.py report per recording)
+    - ``<out-dir>/subtract_reports.json``  (one report per recording, same shape as before)
     - ``<out-dir>/yamnet_by_file.json``    (max score per label, per file, over all windows)
 
 Usage:
@@ -20,16 +26,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import shutil
 import sys
-import types
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import soundfile as sf
+
 BIDS_ROOT = Path("~/Downloads/b2ai_v31_bids_07_01_v3").expanduser()
-SUBTRACT_PY = Path("~/Downloads/buzz_separation_20260906/residual/subtract.py").expanduser()
+BANDS_HZ = [(0.0, 200.0), (200.0, 1000.0), (1000.0, 4000.0), (4000.0, 8000.0)]
 
 # key, subject, task, is_speech, path relative to BIDS_ROOT
 RECORDINGS: list[dict[str, Any]] = [
@@ -159,14 +166,30 @@ WATCH_LABELS = [
 ]
 
 
-def load_subtract_module() -> types.ModuleType:
-    """Import ``subtract.py`` from its actual path rather than duplicating its logic."""
-    spec = importlib.util.spec_from_file_location("subtract", SUBTRACT_PY)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load {SUBTRACT_PY}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def _dbfs_peak(x: np.ndarray) -> float:
+    """Peak level in dBFS; ``-inf`` for a silent signal."""
+    peak = float(np.max(np.abs(x))) if x.size else 0.0
+    return 20.0 * np.log10(peak) if peak > 0 else float("-inf")
+
+
+def _dbfs_rms(x: np.ndarray) -> float:
+    """RMS level in dBFS; ``-inf`` for a silent signal."""
+    rms = float(np.sqrt(np.mean(np.square(x)))) if x.size else 0.0
+    return 20.0 * np.log10(rms) if rms > 0 else float("-inf")
+
+
+def _write_wav_pcm16(path: Path, x: np.ndarray, sr: int) -> dict[str, Any]:
+    """Write ``x`` as 16-bit PCM, scaling down (and reporting the gain) only if it would clip."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    peak = float(np.max(np.abs(x))) if x.size else 0.0
+    applied_gain_db = 0.0
+    out = x
+    if peak > 0.999:
+        scale = 0.999 / peak
+        out = x * scale
+        applied_gain_db = 20 * np.log10(scale)
+    sf.write(str(path), out, sr, subtype="PCM_16")
+    return {"path": str(path), "input_peak": peak, "clip_avoidance_gain_db": applied_gain_db}
 
 
 def main() -> None:
@@ -180,9 +203,8 @@ def main() -> None:
     from senselab.audio.tasks.classification.api import classify_audios
     from senselab.audio.tasks.classification.label_scores import label_scores
     from senselab.audio.tasks.speech_enhancement.api import enhance_audios
+    from senselab.audio.tasks.speech_enhancement.residual import band_energy_fractions, compute_residual
     from senselab.utils.data_structures import HFModel
-
-    subtract = load_subtract_module()
 
     for rec in RECORDINGS:
         src = BIDS_ROOT / rec["relpath"]
@@ -211,17 +233,55 @@ def main() -> None:
         shutil.copyfile(BIDS_ROOT / rec["relpath"], orig_out)
         enh.save_to_file(str(enh_out), subtype="PCM_16", out_of_range="warn")
 
-        print(f"Subtracting for {key}...", file=sys.stderr)
-        result = subtract.process(str(orig_out), [str(enh_out)])
-        report = result["report"]
+        print(f"Computing residual for {key}...", file=sys.stderr)
+        ref, sr_ref = sf.read(str(orig_out), dtype="float64", always_2d=True)
+        ref = ref.mean(axis=1)
+        sig, sr_sig = sf.read(str(enh_out), dtype="float64", always_2d=True)
+        sig = sig.mean(axis=1)
+        if sr_sig != sr_ref:
+            raise RuntimeError(f"{key}: original ({sr_ref} Hz) and enhanced ({sr_sig} Hz) sampling rates differ")
+        computation = compute_residual(ref, sig, sr_ref, max_lag_ms=200.0)
 
         res_out = out_dir / f"{key}__residual.wav"
-        write_report = subtract.write_wav_pcm16(res_out, result["residual_direct"], result["sr"])
-        report["direct"]["write"] = write_report
-        report["key"] = key
-        report["subject"] = rec["subject"]
-        report["task"] = rec["task"]
-        report["is_speech"] = rec["is_speech"]
+        write_report = _write_wav_pcm16(res_out, computation.residual, sr_ref)
+
+        # Same report shape `subtract.py`'s own JSON report used, so this reproduces the published
+        # per-recording table directly against these field names -- built by calling the shared
+        # library rather than re-deriving the numbers a second way.
+        report: dict[str, Any] = {
+            "input": str(orig_out),
+            "streams": [str(enh_out)],
+            "sampling_rate": sr_ref,
+            "n_samples_aligned": len(computation.reference_aligned),
+            "lag_samples_per_stream": {str(enh_out): computation.lag_samples},
+            "lag_ms_per_stream": {str(enh_out): computation.lag_ms},
+            "fitted_gain": computation.gain,
+            "fitted_gain_db": computation.gain_db,
+            "input_on_aligned_region": {
+                "peak_dbfs": _dbfs_peak(computation.reference_aligned),
+                "rms_dbfs": _dbfs_rms(computation.reference_aligned),
+                "bands": band_energy_fractions(computation.reference_aligned, sr_ref, BANDS_HZ),
+            },
+            "direct": {
+                "peak_dbfs": _dbfs_peak(computation.residual),
+                "rms_dbfs": _dbfs_rms(computation.residual),
+                "energy_fraction_of_input": computation.residual_energy_fraction,
+                "energy_below_input_db": (
+                    10.0 * np.log10(computation.residual_energy_fraction)
+                    if computation.residual_energy_fraction > 0
+                    else float("-inf")
+                ),
+                "bands": band_energy_fractions(computation.residual, sr_ref, BANDS_HZ),
+                "write": write_report,
+            },
+            "enhanced_energy_fraction": computation.signal_energy_fraction,
+            "correlation_input_vs_combined_stream": computation.correlation_signal,
+            "correlation_residual_vs_input": computation.correlation_residual,
+            "key": key,
+            "subject": rec["subject"],
+            "task": rec["task"],
+            "is_speech": rec["is_speech"],
+        }
         reports.append(report)
 
         orig_paths.append(str(orig_out))
@@ -231,9 +291,7 @@ def main() -> None:
     (out_dir / "subtract_reports.json").write_text(json.dumps(reports, indent=2))
 
     all_paths = orig_paths + enh_paths + res_paths
-    all_roles = (
-        ["original"] * len(RECORDINGS) + ["enhanced"] * len(RECORDINGS) + ["residual"] * len(RECORDINGS)
-    )
+    all_roles = ["original"] * len(RECORDINGS) + ["enhanced"] * len(RECORDINGS) + ["residual"] * len(RECORDINGS)
     all_keys = [r["key"] for r in RECORDINGS] * 3
 
     print(f"Running one batched YAMNet call over {len(all_paths)} files...", file=sys.stderr)
