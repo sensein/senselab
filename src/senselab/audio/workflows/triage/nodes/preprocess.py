@@ -1684,15 +1684,16 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             waveform=torch.from_numpy(computation.signal_aligned.astype(np.float32)).unsqueeze(0),
             sampling_rate=target_hz,
         )
-        enhanced_audio.save_to_file(str(run_dir / "streams" / "enhanced.wav"))
+        enhanced_path, enhanced_report = write_stream(enhanced_audio, run_dir, "enhanced")
         enhanced_id = store.entity(
             prov_type="stream",
             extent=(0.0, enhanced_duration_s),
             attributes={
                 "name": "enhanced",
-                "path": "streams/enhanced.wav",
+                "path": enhanced_path,
                 "sampling_rate": target_hz,
                 "channels": 1,
+                "write_gain": enhanced_report.gain,
             },
         )
         store.was_generated_by(enhanced_id, activity)
