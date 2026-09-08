@@ -6,7 +6,6 @@ from typing import Any, Callable
 
 import numpy as np
 import pytest
-import soundfile as sf
 import torch
 
 from senselab.audio.data_structures import Audio
@@ -14,7 +13,12 @@ from senselab.audio.tasks.classification.yamnet import YAMNET_WINDOW_SECONDS
 from senselab.audio.tasks.speech_enhancement.residual import compute_residual
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
-from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements, live_entities
+from senselab.audio.workflows.triage.nodes.common import (
+    find_measurement,
+    find_measurements,
+    live_entities,
+    resolve_stream,
+)
 from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID, preprocess
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
@@ -1841,8 +1845,9 @@ class TestTheNodeAgreesWithTheLibraryFunction:
         assert measurement is not None
         attrs = measurement.attributes
 
-        plain, sr = sf.read(str(tmp_path / "streams" / "plain.wav"), dtype="float64", always_2d=True)
-        ref = plain.mean(axis=1)
+        _, plain_audio = resolve_stream(store, tmp_path, "plain")
+        sr = int(plain_audio.sampling_rate)
+        ref = plain_audio.waveform.mean(dim=0).to(torch.float64).numpy()
         x = torch.from_numpy(ref).unsqueeze(0).to(torch.float32)
         enhanced = _fake_enhance(0.5, noise_scale=0.05, seed=1)([Audio(waveform=x, sampling_rate=sr)], model=None)[0]
         sig = enhanced.waveform.squeeze(0).to(torch.float64).numpy()
