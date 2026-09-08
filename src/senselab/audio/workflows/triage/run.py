@@ -19,7 +19,7 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
-from senselab.audio.workflows.triage.nodes.common import NodeResult, describe_exception
+from senselab.audio.workflows.triage.nodes.common import NodeResult, capture_environments, describe_exception
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
 from senselab.audio.workflows.triage.nodes.redact import redact
 from senselab.audio.workflows.triage.nodes.report import report
@@ -37,6 +37,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunState,
 )
 from senselab.utils.prov_store import ProvStore
+from senselab.utils.subprocess_venv import record_venv_use
 
 REPORT_NODE = "REPORT"
 
@@ -359,31 +360,36 @@ def run_triage(
     store = ProvStore(run_id=layout.root.name)
     outcomes: dict[str, NodeOutcome] = {}
 
-    admitted = _attempt(outcomes, "ADMIT", lambda: admit(store, source, config, hint, run_dir=layout.run_dir))
-    measurable = admitted is not None and admitted.verdict.outcome is not Outcome.FAIL and admitted.audio is not None
-
-    released: dict[str, Path] = {}
-    if admitted is not None and measurable and admitted.audio is not None:
-        released = _drive_branches(
-            store,
-            admitted.audio,
-            config,
-            hint,
-            run_dir=layout.run_dir,
-            artifacts_dir=layout.artifacts_dir,
-            outcomes=outcomes,
-            enrollment=enrollment,
+    with record_venv_use() as used_venvs:
+        admitted = _attempt(outcomes, "ADMIT", lambda: admit(store, source, config, hint, run_dir=layout.run_dir))
+        measurable = (
+            admitted is not None and admitted.verdict.outcome is not Outcome.FAIL and admitted.audio is not None
         )
-    else:
-        for node in GRAPH_ORDER[1:-1]:
-            outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
 
-    ran = {node: outcome.state for node, outcome in outcomes.items()}
-    folded = _attempt(
-        outcomes,
-        "VERDICT",
-        lambda: verdict(store, None, config, hint, run_dir=layout.run_dir, ran=ran),
-    )
+        released: dict[str, Path] = {}
+        if admitted is not None and measurable and admitted.audio is not None:
+            released = _drive_branches(
+                store,
+                admitted.audio,
+                config,
+                hint,
+                run_dir=layout.run_dir,
+                artifacts_dir=layout.artifacts_dir,
+                outcomes=outcomes,
+                enrollment=enrollment,
+            )
+        else:
+            for node in GRAPH_ORDER[1:-1]:
+                outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
+
+        ran = {node: outcome.state for node, outcome in outcomes.items()}
+        folded = _attempt(
+            outcomes,
+            "VERDICT",
+            lambda: verdict(store, None, config, hint, run_dir=layout.run_dir, ran=ran),
+        )
+
+    capture_environments(store, used_venvs)
     store.write_jsonl(layout.store_path)
 
     summary = _attempt_artifacts(

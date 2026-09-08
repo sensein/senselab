@@ -30,6 +30,7 @@ PROV_TYPE = Literal[
     "enrollment",
 ]
 AGENT_TYPE = Literal["model", "software"]
+ENVIRONMENT_KIND = Literal["host", "venv"]
 RELATION = Literal[
     "wasGeneratedBy", "used", "wasAssociatedWith", "wasAttributedTo", "wasDerivedFrom", "wasInvalidatedBy"
 ]
@@ -45,11 +46,24 @@ PATH_KEY = "path"
 _READ_CHUNK = 1 << 20
 _PROV_TYPES = frozenset(get_args(PROV_TYPE))
 _AGENT_TYPES = frozenset(get_args(AGENT_TYPE))
+_ENVIRONMENT_KINDS = frozenset(get_args(ENVIRONMENT_KIND))
 _RELATIONS = frozenset(get_args(RELATION))
 _RECORD_KEYS: dict[str, frozenset[str]] = {
     "entity": frozenset({"id", "prov_type", "extent", "attributes"}),
     "activity": frozenset({"id", "node", "step", "started", "ended", "parameters"}),
     "agent": frozenset({"id", "agent_type", "model_id", "commit_sha", "unresolved_reason", "version"}),
+    "environment": frozenset(
+        {
+            "id",
+            "kind",
+            "label",
+            "python_version",
+            "operating_system",
+            "dependencies",
+            "dependencies_digest",
+            "senselab_version",
+        }
+    ),
     "relation": frozenset({"relation", "source", "target"}),
 }
 
@@ -105,6 +119,34 @@ class Agent:
     commit_sha: str | None = None
     unresolved_reason: str | None = None
     version: str | None = None
+
+
+@dataclass(frozen=True)
+class Environment:
+    """The runtime a run actually executed in: the host interpreter, or one subprocess venv.
+
+    Attributes:
+        id: The environment's id.
+        kind: ``"host"`` for the interpreter running the pipeline, ``"venv"`` for one subprocess venv.
+        label: The host's own name, or the venv's resolved directory name — which encodes its
+            device key (e.g. ``"crisperwhisper-cpu"``).
+        python_version: The interpreter's version.
+        operating_system: ``platform.platform()``, for the host. None for a venv, which runs under
+            the same operating system as the host that built it.
+        dependencies: Package name to version, for whichever packages were recorded.
+        dependencies_digest: SHA-256 over the venv's full installed-distribution listing, when
+            ``dependencies`` holds a declared subset rather than that full listing.
+        senselab_version: senselab's own installed version, for the host.
+    """
+
+    id: str
+    kind: ENVIRONMENT_KIND
+    label: str
+    python_version: str
+    operating_system: str | None = None
+    dependencies: dict[str, str] = field(default_factory=dict)
+    dependencies_digest: str | None = None
+    senselab_version: str | None = None
 
 
 def _digest(payload: object) -> str:
@@ -226,6 +268,7 @@ class ProvStore:
         self._entities: dict[str, Entity] = {}
         self._activities: dict[str, Activity] = {}
         self._agents: dict[str, Agent] = {}
+        self._environments: dict[str, Environment] = {}
         self._relations: list[tuple[RELATION, str, str]] = []
 
     def entity(self, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: dict[str, Any]) -> str:
@@ -314,6 +357,55 @@ class ProvStore:
         )
         return gid
 
+    def environment(
+        self,
+        *,
+        kind: ENVIRONMENT_KIND,
+        label: str,
+        python_version: str,
+        operating_system: str | None = None,
+        dependencies: dict[str, str] | None = None,
+        dependencies_digest: str | None = None,
+        senselab_version: str | None = None,
+    ) -> str:
+        """Add an environment: the host interpreter, or one subprocess venv.
+
+        Args:
+            kind: ``"host"`` or ``"venv"``.
+            label: The host's own name, or the venv's resolved directory name.
+            python_version: The interpreter's version.
+            operating_system: ``platform.platform()``, for the host.
+            dependencies: Package name to version.
+            dependencies_digest: SHA-256 over the venv's full installed-distribution listing, when
+                ``dependencies`` is a declared subset of it.
+            senselab_version: senselab's own installed version, for the host.
+
+        Returns:
+            Its id.
+        """
+        payload = [
+            self.run_id,
+            kind,
+            label,
+            python_version,
+            operating_system,
+            dependencies,
+            dependencies_digest,
+            senselab_version,
+        ]
+        eid = f"env-{_digest(payload)}"
+        self._environments[eid] = Environment(
+            id=eid,
+            kind=kind,
+            label=label,
+            python_version=python_version,
+            operating_system=operating_system,
+            dependencies=dict(dependencies or {}),
+            dependencies_digest=dependencies_digest,
+            senselab_version=senselab_version,
+        )
+        return eid
+
     def _relate(self, relation: RELATION, source: str, target: str) -> None:
         triple = (relation, source, target)
         if triple not in self._relations:
@@ -355,6 +447,10 @@ class ProvStore:
         """Return one agent."""
         return self._agents[agent_id]
 
+    def get_environment(self, environment_id: str) -> Environment:
+        """Return one environment."""
+        return self._environments[environment_id]
+
     def entities(self, prov_type: PROV_TYPE | None = None) -> list[Entity]:
         """Return entities, optionally of one type."""
         return [e for e in self._entities.values() if prov_type is None or e.prov_type == prov_type]
@@ -373,6 +469,17 @@ class ProvStore:
             The agents, in write order.
         """
         return [g for g in self._agents.values() if agent_type is None or g.agent_type == agent_type]
+
+    def environments(self, kind: ENVIRONMENT_KIND | None = None) -> list[Environment]:
+        """Return environments, optionally of one kind.
+
+        Args:
+            kind: ``"host"`` or ``"venv"``, or None for every environment.
+
+        Returns:
+            The environments, in write order.
+        """
+        return [e for e in self._environments.values() if kind is None or e.kind == kind]
 
     def relations(self) -> list[tuple[RELATION, str, str]]:
         """Return every relation as ``(relation, source, target)``, in write order."""
@@ -427,6 +534,10 @@ class ProvStore:
         ]
         lines += [
             json.dumps({"record": "agent", **asdict(g)}, sort_keys=True, default=str) for g in self._agents.values()
+        ]
+        lines += [
+            json.dumps({"record": "environment", **asdict(e)}, sort_keys=True, default=str)
+            for e in self._environments.values()
         ]
         lines += [
             json.dumps({"record": "relation", "relation": r, "source": s, "target": t}, sort_keys=True)
@@ -491,6 +602,10 @@ class ProvStore:
                 except ValueError as err:
                     raise ValueError(f"{where}: agent {rec['id']!r}: {err}") from err
                 store._agents[rec["id"]] = Agent(**rec)
+            elif kind == "environment":
+                if rec["kind"] not in _ENVIRONMENT_KINDS:
+                    raise ValueError(f"{where}: environment {rec['id']!r} has unknown kind {rec['kind']!r}")
+                store._environments[rec["id"]] = Environment(**rec)
             else:
                 if rec["relation"] not in _RELATIONS:
                     raise ValueError(f"{where}: unknown relation {rec['relation']!r}")
@@ -505,6 +620,7 @@ class ProvStore:
             out._entities.update(s._entities)
             out._activities.update(s._activities)
             out._agents.update(s._agents)
+            out._environments.update(s._environments)
         seen: set[tuple[RELATION, str, str]] = set()
         for s in stores:
             for rel in s._relations:
@@ -520,6 +636,7 @@ class ProvStore:
                 "e": sorted(self._entities),
                 "act": sorted(self._activities),
                 "ag": sorted(self._agents),
+                "env": sorted(self._environments),
                 "r": sorted(f"{r}:{s}:{t}" for r, s, t in self._relations),
             }
         )

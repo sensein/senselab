@@ -265,39 +265,150 @@ it. `write_bep028_files` writes the three non-empty BEP028-named files there; th
 single-document graph is the same content under one `Records` object and is what a reader loads into
 a triple store.
 
-## Addition 3 (designed, not implemented) — environment
+## Addition 3 — environment
 
-Today: one string, `agent_type="software", version=f"senselab {version('senselab')}"`
-(`nodes/common.py:68`). That is the whole environment record.
+Was: one string, `agent_type="software", version=f"senselab {version('senselab')}"`
+(`nodes/common.py:68`, unchanged — see "Where it goes" below). Now: a fourth record kind,
+`Environment` (`prov_store.py`), captured at run time by `run_triage` and serialized to BEP028's
+`_env` suffix.
 
-**What is cheap.** `platform.python_version()`, `platform.platform()`,
-`sys.implementation.name` — in-process, microseconds. `importlib.metadata.version()` for a named
-short list of packages that decide numerical results (torch, torchaudio, torchcodec, transformers,
-numpy, scipy, librosa) — a few hundred microseconds each.
+### What the brief got right, and one correction
 
-**What is cheap and is the interesting one.** The six-plus subprocess venvs under
-`~/.cache/senselab/venvs/` each carry their own torch and transformers, recorded nowhere. Reading
-them does **not** need an interpreter start: scanning `lib/python*/site-packages/*.dist-info`
-directory names is pure filesystem work. Measured on this host: **26 venvs, 35.6 ms total**, and
-they hold **11 distinct torch versions (2.2.2 through 2.14.0)** and 6 distinct transformers
-versions. `senselab <version>` records none of that, and a result computed by `brouhaha`'s torch
-2.2.2 is not the same result as one computed by `crisperwhisper-cpu`'s 2.14.0.
+The five-venv table in the commissioning brief was verified against this host and matches exactly:
+`clearvoice-cpu` (torch 2.14.0), `crisperwhisper`/`crisperwhisper-cpu` (torch 2.13.0/2.14.0,
+transformers 5.14.1/5.16.1), `qwen-asr`/`qwen-asr-cpu` (torch 2.8.0, transformers 4.57.6),
+`yamnet` (tensorflow 2.21.0, keras 3.14.0, numpy 2.4.4), `hear` (tensorflow 2.21.0, keras 3.15.1,
+numpy 2.4.6) — reproduced by `env_capture_measure_scan.py` in the scratchpad. One thing the brief
+did not say: `preprocess.py:1923-1926` runs **both** ASR backends (`asr_crisperwhisper` and
+`asr_qwen`) for consensus, not one or the other, so a single run's own environment picture is
+`clearvoice(-cpu)` + `crisperwhisper(-cpu)` + `qwen-asr(-cpu)` + `yamnet` + `hear` — five venvs,
+not a choice among them.
 
-**What is not worth it.** A full `uv pip freeze` of the main environment — 252 packages, a
-subprocess spawn, and almost all of it irrelevant to any number. Container digests: no container is
-in use.
+### Where it is captured
 
-**The proposal.** One BEP028 `Environments` entry for the host interpreter
-(`OperatingSystem` = `platform.platform()`, `Dependencies` = the short list) and one per subprocess
-venv actually used by the run (`Label` = the venv name, `Dependencies` = its dist-info scan). This
-needs a new record kind in the store, since `Agent` has only `version: str | None`.
+`ensure_venv` (`subprocess_venv.py`) is the single choke point every one of the five backends
+already calls, and for a torch-bearing backend it calls `detect_host_cuda()` (a subprocess probe)
+on *every* call, cache hit or not, because the resolved directory name needs the CUDA tag before
+the cache marker can even be checked (`_ensure_venv_once`, `torch_specs = ...; if torch_specs:
+detect_host_cuda()`, before `dir_name` is built). Capturing by calling `ensure_venv` again — a
+tempting way to recover `venv_dir` in a node that only sees the backend's high-level result — would
+double that probe cost on every recording. Instead, `subprocess_venv.record_venv_use()` opens a
+`contextvars.ContextVar`-backed recorder; `ensure_venv` notes `(name, venv_dir)` into it, when one
+is open, right after `_ensure_venv_once` returns — no second probe, no second lock acquisition.
+`run_triage` (`run.py`) opens the recorder around ADMIT through VERDICT (every node that can reach a
+subprocess venv sits inside that span) and calls `capture_environments(store, used_venvs)` once,
+after the span closes and before `store.write_jsonl`. A run that fails at ADMIT or never reaches a
+venv-backed node still gets a host environment; `used_venvs` is simply empty.
 
-**Why it is not implemented here.** An environment must be captured *at run time*. Synthesizing
-`Environments` during conversion of an existing run directory would record the converter's
-environment, not the run's — the same "confidently wrong" failure the commit-SHA rule exists to
-prevent. So the serializer emits no `Environments` for a converted run, and
-`prov_bep028_test.py:test_no_environment_is_invented` pins that it does not invent one. Capture is
-a separate change that touches the pipeline, not the serializer.
+This is the same rule the checksum addition follows for the same reason: captured by the process
+that did the work, never reconstructed later. `venv_environment()` (`subprocess_venv.py`) reads
+`pyvenv.cfg`'s `version_info` line for the interpreter version and globs
+`lib/python*/site-packages/*.dist-info` for installed distributions — pure filesystem work, no
+interpreter start, no `uv pip freeze`. Measured on this host: 6.4 ms for the 26 provisioned venvs
+(`env_capture_measure_scan.py`), the same order of magnitude as the brief's 35.6 ms on a different
+host and cache state.
+
+### Where it goes in the store
+
+A **new record kind**, `environment` (`prov_store.py:Environment`, fields `id`, `kind` —
+`"host"`/`"venv"` — `label`, `python_version`, `operating_system`, `dependencies`,
+`dependencies_digest`, `senselab_version`), not a field added to `Agent`.
+
+Rejected: widening `Agent`. `_RECORD_KEYS["agent"]` is an exact key set, checked on every line
+`read_jsonl` reads (`prov_store.py:470`), so adding a field to it makes every `store.jsonl` already
+on disk fail to read back — the same reason the checksum addition above chose `attributes` over a
+first-class `Entity.checksum` field. A new record kind carries no such risk: an old store simply
+never has a line whose `"record"` is `"environment"`, and the read loop's per-line dispatch
+(`prov_store.py:466`) does not require every kind to appear.
+
+Verified, not assumed: `env_capture_backcompat_check.py` ran `ProvStore.read_jsonl` over all
+**388** `store.jsonl` files under `triage_battery_20260908/out/*/run/` with the new code — 388/388
+parsed, and each read back with `store.environments() == []`, which is what a store predating this
+change should report. `src/tests/utils/prov_store_test.py::TestEnvironments` pins the same
+property on a synthetic store as a regression test.
+
+The software agent itself (`nodes/common.py:software_agent`) is unchanged: same fields, same
+`version=f"senselab {version('senselab')}"` string, same id. The host `Environment` is the fuller
+record the brief asked for — python version, `platform.platform()`, senselab version — and is what
+a reader should use for the host's environment; the software agent keeps its narrower job
+(`wasAttributedTo`/`wasAssociatedWith` targets) because changing its fields is exactly the
+`_RECORD_KEYS` hazard above.
+
+### Serializing to `_env`
+
+BEP028's `Environments` schema (`src/schema/objects/metadata.yaml` on `bclenet:BEP028_spec`, read
+directly): `Id` and `Label` required; `AlternativeIdentifier`, `EnvironmentVariables`,
+`OperatingSystem`, `Dependencies` optional. No `Type` field — unlike `Files`, `Activities` and
+`Software`, an `Environments` object carries no BEP028-defined type slot. `prov_bep028.py:
+_environment_record` maps `operating_system` → `OperatingSystem` and `dependencies` → `Dependencies`
+directly; `python_version`, `dependencies_digest` and `senselab_version` have no BEP028 term, so
+they go through `_term()` into the senselab vocabulary (`PythonVersion`, `DependenciesDigest`,
+`SenselabVersion`), the same mechanism `SIZE_KEY`/`MTIME_KEY` already use on `Files` objects — the
+`@vocab` catch-all (see Addition 2's own section on it) means they expand rather than vanish.
+
+**Where BEP028 and the store disagree in kind, again — a ninth item for the list above.** The
+schema's own `Activities.Used` field description says an activity's `Used` array's identifiers "MAY
+name … environment(s) … described as specified in the Environments section" — so a graph *should*
+say which activity ran in which environment. The store does not record that: `record_venv_use()`
+is scoped to the whole run, not to one activity, because attributing a venv use to the one
+PREPROCESS step (of the ~36 in a battery run) that actually called `transcribe_audios` would need
+call-site changes across `preprocess.py` and `speech.py`, and the id of *which* step called which
+API is not tracked today. Inventing that edge at serialization time would be exactly the kind of
+fabrication item 5 above already refuses for node/step containment. `Environments` are therefore
+emitted unlinked: present in the graph, named by no `Activities[].Used` entry — a gap in the store,
+not a BEP028 limitation, and one this design does not close.
+
+### Volume: full listing vs. a declared subset plus a digest
+
+A full dist-info listing runs 36-93 packages per venv (measured: `hear` 36, `yamnet` 39,
+`crisperwhisper` 43, `clearvoice-cpu` 62, `qwen-asr` 93). Storing all of it, per venv, per run,
+across 44,786 recordings, is disproportionate to what any reader would query — nobody diffs two
+runs' `six` or `charset_normalizer` versions. `venv_environment()` instead names
+`_DECLARED_ENV_PACKAGES` in full — torch, torchaudio, torchcodec, transformers, tensorflow,
+tensorflow-hub, keras, numpy, and each of the three backends with their own installed library
+(`crisperwhisper`, `qwen-asr`/`qwen_asr`, `clearvoice`) — plus a SHA-256 over the *full* sorted
+listing, so a mismatch against a fresh scan is detectable without paying to store the other
+30-90 packages that did not change.
+
+Measured (`env_capture_measure_store_cost.py`), one run's environment records (host + the five
+venvs actually reachable from triage) as `store.jsonl` lines:
+
+| | bytes / run | × 44,786 recordings |
+| --- | --- | --- |
+| full dist-info listing | 7,276 B | 325.9 MB |
+| declared subset + digest | 2,136 B | 95.7 MB |
+| difference | 5,140 B | 230.2 MB |
+
+**Decision: declared subset + digest.** 230 MB is not free at battery scale, and the subset already
+carries the packages the "three different torch versions inside triage alone" argument in the
+brief is actually about. A reader who needs the excluded 90% re-scans the venv directly (still on
+disk, still 6-36 ms) and compares its own digest against `DependenciesDigest`; nothing about the
+excluded packages is lost, only stored redundantly.
+
+### Tests
+
+`src/tests/utils/prov_store_test.py::TestEnvironments` — the record kind's write/read/merge/
+fingerprint contract, an unknown `kind` refused on read, and the 388-store backward-compatibility
+property reproduced as a unit test. `src/tests/utils/subprocess_venv_test.py::TestRecordVenvUse`,
+`::TestVenvEnvironment` — the recorder (including the "outside the context manager, nothing is
+recorded, no error" case) and the dist-info/`pyvenv.cfg` parsing, against a synthetic on-disk venv
+tree. `src/tests/utils/prov_bep028_test.py::test_a_recorded_environment_reaches_the_graph`,
+`::test_write_bep028_files_emits_the_env_suffix` — the `_env` mapping and file split.
+`src/tests/audio/workflows/triage/nodes/common_test.py::TestHostEnvironment`,
+`::TestCaptureEnvironments` — the host record's fields and the host+venv aggregation.
+`src/tests/audio/workflows/triage/run_test.py::test_the_store_carries_a_host_environment` — a full
+(fake-graph) `run_triage()` call writes exactly one host environment, end to end.
+
+### Artefacts
+
+`env_capture_demo_graph.jsonld` and `prov/prov-demo_env.json` (scratchpad): a live capture — the
+real host plus the five real on-disk venvs this host has provisioned for triage's backends,
+`capture_environments` run for real, not reconstructed from a converted store. `check_graph` on the
+aggregated document: zero problems. Converting an actual pre-existing run directory
+(`sub-0032892c…_task-Cape-V-sentences-(v2)-1_20260908-025853/run/store.jsonl`) still emits no
+`Environments` key at all (`env_capture_convert_real_run.py`) — correct, since that run predates
+this change and never called `capture_environments`; inventing one at conversion time is exactly
+what this design refuses to do.
 
 ## Validation of the emitted graph
 

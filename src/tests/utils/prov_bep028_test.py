@@ -154,6 +154,49 @@ def test_no_environment_is_invented(store: ProvStore) -> None:
     assert "Environments" not in to_bep028_graph(store)["Records"]
 
 
+def test_a_recorded_environment_reaches_the_graph(store: ProvStore) -> None:
+    """A store that did record one is not a case check_graph or the mapping table forgot."""
+    store.environment(
+        kind="host",
+        label="host",
+        python_version="3.12.11",
+        operating_system="macOS-15.0-arm64-arm-64bit",
+        dependencies={"torch": "2.8.0"},
+        senselab_version="1.3.1",
+    )
+    store.environment(
+        kind="venv",
+        label="crisperwhisper-cpu",
+        python_version="3.12.11",
+        dependencies={"torch": "2.14.0", "transformers": "5.16.1"},
+        dependencies_digest="c" * 64,
+    )
+    graph = to_bep028_graph(store)
+    environments = graph["Records"]["Environments"]
+    assert {node["Label"] for node in environments} == {"host", "crisperwhisper-cpu"}
+    [host] = [node for node in environments if node["Label"] == "host"]
+    assert host["OperatingSystem"] == "macOS-15.0-arm64-arm-64bit"
+    assert host["Dependencies"] == {"torch": "2.8.0"}
+    assert host["SenselabVersion"] == "1.3.1"
+    [venv] = [node for node in environments if node["Label"] == "crisperwhisper-cpu"]
+    assert venv["Dependencies"] == {"torch": "2.14.0", "transformers": "5.16.1"}
+    assert venv["DependenciesDigest"] == "c" * 64
+    assert "OperatingSystem" not in venv
+    assert "SenselabVersion" not in venv
+    assert check_graph(graph) == []
+
+
+def test_write_bep028_files_emits_the_env_suffix(store: ProvStore, tmp_path: Path) -> None:
+    """An ``_env`` file is written only when the store actually carries an environment."""
+    store.environment(kind="host", label="host", python_version="3.12.11")
+    graph = to_bep028_graph(store)
+    written = write_bep028_files(graph, tmp_path, label="triage")
+    names = {path.name for path in written}
+    assert "prov-triage_env.json" in names
+    body = json.loads((tmp_path / "prov-triage_env.json").read_text())
+    assert body["Environments"][0]["Label"] == "host"
+
+
 def test_check_graph_catches_a_dangling_reference(store: ProvStore) -> None:
     """A relation naming an id no node declares is a problem, not a silent broken edge."""
     graph = to_bep028_graph(store)

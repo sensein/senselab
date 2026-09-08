@@ -22,6 +22,8 @@ Safety features are configurable via ``safe_mode`` to minimize
 overhead for simple single-process workflows.
 """
 
+import contextvars
+import glob
 import hashlib
 import json
 import logging
@@ -33,9 +35,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Iterator, Optional
 
 from senselab.utils.cuda_probe import (
     HostCuda,
@@ -143,6 +146,123 @@ def provisioned_venv_dirs(name: str) -> list[Path]:
     return [directory for directory in candidates if (directory / ".senselab-installed").is_file()]
 
 
+_VENV_USE_RECORDER: "contextvars.ContextVar[Optional[dict[str, Path]]]" = contextvars.ContextVar(
+    "_VENV_USE_RECORDER", default=None
+)
+
+
+@contextmanager
+def record_venv_use() -> Iterator[dict[str, Path]]:
+    """Record which subprocess venvs :func:`ensure_venv` resolves to within this context.
+
+    Nesting is not supported: an inner call replaces the outer recorder for its duration.
+
+    Yields:
+        The dict, updated in place as :func:`ensure_venv` calls occur inside the block.
+    """
+    used: dict[str, Path] = {}
+    token = _VENV_USE_RECORDER.set(used)
+    try:
+        yield used
+    finally:
+        _VENV_USE_RECORDER.reset(token)
+
+
+def _note_venv_use(name: str, venv_dir: Path) -> None:
+    """Record a resolved venv directory, when :func:`record_venv_use` is active."""
+    recorder = _VENV_USE_RECORDER.get()
+    if recorder is not None:
+        recorder[name] = venv_dir
+
+
+_DECLARED_ENV_PACKAGES = frozenset(
+    {
+        "torch",
+        "torchaudio",
+        "torchcodec",
+        "transformers",
+        "tensorflow",
+        "tensorflow-hub",
+        "keras",
+        "numpy",
+        "crisperwhisper",
+        "qwen-asr",
+        "clearvoice",
+    }
+)
+"""The packages a venv's environment record names in full: the ones that decide its numerical
+results, plus each backend's own library."""
+
+
+def _normalize_package_name(name: str) -> str:
+    """A dist-info package name, folded to compare across ``-``/``_`` spelling variants."""
+    return name.lower().replace("_", "-")
+
+
+def _venv_python_version(venv_dir: Path) -> str:
+    """The interpreter version a venv was built with, from ``pyvenv.cfg``.
+
+    Returns:
+        The value of ``pyvenv.cfg``'s ``version_info`` (falling back to ``version``) key, or
+        ``"unknown"`` when neither is present.
+    """
+    cfg = venv_dir / "pyvenv.cfg"
+    try:
+        text = cfg.read_text()
+    except OSError:
+        return "unknown"
+    match = re.search(r"^version(?:_info)?\s*=\s*(\S+)", text, re.MULTILINE)
+    return match.group(1) if match else "unknown"
+
+
+def _venv_dist_info(venv_dir: Path) -> dict[str, str]:
+    """Every installed distribution's name and version, read from ``*.dist-info`` directory names.
+
+    Pure filesystem work: no interpreter start, no ``uv pip freeze``.
+
+    Args:
+        venv_dir: The venv's directory.
+
+    Returns:
+        Package name to version, for every ``*.dist-info`` directory found.
+    """
+    pattern = str(venv_dir / "lib" / "python*" / "site-packages" / "*.dist-info")
+    if sys.platform == "win32":
+        pattern = str(venv_dir / "Lib" / "site-packages" / "*.dist-info")
+    out: dict[str, str] = {}
+    for entry in glob.glob(pattern):
+        base = os.path.basename(entry)[: -len(".dist-info")]
+        name, _, version = base.rpartition("-")
+        if name:
+            out[name] = version
+    return out
+
+
+def venv_environment(name: str, venv_dir: Path) -> dict[str, Any]:
+    """The environment record for one resolved subprocess venv.
+
+    Args:
+        name: The venv's backend name, as passed to :func:`ensure_venv`.
+        venv_dir: Its resolved directory, from :func:`ensure_venv` or :func:`record_venv_use`.
+
+    Returns:
+        Keyword arguments for :meth:`~senselab.utils.prov_store.ProvStore.environment`: ``label``
+        (the resolved directory's own name, which encodes its device key), ``python_version``,
+        ``dependencies`` (the declared subset actually installed — see
+        :data:`_DECLARED_ENV_PACKAGES`) and ``dependencies_digest`` (a SHA-256 over the full
+        listing, so a mismatch against a fresh scan is detectable without storing every package).
+    """
+    full = _venv_dist_info(venv_dir)
+    declared = {pkg: version for pkg, version in full.items() if _normalize_package_name(pkg) in _DECLARED_ENV_PACKAGES}
+    digest = hashlib.sha256(json.dumps(sorted(full.items()), separators=(",", ":")).encode()).hexdigest()
+    return {
+        "label": venv_dir.name,
+        "python_version": _venv_python_version(venv_dir),
+        "dependencies": declared,
+        "dependencies_digest": digest,
+    }
+
+
 def _cache_dir() -> Path:
     """Return the directory for cached subprocess venvs, creating it if missing."""
     cache = _cache_dir_path()
@@ -237,7 +357,9 @@ def ensure_venv(
     last_error: Optional[_VenvLockLost] = None
     for attempt in range(1, _MAX_LOCK_LOST_RETRIES + 1):
         try:
-            return _ensure_venv_once(name, requirements, python_version, max_cuda_version)
+            venv_dir = _ensure_venv_once(name, requirements, python_version, max_cuda_version)
+            _note_venv_use(name, venv_dir)
+            return venv_dir
         except _VenvLockLost as exc:
             last_error = exc
             logger.warning(
