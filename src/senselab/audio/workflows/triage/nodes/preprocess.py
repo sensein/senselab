@@ -82,6 +82,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     describe_exception,
     live_entities,
+    path_attributes,
     software_agent,
     write_stream,
     write_verdict,
@@ -428,7 +429,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         extent=(0.0, duration_s),
         attributes={
             "name": "plain",
-            "path": plain_path,
+            **path_attributes(plain_path, run_dir),
             "sampling_rate": target_hz,
             "channels": 1,
             "peak_scale": peak_scale,
@@ -450,7 +451,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             extent=(0.0, duration_s),
             attributes={
                 "name": "preemphasised",
-                "path": sharp_path,
+                **path_attributes(sharp_path, run_dir),
                 "sampling_rate": target_hz,
                 "channels": 1,
                 "coefficient": coefficient,
@@ -554,7 +555,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             software,
             name="energy_envelope",
             signal=sharp_signal,
-            attributes={"path": "derivatives/energy_envelope.npz", "sampling_rate": target_hz},
+            attributes={**path_attributes("derivatives/energy_envelope.npz", run_dir), "sampling_rate": target_hz},
             derived_from=(sharp_id,),
         )
         derivatives["energy_envelope"] = entity_id
@@ -619,7 +620,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             extent=(0.0, duration_s),
             attributes={
                 "name": "normalized",
-                "path": normalized_path,
+                **path_attributes(normalized_path, run_dir),
                 "sampling_rate": target_hz,
                 "channels": 1,
                 "write_gain": normalized_report.gain,
@@ -647,7 +648,10 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             software,
             name="normalized_envelope",
             signal="normalized",
-            attributes={"path": "derivatives/normalized_envelope.npz", "sampling_rate": target_hz},
+            attributes={
+                **path_attributes("derivatives/normalized_envelope.npz", run_dir),
+                "sampling_rate": target_hz,
+            },
             derived_from=(normalized_id,),
         )
         derivatives["normalized_envelope"] = entity_id
@@ -868,7 +872,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             signal="plain",
             attributes={
                 "classifier": name.removesuffix("_scores"),
-                "path": path,
+                **path_attributes(path, run_dir),
                 "n_windows": len(windows),
                 "win_length_s": float(windows[0]["win_length"]) if windows else None,
                 "hop_s": float(windows[0]["hop_length"]) if windows else None,
@@ -1522,7 +1526,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             software,
             name=name,
             signal=sharp_signal,
-            attributes={"path": f"derivatives/{name}.npz", **parameters},
+            attributes={**path_attributes(f"derivatives/{name}.npz", run_dir), **parameters},
             derived_from=(sharp_id,),
         )
         derivatives[name] = entity_id
@@ -1565,7 +1569,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             name="continuity_trace",
             signal=sharp_signal,
             attributes={
-                "path": "derivatives/continuity_trace.npz",
+                **path_attributes("derivatives/continuity_trace.npz", run_dir),
                 "sampling_rate": target_hz,
                 "cut_percentile": parameters["cut_percentile"],
                 "cut_level": cut_level,
@@ -1603,7 +1607,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             software,
             name="gammatone",
             signal=sharp_signal,
-            attributes={"path": "derivatives/gammatone.npz", "hop_s": parameters["hop_s"]},
+            attributes={**path_attributes("derivatives/gammatone.npz", run_dir), "hop_s": parameters["hop_s"]},
             derived_from=(sharp_id,),
         )
         derivatives["gammatone"] = entity_id
@@ -1690,7 +1694,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             extent=(0.0, enhanced_duration_s),
             attributes={
                 "name": "enhanced",
-                "path": enhanced_path,
+                **path_attributes(enhanced_path, run_dir),
                 "sampling_rate": target_hz,
                 "channels": 1,
                 "write_gain": enhanced_report.gain,
@@ -1710,7 +1714,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             extent=(0.0, residual_duration_s),
             attributes={
                 "name": "residual",
-                "path": residual_path,
+                **path_attributes(residual_path, run_dir),
                 "sampling_rate": target_hz,
                 "channels": 1,
                 "write_gain": residual_report.gain,
@@ -1805,7 +1809,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             signal=prefix,
             attributes={
                 "classifier": name.removeprefix(f"{prefix}_").removesuffix("_scores"),
-                "path": path,
+                **path_attributes(path, run_dir),
                 "n_windows": len(windows),
                 "win_length_s": float(windows[0]["win_length"]) if windows else None,
                 "hop_s": float(windows[0]["hop_length"]) if windows else None,

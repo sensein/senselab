@@ -1,7 +1,8 @@
 """ADMIT — is this recording measurable at all.
 
-The only rejections are decode failure, all samples zero, and a constant signal. No thresholds, no
-``flag`` outcome, no models, no derived audio. The measurements behind the threshold-free rule are in
+The only rejections are decode failure, all samples zero, a constant signal, and a file whose bytes
+change while ADMIT reads them. No thresholds, no ``flag`` outcome, no models, no derived audio. The
+measurements behind the threshold-free rule are in
 ``specs/20260817-triage-workflow-dag/admit.md``.
 """
 
@@ -16,7 +17,7 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import ProvStore
+from senselab.utils.prov_store import ProvStore, file_attributes, file_digest
 
 NODE = "ADMIT"
 
@@ -42,7 +43,8 @@ def admit(
 ) -> AdmitResult:
     """Decide whether the recording is measurable at all.
 
-    Rejects only decode failure, all-zero samples and a constant signal. Everything else passes, as
+    Rejects only decode failure, all-zero samples, a constant signal, and a file whose bytes change
+    between the digest taken before the decode and the one taken after it. Everything else passes, as
     supplied — no resampling, no channel reduction, no models, no quality judgement. ``config``,
     ``hint`` and ``run_dir`` belong to the shared node shape and are not read: ADMIT holds no
     numbers, no hint changes whether a file decodes, and it writes no sidecars.
@@ -72,6 +74,7 @@ def admit(
         )
         return AdmitResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, audio=None)
 
+    before, before_reason = file_digest(source)
     try:
         audio = Audio(filepath=str(source))
         waveform = audio.waveform
@@ -85,6 +88,9 @@ def admit(
         return _fail("every sample is zero")
     if bool(torch.all(waveform == waveform[:, :1])):
         return _fail("constant value per channel; no variance")
+    after, after_reason = file_digest(source)
+    if before is not None and after is not None and before != after:
+        return _fail("the file changed while it was being read; the decoded bytes are unidentifiable")
 
     duration_s = waveform.shape[-1] / audio.sampling_rate
     stream_id = store.entity(
@@ -95,6 +101,7 @@ def admit(
             "path": str(source.resolve()),
             "sampling_rate": int(audio.sampling_rate),
             "channels": int(waveform.shape[0]),
+            **file_attributes(source, digest=after, reason=None if after else after_reason or before_reason),
         },
     )
     store.was_generated_by(stream_id, activity_id)

@@ -35,6 +35,14 @@ RELATION = Literal[
 ]
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+CHECKSUM_ALGORITHM = "sha256"
+CHECKSUM_KEY = "checksum_sha256"
+CHECKSUM_UNRESOLVED_KEY = "checksum_unresolved_reason"
+SIZE_KEY = "size_bytes"
+MTIME_KEY = "mtime_ns"
+PATH_KEY = "path"
+_READ_CHUNK = 1 << 20
 _PROV_TYPES = frozenset(get_args(PROV_TYPE))
 _AGENT_TYPES = frozenset(get_args(AGENT_TYPE))
 _RELATIONS = frozenset(get_args(RELATION))
@@ -103,6 +111,82 @@ def _digest(payload: object) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
+def file_digest(path: str | Path) -> tuple[str | None, str | None]:
+    """Read a file and return its SHA-256, or the reason it has none.
+
+    Args:
+        path: The file to digest.
+
+    Returns:
+        ``(digest, reason)`` — a 64-character lowercase hex digest and None, or None and a reason
+        the digest could not be taken.
+    """
+    target = Path(path)
+    digest = hashlib.sha256()
+    try:
+        with target.open("rb") as handle:
+            while chunk := handle.read(_READ_CHUNK):
+                digest.update(chunk)
+    except FileNotFoundError:
+        return None, "file not found"
+    except IsADirectoryError:
+        return None, "path is a directory"
+    except PermissionError:
+        return None, "permission denied"
+    except OSError as err:
+        return None, f"read failed: {type(err).__name__}"
+    return digest.hexdigest(), None
+
+
+def file_attributes(path: str | Path, *, digest: str | None = None, reason: str | None = None) -> dict[str, Any]:
+    """Entity attributes describing a file's bytes as they are now.
+
+    Args:
+        path: The file, used for ``size_bytes`` and ``mtime_ns`` and, unless a digest or a reason is
+            supplied, read to compute the digest.
+        digest: An already-computed SHA-256 to record instead of reading the file again.
+        reason: Why no digest is available, recorded instead of reading the file again.
+
+    Returns:
+        ``checksum_sha256`` or ``checksum_unresolved_reason``, and ``size_bytes`` and ``mtime_ns``
+        when the file can be stat'd.
+
+    Raises:
+        ValueError: If both ``digest`` and ``reason`` are supplied.
+    """
+    if digest is not None and reason is not None:
+        raise ValueError("digest and reason contradict each other; supply at most one")
+    if digest is None and reason is None:
+        digest, reason = file_digest(path)
+    out: dict[str, Any] = {CHECKSUM_KEY: digest} if digest is not None else {CHECKSUM_UNRESOLVED_KEY: reason}
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return out
+    out[SIZE_KEY] = int(stat.st_size)
+    out[MTIME_KEY] = int(stat.st_mtime_ns)
+    return out
+
+
+def _check_entity_attributes(attributes: dict[str, Any]) -> None:
+    """Refuse checksum attributes the store never accepts, at write time and at read-back alike.
+
+    Raises:
+        ValueError: If a digest and a reason it is missing are supplied together, if the digest is
+            not 64 lowercase hex characters, if the reason is empty, or if either is present without
+            a ``path`` saying which file it describes.
+    """
+    digest, reason = attributes.get(CHECKSUM_KEY), attributes.get(CHECKSUM_UNRESOLVED_KEY)
+    if digest is not None and reason is not None:
+        raise ValueError(f"{CHECKSUM_KEY} and {CHECKSUM_UNRESOLVED_KEY} contradict each other; supply exactly one")
+    if digest is not None and not (isinstance(digest, str) and _DIGEST.fullmatch(digest)):
+        raise ValueError(f"{CHECKSUM_KEY} must be 64 lowercase hex characters, got {digest!r}")
+    if reason is not None and not (isinstance(reason, str) and reason.strip()):
+        raise ValueError(f"{CHECKSUM_UNRESOLVED_KEY} must not be empty; an empty reason says nothing")
+    if (digest is not None or reason is not None) and not attributes.get(PATH_KEY):
+        raise ValueError(f"a checksum needs a {PATH_KEY!r} naming the file it describes")
+
+
 def _check_agent_fields(
     agent_type: str, model_id: str | None, commit_sha: str | None, unresolved_reason: str | None
 ) -> None:
@@ -154,7 +238,12 @@ class ProvStore:
 
         Returns:
             Its id.
+
+        Raises:
+            ValueError: If the attributes carry both a checksum and a reason it is missing, a
+                malformed digest, an empty reason, or either without a ``path``.
         """
+        _check_entity_attributes(attributes)
         eid = f"{prov_type}-{_digest([self.run_id, prov_type, extent, attributes])}"
         self._entities[eid] = Entity(id=eid, prov_type=prov_type, extent=extent, attributes=dict(attributes))
         return eid
@@ -285,6 +374,10 @@ class ProvStore:
         """
         return [g for g in self._agents.values() if agent_type is None or g.agent_type == agent_type]
 
+    def relations(self) -> list[tuple[RELATION, str, str]]:
+        """Return every relation as ``(relation, source, target)``, in write order."""
+        return list(self._relations)
+
     def associations_of(self, agent_id: str) -> list[str]:
         """Return the activities an agent was associated with.
 
@@ -382,6 +475,10 @@ class ProvStore:
             if kind == "entity":
                 if rec["prov_type"] not in _PROV_TYPES:
                     raise ValueError(f"{where}: entity {rec['id']!r} has unknown prov_type {rec['prov_type']!r}")
+                try:
+                    _check_entity_attributes(rec["attributes"])
+                except ValueError as err:
+                    raise ValueError(f"{where}: entity {rec['id']!r}: {err}") from err
                 extent = rec.pop("extent")
                 store._entities[rec["id"]] = Entity(extent=tuple(extent) if extent else None, **rec)
             elif kind == "activity":

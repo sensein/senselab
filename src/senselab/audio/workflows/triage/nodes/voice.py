@@ -26,6 +26,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     clamp_extent,
     find_measurement,
     live_entities,
+    path_attributes,
     resolve_stream,
     software_agent,
     write_verdict,
@@ -373,7 +374,12 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
     tracks_id = store.entity(
         prov_type="measurement",
         extent=None,
-        attributes={"name": "voice_tracks", "signal": source, "path": tracks_path, "hop_s": params["hop_s"]},
+        attributes={
+            "name": "voice_tracks",
+            "signal": source,
+            **path_attributes(tracks_path, run_dir),
+            "hop_s": params["hop_s"],
+        },
     )
     store.was_generated_by(tracks_id, activity)
     store.was_attributed_to(tracks_id, software)

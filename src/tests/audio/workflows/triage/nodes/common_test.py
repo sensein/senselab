@@ -1,5 +1,6 @@
-"""The shared node helpers: verdict-key shadowing, and the latest-non-invalidated read rule."""
+"""The shared node helpers: verdict-key shadowing, the read rule, and a written file's digest."""
 
+import hashlib
 from pathlib import Path
 from typing import Callable
 
@@ -13,13 +14,20 @@ from senselab.audio.workflows.triage.nodes.common import (
     consensus_words,
     find_measurement,
     lexical_words,
+    path_attributes,
     resolve_stream,
     software_agent,
     write_stream,
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import ProvStore
+from senselab.utils.prov_store import (
+    CHECKSUM_KEY,
+    CHECKSUM_UNRESOLVED_KEY,
+    MTIME_KEY,
+    SIZE_KEY,
+    ProvStore,
+)
 
 
 class TestWriteVerdict:
@@ -274,3 +282,23 @@ class TestClampExtent:
         with pytest.raises(ValueError) as raised:
             clamp_extent((0.5, 1.1), self._audio())
         assert "1.1" in str(raised.value) and "1.0" in str(raised.value)
+
+
+class TestPathAttributes:
+    """What a node records about a file it has just written."""
+
+    def test_a_written_file_carries_its_digest(self, tmp_path: Path) -> None:
+        """The digest is of the bytes on disk, taken in the process that wrote them."""
+        (tmp_path / "streams").mkdir()
+        target = tmp_path / "streams" / "plain.flac"
+        target.write_bytes(b"payload")
+        attributes = path_attributes("streams/plain.flac", tmp_path)
+        assert attributes["path"] == "streams/plain.flac"
+        assert attributes[CHECKSUM_KEY] == hashlib.sha256(b"payload").hexdigest()
+        assert attributes[SIZE_KEY] == 7
+        assert attributes[MTIME_KEY] == target.stat().st_mtime_ns
+
+    def test_a_file_that_is_not_there_says_so(self, tmp_path: Path) -> None:
+        """A write that did not land records the reason, not a null and not an exception."""
+        attributes = path_attributes("derivatives/gone.npz", tmp_path)
+        assert attributes == {"path": "derivatives/gone.npz", CHECKSUM_UNRESOLVED_KEY: "file not found"}
