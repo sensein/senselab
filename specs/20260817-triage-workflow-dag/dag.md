@@ -90,7 +90,8 @@ graph TD
 `GRAPH_ORDER` is `("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE",
 "REDACT", "VERDICT")` and `BRANCHES` is `("AIRWAY", "SPEECH", "VOICE")` (`vocabulary.py:14-18`).
 REPORT runs after VERDICT and is not in `GRAPH_ORDER` (`run.py:41`, `:391`). FIGURE is in neither:
-it is not called by the runner at all (see step 9).
+the in-tree runner never calls it, though the pipeline as actually run does, right after TAXONOMY
+(see step 3b).
 
 **Three gates, each of a different kind** (`run.py:333-346`, `_drive_branches`):
 
@@ -558,6 +559,57 @@ not the **file** result: `Triage.PASS` and the acoustically-empty `DISCARD` are 
 | 6 fold | nothing — the fold already flags on uncertainty; pathways are what is missing |
 | background | whether a competing background is a quality flag or nothing at all |
 
+### 3b. FIGURE — rendering, folded into the preprocessing sequence
+
+`preprocess_figure(store, figure_dir, config, *, run_dir, style=None, stem=None)` (`figure.py:1725`).
+Draws PREPROCESS's and TAXONOMY's output from the store: one multi-page PDF, one
+`taxonomy_summary.json` always written alongside it, and per-page PNGs only when
+`style.also_write_pngs` is set (`figure.py:1936-1946`).
+
+**Two things are both true, and the pair is what matters here.** The owner's position is that
+figure/PDF generation is part of preprocessing and belongs in the graph as such — every batch driver
+that has actually processed a recording, including the recent 388-file batteries, calls
+`admit -> preprocess -> taxonomy -> preprocess_figure` in that sequence, with rendering as the final
+step (the owner's account of that driver; it lives on cluster scratch, outside this repository, and
+its contents are not verifiable from here). Against that: `run_triage` (`run.py`) imports no figure
+module and never calls `preprocess_figure` — grep for `figure` in `run.py` returns nothing — and
+`scripts/triage_audio.py` calls only `run_triage`. The only caller of `preprocess_figure` inside
+`src/`, `scripts/` and `specs/` is `figure_test.py`. **The in-tree runner is the component out of
+step with the pipeline as it is actually run, not the other way around.**
+
+It reads a finished store and **writes nothing back**, so it can be re-invoked over a completed run
+directory, the same shape as re-running `report`. It **recomputes nothing**: everything it draws is
+a store read or a display transform of one, which is why `continuity_trace` had to be persisted. A
+structural AST sweep asserts FIGURE imports no measuring API (`figure_reads_only_test.py:77-92`),
+and a second test asserts no `FigureStyle` field name can shadow a pipeline config key
+(`figure_test.py:273-283`).
+
+The pipeline configuration is **read and never overridden** — a threshold set to make a panel draw
+would produce a picture of a pipeline that is not the one in production. A panel whose element is
+absent names the missing derivative and prints the reason the producing node recorded.
+
+**What the PDF contains, page by page:**
+
+| panel | what it shows | store entity / derivative | config key(s) |
+| --- | --- | --- | --- |
+| cover — SOURCE | the recording's path, wrapped | ADMIT's recorded path (`_source_path`) | none |
+| cover — CONSENSUS ALIGNMENT | `consensus_alignment_lines` (`:1519-1580`): algorithm, per-source word counts and timing source, agreement/variant/insertion outcome counts, time-shift fit, word-timing uncertainty | `consensus_transcript` measurement and its word stream | none |
+| cover — WHOLE-FILE CLASSIFICATION SUMMARY | part of `summary_panel_lines` (`:840-861`): each of YAMNet/AST/HeAR's highest-scoring labels over the whole file | `<classifier>_label_summary` (TAXONOMY's fold of `<classifier>_scores`) | none pipeline; `style.summary_labels` caps rows listed |
+| cover — RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL | the rest of `summary_panel_lines`, its residual block (`:818-837`): gain/enhanced-fraction/residual-energy line, then a label summary over residual windows for **YAMNet and AST only** (`_RESIDUAL_SUMMARISED_CLASSIFIERS`, `figure.py:65`) | `residual` measurement; `residual_yamnet_summary_all`, `residual_ast_summary_all` | none; HeAR's own residual summary, both streams' `_summary_speech_free` variants, and the entire `enhanced` stream's classifier summaries are computed and stored but never drawn here |
+| cover — KIND STATES AND EVIDENCE LINES | the last part of `summary_panel_lines`: each kind's folded state, its evidence lines against their floors, and the reason behind any `unavailable` | TAXONOMY's `kind` entities | none read directly here — reflects whatever `taxonomy.presence_floor.*` etc. already decided |
+| per-page — wideband spectrogram | the speech-analysis spectrogram | `spectrogram_wideband` | `spectrogram.wideband_window_ms`, `spectrogram.hop_ms` (`:1780`, `:1793-1794`) |
+| per-page — waveform | conditioned waveform, envelope dBFS trace, floor and `k_db` threshold lines, continuity trace and its rank-cut level | `energy_envelope` (`envelope_dbfs`, `floor_dbfs`), `continuity_trace` | `spans.k_db` (`:1882`) — read here, not by the span lane panel below it |
+| per-page — span lane | every live general span (amplitude/continuity/asr/normalization/gap), plus clip-event extents | live `span` entities (`family` absent) and clip-family spans | none read directly — the span algorithm's own keys are already baked into the stored spans |
+| per-page — YAMNet raster | the union of each span's top-K YAMNet labels, scored | `span_yamnet` per-span scores | `taxonomy.consolidation_floor` (`:1798`) sets the row floor; `style.top_labels` (= 4, `:165`) caps labels per span (`_raster_rows`, `:1800-1801`) |
+| per-page — HeAR raster | the same, for HeAR | `span_hear` per-span scores | same as the YAMNet raster above |
+| per-page — SQUIM | per-span STOI/PESQ/SI-SDR | per-span `squim` assertions | none (`style.squim_ranges` only sets colour scaling) |
+| per-page — consensus ASR / word lane (`_asr_lane_panel`) | each source's own per-word span under the derived extent; agreement words bold, insertions and variants marked | the consensus word stream (from `consensus_transcript`) | none |
+| output — `<stem>.pdf` | the cover plus every per-window page above | all rows above | — |
+| output — `<stem>__page<NN>.png` | one PNG per page, standalone | the same pages as the PDF | `style.also_write_pngs` (a `FigureStyle` field, not a pipeline config key) |
+| output — `taxonomy_summary.json` | the machine-readable form of the whole-file classification summary and kind states — not the cover's SOURCE, CONSENSUS ALIGNMENT or residual lines | the same two blocks as the cover rows above, rebuilt by `taxonomy_summary_lines` (`:702`) | none |
+
+Its own drawing choices live in a `FigureStyle` dataclass, disjoint from anything the pipeline reads.
+
 ### 4. routing — turn classification (+ hints) into an execution set
 
 Measures nothing and classifies nothing: it reads TAXONOMY's `kind` elements and the caller's hints
@@ -677,38 +729,6 @@ store does not hold. Both carry element ids, a join key back into the store, so 
 and never under the release tree. Config: `report.format`, `spectrogram.hop_ms`. Its failure is
 recorded beside every other node's and changes no verdict — and a failure carrying artifacts keeps
 them, since REPORT writes its JSON before it draws.
-
-### 9. FIGURE — a renderer the runner does not call
-
-`preprocess_figure(store, figure_dir, config, *, run_dir, style=None, stem=None)`
-(`figure.py:1725`). Draws PREPROCESS's and TAXONOMY's output from the store. The primary product is
-one multi-page PDF; per-page PNGs are written only when `style.also_write_pngs` is set, and a
-`taxonomy_summary.json` is always written alongside it (`figure.py:1936-1946`).
-
-**It is deliberately not wired into `run_triage`** — `run.py` does not import it, and grep finds no
-mention of `figure` there. It reads a finished store and **writes nothing back**, so it can be
-re-invoked over a completed run directory, the same shape as re-running `report`.
-
-It **recomputes nothing**: everything it draws is a store read or a display transform of one, which
-is why `continuity_trace` had to be persisted. A structural test sweeps FIGURE's imports and fails
-on anything that measures.
-
-**The cover page** is `cover_lines` (`figure.py:1583-1605`): `SOURCE` (the recording's path,
-wrapped), then `consensus_alignment_lines` (`:1519-1580`), then `summary_panel_lines`
-(`:840-861`) — whole-file classification, the residual block, then kind states. The residual block
-(`:818-837`) renders **YAMNet and AST only** (`_RESIDUAL_SUMMARISED_CLASSIFIERS`, `figure.py:65`);
-HeAR and the `speech_free` variant stay unrendered, and the `enhanced` stream's summaries are not
-rendered at all.
-
-The pipeline configuration is **read and never overridden** — a standing rule, because a threshold
-set to make a panel draw would produce a picture of a pipeline that is not the one in production. A
-panel whose element is absent names the missing derivative and prints the reason the producing node
-recorded. Config: `spans.k_db` (`figure.py:1882`), `spectrogram.wideband_window_ms` and
-`spectrogram.hop_ms` (`figure.py:1780`, `:1793-1794`), and `taxonomy.consolidation_floor`
-(`figure.py:1798`).
-
-Its own drawing choices live in a `FigureStyle` dataclass, disjoint from anything the pipeline
-reads, and a test asserts no style field name can shadow a pipeline key.
 
 ## Summary: the three goals against what actually decides them
 
