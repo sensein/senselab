@@ -8,12 +8,14 @@ import pytest
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.nodes.common import (
+    STREAM_SUFFIX,
     clamp_extent,
     consensus_words,
     find_measurement,
     lexical_words,
     resolve_stream,
     software_agent,
+    write_stream,
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
@@ -124,6 +126,60 @@ class TestResolveStream:
         store.was_invalidated_by(first, activity_id)
         found_id, _ = resolve_stream(store, tmp_path, "recording")
         assert found_id == second
+
+
+class TestWriteStream:
+    """write_stream persists a stream as FLAC and never lets a write clip."""
+
+    def test_writes_flac_and_survives_round_trip(self, tmp_path: Path) -> None:
+        """A stream within range round-trips with the classifier-relevant content intact."""
+        rng = np.random.default_rng(0)
+        samples = (rng.standard_normal((1, 16000)) * 0.2).astype(np.float32)
+        audio = Audio(waveform=samples, sampling_rate=16000)
+        relative, report = write_stream(audio, tmp_path, "plain")
+        assert relative == f"streams/plain{STREAM_SUFFIX}"
+        written = tmp_path / relative
+        assert written.is_file()
+        assert report.gain == 1.0
+        reloaded = Audio(filepath=str(written))
+        assert reloaded.sampling_rate == 16000
+        assert reloaded.waveform.shape == audio.waveform.shape
+        # FLAC/PCM_24's quantization floor is far below anything a classifier responds to.
+        assert float((reloaded.waveform - audio.waveform).abs().max()) < 1e-4
+
+    def test_resolve_stream_reads_back_what_write_stream_wrote(self, store: ProvStore, tmp_path: Path) -> None:
+        """The store round trip: write_stream's path resolves through resolve_stream unchanged."""
+        samples = np.full((1, 8000), 0.3, dtype=np.float32)
+        audio = Audio(waveform=samples, sampling_rate=16000)
+        relative, _ = write_stream(audio, tmp_path, "residual")
+        store.entity(prov_type="stream", extent=(0.0, 0.5), attributes={"name": "residual", "path": relative})
+        _, reloaded = resolve_stream(store, tmp_path, "residual")
+        assert reloaded.waveform.shape[-1] == 8000
+        assert float((reloaded.waveform - audio.waveform).abs().max()) < 1e-4
+
+    def test_a_peak_past_unit_range_is_scaled_down_not_clipped(self, tmp_path: Path) -> None:
+        """Values a write would clip are scaled to fit instead, and the gain is reported."""
+        samples = np.zeros((1, 16000), dtype=np.float32)
+        samples[0, 0] = 1.4  # past +-1, as a real residual's peak can be
+        audio = Audio(waveform=samples, sampling_rate=16000)
+        relative, report = write_stream(audio, tmp_path, "residual")
+        assert report.gain == pytest.approx(1.0 / 1.4, rel=1e-6)
+        reloaded = Audio(filepath=str(tmp_path / relative))
+        assert float(reloaded.waveform.abs().max()) <= 1.0
+        # Undoing the recorded gain recovers the original peak, not a truncated one.
+        assert float(reloaded.waveform.abs().max()) / report.gain == pytest.approx(1.4, rel=1e-3)
+
+    def test_a_peak_already_at_full_scale_passes_through_unscaled(self, tmp_path: Path) -> None:
+        """Clipping already present in the recording is content, not a write-time hazard: no rescale."""
+        samples = np.zeros((1, 16000), dtype=np.float32)
+        samples[0, 100:200] = 1.0
+        samples[0, 300:400] = -1.0
+        audio = Audio(waveform=samples, sampling_rate=16000)
+        relative, report = write_stream(audio, tmp_path, "residual")
+        assert report.gain == 1.0
+        reloaded = Audio(filepath=str(tmp_path / relative))
+        assert float(reloaded.waveform[0, 100:200].abs().min()) > 0.999
+        assert float(reloaded.waveform[0, 300:400].max()) < -0.999
 
 
 class TestConsensusWords:

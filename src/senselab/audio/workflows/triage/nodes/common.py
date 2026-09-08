@@ -9,10 +9,14 @@ from typing import Any
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Triage
+from senselab.utils.portable_audio_io import NORMALIZE, AudioWriteReport
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
 MESSAGE_CAP = 200
 """How much of an exception's message is recorded. The bound on what a message can leak."""
+
+STREAM_SUFFIX = ".flac"
+"""Container a persisted stream gets. See ``specs/20260907-triage-stream-compression/design.md``."""
 
 
 def describe_exception(error: BaseException) -> str:
@@ -292,3 +296,28 @@ def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Aud
     if not path.is_absolute():
         path = run_dir / path
     return entity.id, Audio(filepath=str(path))
+
+
+def write_stream(audio: Audio, run_dir: Path, stem: str) -> tuple[str, AudioWriteReport]:
+    """Persist a stream under ``run_dir/streams/<stem><STREAM_SUFFIX>``.
+
+    The one place every node that writes a persisted stream (as opposed to a transient hand-off
+    file a subprocess worker reads and a caller deletes) calls ``Audio.save_to_file``, so the
+    container and the out-of-range policy are decided once. ``out_of_range="normalize"`` never
+    truncates: a peak already at or below +-1 (a genuinely clipped recording, which is content)
+    passes through unchanged, and only a peak the write would otherwise clip is scaled down, with
+    the gain in the returned report -- a caller records it rather than letting it go unaccounted.
+
+    Args:
+        audio: The stream's audio.
+        run_dir: The run directory streams live under.
+        stem: The stream's file stem, e.g. ``"plain"`` or ``"separated_0"``.
+
+    Returns:
+        ``(relative_path, report)`` — the path to record as the stream entity's ``"path"``
+        attribute (relative to ``run_dir``), and the write report (``report.gain`` is 1.0 unless
+        the write scaled the samples down to fit).
+    """
+    relative = f"streams/{stem}{STREAM_SUFFIX}"
+    report = audio.save_to_file(str(run_dir / relative), out_of_range=NORMALIZE)
+    return relative, report

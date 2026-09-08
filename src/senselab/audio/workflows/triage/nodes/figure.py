@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-import soundfile as sf
 from matplotlib.axes import Axes
 from matplotlib.backend_bases import RendererBase
 from matplotlib.backends.backend_pdf import PdfPages
@@ -309,7 +308,7 @@ def _stream_path(store: ProvStore, run_dir: Path) -> Path | None:
         run_dir: The run directory the stream sits under.
 
     Returns:
-        The WAV path, or None when neither stream is in the store.
+        The stream's file path, or None when neither stream is in the store.
     """
     for name in (_STREAM, _FALLBACK_STREAM):
         try:
@@ -1758,13 +1757,19 @@ def preprocess_figure(
     import matplotlib.pyplot as plt
 
     style = style or FigureStyle()
-    stream_path = _stream_path(store, run_dir)
-    if stream_path is None:
+    audio = None
+    for name in (_STREAM, _FALLBACK_STREAM):
+        try:
+            _, audio = resolve_stream(store, run_dir, name)
+            break
+        except LookupError:
+            continue
+    if audio is None:
         raise LookupError("no conditioned stream in the store; PREPROCESS must run before FIGURE")
-    samples, sampling_rate = sf.read(str(stream_path), dtype="float32", always_2d=False)
-    samples = np.asarray(samples, dtype="float64")
+    sampling_rate = int(audio.sampling_rate)
+    samples = audio.waveform.detach().cpu().numpy().astype("float64")
     if samples.ndim > 1:
-        samples = samples.mean(axis=1)
+        samples = samples.mean(axis=0)
     duration_s = len(samples) / float(sampling_rate)
 
     absent = _absent_reasons(store)

@@ -43,6 +43,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     live_entities,
     resolve_stream,
     software_agent,
+    write_stream,
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
@@ -747,8 +748,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         for position, stream_audio in enumerate(separated):
             meta = dict(stream_audio.metadata.get("clearvoice") or {})
             index = int(meta.get("source_index", position))
-            path = f"streams/separated_{index}.wav"
-            stream_audio.save_to_file(str(run_dir / path))
+            path, report = write_stream(stream_audio, run_dir, f"separated_{index}")
             stream_id = store.entity(
                 prov_type="stream",
                 extent=interval,
@@ -762,6 +762,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     "input_norm_scalar": meta.get("input_norm_scalar"),
                     "separation_model": meta.get("model"),
                     "separation_commit": meta.get("commit"),
+                    "write_gain": report.gain,
                 },
             )
             store.was_generated_by(stream_id, separate_act)
