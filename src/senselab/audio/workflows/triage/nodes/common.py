@@ -10,7 +10,7 @@ from typing import Any
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Triage
 from senselab.utils.portable_audio_io import NORMALIZE, AudioWriteReport
-from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
+from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore, file_attributes
 
 MESSAGE_CAP = 200
 """How much of an exception's message is recorded. The bound on what a message can leak."""
@@ -321,3 +321,17 @@ def write_stream(audio: Audio, run_dir: Path, stem: str) -> tuple[str, AudioWrit
     relative = f"streams/{stem}{STREAM_SUFFIX}"
     report = audio.save_to_file(str(run_dir / relative), out_of_range=NORMALIZE)
     return relative, report
+
+
+def path_attributes(relative: str, run_dir: Path) -> dict[str, Any]:
+    """The ``path``, digest, size and mtime of a file just written under ``run_dir``.
+
+    Args:
+        relative: The file's path relative to ``run_dir``, as the entity records it.
+        run_dir: The run directory the path is relative to.
+
+    Returns:
+        ``path`` and either ``checksum_sha256`` or ``checksum_unresolved_reason``, plus
+        ``size_bytes`` and ``mtime_ns`` when the file can be stat'd.
+    """
+    return {"path": relative, **file_attributes(run_dir / relative)}

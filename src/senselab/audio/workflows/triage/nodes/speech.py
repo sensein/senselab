@@ -41,6 +41,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     clamp_extent,
     find_measurement,
     live_entities,
+    path_attributes,
     resolve_stream,
     software_agent,
     write_stream,
@@ -754,7 +755,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                 extent=interval,
                 attributes={
                     "name": f"separated_{index}",
-                    "path": path,
+                    **path_attributes(path, run_dir),
                     "sampling_rate": int(stream_audio.sampling_rate),
                     "channels": 1,
                     "source_index": index,

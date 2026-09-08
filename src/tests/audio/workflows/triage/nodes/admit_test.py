@@ -1,5 +1,6 @@
-"""ADMIT rejects only decode failure, all-zero and constant. No thresholds, no flag, no models."""
+"""ADMIT rejects only decode failure, all-zero, constant, and a file that changes while it is read."""
 
+import hashlib
 from pathlib import Path
 from typing import Callable, cast
 
@@ -7,10 +8,11 @@ import numpy as np
 import pytest
 
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.nodes import admit as admit_module
 from senselab.audio.workflows.triage.nodes.admit import AdmitResult, admit
 from senselab.audio.workflows.triage.nodes.common import resolve_stream
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import ProvStore
+from senselab.utils.prov_store import CHECKSUM_KEY, MTIME_KEY, SIZE_KEY, ProvStore
 
 
 def _sine(duration_s: float = 1.0, amplitude: float = 0.5, sampling_rate: int = 16000) -> np.ndarray:
@@ -180,3 +182,44 @@ class TestStoreWrites:
         """A missing stream is a LookupError naming the stream, not a silent None."""
         with pytest.raises(LookupError, match="plain"):
             resolve_stream(store, tmp_path, "plain")
+
+
+class TestInputChecksum:
+    """The recording is digested before the decode and again after it, and the two must agree."""
+
+    def test_a_recording_that_passes_carries_its_digest(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """The stream entity records the SHA-256 of the bytes that were decoded, with size and mtime."""
+        path = wav_writer("tone.wav", _sine())
+        assert admit(store, path, config, run_dir=tmp_path).verdict.outcome is Outcome.PASS
+        [stream] = store.entities("stream")
+        assert stream.attributes[CHECKSUM_KEY] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert stream.attributes[SIZE_KEY] == path.stat().st_size
+        assert stream.attributes[MTIME_KEY] == path.stat().st_mtime_ns
+
+    def test_a_recording_rewritten_during_the_decode_fails(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A digest for bytes the pipeline never processed is worse than none, so the file is failed."""
+        path = wav_writer("tone.wav", _sine())
+        replacement = wav_writer("other.wav", _sine(amplitude=0.25)).read_bytes()
+        real_audio = admit_module.Audio
+
+        def rewriting(*args: object, **kwargs: object) -> object:
+            """Decode as usual, then let something else overwrite the file behind us."""
+            audio = real_audio(*args, **kwargs)
+            path.write_bytes(replacement)
+            return audio
+
+        monkeypatch.setattr(admit_module, "Audio", rewriting)
+        result = admit(store, path, config, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FAIL
+        assert "changed while it was being read" in result.verdict.why
+        assert result.audio is None
+        assert store.entities("stream") == []
