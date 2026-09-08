@@ -147,9 +147,9 @@ by stream prefix (`enhanced`, `residual`).
 are written as streams (`preprocess.py:1687`, `:1707`). One `residual` measurement records
 `lag_ms`, `gain_db`, `energy_fraction`, `correlation_*`, `peak_dbfs`, `rms_dbfs`, per-band energy
 fractions, and the speech preconditions `speech_present`/`n_consensus_words`/
-`speech_coverage_fraction` (`preprocess.py:1737-1758`). It decides nothing. No meaning or energy
+`speech_coverage_fraction` (`preprocess.py:1737-1759`). It decides nothing. No meaning or energy
 gate decides whether the streams are written: `speech_present`/`speech_coverage_fraction` are
-preconditions on interpretation, not gates (`preprocess.py:1640-1655`, `:1737-1758`), and speech
+preconditions on interpretation, not gates (`preprocess.py:1640-1655`, `:1737-1759`), and speech
 regions come from `_speech_regions` (`:1612-1628`) — the consensus's lexical words' per-source
 timings when a consensus exists, else this pass's own amplitude-source spans, with
 `speech_overlap_source` naming which.
@@ -213,7 +213,7 @@ aligned by position, since misattributing one span's scores to another is worse 
 a batch that raises falls back to one call per span, recording `"<Error> (after batch failed:
 <BatchError>)"` so both facts survive. Input construction stays per span, so HeAR's 2 s buffering
 can still refuse one span and have that recorded against it alone. This replaced one subprocess
-venv per span: **949.7 s → 176.3 s** on a 79.51 s recording with 91 spans, 182 spawns down to two.
+venv per span: **949.7 s → 176.4 s** on a 79.51 s recording with 91 spans, 182 spawns down to two.
 
 **The span algorithm** (`spans/api.py:propose_spans`), in order:
 
@@ -246,9 +246,11 @@ recomputing it, so the trace and the spans are the same object by construction.
 **A null that deleted a span source in silence — resolved 2026-09-05.** `_spans` used to read
 `speech.word_gap_ms` with `config.get` and, when it was `None`, simply omit the parameter: no
 exception, no absent-derivative record, the ASR span source dropped and PREPROCESS still returning
-`pass`. Measured over 112 recordings it cost every one of **1,951 spans** any ASR source — 1,858
-amplitude, 72 continuity, 21 unlabelled, **zero `asr`** — while 7,651 consensus words sat in the
-same stores. The key is now **deleted outright** rather than given a value: consensus words arrive
+`pass`. A **388-recording** run over ten subjects produced **7,651 consensus words and zero `asr`
+spans**; SPEECH read the same key with `require`, so the same null errored that branch outright on
+all **112** recordings of the earlier stage-0 collection
+(`config-derivations.md:213-217`). The key is now **deleted outright** rather than given a value:
+consensus words arrive
 with their own timestamps, so grouping them needs no gap threshold, and
 `group_extents_into_runs` merges on adjacency alone (`spans/api.py`). ASR spans exist again, and
 the deletion also unblocked SPEECH, which had been `require`-ing the same null key.
