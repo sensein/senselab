@@ -408,23 +408,24 @@ class TestTheResidualSummary:
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """A different reason text from the disabled case, so a reader does not conflate the two."""
+        """A different reason text from the disabled case, so a reader does not conflate the two.
+
+        There is no energy-fraction gate any more, so the only other reason ``residual`` states is
+        FRCRN itself being unavailable — still distinct from ``residual.enabled is false``.
+        """
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
         _seed_preprocess_verdict(
             store,
             {
-                "residual": (
-                    "ValueError: FRCRN's enhanced output retained only 0.0500 of the input's energy, below the "
-                    "configured minimum 0.5000 -- it nulled its input rather than passing it through"
-                ),
+                "residual": "ValueError: FRCRN enhancement unavailable: RuntimeError: worker timed out",
                 "residual_yamnet": "LookupError: residual is absent",
                 "residual_ast": "LookupError: residual is absent",
             },
         )
 
         text = "\n".join(summary_panel_lines(store, FigureStyle()))
-        assert "nulled its input" in text
+        assert "FRCRN enhancement unavailable" in text
         assert "residual.enabled is false" not in text
 
     def test_a_block_that_ran_with_no_windows_says_so_rather_than_an_empty_list(

@@ -75,9 +75,9 @@ recording (as supplied) --> resample-+
 | `spectrogram_wb` | 5 ms window, 5 ms hop | pre-emph | onsets, transients, glottal pulses |
 | `spectrogram_nb` | 20 ms window, 5 ms hop | pre-emph | harmonics, F0 by spacing, rendering |
 | `gammatone` | 40 ERB channels, 80–7800 Hz, 5 ms hop | pre-emph | short-transient detection |
-| `residual` | `plain - g·FRCRN_SE_16K(plain)`, lag-aligned, gain-fitted | residual | none — off by default, not wired into any branch |
-| `residual_yamnet_scores`, `residual_ast_scores` | whole-file classifier windows over `residual`, each carrying `speech_overlap` | residual | none — off by default |
-| `residual_yamnet_summary_all`/`_speech_free`, `residual_ast_summary_all`/`_speech_free` | per-label mean/max/window-count, over every window and over speech-free windows only | residual | none — off by default |
+| `residual` | `plain - g·FRCRN_SE_16K(plain)`, lag-aligned, gain-fitted; `enhanced` (the aligned FRCRN output) written alongside it | residual | none — off by default, not wired into any branch |
+| `enhanced_yamnet_scores`/`ast_scores`/`hear_scores`, `residual_yamnet_scores`/`ast_scores`/`hear_scores` | whole-file classifier windows over `enhanced` and `residual`, each carrying `speech_overlap` | enhanced, residual | none — off by default |
+| `{enhanced,residual}_{yamnet,ast,hear}_summary_all`/`_speech_free` | per-label mean/max/window-count, over every window and over speech-free windows only | enhanced, residual | none — off by default |
 
 A derivative is admitted when it is written to the store with provenance. It does not need a
 declared consumer — see [`store.md`](store.md).
@@ -267,43 +267,51 @@ Each difference is load-bearing:
   cross-recognizer tolerance and every reason not to import it: folding a hyphenated token onto its
   unhyphenated form here would match it against a token the finding never named.
 
-## `residual` — background residual and its classification (off by default)
+## `residual` — background residual, its paired enhancement, and their classification (off by default)
 
 `residual.enabled` (default `false`; ~22 s of GPU work per recording): `FRCRN_SE_16K`
 (`alibabasglab/FRCRN_SE_16K`) runs on `plain` through the existing ClearerVoice enhancement path
 (`senselab.audio.tasks.speech_enhancement.enhance_audios`; the pip package's importable class is
 `ClearVoice`, not `ClearerVoice`, which is only the project's name). Its output is
 cross-correlation aligned to `plain` (`residual.max_lag_ms` search, both directions), then
-least-squares gain-fitted (`g = <plain, enhanced> / <enhanced, enhanced>`) before subtraction:
+least-squares gain-fitted (`g = <plain, enhanced> / <enhanced, enhanced>`) before subtraction. Lag
+search, alignment, gain fit, subtraction, band split and correlation all live in one place —
+`senselab.audio.tasks.speech_enhancement.residual.compute_residual` — not duplicated here:
 
 ```
 residual = plain - g * enhanced_aligned
 ```
 
-The lag (samples and ms) and the gain (linear and dB) are recorded on the `residual` measurement
-alongside the model id and its resolved commit. `residual` is written as a stream, alongside
-`plain`/`preemphasised`/`normalized`.
+Both `enhanced` (the lag-aligned FRCRN output, unconditionally written whenever this block runs —
+no separate config flag) and `residual` are written as streams, alongside
+`plain`/`preemphasised`/`normalized`, so a person or a downstream consumer can inspect and listen to
+the pair rather than only the difference. The lag (samples and ms) and the gain (linear and dB) are
+recorded on the `residual` measurement alongside the model id and its resolved commit.
 
-### Two gates, neither sufficient alone
+### No energy-fraction gate
 
-See `benchmarks/residual-without-speech-2026-09-08.md` for the measurement behind both.
-
-- **Primary — `enhanced_energy_fraction` below `residual.min_enhanced_energy_fraction`
-  (0.50, provisional).** FRCRN's own output energy as a fraction of the input's, before any gain
-  fit. On non-speech recordings FRCRN's behaviour is bimodal and not predictable from the task: it
-  either passes the input through (kept energy 94–98%) or nulls it outright (kept energy
-  0.01–6.7%); nothing measured landed between 7% and 94%. A nulled input's "residual" would be the
-  nulled content itself, not the background, so this gate is checked first.
-- **Secondary — the residual's own retained-energy fraction outside `[residual.min_energy_fraction,
-  residual.max_energy_fraction]`** (0.005 / 0.90, provisional). This bound alone missed four of the
-  five nulled non-speech cases the benchmark measured (50–84% residual-energy retained, all under
-  the 0.90 ceiling), which is why it is secondary and not presented as protective on its own.
-
-FRCRN unavailable or raising is also gated absent, with the exception recorded as the reason.
+This block used to gate the residual absent below a minimum enhanced-output energy fraction, and
+outside a residual-energy band, both derived from `benchmarks/residual-without-speech-2026-09-08.md`.
+Both gates are gone: PREPROCESS measures, it does not judge whether a residual means "background" —
+that question is answered by looking at what `enhanced` and `residual` were each classified as
+(`enhanced_yamnet`/`ast`/`hear`, `residual_yamnet`/`ast`/`hear`, below), which now exist for every
+run this block completes, not by a threshold on an energy ratio computed before any classifier has
+run. FRCRN itself being unavailable or raising is still gated absent, with the exception recorded as
+the reason — there is nothing to measure at all in that case.
 
 The `residual` measurement carries: `model_id`, `commit_sha`, `lag_samples`, `lag_ms`, `gain`,
-`gain_db`, `enhanced_energy_fraction`, `energy_fraction`, `peak_dbfs`, `rms_dbfs`, and `bands` — the
-energy fraction in 0–200 / 200–1000 / 1000–4000 / 4000–8000 Hz (`residual.bands_hz`).
+`gain_db`, `enhanced_energy_fraction`, `energy_fraction`, `correlation_enhanced`,
+`correlation_residual`, `peak_dbfs`, `rms_dbfs`, and `bands` — the residual's energy fraction in
+0–200 / 200–1000 / 1000–4000 / 4000–8000 Hz (`residual.bands_hz`). `correlation_enhanced` is the
+Pearson correlation of `plain` and the aligned `enhanced` signal; `correlation_residual` is the same
+against `residual`. This is the same instrument that told the two `MossFormer2_SS_16K` separation
+streams apart in the buzz-separation comparison (0.984 vs 0.077 against the input) — here it
+distinguishes a stream that is essentially the input from one that carries almost none of it,
+without thresholding on either value.
+
+See `benchmarks/residual-without-speech-2026-09-08.md` for what the removed gates were derived from,
+what the cluster/local contradiction that prompted their removal found, and whether that derivation
+still holds now that the gates are gone.
 
 ### The speech-presence precondition
 
@@ -322,23 +330,24 @@ measurement carries:
 merely empty of lexical words), `n_consensus_words` and `speech_coverage_fraction` are `null` —
 unmeasured, a different fact from a measured 0 — and `speech_present` is `false`.
 
-**This is a recorded precondition, not a gate.** It never prevents the residual from being written
-and is independent of the two energy gates above: a consumer testing whether the residual means
-background checks `speech_present`; a consumer explaining why no residual exists at all checks the
-gates. The two must not be confused — "the subtraction did not work" and "the subtraction worked
-but does not mean background here" are different facts.
+**This is a recorded precondition, not a gate.** It never prevents the residual from being written:
+a consumer testing whether the residual means background checks `speech_present` (and, now, what
+`residual_yamnet`/`ast`/`hear` found); a consumer explaining why no residual exists at all checks
+whether this block ran at all. The two must not be confused — "the subtraction did not run" and
+"the subtraction ran but does not mean background here" are different facts.
 
 ### Classification
 
-YAMNet and AST both run over `residual` exactly as `yamnet_scores`/`ast_scores` run over `plain`:
-`residual_yamnet_scores`, `residual_ast_scores`. Each window additionally carries `speech_overlap` —
-the fraction of that window covered by the union of speech regions, derived from the consensus's
-lexical words' per-source `timings` (`speech_overlap_source: "consensus_transcript"`), or, when no
-consensus transcript exists at all, from this pass's own amplitude-source spans
-(`speech_overlap_source: "amplitude_spans"`).
+YAMNet, AST and HeAR each run over **both** `enhanced` and `residual`, exactly as
+`yamnet_scores`/`ast_scores`/`hear_scores` run over `plain`: `enhanced_yamnet_scores`,
+`enhanced_ast_scores`, `enhanced_hear_scores`, `residual_yamnet_scores`, `residual_ast_scores`,
+`residual_hear_scores`. Each window additionally carries `speech_overlap` — the fraction of that
+window covered by the union of speech regions, derived from the consensus's lexical words' per-source
+`timings` (`speech_overlap_source: "consensus_transcript"`), or, when no consensus transcript exists
+at all, from this pass's own amplitude-source spans (`speech_overlap_source: "amplitude_spans"`).
 
-Each classifier's label summary is produced **twice**: `residual_<classifier>_summary_all` over
-every window, and `residual_<classifier>_summary_speech_free` over only the windows with
+Each classifier's label summary is produced **twice per stream**: `{enhanced,residual}_<classifier>
+_summary_all` over every window, and `..._summary_speech_free` over only the windows with
 `speech_overlap == 0.0` — exactly zero, no new threshold introduced. Each summary carries, per
 label, the mean score, the max score and the window count. Comparing the two is the check for the
 enhancement model's own speech-shaped artefact where the speech was: a label whose peak collapses
@@ -346,7 +355,7 @@ once the speech-overlapping windows are excluded was the distortion talking, not
 
 ### Scope
 
-This step produces the stream and the measurements only. It is not wired into
+This step produces the streams and the measurements only. It is not wired into
 `consensus_taxonomy`, TAXONOMY's decisions, or any branch — a separate decision the owner has not
 taken.
 

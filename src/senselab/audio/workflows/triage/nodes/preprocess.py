@@ -25,7 +25,6 @@ from typing import Any, Callable
 
 import numpy as np
 import torch
-from scipy.signal import correlate, correlation_lags
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.classification.api import classify_audios
@@ -67,6 +66,7 @@ from senselab.audio.tasks.spans.api import (
 )
 from senselab.audio.tasks.spectral_continuity.api import spectral_continuity
 from senselab.audio.tasks.speech_enhancement.api import enhance_audios
+from senselab.audio.tasks.speech_enhancement.residual import band_energy_fractions, compute_residual
 from senselab.audio.tasks.speech_to_text.api import transcribe_audios
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -147,90 +147,6 @@ def _bound_to_duration(start: float, end: float, duration_s: float) -> tuple[flo
     if start >= duration_s:
         return None
     return start, min(end, duration_s)
-
-
-def _find_lag(ref: np.ndarray, sig: np.ndarray, sampling_rate: int, max_lag_ms: float) -> int:
-    """The integer-sample lag of ``sig`` relative to ``ref``, by cross-correlation to ``max_lag_ms``.
-
-    Args:
-        ref: The reference signal.
-        sig: The signal being searched for a lag against ``ref``.
-        sampling_rate: Both signals' sampling rate, in Hz.
-        max_lag_ms: The search half-window, in milliseconds.
-
-    Returns:
-        The lag in samples. Positive means ``sig`` arrives later than ``ref``; aligning drops the
-        first ``lag`` samples of ``sig`` (or the last ``-lag`` samples of ``ref``, when negative).
-    """
-    max_lag = max(1, int(round(max_lag_ms * sampling_rate / 1000.0)))
-    n = min(len(ref), len(sig))
-    r, s = ref[:n], sig[:n]
-    corr = correlate(r, s, mode="full", method="fft")
-    lags = correlation_lags(len(r), len(s), mode="full")
-    mask = np.abs(lags) <= max_lag
-    idx = np.argmax(corr[mask])
-    return -int(lags[mask][idx])
-
-
-def _align(ref: np.ndarray, sig: np.ndarray, lag: int) -> tuple[np.ndarray, np.ndarray]:
-    """Trim ``ref``/``sig`` to their overlapping region after shifting ``sig`` by ``lag`` samples.
-
-    Args:
-        ref: The reference signal.
-        sig: The signal to align, as returned by :func:`_find_lag`.
-        lag: The lag in samples, in :func:`_find_lag`'s sign convention.
-
-    Returns:
-        ``(ref, sig)``, trimmed to their common length.
-    """
-    if lag > 0:
-        sig = sig[lag:]
-    elif lag < 0:
-        ref = ref[-lag:]
-    n = min(len(ref), len(sig))
-    return ref[:n], sig[:n]
-
-
-def _fit_gain(ref: np.ndarray, sig: np.ndarray) -> float:
-    """The least-squares gain minimising ``||ref - g * sig||``: ``g = <ref, sig> / <sig, sig>``.
-
-    Args:
-        ref: The reference signal, aligned with ``sig``.
-        sig: The signal being scaled onto ``ref``.
-
-    Returns:
-        The fitted gain, or 0.0 when ``sig`` carries no energy.
-    """
-    denom = float(np.dot(sig, sig))
-    if denom == 0.0:
-        return 0.0
-    return float(np.dot(ref, sig) / denom)
-
-
-def _band_energy_fractions(x: np.ndarray, sampling_rate: int, bands_hz: list[tuple[float, float]]) -> dict[str, float]:
-    """The fraction of ``x``'s spectral energy landing in each ``(lo, hi)`` Hz band.
-
-    Args:
-        x: The signal.
-        sampling_rate: ``x``'s sampling rate, in Hz.
-        bands_hz: The band edges to report over.
-
-    Returns:
-        ``{"lo_hi": fraction, ...}`` keyed by each band's edges. Every fraction is 0.0 when ``x``
-        carries no energy.
-    """
-    n = len(x)
-    if n == 0:
-        return {f"{lo:g}_{hi:g}": 0.0 for lo, hi in bands_hz}
-    spectrum = np.fft.rfft(x)
-    power = np.square(np.abs(spectrum))
-    freqs = np.fft.rfftfreq(n, d=1.0 / sampling_rate)
-    total = float(power.sum())
-    out: dict[str, float] = {}
-    for lo, hi in bands_hz:
-        mask = (freqs >= lo) & (freqs < hi)
-        out[f"{lo:g}_{hi:g}"] = float(power[mask].sum() / total) if total > 0 else 0.0
-    return out
 
 
 def _merge_intervals(spans: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -1708,50 +1624,41 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         return _merge_intervals(amplitude_spans), "amplitude_spans"
 
     def _residual() -> None:
-        """Background residual: ``plain`` minus a lag-aligned, gain-fitted FRCRN enhancement.
+        """Background residual and its paired enhancement: ``plain`` and a lag-aligned FRCRN pass.
 
         Off by default (``residual.enabled``): FRCRN_SE_16K runs on ``plain``, is cross-correlation
-        aligned to it (``residual.max_lag_ms`` search), and its output is least-squares gain-fitted
-        before subtraction, so a few samples of drift or a non-unity output level do not turn the
-        subtraction into a comb filter or a mismatched-level residual.
+        aligned to it (``residual.max_lag_ms`` search via
+        :func:`~senselab.audio.tasks.speech_enhancement.residual.compute_residual`), and the aligned
+        enhancement is written as its own stream (``enhanced``) alongside the least-squares
+        gain-fitted ``residual = plain - g*enhanced``. Both are written whenever this block runs, so
+        a downstream consumer -- or a person listening back -- can see what FRCRN actually produced,
+        not only what was left after subtracting it.
 
-        Two independent gates, either of which leaves no ``residual`` stream (recorded here as a
-        ``ValueError`` the outer loop attributes to this block), plus FRCRN itself being unavailable
-        or raising:
+        No energy-fraction gate decides whether either stream is written. This block measures; it
+        does not judge whether a residual means "background" -- that question is answered by what
+        ``enhanced`` and ``residual`` were each classified as (``enhanced_yamnet``/``ast``/``hear``
+        and ``residual_yamnet``/``ast``/``hear`` below), not by a threshold on an energy ratio
+        computed before any classifier has run. FRCRN itself being unavailable or raising is still a
+        gate PREPROCESS survives (recorded as a ``ValueError`` the outer loop attributes to this
+        block), because there is nothing to measure at all in that case.
 
-        - **The primary gate**: ``enhanced_energy_fraction`` (the enhanced output's own energy as a
-          fraction of the input's, before any gain fit) below ``residual.min_enhanced_energy_fraction``.
-          FRCRN can null a non-speech input outright rather than passing it through, in which case the
-          "residual" would be the nulled content itself, not the background --
-          ``specs/20260817-triage-workflow-dag/benchmarks/residual-without-speech-2026-09-08.md``.
-        - **Secondary, not sufficient alone**: the residual's own retained-energy fraction outside
-          ``[residual.min_energy_fraction, residual.max_energy_fraction]`` -- the same benchmark found
-          this bound alone misses most of the nulled cases the primary gate catches.
-
-        FRCRN is a speech-enhancement model; ``original - enhanced`` means "the noise that was
-        removed" only where there was speech for it to separate from noise. The measurement always
-        computes and stores the residual regardless -- this is a recorded precondition on what the
-        residual *means*, not a gate on whether it is produced -- via ``speech_present``,
-        ``n_consensus_words`` and ``speech_coverage_fraction`` (the consensus's lexical words' own
-        per-source timings, unioned, over the stream's duration). When no consensus transcript
-        exists at all, the latter two are ``None`` (unmeasured) rather than 0, and ``speech_present``
-        is False.
+        FRCRN is a speech-enhancement model; ``plain - g*enhanced`` reads as "the noise that was
+        removed" only where there was speech for it to separate from noise. The residual is written
+        regardless of whether speech is present -- this is a recorded precondition on what it
+        *means*, not a gate on whether it is produced -- via ``speech_present``, ``n_consensus_words``
+        and ``speech_coverage_fraction`` (the consensus's lexical words' own per-source timings,
+        unioned, over the stream's duration). When no consensus transcript exists at all, the latter
+        two are ``None`` (unmeasured) rather than 0, and ``speech_present`` is False.
         """
         if not bool(config.require("residual.enabled")):
             raise ValueError("residual.enabled is false")
         max_lag_ms = float(config.require("residual.max_lag_ms"))
-        max_energy_fraction = float(config.require("residual.max_energy_fraction"))
-        min_energy_fraction = float(config.require("residual.min_energy_fraction"))
-        min_enhanced_energy_fraction = float(config.require("residual.min_enhanced_energy_fraction"))
         bands_hz = [(float(band[0]), float(band[1])) for band in config.require("residual.bands_hz")]
         model = _frcrn_model()
         agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
         parameters: dict[str, Any] = {
             "model": str(model.path_or_uri),
             "max_lag_ms": max_lag_ms,
-            "max_energy_fraction": max_energy_fraction,
-            "min_energy_fraction": min_energy_fraction,
-            "min_enhanced_energy_fraction": min_enhanced_energy_fraction,
             "bands_hz": bands_hz,
         }
         activity = _step("residual", parameters, (plain_id,), agent)
@@ -1766,38 +1673,31 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 
         ref = plain.waveform.squeeze(0).to(torch.float64).numpy()
         sig = enhanced.waveform.squeeze(0).to(torch.float64).numpy()
-        lag = _find_lag(ref, sig, target_hz, max_lag_ms)
-        ref_aligned, sig_aligned = _align(ref, sig, lag)
-        input_energy = float(np.sum(np.square(ref_aligned)))
-        if input_energy <= 0.0:
-            raise ValueError("the aligned input carries no energy")
-        enhanced_energy_fraction = float(np.sum(np.square(sig_aligned))) / input_energy
-        if enhanced_energy_fraction < min_enhanced_energy_fraction:
-            raise ValueError(
-                f"FRCRN's enhanced output retained only {enhanced_energy_fraction:.4f} of the "
-                f"input's energy, below the configured minimum {min_enhanced_energy_fraction:.4f} "
-                "-- it nulled its input rather than passing it through, so the residual would be "
-                "the content it removed, not the background"
-            )
-        gain = _fit_gain(ref_aligned, sig_aligned)
-        residual_np = ref_aligned - gain * sig_aligned
-        residual_energy = float(np.sum(np.square(residual_np)))
-        energy_fraction = residual_energy / input_energy
+        computation = compute_residual(ref, sig, target_hz, max_lag_ms=max_lag_ms)
 
-        if energy_fraction > max_energy_fraction:
-            raise ValueError(
-                f"residual retained {energy_fraction:.4f} of the input's energy, above the "
-                f"configured maximum {max_energy_fraction:.4f}"
-            )
-        if energy_fraction < min_energy_fraction:
-            raise ValueError(
-                f"residual retained {energy_fraction:.4f} of the input's energy, below the "
-                f"configured minimum {min_energy_fraction:.4f}"
-            )
+        enhanced_duration_s = computation.signal_aligned.shape[-1] / target_hz
+        enhanced_audio = Audio(
+            waveform=torch.from_numpy(computation.signal_aligned.astype(np.float32)).unsqueeze(0),
+            sampling_rate=target_hz,
+        )
+        enhanced_audio.save_to_file(str(run_dir / "streams" / "enhanced.wav"))
+        enhanced_id = store.entity(
+            prov_type="stream",
+            extent=(0.0, enhanced_duration_s),
+            attributes={
+                "name": "enhanced",
+                "path": "streams/enhanced.wav",
+                "sampling_rate": target_hz,
+                "channels": 1,
+            },
+        )
+        store.was_generated_by(enhanced_id, activity)
+        store.was_attributed_to(enhanced_id, agent)
+        store.was_derived_from(enhanced_id, plain_id)
 
-        residual_duration_s = residual_np.shape[-1] / target_hz
+        residual_duration_s = computation.residual.shape[-1] / target_hz
         residual_audio = Audio(
-            waveform=torch.from_numpy(residual_np.astype(np.float32)).unsqueeze(0), sampling_rate=target_hz
+            waveform=torch.from_numpy(computation.residual.astype(np.float32)).unsqueeze(0), sampling_rate=target_hz
         )
         residual_audio.save_to_file(str(run_dir / "streams" / "residual.wav"))
         residual_id = store.entity(
@@ -1814,9 +1714,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         store.was_attributed_to(residual_id, agent)
         store.was_derived_from(residual_id, plain_id)
 
-        peak_dbfs = float(20.0 * np.log10(max(float(np.abs(residual_np).max()), 1e-12)))
-        rms_dbfs = float(20.0 * np.log10(max(float(np.sqrt(np.mean(np.square(residual_np)))), 1e-12)))
-        gain_db = float(20.0 * np.log10(abs(gain))) if gain != 0.0 else float("-inf")
+        peak_dbfs = float(20.0 * np.log10(max(float(np.abs(computation.residual).max()), 1e-12)))
+        rms_dbfs = float(20.0 * np.log10(max(float(np.sqrt(np.mean(np.square(computation.residual)))), 1e-12)))
         regions, region_source = _speech_regions()
         n_consensus_words: int | None
         if region_source == "consensus_transcript":
@@ -1838,25 +1737,30 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             attributes={
                 "model_id": model_id,
                 "commit_sha": commit_sha,
-                "lag_samples": lag,
-                "lag_ms": lag / target_hz * 1000.0,
-                "gain": gain,
-                "gain_db": gain_db,
-                "energy_fraction": energy_fraction,
-                "enhanced_energy_fraction": enhanced_energy_fraction,
+                "lag_samples": computation.lag_samples,
+                "lag_ms": computation.lag_ms,
+                "gain": computation.gain,
+                "gain_db": computation.gain_db,
+                "energy_fraction": computation.residual_energy_fraction,
+                "enhanced_energy_fraction": computation.signal_energy_fraction,
+                "correlation_enhanced": computation.correlation_signal,
+                "correlation_residual": computation.correlation_residual,
                 "peak_dbfs": peak_dbfs,
                 "rms_dbfs": rms_dbfs,
-                "bands": _band_energy_fractions(residual_np, target_hz, bands_hz),
+                "bands": band_energy_fractions(computation.residual, target_hz, bands_hz),
                 "speech_present": speech_present,
                 "n_consensus_words": n_consensus_words,
                 "speech_coverage_fraction": speech_coverage_fraction,
             },
-            derived_from=(residual_id,),
+            derived_from=(residual_id, enhanced_id),
         )
         derivatives["residual"] = entity_id
+        view.append(enhanced_id)
         view.append(residual_id)
         view.append(entity_id)
         state.update(
+            enhanced_id=enhanced_id,
+            enhanced_audio=enhanced_audio,
             residual_id=residual_id,
             residual_audio=residual_audio,
             residual_duration_s=residual_duration_s,
@@ -1864,13 +1768,23 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             speech_overlap_source=region_source,
         )
 
-    def _residual_scores(
-        name: str, agent_id: str, activity_step: str, run: Callable[[], list[dict[str, Any]]]
+    def _stream_classifier_scores(
+        prefix: str, name: str, agent_id: str, activity_step: str, run: Callable[[], list[dict[str, Any]]]
     ) -> list[dict[str, Any]]:
-        """One classifier's whole-file windows over the residual, each carrying its ``speech_overlap``."""
-        if "residual_audio" not in state:
-            raise LookupError("residual is absent")
-        activity = _step(activity_step, {}, (state["residual_id"],), agent_id)
+        """One classifier's whole-file windows over the ``enhanced`` or ``residual`` stream.
+
+        Args:
+            prefix: ``"enhanced"`` or ``"residual"`` -- which stream this classifier ran over.
+            name: The measurement name, e.g. ``"residual_yamnet_scores"``.
+            agent_id: The classifier's own agent.
+            activity_step: The activity step name.
+            run: The classify call, over ``state[f"{prefix}_audio"]``.
+        """
+        audio_key = f"{prefix}_audio"
+        id_key = f"{prefix}_id"
+        if audio_key not in state:
+            raise LookupError(f"{prefix} is absent")
+        activity = _step(activity_step, {}, (state[id_key],), agent_id)
         windows = run()
         regions = state["speech_regions"]
         for window in windows:
@@ -1882,16 +1796,16 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             activity,
             agent_id,
             name=name,
-            signal="residual",
+            signal=prefix,
             attributes={
-                "classifier": name.removeprefix("residual_").removesuffix("_scores"),
+                "classifier": name.removeprefix(f"{prefix}_").removesuffix("_scores"),
                 "path": path,
                 "n_windows": len(windows),
                 "win_length_s": float(windows[0]["win_length"]) if windows else None,
                 "hop_s": float(windows[0]["hop_length"]) if windows else None,
                 "speech_overlap_source": state["speech_overlap_source"],
             },
-            derived_from=(state["residual_id"],),
+            derived_from=(state[id_key],),
         )
         derivatives[name] = entity_id
         view.append(entity_id)
@@ -1899,26 +1813,26 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         state[f"{name}_id"] = entity_id
         return windows
 
-    def _residual_summaries(
-        classifier: str, agent_id: str, windows: list[dict[str, Any]], reads: tuple[str, ...]
+    def _stream_classifier_summaries(
+        prefix: str, classifier: str, agent_id: str, windows: list[dict[str, Any]], reads: tuple[str, ...]
     ) -> None:
-        """Two label summaries over the residual's windows: every window, and the speech-free ones.
+        """Two label summaries over one stream's classifier windows: every window, speech-free ones.
 
         The second is exactly the windows whose ``speech_overlap`` is 0.0 -- no new threshold is
         introduced. Comparing the two is the check for the enhancement model's own speech-shaped
         artefact: a label whose peak collapses once the speech-overlapping windows are excluded was
         that artefact, not the background.
         """
-        activity = _step(f"residual_{classifier}_summary", {}, reads, agent_id)
+        activity = _step(f"{prefix}_{classifier}_summary", {}, reads, agent_id)
         speech_free = [window for window in windows if float(window.get("speech_overlap", 0.0)) == 0.0]
         for suffix, subset in (("all", windows), ("speech_free", speech_free)):
-            name = f"residual_{classifier}_summary_{suffix}"
+            name = f"{prefix}_{classifier}_summary_{suffix}"
             entity_id = _measurement(
                 store,
                 activity,
                 agent_id,
                 name=name,
-                signal="residual",
+                signal=prefix,
                 attributes={
                     "classifier": classifier,
                     "n_windows": len(subset),
@@ -1930,33 +1844,37 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             derivatives[name] = entity_id
             view.append(entity_id)
 
-    def _residual_yamnet() -> None:
-        """YAMNet's whole-file windows over the residual, plus its speech-overlap label summaries."""
+    def _stream_yamnet(prefix: str) -> None:
+        """YAMNet's whole-file windows over one stream, plus its speech-overlap label summaries."""
         agent = store.agent(
             agent_type="model",
             model_id=YAMNET_MODEL_URI,
             unresolved_reason="TF-Hub URL pin; no commit exists to resolve",
         )
-        windows = _residual_scores(
-            "residual_yamnet_scores",
+        name = f"{prefix}_yamnet_scores"
+        windows = _stream_classifier_scores(
+            prefix,
+            name,
             agent,
-            "residual_yamnet",
+            f"{prefix}_yamnet",
             lambda: classify_audios(
-                [state["residual_audio"]], model="yamnet", top_k=int(config.require("yamnet.top_k"))
+                [state[f"{prefix}_audio"]], model="yamnet", top_k=int(config.require("yamnet.top_k"))
             )[0],
         )
-        _residual_summaries("yamnet", agent, windows, (state["residual_yamnet_scores_id"],))
+        _stream_classifier_summaries(prefix, "yamnet", agent, windows, (state[f"{name}_id"],))
 
-    def _residual_ast() -> None:
-        """AST's whole-file windows over the residual, plus its speech-overlap label summaries."""
+    def _stream_ast(prefix: str) -> None:
+        """AST's whole-file windows over one stream, plus its speech-overlap label summaries."""
         model = _ast_model()
         agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
-        windows = _residual_scores(
-            "residual_ast_scores",
+        name = f"{prefix}_ast_scores"
+        windows = _stream_classifier_scores(
+            prefix,
+            name,
             agent,
-            "residual_ast",
+            f"{prefix}_ast",
             lambda: classify_audios(
-                [state["residual_audio"]],
+                [state[f"{prefix}_audio"]],
                 model=model,
                 win_length=float(config.require("windows.ast.win_length_s")),
                 hop_length=float(config.require("windows.ast.hop_s")),
@@ -1964,7 +1882,22 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 function_to_apply="sigmoid",
             )[0],
         )
-        _residual_summaries("ast", agent, windows, (state["residual_ast_scores_id"],))
+        _stream_classifier_summaries(prefix, "ast", agent, windows, (state[f"{name}_id"],))
+
+    def _stream_hear(prefix: str) -> None:
+        """HeAR's whole-file windows over one stream, plus its speech-overlap label summaries."""
+        agent = store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION)
+        name = f"{prefix}_hear_scores"
+        windows = _stream_classifier_scores(
+            prefix,
+            name,
+            agent,
+            f"{prefix}_hear",
+            lambda: detect_health_acoustic_events(
+                [state[f"{prefix}_audio"]], hop_length=float(config.require("windows.hear.hop_s")), top_k=None
+            )[0],
+        )
+        _stream_classifier_summaries(prefix, "hear", agent, windows, (state[f"{name}_id"],))
 
     blocks: list[tuple[str, Callable[[], None]]] = [
         ("clip_spans", _clip_spans),
@@ -1994,8 +1927,12 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ("continuity_trace", _continuity_trace),
         ("spans", _spans),
         ("residual", _residual),
-        ("residual_yamnet", _residual_yamnet),
-        ("residual_ast", _residual_ast),
+        ("enhanced_yamnet", lambda: _stream_yamnet("enhanced")),
+        ("enhanced_ast", lambda: _stream_ast("enhanced")),
+        ("enhanced_hear", lambda: _stream_hear("enhanced")),
+        ("residual_yamnet", lambda: _stream_yamnet("residual")),
+        ("residual_ast", lambda: _stream_ast("residual")),
+        ("residual_hear", lambda: _stream_hear("residual")),
         ("squim", _squim),
         ("span_hear", _span_hear),
         ("span_yamnet", _span_yamnet),
