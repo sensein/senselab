@@ -247,18 +247,24 @@ senselab's path to four decimal places (`batch_breath` 0.0263 vs 0.0263, `batch_
 per-recording null/pass split is a property of the recording, and both classes appear in the same run,
 same venv, same process.
 
-The one substantive finding is the third axis. Upstream's supported IO entry point and senselab's
-`net.decode()` bypass are **not equivalent**, though neither flips a classification:
+The third axis initially looked like a substantive finding — upstream's supported IO entry point and
+senselab's `net.decode()` bypass disagreed on `probe_s3_breath` (0.4105 vs 0.5724) — but that gap is
+**not** the code path. It is a needless low-pass filter, documented in
+`specs/20260819-clearvoice-integration/resample-audios-needless-lowpass-2026-09-07.md`:
+`prepare_audios_for_clearvoice` calls `resample_audios` unconditionally, and `resample_audios` has no
+same-rate short-circuit, so already-16 kHz audio is Butterworth low-passed at 7900 Hz before FRCRN
+sees it. Neutralising that filter and re-running the same file through senselab's own path:
 
-| file | upstream IO | senselab bypass |
-|---|---|---|
-| `probe_s3_breath` | 0.4105 | 0.5724 |
-| `batch_breath` | 0.0274 | 0.0263 |
-| `buzz_00_original` | 0.0142 | 0.0157 |
+| filter passes | residual fraction |
+|---|---|
+| 0 (neutralised) | 0.4104 |
+| 1 (production today) | 0.5724 |
+| 2 | 0.5928 |
 
-`probe_s3_breath` differs by 40% relative. senselab's reimplementation preserves the null/pass class
-everywhere tested, but does not reproduce the supported path's numbers, and that divergence is
-undocumented. It should be an explicit decision rather than an accident.
+Zero passes reproduces upstream's IO number (0.4105) to four significant figures. **The two code
+paths are equivalent**; the apparent divergence was the filter, and `decode()`-versus-`process()` had
+nothing to do with it. `probe_s3_breath` sits on FRCRN's null/pass-through boundary, where a
+correlation-0.999 input perturbation moves the output by 39% relative.
 
 ## Verdict
 
