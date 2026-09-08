@@ -27,6 +27,7 @@ events. These justify the *shape* of a rule. Every constant needs more files.
 | [`disruptions.md`](disruptions.md) | what stream disruptions are measured on, and the local discontinuity reference |
 | [`span-fill-recovery-2026-09-08.md`](span-fill-recovery-2026-09-08.md) | controlled ground-truth test of `span_yamnet_input`'s periodic fill: does trimming and refilling a native ≥0.96s span recover its label, and down to what duration — uses the b2ai 10-subject batch, not the single reference recording above |
 | [`residual-without-speech-2026-09-08.md`](residual-without-speech-2026-09-08.md) | whether `original - g*FRCRN_SE_16K(original)` still means "background" with no speech present — eight b2ai `Respiration-and-cough-*` recordings across three subjects plus two `Story-recall` comparators; not the single reference recording above |
+| [`frcrn-torch-vs-arch-2026-09-08.md`](frcrn-torch-vs-arch-2026-09-08.md) | crossing torch version (2.13/2.14) against CPU architecture (arm64/x86_64) to disambiguate FRCRN's local-nulls-vs-cluster-passes-through contradiction — neither axis reproduces it; the cluster's own current production venv no longer reproduces the "passes through" side either |
 
 Scripts that produced these live in [`scripts/`](scripts/). They read the labels through
 `../../labels.py`, so ground truth has exactly one owner in this repository.
