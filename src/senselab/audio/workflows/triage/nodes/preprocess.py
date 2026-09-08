@@ -1630,7 +1630,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _residual() -> None:
         """Background residual and its paired enhancement: ``plain`` and a lag-aligned FRCRN pass.
 
-        Off by default (``residual.enabled``): FRCRN_SE_16K runs on ``plain``, is cross-correlation
+        Gated by ``residual.enabled``: FRCRN_SE_16K runs on ``plain``, is cross-correlation
         aligned to it (``residual.max_lag_ms`` search via
         :func:`~senselab.audio.tasks.speech_enhancement.residual.compute_residual`), and the aligned
         enhancement is written as its own stream (``enhanced``) alongside the least-squares

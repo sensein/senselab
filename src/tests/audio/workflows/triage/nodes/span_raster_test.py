@@ -384,7 +384,7 @@ class TestTheResidualSummary:
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """``residual.enabled: false`` is the default, and this is the state most stores are in."""
+        """A store built with ``residual.enabled: false`` still reads this way -- that path stays live."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
         _seed_preprocess_verdict(
