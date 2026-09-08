@@ -33,7 +33,9 @@ def resample_audios(
     """Resample a batch of `Audio` objects to a target sampling rate.
 
     For each channel, a zero-phase IIR low-pass filter (Butterworth, SOS) is applied,
-    then resampling is performed with `speechbrain.augment.time_domain.Resample`.
+    then resampling is performed with `speechbrain.augment.time_domain.Resample`. An audio
+    whose `sampling_rate` already equals `resample_rate` is returned unchanged (waveform
+    untouched) when `lowcut` is `None`; passing an explicit `lowcut` always applies the filter.
 
     Args:
         audios (list[Audio]):
@@ -73,6 +75,10 @@ def resample_audios(
     for audio in audios:
         # Defensive copy of metadata
         md = audio.metadata.copy()
+
+        if lowcut is None and audio.sampling_rate == resample_rate:
+            outs.append(Audio(waveform=audio.waveform, sampling_rate=resample_rate, metadata=md))
+            continue
 
         # Design low-pass if not provided
         _lowcut = lowcut if lowcut is not None else (resample_rate / 2 - 100.0)
