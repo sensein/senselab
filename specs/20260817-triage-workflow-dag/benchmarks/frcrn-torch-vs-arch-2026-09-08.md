@@ -204,53 +204,81 @@ both commits; the three refactor commits changed only how streams are persisted 
 whether the block raises, not what tensor FRCRN receives. Both endpoints reproduce today's NULL, not
 the batch's pass-through.
 
-### The divergence is real, measured in the batch's own audio
+### There was no divergence: the premise was an analysis error
 
-The batch directories under `frcrn_cluster_residuals_20260907/` hold `plain.wav` (the exact tensor fed
-to FRCRN) and `residual.wav`. Their run-id timestamps are **UTC**, so `...-215051` is 17:50 EDT and
-these are the 17:37 batch's outputs. Measured residual-to-input energy ratios on nine respiration
-recordings:
+**The contradiction this whole report set out to explain does not exist.** It came from misreading the
+batch's own summary.
 
-| task | residual / input |
-|---|---|
-| `(v2)-HardCough` | 0.0629, 0.0379 |
-| `(v2)-ThreeBreaths` | 0.0536 |
-| `(v2)-ThreeBreathsNose` | 0.0806 |
-| `Breath-1` | 0.0263 |
-| `Cough-1` | 0.2391, 0.0098 |
-| `Cough-2` | 0.0057 |
-| `ThreeQuickBreaths-1` | 0.1059 |
+`analysis/residual_detail.json` marks a recording `absent` for two *opposite* reasons, and both
+reason strings contain the phrase "below the configured minimum":
 
-Against 0.59-0.93 for the same class of recording today. The batch really did pass these through and
-current code really does null them, in audio rather than only in a summary column.
+- `"residual retained 0.0000 of the input's energy, below the configured minimum 0.0050"` — FRCRN
+  **passed the input through**, so there was no residual to keep.
+- `"FRCRN's enhanced output retained only 0.0969 of the input's energy, below the configured minimum
+  0.5000 -- it nulled its input rather than passing it through"` — FRCRN **nulled** the input.
 
-### What remains
+Grouping on that shared phrase collapses the two into one bucket and reports every `absent` as
+pass-through. Split on the distinguishing text instead:
 
-With environment, device, venv identity and calling code all eliminated by measurement, two
-hypotheses are still standing. **The code path into the model**: senselab's `net.decode()` bypass has
-never been compared against upstream's supported IO entry point. **The checkpoint**: FRCRN is loaded
-via `HFModel(revision="main")`, which re-resolves over the network at call time, so the weights the
-batch used need not be the weights loaded today — and only one snapshot
-(`3766e6a64b0d8cb58f08d913d617bf129f11ed53`) is cached locally, which neither confirms nor rules this
-out. Note that loading through a ref rather than a pinned SHA is exactly the failure mode
-`CLAUDE.md` warns about, independent of whether it caused this flip. A 2x2x2 crossing torch version,
-architecture and code path, on one identical staged file set with the resolved checkpoint SHA recorded
-per cell, is the experiment that separates them.
+| reason | all 388 | non-speech |
+|---|---|---|
+| residual ~0 → passed through | 207 | 9 |
+| enhanced < 0.5 → nulled | 83 | 52 |
+
+The batch **nulled 52 of its 70 non-speech recordings**, which is what current code does. Its
+`store.jsonl` for `(v2)-Breath` records an enhanced-energy fraction of **0.0969** — the same value
+measured today (0.09690 cluster, 0.09691 local production). The batch and today agree on that file to
+four decimal places.
+
+### The checkpoint is excluded, and the loader does pin
+
+`src/senselab/utils/clearvoice.py:262-267` resolves the ref to a SHA via `resolve_revision` and then
+downloads with `revision=sha`, returning `(checkpoint_dir, commit_sha)` — the resolve-then-load
+contract, applied here by pre-staging because upstream's loader accepts no revision (design.md D-6).
+The batch recorded its resolved checkpoint in `store.jsonl`:
+`3766e6a64b0d8cb58f08d913d617bf129f11ed53`, identical to the one loaded today. The checkpoint did not
+move, and this was answerable from the batch's own provenance throughout.
+
+### What the 2x2x2 measured anyway
+
+Replaying the batch's own `plain.wav` tensors through current code reproduces the batch's numbers on
+senselab's path to four decimal places (`batch_breath` 0.0263 vs 0.0263, `batch_hardcough` 0.0379 vs
+0.0379, `batch_threebreaths` 0.0536 vs 0.0536), with torch 2.13 and 2.14 identical yet again. The
+per-recording null/pass split is a property of the recording, and both classes appear in the same run,
+same venv, same process.
+
+The one substantive finding is the third axis. Upstream's supported IO entry point and senselab's
+`net.decode()` bypass are **not equivalent**, though neither flips a classification:
+
+| file | upstream IO | senselab bypass |
+|---|---|---|
+| `probe_s3_breath` | 0.4105 | 0.5724 |
+| `batch_breath` | 0.0274 | 0.0263 |
+| `buzz_00_original` | 0.0142 | 0.0157 |
+
+`probe_s3_breath` differs by 40% relative. senselab's reimplementation preserves the null/pass class
+everywhere tested, but does not reproduce the supported path's numbers, and that divergence is
+undocumented. It should be an explicit decision rather than an accident.
 
 ## Verdict
 
-**Neither torch version nor CPU architecture is confirmed as the cause**, per the brief's own
-decision rule for this outcome ("Anything else ... means neither explanation is sufficient, and you
-should say so rather than forcing a verdict"). Specifically:
+**There was nothing to explain.** The contradiction that motivated this investigation was an artifact
+of collapsing two opposite `absent` reasons in the batch's summary JSON into one bucket. The batch
+nulled its breath recordings, current code nulls them, and the two agree on `(v2)-Breath` at 0.0969.
 
-- It is not torch version: 2.13 and 2.14 are bit-identical on both architectures.
-- It is not CPU architecture: arm64 and x86_64 agree (to ordinary floating-point noise) at both torch
+The measurements remain valid as measurements, and they answer the question that was actually asked:
+
+- It is not torch version: 2.13 and 2.14 are bit-identical on both architectures, in throwaway venvs
+  and in the 2x2x2's fresh ones.
+- It is not CPU architecture: arm64 and x86_64 agree to ordinary floating-point noise at both torch
   versions, on two different x86_64 nodes.
-- It is not run-to-run instability within an environment: every repeat is bit-identical.
-- **It is that the "pass-through" state itself does not reproduce today, anywhere this session could
-  test it** — including the cluster's own current production environment, which is the strongest
-  version of "the cluster" this report can invoke. That is a different failure of the original
-  hypothesis than either arm of the brief's decision rule anticipated, and it is reported as such.
+- It is not run-to-run instability: every repeat is bit-identical.
+- It is not the environment, device, venv identity, calling code, input level (flat across a 50 dB
+  sweep), sample-rate handling, or the checkpoint (`3766e6a6...` in both the batch's provenance and
+  today's loads).
+
+What the null/pass split *does* track is the individual recording. Both outcomes occur in the same
+run, in the same process, on the same checkpoint.
 
 ## What this implies for pinning
 
@@ -263,19 +291,20 @@ strength of this report.
 Separately, and worth flagging even though it falls outside this report's disambiguation: `torch
 >=2.0.1` with no upper bound already let the production venv's resolved torch drift to 2.14.0 on both
 machines with nobody deciding that version — consistent with the concern in the task background,
-independent of whether that drift caused the original contradiction. If the *next* investigation
-wants to pin something, it should be aimed at the feed path — what the residual refactor changed
-about the waveform handed to FRCRN — rather than at another architecture/torch sweep, since this
-session's sweep has now covered that space and found it flat.
+independent of the contradiction, which turned out not to exist. If the *next* investigation wants
+to pin something, it should be aimed at the gap between senselab's `net.decode()` bypass and
+upstream's supported IO entry point, rather than at another architecture/torch sweep — this session's
+sweep has covered that space and found it flat.
 
 **FRCRN's behavior on duration-filling non-speech input remains untrustworthy regardless of this
 result.** The existing register (`residual-without-speech-2026-09-08.md`) already documents that this
 class of recording sits near a decision boundary where the model's output can be near-total silence
 or near-total pass-through with no stable middle ground, and recommends against using FRCRN's residual
-as a background stream for it. Nothing here contradicts that; if anything, a divergence that could not
-be reproduced under a controlled, repeated, cross-node, cross-torch-version test is itself evidence
-that this boundary is sensitive to conditions this investigation did not manage to isolate — a reason
-for more caution about this model class on this input shape, not less.
+as a background stream for it. Nothing here contradicts that. What this report adds is that the
+boundary is a property of the individual recording rather than of the environment: the same
+checkpoint, in one process, nulls one breath recording and passes another through. That is a reason
+for caution about this model class on this input shape, and a reason not to derive a threshold from
+any single batch.
 
 ## Reproduce
 
