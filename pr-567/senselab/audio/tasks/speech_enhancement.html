@@ -46,6 +46,78 @@
             <li>
                     <a class="function" href="#enhance_audios">enhance_audios</a>
             </li>
+            <li>
+                    <a class="class" href="#ResidualComputation">ResidualComputation</a>
+                            <ul class="memberlist">
+                        <li>
+                                <a class="function" href="#ResidualComputation.__init__">ResidualComputation</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.sampling_rate">sampling_rate</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.lag_samples">lag_samples</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.reference_aligned">reference_aligned</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.signal_aligned">signal_aligned</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.gain">gain</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.residual">residual</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.input_energy">input_energy</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.signal_energy">signal_energy</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.residual_energy">residual_energy</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.signal_energy_fraction">signal_energy_fraction</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.residual_energy_fraction">residual_energy_fraction</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.correlation_signal">correlation_signal</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.correlation_residual">correlation_residual</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.gain_db">gain_db</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResidualComputation.lag_ms">lag_ms</a>
+                        </li>
+                </ul>
+
+            </li>
+            <li>
+                    <a class="function" href="#align">align</a>
+            </li>
+            <li>
+                    <a class="function" href="#band_energy_fractions">band_energy_fractions</a>
+            </li>
+            <li>
+                    <a class="function" href="#compute_residual">compute_residual</a>
+            </li>
+            <li>
+                    <a class="function" href="#correlation">correlation</a>
+            </li>
+            <li>
+                    <a class="function" href="#fit_gain">fit_gain</a>
+            </li>
+            <li>
+                    <a class="function" href="#find_lag">find_lag</a>
+            </li>
     </ul>
 
 
@@ -374,11 +446,29 @@ and every deviation from upstream's own inference path, is in
 
                         <label class="view-source-button" for="mod-speech_enhancement-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">enhance_audios</span>  <span class="c1"># noqa: F401</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;enhance_audios&quot;</span><span class="p">]</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">enhance_audios</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.residual</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a>    <span class="n">ResidualComputation</span><span class="p">,</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>    <span class="n">align</span><span class="p">,</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>    <span class="n">band_energy_fractions</span><span class="p">,</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>    <span class="n">compute_residual</span><span class="p">,</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="n">correlation</span><span class="p">,</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>    <span class="n">find_lag</span><span class="p">,</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="n">fit_gain</span><span class="p">,</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="p">)</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>    <span class="s2">&quot;enhance_audios&quot;</span><span class="p">,</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>    <span class="s2">&quot;ResidualComputation&quot;</span><span class="p">,</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="s2">&quot;align&quot;</span><span class="p">,</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="s2">&quot;band_energy_fractions&quot;</span><span class="p">,</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="s2">&quot;compute_residual&quot;</span><span class="p">,</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="s2">&quot;correlation&quot;</span><span class="p">,</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a>    <span class="s2">&quot;fit_gain&quot;</span><span class="p">,</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="s2">&quot;find_lag&quot;</span><span class="p">,</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a><span class="p">]</span>
 </span></pre></div>
 
 
@@ -491,6 +581,641 @@ ClearerVoice declares <code>timeout_s</code>; SpeechBrain declares none.</li>
 <li><strong>NotImplementedError:</strong>  If <code>model</code> names no known enhancement backend.</li>
 <li><strong>ValueError:</strong>  If a parameter key is not one the selected backend declares.</li>
 </ul>
+</div>
+
+
+                </section>
+                <section id="ResidualComputation">
+                            <input id="ResidualComputation-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+                    <div class="decorator decorator-dataclass">@dataclass(frozen=True)</div>
+
+    <span class="def">class</span>
+    <span class="name">ResidualComputation</span>:
+
+                <label class="view-source-button" for="ResidualComputation-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#ResidualComputation"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="ResidualComputation-130"><a href="#ResidualComputation-130"><span class="linenos">130</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="ResidualComputation-131"><a href="#ResidualComputation-131"><span class="linenos">131</span></a><span class="k">class</span><span class="w"> </span><span class="nc">ResidualComputation</span><span class="p">:</span>
+</span><span id="ResidualComputation-132"><a href="#ResidualComputation-132"><span class="linenos">132</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One lag-aligned, gain-fitted subtraction and every quantity derived from it.</span>
+</span><span id="ResidualComputation-133"><a href="#ResidualComputation-133"><span class="linenos">133</span></a>
+</span><span id="ResidualComputation-134"><a href="#ResidualComputation-134"><span class="linenos">134</span></a><span class="sd">    Attributes:</span>
+</span><span id="ResidualComputation-135"><a href="#ResidualComputation-135"><span class="linenos">135</span></a><span class="sd">        sampling_rate: The rate both aligned signals share, in Hz.</span>
+</span><span id="ResidualComputation-136"><a href="#ResidualComputation-136"><span class="linenos">136</span></a><span class="sd">        lag_samples: ``signal``&#39;s lag relative to ``reference``, in :func:`find_lag`&#39;s convention.</span>
+</span><span id="ResidualComputation-137"><a href="#ResidualComputation-137"><span class="linenos">137</span></a><span class="sd">        reference_aligned: ``reference``, trimmed to the overlapping region.</span>
+</span><span id="ResidualComputation-138"><a href="#ResidualComputation-138"><span class="linenos">138</span></a><span class="sd">        signal_aligned: ``signal``, lag-aligned to ``reference`` -- NOT gain-scaled.</span>
+</span><span id="ResidualComputation-139"><a href="#ResidualComputation-139"><span class="linenos">139</span></a><span class="sd">        gain: The least-squares gain fit on the aligned pair.</span>
+</span><span id="ResidualComputation-140"><a href="#ResidualComputation-140"><span class="linenos">140</span></a><span class="sd">        residual: ``reference_aligned - gain * signal_aligned``.</span>
+</span><span id="ResidualComputation-141"><a href="#ResidualComputation-141"><span class="linenos">141</span></a><span class="sd">        input_energy: ``reference_aligned``&#39;s own energy (sum of squares).</span>
+</span><span id="ResidualComputation-142"><a href="#ResidualComputation-142"><span class="linenos">142</span></a><span class="sd">        signal_energy: ``signal_aligned``&#39;s own energy, before any gain scaling.</span>
+</span><span id="ResidualComputation-143"><a href="#ResidualComputation-143"><span class="linenos">143</span></a><span class="sd">        residual_energy: ``residual``&#39;s own energy.</span>
+</span><span id="ResidualComputation-144"><a href="#ResidualComputation-144"><span class="linenos">144</span></a><span class="sd">        signal_energy_fraction: ``signal_energy / input_energy``; ``nan`` when ``input_energy`` is</span>
+</span><span id="ResidualComputation-145"><a href="#ResidualComputation-145"><span class="linenos">145</span></a><span class="sd">            zero.</span>
+</span><span id="ResidualComputation-146"><a href="#ResidualComputation-146"><span class="linenos">146</span></a><span class="sd">        residual_energy_fraction: ``residual_energy / input_energy``; ``nan`` when ``input_energy``</span>
+</span><span id="ResidualComputation-147"><a href="#ResidualComputation-147"><span class="linenos">147</span></a><span class="sd">            is zero.</span>
+</span><span id="ResidualComputation-148"><a href="#ResidualComputation-148"><span class="linenos">148</span></a><span class="sd">        correlation_signal: :func:`correlation` of ``reference_aligned`` and ``signal_aligned``.</span>
+</span><span id="ResidualComputation-149"><a href="#ResidualComputation-149"><span class="linenos">149</span></a><span class="sd">        correlation_residual: :func:`correlation` of ``reference_aligned`` and ``residual``.</span>
+</span><span id="ResidualComputation-150"><a href="#ResidualComputation-150"><span class="linenos">150</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="ResidualComputation-151"><a href="#ResidualComputation-151"><span class="linenos">151</span></a>
+</span><span id="ResidualComputation-152"><a href="#ResidualComputation-152"><span class="linenos">152</span></a>    <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="ResidualComputation-153"><a href="#ResidualComputation-153"><span class="linenos">153</span></a>    <span class="n">lag_samples</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="ResidualComputation-154"><a href="#ResidualComputation-154"><span class="linenos">154</span></a>    <span class="n">reference_aligned</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+</span><span id="ResidualComputation-155"><a href="#ResidualComputation-155"><span class="linenos">155</span></a>    <span class="n">signal_aligned</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+</span><span id="ResidualComputation-156"><a href="#ResidualComputation-156"><span class="linenos">156</span></a>    <span class="n">gain</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="ResidualComputation-157"><a href="#ResidualComputation-157"><span class="linenos">157</span></a>    <span class="n">residual</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+</span><span id="ResidualComputation-158"><a href="#ResidualComputation-158"><span class="linenos">158</span></a>    <span class="n">input_energy</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="ResidualComputation-159"><a href="#ResidualComputation-159"><span class="linenos">159</span></a>    <span class="n">signal_energy</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="ResidualComputation-160"><a href="#ResidualComputation-160"><span class="linenos">160</span></a>    <span class="n">residual_energy</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="ResidualComputation-161"><a href="#ResidualComputation-161"><span class="linenos">161</span></a>    <span class="n">signal_energy_fraction</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="ResidualComputation-162"><a href="#ResidualComputation-162"><span class="linenos">162</span></a>    <span class="n">residual_energy_fraction</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="ResidualComputation-163"><a href="#ResidualComputation-163"><span class="linenos">163</span></a>    <span class="n">correlation_signal</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="ResidualComputation-164"><a href="#ResidualComputation-164"><span class="linenos">164</span></a>    <span class="n">correlation_residual</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="ResidualComputation-165"><a href="#ResidualComputation-165"><span class="linenos">165</span></a>
+</span><span id="ResidualComputation-166"><a href="#ResidualComputation-166"><span class="linenos">166</span></a>    <span class="nd">@property</span>
+</span><span id="ResidualComputation-167"><a href="#ResidualComputation-167"><span class="linenos">167</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">gain_db</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="ResidualComputation-168"><a href="#ResidualComputation-168"><span class="linenos">168</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;``gain`` in dB; ``-inf`` when ``gain`` is exactly zero.&quot;&quot;&quot;</span>
+</span><span id="ResidualComputation-169"><a href="#ResidualComputation-169"><span class="linenos">169</span></a>        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="mf">20.0</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log10</span><span class="p">(</span><span class="nb">abs</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gain</span><span class="p">)))</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">gain</span> <span class="o">!=</span> <span class="mf">0.0</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;-inf&quot;</span><span class="p">)</span>
+</span><span id="ResidualComputation-170"><a href="#ResidualComputation-170"><span class="linenos">170</span></a>
+</span><span id="ResidualComputation-171"><a href="#ResidualComputation-171"><span class="linenos">171</span></a>    <span class="nd">@property</span>
+</span><span id="ResidualComputation-172"><a href="#ResidualComputation-172"><span class="linenos">172</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">lag_ms</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="ResidualComputation-173"><a href="#ResidualComputation-173"><span class="linenos">173</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;``lag_samples`` converted to milliseconds at ``sampling_rate``.&quot;&quot;&quot;</span>
+</span><span id="ResidualComputation-174"><a href="#ResidualComputation-174"><span class="linenos">174</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">lag_samples</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_rate</span> <span class="o">*</span> <span class="mf">1000.0</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>One lag-aligned, gain-fitted subtraction and every quantity derived from it.</p>
+
+<h6 id="attributes">Attributes:</h6>
+
+<ul>
+<li><strong>sampling_rate:</strong>  The rate both aligned signals share, in Hz.</li>
+<li><strong>lag_samples:</strong>  <code>signal</code>'s lag relative to <code>reference</code>, in <code><a href="#find_lag">find_lag()</a></code>'s convention.</li>
+<li><strong>reference_aligned:</strong>  <code>reference</code>, trimmed to the overlapping region.</li>
+<li><strong>signal_aligned:</strong>  <code>signal</code>, lag-aligned to <code>reference</code> -- NOT gain-scaled.</li>
+<li><strong>gain:</strong>  The least-squares gain fit on the aligned pair.</li>
+<li><strong>residual:</strong>  <code>reference_aligned - gain * signal_aligned</code>.</li>
+<li><strong>input_energy:</strong>  <code><a href="#ResidualComputation.reference_aligned">reference_aligned</a></code>'s own energy (sum of squares).</li>
+<li><strong>signal_energy:</strong>  <code><a href="#ResidualComputation.signal_aligned">signal_aligned</a></code>'s own energy, before any gain scaling.</li>
+<li><strong>residual_energy:</strong>  <code><a href="#ResidualComputation.residual">residual</a></code>'s own energy.</li>
+<li><strong>signal_energy_fraction:</strong>  <code>signal_energy / input_energy</code>; <code>nan</code> when <code><a href="#ResidualComputation.input_energy">input_energy</a></code> is
+zero.</li>
+<li><strong>residual_energy_fraction:</strong>  <code>residual_energy / input_energy</code>; <code>nan</code> when <code><a href="#ResidualComputation.input_energy">input_energy</a></code>
+is zero.</li>
+<li><strong>correlation_signal:</strong>  <code><a href="#correlation">correlation()</a></code> of <code><a href="#ResidualComputation.reference_aligned">reference_aligned</a></code> and <code><a href="#ResidualComputation.signal_aligned">signal_aligned</a></code>.</li>
+<li><strong>correlation_residual:</strong>  <code><a href="#correlation">correlation()</a></code> of <code><a href="#ResidualComputation.reference_aligned">reference_aligned</a></code> and <code><a href="#ResidualComputation.residual">residual</a></code>.</li>
+</ul>
+</div>
+
+
+                            <div id="ResidualComputation.__init__" class="classattr">
+                                <div class="attr function">
+            
+        <span class="name">ResidualComputation</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">lag_samples</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">reference_aligned</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">signal_aligned</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">gain</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">residual</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">input_energy</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">signal_energy</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">residual_energy</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">signal_energy_fraction</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">residual_energy_fraction</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">correlation_signal</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">correlation_residual</span><span class="p">:</span> <span class="nb">float</span></span>)</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.__init__"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.sampling_rate" class="classattr">
+                                <div class="attr variable">
+            <span class="name">sampling_rate</span><span class="annotation">: int</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.sampling_rate"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.lag_samples" class="classattr">
+                                <div class="attr variable">
+            <span class="name">lag_samples</span><span class="annotation">: int</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.lag_samples"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.reference_aligned" class="classattr">
+                                <div class="attr variable">
+            <span class="name">reference_aligned</span><span class="annotation">: numpy.ndarray</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.reference_aligned"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.signal_aligned" class="classattr">
+                                <div class="attr variable">
+            <span class="name">signal_aligned</span><span class="annotation">: numpy.ndarray</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.signal_aligned"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.gain" class="classattr">
+                                <div class="attr variable">
+            <span class="name">gain</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.gain"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.residual" class="classattr">
+                                <div class="attr variable">
+            <span class="name">residual</span><span class="annotation">: numpy.ndarray</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.residual"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.input_energy" class="classattr">
+                                <div class="attr variable">
+            <span class="name">input_energy</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.input_energy"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.signal_energy" class="classattr">
+                                <div class="attr variable">
+            <span class="name">signal_energy</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.signal_energy"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.residual_energy" class="classattr">
+                                <div class="attr variable">
+            <span class="name">residual_energy</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.residual_energy"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.signal_energy_fraction" class="classattr">
+                                <div class="attr variable">
+            <span class="name">signal_energy_fraction</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.signal_energy_fraction"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.residual_energy_fraction" class="classattr">
+                                <div class="attr variable">
+            <span class="name">residual_energy_fraction</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.residual_energy_fraction"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.correlation_signal" class="classattr">
+                                <div class="attr variable">
+            <span class="name">correlation_signal</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.correlation_signal"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.correlation_residual" class="classattr">
+                                <div class="attr variable">
+            <span class="name">correlation_residual</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResidualComputation.correlation_residual"></a>
+    
+    
+
+                            </div>
+                            <div id="ResidualComputation.gain_db" class="classattr">
+                                        <input id="ResidualComputation.gain_db-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr variable">
+            <span class="name">gain_db</span><span class="annotation">: float</span>
+
+                <label class="view-source-button" for="ResidualComputation.gain_db-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#ResidualComputation.gain_db"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="ResidualComputation.gain_db-166"><a href="#ResidualComputation.gain_db-166"><span class="linenos">166</span></a>    <span class="nd">@property</span>
+</span><span id="ResidualComputation.gain_db-167"><a href="#ResidualComputation.gain_db-167"><span class="linenos">167</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">gain_db</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="ResidualComputation.gain_db-168"><a href="#ResidualComputation.gain_db-168"><span class="linenos">168</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;``gain`` in dB; ``-inf`` when ``gain`` is exactly zero.&quot;&quot;&quot;</span>
+</span><span id="ResidualComputation.gain_db-169"><a href="#ResidualComputation.gain_db-169"><span class="linenos">169</span></a>        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="mf">20.0</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log10</span><span class="p">(</span><span class="nb">abs</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gain</span><span class="p">)))</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">gain</span> <span class="o">!=</span> <span class="mf">0.0</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;-inf&quot;</span><span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p><code><a href="#ResidualComputation.gain">gain</a></code> in dB; <code>-inf</code> when <code><a href="#ResidualComputation.gain">gain</a></code> is exactly zero.</p>
+</div>
+
+
+                            </div>
+                            <div id="ResidualComputation.lag_ms" class="classattr">
+                                        <input id="ResidualComputation.lag_ms-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr variable">
+            <span class="name">lag_ms</span><span class="annotation">: float</span>
+
+                <label class="view-source-button" for="ResidualComputation.lag_ms-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#ResidualComputation.lag_ms"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="ResidualComputation.lag_ms-171"><a href="#ResidualComputation.lag_ms-171"><span class="linenos">171</span></a>    <span class="nd">@property</span>
+</span><span id="ResidualComputation.lag_ms-172"><a href="#ResidualComputation.lag_ms-172"><span class="linenos">172</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">lag_ms</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="ResidualComputation.lag_ms-173"><a href="#ResidualComputation.lag_ms-173"><span class="linenos">173</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;``lag_samples`` converted to milliseconds at ``sampling_rate``.&quot;&quot;&quot;</span>
+</span><span id="ResidualComputation.lag_ms-174"><a href="#ResidualComputation.lag_ms-174"><span class="linenos">174</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">lag_samples</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_rate</span> <span class="o">*</span> <span class="mf">1000.0</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p><code><a href="#ResidualComputation.lag_samples">lag_samples</a></code> converted to milliseconds at <code><a href="#ResidualComputation.sampling_rate">sampling_rate</a></code>.</p>
+</div>
+
+
+                            </div>
+                </section>
+                <section id="align">
+                            <input id="align-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">align</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">reference</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">signal</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">lag</span><span class="p">:</span> <span class="nb">int</span></span><span class="return-annotation">) -> <span class="nb">tuple</span><span class="p">[</span><span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="align-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#align"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="align-45"><a href="#align-45"><span class="linenos">45</span></a><span class="k">def</span><span class="w"> </span><span class="nf">align</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">signal</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">lag</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+</span><span id="align-46"><a href="#align-46"><span class="linenos">46</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Trim ``reference``/``signal`` to their overlapping region after shifting ``signal`` by ``lag``.</span>
+</span><span id="align-47"><a href="#align-47"><span class="linenos">47</span></a>
+</span><span id="align-48"><a href="#align-48"><span class="linenos">48</span></a><span class="sd">    Args:</span>
+</span><span id="align-49"><a href="#align-49"><span class="linenos">49</span></a><span class="sd">        reference: The reference signal.</span>
+</span><span id="align-50"><a href="#align-50"><span class="linenos">50</span></a><span class="sd">        signal: The signal to align, as returned by :func:`find_lag`.</span>
+</span><span id="align-51"><a href="#align-51"><span class="linenos">51</span></a><span class="sd">        lag: The lag in samples, in :func:`find_lag`&#39;s sign convention.</span>
+</span><span id="align-52"><a href="#align-52"><span class="linenos">52</span></a>
+</span><span id="align-53"><a href="#align-53"><span class="linenos">53</span></a><span class="sd">    Returns:</span>
+</span><span id="align-54"><a href="#align-54"><span class="linenos">54</span></a><span class="sd">        ``(reference, signal)``, trimmed to their common length.</span>
+</span><span id="align-55"><a href="#align-55"><span class="linenos">55</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="align-56"><a href="#align-56"><span class="linenos">56</span></a>    <span class="k">if</span> <span class="n">lag</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="align-57"><a href="#align-57"><span class="linenos">57</span></a>        <span class="n">signal</span> <span class="o">=</span> <span class="n">signal</span><span class="p">[</span><span class="n">lag</span><span class="p">:]</span>
+</span><span id="align-58"><a href="#align-58"><span class="linenos">58</span></a>    <span class="k">elif</span> <span class="n">lag</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="align-59"><a href="#align-59"><span class="linenos">59</span></a>        <span class="n">reference</span> <span class="o">=</span> <span class="n">reference</span><span class="p">[</span><span class="o">-</span><span class="n">lag</span><span class="p">:]</span>
+</span><span id="align-60"><a href="#align-60"><span class="linenos">60</span></a>    <span class="n">n</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">reference</span><span class="p">),</span> <span class="nb">len</span><span class="p">(</span><span class="n">signal</span><span class="p">))</span>
+</span><span id="align-61"><a href="#align-61"><span class="linenos">61</span></a>    <span class="k">return</span> <span class="n">reference</span><span class="p">[:</span><span class="n">n</span><span class="p">],</span> <span class="n">signal</span><span class="p">[:</span><span class="n">n</span><span class="p">]</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Trim <code>reference</code>/<code>signal</code> to their overlapping region after shifting <code>signal</code> by <code>lag</code>.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>reference:</strong>  The reference signal.</li>
+<li><strong>signal:</strong>  The signal to align, as returned by <code><a href="#find_lag">find_lag()</a></code>.</li>
+<li><strong>lag:</strong>  The lag in samples, in <code><a href="#find_lag">find_lag()</a></code>'s sign convention.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p><code>(reference, signal)</code>, trimmed to their common length.</p>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="band_energy_fractions">
+                            <input id="band_energy_fractions-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">band_energy_fractions</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">x</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">bands_hz</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span></span><span class="return-annotation">) -> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="band_energy_fractions-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#band_energy_fractions"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="band_energy_fractions-80"><a href="#band_energy_fractions-80"><span class="linenos"> 80</span></a><span class="k">def</span><span class="w"> </span><span class="nf">band_energy_fractions</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">bands_hz</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]])</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+</span><span id="band_energy_fractions-81"><a href="#band_energy_fractions-81"><span class="linenos"> 81</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The fraction of ``x``&#39;s spectral energy landing in each ``(lo, hi)`` Hz band.</span>
+</span><span id="band_energy_fractions-82"><a href="#band_energy_fractions-82"><span class="linenos"> 82</span></a>
+</span><span id="band_energy_fractions-83"><a href="#band_energy_fractions-83"><span class="linenos"> 83</span></a><span class="sd">    Args:</span>
+</span><span id="band_energy_fractions-84"><a href="#band_energy_fractions-84"><span class="linenos"> 84</span></a><span class="sd">        x: The signal.</span>
+</span><span id="band_energy_fractions-85"><a href="#band_energy_fractions-85"><span class="linenos"> 85</span></a><span class="sd">        sampling_rate: ``x``&#39;s sampling rate, in Hz.</span>
+</span><span id="band_energy_fractions-86"><a href="#band_energy_fractions-86"><span class="linenos"> 86</span></a><span class="sd">        bands_hz: The band edges to report over.</span>
+</span><span id="band_energy_fractions-87"><a href="#band_energy_fractions-87"><span class="linenos"> 87</span></a>
+</span><span id="band_energy_fractions-88"><a href="#band_energy_fractions-88"><span class="linenos"> 88</span></a><span class="sd">    Returns:</span>
+</span><span id="band_energy_fractions-89"><a href="#band_energy_fractions-89"><span class="linenos"> 89</span></a><span class="sd">        ``{&quot;lo_hi&quot;: fraction, ...}`` keyed by each band&#39;s edges. Every fraction is 0.0 when ``x``</span>
+</span><span id="band_energy_fractions-90"><a href="#band_energy_fractions-90"><span class="linenos"> 90</span></a><span class="sd">        carries no energy.</span>
+</span><span id="band_energy_fractions-91"><a href="#band_energy_fractions-91"><span class="linenos"> 91</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="band_energy_fractions-92"><a href="#band_energy_fractions-92"><span class="linenos"> 92</span></a>    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span><span id="band_energy_fractions-93"><a href="#band_energy_fractions-93"><span class="linenos"> 93</span></a>    <span class="k">if</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="band_energy_fractions-94"><a href="#band_energy_fractions-94"><span class="linenos"> 94</span></a>        <span class="k">return</span> <span class="p">{</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">lo</span><span class="si">:</span><span class="s2">g</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">hi</span><span class="si">:</span><span class="s2">g</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">:</span> <span class="mf">0.0</span> <span class="k">for</span> <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span> <span class="ow">in</span> <span class="n">bands_hz</span><span class="p">}</span>
+</span><span id="band_energy_fractions-95"><a href="#band_energy_fractions-95"><span class="linenos"> 95</span></a>    <span class="n">spectrum</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">rfft</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span><span id="band_energy_fractions-96"><a href="#band_energy_fractions-96"><span class="linenos"> 96</span></a>    <span class="n">power</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">spectrum</span><span class="p">))</span>
+</span><span id="band_energy_fractions-97"><a href="#band_energy_fractions-97"><span class="linenos"> 97</span></a>    <span class="n">freqs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">rfftfreq</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">d</span><span class="o">=</span><span class="mf">1.0</span> <span class="o">/</span> <span class="n">sampling_rate</span><span class="p">)</span>
+</span><span id="band_energy_fractions-98"><a href="#band_energy_fractions-98"><span class="linenos"> 98</span></a>    <span class="n">total</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">power</span><span class="o">.</span><span class="n">sum</span><span class="p">())</span>
+</span><span id="band_energy_fractions-99"><a href="#band_energy_fractions-99"><span class="linenos"> 99</span></a>    <span class="n">out</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="band_energy_fractions-100"><a href="#band_energy_fractions-100"><span class="linenos">100</span></a>    <span class="k">for</span> <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span> <span class="ow">in</span> <span class="n">bands_hz</span><span class="p">:</span>
+</span><span id="band_energy_fractions-101"><a href="#band_energy_fractions-101"><span class="linenos">101</span></a>        <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">freqs</span> <span class="o">&gt;=</span> <span class="n">lo</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">freqs</span> <span class="o">&lt;</span> <span class="n">hi</span><span class="p">)</span>
+</span><span id="band_energy_fractions-102"><a href="#band_energy_fractions-102"><span class="linenos">102</span></a>        <span class="n">out</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">lo</span><span class="si">:</span><span class="s2">g</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">hi</span><span class="si">:</span><span class="s2">g</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">power</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">/</span> <span class="n">total</span><span class="p">)</span> <span class="k">if</span> <span class="n">total</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.0</span>
+</span><span id="band_energy_fractions-103"><a href="#band_energy_fractions-103"><span class="linenos">103</span></a>    <span class="k">return</span> <span class="n">out</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>The fraction of <code>x</code>'s spectral energy landing in each <code>(lo, hi)</code> Hz band.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>x:</strong>  The signal.</li>
+<li><strong>sampling_rate:</strong>  <code>x</code>'s sampling rate, in Hz.</li>
+<li><strong>bands_hz:</strong>  The band edges to report over.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p><code>{"lo_hi": fraction, ...}</code> keyed by each band's edges. Every fraction is 0.0 when <code>x</code>
+  carries no energy.</p>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="compute_residual">
+                            <input id="compute_residual-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">compute_residual</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">reference</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">signal</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">max_lag_ms</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="n"><a href="#ResidualComputation">ResidualComputation</a></span>:</span></span>
+
+                <label class="view-source-button" for="compute_residual-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#compute_residual"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="compute_residual-177"><a href="#compute_residual-177"><span class="linenos">177</span></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_residual</span><span class="p">(</span>
+</span><span id="compute_residual-178"><a href="#compute_residual-178"><span class="linenos">178</span></a>    <span class="n">reference</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="compute_residual-179"><a href="#compute_residual-179"><span class="linenos">179</span></a>    <span class="n">signal</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="compute_residual-180"><a href="#compute_residual-180"><span class="linenos">180</span></a>    <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="compute_residual-181"><a href="#compute_residual-181"><span class="linenos">181</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="compute_residual-182"><a href="#compute_residual-182"><span class="linenos">182</span></a>    <span class="n">max_lag_ms</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="compute_residual-183"><a href="#compute_residual-183"><span class="linenos">183</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ResidualComputation</span><span class="p">:</span>
+</span><span id="compute_residual-184"><a href="#compute_residual-184"><span class="linenos">184</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Lag-align ``signal`` to ``reference``, fit gain, subtract, and report every derived quantity.</span>
+</span><span id="compute_residual-185"><a href="#compute_residual-185"><span class="linenos">185</span></a>
+</span><span id="compute_residual-186"><a href="#compute_residual-186"><span class="linenos">186</span></a><span class="sd">    Args:</span>
+</span><span id="compute_residual-187"><a href="#compute_residual-187"><span class="linenos">187</span></a><span class="sd">        reference: The reference signal (e.g. the pipeline&#39;s ``plain`` stream).</span>
+</span><span id="compute_residual-188"><a href="#compute_residual-188"><span class="linenos">188</span></a><span class="sd">        signal: The enhancement or separation output being related to ``reference``.</span>
+</span><span id="compute_residual-189"><a href="#compute_residual-189"><span class="linenos">189</span></a><span class="sd">        sampling_rate: Both signals&#39; sampling rate, in Hz.</span>
+</span><span id="compute_residual-190"><a href="#compute_residual-190"><span class="linenos">190</span></a><span class="sd">        max_lag_ms: :func:`find_lag`&#39;s search half-window, in milliseconds.</span>
+</span><span id="compute_residual-191"><a href="#compute_residual-191"><span class="linenos">191</span></a>
+</span><span id="compute_residual-192"><a href="#compute_residual-192"><span class="linenos">192</span></a><span class="sd">    Returns:</span>
+</span><span id="compute_residual-193"><a href="#compute_residual-193"><span class="linenos">193</span></a><span class="sd">        The full computation. Neither energy fraction is gated here: whether a fraction means</span>
+</span><span id="compute_residual-194"><a href="#compute_residual-194"><span class="linenos">194</span></a><span class="sd">        anything is a question for a downstream consumer (one that can also look at what each</span>
+</span><span id="compute_residual-195"><a href="#compute_residual-195"><span class="linenos">195</span></a><span class="sd">        stream was classified as), not a precondition on producing the arrays.</span>
+</span><span id="compute_residual-196"><a href="#compute_residual-196"><span class="linenos">196</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="compute_residual-197"><a href="#compute_residual-197"><span class="linenos">197</span></a>    <span class="n">lag</span> <span class="o">=</span> <span class="n">find_lag</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">signal</span><span class="p">,</span> <span class="n">sampling_rate</span><span class="p">,</span> <span class="n">max_lag_ms</span><span class="p">)</span>
+</span><span id="compute_residual-198"><a href="#compute_residual-198"><span class="linenos">198</span></a>    <span class="n">ref_aligned</span><span class="p">,</span> <span class="n">sig_aligned</span> <span class="o">=</span> <span class="n">align</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">signal</span><span class="p">,</span> <span class="n">lag</span><span class="p">)</span>
+</span><span id="compute_residual-199"><a href="#compute_residual-199"><span class="linenos">199</span></a>    <span class="n">input_energy</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="n">ref_aligned</span><span class="p">)))</span>
+</span><span id="compute_residual-200"><a href="#compute_residual-200"><span class="linenos">200</span></a>    <span class="n">signal_energy</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="n">sig_aligned</span><span class="p">)))</span>
+</span><span id="compute_residual-201"><a href="#compute_residual-201"><span class="linenos">201</span></a>    <span class="n">gain</span> <span class="o">=</span> <span class="n">fit_gain</span><span class="p">(</span><span class="n">ref_aligned</span><span class="p">,</span> <span class="n">sig_aligned</span><span class="p">)</span>
+</span><span id="compute_residual-202"><a href="#compute_residual-202"><span class="linenos">202</span></a>    <span class="n">residual</span> <span class="o">=</span> <span class="n">ref_aligned</span> <span class="o">-</span> <span class="n">gain</span> <span class="o">*</span> <span class="n">sig_aligned</span>
+</span><span id="compute_residual-203"><a href="#compute_residual-203"><span class="linenos">203</span></a>    <span class="n">residual_energy</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="n">residual</span><span class="p">)))</span>
+</span><span id="compute_residual-204"><a href="#compute_residual-204"><span class="linenos">204</span></a>    <span class="n">signal_energy_fraction</span> <span class="o">=</span> <span class="n">signal_energy</span> <span class="o">/</span> <span class="n">input_energy</span> <span class="k">if</span> <span class="n">input_energy</span> <span class="o">&gt;</span> <span class="mf">0.0</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+</span><span id="compute_residual-205"><a href="#compute_residual-205"><span class="linenos">205</span></a>    <span class="n">residual_energy_fraction</span> <span class="o">=</span> <span class="n">residual_energy</span> <span class="o">/</span> <span class="n">input_energy</span> <span class="k">if</span> <span class="n">input_energy</span> <span class="o">&gt;</span> <span class="mf">0.0</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+</span><span id="compute_residual-206"><a href="#compute_residual-206"><span class="linenos">206</span></a>    <span class="k">return</span> <span class="n">ResidualComputation</span><span class="p">(</span>
+</span><span id="compute_residual-207"><a href="#compute_residual-207"><span class="linenos">207</span></a>        <span class="n">sampling_rate</span><span class="o">=</span><span class="n">sampling_rate</span><span class="p">,</span>
+</span><span id="compute_residual-208"><a href="#compute_residual-208"><span class="linenos">208</span></a>        <span class="n">lag_samples</span><span class="o">=</span><span class="n">lag</span><span class="p">,</span>
+</span><span id="compute_residual-209"><a href="#compute_residual-209"><span class="linenos">209</span></a>        <span class="n">reference_aligned</span><span class="o">=</span><span class="n">ref_aligned</span><span class="p">,</span>
+</span><span id="compute_residual-210"><a href="#compute_residual-210"><span class="linenos">210</span></a>        <span class="n">signal_aligned</span><span class="o">=</span><span class="n">sig_aligned</span><span class="p">,</span>
+</span><span id="compute_residual-211"><a href="#compute_residual-211"><span class="linenos">211</span></a>        <span class="n">gain</span><span class="o">=</span><span class="n">gain</span><span class="p">,</span>
+</span><span id="compute_residual-212"><a href="#compute_residual-212"><span class="linenos">212</span></a>        <span class="n">residual</span><span class="o">=</span><span class="n">residual</span><span class="p">,</span>
+</span><span id="compute_residual-213"><a href="#compute_residual-213"><span class="linenos">213</span></a>        <span class="n">input_energy</span><span class="o">=</span><span class="n">input_energy</span><span class="p">,</span>
+</span><span id="compute_residual-214"><a href="#compute_residual-214"><span class="linenos">214</span></a>        <span class="n">signal_energy</span><span class="o">=</span><span class="n">signal_energy</span><span class="p">,</span>
+</span><span id="compute_residual-215"><a href="#compute_residual-215"><span class="linenos">215</span></a>        <span class="n">residual_energy</span><span class="o">=</span><span class="n">residual_energy</span><span class="p">,</span>
+</span><span id="compute_residual-216"><a href="#compute_residual-216"><span class="linenos">216</span></a>        <span class="n">signal_energy_fraction</span><span class="o">=</span><span class="n">signal_energy_fraction</span><span class="p">,</span>
+</span><span id="compute_residual-217"><a href="#compute_residual-217"><span class="linenos">217</span></a>        <span class="n">residual_energy_fraction</span><span class="o">=</span><span class="n">residual_energy_fraction</span><span class="p">,</span>
+</span><span id="compute_residual-218"><a href="#compute_residual-218"><span class="linenos">218</span></a>        <span class="n">correlation_signal</span><span class="o">=</span><span class="n">correlation</span><span class="p">(</span><span class="n">ref_aligned</span><span class="p">,</span> <span class="n">sig_aligned</span><span class="p">),</span>
+</span><span id="compute_residual-219"><a href="#compute_residual-219"><span class="linenos">219</span></a>        <span class="n">correlation_residual</span><span class="o">=</span><span class="n">correlation</span><span class="p">(</span><span class="n">ref_aligned</span><span class="p">,</span> <span class="n">residual</span><span class="p">),</span>
+</span><span id="compute_residual-220"><a href="#compute_residual-220"><span class="linenos">220</span></a>    <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Lag-align <code>signal</code> to <code>reference</code>, fit gain, subtract, and report every derived quantity.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>reference:</strong>  The reference signal (e.g. the pipeline's <code>plain</code> stream).</li>
+<li><strong>signal:</strong>  The enhancement or separation output being related to <code>reference</code>.</li>
+<li><strong>sampling_rate:</strong>  Both signals' sampling rate, in Hz.</li>
+<li><strong>max_lag_ms:</strong>  <code><a href="#find_lag">find_lag()</a></code>'s search half-window, in milliseconds.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>The full computation. Neither energy fraction is gated here: whether a fraction means
+  anything is a question for a downstream consumer (one that can also look at what each
+  stream was classified as), not a precondition on producing the arrays.</p>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="correlation">
+                            <input id="correlation-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">correlation</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">a</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>, </span><span class="param"><span class="n">b</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span></span><span class="return-annotation">) -> <span class="nb">float</span>:</span></span>
+
+                <label class="view-source-button" for="correlation-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#correlation"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="correlation-106"><a href="#correlation-106"><span class="linenos">106</span></a><span class="k">def</span><span class="w"> </span><span class="nf">correlation</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="correlation-107"><a href="#correlation-107"><span class="linenos">107</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The Pearson correlation coefficient of two signals, trimmed to their common length.</span>
+</span><span id="correlation-108"><a href="#correlation-108"><span class="linenos">108</span></a>
+</span><span id="correlation-109"><a href="#correlation-109"><span class="linenos">109</span></a><span class="sd">    Gain-scaling one signal by a positive factor does not change this value; scaling by a negative</span>
+</span><span id="correlation-110"><a href="#correlation-110"><span class="linenos">110</span></a><span class="sd">    one flips its sign. This is the instrument that told the two `MossFormer2_SS_16K` separation</span>
+</span><span id="correlation-111"><a href="#correlation-111"><span class="linenos">111</span></a><span class="sd">    streams apart in the buzz-separation comparison (0.984 vs 0.077 against the input) and is used</span>
+</span><span id="correlation-112"><a href="#correlation-112"><span class="linenos">112</span></a><span class="sd">    here for the same purpose: telling a stream that is essentially the input from one that carries</span>
+</span><span id="correlation-113"><a href="#correlation-113"><span class="linenos">113</span></a><span class="sd">    almost none of it.</span>
+</span><span id="correlation-114"><a href="#correlation-114"><span class="linenos">114</span></a>
+</span><span id="correlation-115"><a href="#correlation-115"><span class="linenos">115</span></a><span class="sd">    Args:</span>
+</span><span id="correlation-116"><a href="#correlation-116"><span class="linenos">116</span></a><span class="sd">        a: The first signal.</span>
+</span><span id="correlation-117"><a href="#correlation-117"><span class="linenos">117</span></a><span class="sd">        b: The second signal.</span>
+</span><span id="correlation-118"><a href="#correlation-118"><span class="linenos">118</span></a>
+</span><span id="correlation-119"><a href="#correlation-119"><span class="linenos">119</span></a><span class="sd">    Returns:</span>
+</span><span id="correlation-120"><a href="#correlation-120"><span class="linenos">120</span></a><span class="sd">        The correlation coefficient, or ``nan`` when fewer than two samples remain after trimming to</span>
+</span><span id="correlation-121"><a href="#correlation-121"><span class="linenos">121</span></a><span class="sd">        the common length, or either signal carries zero variance.</span>
+</span><span id="correlation-122"><a href="#correlation-122"><span class="linenos">122</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="correlation-123"><a href="#correlation-123"><span class="linenos">123</span></a>    <span class="n">n</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">a</span><span class="p">),</span> <span class="nb">len</span><span class="p">(</span><span class="n">b</span><span class="p">))</span>
+</span><span id="correlation-124"><a href="#correlation-124"><span class="linenos">124</span></a>    <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">a</span><span class="p">[:</span><span class="n">n</span><span class="p">],</span> <span class="n">b</span><span class="p">[:</span><span class="n">n</span><span class="p">]</span>
+</span><span id="correlation-125"><a href="#correlation-125"><span class="linenos">125</span></a>    <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;</span> <span class="mi">2</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">std</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="o">==</span> <span class="mf">0.0</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">std</span><span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="o">==</span> <span class="mf">0.0</span><span class="p">:</span>
+</span><span id="correlation-126"><a href="#correlation-126"><span class="linenos">126</span></a>        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+</span><span id="correlation-127"><a href="#correlation-127"><span class="linenos">127</span></a>    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">corrcoef</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>The Pearson correlation coefficient of two signals, trimmed to their common length.</p>
+
+<p>Gain-scaling one signal by a positive factor does not change this value; scaling by a negative
+one flips its sign. This is the instrument that told the two <code>MossFormer2_SS_16K</code> separation
+streams apart in the buzz-separation comparison (0.984 vs 0.077 against the input) and is used
+here for the same purpose: telling a stream that is essentially the input from one that carries
+almost none of it.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>a:</strong>  The first signal.</li>
+<li><strong>b:</strong>  The second signal.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>The correlation coefficient, or <code>nan</code> when fewer than two samples remain after trimming to
+  the common length, or either signal carries zero variance.</p>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="fit_gain">
+                            <input id="fit_gain-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">fit_gain</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">reference</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>, </span><span class="param"><span class="n">signal</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span></span><span class="return-annotation">) -> <span class="nb">float</span>:</span></span>
+
+                <label class="view-source-button" for="fit_gain-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#fit_gain"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="fit_gain-64"><a href="#fit_gain-64"><span class="linenos">64</span></a><span class="k">def</span><span class="w"> </span><span class="nf">fit_gain</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">signal</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="fit_gain-65"><a href="#fit_gain-65"><span class="linenos">65</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The least-squares gain minimising ``||reference - g * signal||``: ``g = &lt;ref, sig&gt; / &lt;sig, sig&gt;``.</span>
+</span><span id="fit_gain-66"><a href="#fit_gain-66"><span class="linenos">66</span></a>
+</span><span id="fit_gain-67"><a href="#fit_gain-67"><span class="linenos">67</span></a><span class="sd">    Args:</span>
+</span><span id="fit_gain-68"><a href="#fit_gain-68"><span class="linenos">68</span></a><span class="sd">        reference: The reference signal, aligned with ``signal``.</span>
+</span><span id="fit_gain-69"><a href="#fit_gain-69"><span class="linenos">69</span></a><span class="sd">        signal: The signal being scaled onto ``reference``.</span>
+</span><span id="fit_gain-70"><a href="#fit_gain-70"><span class="linenos">70</span></a>
+</span><span id="fit_gain-71"><a href="#fit_gain-71"><span class="linenos">71</span></a><span class="sd">    Returns:</span>
+</span><span id="fit_gain-72"><a href="#fit_gain-72"><span class="linenos">72</span></a><span class="sd">        The fitted gain, or 0.0 when ``signal`` carries no energy.</span>
+</span><span id="fit_gain-73"><a href="#fit_gain-73"><span class="linenos">73</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="fit_gain-74"><a href="#fit_gain-74"><span class="linenos">74</span></a>    <span class="n">denom</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">signal</span><span class="p">,</span> <span class="n">signal</span><span class="p">))</span>
+</span><span id="fit_gain-75"><a href="#fit_gain-75"><span class="linenos">75</span></a>    <span class="k">if</span> <span class="n">denom</span> <span class="o">==</span> <span class="mf">0.0</span><span class="p">:</span>
+</span><span id="fit_gain-76"><a href="#fit_gain-76"><span class="linenos">76</span></a>        <span class="k">return</span> <span class="mf">0.0</span>
+</span><span id="fit_gain-77"><a href="#fit_gain-77"><span class="linenos">77</span></a>    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">/</span> <span class="n">denom</span><span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>The least-squares gain minimising <code>||reference - g * signal||</code>: <code>g = &lt;ref, sig&gt; / &lt;sig, sig&gt;</code>.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>reference:</strong>  The reference signal, aligned with <code>signal</code>.</li>
+<li><strong>signal:</strong>  The signal being scaled onto <code>reference</code>.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>The fitted gain, or 0.0 when <code>signal</code> carries no energy.</p>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="find_lag">
+                            <input id="find_lag-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">find_lag</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">reference</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">signal</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">max_lag_ms</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="nb">int</span>:</span></span>
+
+                <label class="view-source-button" for="find_lag-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#find_lag"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="find_lag-21"><a href="#find_lag-21"><span class="linenos">21</span></a><span class="k">def</span><span class="w"> </span><span class="nf">find_lag</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">signal</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">max_lag_ms</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span id="find_lag-22"><a href="#find_lag-22"><span class="linenos">22</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The integer-sample lag of ``signal`` relative to ``reference``, by cross-correlation.</span>
+</span><span id="find_lag-23"><a href="#find_lag-23"><span class="linenos">23</span></a>
+</span><span id="find_lag-24"><a href="#find_lag-24"><span class="linenos">24</span></a><span class="sd">    Args:</span>
+</span><span id="find_lag-25"><a href="#find_lag-25"><span class="linenos">25</span></a><span class="sd">        reference: The reference signal.</span>
+</span><span id="find_lag-26"><a href="#find_lag-26"><span class="linenos">26</span></a><span class="sd">        signal: The signal being searched for a lag against ``reference``.</span>
+</span><span id="find_lag-27"><a href="#find_lag-27"><span class="linenos">27</span></a><span class="sd">        sampling_rate: Both signals&#39; sampling rate, in Hz.</span>
+</span><span id="find_lag-28"><a href="#find_lag-28"><span class="linenos">28</span></a><span class="sd">        max_lag_ms: The search half-window, in milliseconds.</span>
+</span><span id="find_lag-29"><a href="#find_lag-29"><span class="linenos">29</span></a>
+</span><span id="find_lag-30"><a href="#find_lag-30"><span class="linenos">30</span></a><span class="sd">    Returns:</span>
+</span><span id="find_lag-31"><a href="#find_lag-31"><span class="linenos">31</span></a><span class="sd">        The lag in samples. Positive means ``signal`` arrives later than ``reference``; aligning</span>
+</span><span id="find_lag-32"><a href="#find_lag-32"><span class="linenos">32</span></a><span class="sd">        drops the first ``lag`` samples of ``signal`` (or the last ``-lag`` samples of</span>
+</span><span id="find_lag-33"><a href="#find_lag-33"><span class="linenos">33</span></a><span class="sd">        ``reference``, when negative).</span>
+</span><span id="find_lag-34"><a href="#find_lag-34"><span class="linenos">34</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="find_lag-35"><a href="#find_lag-35"><span class="linenos">35</span></a>    <span class="n">max_lag</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">max_lag_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mf">1000.0</span><span class="p">)))</span>
+</span><span id="find_lag-36"><a href="#find_lag-36"><span class="linenos">36</span></a>    <span class="n">n</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">reference</span><span class="p">),</span> <span class="nb">len</span><span class="p">(</span><span class="n">signal</span><span class="p">))</span>
+</span><span id="find_lag-37"><a href="#find_lag-37"><span class="linenos">37</span></a>    <span class="n">r</span><span class="p">,</span> <span class="n">s</span> <span class="o">=</span> <span class="n">reference</span><span class="p">[:</span><span class="n">n</span><span class="p">],</span> <span class="n">signal</span><span class="p">[:</span><span class="n">n</span><span class="p">]</span>
+</span><span id="find_lag-38"><a href="#find_lag-38"><span class="linenos">38</span></a>    <span class="n">corr</span> <span class="o">=</span> <span class="n">correlate</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;full&quot;</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;fft&quot;</span><span class="p">)</span>
+</span><span id="find_lag-39"><a href="#find_lag-39"><span class="linenos">39</span></a>    <span class="n">lags</span> <span class="o">=</span> <span class="n">correlation_lags</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">r</span><span class="p">),</span> <span class="nb">len</span><span class="p">(</span><span class="n">s</span><span class="p">),</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;full&quot;</span><span class="p">)</span>
+</span><span id="find_lag-40"><a href="#find_lag-40"><span class="linenos">40</span></a>    <span class="n">mask</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">lags</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="n">max_lag</span>
+</span><span id="find_lag-41"><a href="#find_lag-41"><span class="linenos">41</span></a>    <span class="n">idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">corr</span><span class="p">[</span><span class="n">mask</span><span class="p">])</span>
+</span><span id="find_lag-42"><a href="#find_lag-42"><span class="linenos">42</span></a>    <span class="k">return</span> <span class="o">-</span><span class="nb">int</span><span class="p">(</span><span class="n">lags</span><span class="p">[</span><span class="n">mask</span><span class="p">][</span><span class="n">idx</span><span class="p">])</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>The integer-sample lag of <code>signal</code> relative to <code>reference</code>, by cross-correlation.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>reference:</strong>  The reference signal.</li>
+<li><strong>signal:</strong>  The signal being searched for a lag against <code>reference</code>.</li>
+<li><strong>sampling_rate:</strong>  Both signals' sampling rate, in Hz.</li>
+<li><strong>max_lag_ms:</strong>  The search half-window, in milliseconds.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>The lag in samples. Positive means <code>signal</code> arrives later than <code>reference</code>; aligning
+  drops the first <code>lag</code> samples of <code>signal</code> (or the last <code>-lag</code> samples of
+  <code>reference</code>, when negative).</p>
+</blockquote>
 </div>
 
 
