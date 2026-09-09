@@ -9,6 +9,7 @@ import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
 from senselab.audio.tasks.classification.yamnet import YAMNET_WINDOW_SECONDS
 from senselab.audio.tasks.speech_enhancement.residual import compute_residual
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -1479,6 +1480,56 @@ class TestAnUnexpectedBlockFailureIsNotAbsorbed:
         # `gammatone` does not touch the spectrogram at all.
         assert live_entities(store, "span")
         assert find_measurement(store, "gammatone") is not None
+
+
+class TestASTTooShortDegradesWithoutLosingTheRecording:
+    """AST's kaldi-fbank guard (huggingface.AudioTooShortForAST) is a cascading absence, not a hard failure.
+
+    Before this guard, the AssertionError AST's feature extractor raises on too-short audio was
+    an unclassified exception: it landed in ``hard_failures`` and PREPROCESS raised, discarding
+    every already-successful measurement for the recording (53/61,442 recordings, see
+    specs/20260909-ast-too-short-guard/). ``ast_scores``, ``enhanced_ast`` and ``residual_ast``
+    all route through the same ``classify_audios`` call, so one raise covers all three.
+    """
+
+    def test_ast_blocks_are_absent_but_yamnet_and_hear_survive(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A too-short recording loses only the three AST derivatives, with a readable reason."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(
+            monkeypatch,
+            yamnet=[window(0.0, 0.96, {"Speech": 0.9})],
+            hear=[window(0.0, 2.0, {"Cough": 0.8})],
+            enhance=_fake_enhance(0.5),
+        )
+
+        def _classify(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
+            if model == "yamnet":
+                return [[window(0.0, 0.96, {"Speech": 0.9})]]
+            raise AudioTooShortForAST("372 samples at 16000 Hz, need at least 400")
+
+        monkeypatch.setattr(preprocess_module, "classify_audios", _classify)
+
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        absent = _absent_map(store)
+        for name in ("ast_scores", "enhanced_ast", "residual_ast"):
+            assert "need at least 400" in absent[name]
+
+        # Not just YAMNet's own block: its stream-prefixed variants, and HeAR throughout, all
+        # reach the store even though every AST block failed.
+        assert find_measurement(store, "yamnet_scores") is not None
+        assert find_measurement(store, "hear_scores") is not None
+        assert find_measurement(store, "enhanced_yamnet_scores") is not None
+        assert find_measurement(store, "residual_yamnet_scores") is not None
+        assert find_measurement(store, "enhanced_hear_scores") is not None
+        assert find_measurement(store, "residual_hear_scores") is not None
 
 
 def _absent_map(store: ProvStore) -> dict[str, str]:
