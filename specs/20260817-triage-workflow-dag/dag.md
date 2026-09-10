@@ -154,10 +154,11 @@ regions come from `_speech_regions` (`:1612-1628`) — the consensus's lexical w
 timings when a consensus exists, else this pass's own amplitude-source spans, with
 `speech_overlap_source` naming which.
 
-`residual.enabled` is **false** in the packaged config (`data/config/default.yaml:209`), so
-`_residual` raises `ValueError("residual.enabled is false")` (`preprocess.py:1657-1658`) and is
-recorded as an absent derivative (`:1951-1954`), and the six stream-classifier blocks then raise
-`LookupError(f"{prefix} is absent")` (`:1792`). This absence has a different cause from the
+`residual.enabled` is **true** in the packaged config (`data/config/default.yaml:209`), so the
+block runs by default. When an operator sets it false, `_residual` raises
+`ValueError("residual.enabled is false")` (`preprocess.py:1657-1658`) and is recorded as an absent
+derivative (`:1951-1954`), and the six stream-classifier blocks then raise
+`LookupError(f"{prefix} is absent")` (`:1792`). That absence has a different cause from the
 null-threshold absences below and is not the same kind of gap.
 
 Name the twelve `{prefix}_{classifier}_summary_all` / `_summary_speech_free` derivatives
@@ -205,6 +206,8 @@ whole-file `yamnet_scores` windows intersecting the span. A span shorter than th
 `no_covering_window`; a missing whole-file pass is `yamnet_scores_absent`. HeAR still centres a
 short span in a silent 2 s buffer instead (`:1119-1121`, `span_hear_input`) and writes no
 `attribution` field.
+
+AST has the same shape of limit and is handled the same way. Its feature extractor asserts `window_size <= len(waveform)` inside `torchaudio.compliance.kaldi.fbank`, so a trailing window shorter than 400 samples at 16 kHz (25 ms) aborts the pass. `AudioTooShortForAST` (`classification/huggingface.py:23`, raised at `:238`) is a `ValueError`, so the block is recorded as an absence rather than a hard failure and the recording keeps its YAMNet and HeAR results. A file 10.2632 s long yields one full 10.24 s window plus a 371-sample remainder, which is how this arises; it hit 55 of 62,550 recordings before the guard.
 
 **Per-span classification is batched.** Both passes build every span's input first, then make **one
 call per classifier** (`_classify_spans_in_batch`, `preprocess.py:248-280`). A batch is used only
@@ -597,7 +600,7 @@ absent names the missing derivative and prints the reason the producing node rec
 | cover — SOURCE | the recording's path, wrapped | ADMIT's recorded path (`_source_path`) | none |
 | cover — CONSENSUS ALIGNMENT | `consensus_alignment_lines` (`:1519-1580`): algorithm, per-source word counts and timing source, agreement/variant/insertion outcome counts, time-shift fit, word-timing uncertainty | `consensus_transcript` measurement and its word stream | none |
 | cover — WHOLE-FILE CLASSIFICATION SUMMARY | part of `summary_panel_lines` (`:840-861`): each of YAMNet/AST/HeAR's highest-scoring labels over the whole file | `<classifier>_label_summary` (TAXONOMY's fold of `<classifier>_scores`) | none pipeline; `style.summary_labels` caps rows listed |
-| cover — RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL | the rest of `summary_panel_lines`, its residual block (`:818-837`): gain/enhanced-fraction/residual-energy line, then a label summary over residual windows for **YAMNet and AST only** (`_RESIDUAL_SUMMARISED_CLASSIFIERS`, `figure.py:65`) | `residual` measurement; `residual_yamnet_summary_all`, `residual_ast_summary_all` | none; HeAR's own residual summary, both streams' `_summary_speech_free` variants, and the entire `enhanced` stream's classifier summaries are computed and stored but never drawn here |
+| cover — ENHANCED — SPEECH ISOLATED BY FRCRN, then RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL | `summary_panel_lines` renders both streams in sequence (`_stream_classifier_block`, `figure.py:787`; titles at `:64`): a gain/enhanced-fraction/residual-energy line, a label summary per classifier over **YAMNet, AST and HeAR** (`_SUMMARISED_CLASSIFIERS`, `figure.py:61`), and a compact speech-free line per classifier (`_stream_speech_free_line`, `:827`, `style.speech_free_labels` at `:177`) | the `residual` measurement; `{enhanced,residual}_{yamnet,ast,hear}_summary_all` and their `_summary_speech_free` variants | none — all twelve stream summaries now reach the page |
 | cover — KIND STATES AND EVIDENCE LINES | the last part of `summary_panel_lines`: each kind's folded state, its evidence lines against their floors, and the reason behind any `unavailable` | TAXONOMY's `kind` entities | none read directly here — reflects whatever `taxonomy.presence_floor.*` etc. already decided |
 | per-page — wideband spectrogram | the speech-analysis spectrogram | `spectrogram_wideband` | `spectrogram.wideband_window_ms`, `spectrogram.hop_ms` (`:1780`, `:1793-1794`) |
 | per-page — waveform | conditioned waveform, envelope dBFS trace, floor and `k_db` threshold lines, continuity trace and its rank-cut level | `energy_envelope` (`envelope_dbfs`, `floor_dbfs`), `continuity_trace` | `spans.k_db` (`:1882`) — read here, not by the span lane panel below it |
@@ -747,6 +750,30 @@ them, since REPORT writes its JSON before it draws.
 | 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | partially | every `taxonomy.presence_floor.*` is null, so no kind can be `present` or `absent`; `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design |
 | 3. PII | yes — the consensus transcript and each recognizer's own transcript are scanned in one call | **yes** | the one goal fully wired to a decision, and the only one whose acting node cannot run: `redaction.padding_ms` and `redaction.fill` are null and both `require`d, so REDACT raises. SPEECH marks PII; nothing releases a redacted product |
 
+## What each run records about itself
+
+The store is `ProvStore` (`utils/prov_store.py`), modelled on W3C PROV: entities, activities, agents
+and PROV's own relations, append-only, so merging two stores is a set union and order-independent.
+
+Three things it now records that a reader of an older run will not find:
+
+- **Checksums.** Every entity carrying a `path` gets a SHA-256 with `size_bytes` and `mtime_ns`,
+  computed in the process that wrote the file (`CHECKSUM_KEY`, `prov_store.py:41`). The input
+  recording is digested **before and after** the decode; a mismatch fails ADMIT rather than
+  recording a digest for bytes the pipeline never read. Detection, not prevention — the source tree
+  is not ours to lock.
+- **Environment.** One `environment` record per run for the host and one per subprocess venv
+  actually used (`ENVIRONMENT_KIND`, `prov_store.py:33`), each with its Python version and the
+  versions of a declared package set plus a digest of the full listing. This exists because the
+  venvs do not agree: a 62,550-recording run recorded host torch 2.11.0 against `clearvoice-cpu`
+  and `crisperwhisper-cpu` on 2.14.0+cpu and `qwen-asr-cpu` on 2.8.0+cpu, with `yamnet`/`hear` on
+  TensorFlow 2.21.0 and no torch at all.
+- **A BEP028 PROV-O JSON-LD projection.** `utils/prov_bep028.py` serialises a written `store.jsonl`
+  into the four BIDS-Prov files (`_io`, `_act`, `_soft`, `_env`) without re-running anything.
+
+The store is written once, at the end of a run. A process that dies mid-recording therefore records
+nothing at all, which is why a stalled task leaves no evidence of where it stopped.
+
 ## Cross-cutting tensions
 
 **Every recording flags.** Restated because it subsumes the table above: until voice is reworked,
@@ -758,7 +785,7 @@ triage verdicts downstream is reading a constant.
 derivatives absent) and `get` in the per-span passes (raw scores kept). `taxonomy.speech_labels` is
 `get ... or []` in both its readers (`taxonomy.py:564`, `speech.py:588`), so a null empties the
 speech family without a word anywhere. The per-span behaviour is the intended one; the others have
-not been brought to it. `residual.enabled` is `require`d and false (`preprocess.py:1657`), so an
+not been brought to it. `residual.enabled` is `require`d and now true by default (`preprocess.py:1657`), so an
 intentionally-off block reports through the same absent-derivative channel as an unmeasured null.
 
 **Eight keys are read by nothing**: the four `quality.*`; `taxonomy.voice_min_duration_s` and
