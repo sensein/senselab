@@ -1,0 +1,1737 @@
+{
+ "detectors": [
+  {
+   "best_youden_row": {
+    "fn": 0,
+    "fp": 0,
+    "sensitivity": 1.0,
+    "specificity": 1.0,
+    "threshold": 1,
+    "tn": 25978,
+    "tp": 36569,
+    "youden": 1.0
+   },
+   "detector": "speech.words_agreement",
+   "n_reference_positive": 36569,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 10093,
+    "fp": 290,
+    "sensitivity": 0.7551668930719969,
+    "specificity": 0.9863996623364442,
+    "threshold": 4,
+    "tn": 21033,
+    "tp": 31131,
+    "youden": 0.7415665554084412
+   },
+   "detector": "speech.words_agreement",
+   "n_reference_positive": 41224,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1880,
+    "fp": 3541,
+    "sensitivity": 0.943433127726794,
+    "specificity": 0.8791962336244541,
+    "threshold": 2,
+    "tn": 25771,
+    "tp": 31355,
+    "youden": 0.8226293613512481
+   },
+   "detector": "speech.words_agreement",
+   "n_reference_positive": 33235,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 449,
+    "fp": 0,
+    "sensitivity": 0.9877218409034975,
+    "specificity": 1.0,
+    "threshold": 1,
+    "tn": 25978,
+    "tp": 36120,
+    "youden": 0.9877218409034976
+   },
+   "detector": "speech.words_agreement_lexical",
+   "n_reference_positive": 36569,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 10102,
+    "fp": 284,
+    "sensitivity": 0.7549485736464195,
+    "specificity": 0.9866810486329316,
+    "threshold": 4,
+    "tn": 21039,
+    "tp": 31122,
+    "youden": 0.7416296222793513
+   },
+   "detector": "speech.words_agreement_lexical",
+   "n_reference_positive": 41224,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1883,
+    "fp": 3502,
+    "sensitivity": 0.9433428614412517,
+    "specificity": 0.8805267467248908,
+    "threshold": 2,
+    "tn": 25810,
+    "tp": 31352,
+    "youden": 0.8238696081661425
+   },
+   "detector": "speech.words_agreement_lexical",
+   "n_reference_positive": 33235,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 872,
+    "fp": 6756,
+    "sensitivity": 0.9761546665208236,
+    "specificity": 0.7399337901301101,
+    "threshold": 2,
+    "tn": 19222,
+    "tp": 35697,
+    "youden": 0.7160884566509336
+   },
+   "detector": "speech.words_lexical",
+   "n_reference_positive": 36569,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 4271,
+    "fp": 707,
+    "sensitivity": 0.8963953037065787,
+    "specificity": 0.9668433147305726,
+    "threshold": 5,
+    "tn": 20616,
+    "tp": 36953,
+    "youden": 0.8632386184371512
+   },
+   "detector": "speech.words_lexical",
+   "n_reference_positive": 41224,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3704,
+    "fp": 8129,
+    "sensitivity": 0.8885512261170453,
+    "specificity": 0.722673307860262,
+    "threshold": 5,
+    "tn": 21183,
+    "tp": 29531,
+    "youden": 0.6112245339773072
+   },
+   "detector": "speech.words_lexical",
+   "n_reference_positive": 33235,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1533,
+    "fp": 6712,
+    "sensitivity": 0.9580792474500259,
+    "specificity": 0.7416275309877589,
+    "threshold": 3,
+    "tn": 19266,
+    "tp": 35036,
+    "youden": 0.6997067784377848
+   },
+   "detector": "speech.words_total",
+   "n_reference_positive": 36569,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 4192,
+    "fp": 1282,
+    "sensitivity": 0.8983116631088687,
+    "specificity": 0.9398771279838671,
+    "threshold": 5,
+    "tn": 20041,
+    "tp": 37032,
+    "youden": 0.8381887910927359
+   },
+   "detector": "speech.words_total",
+   "n_reference_positive": 41224,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3629,
+    "fp": 8708,
+    "sensitivity": 0.890807883255604,
+    "specificity": 0.7029203056768559,
+    "threshold": 5,
+    "tn": 20604,
+    "tp": 29606,
+    "youden": 0.5937281889324599
+   },
+   "detector": "speech.words_total",
+   "n_reference_positive": 33235,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 713,
+    "fp": 7654,
+    "sensitivity": 0.980501545108978,
+    "specificity": 0.7050368029596517,
+    "threshold": 0.1,
+    "tn": 18295,
+    "tp": 35854,
+    "youden": 0.6855383480686297
+   },
+   "detector": "speech.residual_speech_coverage",
+   "n_reference_positive": 36567,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 2093,
+    "fp": 2944,
+    "sensitivity": 0.9492027279567021,
+    "specificity": 0.8618683432646741,
+    "threshold": 0.2,
+    "tn": 18369,
+    "tp": 39110,
+    "youden": 0.8110710712213762
+   },
+   "detector": "speech.residual_speech_coverage",
+   "n_reference_positive": 41203,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1802,
+    "fp": 10637,
+    "sensitivity": 0.9457539360004816,
+    "specificity": 0.6369252824521282,
+    "threshold": 0.2,
+    "tn": 18660,
+    "tp": 31417,
+    "youden": 0.58267921845261
+   },
+   "detector": "speech.residual_speech_coverage",
+   "n_reference_positive": 33219,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2803,
+    "fp": 6242,
+    "sensitivity": 0.7845337843031748,
+    "specificity": 0.8739168198436584,
+    "threshold": 0.1,
+    "tn": 43265,
+    "tp": 10206,
+    "youden": 0.6584506041468332
+   },
+   "detector": "airway.residual_energy_fraction",
+   "n_reference_positive": 13009,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1,
+    "fp": 49507,
+    "sensitivity": 0.9999231301406718,
+    "specificity": 0.0,
+    "threshold": 1e-06,
+    "tn": 0,
+    "tp": 13008,
+    "youden": -7.686985932819912e-05
+   },
+   "detector": "airway.residual_enhanced_energy_fraction",
+   "n_reference_positive": 13009,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1168,
+    "fp": 11394,
+    "sensitivity": 0.8593787623404767,
+    "specificity": 0.7899375011522649,
+    "threshold": 3.0,
+    "tn": 42847,
+    "tp": 7138,
+    "youden": 0.6493162634927416
+   },
+   "detector": "voice.longest_amplitude_span",
+   "n_reference_positive": 8306,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 8275,
+    "fp": 39,
+    "sensitivity": 0.003732241752949675,
+    "specificity": 0.9992809867074722,
+    "threshold": 4.0,
+    "tn": 54202,
+    "tp": 31,
+    "youden": 0.0030132284604218462
+   },
+   "detector": "voice.longest_continuity_span",
+   "n_reference_positive": 8306,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1981,
+    "fp": 24352,
+    "sensitivity": 0.7614977124969902,
+    "specificity": 0.5510407256503383,
+    "threshold": 5.0,
+    "tn": 29889,
+    "tp": 6325,
+    "youden": 0.3125384381473286
+   },
+   "detector": "voice.total_amplitude_span",
+   "n_reference_positive": 8306,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1979,
+    "fp": 5651,
+    "sensitivity": 0.838791137178234,
+    "specificity": 0.8828492650869665,
+    "threshold": 0.05,
+    "tn": 42586,
+    "tp": 10297,
+    "youden": 0.7216404022652005
+   },
+   "detector": "airway.residual_energy_fraction+hear>=0.2",
+   "n_reference_positive": 12276,
+   "n_scored": 60513,
+   "n_unavailable": 2034,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2255,
+    "fp": 5330,
+    "sensitivity": 0.8163082437275986,
+    "specificity": 0.889503907788627,
+    "threshold": 0.02,
+    "tn": 42907,
+    "tp": 10021,
+    "youden": 0.7058121515162257
+   },
+   "detector": "airway.residual_energy_fraction+hear>=0.5",
+   "n_reference_positive": 12276,
+   "n_scored": 60513,
+   "n_unavailable": 2034,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1580,
+    "fp": 7205,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.8712935809710003,
+    "specificity": 0.850639524036568,
+    "threshold": 0.2,
+    "tn": 41034,
+    "tp": 10696,
+    "youden": 0.7219331050075684
+   },
+   "detector": "airway.yamnet_peak.plain+hear>=0.2",
+   "n_reference_positive": 12276,
+   "n_scored": 60515,
+   "n_unavailable": 2032,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 952,
+    "fp": 8540,
+    "sensitivity": 0.9268198939195941,
+    "specificity": 0.827506110000202,
+    "threshold": 0.0001,
+    "tn": 40969,
+    "tp": 12057,
+    "youden": 0.7543260039197961
+   },
+   "detector": "airway.residual_energy_fraction+no_agreed_word",
+   "n_reference_positive": 13009,
+   "n_scored": 62518,
+   "n_unavailable": 29,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2334,
+    "fp": 5612,
+    "sensitivity": 0.7189983144714664,
+    "specificity": 0.8965358308290776,
+    "threshold": 2.0,
+    "tn": 48629,
+    "tp": 5972,
+    "youden": 0.6155341453005441
+   },
+   "detector": "voice.longest_amplitude_span+no_agreed_word",
+   "n_reference_positive": 8306,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2368,
+    "fp": 2275,
+    "sensitivity": 0.7148362235067437,
+    "specificity": 0.9580366694949644,
+    "threshold": 0.02,
+    "tn": 51939,
+    "tp": 5936,
+    "youden": 0.672872893001708
+   },
+   "detector": "voice.yamnet_peak.plain+no_agreed_word",
+   "n_reference_positive": 8304,
+   "n_scored": 62518,
+   "n_unavailable": 29,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1353,
+    "fp": 2280,
+    "sensitivity": 0.8371057067180352,
+    "specificity": 0.9579653767445291,
+    "threshold": 0.02,
+    "tn": 51961,
+    "tp": 6953,
+    "youden": 0.7950710834625643
+   },
+   "detector": "voice.yamnet_peak.plain+amplitude>=3s",
+   "n_reference_positive": 8306,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3696,
+    "fp": 0,
+    "sensitivity": 0.8988588785813972,
+    "specificity": 1.0,
+    "threshold": 1,
+    "tn": 25920,
+    "tp": 32847,
+    "youden": 0.8988588785813971
+   },
+   "detector": "speech.words_agreement+ast>=0.5",
+   "n_reference_positive": 36543,
+   "n_scored": 62463,
+   "n_unavailable": 84,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 11539,
+    "fp": 260,
+    "sensitivity": 0.7197911607576494,
+    "specificity": 0.9877836771131889,
+    "threshold": 4,
+    "tn": 21023,
+    "tp": 29641,
+    "youden": 0.7075748378708382
+   },
+   "detector": "speech.words_agreement+ast>=0.5",
+   "n_reference_positive": 41180,
+   "n_scored": 62463,
+   "n_unavailable": 84,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 4447,
+    "fp": 1150,
+    "sensitivity": 0.8660461473582746,
+    "specificity": 0.9607039125234922,
+    "threshold": 4,
+    "tn": 28115,
+    "tp": 28751,
+    "youden": 0.8267500598817668
+   },
+   "detector": "speech.words_agreement+ast>=0.5",
+   "n_reference_positive": 33198,
+   "n_scored": 62463,
+   "n_unavailable": 84,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 749,
+    "fp": 4337,
+    "sensitivity": 0.9098025048169557,
+    "specificity": 0.9200022134504002,
+    "threshold": 0.02,
+    "tn": 49877,
+    "tp": 7555,
+    "youden": 0.829804718267356
+   },
+   "detector": "voice.yamnet_chant_peak.plain",
+   "n_reference_positive": 8304,
+   "n_scored": 62518,
+   "n_unavailable": 29,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 753,
+    "fp": 4582,
+    "sensitivity": 0.909320809248555,
+    "specificity": 0.915483085549858,
+    "threshold": 0.02,
+    "tn": 49632,
+    "tp": 7551,
+    "youden": 0.8248038947984129
+   },
+   "detector": "voice.yamnet_mantra_peak.plain",
+   "n_reference_positive": 8304,
+   "n_scored": 62518,
+   "n_unavailable": 29,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2263,
+    "fp": 5983,
+    "sensitivity": 0.9381169843309908,
+    "specificity": 0.7694323480673629,
+    "threshold": 0.99,
+    "tn": 19966,
+    "tp": 34306,
+    "youden": 0.7075493323983537
+   },
+   "detector": "speech.yamnet_peak.plain",
+   "n_reference_positive": 36569,
+   "n_scored": 62518,
+   "n_unavailable": 29,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 3769,
+    "fp": 2853,
+    "sensitivity": 0.9085305181410023,
+    "specificity": 0.8661380378172946,
+    "threshold": 0.99,
+    "tn": 18460,
+    "tp": 37436,
+    "youden": 0.7746685559582969
+   },
+   "detector": "speech.yamnet_peak.plain",
+   "n_reference_positive": 41205,
+   "n_scored": 62518,
+   "n_unavailable": 29,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2437,
+    "fp": 9505,
+    "sensitivity": 0.9266427861894585,
+    "specificity": 0.675564050926716,
+    "threshold": 0.99,
+    "tn": 19792,
+    "tp": 30784,
+    "youden": 0.6022068371161744
+   },
+   "detector": "speech.yamnet_peak.plain",
+   "n_reference_positive": 33221,
+   "n_scored": 62518,
+   "n_unavailable": 29,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2004,
+    "fp": 5864,
+    "sensitivity": 0.9451964886372959,
+    "specificity": 0.7740182665998689,
+    "threshold": 0.99,
+    "tn": 20085,
+    "tp": 34563,
+    "youden": 0.7192147552371648
+   },
+   "detector": "speech.yamnet_peak.enhanced",
+   "n_reference_positive": 36567,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 3453,
+    "fp": 2677,
+    "sensitivity": 0.9161954226633983,
+    "specificity": 0.8743959086003847,
+    "threshold": 0.99,
+    "tn": 18636,
+    "tp": 37750,
+    "youden": 0.7905913312637831
+   },
+   "detector": "speech.yamnet_peak.enhanced",
+   "n_reference_positive": 41203,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2182,
+    "fp": 9390,
+    "sensitivity": 0.9343146994190072,
+    "specificity": 0.6794893675120319,
+    "threshold": 0.99,
+    "tn": 19907,
+    "tp": 31037,
+    "youden": 0.6138040669310392
+   },
+   "detector": "speech.yamnet_peak.enhanced",
+   "n_reference_positive": 33219,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 32981,
+    "fp": 1431,
+    "sensitivity": 0.09806656274783275,
+    "specificity": 0.9448533662183514,
+    "threshold": 0.95,
+    "tn": 24518,
+    "tp": 3586,
+    "youden": 0.04291992896618413
+   },
+   "detector": "speech.yamnet_peak.residual",
+   "n_reference_positive": 36567,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 39415,
+    "fp": 344,
+    "sensitivity": 0.04339489842972599,
+    "specificity": 0.9838596161966875,
+    "threshold": 0.99,
+    "tn": 20969,
+    "tp": 1788,
+    "youden": 0.027254514626413595
+   },
+   "detector": "speech.yamnet_peak.residual",
+   "n_reference_positive": 41203,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 31522,
+    "fp": 435,
+    "sensitivity": 0.051085222312531986,
+    "specificity": 0.9851520633511963,
+    "threshold": 0.99,
+    "tn": 28862,
+    "tp": 1697,
+    "youden": 0.0362372856637283
+   },
+   "detector": "speech.yamnet_peak.residual",
+   "n_reference_positive": 33219,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3462,
+    "fp": 4696,
+    "sensitivity": 0.9053296507971232,
+    "specificity": 0.8192316575563938,
+    "threshold": 0.99,
+    "tn": 21282,
+    "tp": 33107,
+    "youden": 0.724561308353517
+   },
+   "detector": "speech.yamnet_peak.consensus",
+   "n_reference_positive": 36569,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 5229,
+    "fp": 1808,
+    "sensitivity": 0.8731564137395692,
+    "specificity": 0.9152089293251419,
+    "threshold": 0.99,
+    "tn": 19515,
+    "tp": 35995,
+    "youden": 0.7883653430647111
+   },
+   "detector": "speech.yamnet_peak.consensus",
+   "n_reference_positive": 41224,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3252,
+    "fp": 7820,
+    "sensitivity": 0.9021513464720927,
+    "specificity": 0.7332150655021834,
+    "threshold": 0.99,
+    "tn": 21492,
+    "tp": 29983,
+    "youden": 0.6353664119742761
+   },
+   "detector": "speech.yamnet_peak.consensus",
+   "n_reference_positive": 33235,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3696,
+    "fp": 2198,
+    "sensitivity": 0.8988588785813972,
+    "specificity": 0.9152006172839506,
+    "threshold": 0.5,
+    "tn": 23722,
+    "tp": 32847,
+    "youden": 0.8140594958653478
+   },
+   "detector": "speech.ast_peak.plain",
+   "n_reference_positive": 36543,
+   "n_scored": 62463,
+   "n_unavailable": 84,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 4305,
+    "fp": 3514,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.8954589606605148,
+    "specificity": 0.8348916975990227,
+    "threshold": 0.2,
+    "tn": 17769,
+    "tp": 36875,
+    "youden": 0.7303506582595376
+   },
+   "detector": "speech.ast_peak.plain",
+   "n_reference_positive": 41180,
+   "n_scored": 62463,
+   "n_unavailable": 84,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2709,
+    "fp": 4556,
+    "sensitivity": 0.9183986987167901,
+    "specificity": 0.8443191525713309,
+    "threshold": 0.5,
+    "tn": 24709,
+    "tp": 30489,
+    "youden": 0.7627178512881212
+   },
+   "detector": "speech.ast_peak.plain",
+   "n_reference_positive": 33198,
+   "n_scored": 62463,
+   "n_unavailable": 84,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3404,
+    "fp": 2288,
+    "sensitivity": 0.9068443666018993,
+    "specificity": 0.9117283950617284,
+    "threshold": 0.5,
+    "tn": 23632,
+    "tp": 33137,
+    "youden": 0.8185727616636278
+   },
+   "detector": "speech.ast_peak.enhanced",
+   "n_reference_positive": 36541,
+   "n_scored": 62461,
+   "n_unavailable": 86,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 5775,
+    "fp": 3213,
+    "sensitivity": 0.8597552090922337,
+    "specificity": 0.8490344406333693,
+    "threshold": 0.3,
+    "tn": 18070,
+    "tp": 35403,
+    "youden": 0.708789649725603
+   },
+   "detector": "speech.ast_peak.enhanced",
+   "n_reference_positive": 41178,
+   "n_scored": 62461,
+   "n_unavailable": 86,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3782,
+    "fp": 3464,
+    "sensitivity": 0.8860706109169779,
+    "specificity": 0.8816333504185888,
+    "threshold": 0.6,
+    "tn": 25801,
+    "tp": 29414,
+    "youden": 0.7677039613355667
+   },
+   "detector": "speech.ast_peak.enhanced",
+   "n_reference_positive": 33196,
+   "n_scored": 62461,
+   "n_unavailable": 86,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 8716,
+    "fp": 5501,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.7614734134260146,
+    "specificity": 0.787770061728395,
+    "threshold": 0.2,
+    "tn": 20419,
+    "tp": 27825,
+    "youden": 0.5492434751544097
+   },
+   "detector": "speech.ast_peak.residual",
+   "n_reference_positive": 36541,
+   "n_scored": 62461,
+   "n_unavailable": 86,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 12015,
+    "fp": 4163,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.7082179804750109,
+    "specificity": 0.804397876239252,
+    "threshold": 0.2,
+    "tn": 17120,
+    "tp": 29163,
+    "youden": 0.5126158567142629
+   },
+   "detector": "speech.ast_peak.residual",
+   "n_reference_positive": 41178,
+   "n_scored": 62461,
+   "n_unavailable": 86,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 6982,
+    "fp": 7112,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.7896734546330884,
+    "specificity": 0.7569793268409363,
+    "threshold": 0.2,
+    "tn": 22153,
+    "tp": 26214,
+    "youden": 0.5466527814740245
+   },
+   "detector": "speech.ast_peak.residual",
+   "n_reference_positive": 33196,
+   "n_scored": 62461,
+   "n_unavailable": 86,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 36569,
+    "fp": 0,
+    "sensitivity": 0.0,
+    "specificity": 1.0,
+    "threshold": 0.001,
+    "tn": 25978,
+    "tp": 0,
+    "youden": 0.0
+   },
+   "detector": "speech.ast_peak.consensus",
+   "n_reference_positive": 36569,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 41224,
+    "fp": 0,
+    "sensitivity": 0.0,
+    "specificity": 1.0,
+    "threshold": 0.001,
+    "tn": 21323,
+    "tp": 0,
+    "youden": 0.0
+   },
+   "detector": "speech.ast_peak.consensus",
+   "n_reference_positive": 41224,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 33235,
+    "fp": 0,
+    "sensitivity": 0.0,
+    "specificity": 1.0,
+    "threshold": 0.001,
+    "tn": 29312,
+    "tp": 0,
+    "youden": 0.0
+   },
+   "detector": "speech.ast_peak.consensus",
+   "n_reference_positive": 33235,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 4220,
+    "fp": 7971,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.8840308884553024,
+    "specificity": 0.6696095498632181,
+    "threshold": 0.2,
+    "tn": 16155,
+    "tp": 32169,
+    "youden": 0.5536404383185205
+   },
+   "detector": "speech.hear_peak.plain",
+   "n_reference_positive": 36389,
+   "n_scored": 60515,
+   "n_unavailable": 2032,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 4818,
+    "fp": 4958,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.87955,
+    "specificity": 0.7583231781623202,
+    "threshold": 0.2,
+    "tn": 15557,
+    "tp": 35182,
+    "youden": 0.6378731781623204
+   },
+   "detector": "speech.hear_peak.plain",
+   "n_reference_positive": 40000,
+   "n_scored": 60515,
+   "n_unavailable": 2032,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3053,
+    "fp": 11150,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.9047217801079799,
+    "specificity": 0.6083871874121944,
+    "threshold": 0.2,
+    "tn": 17322,
+    "tp": 28990,
+    "youden": 0.5131089675201743
+   },
+   "detector": "speech.hear_peak.plain",
+   "n_reference_positive": 32043,
+   "n_scored": 60515,
+   "n_unavailable": 2032,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3601,
+    "fp": 8387,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.901036084315827,
+    "specificity": 0.6523667412749731,
+    "threshold": 0.2,
+    "tn": 15739,
+    "tp": 32786,
+    "youden": 0.5534028255908001
+   },
+   "detector": "speech.hear_peak.enhanced",
+   "n_reference_positive": 36387,
+   "n_scored": 60513,
+   "n_unavailable": 2034,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 6978,
+    "fp": 3873,
+    "sensitivity": 0.8255412770638532,
+    "specificity": 0.8112113087984402,
+    "threshold": 0.3,
+    "tn": 16642,
+    "tp": 33020,
+    "youden": 0.6367525858622933
+   },
+   "detector": "speech.hear_peak.enhanced",
+   "n_reference_positive": 39998,
+   "n_scored": 60513,
+   "n_unavailable": 2034,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2488,
+    "fp": 11620,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.922349489716301,
+    "specificity": 0.5918797415004214,
+    "threshold": 0.2,
+    "tn": 16852,
+    "tp": 29553,
+    "youden": 0.5142292312167225
+   },
+   "detector": "speech.hear_peak.enhanced",
+   "n_reference_positive": 32041,
+   "n_scored": 60513,
+   "n_unavailable": 2034,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 29542,
+    "fp": 3170,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.18811663506197268,
+    "specificity": 0.8686064826328442,
+    "threshold": 0.2,
+    "tn": 20956,
+    "tp": 6845,
+    "youden": 0.05672311769481686
+   },
+   "detector": "speech.hear_peak.residual",
+   "n_reference_positive": 36387,
+   "n_scored": 60513,
+   "n_unavailable": 2034,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 35211,
+    "fp": 1395,
+    "sensitivity": 0.11968098404920247,
+    "specificity": 0.9320009748964172,
+    "threshold": 0.3,
+    "tn": 19120,
+    "tp": 4787,
+    "youden": 0.051681958945619666
+   },
+   "detector": "speech.hear_peak.residual",
+   "n_reference_positive": 39998,
+   "n_scored": 60513,
+   "n_unavailable": 2034,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 25712,
+    "fp": 3686,
+    "marker": "taxonomy.consolidation_floor",
+    "sensitivity": 0.19752816703598514,
+    "specificity": 0.8705394773812869,
+    "threshold": 0.2,
+    "tn": 24786,
+    "tp": 6329,
+    "youden": 0.06806764441727209
+   },
+   "detector": "speech.hear_peak.residual",
+   "n_reference_positive": 32041,
+   "n_scored": 60513,
+   "n_unavailable": 2034,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 5313,
+    "fp": 7230,
+    "sensitivity": 0.8547130082857065,
+    "specificity": 0.7216875817999846,
+    "threshold": 0.15,
+    "tn": 18748,
+    "tp": 31256,
+    "youden": 0.576400590085691
+   },
+   "detector": "speech.hear_peak.span",
+   "n_reference_positive": 36569,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 7545,
+    "fp": 4807,
+    "sensitivity": 0.8169755482243354,
+    "specificity": 0.7745626787975426,
+    "threshold": 0.15,
+    "tn": 16516,
+    "tp": 33679,
+    "youden": 0.5915382270218781
+   },
+   "detector": "speech.hear_peak.span",
+   "n_reference_positive": 41224,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 4594,
+    "fp": 9845,
+    "sensitivity": 0.8617722280728148,
+    "specificity": 0.6641307314410481,
+    "threshold": 0.15,
+    "tn": 19467,
+    "tp": 28641,
+    "youden": 0.5259029595138629
+   },
+   "detector": "speech.hear_peak.span",
+   "n_reference_positive": 33235,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 7261,
+    "fp": 6305,
+    "sensitivity": 0.8014438458803905,
+    "specificity": 0.75729463392101,
+    "threshold": 0.001,
+    "tn": 19673,
+    "tp": 29308,
+    "youden": 0.5587384798014006
+   },
+   "detector": "speech.hear_peak.consensus",
+   "n_reference_positive": 36569,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "agreed_asr",
+   "reference_is_proxy": false
+  },
+  {
+   "best_youden_row": {
+    "fn": 9589,
+    "fp": 3978,
+    "sensitivity": 0.7673927809043276,
+    "specificity": 0.8134408854288796,
+    "threshold": 0.001,
+    "tn": 17345,
+    "tp": 31635,
+    "youden": 0.5808336663332072
+   },
+   "detector": "speech.hear_peak.consensus",
+   "n_reference_positive": 41224,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 6206,
+    "fp": 8584,
+    "sensitivity": 0.8132691439747255,
+    "specificity": 0.707150655021834,
+    "threshold": 0.001,
+    "tn": 20728,
+    "tp": 27029,
+    "youden": 0.5204197989965595
+   },
+   "detector": "speech.hear_peak.consensus",
+   "n_reference_positive": 33235,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_lexical_speech",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2535,
+    "fp": 6501,
+    "sensitivity": 0.8051349066031209,
+    "specificity": 0.8686905411137369,
+    "threshold": 0.3,
+    "tn": 43008,
+    "tp": 10474,
+    "youden": 0.6738254477168577
+   },
+   "detector": "airway.yamnet_peak.plain",
+   "n_reference_positive": 13009,
+   "n_scored": 62518,
+   "n_unavailable": 29,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 6560,
+    "fp": 6872,
+    "sensitivity": 0.4957337228072873,
+    "specificity": 0.8611913466782475,
+    "threshold": 0.3,
+    "tn": 42635,
+    "tp": 6449,
+    "youden": 0.3569250694855348
+   },
+   "detector": "airway.yamnet_peak.enhanced",
+   "n_reference_positive": 13009,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2683,
+    "fp": 7478,
+    "sensitivity": 0.7937581674225536,
+    "specificity": 0.8489506534429475,
+    "threshold": 0.05,
+    "tn": 42029,
+    "tp": 10326,
+    "youden": 0.6427088208655012
+   },
+   "detector": "airway.yamnet_peak.residual",
+   "n_reference_positive": 13009,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2545,
+    "fp": 7256,
+    "sensitivity": 0.8044864408081739,
+    "specificity": 0.8535029275186755,
+    "threshold": 0.001,
+    "tn": 42274,
+    "tp": 10472,
+    "youden": 0.6579893683268494
+   },
+   "detector": "airway.yamnet_peak.consensus",
+   "n_reference_positive": 13017,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2498,
+    "fp": 8428,
+    "sensitivity": 0.8076982294072363,
+    "specificity": 0.8296444525296627,
+    "threshold": 0.15,
+    "tn": 41045,
+    "tp": 10492,
+    "youden": 0.637342681936899
+   },
+   "detector": "airway.ast_peak.plain",
+   "n_reference_positive": 12990,
+   "n_scored": 62463,
+   "n_unavailable": 84,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2985,
+    "fp": 14816,
+    "sensitivity": 0.7702078521939953,
+    "specificity": 0.7005114107254755,
+    "threshold": 0.1,
+    "tn": 34655,
+    "tp": 10005,
+    "youden": 0.47071926291947097
+   },
+   "detector": "airway.ast_peak.enhanced",
+   "n_reference_positive": 12990,
+   "n_scored": 62461,
+   "n_unavailable": 86,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 2821,
+    "fp": 6124,
+    "sensitivity": 0.782832948421863,
+    "specificity": 0.8762103050271877,
+    "threshold": 0.1,
+    "tn": 43347,
+    "tp": 10169,
+    "youden": 0.6590432534490507
+   },
+   "detector": "airway.ast_peak.residual",
+   "n_reference_positive": 12990,
+   "n_scored": 62461,
+   "n_unavailable": 86,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 13017,
+    "fp": 0,
+    "sensitivity": 0.0,
+    "specificity": 1.0,
+    "threshold": 0.001,
+    "tn": 49530,
+    "tp": 0,
+    "youden": 0.0
+   },
+   "detector": "airway.ast_peak.consensus",
+   "n_reference_positive": 13017,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1392,
+    "fp": 15275,
+    "sensitivity": 0.8866080156402737,
+    "specificity": 0.683347498911669,
+    "threshold": 0.6,
+    "tn": 32964,
+    "tp": 10884,
+    "youden": 0.5699555145519426
+   },
+   "detector": "airway.hear_peak.plain",
+   "n_reference_positive": 12276,
+   "n_scored": 60515,
+   "n_unavailable": 2032,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3173,
+    "fp": 19749,
+    "sensitivity": 0.7415281850765721,
+    "specificity": 0.5905839915417626,
+    "threshold": 0.4,
+    "tn": 28488,
+    "tp": 9103,
+    "youden": 0.3321121766183346
+   },
+   "detector": "airway.hear_peak.enhanced",
+   "n_reference_positive": 12276,
+   "n_scored": 60513,
+   "n_unavailable": 2034,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1417,
+    "fp": 11133,
+    "sensitivity": 0.8845715216682959,
+    "specificity": 0.7692020648050252,
+    "threshold": 0.4,
+    "tn": 37104,
+    "tp": 10859,
+    "youden": 0.6537735864733212
+   },
+   "detector": "airway.hear_peak.residual",
+   "n_reference_positive": 12276,
+   "n_scored": 60513,
+   "n_unavailable": 2034,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3437,
+    "fp": 18318,
+    "sensitivity": 0.7359606668203119,
+    "specificity": 0.6301635372501514,
+    "threshold": 0.7,
+    "tn": 31212,
+    "tp": 9580,
+    "youden": 0.3661242040704633
+   },
+   "detector": "airway.hear_peak.span",
+   "n_reference_positive": 13017,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3437,
+    "fp": 18318,
+    "sensitivity": 0.7359606668203119,
+    "specificity": 0.6301635372501514,
+    "threshold": 0.7,
+    "tn": 31212,
+    "tp": 9580,
+    "youden": 0.3661242040704633
+   },
+   "detector": "airway.hear_peak.consensus",
+   "n_reference_positive": 13017,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_airway",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 782,
+    "fp": 3258,
+    "sensitivity": 0.9058285163776493,
+    "specificity": 0.9399048216327885,
+    "threshold": 0.05,
+    "tn": 50956,
+    "tp": 7522,
+    "youden": 0.8457333380104379
+   },
+   "detector": "voice.yamnet_peak.plain",
+   "n_reference_positive": 8304,
+   "n_scored": 62518,
+   "n_unavailable": 29,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1110,
+    "fp": 3449,
+    "sensitivity": 0.8663294797687862,
+    "specificity": 0.936379399394968,
+    "threshold": 0.05,
+    "tn": 50763,
+    "tp": 7194,
+    "youden": 0.8027088791637542
+   },
+   "detector": "voice.yamnet_peak.enhanced",
+   "n_reference_positive": 8304,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 6274,
+    "fp": 2455,
+    "sensitivity": 0.24446050096339114,
+    "specificity": 0.9547148232863573,
+    "threshold": 0.02,
+    "tn": 51757,
+    "tp": 2030,
+    "youden": 0.1991753242497485
+   },
+   "detector": "voice.yamnet_peak.residual",
+   "n_reference_positive": 8304,
+   "n_scored": 62516,
+   "n_unavailable": 31,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1582,
+    "fp": 971,
+    "sensitivity": 0.8095352757043102,
+    "specificity": 0.982098412639885,
+    "threshold": 0.001,
+    "tn": 53270,
+    "tp": 6724,
+    "youden": 0.791633688344195
+   },
+   "detector": "voice.yamnet_peak.consensus",
+   "n_reference_positive": 8306,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1730,
+    "fp": 4921,
+    "sensitivity": 0.7913903291932955,
+    "specificity": 0.9091563596086395,
+    "threshold": 0.005,
+    "tn": 49249,
+    "tp": 6563,
+    "youden": 0.7005466888019352
+   },
+   "detector": "voice.ast_peak.plain",
+   "n_reference_positive": 8293,
+   "n_scored": 62463,
+   "n_unavailable": 84,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 1900,
+    "fp": 5055,
+    "sensitivity": 0.7708911129868564,
+    "specificity": 0.9066792202038104,
+    "threshold": 0.005,
+    "tn": 49113,
+    "tp": 6393,
+    "youden": 0.6775703331906668
+   },
+   "detector": "voice.ast_peak.enhanced",
+   "n_reference_positive": 8293,
+   "n_scored": 62461,
+   "n_unavailable": 86,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 3688,
+    "fp": 3314,
+    "sensitivity": 0.5552875919450139,
+    "specificity": 0.9388199675084921,
+    "threshold": 0.005,
+    "tn": 50854,
+    "tp": 4605,
+    "youden": 0.4941075594535058
+   },
+   "detector": "voice.ast_peak.residual",
+   "n_reference_positive": 8293,
+   "n_scored": 62461,
+   "n_unavailable": 86,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  },
+  {
+   "best_youden_row": {
+    "fn": 8306,
+    "fp": 0,
+    "sensitivity": 0.0,
+    "specificity": 1.0,
+    "threshold": 0.001,
+    "tn": 54241,
+    "tp": 0,
+    "youden": 0.0
+   },
+   "detector": "voice.ast_peak.consensus",
+   "n_reference_positive": 8306,
+   "n_scored": 62547,
+   "n_unavailable": 0,
+   "reference": "declared_voice",
+   "reference_is_proxy": true
+  }
+ ],
+ "n_families": 48,
+ "n_recordings": 62547,
+ "taxonomy_as_run": {
+  "kind_states": {
+   "airway": {
+    "missing": 29,
+    "uncertain": 62518
+   },
+   "speech": {
+    "missing": 29,
+    "uncertain": 62518
+   },
+   "voice": {
+    "missing": 29,
+    "uncertain": 62518
+   }
+  },
+  "routing_would_run": {
+   "agreed_asr": {
+    "fn": 0,
+    "fp": 25978,
+    "sensitivity": 1.0,
+    "specificity": 0.0,
+    "tn": 0,
+    "tp": 36569,
+    "youden": 0.0
+   },
+   "declared_airway": {
+    "fn": 0,
+    "fp": 49530,
+    "sensitivity": 1.0,
+    "specificity": 0.0,
+    "tn": 0,
+    "tp": 13017,
+    "youden": 0.0
+   },
+   "declared_lexical_speech": {
+    "fn": 0,
+    "fp": 29312,
+    "sensitivity": 1.0,
+    "specificity": 0.0,
+    "tn": 0,
+    "tp": 33235,
+    "youden": 0.0
+   },
+   "declared_speech": {
+    "fn": 0,
+    "fp": 21323,
+    "sensitivity": 1.0,
+    "specificity": 0.0,
+    "tn": 0,
+    "tp": 41224,
+    "youden": 0.0
+   },
+   "declared_voice": {
+    "fn": 0,
+    "fp": 54241,
+    "sensitivity": 1.0,
+    "specificity": 0.0,
+    "tn": 0,
+    "tp": 8306,
+    "youden": 0.0
+   }
+  }
+ }
+}
