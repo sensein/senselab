@@ -186,5 +186,11 @@ with the reason attached — no widening of that clause, and the recording keeps
 and every non-ASR measurement.
 
 Matching on the message text is the only signal available: CTranslate2 raises the condition from C++
-with no distinguishable Python type. `test_other_worker_failures_stay_hard` pins that an unrelated
+with no distinguishable Python type. The field message, recovered from the run's own logs and both
+`out/*.summary.json`, is byte-identical to the reproduction —
+`No position encodings are defined for positions >= 448, but got position 448` — so the substring
+`_CT2_POSITION_LIMIT` matches on it. `test_other_worker_failures_stay_hard` pins that an unrelated
 worker `RuntimeError` is still a hard failure, so the match cannot silently widen.
+
+The same two recordings are the only ones affected: the string appears in five job logs across the
+full run, the sweep and the ASR retry, and every occurrence resolves to one of these two.
