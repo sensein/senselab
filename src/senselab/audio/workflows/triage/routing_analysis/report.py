@@ -39,6 +39,13 @@ PRIMARY_DETECTORS: tuple[str, ...] = (
     "voice.longest_amplitude_span",
     "voice.yamnet_peak.plain",
     "voice.yamnet_chant_peak.plain",
+    "voice.yamnet_singing_union.plain",
+    "cough.amplitude_peak_over_floor_db_max",
+    "cough.yamnet_cough_minus_breath.plain",
+    "cough.squim_si_sdr_iqr",
+    "glide.yamnet_singing_union.plain",
+    "glide.squim_stoi_max",
+    "glide.amplitude_duty_fraction",
 )
 """The detectors also swept within each task family, where the imbalance is visible."""
 
@@ -111,6 +118,9 @@ class ReferenceStandard:
         is_proxy: Whether it is a declaration read as a prior rather than an observation.
         description: What positive means, in one sentence.
         predicate: Whether one recording is a reference positive.
+        population: Which recordings are scored at all, or None for the whole corpus. A standard
+            that separates two declared families scores only within their union.
+        population_description: What the restricted population is, in one phrase.
     """
 
     name: str
@@ -118,6 +128,8 @@ class ReferenceStandard:
     is_proxy: bool
     description: str
     predicate: Callable[[RecordingFeatures], bool]
+    population: Callable[[RecordingFeatures], bool] | None = None
+    population_description: str = "the whole corpus"
 
 
 def _declared(kind: str) -> Callable[[RecordingFeatures], bool]:
@@ -172,8 +184,36 @@ REFERENCE_STANDARDS: tuple[ReferenceStandard, ...] = (
         description="the declared task family asks for sustained or glided phonation",
         predicate=_declared("voice"),
     ),
+    ReferenceStandard(
+        name="declared_cough_vs_breath",
+        kind="cough",
+        is_proxy=True,
+        description="the declared task family asks for a cough rather than for breathing",
+        predicate=_declared("cough"),
+        population=lambda features: features.family in DECLARED_KIND["airway"],
+        population_description="the declared airway families only",
+    ),
+    ReferenceStandard(
+        name="declared_glide",
+        kind="glide",
+        is_proxy=True,
+        description="the declared task family asks for a continuous pitch sweep",
+        predicate=_declared("glide"),
+    ),
+    ReferenceStandard(
+        name="declared_glide_within_voice",
+        kind="glide",
+        is_proxy=True,
+        description="the declared task family asks for a pitch sweep rather than a held vowel",
+        predicate=_declared("glide"),
+        population=lambda features: features.family in DECLARED_KIND["voice"],
+        population_description="the declared voice families only",
+    ),
 )
 """The reference standards every detector of the matching kind is scored against."""
+
+ROUTING_KINDS: tuple[str, ...] = ("speech", "airway", "voice")
+"""The kinds TAXONOMY itself carries a state for; ``cough`` and ``glide`` are analysis-only."""
 
 
 def score_detector(
@@ -200,6 +240,8 @@ def score_detector(
     for record in records:
         if family is not None and record.family != family:
             continue
+        if reference.population is not None and not reference.population(record):
+            continue
         value = detector_value(record, detector)
         if value is None:
             unavailable += 1
@@ -209,7 +251,7 @@ def score_detector(
     for threshold in sweep_points(detector):
         tp = fp = tn = fn = 0
         for value, positive in values:
-            fired = value >= threshold
+            fired = value <= threshold if detector.polarity == "below" else value >= threshold
             if fired and positive:
                 tp += 1
             elif fired:
@@ -226,9 +268,11 @@ def score_detector(
         "detector": detector.name,
         "kind": detector.kind,
         "unit": detector.unit,
+        "polarity": detector.polarity,
         "reader": list(detector.reader),
         "reference": reference.name,
         "reference_is_proxy": reference.is_proxy,
+        "population": reference.population_description,
         "family": family,
         "n_scored": len(values),
         "n_unavailable": unavailable,
@@ -361,6 +405,8 @@ def taxonomy_as_run(records: Sequence[RecordingFeatures]) -> dict[str, Any]:
     tables: dict[str, dict[str, Any]] = {}
     for reference in REFERENCE_STANDARDS:
         kind = reference.kind
+        if kind not in ROUTING_KINDS:
+            continue
         tp = fp = tn = fn = 0
         for record in records:
             state = record.kind_state.get(kind, "missing")
@@ -381,6 +427,158 @@ def taxonomy_as_run(records: Sequence[RecordingFeatures]) -> dict[str, Any]:
             bucket = states.setdefault(kind, {})
             bucket[state] = bucket.get(state, 0) + 1
     return {"kind_states": states, "routing_would_run": tables}
+
+
+@dataclass(frozen=True)
+class RoutingRule:
+    """One detector at one operating point, as a rule set uses it.
+
+    Attributes:
+        kind: The branch it would route to.
+        detector: The detector's name.
+        threshold: The operating point. Carried from the brief being answered; **not** a fitted
+            floor, and nothing here proposes one.
+    """
+
+    kind: str
+    detector: str
+    threshold: float
+
+
+DETECTOR_BY_NAME: dict[str, Detector] = {detector.name: detector for detector in DETECTORS}
+"""Every detector in the catalogue, by name, so a rule set can name one."""
+
+BASELINE_RULES: tuple[RoutingRule, ...] = (
+    RoutingRule("speech", "speech.words_lexical", 2.0),
+    RoutingRule("airway", "airway.residual_energy_fraction", 0.1),
+    RoutingRule("airway", "airway.yamnet_peak.plain", 0.3),
+    RoutingRule("voice", "voice.yamnet_singing_union.plain", 0.2),
+)
+"""The four rules whose 4.9% fall-through this analysis is asked to move."""
+
+AUGMENTATION_TOP_FAMILIES = 12
+"""How many families the fall-through table lists."""
+
+
+def _rule_fires(record: RecordingFeatures, rule: RoutingRule) -> bool:
+    """Whether one rule sends one recording to its branch.
+
+    Args:
+        record: The recording.
+        rule: The rule.
+
+    Returns:
+        True when the detector's value is on the firing side of the threshold. Absent evidence is
+        not a firing.
+    """
+    detector = DETECTOR_BY_NAME[rule.detector]
+    value = detector_value(record, detector)
+    if value is None:
+        return False
+    return value <= rule.threshold if detector.polarity == "below" else value >= rule.threshold
+
+
+def bucket_coverage(records: Sequence[RecordingFeatures], rules: Sequence[RoutingRule]) -> dict[str, Any]:
+    """How many recordings one rule set sends to no branch at all, and which families they are.
+
+    Args:
+        records: The recordings.
+        rules: The rule set.
+
+    Returns:
+        The corpus counts, the per-kind firing counts and the per-family fall-through, worst first.
+    """
+    per_kind: dict[str, int] = {}
+    per_family: dict[str, list[int]] = {}
+    no_bucket = 0
+    for record in records:
+        fired = {rule.kind for rule in rules if _rule_fires(record, rule)}
+        for kind in fired:
+            per_kind[kind] = per_kind.get(kind, 0) + 1
+        slot = per_family.setdefault(record.family, [0, 0])
+        slot[0] += 1
+        if not fired:
+            no_bucket += 1
+            slot[1] += 1
+    ranked = sorted(
+        ((family, int(pair[0]), int(pair[1])) for family, pair in per_family.items()),
+        key=lambda item: (-(item[2] / item[1]) if item[1] else 0.0, -item[2]),
+    )
+    families = [
+        {"family": family, "n": n, "n_no_bucket": missed, "fraction": (missed / n) if n else 0.0}
+        for family, n, missed in ranked
+    ]
+    return {
+        "rules": [asdict(rule) for rule in rules],
+        "n_recordings": len(records),
+        "n_no_bucket": no_bucket,
+        "fraction_no_bucket": no_bucket / len(records) if records else None,
+        "n_fired_per_kind": dict(sorted(per_kind.items())),
+        "families": families,
+    }
+
+
+def bucket_augmentation(
+    records: Sequence[RecordingFeatures],
+    base: Sequence[RoutingRule] = BASELINE_RULES,
+) -> dict[str, Any]:
+    """What each candidate detector would do to the fall-through if added to a rule set.
+
+    Args:
+        records: The recordings.
+        base: The rule set being augmented.
+
+    Returns:
+        One entry per detector not already in ``base``, listing every threshold in its grid with
+        the fall-through that adding it there would leave, how many recordings it rescues and how
+        many it fires on in total. No threshold is chosen.
+    """
+    base_names = {rule.detector for rule in base}
+    uncovered = [not any(_rule_fires(record, rule) for rule in base) for record in records]
+    n_uncovered = sum(uncovered)
+    entries: list[dict[str, Any]] = []
+    for detector in DETECTORS:
+        if detector.name in base_names:
+            continue
+        values = [detector_value(record, detector) for record in records]
+        rows: list[dict[str, Any]] = []
+        for threshold in sweep_points(detector):
+            fires = 0
+            rescued = 0
+            for index, value in enumerate(values):
+                if value is None:
+                    continue
+                fired = value <= threshold if detector.polarity == "below" else value >= threshold
+                if not fired:
+                    continue
+                fires += 1
+                if uncovered[index]:
+                    rescued += 1
+            rows.append(
+                {
+                    "threshold": threshold,
+                    "n_fires_corpus": fires,
+                    "fraction_fires_corpus": fires / len(records) if records else None,
+                    "n_rescued": rescued,
+                    "n_no_bucket_after": n_uncovered - rescued,
+                    "fraction_no_bucket_after": (n_uncovered - rescued) / len(records) if records else None,
+                }
+            )
+        entries.append(
+            {
+                "detector": detector.name,
+                "kind": detector.kind,
+                "unit": detector.unit,
+                "polarity": detector.polarity,
+                "rows": rows,
+            }
+        )
+    return {
+        "base": [asdict(rule) for rule in base],
+        "n_recordings": len(records),
+        "n_no_bucket_base": n_uncovered,
+        "candidates": entries,
+    }
 
 
 def _best_row(scored: dict[str, Any]) -> dict[str, Any] | None:
@@ -433,11 +631,16 @@ def write_report(records: Sequence[RecordingFeatures], out_dir: Path) -> dict[st
     (out_dir / "prevalence.json").write_text(json.dumps(prevalence_report, indent=1, sort_keys=True))
     disagreement_report = disagreements(records)
     (out_dir / "disagreements.json").write_text(json.dumps(disagreement_report, indent=1, sort_keys=True))
+    coverage = bucket_coverage(records, BASELINE_RULES)
+    (out_dir / "buckets.json").write_text(json.dumps(coverage, indent=1, sort_keys=True))
+    augmentation = bucket_augmentation(records, BASELINE_RULES)
+    (out_dir / "bucket_augmentation.json").write_text(json.dumps(augmentation, indent=1, sort_keys=True))
     baseline = taxonomy_as_run(records)
     index: dict[str, Any] = {
         "n_recordings": len(records),
         "n_families": len(prevalence_report["families"]),
         "taxonomy_as_run": baseline,
+        "bucket_coverage": {key: value for key, value in coverage.items() if key != "families"},
         "detectors": [
             {
                 "detector": scored["detector"],
@@ -452,7 +655,7 @@ def write_report(records: Sequence[RecordingFeatures], out_dir: Path) -> dict[st
         ],
     }
     (out_dir / "index.json").write_text(json.dumps(index, indent=1, sort_keys=True))
-    (out_dir / "summary.md").write_text(_markdown(index, prevalence_report, disagreement_report, sweeps))
+    (out_dir / "summary.md").write_text(_markdown(index, prevalence_report, disagreement_report, sweeps, coverage))
     return index
 
 
@@ -473,6 +676,7 @@ def _markdown(
     prevalence_report: dict[str, Any],
     disagreement_report: dict[str, Any],
     sweeps: Sequence[dict[str, Any]],
+    coverage: dict[str, Any],
 ) -> str:
     """The readable summary.
 
@@ -481,6 +685,7 @@ def _markdown(
         prevalence_report: What :func:`prevalence` returned.
         disagreement_report: What :func:`disagreements` returned.
         sweeps: Every scored detector.
+        coverage: What :func:`bucket_coverage` returned for :data:`BASELINE_RULES`.
 
     Returns:
         The Markdown document.
@@ -505,6 +710,21 @@ def _markdown(
             f"{_rate(table['sensitivity'])} | {_rate(table['specificity'])} |"
         )
     lines.append("")
+    lines.append("## Branch coverage under the baseline rule set")
+    lines.append("")
+    for rule in coverage["rules"]:
+        lines.append(f"- `{rule['detector']}` >= {rule['threshold']:g} -> {rule['kind']}")
+    lines.append("")
+    lines.append(
+        f"- no branch at all: {coverage['n_no_bucket']} of {coverage['n_recordings']} "
+        f"({_rate(coverage['fraction_no_bucket'])})"
+    )
+    lines.append("")
+    lines.append("| family | n | no bucket | fraction |")
+    lines.append("| --- | --- | --- | --- |")
+    for row in coverage["families"][:AUGMENTATION_TOP_FAMILIES]:
+        lines.append(f"| {row['family']} | {row['n']} | {row['n_no_bucket']} | {_rate(row['fraction'])} |")
+    lines.append("")
     lines.append("## Prevalence per family")
     lines.append("")
     lines.append("| family | n | agreed_asr | declared_speech | declared_airway | declared_voice |")
@@ -523,8 +743,9 @@ def _markdown(
         lines.append(f"### {scored['detector']} vs {scored['reference']}{proxy}")
         lines.append("")
         lines.append(
-            f"unit {scored['unit']}; scored {scored['n_scored']}, "
-            f"evidence absent {scored['n_unavailable']}, reference positive {scored['n_reference_positive']}"
+            f"unit {scored['unit']}, fires {scored['polarity']} threshold; over {scored['population']}; "
+            f"scored {scored['n_scored']}, evidence absent {scored['n_unavailable']}, "
+            f"reference positive {scored['n_reference_positive']}"
         )
         lines.append("")
         lines.append("| threshold | tp | fp | tn | fn | sens | spec | note |")

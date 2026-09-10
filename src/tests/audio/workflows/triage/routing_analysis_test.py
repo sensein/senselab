@@ -223,10 +223,12 @@ def test_task_id_reads_the_bids_entity() -> None:
 
 
 def test_declared_kinds_partition_the_families() -> None:
-    """v1 and v2 respiration families are both airway; only a lexical family declares both keys."""
-    assert declared_kinds("respiration-and-cough-fivebreaths") == frozenset({"airway"})
-    assert declared_kinds("respiration-and-cough-v2-hardcough") == frozenset({"airway"})
-    assert declared_kinds("maximum-phonation-time") == frozenset({"voice"})
+    """Airway carries a breath/cough sub-kind, because the two are detected by different evidence."""
+    assert declared_kinds("respiration-and-cough-fivebreaths") == frozenset({"airway", "breath"})
+    assert declared_kinds("respiration-and-cough-cough") == frozenset({"airway", "cough"})
+    assert declared_kinds("respiration-and-cough-v2-hardcough") == frozenset({"airway", "cough"})
+    assert declared_kinds("voluntary-cough") == frozenset({"airway", "cough"})
+    assert declared_kinds("maximum-phonation-time") == frozenset({"voice", "sustained"})
     assert declared_kinds("harvard-sentences-list") == frozenset({"speech", "lexical_speech"})
     assert declared_kinds("diadochokinesis-ka") == frozenset({"speech"})
 

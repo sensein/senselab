@@ -59,8 +59,46 @@ FAMILIES: Mapping[str, Mapping[str, tuple[str, ...]]] = {
 }
 """Each kind's label family per classifier."""
 
+AUDIOSET_SINGING: tuple[str, ...] = (
+    "A capella",
+    "Chant",
+    "Child singing",
+    "Choir",
+    "Female singing",
+    "Humming",
+    "Male singing",
+    "Mantra",
+    "Singing",
+    "Synthetic singing",
+    "Vocal music",
+    "Yodeling",
+)
+"""The AudioSet singing subtree. YAMNet's 521-label grid carries all but the two gendered variants."""
+
+AUDIOSET_COUGH: tuple[str, ...] = ("Cough", "Throat clearing", "Sneeze")
+
+AUDIOSET_BREATH: tuple[str, ...] = ("Breathing", "Gasp", "Sigh", "Sniff", "Wheeze", "Snoring")
+
+AUDIOSET_WHISTLE: tuple[str, ...] = ("Whistling", "Whistle")
+
+HEAR_COUGH: tuple[str, ...] = ("Cough", "Baby Cough", "Throat Clear", "Sneeze")
+
+HEAR_BREATH: tuple[str, ...] = ("Breathe", "Snore")
+
+LABEL_SETS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
+    "singing": {"yamnet": AUDIOSET_SINGING, "ast": AUDIOSET_SINGING, "hear": ()},
+    "cough_labels": {"yamnet": AUDIOSET_COUGH, "ast": AUDIOSET_COUGH, "hear": HEAR_COUGH},
+    "breath_labels": {"yamnet": AUDIOSET_BREATH, "ast": AUDIOSET_BREATH, "hear": HEAR_BREATH},
+    "whistle": {"yamnet": AUDIOSET_WHISTLE, "ast": AUDIOSET_WHISTLE, "hear": ()},
+}
+"""Named label unions beyond the three routing kinds, read by a ``peak_set`` detector."""
+
 TRACKED_LABELS: Mapping[str, frozenset[str]] = {
-    classifier: frozenset(label for kind in FAMILIES.values() for label in kind[classifier])
+    classifier: frozenset(
+        label
+        for group in (*FAMILIES.values(), *LABEL_SETS.values())
+        for label in group[classifier]  # type: ignore[index]
+    )
     for classifier in CLASSIFIERS
 }
 """Every label whose peak the extractor keeps, per classifier. Everything else is dropped."""

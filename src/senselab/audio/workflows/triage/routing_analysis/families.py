@@ -87,11 +87,33 @@ VOICE_ELICITING: frozenset[str] = frozenset(
 )
 """Families whose instructions ask for sustained or glided phonation without words."""
 
+COUGH_ELICITING: frozenset[str] = frozenset(
+    {
+        "respiration-and-cough-cough",
+        "respiration-and-cough-v2-hardcough",
+        "voluntary-cough",
+    }
+)
+"""The airway families whose instructions ask for a cough."""
+
+BREATH_ELICITING: frozenset[str] = AIRWAY_ELICITING - COUGH_ELICITING
+"""The airway families whose instructions ask for breathing, the complement of the cough ones."""
+
+GLIDE_ELICITING: frozenset[str] = frozenset({"glides-high-to-low", "glides-low-to-high", "high-to-low"})
+"""The voice families whose instructions ask for a continuous pitch sweep."""
+
+SUSTAINED_ELICITING: frozenset[str] = VOICE_ELICITING - GLIDE_ELICITING
+"""The voice families whose instructions ask for a steady held vowel."""
+
 DECLARED_KIND: dict[str, frozenset[str]] = {
     "speech": SPEECH_ELICITING,
     "lexical_speech": LEXICAL_SPEECH,
     "airway": AIRWAY_ELICITING,
     "voice": VOICE_ELICITING,
+    "cough": COUGH_ELICITING,
+    "breath": BREATH_ELICITING,
+    "glide": GLIDE_ELICITING,
+    "sustained": SUSTAINED_ELICITING,
 }
 """Each kind's declared families, the proxy reference standard for airway and voice."""
 

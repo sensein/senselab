@@ -17,9 +17,13 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
 from senselab.audio.workflows.triage.routing_analysis.families import declared_kinds, task_family, task_id_of
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures, extract_features, read_store
 from senselab.audio.workflows.triage.routing_analysis.report import (
+    BASELINE_RULES,
     REFERENCE_STANDARDS,
     Confusion,
     ReferenceStandard,
+    RoutingRule,
+    bucket_augmentation,
+    bucket_coverage,
     disagreements,
     dump_features,
     load_features,
@@ -30,12 +34,16 @@ from senselab.audio.workflows.triage.routing_analysis.report import (
 )
 
 __all__ = [
+    "BASELINE_RULES",
     "DETECTORS",
     "REFERENCE_STANDARDS",
     "Confusion",
     "Detector",
     "RecordingFeatures",
     "ReferenceStandard",
+    "RoutingRule",
+    "bucket_augmentation",
+    "bucket_coverage",
     "declared_kinds",
     "detector_value",
     "disagreements",
