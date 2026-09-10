@@ -74,6 +74,14 @@ _CRISPER_BACKEND = "ct2" if _IS_LINUX_X86 else "transformers"
 _CT2_WEIGHTS = "model.bin"
 _CT2_MARKER = ".conversion_complete"
 
+# CTranslate2's C++ message when a decode step indexes past Whisper's 448 position
+# encodings; see specs/20260910-crisperwhisper-decoder-positions/.
+_CT2_POSITION_LIMIT = "No position encodings are defined for positions >="
+
+
+class CrisperWhisperDecoderPositionsExceeded(ValueError):
+    """A chunk's prompt plus its token budget overran Whisper's 448 decoder positions; record it as an absence."""
+
 
 def _ct2_cache_root() -> Path:
     """Return the conversion-cache root ``crisperwhisper.converter`` reads."""
@@ -245,6 +253,10 @@ class CrisperWhisperASR:
             One ``ScriptLine`` per input with verbatim ``text``, word-level
             ``chunks`` carrying timestamps + ``score`` (native word confidence
             when exposed), and a line-level ``score``.
+
+        Raises:
+            CrisperWhisperDecoderPositionsExceeded: A chunk's decoder prompt plus its
+                token budget overran Whisper's 448 position encodings.
         """
         if model is None:
             model = HFModel(path_or_uri="nyralabs/CrisperWhisper2.0_turbo")
@@ -303,7 +315,12 @@ class CrisperWhisperASR:
                 timeout=1800,
                 env=env,
             )
-            output = parse_subprocess_result(result, "CrisperWhisper 2.0")
+            try:
+                output = parse_subprocess_result(result, "CrisperWhisper 2.0")
+            except RuntimeError as err:
+                if _CT2_POSITION_LIMIT in str(err):
+                    raise CrisperWhisperDecoderPositionsExceeded(str(err)) from err
+                raise
 
             results: List[ScriptLine] = []
             for entry in output.get("results", []):

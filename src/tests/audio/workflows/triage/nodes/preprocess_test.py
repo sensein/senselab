@@ -12,6 +12,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
 from senselab.audio.tasks.classification.yamnet import YAMNET_WINDOW_SECONDS
 from senselab.audio.tasks.speech_enhancement.residual import compute_residual
+from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.common import (
@@ -1530,6 +1531,45 @@ class TestASTTooShortDegradesWithoutLosingTheRecording:
         assert find_measurement(store, "residual_yamnet_scores") is not None
         assert find_measurement(store, "enhanced_hear_scores") is not None
         assert find_measurement(store, "residual_hear_scores") is not None
+
+
+class TestCrisperWhisperPositionOverrunDegradesWithoutLosingTheRecording:
+    """CrisperWhisper's 448-position overrun is a cascading absence, not a hard failure.
+
+    Before this guard, the CTranslate2 RuntimeError landed in ``hard_failures`` and PREPROCESS
+    raised, discarding every already-successful measurement for the recording (2/62,550
+    recordings, see specs/20260910-crisperwhisper-decoder-positions/).
+    """
+
+    def test_only_the_crisperwhisper_block_is_absent(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The recording keeps its Qwen transcript and its non-ASR measurements."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+        real = preprocess_module.transcribe_audios
+
+        def _crisper_overruns(audios: list, model: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            if str(model.path_or_uri) == CRISPERWHISPER_ID:
+                raise CrisperWhisperDecoderPositionsExceeded(
+                    "No position encodings are defined for positions >= 448, but got position 448"
+                )
+            return real(audios, model=model, **kwargs)
+
+        monkeypatch.setattr(preprocess_module, "transcribe_audios", _crisper_overruns)
+
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+
+        absent = dict(store.get_entity(result.verdict_entity_id).attributes["absent"])
+        assert "positions >= 448" in absent["asr_crisperwhisper"]
+        assert find_measurement(store, "asr_crisperwhisper") is None
+        assert find_measurement(store, "asr_qwen") is not None
+        assert find_measurement(store, "energy_envelope") is not None
 
 
 def _absent_map(store: ProvStore) -> dict[str, str]:
