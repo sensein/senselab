@@ -339,199 +339,229 @@ would let it decide are all null.
 
 ---
 
-#### PROPOSED — deciding the kinds from `consensus_taxonomy`
+#### PROPOSED — deciding the kinds, so ROUTING can route
 
 > **Everything from here to the end of this subsection is a plan, not the code.** Today's behaviour
 > is the table above: every floor null, every line `unavailable`, every kind `uncertain`, every
 > recording flagged. Nothing below is implemented. It is written here for the owner to mark up.
 
-Four pathways, each raising one kind, plus a fallback. A pathway is **certain** or it is not; a kind
-no certain pathway raised is `uncertain`, and a file with no certain pathway is flagged. Floors that
-turn a count into present/absent are replaced by the pathways themselves.
+Rewritten 2026-09-10 against a 62,550-recording measurement of what each candidate detector would
+actually route. Every figure quoted here comes from
+[`specs/20260910-taxonomy-routing-evidence/measurements.md`](../20260910-taxonomy-routing-evidence/measurements.md),
+which carries the full threshold sweeps, the per-family breakdowns and the enumerated
+disagreements. The earlier 388-recording tables that stood here have been discarded: they predate
+covering-window span attribution and a resample fix, and are not a valid baseline.
 
-##### 1. Speech — real lexical content is certain, not inferred
+**The framing this section now serves.** A file belongs in the speech branch if **someone spoke in
+it**, whatever the declared task. The declaration is a prior, never ground truth. No branch outcome
+is used anywhere below: no branch has been run.
 
-If the recognizer emitted **actual words**, speech is present and the matter is closed. No floor, no
-count compared to a threshold. The distinction that carries it is real lexical content against
-**only bracketed non-lexical markers** like `[COUGH]`, and the test is the word's own `bracketed`
-attribute, read through `lexical_words` (`triage/nodes/common.py`).
+##### 0. What is being replaced — specificity 0.000
 
-The rule: **consensus words that are not all bracketed ⇒ speech present, certain.** YAMNet and AST
-over the whole audio **corroborate** — they are recorded, they never decide, and their absence never
-weakens the ASR.
+TAXONOMY wrote `uncertain` for all three kinds on 62,518 of 62,547 stores (29 have no `kind`
+entity). ROUTING runs a branch unless the kind is `absent` (`routing.py:185-187`), so every branch
+would run on every recording: sensitivity 1.000 and specificity **0.000** against every reference
+standard tried. Any pathway below is an improvement on that.
 
-One thing makes the test more trustworthy than it looks. The consensus compares readings on a key
-that drops brackets, so `[COUGH]` and `cough` share a column, and that column's surface is the
-**bracketed form** — the bracket override of
-[`consensus-asr-rulings.md`](consensus-asr-rulings.md) R-1. So the bias is toward marking content
-non-lexical, which is the safe direction — a cough will not be mistaken for a word.
+Seven nulls hold it there, not one:
 
-**The inverse case is what `words.onomatopoeic_tokens` (null) is for**: a recognizer that renders a
-cough as the ordinary word `cough`, which no bracket test can catch. That vocabulary subtracts —
-words matching it do not count as lexical content. While it is null the rule over-calls speech on a
-recording whose only "words" are onomatopoeic renderings, which is the lenient direction, and the
-branch still discards.
+| null | where | consequence |
+| --- | --- | --- |
+| `windows.{yamnet,ast,hear}.default_threshold` | `default.yaml:92,95,101` | `_windows()` requires it (`preprocess.py:892`), so no `<classifier>_windows` (`preprocess.py:934`) reaches the store and `_window_evidence` (`taxonomy.py:98`) is always unavailable; `span_hear`/`span_yamnet` carry `labelled: false`, which `taxonomy.py:200` reads as unavailable too |
+| `taxonomy.presence_floor.*` (4) | `default.yaml:165-171` | `_line_state` returns `unavailable` on a null floor (`taxonomy.py:269`) |
 
-*Owed*: `_is_bracketed_token` is private to another module and used only for display; TAXONOMY needs
-it exposed or restated. `words.onomatopoeic_tokens` needs its vocabulary.
+`taxonomy.voice_min_duration_s` is a null of a third kind: unread, because
+`_retired_voice_line` (`taxonomy.py:311`) returns `unavailable` unconditionally.
+
+##### 1. Speech — lexical content, with agreement *not* required
+
+The rule: **at least one live consensus word that is not bracketed ⇒ speech present, certain.**
+Read through `lexical_words` (`common.py:291`), which is `consensus_words` filtered on the word's
+own `bracketed` attribute. No classifier can raise or lower it.
+
+Two amendments to the rule as previously proposed, both measured:
+
+**(a) Do not require `outcome: agreement`.** Against the declaration, `≥1 agreed word` scores
+sens 0.824 / spec 0.879; `≥1 non-bracketed word of any outcome` scores sens 0.965 / spec 0.738,
+and `≥5` scores sens 0.896 / spec 0.967 — the best Youden of any speech detector measured. The
+14-point sensitivity gap is almost entirely diadochokinesis: 5,677 of the 7,239 speech-declared
+recordings with no agreed word are DDK, and their transcripts are not empty — both recognizers
+transcribe the syllable train (`'Ca-ca-ca-ca-…'`, `'Ca-caxacaca-caxacaca-…'`) and disagree on how,
+so every word lands as `variant`. The `buttercup` variants, whose target is a real word, disagree at
+0.27 against 0.93 for `/ka/`. **Requiring agreement measures lexical agreement between recognizers,
+not speech presence.**
+
+**(b) Bracketed-only must not count.** 449 recordings across 12 families have an agreed word where
+*every* agreed word is bracketed — `'[cough]'`, `'[UH]'`, `'[cough] Cough Cough Cough Cough'` —
+concentrated in `respiration-and-cough-cough` (202) and `-v2-hardcough` (120). Reading
+`lexical_words` rather than the raw word list removes all 449 at a cost of one true positive.
+
+**`words.onomatopoeic_tokens` is the remaining leak, and it is now quantified.** The vocabulary is
+already wired — `preprocess.py:1372` reads it and `bracketed_form` (`consensus.py:162`, applied at
+`:282`) rewrites a matching token to `[KEY]` — and it is null (`default.yaml:116`). While it is
+null, `respiration-and-cough-cough` yields 37 recordings whose only unbracketed words are
+`'cough cough cough'`, `maximum-phonation-time` yields 50 `'Ah.'`, and `glides-low-to-high` alone
+yields 145 `'E.'` plus 44 `'E'`/`'E-'`. Those are the manoeuvre transcribed as a word, and filling the
+vocabulary is the whole fix. **The candidate tokens are readable off the corpus; choosing them is
+the owner's, not this document's.**
+
+**The disagreements are the point, and most are not errors.** 2,584 recordings carry an agreed word
+in a family that does not ask for words. Split by transcript:
+
+| cause | scale | what to do |
+| --- | --- | --- |
+| the protocol asks for speech first — 938 of 1,258 `prolonged-vowel` transcripts begin `'One two three'` | 1,258 | route to speech; this is correct, not a false positive |
+| genuine off-task speech, much of it the examiner — `"I'll have you do that one more time. [breath]"`, `"Now do I stop?"`, and one `breath-sounds` recording carrying a conversation about surgery rotations | 73/73 in `respiration-and-cough-breath`, 62/64 in `-fivebreaths` | route to speech; **this is the goal-2 condition the graph exists to find** |
+| the manoeuvre transcribed as a word | 239 in `respiration-and-cough-cough`, of which 37 survive the bracket test | `words.onomatopoeic_tokens` |
+
+*Owed*: `_is_bracketed_token` (`speech_to_text_ensemble/api.py:61`) is private to another module and
+used only for display; TAXONOMY reads the stored `bracketed` attribute instead and needs nothing
+from it. `words.onomatopoeic_tokens` needs its vocabulary.
 
 ##### 2. The AudioSet ontology, not a hand-built concept layer
 
-YAMNet's 521 and AST's 527 classes are **AudioSet classes with a published parent–child ontology**.
-Kinds should be expressed as subtrees of it rather than as flat string lists. This supersedes the
-ad-hoc concept layer an earlier draft of this section proposed: the hierarchy is the concept layer,
-and it is published rather than invented. It also dissolves most of the naming mismatch that draft
-found — `Breathe`/`Breathing`, `Laugh`/`Laughter`, `Throat Clear`/`Throat clearing` are HeAR-against-
-AudioSet spellings, so only **HeAR's eight labels** need mapping into the ontology by hand.
+Unchanged from the previous draft, and still owed. YAMNet's 521 and AST's 527 classes are
+**AudioSet classes with a published parent–child ontology**; kinds should be expressed as subtrees
+of it rather than as flat string lists. Only **HeAR's eight labels** need mapping in by hand.
 
-**The ontology is not in this repository.** What exists is
-`audio_analysis/data/audioset_source_map.json` — a *flattening*, 527 AST display names onto four
-categories (`speech`, `people`, `machine`, `environment`), whose own `derivation` records that it was
-"Generated from audioset/ontology (632 nodes)". The tree it was generated from was not vendored. That
-map cannot serve here: `Cough`, `Breathing`, `Snoring`, `Wheeze`, `Gasp`, `Sniff` and
-`Throat clearing` all flatten to `people`, so it cannot separate airway from anything else a person
-does. It also belongs to another workflow, which does not govern triage.
+**The ontology is not in this repository.** `audio_analysis/data/audioset_source_map.json` is a
+*flattening* onto four categories and cannot serve: `Cough`, `Breathing`, `Snoring`, `Wheeze`,
+`Gasp`, `Sniff` and `Throat clearing` all flatten to `people`. It also belongs to another workflow.
 
-*Owed*: vendor and pin the AudioSet `ontology.json` (id, name, `child_ids`) with its release
-identifier, the same way a model revision is pinned. Until then any subtree claim below is
-unverified.
+*Owed*: vendor and pin the AudioSet `ontology.json` with its release identifier, the same way a
+model revision is pinned. Until then any subtree claim below is unverified.
 
-##### 3. Airway is cough and breathing — and `Snoring` is dropped
+##### 3. Airway is two phenomena, and one detector does not serve both
 
-Measured over the 388-recording, 10-subject run:
+Firing fraction per family at the best whole-corpus threshold for each:
 
-| label | fires on | verdict |
+| family | `residual.energy_fraction ≥ 0.1` | YAMNet airway family `≥ 0.3` |
 | --- | --- | --- |
-| `Snore` | **245/388 (63%)**, incl. 27/28 free-speech and 9/9 story-recall | not discriminative |
-| `Snore` in **gap** spans | peak **0.298** on the silence between utterances | fires on background |
+| `respiration-and-cough-v2-breath` | **0.977** | 0.674 |
+| `respiration-and-cough-breath` | **0.904** | 0.554 |
+| `respiration-and-cough-fivebreaths` | **0.887** | 0.821 |
+| `respiration-and-cough-cough` | 0.569 | **0.825** |
+| `voluntary-cough` | 0.621 | **0.963** |
+| `respiration-and-cough-v2-hardcough` | 0.352 | **0.855** |
 
-`Snore` must not raise airway. Today `taxonomy.audioset_airway_labels` is `[Cough, Throat clearing,
-Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]` and `taxonomy.hear_airway_labels` includes
-`Snore`; under this proposal airway is the **`Cough` and `Breathing` subtrees only**, and `Snoring`,
-`Sigh`, `Sniff`, `Wheeze` and `Gasp` are dropped unless a measurement argues them back.
+Whole corpus: the residual at 0.1 is sens 0.785 / spec 0.874; YAMNet at 0.3 is sens 0.805 /
+spec 0.869. **The residual catches breathing and misses coughing; YAMNet catches coughing and is
+weakest on quiet breathing.** No threshold in either sweep repairs the other's blind spot, so
+airway should be raised by **either** line, and `breath` and `cough` should be counted separately
+rather than pooled into one `airway` verdict.
 
-> **A conflict between notions 2 and 3 that needs the owner's ruling.** In the published AudioSet
+`residual.enabled` is `true` by default (`default.yaml:209`), so the residual line has an input on
+every run.
+
+**YAMNet `Cough` is the most specific single label measured** — 0.006 on `harvard-sentences-list`,
+0.019 on `free-speech`, against 0.749–0.872 on the cough tasks. HeAR `Cough` is more sensitive
+(0.928–0.978) and fires on 0.828 of `word-color-stroop` and 0.746 of `story-recall-v2`: sensitive,
+and not usable alone. That is the same authoritative/corroborating shape as before, with the roles
+the previous draft assigned — **AudioSet raises, HeAR corroborates** — confirmed at scale.
+
+**`Snoring` / `Snore` must not raise or corroborate anything.** The previous draft dropped it on the
+grounds that HeAR's `Snore` "peaks on sustained voicing, not respiration". **That is not what this
+corpus shows, and the corrected reason is stronger:** `Snore` at 0.2 fires on 0.983 of
+`word-color-stroop`, 0.917 of `animal-fluency` and 0.804 of `story-recall-v2` — connected speech —
+as well as 0.911 of `respiration-and-cough-fivebreaths` and 0.873 of `maximum-phonation-time`. It
+does not invert against family; it fires on nearly everything long. It discriminates nothing.
+
+Airway under this proposal is therefore the **`Cough` and `Breathing` subtrees only**, with
+`Snoring`, `Sigh`, `Sniff`, `Wheeze` and `Gasp` dropped from
+`taxonomy.audioset_airway_labels` (`default.yaml:176`) and `Snore` from `taxonomy.hear_airway_labels`
+(`default.yaml:177`) unless a measurement argues them back.
+
+> **The conflict between notions 2 and 3 still needs the owner's ruling.** In the published AudioSet
 > ontology `Snoring` is, to the best of our knowledge, a **child of `Breathing`** — so "take the
 > `Breathing` subtree" and "drop `Snoring`" contradict each other. Either the rule is a subtree
-> *minus an explicit exclusion list*, or airway names its members directly and the ontology is used
-> only for naming and grouping. This must be checked against the pinned ontology before either is
-> written; it is asserted here from published structure, not from a file in this repository.
+> *minus an explicit exclusion list*, or airway names its members directly. Check it against the
+> pinned ontology before either is written.
 
-##### 4. YAMNet and AST raise airway; HeAR corroborates
+Two further measured facts constrain the airway line:
 
-Measured over the same run, splitting the respiration protocol into its sub-tasks and separating the
-classifiers through `peak_by_classifier`, at peak ≥ 0.2:
+- **The per-span HeAR reading is worse than the whole-file one.** `_span_label_evidence`
+  (`taxonomy.py:167`) is written to read `span_hear` as airway's authoritative line; scored that
+  way it reaches Youden 0.366 against 0.570 for the whole-file HeAR summary. Whichever line is
+  chosen, **this one is the weakest airway detector measured** and the choice needs a reason.
+- **The enhanced stream is not an airway input.** YAMNet's airway family on `enhanced` reaches
+  Youden 0.357 against 0.674 on `plain`: enhancement removes the airway content with the noise.
+  `residual.enhanced_energy_fraction` is worse still — it fires on 99.99% of everything at every
+  threshold, Youden ≈ 0.
 
-| | cough sub-task (14) | breath sub-task (56) | every other task (318) |
-| --- | --- | --- | --- |
-| `Cough` — YAMNet | 35% | 1% | **0.9%** |
-| `Cough` — HeAR | 64% | 1% | **27%** |
-| `Breathing` — YAMNet | 14% | 55% | **12%** |
-| `Breathe` — HeAR | 42% | 82% | **39%** |
+##### 4. Voice — the chant family, not the span duration
 
-**YAMNet is the specific one; HeAR is the sensitive one.** YAMNet's `Cough` fires on 3 of 318
-unrelated recordings — essentially no false alarms — while HeAR's fires on 27% of them, more often
-off-task than on the cough task itself. On breathing, YAMNet separates 55% against 12% (≈4.6×) where
-HeAR separates 82% against 39% (≈2.1×).
+**The proposed rule is beaten by a label.** `voice.longest_amplitude_span ≥ 3 s` scores sens 0.859 /
+spec 0.790, with 11,394 false positives that are connected speech (`caterpillar-passage` 0.712,
+`story-recall-v2` 0.664, `free-speech` 0.509 all clear 3 s). A 2 s floor is much worse — 24,569
+false positives — which reproduces the earlier small-sample result at 62,550.
 
-So airway is **raised by the AudioSet classifiers and corroborated by HeAR**, never raised by HeAR
-alone. Recall is the price: YAMNet alone would miss roughly two thirds of cough tasks. Under
-leniency that is the wrong trade to make silently, so **HeAR corroboration should widen recall
-without being able to raise the kind by itself** — a span HeAR calls cough and YAMNet does not is
-recorded, and the branch decides.
+The YAMNet chant family (`Chant`, `Mantra`, `Singing`, `Humming`, `Choir`, `Vocal music`,
+`Yodeling`) at peak ≥ 0.05 scores **sens 0.906 / spec 0.940**: 4.5 points more sensitive and 15
+points more specific than the duration floor. Per family:
 
-**Honest consequence:** of HeAR's eight labels, `Snore` is excluded by notion 3, and `Speech`,
-`Laugh`, `Sneeze`, `Throat Clear` and `Baby Cough` have no raising role here. Only `Cough` and
-`Breathe` corroborate. HeAR's remaining labels become unused by TAXONOMY, which is worth saying out
-loud rather than leaving them nominally configured.
+| family | `≥ 0.05` |
+| --- | --- |
+| `prolonged-vowel`, `maximum-phonation-time`(-v2) | 0.911–0.930 |
+| `glides-low-to-high`, `glides-high-to-low`, `high-to-low` | 0.860–0.907 |
+| every family that is not declared voice | ≤ 0.306 |
 
-##### 5. Phonation — long spans that also carry continuity
+Conjoining the two (chant ≥ 0.02 **and** amplitude span ≥ 3 s) trades sensitivity for specificity —
+0.837 / 0.958 — and is a reasonable alternative if false positives are the worry. **Which of the
+two the owner wants is open; that the duration floor alone is the worst of the three is not.**
 
-Voice's pathway: a span that is **long** and carries **continuity corroboration**. Both quantities
-exist. Spans carry `measure` (`amplitude`, `continuity`, `asr`, `gap`) and extents, and a candidate
-from a second source that overlaps an existing span is attached as a `corroborated_by` entry rather
-than dropped (`preprocess.py:626-640`) — each entry carrying its own `measure`, `start` and `end`.
-So the joint condition is directly readable: **`measure == "amplitude"` with a `corroborated_by`
-entry whose `measure == "continuity"`.**
+**`continuity` spans carry no phonation signal.** `voice.longest_continuity_span` has *negative*
+Youden at every threshold from 0.25 s to 2 s and 0.003 at its best. This is the measured form of
+the note above: a continuity candidate overlapping an amplitude span is absorbed as a
+`corroborated_by` entry rather than surviving as a span (`preprocess.py:819-821`), so the standalone
+continuity span is anti-correlated with sustained phonation. **A pathway reading `corroborated_by`
+may still work; one reading standalone continuity spans cannot.** Nothing here measures the former.
 
-**The count of continuity spans is the wrong place to look**, and this trips up the obvious check. A
-continuity candidate overlapping an amplitude span becomes corroboration, not a span of its own, so
-`span_counts` shows `continuity: 0` for exactly the recordings where phonation lives — median 0 for
-Maximum-phonation-time, Prolonged-vowel and Glides, against median 4 for story-recall. That is not
-evidence against this pathway; it is evidence that the pathway must read `corroborated_by`.
+*Owed*: whether voice reads the chant labels, the amplitude duration, or their conjunction; and, if
+a duration takes part, its value — which belongs in `taxonomy` as a new key with its derivation in
+`specs/`, not as a literal.
 
-*Owed*: a duration. On one story-recall recording, 64 of 92 spans are amplitude-with-continuity, at
-median 0.69 s and max 2.65 s — connected speech, not phonation, so that is the wrong recording to
-fit on. The threshold belongs in `taxonomy` as a new key, since it decides a kind, and should be
-measured on the sustained-vowel tasks. `spans.continuity_min_duration_ms` (300 ms) is the existing
-length filter on the continuity *source* and is not the same quantity.
+##### 5. What the classifiers cannot do, stated plainly
+
+| claim | measurement |
+| --- | --- |
+| YAMNet `Speech` cannot route speech | at 0.2 (`consolidation_floor`), sens 0.997 / spec **0.217**; its per-family firing fraction never drops below 0.560 in any of the 48 families (minimum `respiration-and-cough-breath`, maximum `animal-fluency` 1.000). Only at 0.99 is it a discriminator (0.938 / 0.769) |
+| AST is the best classifier for speech | `Speech` peak ≥ 0.5 on `plain`: sens 0.899 / spec 0.915 against agreed ASR, Youden 0.814 against YAMNet's best 0.708 — and still below the ASR rule |
+| AST cannot corroborate anything through `consensus_taxonomy` | `PER_SPAN_CLASSIFIERS` is `{yamnet, hear}` (`taxonomy.py:380`) and no `span_ast` measurement exists anywhere in the tree; every AST detector read off `consensus_taxonomy` has sensitivity 0.0000 at every threshold |
+| five of HeAR's eight labels can never corroborate | `_write_consensus_taxonomy` merges on the exact label string (`taxonomy.py:461`). Only `Cough`, `Sneeze` and `Speech` are spelled the same in both vocabularies; `Baby Cough`, `Breathe`, `Laugh`, `Snore` and `Throat Clear` have no AudioSet counterpart by string and so can never reach `n_classifiers: 2` |
+| the residual is not a speech input | YAMNet `Speech` on `residual` reaches Youden 0.043, HeAR `Speech` 0.057 |
 
 ##### 6. No certain pathway ⇒ flag the file
 
-The fallback, stated positively: **a kind no pathway raised with certainty is `uncertain`, and any
-uncertain kind flags the file.** This is what the fold already does (`taxonomy.py:636-643`, `any
-uncertain ⇒ FLAG`) — the change is not the fold but that pathways can now reach certainty, which
-none can today.
-
-What becomes reachable: once real ASR text can make speech certain, `FLAG` stops being the only
-outcome. `PASS` needs every kind decided and at least one present; `FAIL` needs all three absent.
-Both stay blocked while voice has no implemented pathway, so notion 5 is what unblocks the node
-outcome, not notion 1.
+Unchanged. **A kind no pathway raised with certainty is `uncertain`, and any uncertain kind flags
+the file** — which is what the fold already does (`taxonomy.py:635-640`). The change is not the fold
+but that pathways can reach certainty, which none can today.
 
 ##### Background, and the gap spans
 
-PREPROCESS now writes the complement of the proposed set as `measure: "gap"` and classifies it like
-any other span. On one story-recall recording, **20 gaps totalling 7.9 s** — verified in its store —
-carry `Silence` 0.977, `Pulse` 0.721, `Mains hum` 0.404, `Hum` 0.339 and `Snore` 0.298: a mains buzz
-nothing previously measured.
+Unchanged in substance and not re-measured here. PREPROCESS writes the complement of the proposed
+set as `measure: "gap"` and classifies it like any other span. **Background should be neither a kind
+nor a pathway**: the three kinds answer "is the content the protocol asked for present"; a mains hum
+is a property of the room. Proposed instead: gaps feed a **file-level quality flag** alongside the
+disruption counting.
 
-**Background should be neither a kind nor a pathway.** The three kinds answer "is the content the
-protocol asked for present"; a mains hum is a property of the room. Proposed instead: gaps feed a
-**file-level quality flag**, alongside the disruption counting, where a background that competes
-with the content is a reason to look and not a reason to route a branch. The `Snore` 0.298 in those
-same gaps is the sharpest evidence for notion 3 in this document — the label fires on the silence
-between utterances.
+##### What FIGURE already draws
 
-##### The pathways, their inputs, and the flags
-
-```mermaid
-graph LR
-  subgraph inputs
-    ASR["consensus words<br/>bracketed?"]
-    YAM["YAMNet / AST<br/>AudioSet classes"]
-    HEAR["HeAR<br/>8 labels"]
-    SPN["spans: measure<br/>+ corroborated_by"]
-    GAP["gap spans"]
-  end
-  ASR --> P1{{"1. real lexical content<br/>CERTAIN"}}
-  YAM -.corroborates.-> P1
-  YAM --> P2{{"2. Cough / Breathing<br/>subtrees"}}
-  HEAR -.corroborates only.-> P2
-  SPN --> P3{{"3. long + continuity<br/>corroboration"}}
-  P1 --> SPE["speech"]
-  P2 --> AIR["airway"]
-  P3 --> VOI["voice"]
-  SPE --> FOLD{{"any kind uncertain?"}}
-  AIR --> FOLD
-  VOI --> FOLD
-  FOLD -->|yes| FLAG["FLAG the file"]
-  FOLD -->|no| DEC["PASS or FAIL"]
-  GAP -.background.-> QF["quality flag<br/>not a kind"]
-  HINT["hint tags"] -.never sets a state.-> HC["hint_contradiction"]
-  P2 -.expected vs found.-> HC
-```
+`_stream_summary_lines` (`figure.py:865`) is called for `enhanced` and `residual`
+(`figure.py:908,910`) and emits, per stream, one block per classifier off `*_summary_all` plus one
+speech-free line per classifier off `*_summary_speech_free` — **all twelve stream summaries**. A
+kind decision taken from these measurements is therefore already visible on the page that
+accompanies it.
 
 ##### The hint: a flag, never a state
 
-TAXONOMY refuses hints today, with a reason worth preserving (`taxonomy.py:20-26`): a recording can
-genuinely carry two tasks' content, and a hint naming one must not suppress evidence for the other.
-That sits against the ruling that screening decides on content **plus the hint when available**.
+Unchanged. TAXONOMY refuses hints today, with a reason worth preserving (`taxonomy.py:22-26`): a
+recording can genuinely carry two tasks' content. This section's own measurement is the strongest
+case yet for that refusal — 78% of `prolonged-vowel` recordings contain real speech, and a hint
+naming `voice` must not suppress it.
 
-The reconciliation: **the hint may not set, raise, lower or suppress any kind's state.** The state
-stays content-only. What it may do is produce its own finding — when the content the task declares
-is absent, or a strongly-supported label contradicts the declaration, that is a `hint_contradiction`
-flag on the file. A sustained-vowel task reading as `Snore` on 18 of 18 recordings is exactly such a
-case, and more useful surfaced than resolved either way.
+**The hint may not set, raise, lower or suppress any kind's state.** What it may do is produce its
+own finding: when the content the task declares is absent, or a strongly-supported label
+contradicts the declaration, that is a `hint_contradiction` flag on the file.
 
 ##### Every state, and what produces it
 
@@ -552,15 +582,49 @@ case, and more useful surfaced than resolved either way.
 not the **file** result: `Triage.PASS` and the acoustically-empty `DISCARD` are VERDICT's, and
 `DISCARD` stays reachable through ADMIT `fail` regardless of anything here.
 
+##### The pathways, their inputs, and the flags
+
+```mermaid
+graph LR
+  subgraph inputs
+    ASR["consensus words<br/>bracketed?"]
+    AST["AST<br/>AudioSet, whole file"]
+    YAM["YAMNet<br/>AudioSet"]
+    HEAR["HeAR<br/>8 labels"]
+    RES["residual<br/>energy_fraction"]
+    SPN["spans: measure<br/>+ corroborated_by"]
+    GAP["gap spans"]
+  end
+  ASR --> P1{{"1. non-bracketed word<br/>any outcome<br/>CERTAIN"}}
+  AST -.corroborates.-> P1
+  YAM --> P2{{"2. Cough subtree"}}
+  RES --> P3{{"3. Breathing subtree"}}
+  HEAR -.corroborates only.-> P2
+  HEAR -.corroborates only.-> P3
+  YAM --> P4{{"4. chant family"}}
+  SPN -.optional conjunct.-> P4
+  P1 --> SPE["speech"]
+  P2 --> AIR["airway"]
+  P3 --> AIR
+  P4 --> VOI["voice"]
+  SPE --> FOLD{{"any kind uncertain?"}}
+  AIR --> FOLD
+  VOI --> FOLD
+  FOLD -->|yes| FLAG["FLAG the file"]
+  FOLD -->|no| DEC["PASS or FAIL"]
+  GAP -.background.-> QF["quality flag<br/>not a kind"]
+  HINT["hint tags"] -.never sets a state.-> HC["hint_contradiction"]
+```
+
 ##### What each pathway still needs
 
 | pathway | owed |
 | --- | --- |
-| 1 speech | `_is_bracketed_token` exposed to TAXONOMY; `words.onomatopoeic_tokens` vocabulary (null) |
+| 1 speech | `words.onomatopoeic_tokens` vocabulary (null, `default.yaml:116`); the ruling that `outcome` is not read |
 | 2 ontology | the AudioSet `ontology.json` vendored and pinned — **not currently in the repository** |
-| 3 airway | the subtree-minus-exclusions ruling; HeAR's eight labels mapped into the ontology |
-| 4 raising | whether HeAR-corroborated-only widens recall, or is recorded and ignored |
-| 5 voice | a minimum duration, measured on sustained-vowel tasks, living in `taxonomy` |
+| 3 airway | the subtree-minus-exclusions ruling; whether `breath` and `cough` become two counted lines; whether the HeAR line reads `span_hear` (Youden 0.366) or the whole-file summary (0.570) |
+| 4 voice | chant labels, amplitude duration, or their conjunction — and, if a duration, its value in `taxonomy` with a derivation |
+| 5 floors | the four `taxonomy.presence_floor.*` and the three `windows.*.default_threshold` nulls; nothing in this node can decide while they stand |
 | 6 fold | nothing — the fold already flags on uncertainty; pathways are what is missing |
 | background | whether a competing background is a quality flag or nothing at all |
 
