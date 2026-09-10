@@ -69,6 +69,47 @@ def test_worker_output_maps_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> N
     assert sl.start == 0.0 and sl.end == 0.9
 
 
+def _stub_out_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the backend at a fake venv + snapshot so no Hub or venv work happens."""
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr(cw, "resolve_model", lambda *a, **k: ("f" * 40, Path("/fake/snapshot")))
+    monkeypatch.setattr(cw, "ensure_venv", lambda *a, **k: "/fake/venv")
+    monkeypatch.setattr(cw, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
+    monkeypatch.setattr(cw.subprocess, "run", lambda *a, **k: None)
+
+
+def test_ct2_position_limit_becomes_a_typed_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CTranslate2's 448-position overrun is re-raised as a ValueError, so it records as an absence."""
+    _stub_out_staging(monkeypatch)
+
+    def _raise(*a: object, **k: object) -> dict:
+        raise RuntimeError("No position encodings are defined for positions >= 448, but got position 448")
+
+    monkeypatch.setattr(cw, "parse_subprocess_result", _raise)
+    audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
+
+    with pytest.raises(cw.CrisperWhisperDecoderPositionsExceeded) as caught:
+        cw.CrisperWhisperASR.transcribe_with_crisperwhisper([audio], model=None)
+    assert isinstance(caught.value, ValueError)
+    assert "448" in str(caught.value)
+
+
+def test_other_worker_failures_stay_hard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unrelated worker RuntimeError is not reclassified as an absence."""
+    _stub_out_staging(monkeypatch)
+
+    def _raise(*a: object, **k: object) -> dict:
+        raise RuntimeError("CrisperWhisper 2.0 venv failed:\nCUDA out of memory")
+
+    monkeypatch.setattr(cw, "parse_subprocess_result", _raise)
+    audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
+
+    with pytest.raises(RuntimeError) as caught:
+        cw.CrisperWhisperASR.transcribe_with_crisperwhisper([audio], model=None)
+    assert not isinstance(caught.value, ValueError)
+
+
 def test_ct2_cache_key_matches_the_library_layout() -> None:
     """The computed key is the directory name the library's converter writes."""
     snapshot = (
