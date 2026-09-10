@@ -318,6 +318,11 @@ threshold in either sweep repairs the other's blind spot.
   speech as well. It must not raise or corroborate any kind.
 - **YAMNet `Breathing` confuses sustained phonation**: 0.504 on `maximum-phonation-time`, against
   0.019 on `harvard-sentences-list`.
+- **Five of HeAR's eight labels can never corroborate an AudioSet one.** `_write_consensus_taxonomy`
+  merges rows on the exact label string (`taxonomy.py:461`). Checked against a run's own 521 YAMNet
+  label keys, only `Cough`, `Sneeze` and `Speech` are spelled the same; `Baby Cough`, `Breathe`,
+  `Laugh`, `Snore` and `Throat Clear` have only near-misses (`Breathing`, `Laughter`, `Snoring`,
+  `Throat clearing`), so no `consensus_taxonomy` row for them can reach `n_classifiers: 2`.
 
 ## Voice
 

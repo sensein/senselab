@@ -493,7 +493,7 @@ spec 0.790, with 11,394 false positives that are connected speech (`caterpillar-
 false positives — which reproduces the earlier small-sample result at 62,550.
 
 The YAMNet chant family (`Chant`, `Mantra`, `Singing`, `Humming`, `Choir`, `Vocal music`,
-`Yodeling`) at peak ≥ 0.05 scores **sens 0.906 / spec 0.940**: 4.5 points more sensitive and 15
+`Yodeling`) at peak ≥ 0.05 scores **sens 0.906 / spec 0.940**: 4.7 points more sensitive and 15
 points more specific than the duration floor. Per family:
 
 | family | `≥ 0.05` |
@@ -524,7 +524,7 @@ a duration takes part, its value — which belongs in `taxonomy` as a new key wi
 | YAMNet `Speech` cannot route speech | at 0.2 (`consolidation_floor`), sens 0.997 / spec **0.217**; its per-family firing fraction never drops below 0.560 in any of the 48 families (minimum `respiration-and-cough-breath`, maximum `animal-fluency` 1.000). Only at 0.99 is it a discriminator (0.938 / 0.769) |
 | AST is the best classifier for speech | `Speech` peak ≥ 0.5 on `plain`: sens 0.899 / spec 0.915 against agreed ASR, Youden 0.814 against YAMNet's best 0.708 — and still below the ASR rule |
 | AST cannot corroborate anything through `consensus_taxonomy` | `PER_SPAN_CLASSIFIERS` is `{yamnet, hear}` (`taxonomy.py:380`) and no `span_ast` measurement exists anywhere in the tree; every AST detector read off `consensus_taxonomy` has sensitivity 0.0000 at every threshold |
-| five of HeAR's eight labels can never corroborate | `_write_consensus_taxonomy` merges on the exact label string (`taxonomy.py:461`). Only `Cough`, `Sneeze` and `Speech` are spelled the same in both vocabularies; `Baby Cough`, `Breathe`, `Laugh`, `Snore` and `Throat Clear` have no AudioSet counterpart by string and so can never reach `n_classifiers: 2` |
+| five of HeAR's eight labels can never corroborate | `_write_consensus_taxonomy` merges on the exact label string (`taxonomy.py:461`). Checked against a run's own 521 YAMNet label keys, only `Cough`, `Sneeze` and `Speech` are spelled the same; `Baby Cough`, `Breathe`, `Laugh`, `Snore` and `Throat Clear` have only near-misses (`Breathing`, `Laughter`, `Snoring`, `Throat clearing`) and so can never reach `n_classifiers: 2` |
 | the residual is not a speech input | YAMNet `Speech` on `residual` reaches Youden 0.043, HeAR `Speech` 0.057 |
 
 ##### 6. No certain pathway ⇒ flag the file
@@ -594,8 +594,9 @@ graph LR
   end
   ASR --> P1{{"1. non-bracketed word<br/>any outcome<br/>CERTAIN"}}
   AST -.corroborates.-> P1
-  YAM --> P2{{"2. Cough subtree"}}
-  RES --> P3{{"3. Breathing subtree"}}
+  YAM --> P2{{"2. cough<br/>Cough subtree"}}
+  YAM --> P3{{"3. breath<br/>Breathing subtree<br/>or residual energy"}}
+  RES --> P3
   HEAR -.corroborates only.-> P2
   HEAR -.corroborates only.-> P3
   YAM --> P4{{"4. chant family"}}
