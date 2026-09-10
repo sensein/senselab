@@ -8,14 +8,18 @@ preferred here: every one in a detector's grid is scored, and
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures
-from senselab.audio.workflows.triage.routing_analysis.labels import FAMILIES, peak_key
+from senselab.audio.workflows.triage.routing_analysis.labels import FAMILIES, LABEL_SETS, peak_key
 
 GATE_CLOSED = -1.0
 """The value a gated detector reads when its corroborator did not fire: below every threshold."""
+
+GATE_CLOSED_BELOW = math.inf
+"""The same, for a ``below``-polarity detector, where a small value is what fires."""
 
 CONSOLIDATION_FLOOR = 0.2
 """``taxonomy.consolidation_floor`` in ``data/config/default.yaml``, marked in every score grid."""
@@ -65,6 +69,54 @@ FRACTION_GRID: tuple[float, ...] = (
 )
 """Residual energy-fraction thresholds."""
 
+DB_OVER_FLOOR_GRID: tuple[float, ...] = (3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0, 25.0, 30.0, 35.0, 40.0, 50.0)
+"""``peak_over_floor_db`` thresholds, in dB above the span's own floor."""
+
+DBFS_GRID: tuple[float, ...] = (-60.0, -50.0, -45.0, -40.0, -35.0, -30.0, -25.0, -20.0, -15.0, -10.0, -6.0, -3.0)
+"""Whole-file level thresholds, in dBFS."""
+
+PESQ_GRID: tuple[float, ...] = (1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0)
+"""SQUIM PESQ thresholds; the head's range is 1.0-4.5."""
+
+SI_SDR_GRID: tuple[float, ...] = (-20.0, -15.0, -12.0, -10.0, -8.0, -6.0, -4.0, -2.0, 0.0, 2.0, 5.0, 10.0, 15.0)
+"""SQUIM SI-SDR thresholds, in dB."""
+
+STOI_GRID: tuple[float, ...] = (0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9)
+"""SQUIM STOI thresholds; the head's range is 0-1."""
+
+SPREAD_GRID: tuple[float, ...] = (0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0, 2.0, 5.0)
+"""Thresholds for an interquartile spread, whose unit is that of the quantity it spreads."""
+
+ZCR_GRID: tuple[float, ...] = (100.0, 200.0, 400.0, 600.0, 800.0, 1000.0, 1250.0, 1500.0, 2000.0, 2500.0, 3000.0)
+"""Zero-crossing-rate thresholds, in crossings per second over the original recording."""
+
+RATE_GRID: tuple[float, ...] = (0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0)
+"""Span-rate thresholds, in spans per second of recording."""
+
+DB_SPREAD_GRID: tuple[float, ...] = (0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 13.0, 16.0, 20.0, 25.0, 30.0)
+"""Thresholds for an interquartile spread whose unit is dB."""
+
+SIGNED_SCORE_GRID: tuple[float, ...] = (
+    -0.9,
+    -0.7,
+    -0.5,
+    -0.3,
+    -0.2,
+    -0.1,
+    -0.05,
+    -0.01,
+    0.0,
+    0.01,
+    0.05,
+    0.1,
+    0.2,
+    0.3,
+    0.5,
+    0.7,
+    0.9,
+)
+"""Thresholds for a difference of two classifier scores, which is signed."""
+
 
 @dataclass(frozen=True)
 class Detector:
@@ -77,6 +129,7 @@ class Detector:
             ``gated`` reader nests two of these.
         unit: The unit of the number it reads.
         thresholds: Every threshold it is scored at.
+        polarity: ``above`` fires at or over the threshold, ``below`` fires at or under it.
     """
 
     name: str
@@ -84,6 +137,7 @@ class Detector:
     reader: tuple[Any, ...]
     unit: str
     thresholds: tuple[float, ...]
+    polarity: str = "above"
 
 
 def sweep_points(detector: Detector) -> tuple[float, ...]:
@@ -141,14 +195,54 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
             return None
         passes = gate_value >= float(gate_threshold) if polarity == "above" else gate_value < float(gate_threshold)
         if not passes:
-            return GATE_CLOSED
-        return detector_value(features, Detector(detector.name, detector.kind, primary, detector.unit, ()))
+            return GATE_CLOSED if detector.polarity == "above" else GATE_CLOSED_BELOW
+        return detector_value(
+            features, Detector(detector.name, detector.kind, primary, detector.unit, (), detector.polarity)
+        )
     if source == "peak_label":
         stream, classifier, label = arguments
         if stream in ("plain", "enhanced", "residual") and f"{stream}|{classifier}" not in features.classifier_streams:
             return None
         return float(features.peaks.get(peak_key(stream, classifier, label), 0.0))
+    if source == "peak_set":
+        stream, classifier, set_name = arguments
+        if stream in ("plain", "enhanced", "residual") and f"{stream}|{classifier}" not in features.classifier_streams:
+            return None
+        labels = LABEL_SETS[set_name][classifier]
+        if not labels:
+            return None
+        return max((features.peaks.get(peak_key(stream, classifier, label), 0.0) for label in labels), default=0.0)
+    if source == "span_stat":
+        return _optional(features.span_stats, arguments[0])
+    if source == "squim":
+        return _optional(features.squim, arguments[0])
+    if source == "level":
+        return _optional(features.level, arguments[0])
+    if source == "disruptions":
+        return _optional(features.disruptions, arguments[0])
+    if source == "silence":
+        return _optional(features.silence, arguments[0])
+    if source == "difference":
+        left = detector_value(features, Detector(detector.name, detector.kind, arguments[0], detector.unit, ()))
+        right = detector_value(features, Detector(detector.name, detector.kind, arguments[1], detector.unit, ()))
+        return None if left is None or right is None else left - right
     raise ValueError(f"unknown detector source {source!r}")
+
+
+def _optional(table: dict[str, float], key: str) -> float | None:
+    """One value out of a feature table, absent rather than zero when the derivative is missing.
+
+    Args:
+        table: The feature table.
+        key: The key.
+
+    Returns:
+        The value, or None when the key is absent or not finite.
+    """
+    value = table.get(key)
+    if value is None or not math.isfinite(float(value)):
+        return None
+    return float(value)
 
 
 def _peak_detectors() -> list[Detector]:
@@ -192,6 +286,254 @@ def _peak_detectors() -> list[Detector]:
                 )
             )
     return built
+
+
+def _singing_detectors() -> list[Detector]:
+    """The AudioSet singing-subtree union, on each stream and both AudioSet classifiers.
+
+    Returns:
+        The union detectors, for the ``voice`` and ``glide`` kinds.
+    """
+    built: list[Detector] = []
+    for kind in ("voice", "glide"):
+        for classifier in ("yamnet", "ast"):
+            for stream in ("plain", "enhanced"):
+                built.append(
+                    Detector(
+                        name=f"{kind}.{classifier}_singing_union.{stream}",
+                        kind=kind,
+                        reader=("peak_set", stream, classifier, "singing"),
+                        unit="score",
+                        thresholds=SCORE_GRID,
+                    )
+                )
+    return built
+
+
+_COUGH_VS_BREATH: tuple[Detector, ...] = (
+    Detector("cough.longest_amplitude_span", "cough", ("span_longest", "amplitude"), "seconds", DURATION_GRID, "below"),
+    Detector(
+        "cough.amplitude_duration_median",
+        "cough",
+        ("span_stat", "amplitude.duration_median"),
+        "seconds",
+        DURATION_GRID,
+        "below",
+    ),
+    Detector(
+        "cough.amplitude_duration_max", "cough", ("span_stat", "amplitude.duration_max"), "seconds", DURATION_GRID
+    ),
+    Detector("cough.amplitude_span_count", "cough", ("span_count", "amplitude"), "spans", COUNT_GRID),
+    Detector("cough.amplitude_rate_per_s", "cough", ("span_stat", "amplitude.rate_per_s"), "spans/s", RATE_GRID),
+    Detector(
+        "cough.amplitude_duty_fraction",
+        "cough",
+        ("span_stat", "amplitude.duty_fraction"),
+        "fraction",
+        FRACTION_GRID,
+        "below",
+    ),
+    Detector(
+        "cough.amplitude_peak_over_floor_db_max",
+        "cough",
+        ("span_stat", "amplitude.peak_over_floor_db_max"),
+        "dB",
+        DB_OVER_FLOOR_GRID,
+    ),
+    Detector(
+        "cough.amplitude_peak_over_floor_db_median",
+        "cough",
+        ("span_stat", "amplitude.peak_over_floor_db_median"),
+        "dB",
+        DB_OVER_FLOOR_GRID,
+    ),
+    Detector("cough.squim_stoi_median", "cough", ("squim", "all.stoi.median"), "stoi", STOI_GRID, "below"),
+    Detector("cough.squim_stoi_max", "cough", ("squim", "all.stoi.max"), "stoi", STOI_GRID),
+    Detector("cough.squim_stoi_iqr", "cough", ("squim", "all.stoi.iqr"), "stoi", SPREAD_GRID),
+    Detector("cough.squim_pesq_max", "cough", ("squim", "all.pesq.max"), "pesq", PESQ_GRID),
+    Detector("cough.squim_pesq_iqr", "cough", ("squim", "all.pesq.iqr"), "pesq", SPREAD_GRID),
+    Detector("cough.squim_si_sdr_median", "cough", ("squim", "all.si_sdr.median"), "dB", SI_SDR_GRID, "below"),
+    Detector("cough.squim_si_sdr_max", "cough", ("squim", "all.si_sdr.max"), "dB", SI_SDR_GRID),
+    Detector("cough.squim_si_sdr_iqr", "cough", ("squim", "all.si_sdr.iqr"), "dB", DB_SPREAD_GRID),
+    Detector(
+        "cough.squim_amplitude_si_sdr_max", "cough", ("squim", "amplitude.si_sdr.max"), "dB", SI_SDR_GRID, "below"
+    ),
+    Detector(
+        "cough.yamnet_cough_labels.plain", "cough", ("peak_set", "plain", "yamnet", "cough_labels"), "score", SCORE_GRID
+    ),
+    Detector(
+        "cough.hear_cough_labels.plain", "cough", ("peak_set", "plain", "hear", "cough_labels"), "score", SCORE_GRID
+    ),
+    Detector(
+        "cough.yamnet_cough_minus_breath.plain",
+        "cough",
+        (
+            "difference",
+            ("peak_set", "plain", "yamnet", "cough_labels"),
+            ("peak_set", "plain", "yamnet", "breath_labels"),
+        ),
+        "score",
+        SIGNED_SCORE_GRID,
+    ),
+    Detector(
+        "cough.hear_cough_minus_breath.plain",
+        "cough",
+        ("difference", ("peak_set", "plain", "hear", "cough_labels"), ("peak_set", "plain", "hear", "breath_labels")),
+        "score",
+        SIGNED_SCORE_GRID,
+    ),
+    Detector(
+        "cough.yamnet_cough_label.plain", "cough", ("peak_label", "plain", "yamnet", "Cough"), "score", SCORE_GRID
+    ),
+    Detector(
+        "cough.yamnet_breathing_label.plain",
+        "cough",
+        ("peak_label", "plain", "yamnet", "Breathing"),
+        "score",
+        SCORE_GRID,
+        "below",
+    ),
+    Detector("cough.zero_crossing_rate", "cough", ("disruptions", "zero_crossing_rate"), "crossings/s", ZCR_GRID),
+    Detector("cough.level_peak_dbfs", "cough", ("level", "peak_dbfs"), "dBFS", DBFS_GRID),
+    Detector(
+        "cough.level_crest_db",
+        "cough",
+        ("difference", ("level", "peak_dbfs"), ("level", "rms_dbfs")),
+        "dB",
+        DB_OVER_FLOOR_GRID,
+    ),
+    Detector("cough.silence_fraction", "cough", ("silence", "fraction"), "fraction", FRACTION_GRID),
+    Detector(
+        "cough.residual_energy_fraction", "cough", ("residual", "energy_fraction"), "fraction", FRACTION_GRID, "below"
+    ),
+    Detector("cough.residual_band_0_200", "cough", ("residual", "band_0_200"), "fraction", FRACTION_GRID, "below"),
+    Detector("cough.residual_band_1000_4000", "cough", ("residual", "band_1000_4000"), "fraction", FRACTION_GRID),
+    Detector(
+        "cough.yamnet_cough_labels.plain+short_span",
+        "cough",
+        ("gated", ("peak_set", "plain", "yamnet", "cough_labels"), ("span_longest", "amplitude"), 1.0, "below"),
+        "score",
+        SCORE_GRID,
+    ),
+    Detector(
+        "cough.level_crest_db+hear_cough>=0.5",
+        "cough",
+        (
+            "gated",
+            ("difference", ("level", "peak_dbfs"), ("level", "rms_dbfs")),
+            ("peak_set", "plain", "hear", "cough_labels"),
+            0.5,
+            "above",
+        ),
+        "dB",
+        DB_OVER_FLOOR_GRID,
+    ),
+)
+"""Candidate discriminators between a declared cough family and a declared breath family."""
+
+_GLIDES: tuple[Detector, ...] = (
+    Detector("glide.yamnet_whistle.plain", "glide", ("peak_set", "plain", "yamnet", "whistle"), "score", SCORE_GRID),
+    Detector(
+        "glide.yamnet_humming_label.plain", "glide", ("peak_label", "plain", "yamnet", "Humming"), "score", SCORE_GRID
+    ),
+    Detector(
+        "glide.yamnet_chant_label.plain", "glide", ("peak_label", "plain", "yamnet", "Chant"), "score", SCORE_GRID
+    ),
+    Detector("glide.yamnet_peak.plain", "glide", ("peak", "plain", "yamnet", "voice"), "score", SCORE_GRID),
+    Detector("glide.longest_amplitude_span", "glide", ("span_longest", "amplitude"), "seconds", DURATION_GRID),
+    Detector(
+        "glide.amplitude_duration_iqr", "glide", ("span_stat", "amplitude.duration_iqr"), "seconds", DURATION_GRID
+    ),
+    Detector(
+        "glide.amplitude_duty_fraction", "glide", ("span_stat", "amplitude.duty_fraction"), "fraction", FRACTION_GRID
+    ),
+    Detector("glide.amplitude_span_count", "glide", ("span_count", "amplitude"), "spans", COUNT_GRID, "below"),
+    Detector(
+        "glide.amplitude_peak_over_floor_db_max",
+        "glide",
+        ("span_stat", "amplitude.peak_over_floor_db_max"),
+        "dB",
+        DB_OVER_FLOOR_GRID,
+    ),
+    Detector("glide.squim_stoi_max", "glide", ("squim", "all.stoi.max"), "stoi", STOI_GRID),
+    Detector("glide.squim_pesq_max", "glide", ("squim", "all.pesq.max"), "pesq", PESQ_GRID),
+    Detector("glide.squim_si_sdr_max", "glide", ("squim", "all.si_sdr.max"), "dB", SI_SDR_GRID),
+    Detector("glide.squim_si_sdr_iqr", "glide", ("squim", "all.si_sdr.iqr"), "dB", DB_SPREAD_GRID),
+    Detector("glide.squim_amplitude_stoi_median", "glide", ("squim", "amplitude.stoi.median"), "stoi", STOI_GRID),
+    Detector("glide.silence_fraction", "glide", ("silence", "fraction"), "fraction", FRACTION_GRID, "below"),
+    Detector("glide.level_lufs", "glide", ("level", "lufs"), "dBFS", DBFS_GRID),
+    Detector("glide.zero_crossing_rate", "glide", ("disruptions", "zero_crossing_rate"), "crossings/s", ZCR_GRID),
+    Detector(
+        "glide.residual_energy_fraction", "glide", ("residual", "energy_fraction"), "fraction", FRACTION_GRID, "below"
+    ),
+    Detector("glide.words_lexical", "glide", ("words", "lexical"), "words", COUNT_GRID, "below"),
+    Detector(
+        "glide.yamnet_singing_union.plain+no_agreed_word",
+        "glide",
+        ("gated", ("peak_set", "plain", "yamnet", "singing"), ("words", "agreement"), 1, "below"),
+        "score",
+        SCORE_GRID,
+    ),
+    Detector(
+        "glide.yamnet_singing_union.plain+amplitude>=2s",
+        "glide",
+        ("gated", ("peak_set", "plain", "yamnet", "singing"), ("span_longest", "amplitude"), 2.0, "above"),
+        "score",
+        SCORE_GRID,
+    ),
+    Detector(
+        "glide.longest_amplitude_span+singing>=0.05",
+        "glide",
+        ("gated", ("span_longest", "amplitude"), ("peak_set", "plain", "yamnet", "singing"), 0.05, "above"),
+        "seconds",
+        DURATION_GRID,
+    ),
+    Detector(
+        "glide.squim_stoi_max+no_agreed_word",
+        "glide",
+        ("gated", ("squim", "all.stoi.max"), ("words", "agreement"), 1, "below"),
+        "stoi",
+        STOI_GRID,
+    ),
+)
+"""Candidate detectors for the glide families, the worst-served of the voice families."""
+
+_NEW_DERIVATIVES: tuple[Detector, ...] = (
+    Detector(
+        "airway.hear_cough_labels.plain", "airway", ("peak_set", "plain", "hear", "cough_labels"), "score", SCORE_GRID
+    ),
+    Detector(
+        "airway.amplitude_peak_over_floor_db_max",
+        "airway",
+        ("span_stat", "amplitude.peak_over_floor_db_max"),
+        "dB",
+        DB_OVER_FLOOR_GRID,
+    ),
+    Detector("airway.amplitude_rate_per_s", "airway", ("span_stat", "amplitude.rate_per_s"), "spans/s", RATE_GRID),
+    Detector("airway.zero_crossing_rate", "airway", ("disruptions", "zero_crossing_rate"), "crossings/s", ZCR_GRID),
+    Detector("airway.squim_stoi_median", "airway", ("squim", "all.stoi.median"), "stoi", STOI_GRID, "below"),
+    Detector("airway.squim_si_sdr_iqr", "airway", ("squim", "all.si_sdr.iqr"), "dB", DB_SPREAD_GRID),
+    Detector("airway.silence_fraction", "airway", ("silence", "fraction"), "fraction", FRACTION_GRID),
+    Detector("airway.residual_band_0_200", "airway", ("residual", "band_0_200"), "fraction", FRACTION_GRID),
+    Detector("airway.residual_band_4000_8000", "airway", ("residual", "band_4000_8000"), "fraction", FRACTION_GRID),
+    Detector(
+        "airway.residual_correlation_residual", "airway", ("residual", "correlation_residual"), "r", FRACTION_GRID
+    ),
+    Detector("speech.squim_stoi_median", "speech", ("squim", "all.stoi.median"), "stoi", STOI_GRID),
+    Detector("speech.squim_pesq_median", "speech", ("squim", "all.pesq.median"), "pesq", PESQ_GRID),
+    Detector("speech.squim_si_sdr_median", "speech", ("squim", "all.si_sdr.median"), "dB", SI_SDR_GRID),
+    Detector("speech.silence_fraction", "speech", ("silence", "fraction"), "fraction", FRACTION_GRID, "below"),
+    Detector("speech.amplitude_rate_per_s", "speech", ("span_stat", "amplitude.rate_per_s"), "spans/s", RATE_GRID),
+    Detector("speech.level_lufs", "speech", ("level", "lufs"), "dBFS", DBFS_GRID),
+    Detector("voice.squim_stoi_max", "voice", ("squim", "all.stoi.max"), "stoi", STOI_GRID),
+    Detector("voice.squim_amplitude_pesq_max", "voice", ("squim", "amplitude.pesq.max"), "pesq", PESQ_GRID),
+    Detector(
+        "voice.amplitude_duty_fraction", "voice", ("span_stat", "amplitude.duty_fraction"), "fraction", FRACTION_GRID
+    ),
+    Detector("voice.silence_fraction", "voice", ("silence", "fraction"), "fraction", FRACTION_GRID, "below"),
+    Detector("voice.level_lufs", "voice", ("level", "lufs"), "dBFS", DBFS_GRID),
+)
+"""Detectors reading a derivative the first sweep ignored, on the three kinds it already covered."""
 
 
 DETECTORS: tuple[Detector, ...] = tuple(
@@ -292,5 +634,9 @@ DETECTORS: tuple[Detector, ...] = tuple(
         ),
     ]
     + _peak_detectors()
+    + _singing_detectors()
+    + list(_COUGH_VS_BREATH)
+    + list(_GLIDES)
+    + list(_NEW_DERIVATIVES)
 )
 """Every candidate detector, scored at every threshold in its own grid."""
