@@ -7,9 +7,9 @@ against and never a filter on which gates run.
 
 Every gate is one feature path, one comparison and one threshold, all of them read from
 ``taxonomy.ruleset`` in ``data/config/default.yaml``. A gate either routes a branch or flags it:
-``branch_gates`` decides entry, ``branch_flags`` annotates a branch already entered. Ahead of both,
-one precondition asks whether the recording carried anything at all. The operating points, which of
-them are provisional, and the open questions are in
+``branch_gates`` decides entry, ``branch_flags`` annotates a branch already entered. Behind both,
+one bypass asks whether the recording carried anything at all, and it is consulted only where no
+gate fired. The operating points, which of them are provisional, and the open questions are in
 ``specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md``.
 """
 
@@ -57,6 +57,22 @@ class GateOutcome(Enum):
     UNAVAILABLE = "unavailable"
 
 
+class RouteState(Enum):
+    """What the ruleset made of one recording. Exactly one member holds for every evaluation.
+
+    Only :attr:`UNEXPLAINED` is a charge against the ruleset: it is content no gate could account
+    for. :attr:`EMPTY` is a charge against the recording, and :attr:`ROUTED` is neither.
+    """
+
+    ROUTED = "routed"
+    EMPTY = "empty"
+    UNEXPLAINED = "unexplained"
+
+
+ROUTE_STATES: tuple[str, ...] = tuple(state.value for state in RouteState)
+"""Every state's name, in declaration order, so a tally can carry all three whether or not seen."""
+
+
 @dataclass(frozen=True)
 class Gate:
     """One threshold rule over one number.
@@ -77,7 +93,7 @@ class Gate:
 
 @dataclass(frozen=True)
 class Emptiness:
-    """The precondition that decides a recording carried nothing to route.
+    """The bypass that decides a recording nothing routed carried nothing to route.
 
     Attributes:
         peak_streams: The ``<stream>|<classifier>`` summaries whose highest tracked-label score
@@ -100,7 +116,7 @@ class Ruleset:
             and never routes: it is read after a branch is entered, not to enter it.
         reference_family_set: Branch to the :data:`FAMILY_SETS` entry it is scored against. This
             mapping is a reference standard, not a router: no gate is skipped because of it.
-        emptiness: The precondition evaluated ahead of every branch gate.
+        emptiness: The bypass evaluated after every branch gate, and only where none fired.
     """
 
     gates: Mapping[str, Gate]
@@ -143,10 +159,9 @@ class RouteEvaluation:
         flags: Per branch, the flag gates that fired. A flag annotates a branch and never routes
             it, so it is absent from every other field here. Only branches with a fired flag are
             keyed.
-        empty: Whether the emptiness precondition fired, in which case no branch gate ran.
-        fell_through: Whether the recording carried content and still routed nowhere. An empty
-            recording is not a fall-through.
-        gate_outcomes: Every gate's outcome, by gate name; empty when ``empty``.
+        state: Which of the three outcomes this recording had.
+        gate_outcomes: Every gate's outcome, by gate name. Every gate is evaluated on every
+            recording, so this is never empty for a ruleset that declares one.
     """
 
     stem: str
@@ -158,8 +173,7 @@ class RouteEvaluation:
     extra: tuple[str, ...]
     unavailable: Mapping[str, tuple[str, ...]]
     flags: Mapping[str, tuple[str, ...]]
-    empty: bool
-    fell_through: bool
+    state: RouteState
     gate_outcomes: Mapping[str, GateOutcome]
 
 
@@ -177,9 +191,8 @@ class FamilyTally:
         extra: Per branch, how many were routed and not declared.
         unavailable: Per branch, how many carried an unreadable gate for it.
         flagged: Per branch, how many carried a fired flag gate for it.
-        empty: How many the emptiness precondition fired on.
-        fell_through: How many carried content and still routed to no branch at all. The empty
-            ones are counted in ``empty`` and never here.
+        states: How many landed in each :class:`RouteState`, keyed by its value. All three keys are
+            present whether or not the family carried one, and they sum to ``recordings``.
     """
 
     family: str
@@ -191,8 +204,7 @@ class FamilyTally:
     extra: Mapping[str, int]
     unavailable: Mapping[str, int]
     flagged: Mapping[str, int]
-    empty: int
-    fell_through: int
+    states: Mapping[str, int]
 
 
 def max_token_repeat(transcript: str) -> int:
@@ -291,7 +303,7 @@ def load_ruleset(config: TriageConfig) -> Ruleset:
 
 
 def evaluate_emptiness(features: RecordingFeatures, emptiness: Emptiness) -> GateOutcome:
-    """Whether a recording carried nothing at all, before any branch gate is asked anything.
+    """Whether a recording carried nothing at all, asked only where no branch gate fired.
 
     Args:
         features: The recording's extracted evidence.
@@ -351,10 +363,11 @@ def evaluate_gate(features: RecordingFeatures, gate: Gate) -> GateOutcome:
 def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvaluation:
     """Route one recording from its content, then compare that against what its family declares.
 
-    The emptiness precondition runs first. When it fires no branch gate is asked anything and the
-    recording routes nowhere, which is distinct from carrying content that matched no gate. When it
-    does not, every branch's gates are evaluated, whatever the task asked for, and every branch's
-    flag gates are evaluated beside them without contributing to ``routed``.
+    Every branch's gates are evaluated, whatever the task asked for, and every branch's flag gates
+    are evaluated beside them without contributing to ``routed``. Emptiness is a bypass rather than
+    a precondition: it is consulted only where no gate fired, so a gate firing on a recording the
+    emptiness rule would have called empty routes it normally. That disagreement is a reading of the
+    emptiness rule, not something the evaluation suppresses.
 
     Args:
         features: The recording's extracted evidence.
@@ -364,22 +377,6 @@ def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvalu
         The evaluation.
     """
     declared = ruleset.reference_branches(features.family)
-    if evaluate_emptiness(features, ruleset.emptiness) is GateOutcome.FIRED:
-        return RouteEvaluation(
-            stem=features.stem,
-            family=features.family,
-            routed=(),
-            declared=declared,
-            agreed=(),
-            missed=declared,
-            extra=(),
-            unavailable={},
-            flags={},
-            empty=True,
-            fell_through=False,
-            gate_outcomes={},
-        )
-
     outcomes: dict[str, GateOutcome] = {}
     routed: list[str] = []
     unavailable: dict[str, tuple[str, ...]] = {}
@@ -400,6 +397,13 @@ def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvalu
         if raised:
             flags[branch] = raised
 
+    if routed:
+        state = RouteState.ROUTED
+    elif evaluate_emptiness(features, ruleset.emptiness) is GateOutcome.FIRED:
+        state = RouteState.EMPTY
+    else:
+        state = RouteState.UNEXPLAINED
+
     return RouteEvaluation(
         stem=features.stem,
         family=features.family,
@@ -410,8 +414,7 @@ def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvalu
         extra=tuple(branch for branch in routed if branch not in declared),
         unavailable=unavailable,
         flags=flags,
-        empty=False,
-        fell_through=not routed,
+        state=state,
         gate_outcomes=outcomes,
     )
 
@@ -427,14 +430,12 @@ def tally_families(evaluations: Iterable[RouteEvaluation]) -> dict[str, FamilyTa
     """
     counters: dict[str, dict[str, Counter[str]]] = {}
     recordings: Counter[str] = Counter()
-    fell_through: Counter[str] = Counter()
-    empty: Counter[str] = Counter()
+    states: dict[str, Counter[str]] = {}
     for evaluation in evaluations:
         family = evaluation.family
         rows = counters.setdefault(family, {axis: Counter() for axis in AXES})
         recordings[family] += 1
-        fell_through[family] += int(evaluation.fell_through)
-        empty[family] += int(evaluation.empty)
+        states.setdefault(family, Counter())[evaluation.state.value] += 1
         for axis in AXES:
             rows[axis].update(branches_on(evaluation, axis))
     return {
@@ -448,8 +449,7 @@ def tally_families(evaluations: Iterable[RouteEvaluation]) -> dict[str, FamilyTa
             extra=_per_branch(rows["extra"]),
             unavailable=_per_branch(rows["unavailable"]),
             flagged=_per_branch(rows["flagged"]),
-            empty=empty[family],
-            fell_through=fell_through[family],
+            states={name: states[family].get(name, 0) for name in ROUTE_STATES},
         )
         for family, rows in sorted(counters.items())
     }

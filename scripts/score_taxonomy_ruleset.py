@@ -7,7 +7,8 @@
 is read from the triage configuration, so a partial override changes the gates without touching
 this script. ``out_dir`` receives ``ruleset_score.json``: the corpus totals, the per-branch counts,
 the per-branch sensitivity and specificity against the reference family sets, and one tally per
-family.
+family. Every recording lands in exactly one of ``routed``, ``empty`` and ``unexplained``, and only
+the last of those is a charge against the ruleset.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.routing_analysis.report import Confusion, load_features
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     AXES,
+    ROUTE_STATES,
     RouteEvaluation,
     Ruleset,
     branches_on,
@@ -36,48 +38,48 @@ from senselab.audio.workflows.triage.vocabulary import BRANCHES
 SCORE_FILE = "ruleset_score.json"
 
 
-def corpus_totals(evaluations: list[RouteEvaluation]) -> tuple[int, int, int, dict[str, dict[str, int]]]:
+def corpus_totals(evaluations: list[RouteEvaluation]) -> tuple[int, dict[str, int], dict[str, dict[str, int]]]:
     """Fold every evaluation into one set of corpus-wide counts.
 
     Args:
         evaluations: One evaluation per recording.
 
     Returns:
-        The recording count, the empty count, the fall-through count over the rest, and per-branch
-        counts for each of :data:`~senselab.audio.workflows.triage.routing_analysis.ruleset.AXES`.
+        The recording count, how many landed in each
+        :class:`~senselab.audio.workflows.triage.routing_analysis.ruleset.RouteState`, and
+        per-branch counts for each of
+        :data:`~senselab.audio.workflows.triage.routing_analysis.ruleset.AXES`.
     """
     per_axis = {axis: dict.fromkeys(BRANCHES, 0) for axis in AXES}
-    fell_through = 0
-    empty = 0
+    states = dict.fromkeys(ROUTE_STATES, 0)
     for evaluation in evaluations:
         for axis, counts in per_axis.items():
             for branch in branches_on(evaluation, axis):
                 counts[branch] += 1
-        fell_through += int(evaluation.fell_through)
-        empty += int(evaluation.empty)
-    return len(evaluations), empty, fell_through, per_axis
+        states[evaluation.state.value] += 1
+    return len(evaluations), states, per_axis
 
 
 def print_table(
     recordings: int,
-    empty: int,
-    fell_through: int,
+    states: dict[str, int],
     per_axis: dict[str, dict[str, int]],
     scores: dict[str, Confusion],
     tallies: dict[str, dict[str, Any]],
 ) -> None:
-    """Write the corpus totals, the per-branch scores and the worst fall-through families to stdout.
+    """Write the corpus totals, the per-branch scores and the worst unexplained families to stdout.
 
     Args:
         recordings: How many recordings were scored.
-        empty: How many carried nothing on either enhanced or residual stream.
-        fell_through: How many carried content and still routed to no branch at all.
+        states: How many landed in each route state.
         per_axis: The per-branch counts from :func:`corpus_totals`.
         scores: The per-branch 2x2 against the reference family sets.
         tallies: Family name to its tally, as dictionaries.
     """
-    print(f"\nrecordings {recordings}   empty {empty} ({empty / recordings:.1%})")
-    print(f"content routed to no branch {fell_through} ({fell_through / recordings:.1%})\n")
+    print(f"\nrecordings {recordings}")
+    for name in ROUTE_STATES:
+        print(f"  {name:12s} {states[name]:8d} ({states[name] / recordings:.1%})")
+    print()
     print(f"{'branch':8s} {'routed':>8s} {'declared':>9s} {'agreed':>8s} {'missed':>8s} {'extra':>8s} {'unavail':>8s}")
     for branch in BRANCHES:
         print(
@@ -94,11 +96,12 @@ def print_table(
             f"{branch:8s} {table.tp:8d} {table.fp:8d} {table.tn:8d} {table.fn:8d} {sensitivity:>7s} {specificity:>7s}"
         )
 
-    worst = sorted(tallies.values(), key=lambda tally: -int(tally["fell_through"]))[:12]
-    print(f"\n{'family':40s} {'n':>6s} {'empty':>7s} {'fell through':>13s} {'rate':>7s}")
+    worst = sorted(tallies.values(), key=lambda tally: -int(tally["states"]["unexplained"]))[:12]
+    print(f"\n{'family':40s} {'n':>6s} {'empty':>7s} {'unexplained':>13s} {'rate':>7s}")
     for tally in worst:
-        count, fallen, blank = int(tally["recordings"]), int(tally["fell_through"]), int(tally["empty"])
-        print(f"{tally['family']:40s} {count:6d} {blank:7d} {fallen:13d} {fallen / count:7.1%}")
+        count = int(tally["recordings"])
+        unexplained, blank = int(tally["states"]["unexplained"]), int(tally["states"]["empty"])
+        print(f"{tally['family']:40s} {count:6d} {blank:7d} {unexplained:13d} {unexplained / count:7.1%}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -126,9 +129,9 @@ def main(argv: list[str] | None = None) -> int:
     evaluations = [evaluate_routes(record, ruleset) for record in records]
     tallies = {family: asdict(tally) for family, tally in tally_families(evaluations).items()}
     scores = score_branches(evaluations)
-    recordings, empty, fell_through, per_axis = corpus_totals(evaluations)
+    recordings, states, per_axis = corpus_totals(evaluations)
 
-    totals = {"recordings": recordings, "empty": empty, "fell_through": fell_through, **per_axis}
+    totals: dict[str, Any] = {"recordings": recordings, "states": states, **per_axis}
     score = {
         "config_hash": config.config_hash,
         "totals": totals,
@@ -136,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         "families": tallies,
     }
     (arguments.out_dir / SCORE_FILE).write_text(json.dumps(score, indent=1))
-    print_table(recordings, empty, fell_through, per_axis, scores, tallies)
+    print_table(recordings, states, per_axis, scores, tallies)
     print(f"\n[ruleset] wrote {arguments.out_dir / SCORE_FILE}", flush=True)
     return 0
 

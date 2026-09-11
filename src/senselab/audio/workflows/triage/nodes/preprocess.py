@@ -78,6 +78,11 @@ from senselab.audio.workflows.triage.consensus import (
     render_transcript,
     vocabulary_key,
 )
+from senselab.audio.workflows.triage.label_membership import (
+    LabelMembership,
+    load_label_membership,
+    optional_label_membership,
+)
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     describe_exception,
@@ -211,29 +216,18 @@ def _pooled_label_scores(windows: list[dict[str, Any]]) -> dict[str, dict[str, A
     return dict(sorted(labels.items(), key=lambda item: -item[1]["mean_score"]))
 
 
-def _confident_labels(
-    window: dict[str, Any], default_threshold: float, label_thresholds: dict[str, float]
-) -> dict[str, float]:
-    """The labels this window is confident of, each with the score behind it.
-
-    A label is a member iff its score clears its own threshold — ``label_thresholds[label]`` where
-    one exists, ``default_threshold`` otherwise. The result may be empty, which is a window nobody's
-    threshold cleared and is a different fact from a window that was never classified.
+def _confident_labels(window: dict[str, Any], membership: LabelMembership) -> dict[str, float]:
+    """The labels this window carries, each with the score behind it.
 
     Args:
         window: A classifier window, in the shape ``label_scores`` reads.
-        default_threshold: The threshold for a label with no entry of its own.
-        label_thresholds: Per-label thresholds.
+        membership: The rule read from ``windows.<classifier>``.
 
     Returns:
-        ``{label: score}`` over the members, in descending score order.
+        ``{label: score}`` over the members, in descending score order. Empty is a window nothing
+        cleared, which is a different fact from a window that was never classified.
     """
-    members: dict[str, float] = {}
-    for pair in label_scores(window):
-        for label, score in pair.items():
-            if float(score) >= float(label_thresholds.get(label, default_threshold)):
-                members[label] = float(score)
-    return dict(sorted(members.items(), key=lambda item: -item[1]))
+    return membership.members(_raw_label_scores(window))
 
 
 def _raw_label_scores(window: dict[str, Any]) -> dict[str, float]:
@@ -286,25 +280,23 @@ def _span_window_attributes(
     classifier: str,
     span_id: str,
     raw_window: dict[str, Any],
-    default_threshold: float | None,
-    label_thresholds: dict[str, float],
+    membership: LabelMembership | None,
     extra: dict[str, Any],
 ) -> dict[str, Any]:
-    """One per-span classifier window's attributes, labelled only when a threshold exists.
+    """One per-span classifier window's attributes, labelled only when a membership rule exists.
 
     ``raw_scores`` is written whatever the configuration says, because the model ran and its output
     is a measurement. ``labels`` and ``scores`` are a decision taken over that measurement, so they
-    appear only when a threshold was configured, and ``labelled`` says which case a reader is
-    looking at: absent labels with ``labelled`` False is "no threshold was set", an empty ``labels``
-    with ``labelled`` True is "nothing cleared the bar".
+    appear only when a rule was configured, and ``labelled`` says which case a reader is looking at:
+    absent labels with ``labelled`` False is "no threshold was set", an empty ``labels`` with
+    ``labelled`` True is "nothing cleared the bar".
 
     Args:
         name: The measurement name, ``"span_hear"`` or ``"span_yamnet"``.
         classifier: The classifier's own name.
         span_id: The span this window was cut from.
         raw_window: The classifier's own output for the window.
-        default_threshold: The configured threshold, or None while it is unmeasured.
-        label_thresholds: Per-label overrides of that threshold.
+        membership: The rule read from ``windows.<classifier>``, or None while its floor is null.
         extra: Attributes particular to one caller.
 
     Returns:
@@ -316,13 +308,14 @@ def _span_window_attributes(
         "signal": "plain",
         "span_id": span_id,
         "raw_scores": _raw_label_scores(raw_window),
-        "default_threshold": default_threshold,
-        "labelled": default_threshold is not None,
+        "default_threshold": membership.floor if membership is not None else None,
+        "label_top_k": membership.top_k if membership is not None else None,
+        "labelled": membership is not None,
         "isolated_span": True,
         **extra,
     }
-    if default_threshold is not None:
-        members = _confident_labels(raw_window, default_threshold, label_thresholds)
+    if membership is not None:
+        members = _confident_labels(raw_window, membership)
         attributes["labels"] = list(members)
         attributes["scores"] = members
     return attributes
@@ -889,14 +882,14 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         scores_name = f"{classifier}_scores"
         if scores_name not in state:
             raise LookupError(f"{scores_name} is absent")
-        default_threshold = float(config.require(f"windows.{classifier}.default_threshold"))
-        label_thresholds = {
-            str(label): float(value)
-            for label, value in config.require(f"windows.{classifier}.label_thresholds").items()
-        }
+        membership = load_label_membership(config, classifier)
         activity = _step(
             f"{classifier}_windows",
-            {"default_threshold": default_threshold, "label_thresholds": label_thresholds},
+            {
+                "default_threshold": membership.floor,
+                "label_top_k": membership.top_k,
+                "label_thresholds": dict(membership.label_floors),
+            },
             (state[scores_name + "_id"],),
             software,
         )
@@ -906,7 +899,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         fired: dict[str, float] = {}
         for raw_window in raw:
             raw_scores = _raw_label_scores(raw_window)
-            members = _confident_labels(raw_window, default_threshold, label_thresholds)
+            members = _confident_labels(raw_window, membership)
             window_id = store.entity(
                 prov_type="measurement",
                 extent=(float(raw_window["start"]), float(raw_window["end"])),
@@ -925,8 +918,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             window_ids.append(window_id)
             for label in members:
                 windows_by_label.setdefault(label, []).append(window_id)
-                if label in label_thresholds:
-                    fired[label] = label_thresholds[label]
+                if label in membership.label_floors:
+                    fired[label] = membership.label_floors[label]
         entity_id = _measurement(
             store,
             activity,
@@ -940,7 +933,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 "n_windows": len(raw),
                 "win_length_s": float(raw[0]["win_length"]) if raw else None,
                 "hop_s": float(raw[0]["hop_length"]) if raw else None,
-                "default_threshold": default_threshold,
+                "default_threshold": membership.floor,
+                "label_top_k": membership.top_k,
                 "label_thresholds": fired,
             },
             derived_from=(state[scores_name + "_id"],),
@@ -1134,11 +1128,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             raise LookupError("spans are absent")
         agent = store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION)
         activity = _step("span_hear", {}, tuple(span_ids), agent)
-        declared = config.get("windows.hear.default_threshold")
-        default_threshold = None if declared is None else float(declared)
-        label_thresholds = {
-            str(label): float(value) for label, value in (config.get("windows.hear.label_thresholds") or {}).items()
-        }
+        membership = optional_label_membership(config, "hear")
         result_ids: list[str] = []
         prepared: list[Audio] = []
         prepared_for: list[str] = []
@@ -1174,8 +1164,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                         classifier="hear",
                         span_id=span_id,
                         raw_window=raw_window,
-                        default_threshold=default_threshold,
-                        label_thresholds=label_thresholds,
+                        membership=membership,
                         extra={"input_window_s": HEAR_WINDOW_SECONDS},
                     ),
                 )
@@ -1209,11 +1198,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             unresolved_reason="TF-Hub URL pin; no commit exists to resolve",
         )
         activity = _step("span_yamnet", {}, tuple(span_ids), agent)
-        declared = config.get("windows.yamnet.default_threshold")
-        default_threshold = None if declared is None else float(declared)
-        label_thresholds = {
-            str(label): float(value) for label, value in (config.get("windows.yamnet.label_thresholds") or {}).items()
-        }
+        membership = optional_label_membership(config, "yamnet")
         top_k = int(config.require("yamnet.top_k"))
         whole_file_windows: list[dict[str, Any]] | None = state.get("yamnet_scores")
 
@@ -1244,8 +1229,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                         classifier="yamnet",
                         span_id=span_id,
                         raw_window=attributed_window,
-                        default_threshold=default_threshold,
-                        label_thresholds=label_thresholds,
+                        membership=membership,
                         extra={
                             "attribution": "covering_windows",
                             "covering_windows_n": covering_windows_n,
@@ -1290,8 +1274,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                         classifier="yamnet",
                         span_id=span_id,
                         raw_window=raw_window,
-                        default_threshold=default_threshold,
-                        label_thresholds=label_thresholds,
+                        membership=membership,
                         extra={"attribution": "native"},
                     ),
                 )

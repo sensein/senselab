@@ -6,6 +6,7 @@ from typing import Any, Callable
 import pytest
 
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.nodes.common import resolve_stream
 from senselab.audio.workflows.triage.nodes.figure import (
     FigureStyle,
@@ -75,49 +76,60 @@ def _seed_preprocess_verdict(store: ProvStore, absent: dict[str, str]) -> None:
 class TestTheWindowAttributes:
     """``labelled`` separates "no threshold was set" from "nothing cleared the bar"."""
 
-    def test_a_null_threshold_keeps_the_scores_and_writes_no_labels(self) -> None:
+    def test_no_membership_keeps_the_scores_and_writes_no_labels(self) -> None:
         """The model ran, so its output is a measurement; only the decision over it is missing."""
         attributes = _span_window_attributes(
             name="span_hear",
             classifier="hear",
             span_id="span-1",
             raw_window={"label_scores": [{"Cough": 0.8}, {"Breathe": 0.1}]},
-            default_threshold=None,
-            label_thresholds={},
+            membership=None,
             extra={},
         )
         assert attributes["raw_scores"], "a null threshold must not destroy the model's output"
         assert attributes["labelled"] is False
         assert attributes["default_threshold"] is None
+        assert attributes["label_top_k"] is None
         assert "labels" not in attributes
         assert "scores" not in attributes
 
-    def test_a_set_threshold_labels_as_well(self) -> None:
-        """With a threshold there is a decision to record, and it sits beside the scores."""
+    def test_a_membership_labels_as_well(self) -> None:
+        """With a rule there is a decision to record, and it sits beside the scores."""
         attributes = _span_window_attributes(
             name="span_hear",
             classifier="hear",
             span_id="span-1",
             raw_window={"label_scores": [{"Cough": 0.8}, {"Breathe": 0.1}]},
-            default_threshold=0.5,
-            label_thresholds={},
+            membership=LabelMembership(top_k=4, floor=0.5, label_floors={}),
             extra={},
         )
         assert attributes["labelled"] is True
         assert attributes["default_threshold"] == 0.5
+        assert attributes["label_top_k"] == 4
         assert attributes["raw_scores"]
         assert "Cough" in attributes["labels"]
         assert "Breathe" not in attributes["labels"], "0.1 is below the 0.5 bar"
 
+    def test_a_label_over_the_floor_but_outside_the_top_k_is_not_carried(self) -> None:
+        """The rule is a conjunction: clearing the floor is not enough to join the set."""
+        attributes = _span_window_attributes(
+            name="span_hear",
+            classifier="hear",
+            span_id="span-1",
+            raw_window={"label_scores": [{"Cough": 0.9}, {"Breathe": 0.8}, {"Snore": 0.7}]},
+            membership=LabelMembership(top_k=2, floor=0.5, label_floors={}),
+            extra={},
+        )
+        assert attributes["labels"] == ["Cough", "Breathe"]
+
     def test_nothing_clearing_the_bar_is_not_the_same_state(self) -> None:
-        """An empty label list with a threshold set is "ran, found nothing" — a real finding."""
+        """An empty label list with a rule set is "ran, found nothing" — a real finding."""
         attributes = _span_window_attributes(
             name="span_hear",
             classifier="hear",
             span_id="span-1",
             raw_window={"label_scores": [{"Cough": 0.1}]},
-            default_threshold=0.5,
-            label_thresholds={},
+            membership=LabelMembership(top_k=4, floor=0.5, label_floors={}),
             extra={},
         )
         assert attributes["labelled"] is True

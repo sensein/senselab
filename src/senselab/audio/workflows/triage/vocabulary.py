@@ -11,8 +11,22 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
-GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
-"""The nodes the runner drives, in the order it drives them. VERDICT folds the eight before it."""
+GRAPH_ORDER = (
+    "ADMIT",
+    "PREPROCESS",
+    "TAXONOMY",
+    "routing",
+    "AIRWAY",
+    "SPEECH",
+    "VOICE",
+    "QUALITY",
+    "REDACT",
+    "VERDICT",
+)
+"""The nodes the runner drives, in the order it drives them. VERDICT folds the nine before it."""
+
+QUALITY = "QUALITY"
+"""The terminal node every recording reaches, whatever routed. A graph edge, never a branch."""
 
 BRANCHES = ("AIRWAY", "SPEECH", "VOICE", "DDK")
 """The branches routing selects among; each is the authority on its own kind and no other."""
