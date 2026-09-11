@@ -3,7 +3,8 @@
 The store is read one line at a time and never held whole. Only the entity records a routing
 detector could read are decoded; the label summaries are reduced to the peaks in
 :data:`~senselab.audio.workflows.triage.routing_analysis.labels.TRACKED_LABELS` and everything else
-in them is dropped.
+in them is dropped. A per-span classifier window is reduced to its best-scoring label, which is
+joined back to the span it names and dropped unless that label is tracked.
 """
 
 from __future__ import annotations
@@ -30,6 +31,9 @@ SQUIM_METRICS: tuple[str, ...] = ("pesq", "si_sdr", "stoi")
 SQUIM_POPULATIONS: tuple[str, ...] = ("all", "amplitude", "gap")
 """Which spans a SQUIM summary is taken over: every span, or one measure's spans."""
 
+SPAN_CLASSIFIERS: dict[str, str] = {"span_yamnet": "yamnet", "span_hear": "hear"}
+"""The per-span classifier measurements PREPROCESS writes, and the classifier each one belongs to."""
+
 LEVEL_KEYS: tuple[str, ...] = ("peak_dbfs", "rms_dbfs", "lufs")
 """The whole-file ``level`` measurement's scalars."""
 
@@ -55,7 +59,6 @@ _RELATION_MARKER = '"relation"'
 _INVALIDATED = "wasInvalidatedBy"
 _SUMMARY_SUFFIX = "_label_summary"
 _SUMMARY_ALL_SUFFIX = "_summary_all"
-_SKIP_NAMES = ('"name": "span_yamnet"',)
 
 TRANSCRIPT_CAP = 300
 """How much of the consensus transcript is kept, so a disagreement can be read, not just counted."""
@@ -82,6 +85,11 @@ class RecordingFeatures:
         span_stats: ``{"<measure>.<statistic>": value}`` over the live spans of each measure —
             the duration distribution, the ``peak_over_floor_db`` distribution, how many carry a
             ``corroborated_by`` entry, and the duty fraction against the recording's extent.
+        span_label_stats: ``{"<classifier>.<label>.span_count": n}`` and
+            ``{"<classifier>.<label>.peak_over_floor_db_<statistic>": value}`` over the live spans
+            whose best-scoring per-span classifier label is that label. Only labels in
+            :data:`~senselab.audio.workflows.triage.routing_analysis.labels.TRACKED_LABELS` that at
+            least one live span carries appear at all.
         squim: ``{"<population>.<metric>.<statistic>": value}`` over the per-span SQUIM
             assertions, plus ``<population>.n`` and ``<population>.unmeasured``.
         level: The whole-file ``level`` measurement's scalars.
@@ -108,6 +116,7 @@ class RecordingFeatures:
     span_longest_s: dict[str, float] = field(default_factory=dict)
     span_total_s: dict[str, float] = field(default_factory=dict)
     span_stats: dict[str, float] = field(default_factory=dict)
+    span_label_stats: dict[str, float] = field(default_factory=dict)
     squim: dict[str, float] = field(default_factory=dict)
     level: dict[str, float] = field(default_factory=dict)
     disruptions: dict[str, float] = field(default_factory=dict)
@@ -135,15 +144,11 @@ def read_store(path: Path) -> Iterator[dict[str, Any]]:
 
     Yields:
         Each decoded record. Activity, agent, environment and non-invalidation relation records are
-        skipped without being decoded, and so are the per-span classifier score dumps, which no
-        routing detector reads and which dominate the file's bytes.
+        skipped without being decoded.
     """
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if line.startswith(_ENTITY_PREFIX):
-                if any(marker in line for marker in _SKIP_NAMES):
-                    yield {"record": "entity", "prov_type": "measurement", "attributes": {"name": "span_skipped"}}
-                    continue
                 yield json.loads(line)
             elif _RELATION_MARKER in line and _INVALIDATED in line:
                 yield json.loads(line)
@@ -186,12 +191,36 @@ def _summary_stream_classifier(name: str) -> tuple[str, str] | None:
     return None
 
 
-def _absorb_measurement(features: RecordingFeatures, attributes: dict[str, Any]) -> None:
+def _absorb_span_window(
+    span_tops: dict[str, dict[str, tuple[str, float]]], classifier: str, attributes: dict[str, Any]
+) -> None:
+    """Keep the best-scoring label of one per-span classifier window, against the span it names.
+
+    Args:
+        span_tops: ``{classifier: {span_id: (label, score)}}``, updated in place.
+        classifier: The classifier the window belongs to.
+        attributes: The ``span_<classifier>`` measurement's attributes.
+    """
+    span_id = attributes.get("span_id")
+    scores = attributes.get("raw_scores") or {}
+    if span_id is None or not scores:
+        return
+    label, score = max(((str(key), float(value)) for key, value in scores.items()), key=lambda pair: pair[1])
+    slot = span_tops.setdefault(classifier, {})
+    current = slot.get(str(span_id))
+    if current is None or score > current[1]:
+        slot[str(span_id)] = (label, score)
+
+
+def _absorb_measurement(
+    features: RecordingFeatures, attributes: dict[str, Any], span_tops: dict[str, dict[str, tuple[str, float]]]
+) -> None:
     """Fold one ``measurement`` entity into the record.
 
     Args:
         features: The record being built.
         attributes: The measurement's attributes.
+        span_tops: The per-span best-scoring label table, updated in place.
     """
     name = str(attributes.get("name") or "")
     if name == "consensus_transcript":
@@ -227,12 +256,15 @@ def _absorb_measurement(features: RecordingFeatures, attributes: dict[str, Any])
             "score_mean": statistics.fmean(float(window.get("score") or 0.0) for window in windows) if windows else 0.0,
         }
         return
-    if name == "span_hear":
-        tracked_hear = TRACKED_LABELS["hear"]
-        for label, score in (attributes.get("raw_scores") or {}).items():
-            if label in tracked_hear:
-                key = peak_key("span", "hear", str(label))
-                features.peaks[key] = max(features.peaks.get(key, 0.0), float(score))
+    span_classifier = SPAN_CLASSIFIERS.get(name)
+    if span_classifier is not None:
+        _absorb_span_window(span_tops, span_classifier, attributes)
+        if span_classifier == "hear":
+            tracked_hear = TRACKED_LABELS["hear"]
+            for label, score in (attributes.get("raw_scores") or {}).items():
+                if label in tracked_hear:
+                    key = peak_key("span", "hear", str(label))
+                    features.peaks[key] = max(features.peaks.get(key, 0.0), float(score))
         return
     if name == "consensus_taxonomy":
         for row in attributes.get("labels") or []:
@@ -301,6 +333,56 @@ def _extent_key(extent: Sequence[float]) -> tuple[float, float]:
     return (round(float(extent[0]), 6), round(float(extent[1]), 6))
 
 
+def _finite_peaks(spans: Sequence[dict[str, Any]]) -> list[float]:
+    """The ``peak_over_floor_db`` of every span that carries a finite one.
+
+    Args:
+        spans: The spans.
+
+    Returns:
+        The sample, in span order.
+    """
+    return [
+        float(span["peak_db"])
+        for span in spans
+        if span["peak_db"] is not None and math.isfinite(float(span["peak_db"]))
+    ]
+
+
+def _label_span_statistics(
+    spans: Sequence[dict[str, Any]], span_tops: dict[str, dict[str, tuple[str, float]]]
+) -> dict[str, float]:
+    """Reduce the live spans to one distribution per classifier label they carry.
+
+    A span carries the label its per-span classifier scored highest on it, across every window the
+    classifier placed over that span. Labels outside
+    :data:`~senselab.audio.workflows.triage.routing_analysis.labels.TRACKED_LABELS` are dropped, so
+    a recording whose spans carry none of them contributes nothing.
+
+    Args:
+        spans: The live spans, each carrying ``id`` and ``peak_db``.
+        span_tops: ``{classifier: {span_id: (label, score)}}``.
+
+    Returns:
+        ``{"<classifier>.<label>.span_count": n}`` and
+        ``{"<classifier>.<label>.peak_over_floor_db_<statistic>": value}``.
+    """
+    out: dict[str, float] = {}
+    for classifier in SPAN_CLASSIFIERS.values():
+        tops = span_tops.get(classifier) or {}
+        tracked = TRACKED_LABELS[classifier]
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for span in spans:
+            carried = tops.get(str(span["id"]))
+            if carried is not None and carried[0] in tracked:
+                grouped.setdefault(carried[0], []).append(span)
+        for label, selected in sorted(grouped.items()):
+            out[f"{classifier}.{label}.span_count"] = float(len(selected))
+            for key, value in _stats(_finite_peaks(selected)).items():
+                out[f"{classifier}.{label}.peak_over_floor_db_{key}"] = value
+    return out
+
+
 def _span_statistics(spans: Sequence[dict[str, Any]], duration_s: float | None) -> dict[str, float]:
     """Reduce one recording's live spans to the numbers a routing detector could read.
 
@@ -318,12 +400,7 @@ def _span_statistics(spans: Sequence[dict[str, Any]], duration_s: float | None) 
         durations = [float(span["duration"]) for span in selected]
         for key, value in _stats(durations).items():
             out[f"{measure}.duration_{key}"] = value
-        peaks = [
-            float(span["peak_db"])
-            for span in selected
-            if span["peak_db"] is not None and math.isfinite(float(span["peak_db"]))
-        ]
-        for key, value in _stats(peaks).items():
+        for key, value in _stats(_finite_peaks(selected)).items():
             out[f"{measure}.peak_over_floor_db_{key}"] = value
         out[f"{measure}.corroborated_n"] = float(sum(1 for span in selected if span["corroborated"]))
         out[f"{measure}.corroborated_total"] = float(sum(int(span["corroborated"]) for span in selected))
@@ -383,6 +460,7 @@ def extract_features(store_path: Path, stem: str, run_root: str, task_id: str, f
     words: list[dict[str, Any]] = []
     spans: list[dict[str, Any]] = []
     squim: list[tuple[tuple[float, float], dict[str, Any]]] = []
+    span_tops: dict[str, dict[str, tuple[str, float]]] = {}
     kinds: dict[str, str] = {}
 
     for record in read_store(store_path):
@@ -397,7 +475,7 @@ def extract_features(store_path: Path, stem: str, run_root: str, task_id: str, f
         features.n_entities += 1
         entity_id = str(record.get("id"))
         if prov_type == "measurement":
-            _absorb_measurement(features, attributes)
+            _absorb_measurement(features, attributes, span_tops)
         elif prov_type == "word":
             words.append({"id": entity_id, **attributes})
         elif prov_type == "span":
@@ -448,6 +526,7 @@ def extract_features(store_path: Path, stem: str, run_root: str, task_id: str, f
         features.span_longest_s[measure] = max(durations) if durations else 0.0
         features.span_total_s[measure] = float(sum(durations))
     features.span_stats = _span_statistics(live_spans, features.duration_s)
+    features.span_label_stats = _label_span_statistics(live_spans, span_tops)
     features.squim = _squim_statistics(squim, {span["extent"]: span["measure"] for span in live_spans})
     features.classifier_streams = sorted(set(features.classifier_streams))
     for kind_name in ("speech", "airway", "voice"):

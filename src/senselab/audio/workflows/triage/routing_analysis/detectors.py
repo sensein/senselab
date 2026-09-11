@@ -69,7 +69,25 @@ FRACTION_GRID: tuple[float, ...] = (
 )
 """Residual energy-fraction thresholds."""
 
-DB_OVER_FLOOR_GRID: tuple[float, ...] = (3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0, 25.0, 30.0, 35.0, 40.0, 50.0)
+DB_OVER_FLOOR_GRID: tuple[float, ...] = (
+    3.0,
+    6.0,
+    9.0,
+    12.0,
+    15.0,
+    18.0,
+    21.0,
+    25.0,
+    30.0,
+    35.0,
+    40.0,
+    45.0,
+    50.0,
+    55.0,
+    60.0,
+    70.0,
+    80.0,
+)
 """``peak_over_floor_db`` thresholds, in dB above the span's own floor."""
 
 DBFS_GRID: tuple[float, ...] = (-60.0, -50.0, -45.0, -40.0, -35.0, -30.0, -25.0, -20.0, -15.0, -10.0, -6.0, -3.0)
@@ -214,6 +232,8 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         return max((features.peaks.get(peak_key(stream, classifier, label), 0.0) for label in labels), default=0.0)
     if source == "span_stat":
         return _optional(features.span_stats, arguments[0])
+    if source == "span_label_stat":
+        return _optional(features.span_label_stats, arguments[0])
     if source == "squim":
         return _optional(features.squim, arguments[0])
     if source == "level":
@@ -535,6 +555,31 @@ _NEW_DERIVATIVES: tuple[Detector, ...] = (
 )
 """Detectors reading a derivative the first sweep ignored, on the three kinds it already covered."""
 
+_LABEL_CONDITIONED_SPANS: tuple[Detector, ...] = (
+    Detector(
+        "cough.yamnet_cough_span_peak_over_floor_db_max",
+        "cough",
+        ("span_label_stat", "yamnet.Cough.peak_over_floor_db_max"),
+        "dB",
+        DB_OVER_FLOOR_GRID,
+    ),
+    Detector(
+        "cough.yamnet_cough_span_peak_over_floor_db_p75",
+        "cough",
+        ("span_label_stat", "yamnet.Cough.peak_over_floor_db_p75"),
+        "dB",
+        DB_OVER_FLOOR_GRID,
+    ),
+    Detector(
+        "cough.yamnet_cough_span_peak_over_floor_db_p90",
+        "cough",
+        ("span_label_stat", "yamnet.Cough.peak_over_floor_db_p90"),
+        "dB",
+        DB_OVER_FLOOR_GRID,
+    ),
+)
+"""Span amplitude read only over the spans YAMNet itself labelled ``Cough``."""
+
 
 DETECTORS: tuple[Detector, ...] = tuple(
     [
@@ -638,5 +683,6 @@ DETECTORS: tuple[Detector, ...] = tuple(
     + list(_COUGH_VS_BREATH)
     + list(_GLIDES)
     + list(_NEW_DERIVATIVES)
+    + list(_LABEL_CONDITIONED_SPANS)
 )
 """Every candidate detector, scored at every threshold in its own grid."""
