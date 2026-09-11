@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.data_structures import AudioHints
+from senselab.audio.workflows.triage.classifier_ontology import corroboration_sets
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
@@ -91,6 +92,35 @@ def _labels_of(window: Entity) -> list[str]:
     return [str(label) for label in window.attributes.get("labels") or []]
 
 
+def _corroboration(config: TriageConfig) -> dict[str, frozenset[str]]:
+    """Each HeAR label's AudioSet corroboration set, from the ontology profile.
+
+    The set is the label's mapped AudioSet node and every descendant of it, so ``Cough`` is
+    corroborated by ``Throat clearing`` without either name being written down twice. A label named
+    in ``airway.corroboration_overrides`` takes that list instead of its derived set.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        ``{HeAR label: AudioSet display names}``, covering every label the profile maps.
+
+    Raises:
+        ValueError: If an override names a HeAR label the profile does not map, which is a typo
+            rather than an extension.
+    """
+    sets = corroboration_sets(config.get("airway.corroboration_profile"))
+    overrides = config.get("airway.corroboration_overrides") or {}
+    unknown = sorted(str(label) for label in overrides if str(label) not in sets)
+    if unknown:
+        raise ValueError(
+            f"airway.corroboration_overrides names {unknown}, which the classifier-ontology profile "
+            f"does not map; it maps {sorted(sets)}"
+        )
+    sets.update({str(label): frozenset(str(name) for name in names) for label, names in overrides.items()})
+    return sets
+
+
 def _contest_labels(config: TriageConfig) -> set[str]:
     """The YAMNet labels that may contest a HeAR label, refused when they are also airway evidence.
 
@@ -125,6 +155,9 @@ def airway(  # noqa: C901 — the branch's four steps, in order
 ) -> NodeResult:
     """Label, confirm and contest PREPROCESS's general spans using its own per-span HeAR labels.
 
+    A YAMNet label corroborates a HeAR label when it is that label's mapped AudioSet node or a
+    descendant of it, read from the classifier-ontology profile rather than from a string map.
+
     No gate of its own: PREPROCESS's spans are one shared mechanism, proposed at one shared
     ``spans.k_db``, not an airway-specific threshold — matching a stale, separately-configured
     ``airway.k_db``/``airway.k_db_by_task`` against the spans' own ``k_db`` attribute silently
@@ -146,13 +179,11 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         The verdict, the view over the spans and assertions touched, and a null figure path.
 
     Raises:
-        ValueError: If ``airway.contest_labels`` intersects ``taxonomy.audioset_airway_labels``.
+        ValueError: If ``airway.contest_labels`` intersects ``taxonomy.audioset_airway_labels``, or
+            if ``airway.corroboration_overrides`` names a label the ontology profile does not map.
     """
     labels_of_interest = [str(label) for label in config.require("airway.labels_of_interest")]
-    confirmation_map = {
-        str(hear_label): {str(v) for v in yamnet_labels}
-        for hear_label, yamnet_labels in config.require("airway.confirmation_map").items()
-    }
+    corroboration = _corroboration(config)
     contest_labels = _contest_labels(config)
 
     software = software_agent(store)
@@ -259,7 +290,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
                     colocated.append(yamnet_window.id)
                     store.used(confirm_activity, yamnet_window.id)
                     for yamnet_label in _labels_of(yamnet_window):
-                        if yamnet_label in confirmation_map.get(label, set()):
+                        if yamnet_label in corroboration.get(label, frozenset()):
                             confirms.append((yamnet_window.id, yamnet_label, hear_window_id))
                         elif yamnet_label in contest_labels:
                             contests.append((yamnet_window.id, yamnet_label, hear_window_id))

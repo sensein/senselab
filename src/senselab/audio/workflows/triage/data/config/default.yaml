@@ -119,13 +119,17 @@ words:
 routing:
   hint_kind_map: null                  # tag (and metadata.speech_type) -> kind; a tag matching nothing forces nothing
 
-# AIRWAY's labels of interest, and what may confirm or contest them.
+# AIRWAY's labels of interest, and what may confirm or contest them. Corroboration is no longer a
+# hand-written string map: it comes from the classifier-ontology profile in
+# `data/classifier_ontology/`, where every HeAR label resolves to an AudioSet node and is
+# corroborated by that node or any descendant of it. Six of HeAR's eight labels had no entry in the
+# hand map and could never be corroborated; see
+# `specs/20260910-classifier-ontology-mapping/design.md`.
 airway:
   labels_of_interest: [Cough, Breathe]  # the HeAR labels this branch acts on
-  confirmation_map:                     # which YAMNet labels corroborate each HeAR label
-    Cough: [Cough]
-    Breathe: [Breathing, Sigh, Gasp]
-  contest_labels: null                  # YAMNet labels that may contest a HeAR label; refused if it intersects the map
+  corroboration_profile: null           # path to a classifier-ontology profile; null takes the packaged latest
+  corroboration_overrides: null         # HeAR label -> AudioSet class names, REPLACING that label's derived set
+  contest_labels: null                  # YAMNet labels that may contest a HeAR label; refused if it intersects taxonomy.audioset_airway_labels
 
 # Praat's harmonicity and pitch settings for the whole-stream F0/formant tracks.
 phonation:

@@ -56,7 +56,7 @@ disagreement about this one. The eligible contesting labels are the config key
 
 | the candidate's overlapping YAMNet windows | effect |
 | --- | --- |
-| carry a label mapping to HeAR's — `Cough`→`Cough`, `Breathe`→{`Breathing`,`Sigh`,`Gasp`} | **confirm** |
+| carry a label in HeAR's AudioSet subtree — `Cough`→{`Cough`,`Throat clearing`}, `Breathe`→{`Breathing`,`Wheeze`,`Snoring`,`Gasp`,`Pant`,`Snort`} | **confirm** |
 | carry a member of `airway.contest_labels` | **contest** — flag the span, do not relabel |
 | carry neither | **abstain** — HeAR's label stands, marked single-source |
 
