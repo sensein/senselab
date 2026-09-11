@@ -287,6 +287,7 @@ class TestTheV2OpenKeys:
         for path in (
             "phonation.f0_min_hz",
             "phonation.f0_max_hz",
+            "voice.f0_range_hz",
             "taxonomy.audioset_speech_labels",
             "taxonomy.min_families",
             "taxonomy.ast_frame_s",
@@ -329,12 +330,12 @@ class TestTheV2OpenKeys:
         override.write_text("windows:\n  ast:\n    hop_s: 8.0\n")
         assert load_triage_config(override).require("windows.ast.hop_s") == 8.0
 
-    def test_the_f0_range_replaces_the_two_scalar_keys(self) -> None:
-        """One range, read by PREPROCESS and VOICE alike, so the two cannot drift."""
+    def test_the_wide_search_replaces_the_declared_range(self) -> None:
+        """One wide search, read by PREPROCESS and VOICE alike, each narrowing it the same way."""
         config = load_triage_config()
-        with pytest.raises(ValueError, match="has no value"):
+        assert config.require("voice.f0_search_range_hz") == [50.0, 600.0]
+        with pytest.raises(ValueError, match="unknown configuration key"):
             config.require("voice.f0_range_hz")
-        assert config.get("voice.f0_range_hz", "SENTINEL") == "SENTINEL"
 
 
 class TestTheHashNamesParametersOnly:

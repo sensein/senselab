@@ -18,8 +18,8 @@ from typing import Any
 
 import numpy as np
 
-from senselab.audio.data_structures import AudioHints
-from senselab.audio.tasks.phonation import PeriodMark, hnr_track, period_marks
+from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.tasks.phonation import PeriodMark, derive_f0_range, hnr_track, period_marks
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
@@ -45,29 +45,34 @@ _NO_TASK_DECLARED = "no_task_declared"
 _TASK_HAS_NO_RANGE = "task_has_no_declared_range"
 
 
-def _f0_range(config: TriageConfig, hint: AudioHints | None) -> tuple[float, float]:
-    """The F0 search range for this recording's declared population.
+def _f0_range(config: TriageConfig, hint: AudioHints | None, audio: Audio) -> tuple[float, float]:
+    """The F0 search range for this recording: the declared population's, else the derived one.
 
     Args:
         config: The triage configuration.
-        hint: The caller's hint; ``metadata["population"]`` selects an override.
+        hint: The caller's hint; ``metadata["population"]`` selects a declared range.
+        audio: The stream the range is derived from when no population declares one.
 
     Returns:
         ``(f0_min_hz, f0_max_hz)``.
 
     Raises:
-        ValueError: If ``voice.f0_range_hz`` is unmeasured, or if ``f0_max / f0_min`` exceeds
-            ``voice.f0_range_ratio_max`` — a period-doubling check over a range that wide flags every
-            recording, and a check that fires on everything reports nothing, so the configuration is
-            refused rather than run and flagged.
+        ValueError: If no range could be derived from the recording, or if ``f0_max / f0_min``
+            exceeds ``voice.f0_range_ratio_max`` — a period-doubling check over a range that wide
+            flags every recording, and a check that fires on everything reports nothing, so the
+            configuration is refused rather than run and flagged.
     """
     declared = hint.metadata.get("population") if hint is not None else None
     population = str(declared) if declared else None
     by_population = config.get("voice.f0_range_by_population") or {}
     raw = by_population.get(population) if population is not None else None
     if raw is None:
-        raw = config.require("voice.f0_range_hz")
-    f0_min_hz, f0_max_hz = float(raw[0]), float(raw[1])
+        search = config.require("voice.f0_search_range_hz")
+        f0_min_hz, f0_max_hz = derive_f0_range(
+            audio, search_floor_hz=float(search[0]), search_ceiling_hz=float(search[1])
+        )
+    else:
+        f0_min_hz, f0_max_hz = float(raw[0]), float(raw[1])
     ratio_max = config.get("voice.f0_range_ratio_max")
     if ratio_max is not None and f0_max_hz / f0_min_hz > float(ratio_max):
         raise ValueError(
@@ -78,20 +83,21 @@ def _f0_range(config: TriageConfig, hint: AudioHints | None) -> tuple[float, flo
     return f0_min_hz, f0_max_hz
 
 
-def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
-    """Resolve every ``require()`` key at entry, before the store is touched (N2).
+def _required(config: TriageConfig, hint: AudioHints | None, audio: Audio) -> dict[str, Any]:
+    """Resolve every ``require()`` key at entry, before the store is written to (N2).
 
     Args:
         config: The triage configuration.
-        hint: The caller's hint, which selects the population's F0 range.
+        hint: The caller's hint, which selects a declared population's F0 range.
+        audio: The stream the F0 range is derived from when no population declares one.
 
     Returns:
         The resolved analysis parameters and the period-doubling identity factor.
 
     Raises:
-        ValueError: If any key read here is null, or if the declared range is vacuous.
+        ValueError: If any key read here is null, or if the resolved range is vacuous.
     """
-    f0_min_hz, f0_max_hz = _f0_range(config, hint)
+    f0_min_hz, f0_max_hz = _f0_range(config, hint, audio)
     return {
         "f0_min_hz": f0_min_hz,
         "f0_max_hz": f0_max_hz,
@@ -181,11 +187,12 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
         The verdict, the view over the spans and measurements written, and the verdict entity id.
 
     Raises:
-        ValueError: If a key read at entry is null, or the declared F0 range is vacuous (N2) —
-            raised before the store is touched.
+        ValueError: If a key read at entry is null, or the resolved F0 range is vacuous (N2) —
+            raised before the store is written to.
         LookupError: If the ``source`` stream is absent.
     """
-    params = _required(config, hint)
+    stream_id, plain = resolve_stream(store, run_dir, source)
+    params = _required(config, hint, plain)
     hnr_interval = config.get("phonation.hnr_floor_interval_db")
     rms_interval = config.get("phonation.rms_floor_interval")
     if hnr_interval is not None and rms_interval is not None:
@@ -197,8 +204,6 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
     f0_min_hz, f0_max_hz = params["f0_min_hz"], params["f0_max_hz"]
     window_s = params["periods_per_window"] / f0_min_hz
     min_marks_s = _MARK_PERIODS / f0_min_hz
-
-    stream_id, plain = resolve_stream(store, run_dir, source)
     sr = int(plain.sampling_rate)
 
     software = software_agent(store)
