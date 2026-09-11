@@ -355,7 +355,11 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
         }
 
 
-def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str, float]:
+def extract_pitch_values(
+    snd: Union[parselmouth.Sound, Path, Audio],
+    search_floor_hz: float = 50.0,
+    search_ceiling_hz: float = 600.0,
+) -> Dict[str, float]:
     """Estimate Pitch Range.
 
     Calculates the mean pitch using a wide range and uses this to shorten the range for future pitch extraction
@@ -363,12 +367,17 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
 
     Args:
         snd (Union[parselmouth.Sound, Path, Audio]): A Parselmouth Sound object or a file path or an Audio object.
+        search_floor_hz (float): Lowest pitch of the wide search the narrow range is derived from.
+        search_ceiling_hz (float): Highest pitch of that wide search.
 
     Returns:
         dict: A dictionary containing the following keys:
 
             - pitch_floor (float): The lowest pitch value to use in future pitch extraction algorithms.
             - pitch_ceiling (float): The highest pitch value to use in future pitch extraction algorithms.
+
+        Both are NaN when the wide search placed no pitch at all, which is an absence rather than
+        the higher of the two standardized ranges.
 
     Notes:
         Values are taken from: [Standardization of pitch-range settings in voice acoustic analysis](https://doi.org/10.3758/BRM.41.2.318)
@@ -402,7 +411,7 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
 
-        pitch_wide = snd.to_pitch_ac(time_step=0.005, pitch_floor=50, pitch_ceiling=600)
+        pitch_wide = snd.to_pitch_ac(time_step=0.005, pitch_floor=search_floor_hz, pitch_ceiling=search_ceiling_hz)
         # Other than values above, I'm using default hyperparamters
         # Details: https://www.fon.hum.uva.nl/praat/manual/Sound__To_Pitch__ac____.html
 
@@ -412,7 +421,9 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
         pitch_values_Z = (pitch_values - np.mean(pitch_values)) / np.std(pitch_values)
         pitch_values_filtered = pitch_values[abs(pitch_values_Z) <= 2]
 
-        mean_pitch = np.mean(pitch_values_filtered)
+        mean_pitch = np.mean(pitch_values_filtered) if pitch_values_filtered.size else np.nan
+        if not np.isfinite(mean_pitch):
+            return {"pitch_floor": np.nan, "pitch_ceiling": np.nan}
 
         # Here there is an interesting alternative solution to discuss: https://praatscripting.lingphon.net/conditionals-1.html
         if mean_pitch < 170:

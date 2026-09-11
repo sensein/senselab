@@ -604,16 +604,24 @@ derived in the paragraphs above. UNSET, continued:
   phonation.hnr_floor_interval_db, phonation.rms_floor_interval: the near-edge intervals were
   measured as normalised autocorrelation -- the same (0.44, 0.933) and (0.0007, 0.0161) named
   above -- and the gate now reads Praat harmonicity in dB and RMS, so the units do not transfer.
-  While null the near-edge flag is inert. gate_interval is three-valued: "measured" iff both
-  intervals are supplied, "partial" when exactly one is, "unmeasured" when neither -- each
-  family's near-edge check arms independently with its own interval.
+  Praat calibrates neither: its harmonicity has a silence_threshold relative to the global peak
+  (already `phonation.silence_threshold`), and no dB floor or RMS interval at all, so unlike the
+  F0 range these two cannot be resolved by deriving them per recording and stay null pending a
+  measurement in the implementation's own units. While null the near-edge flag is inert.
+  gate_interval is three-valued: "measured" iff both intervals are supplied, "partial" when exactly
+  one is, "unmeasured" when neither -- each family's near-edge check arms independently with its own
+  interval.
 
-voice.f0_range_hz replaces phonation.f0_min_hz and phonation.f0_max_hz. One range, as [min, max],
-read by both PREPROCESS's F0-track measurement and the VOICE branch, so the two cannot hold ranges
-that drift. It is null for the reason the two scalars were: no single search range serves both a low adult
-male fundamental and an infant voice, so the caller must state which population it is measuring.
+voice.f0_search_range_hz replaces voice.f0_range_hz, which replaced phonation.f0_min_hz and
+phonation.f0_max_hz. It is [50.0, 600.0] Hz: the wide search of the pitch-range standardization
+method (Notes in `extract_pitch_values`), from which that method narrows each recording's own
+[floor, ceiling]. PREPROCESS and VOICE both narrow it the same way, off `plain`, so the two cannot
+hold ranges that drift. What was wrong with the key it replaces is its premise, not its value: a
+fixed corpus-wide range had to be null, because no single range serves both a low adult male
+fundamental and an infant voice -- but no fixed range is needed, because the range is derivable per
+recording. See `specs/20260911-ppg-praat-batch/design.md`.
 
-voice v2 -- branch-voice.md. voice.f0_range_by_population overrides voice.f0_range_hz per declared
+voice v2 -- branch-voice.md. voice.f0_range_by_population replaces the derived range per declared
 age and sex; null, owed a fit per population, and a range spanning too wide an interval makes any
 period-doubling test on it vacuous. voice.f0_range_ratio_max is the f0_max / f0_min above which the
 period-doubling check reports nothing because it flags everything; it is null, and a configuration
@@ -868,7 +876,8 @@ UNSET, and why -- benchmarks/open.md carries each of these:
     step 3's "is this span speech" vote, those gate step 8's quality reading.
   phonation.hnr_floor_interval_db, phonation.rms_floor_interval: benchmarks/voice.md measured a
     near-edge interval in normalised-autocorrelation units, which do not transfer to the Praat-dB
-    implementation; while null the near-edge row is inert and the verdict records "unmeasured".
+    implementation, and Praat self-calibrates neither, so neither can be resolved by derivation;
+    while null the near-edge row is inert and the verdict records "unmeasured".
   quality.stoi_floor, quality.pesq_floor, quality.disruption_*: no labelled quality verdicts exist,
     so SPEECH's quality fail is unreachable by design until they do. Reserved: read by nothing yet;
     SPEECH step 8 reports without gating until these are measured AND wired.

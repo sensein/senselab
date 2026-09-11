@@ -27,7 +27,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import seed_preprocess_store
 
 FAKE_F0 = 100.0
-"""The fake point process's rate. Chosen against ``voice_config``'s range so neither doubling alias
+"""The fake point process's rate. Chosen against the faked derived range so neither doubling alias
 lands inside it: 200 Hz is above its maximum and 50 Hz is below its minimum, which leaves the
 period-doubling row inert unless a test asks for a range that makes it fire."""
 
@@ -97,21 +97,27 @@ def _fake_period_marks(
     return [PeriodMark(time_s=float(t), period_s=period, amplitude=0.1) for t in times]
 
 
+FAKE_DERIVED_RANGE = (75.0, 190.0)
+"""What the faked derivation returns, standing in for what Praat narrows off the recording."""
+
+
+def _fake_derive_f0_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float) -> tuple[float, float]:
+    """The derivation, faked to one range so every assertion below has fixed numbers."""
+    return FAKE_DERIVED_RANGE
+
+
 @pytest.fixture(autouse=True)
 def praat_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Praat is deterministic but slow; the phonation task's tests own the real calls."""
     monkeypatch.setattr(voice_module, "hnr_track", _fake_hnr_track)
     monkeypatch.setattr(voice_module, "period_marks", _fake_period_marks)
+    monkeypatch.setattr(voice_module, "derive_f0_range", _fake_derive_f0_range)
 
 
 @pytest.fixture
 def voice_config(tmp_path: Path) -> TriageConfig:
-    """The packaged configuration with one declared F0 range. A fixture, not a fit.
-
-    The packaged ``voice.f0_range_hz`` is null because no single range serves both a low adult male
-    fundamental and an infant voice; this states one so the branch can run.
-    """
-    return _override(tmp_path, "voice:\n  f0_range_hz: [75.0, 190.0]\n")
+    """The packaged configuration. The F0 range is the recording's own, derived not declared."""
+    return load_triage_config()
 
 
 def _override(tmp_path: Path, text: str) -> TriageConfig:
@@ -268,13 +274,27 @@ class TestTheSubjectIsPreprocessesSpans:
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
         assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.kind == "voice"
 
-    def test_the_packaged_config_refuses_before_the_store_is_touched(
+    def test_the_packaged_config_runs_on_the_derived_range(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path
     ) -> None:
-        """No range is declared by default, and the branch does not invent a population to serve."""
+        """Nothing is declared by default, and the range the branch used is the recording's own."""
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        voice(store, "plain", config, run_dir=tmp_path)
+        analyze = next(a for a in store.activities("VOICE") if a.step == "analyze")
+        assert tuple(analyze.parameters["f0_range_hz"]) == FAKE_DERIVED_RANGE
+
+    def test_a_recording_no_range_derives_from_refuses_before_the_store_is_written(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An underivable range is an absence; the branch stops rather than inventing a population."""
+
+        def _no_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float) -> tuple[float, float]:
+            raise ValueError("no F0 range could be derived from this recording")
+
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        monkeypatch.setattr(voice_module, "derive_f0_range", _no_range)
         before = len(store.entities())
-        with pytest.raises(ValueError, match="voice.f0_range_hz"):
+        with pytest.raises(ValueError, match="no F0 range could be derived"):
             voice(store, "plain", config, run_dir=tmp_path)
         assert len(store.entities()) == before
 
@@ -321,7 +341,7 @@ class TestProductionModes:
         still reaches a seeded span and still measures it. What the branch does with aperiodic
         phonation is what this test is for, and that is unchanged.
         """
-        config = _override(tmp_path, "voice:\n  f0_range_hz: [75.0, 190.0]\n")
+        config = load_triage_config()
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
         assert taxonomy(store, "plain", config, run_dir=tmp_path).kinds["voice"] == "uncertain"
         assert "VOICE" in routing(store, None, config, run_dir=tmp_path).runs
@@ -365,7 +385,7 @@ class TestMptRecoverableProducts:
         """
         config = _override(
             tmp_path,
-            "voice:\n  f0_range_hz: [75.0, 190.0]\n  task_duration_ranges: {maximum_phonation_time: [10.0, 40.0]}\n",
+            "voice:\n  task_duration_ranges: {maximum_phonation_time: [10.0, 40.0]}\n",
         )
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
         hint = AudioHints(metadata={"task": "maximum_phonation_time"})
@@ -454,7 +474,7 @@ class TestTheF0RangeServesAPopulation:
         """Age and sex move the range; the hint names which population."""
         config = _override(
             tmp_path,
-            "voice:\n  f0_range_hz: [75, 500]\n  f0_range_by_population: {adult_male: [60, 250]}\n",
+            "voice:\n  f0_range_by_population: {adult_male: [60, 250]}\n",
         )
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
         hint = AudioHints(metadata={"population": "adult_male"})
@@ -462,13 +482,16 @@ class TestTheF0RangeServesAPopulation:
         analyze = next(a for a in store.activities("VOICE") if a.step == "analyze")
         assert list(analyze.parameters["f0_range_hz"]) == [60.0, 250.0]
 
-    def test_a_vacuous_ratio_is_refused_before_the_store_is_touched(self, store: ProvStore, tmp_path: Path) -> None:
+    def test_a_vacuous_ratio_is_refused_before_the_store_is_written(self, store: ProvStore, tmp_path: Path) -> None:
         """A check that flags everything reports nothing, so it is refused rather than run and flagged."""
-        config = _override(tmp_path, "voice:\n  f0_range_hz: [50, 800]\n  f0_range_ratio_max: 4.0\n")
+        config = _override(
+            tmp_path,
+            "voice:\n  f0_range_by_population: {wide: [50, 800]}\n  f0_range_ratio_max: 4.0\n",
+        )
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
         before = len(store.entities())
         with pytest.raises(ValueError, match="f0_range_ratio_max"):
-            voice(store, "plain", config, run_dir=tmp_path)
+            voice(store, "plain", config, AudioHints(metadata={"population": "wide"}), run_dir=tmp_path)
         assert len(store.entities()) == before
 
     def test_a_null_ratio_refuses_nothing(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:

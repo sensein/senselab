@@ -9,6 +9,7 @@ import numpy as np
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     PARSELMOUTH_AVAILABLE,
+    extract_pitch_values,
     get_sound,
     parselmouth,
 )
@@ -37,6 +38,33 @@ def _require_parselmouth() -> None:
         )
 
 
+def derive_f0_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float) -> tuple[float, float]:
+    """This recording's own F0 search range, narrowed from a wide search by the standardization method.
+
+    Args:
+        audio: The recording.
+        search_floor_hz: Lowest pitch of the wide search. Read it from ``voice.f0_search_range_hz``.
+        search_ceiling_hz: Highest pitch of that wide search. Read it from ``voice.f0_search_range_hz``.
+
+    Returns:
+        ``(f0_min_hz, f0_max_hz)`` for this recording, to hand to :func:`f0_track`,
+        :func:`hnr_track`, :func:`period_marks` and :func:`formant_track`.
+
+    Raises:
+        ModuleNotFoundError: If parselmouth is not installed.
+        ValueError: If the wide search placed no usable pitch and the narrowing did not resolve —
+            an absence, never a guessed range.
+    """
+    _require_parselmouth()
+    values = extract_pitch_values(audio, search_floor_hz=search_floor_hz, search_ceiling_hz=search_ceiling_hz)
+    floor, ceiling = float(values["pitch_floor"]), float(values["pitch_ceiling"])
+    if not np.isfinite(floor) or not np.isfinite(ceiling):
+        raise ValueError(
+            f"no F0 range could be derived from this recording over [{search_floor_hz}, {search_ceiling_hz}] Hz"
+        )
+    return floor, ceiling
+
+
 def hnr_track(
     audio: Audio,
     *,
@@ -49,7 +77,7 @@ def hnr_track(
 
     Args:
         audio: The recording. ``get_sound`` handles channel merging and resampling.
-        f0_min_hz: Lowest F0 the analysis considers. Read it from ``voice.f0_range_hz``.
+        f0_min_hz: Lowest F0 the analysis considers. Read it from :func:`derive_f0_range`.
         hop_s: Praat's ``time_step``. Read it from ``phonation.hop_s``.
         silence_threshold: Praat's silence threshold. Read it from ``phonation.silence_threshold``.
         periods_per_window: Praat's analysis window length, in periods of ``f0_min_hz``. Read it
@@ -89,8 +117,8 @@ def period_marks(
         audio: The recording.
         start_s: Span onset.
         end_s: Span offset.
-        f0_min_hz: Lowest F0 to search. Read it from ``voice.f0_range_hz``.
-        f0_max_hz: Highest F0 to search. Read it from ``voice.f0_range_hz``.
+        f0_min_hz: Lowest F0 to search. Read it from :func:`derive_f0_range`.
+        f0_max_hz: Highest F0 to search. Read it from :func:`derive_f0_range`.
 
     Returns:
         One mark per pair of consecutive pulses whose gap is a plausible period — within
@@ -135,8 +163,8 @@ def f0_track(
 
     Args:
         audio: The recording. ``get_sound`` handles channel merging and resampling.
-        f0_min_hz: Lowest F0 to search. Read it from ``voice.f0_range_hz``.
-        f0_max_hz: Highest F0 to search. Read it from ``voice.f0_range_hz``.
+        f0_min_hz: Lowest F0 to search. Read it from :func:`derive_f0_range`.
+        f0_max_hz: Highest F0 to search. Read it from :func:`derive_f0_range`.
         hop_s: Praat's ``time_step``. Read it from ``phonation.hop_s``.
 
     Returns:
