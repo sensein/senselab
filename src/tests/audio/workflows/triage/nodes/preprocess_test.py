@@ -238,7 +238,7 @@ class TestWindowClassificationsAreSets:
         preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
         assert seen["ast"]["top_k"] == 527
 
-    def test_a_truncating_top_k_would_lose_a_confident_label(
+    def test_the_label_top_k_truncates_a_window_over_the_floor(
         self,
         store: ProvStore,
         windows_config: TriageConfig,
@@ -246,13 +246,14 @@ class TestWindowClassificationsAreSets:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A window carrying six labels over threshold keeps all six; a top-5 rank would drop one."""
+        """Membership is a conjunction, so six labels over the floor still yield the top four."""
         _seed_admit(store, tmp_path, wav_writer)
-        scores = {f"L{i}": 0.9 - i * 0.01 for i in range(6)}
+        scores = {f"L{index}": 0.9 - index * 0.01 for index in range(6)}
         _stub_models(monkeypatch, ast=[window(0.0, 0.96, scores)])
         preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
         ast_window = find_measurements(store, "ast_window")[0]
-        assert len(ast_window.attributes["labels"]) == 6
+        assert ast_window.attributes["labels"] == ["L0", "L1", "L2", "L3"]
+        assert len(ast_window.attributes["raw_scores"]) == 6, "the model's own output is kept whole"
 
     def test_hear_runs_on_its_fixed_window_at_the_configured_hop(
         self,
@@ -792,9 +793,10 @@ class TestThePackagedConfigStillRunsEveryClassifier:
     ) -> None:
         """A null threshold must not cost the expensive model output, and a null hop must not either.
 
-        The per-span passes are held to the same rule as the whole-file ones: they are documented
-        "raw scores only -- no labelling decision", so a null labelling threshold leaves them
-        unlabelled rather than unrun.
+        The per-span passes carry a membership: ``windows.yamnet`` and ``windows.hear`` ship a floor
+        and a top-K, so those windows arrive labelled. The whole-file ``<classifier>_windows`` fold
+        is a different block and reads ``label_thresholds`` through ``require``, which is still null,
+        so it stays absent and the store keeps the size it had.
 
         The hops are what made this worth pinning: while ``windows.ast.hop_s`` and
         ``windows.hear.hop_s`` were null, ``require`` raised inside the scores block, so AST and HeAR
@@ -832,8 +834,10 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             assert windows, f"{name} must run: its scores do not depend on a labelling threshold"
             for measurement in windows:
                 assert measurement.attributes["raw_scores"], f"{name} kept no scores"
-                assert measurement.attributes["labelled"] is False
-                assert "labels" not in measurement.attributes
+                assert measurement.attributes["labelled"] is True
+                assert measurement.attributes["default_threshold"] == 0.2
+                assert measurement.attributes["label_top_k"] == 4
+                assert measurement.attributes["labels"] == list(measurement.attributes["scores"])
 
     def test_the_shipped_hops_are_non_overlapping(
         self,

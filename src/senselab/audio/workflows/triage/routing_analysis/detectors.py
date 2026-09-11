@@ -244,6 +244,8 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         return _optional(features.span_stats, arguments[0])
     if source == "span_label_stat":
         return _optional(features.span_label_stats, arguments[0])
+    if source == "span_label_set_stat":
+        return _optional(features.span_label_set_stats, arguments[0])
     if source == "squim":
         return _optional(features.squim, arguments[0])
     if source == "level":
@@ -619,6 +621,21 @@ _LABEL_CONDITIONED_SPANS: tuple[Detector, ...] = (
 )
 """Span amplitude read only over the spans YAMNet itself labelled ``Cough``."""
 
+_COUGH_SET = "cough_labels"
+"""The :data:`~senselab.audio.workflows.triage.routing_analysis.labels.LABEL_SETS` union read below."""
+
+_LABEL_SET_CONDITIONED_SPANS: tuple[Detector, ...] = tuple(
+    Detector(
+        f"cough.yamnet_cough_set_span_peak_over_floor_db_{statistic}",
+        "cough",
+        ("span_label_set_stat", f"yamnet.{_COUGH_SET}.peak_over_floor_db_{statistic}"),
+        "dB",
+        DB_OVER_FLOOR_GRID,
+    )
+    for statistic in ("max", "p75", "p90")
+)
+"""Span amplitude over the spans carrying any cough-set label, not the single ``Cough`` string."""
+
 
 DETECTORS: tuple[Detector, ...] = tuple(
     [
@@ -723,6 +740,7 @@ DETECTORS: tuple[Detector, ...] = tuple(
     + list(_GLIDES)
     + list(_NEW_DERIVATIVES)
     + list(_LABEL_CONDITIONED_SPANS)
+    + list(_LABEL_SET_CONDITIONED_SPANS)
     + list(_BRACKETED_TOKENS)
     + list(_STREAM_PEAKS)
 )

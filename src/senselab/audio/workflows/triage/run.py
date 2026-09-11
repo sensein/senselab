@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.nodes.voice import voice
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
     GRAPH_ORDER,
+    QUALITY,
     FileVerdict,
     NodeVerdict,
     Outcome,
@@ -248,7 +249,9 @@ def _drive_branches(
     tell a branch that found nothing from a branch that never looked. A failed ROUTING call likewise
     leaves every branch ``SKIPPED``: no branch has an authorised decision to act on. A branch that
     raises is still recorded ``ERRORED`` and its siblings still run: none of them reads another's
-    output. REDACT is a step of SPEECH and runs only when SPEECH ran and its scan found PII.
+    output. REDACT is a step of SPEECH and runs only when SPEECH ran and its scan found PII. QUALITY
+    is the terminal node every recording reaches; no implementation exists yet, so it is recorded
+    ``SKIPPED`` on every path rather than being absent on some of them.
 
     PREPROCESS is the one dependency every later node in this function shares — TAXONOMY reads its
     stored derivatives, routing and the branches read TAXONOMY's fold, and none of that evidence
@@ -288,6 +291,7 @@ def _drive_branches(
             _attempt(outcomes, branch, branches[branch])
         else:
             outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED)
+    outcomes[QUALITY] = NodeOutcome(node=QUALITY, state=RunState.SKIPPED)
     if "SPEECH" in selected and _speech_found_pii(store):
         redacted = _attempt(
             outcomes,

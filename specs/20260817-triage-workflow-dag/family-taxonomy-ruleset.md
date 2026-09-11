@@ -95,7 +95,7 @@ gates fires.
 | VOICE | `voice.glide` | YAMNet singing-union peak, plain stream | >= | 0.05 | 0.75 | 0.93 | 0.10 |
 | VOICE | `voice.chant` | YAMNet `Chant` peak, plain stream | >= | 0.02 | 0.83 | 0.94 | 0.14 |
 | AIRWAY | `airway.breath` | `residual.energy_fraction` | >= | 0.10 | 0.66 | 0.98 | 0.16 |
-| AIRWAY | `airway.cough` | `span_stats["all.peak_over_floor_db_max"]` | >= | 50.0 dB | 0.79 | 0.96 | 0.07 |
+| AIRWAY | `airway.cough` | `span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"]` | >= | 50.0 dB | **not re-measured** | — | — |
 | AIRWAY | `airway.bracketed_event` | `bracketed_types` over `taxonomy.airway_bracket_tokens` | >= | 1 token | ~0.710 | — | — |
 | DDK | `ddk.lexical_repetition` | max token repetition in `transcript` | >= | 3 | **not measured** | — | — |
 
@@ -105,11 +105,14 @@ Beside the gates, and never among them:
 | --- | --- | --- | --- | --- |
 | SPEECH | `speech.transcript_agreement` | `words.agreement` | >= | 3 words |
 
-And ahead of all of them, one precondition:
+And behind all of them, consulted only where none fired, one bypass:
 
-| precondition | feature | rule |
+| bypass | feature | rule |
 | --- | --- | --- |
 | `emptiness` | max tracked-label peak of `enhanced\|yamnet` and of `residual\|yamnet` | both `< 0.2` |
+
+And after all of them, `QUALITY`: a node every recording reaches, gated by nothing. See "QUALITY is
+a graph edge, not a route" below.
 
 The SPEECH J above is `sens 0.954 + spec-excluding-DDK 0.855 - 1`; `airway.bracketed_event`'s comes
 off the capped transcript and is a lower bound. Both are derived in their own sections below, and
@@ -121,8 +124,12 @@ the median across all 48. The pair is the spread the operating point was chosen 
 what says whether a J is carried by separation or by prevalence. Every VOICE and residual/span
 AIRWAY row above is the max-Youden operating point from the 62,547-recording corpus sweep.
 
-`voice.sustained`, `voice.glide`, `airway.breath` and `airway.cough` are unchanged: they sit at
-measured operating points and this restructure had no evidence against any of them.
+`voice.sustained`, `voice.glide` and `airway.breath` are unchanged: they sit at measured operating
+points and this restructure had no evidence against any of them. `airway.cough` no longer reads the
+blanket span statistic; see "The cough gate reads cough-labelled spans" below. Its 50 dB cut is
+carried over onto the conditioned population **unswept**, because the conditioned population is
+smaller and louder than the blanket one and no sweep over it exists. Re-fitting it from the corpus
+run is the first thing to do with that run.
 
 ### `voice.chant`, added: the best voice separator in the sweep, previously unused
 
@@ -267,10 +274,11 @@ an error.
   keyed only when it has such a gate, and it is keyed whether or not another gate routed the branch
   anyway: an unreadable feature is a fact about the store, not about the recording.
 - `flags` — per branch, the *names* of the flag gates that fired. Keyed only when one did.
-- `empty` — the emptiness precondition fired, so no branch gate was asked anything.
-- `fell_through` — the recording carried content and still routed nowhere. **An empty recording is
-  not a fall-through**, and the two are separate columns in the tally.
-- `gate_outcomes` — every gate's own outcome, each gate evaluated once; empty when `empty`.
+- `state` — one of `routed`, `empty` and `unexplained`; see "Three outcomes, and only one of them
+  indicts the ruleset" below. It replaces the `empty` and `fell_through` booleans, which could both
+  be false and said nothing about which of the three had happened.
+- `gate_outcomes` — every gate's own outcome, each gate evaluated once. Never empty now: every gate
+  runs on every recording, including one the emptiness rule goes on to call empty.
 
 **`unavailable` is not `silent`.** `GateOutcome` has three members — `FIRED`, `SILENT`,
 `UNAVAILABLE` — and a gate whose feature was never written to the store reads `UNAVAILABLE`. An
@@ -279,15 +287,17 @@ is not a run with no chant; a recording with no consensus transcript is not a re
 repeated syllable. Collapsing the three into a boolean would report a broken or partial store as a
 negative measurement, which is the failure mode that makes a scored ruleset look better than it is.
 
-**Fall-through is a first-class output.** A recording falls through when no gate of any branch fired
-for it. Under instruction-first routing a recording could fall through while carrying content a
-non-declared branch's gate would have fired on — the 74 harvard recordings did exactly that — and
-that class of fall-through no longer exists by construction.
+**The unexplained count is a first-class output.** A recording is unexplained when no gate of any
+branch fired for it and the audio does not say why. Under instruction-first routing a recording could
+land there while carrying content a non-declared branch's gate would have fired on — the 74 harvard
+recordings did exactly that — and that class no longer exists by construction.
 
 `tally_families(evaluations) -> dict[str, FamilyTally]` aggregates a stream of evaluations into the
 per-family counts, per branch on each of `routed`, `declared`, `agreed`, `missed`, `extra`,
-`unavailable` and `flagged`, plus the empty count and the fall-through count, so the ruleset can be
-scored over the corpus without holding it.
+`unavailable` and `flagged`, plus `states`, which carries **all three** route states whether or not
+the family reached one and sums to `recordings`. Two booleans could not: `empty=False,
+fell_through=False` was the routed case and read as an absence of both facts rather than as a third
+one.
 
 `score_branches(evaluations) -> dict[str, Confusion]` answers the question this restructure exists
 to ask: **can content-only routing recover the overarching families?** One 2x2 per branch — a
@@ -373,68 +383,240 @@ key is redundant — the same is not true of the duration or SQUIM distributions
 genuinely wider sample — but a sweep that reports both as independent detectors is reporting one
 detector twice.
 
-### Why the span's best-scoring label, and not the store's own `labels` list
+### Argmax was the first pass, and it starved the feature
 
-PREPROCESS writes two things per span classifier window: `raw_scores`, the model's full output, and
-`labels`, the subset clearing `windows.<classifier>.default_threshold`. `labels` is the natural
-membership reader, and `nodes/taxonomy.py`'s `_span_label_evidence` uses exactly that.
+The first pass attributed each span to the **argmax** of its per-label scores: top-1, no floor, one
+label. Measured over the whole corpus, that is what it cost.
 
-It cannot be used here. `windows.yamnet.default_threshold` and `windows.hear.default_threshold` are
-both `null` in the shipped config — no ROC over this corpus exists to fit them from — so every
-per-span window in the 62,547-recording extraction carries `labelled: false` and no `labels` key at
-all. Conditioning on `labels` would emit nothing for the entire corpus.
+| measurement | value |
+| --- | --- |
+| recordings with **no** Cough-labelled span at all | 60,092 of 62,547 |
+| recall ceiling that imposes on any `Cough`-conditioned gate | **0.624** |
+| `max`, `p75` and `p90` conditioned on `Cough` | **identical curves** |
 
-The reduction used instead is the span's **best-scoring label**: the maximum `(label, score)` pair
-over every window the classifier placed on that span, which is `_per_span_label_scores`'s
-per-label-max followed by `top_label`'s argmax, and is the same number either order is taken in. It
-introduces no threshold, so it adds no unfitted literal to the code, and the thresholding stays
-where it belongs — in the detector's own swept grid. A span whose best label is outside
-`TRACKED_LABELS` carries no tracked label and contributes to nothing.
+The three statistics coincide because a recording with a Cough span almost always has exactly one,
+so its distribution has one point and every percentile of it is that point. `p75` and `p90` were
+added to separate a recording with one loud cough from one with a loud cough and a louder door slam;
+with one span each they cannot.
 
-### Size
+And the refinement still worked. At a **2% over-routing budget**:
 
-`span_label_stats` costs 430-520 bytes per emitted label: nine keys (`span_count` plus the eight
-statistics of `_stats`), one label at a time. A recording emits a label only when a live span
-carries it, so the count per recording is bounded by the number of live spans and, in practice,
-concentrates on 2-4 distinct labels — argmax over 521 AudioSet labels is not diverse across the
-spans of one recording. That is 0.9-1.8 kB against a current 15.7 kB per recording (983 MB /
-62,547), so **+6% to +11% on the shard**, well short of the doubling that would have forced
-emission down to `taxonomy.audioset_airway_labels` and `taxonomy.hear_airway_labels`. All of
-`TRACKED_LABELS` is therefore emitted. The absolute worst case is 36 labels (29 tracked for YAMNet,
-7 for HeAR) on a recording with at least 36 spans each argmaxing differently, which is a doubling
-and does not occur.
+| gate | recall at 2% over-routing |
+| --- | --- |
+| `airway.cough` conditioned on the `Cough` label | **0.624** (its ceiling) |
+| `cough.yamnet_cough_minus_breath` | 0.499 |
+| blanket `amplitude_peak_over_floor_db_max` | 0.176 |
 
-Extraction now parses the `span_yamnet` records it used to skip by raw-string prefilter. Measured at
-17.3 kB and 99 µs per record for a 521-label dump on this laptop, at a few tens of spans per
-recording that is a few milliseconds per store and a few minutes over the corpus — the prefilter
-was worth having while no detector read those bytes, and is not once one does.
+Equal-or-better recall at roughly a quarter of the cost of the blanket reading. The conditioning is
+not the problem; the attribution feeding it is. **This table is the baseline the change below is
+measured against.**
+
+### Membership is top-K ∩ floor, and it is the same rule PREPROCESS writes
+
+A span carries a label when the classifier puts it in **the span's top K** *and* its score is **at or
+above the floor**. Both numbers are configuration — `windows.<classifier>.label_top_k` and
+`windows.<classifier>.default_threshold`, shipped at **4** and **0.2** — and neither appears as a
+literal in code. `LabelMembership` in `senselab/audio/workflows/triage/label_membership.py` is the
+one implementation of the rule; `_confident_labels` in `nodes/preprocess.py` and
+`_label_span_statistics` in `routing_analysis/features.py` are its two callers.
+
+Consequences, each of them a test:
+
+- A span may carry several labels and contributes to **each** of their distributions. Argmax kept
+  one and threw the rest away.
+- A label over the floor but ranked fifth carries nothing. Membership is a conjunction.
+- A span whose best label is under the floor carries nothing at all, which is different from a span
+  the classifier never saw.
+- Pooling across the windows of one span happens **before** the rank: a label's score on a span is
+  its maximum over every window the classifier placed there, and the top-K is taken over those
+  maxima. Taking each window's top-K and unioning them would rank a label on whichever window it
+  happened to survive, and the two are not the same set.
+
+### The label sets are read by name, never restated
+
+`routing_analysis/labels.py` owns `LABEL_SETS` — `cough_labels`, `breath_labels`, `singing`,
+`whistle` — per classifier. `features.py` iterates that mapping and emits one distribution per set
+beside the per-label ones, into `RecordingFeatures.span_label_set_stats`, keyed
+`"<classifier>.<set>.…"`. A span counts toward a set when **any** member of it is one of the labels
+the span carries, and it counts **once** however many members qualify: the set's distribution is over
+spans, not over (span, label) pairs, so it is not the union of its members' distributions.
+
+Those tuples are being regenerated from the AudioSet ontology. Nothing outside `labels.py` restates
+a member of them — not this document's rules, not the config, not the detectors — so the
+regeneration lands without a second edit.
+
+`span_label_set_stats` is a field of its own rather than more keys in `span_label_stats`, and a
+reader source of its own (`span_label_set_stat`). A set name and a label name would otherwise share
+one namespace, where `singing` and `Singing` are one casefold apart.
+
+### The cough gate reads cough-labelled spans
+
+`branch_gates.AIRWAY`'s `airway.cough` was `span_stat all.peak_over_floor_db_max >= 50`: the loudest
+span in the file, whatever anything called it. As a whole-corpus door that scores **J −0.141** and
+fires on **38.7% of non-airway recordings** — it is a loudness detector, and loudness is not an
+airway event.
+
+It now reads `span_label_set_stat yamnet.cough_labels.peak_over_floor_db_max`, at the same 50 dB.
+
+The blanket detector **stays in the catalogue**. Within the airway families it is the best
+cough-vs-breath discriminator there is, at **J 0.787** — but that is a question the AIRWAY branch
+asks after it has the recording, not a question the router asks to decide whether to hand it over.
+The two jobs wanted the same number at different operating points, and only one of them is the
+router's.
+
+The 50 dB cut is **carried over unswept** onto a population that is smaller and louder than the one
+it was fitted on. It is the first thing the corpus run should re-fit.
 
 ### The detectors added
 
-Three, not the cross-product. The feature is general; these are the ones about to be tested against
-the two rows above:
+Three per-label, from the earlier pass, reading `("span_label_stat", "yamnet.Cough.…")`:
 
 - `cough.yamnet_cough_span_peak_over_floor_db_max`
 - `cough.yamnet_cough_span_peak_over_floor_db_p75`
 - `cough.yamnet_cough_span_peak_over_floor_db_p90`
 
-Each reads `("span_label_stat", "yamnet.Cough.peak_over_floor_db_<stat>")` over
-`DB_OVER_FLOOR_GRID`. `max` is the direct conditioned analogue of
-`cough.amplitude_peak_over_floor_db_max`; `p75` and `p90` are there because a recording with one
-loud cough and one louder door slam has the same `max` and a lower `p90`, and which of the three
-separates best is a measurement, not a guess.
+Three set-conditioned, reading `("span_label_set_stat", "yamnet.cough_labels.…")`:
 
-## Emptiness is its own check, ahead of routing
+- `cough.yamnet_cough_set_span_peak_over_floor_db_max`
+- `cough.yamnet_cough_set_span_peak_over_floor_db_p75`
+- `cough.yamnet_cough_set_span_peak_over_floor_db_p90`
 
-A recording that contains nothing and a recording whose content matched no gate are two different
-outcomes, and `fell_through` conflated them. It no longer does.
+All six over `DB_OVER_FLOOR_GRID`, which runs to 80 dB. Six and not the cross-product of every set
+and every statistic: the sets other than `cough_labels` are emitted into the shard so a later sweep
+can read them, and no detector is catalogued for a question nobody has asked yet.
 
-`taxonomy.ruleset.emptiness` is a precondition, evaluated before any branch gate: a recording is
-**empty** when the highest tracked-label peak of **both** `enhanced|yamnet` and `residual|yamnet`
-falls below `peak_floor`. When it fires, no branch gate is asked anything, `routed` is empty,
-`gate_outcomes` is empty, and `empty` is true while `fell_through` is false. A named stream whose
-summary is absent from the store reads unavailable and the recording is **not** called empty — an
-absent classifier summary is not a stream that scored zero.
+Whether `p75` and `p90` separate from `max` is now a live question rather than a foregone one. Under
+argmax they were the same curve because the population had one member; under top-4 ∩ 0.2 a recording
+can carry several cough-set spans and the three can differ.
+
+### Size
+
+The shard is **1,207 MB over 62,547 recordings, 19.3 kB each** — the number after the argmax pass,
+which took it from 983 MB (+23%) against an estimate of +6–11%. That estimate was wrong because it
+assumed 2–4 emitted labels per recording; the count came in higher.
+
+Each emitted group costs 9 keys — `span_count` plus the eight statistics of `_stats` — at **430–520
+bytes**. Two things grow the group count:
+
+| source | groups added | bytes |
+| --- | --- | --- |
+| up to 4 labels per span instead of 1 | realistically ~2x the distinct **tracked** labels, since most of a span's top 4 (`Speech`, `Silence`, `Music`, room tone) are untracked and dropped | +0.9–1.8 kB |
+| the named sets, per classifier | at most 6 (3 sets x 2 span classifiers); in practice `cough_labels` and `breath_labels` on the classifiers that fired | +0.9 kB |
+
+**Estimate: +10% to +15%, so roughly 1.33–1.39 GB.** That is under the ~2 GB ceiling, so emission
+stays over all of `TRACKED_LABELS` plus the named sets rather than being restricted to the sets.
+
+The absolute worst case is 36 tracked labels (29 YAMNet, 7 HeAR) plus 6 sets, 42 groups at ~470 B =
+~20 kB, which would double a recording. It needs 36 distinct tracked labels each inside some span's
+top 4 and over 0.2 in one recording, and it does not occur. If the corpus run comes back over 2 GB,
+the fix is to emit only the sets and drop the per-label groups — the sets are what the gates read.
+
+Extraction parses the `span_yamnet` records it used to skip by raw-string prefilter. Measured at
+17.3 kB and 99 µs per record for a 521-label dump on this laptop, at a few tens of spans per
+recording that is a few milliseconds per store and a few minutes over the corpus. Top-K adds a sort
+of that dump per span rather than a max over it, which is the same order of work; pooling per-label
+maxima across a span's windows holds one float per label per live span for the length of one store,
+a few MB at the corpus's span counts and freed per recording.
+
+### What the store's own `labels` list now says
+
+PREPROCESS writes two things per span classifier window: `raw_scores`, the model's full output, and
+`labels`, the membership over it. Under the shipped config the analysis could not read `labels`:
+`windows.yamnet.default_threshold` and `windows.hear.default_threshold` were both `null`, so
+`_confident_labels` never ran and **every** per-span window in the 62,547-recording extraction is
+stamped `labelled: false` with no `labels` key. That is the whole reason the analysis re-derives
+membership from `raw_scores`.
+
+Both floors are now **0.2** and both classifiers carry `label_top_k: 4`, so a future run stamps the
+same membership the analysis re-derives.
+
+**This changes `config_hash`, and it changes PREPROCESS.** Plainly:
+
+- `span_yamnet` and `span_hear` windows now arrive with `labelled: true`, a `labels` list, a
+  `scores` mapping, and the `default_threshold` and `label_top_k` that produced them. They already
+  carried `raw_scores` and still do — the model's output is a measurement and is never a decision's
+  to discard.
+- `nodes/taxonomy.py`'s `_span_label_evidence` reads that `labels` list, so it has evidence where it
+  had none. `taxonomy.presence_floor` is still null in every line, so every line still reads
+  unavailable and no state changes yet.
+- The whole-file `<classifier>_windows` fold is a **different** block. It reads
+  `windows.<classifier>.label_thresholds` through `require`, that key is still null, and so
+  `yamnet_windows`, `ast_windows` and `hear_windows` stay `absent` exactly as before. Store size per
+  recording is unchanged; the fold would add one entity carrying all 521 raw scores per window.
+- **The existing corpus is unaffected.** It was produced with the nulls, its span windows carry
+  `labelled: false`, and the analysis re-derives from the stored `raw_scores` either way. Nothing
+  needs re-running to read it under the new rule.
+
+`analyze_routing_evidence.py` takes `--config` and passes the same resolved pair into every worker,
+so an override moves the extraction and a future PREPROCESS run together. Extraction refuses to run
+when a floor is null rather than defaulting one.
+
+## Emptiness is a bypass, not a precondition
+
+Owner's model, verbatim: *"everything reaches quality after other branches, but emptiness reaches
+quality directly"*, and *"emptiness will only be evaluated if the other rules have not found a
+route."*
+
+The previous pass had it the other way round. `evaluate_routes` asked the emptiness rule first and
+returned early when it fired, so **no gate ran on an empty recording** and `gate_outcomes` came back
+empty. That is now inverted:
+
+1. Every branch gate and every branch flag is evaluated on every recording. Nothing short-circuits.
+2. Emptiness is consulted only where no gate fired, as the explanation for that.
+
+### Three outcomes, and only one of them indicts the ruleset
+
+`RouteEvaluation.state` is a `RouteState`, and it has exactly three members:
+
+| state | what happened | what it is a charge against |
+| --- | --- | --- |
+| `routed` | one or more branches claimed the recording | nothing |
+| `empty` | nothing routed, and the audio explains why | the recording |
+| `unexplained` | nothing routed, and the audio does not | **the ruleset** |
+
+The names are the point. `fell_through` did not say whether the recording was blank or whether the
+gates had missed something, and it was reported beside an `empty` count that a reader had to subtract
+by hand. `unexplained` is the number to drive the gates from: it is content the ruleset could not
+account for. `FamilyTally.states` counts all three per family and
+`scripts/score_taxonomy_ruleset.py` prints all three as a corpus block, so no reader has to derive
+one from the other two.
+
+### What inverting the order costs, and why it is the right cost
+
+Because gates now always run, an empty recording where a gate fires is **routed**, not empty. That
+is intended: a gate firing is evidence the file is not empty, and it is the same content-first rule
+that governs every other reading here. Two facts follow, both of them signals rather than bugs:
+
+- The disagreement — the emptiness rule says blank, a gate says otherwise — is a **measurement of
+  the emptiness rule**, and the corpus run is where it becomes visible. Do not suppress it, and do
+  not add a rule that lets emptiness veto a gate.
+- The previous ordering depressed branch sensitivity in `score_branches` for a reason unrelated to
+  the gates: an empty recording stayed a reference positive for whatever its family declared, that
+  branch landed in `missed`, and the gate that might have recovered it was never asked. Every gate
+  now gets its chance first, so a sensitivity change between the two passes is partly this and not
+  a change in any gate.
+
+`taxonomy.ruleset.emptiness` is unchanged as data: both stream names and the 0.2 floor stay exactly
+as they were. Only *when* it is consulted has changed.
+
+### QUALITY is a graph edge, not a route
+
+`QUALITY` is in `vocabulary.GRAPH_ORDER`, after `VOICE` and before `REDACT`. It is **not** in
+`BRANCHES`, it has no entry in `taxonomy.ruleset.branch_gates` or `branch_flags`, and it is not in
+`reference_family_set`. Every recording reaches it whatever routed, which is precisely why it cannot
+be a route: a gate that fires on everything selects nothing.
+
+What that costs elsewhere in the graph, all of it checked:
+
+- `run.py` skips `GRAPH_ORDER` slices on the ADMIT-fail and PREPROCESS-fail paths, so `QUALITY`
+  would have been recorded `SKIPPED` there and absent on the happy path. `_drive_branches` now
+  records it `SKIPPED` after the branch loop as well, so every path agrees. There is no
+  `nodes/quality.py` and the runner has no dispatch entry for it.
+- `verdict.py`'s `_GRAPH_ORDER` is `GRAPH_ORDER[:-1]`, so `FileVerdict.ran` already carried
+  `QUALITY: skipped` from the store's own reading, with or without the runner's line.
+- `nodes/report.py` orders node rows by `GRAPH_ORDER`, so a `QUALITY` row reads `skipped`.
+- The `quality:` config section — `stoi_floor`, `pesq_floor`, the disruption tolerances — is still
+  null and still read by nothing. Declaring the node does not adopt those values.
 
 ### What the two streams measure on short recordings
 
@@ -453,7 +635,9 @@ Applying `enhanced < 0.2 AND residual < 0.2` marks **1,336 of the 1,615** short 
 of which only **53** carry any lexical word at all. The remaining 252 short recordings are real but
 truncated — `Speech = 1.00`, one to three lexical words, in clips of 0.2 to 0.45 s — and the AND
 correctly leaves them out of the empty set. **0.2** is the floor, one config value read for both
-streams.
+streams. Those numbers were taken under the old ordering, where the rule decided alone; under the
+new one the 53 with lexical words route to SPEECH instead, and the empty count over the same
+population is a corpus measurement this document does not yet have.
 
 ### Why both streams and not the enhanced one alone
 
@@ -470,6 +654,8 @@ graph at all, which is that node's question, not the ruleset's. It lives in the 
 reason — that is where it can be measured against the routed set, over an extracted feature shard,
 without re-running the graph. `nodes/admit.py` is deliberately untouched. Moving it there is an open
 item, and the move should carry the floor and both stream names with it rather than restating them.
+The move also has to carry the bypass ordering: ADMIT runs before any gate, so an ADMIT that
+discarded on emptiness would restore exactly the short-circuit this pass removed.
 
 ### What the empty set does to the scores
 
@@ -477,9 +663,7 @@ An empty recording stays a reference positive for whatever branch its family dec
 `declared` branch lands in `missed` and it counts as a false negative in `score_branches`. That is
 the honest reading — a branch genuinely was not recovered — but it means a corpus with many empties
 reports a depressed sensitivity for a reason that has nothing to do with the gates. `FamilyTally`
-counts `empty` separately so that reason is visible rather than inferred, and
-`scripts/score_taxonomy_ruleset.py` prints the empty count on its own line above the fall-through
-count.
+counts `empty` in `states` so that reason is visible rather than inferred.
 
 ## Bracketed tokens are AIRWAY evidence, not speech
 
