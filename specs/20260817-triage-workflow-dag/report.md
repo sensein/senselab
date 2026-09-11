@@ -135,7 +135,7 @@ embedded rather than referenced**:
 ## Placement
 
 ```
-<out_dir>/<stem>_<utc-timestamp>/     # the run root; the three trees below are siblings
+<out_dir>/<sub-label>/<ses-label>/<stem>_<utc-timestamp>/   # the run root; the three trees are siblings
   run/
     store.jsonl                       # the store
     streams/  derivatives/            # the sidecars measurements point at
@@ -145,6 +145,22 @@ embedded rather than referenced**:
     summary.json
   released/                           # REDACT's artifacts, only on a REDACT pass
 ```
+
+### Why the run root nests under the stem's entities
+
+Run roots were direct children of `<out_dir>`, named `<stem>_<utc-timestamp>` with every BIDS entity
+joined by `_`. The full-corpus run of 62,547 recordings therefore put **125,263 entries in one flat
+directory** — a run root and a `<stem>.summary.json` per recording — and `ls out/*.summary.json` on
+the cluster exceeded `ARG_MAX`, so the corpus could not be enumerated with a glob at all.
+
+The entities were already in the stem; only the separator was wrong. `entity_subdir(stem)`
+(`run.py`) splits the stem on `_` into entity chunks — labels here are UUIDs containing hyphens, so a
+greedy regex over the whole stem does not work — and returns `sub-<label>/ses-<label>` in BIDS order,
+dropping either component the stem does not carry and returning `.` when it carries neither, which
+leaves a non-BIDS filename flat. `RunLayout.entity_dir` is that directory resolved against
+`<out_dir>`; a caller writing per-recording siblings of the run root reads it from the layout rather
+than deriving it a second time. The leaf keeps the full stem: BIDS repeats entities in the path and
+in the filename. There is no flag to restore the flat layout.
 
 `summary/` sits **beside** the store tree rather than inside it, and is **not** under `released/`: it
 carries element ids and marked words' extents, so it inherits the store's sensitivity and is not a
