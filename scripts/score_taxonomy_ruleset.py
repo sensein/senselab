@@ -77,6 +77,9 @@ def print_table(
         tallies: Family name to its tally, as dictionaries.
     """
     print(f"\nrecordings {recordings}")
+    if not recordings:
+        print("  no recordings in the shard; nothing to score")
+        return
     for name in ROUTE_STATES:
         print(f"  {name:12s} {states[name]:8d} ({states[name] / recordings:.1%})")
     print()
