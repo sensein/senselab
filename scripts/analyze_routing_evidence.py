@@ -1,13 +1,16 @@
 #!/usr/bin/env python
 """Score candidate TAXONOMY routing detectors over a completed triage run.
 
-    uv run python scripts/analyze_routing_evidence.py <run_dir> <out_dir> [--workers N]
+    uv run python scripts/analyze_routing_evidence.py <run_dir> <out_dir> [--workers N] [--config FILE]
 
 ``run_dir`` is the triage out dir: each recording's ``<stem>.summary.json`` sits beside the run
 root it names, under that stem's BIDS entity path. ``out_dir`` receives the extracted features,
 the threshold sweeps, the per-family prevalence, the enumerated disagreements and a readable
 summary. Idempotent: the manifest and the feature shards are reused when they are already
 complete, so a killed run resumes.
+
+Which labels a span carries is read from ``windows.<classifier>`` in the triage configuration, the
+same pair PREPROCESS stamps its own windows with, so ``--config`` changes both together.
 """
 
 from __future__ import annotations
@@ -19,10 +22,18 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
+from typing import Mapping
 
+from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
-from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures, extract_features
+from senselab.audio.workflows.triage.routing_analysis.features import (
+    RecordingFeatures,
+    extract_features,
+    span_label_memberships,
+)
 from senselab.audio.workflows.triage.routing_analysis.report import load_features, write_report
 
 MANIFEST = "manifest.jsonl"
@@ -82,11 +93,12 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
     return manifest
 
 
-def _extract_one(row: dict[str, str]) -> dict[str, object] | None:
+def _extract_one(row: dict[str, str], memberships: Mapping[str, LabelMembership]) -> dict[str, object] | None:
     """Extract one recording's features, or record why it could not be read.
 
     Args:
         row: One manifest row.
+        memberships: Which labels a span carries, per classifier.
 
     Returns:
         The features as a mapping, or None when the store is missing.
@@ -95,19 +107,20 @@ def _extract_one(row: dict[str, str]) -> dict[str, object] | None:
     if not store.is_file():
         return None
     try:
-        features = extract_features(store, row["stem"], row["run_root"], row["task_id"], row["family"])
+        features = extract_features(store, row["stem"], row["run_root"], row["task_id"], row["family"], memberships)
     except (OSError, ValueError) as error:
         return {"stem": row["stem"], "error": f"{type(error).__name__}: {error}"}
     return asdict(features)
 
 
-def extract_all(manifest: Path, out_dir: Path, workers: int) -> Path:
+def extract_all(manifest: Path, out_dir: Path, workers: int, memberships: Mapping[str, LabelMembership]) -> Path:
     """Extract features for every manifest row, resuming from what is already on disk.
 
     Args:
         manifest: The manifest.
         out_dir: Where the shard directory lives.
         workers: How many processes read stores in parallel.
+        memberships: Which labels a span carries, per classifier.
 
     Returns:
         The features JSONL path.
@@ -135,7 +148,8 @@ def extract_all(manifest: Path, out_dir: Path, workers: int) -> Path:
         missing_path.open("a", encoding="utf-8") as misses,
         ProcessPoolExecutor(max_workers=workers) as pool,
     ):
-        for index, (row, result) in enumerate(zip(pending, pool.map(_extract_one, pending, chunksize=8)), start=1):
+        extract = partial(_extract_one, memberships=memberships)
+        for index, (row, result) in enumerate(zip(pending, pool.map(extract, pending, chunksize=8)), start=1):
             if result is None or "error" in result:
                 reason = "missing" if result is None else str(result["error"])
                 misses.write(json.dumps({"stem": row["stem"], "store": row["store"], "why": reason}) + "\n")
@@ -170,14 +184,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("out_dir", type=Path, help="where the analysis is written")
     parser.add_argument("--workers", type=int, default=min(16, (os.cpu_count() or 4)))
     parser.add_argument("--expect", type=int, default=None, help="assert this many recordings resolved")
+    parser.add_argument("--config", type=Path, default=None, help="a partial triage config override")
     arguments = parser.parse_args(argv)
 
     arguments.out_dir.mkdir(parents=True, exist_ok=True)
+    config = load_triage_config(arguments.config)
+    memberships = span_label_memberships(config)
+    print(f"[extract] span labels: config hash {config.config_hash}, {memberships}", flush=True)
     manifest = build_manifest(arguments.run_dir, arguments.out_dir)
     n_rows = sum(1 for line in manifest.open() if line.strip())
     if arguments.expect is not None and n_rows != arguments.expect:
         raise SystemExit(f"resolved {n_rows} recordings, expected {arguments.expect}")
-    features_path = extract_all(manifest, arguments.out_dir, arguments.workers)
+    features_path = extract_all(manifest, arguments.out_dir, arguments.workers, memberships)
     records: list[RecordingFeatures] = load_features(features_path)
     print(f"[report] scoring {len(records)} recordings", flush=True)
     index = write_report(records, arguments.out_dir)

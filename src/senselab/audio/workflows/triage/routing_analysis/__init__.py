@@ -20,6 +20,7 @@ from senselab.audio.workflows.triage.routing_analysis.features import (
     bracket_type,
     extract_features,
     read_store,
+    span_label_memberships,
 )
 from senselab.audio.workflows.triage.routing_analysis.report import (
     BASELINE_RULES,
@@ -39,11 +40,13 @@ from senselab.audio.workflows.triage.routing_analysis.report import (
 )
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     FAMILY_SETS,
+    ROUTE_STATES,
     Emptiness,
     FamilyTally,
     Gate,
     GateOutcome,
     RouteEvaluation,
+    RouteState,
     Ruleset,
     evaluate_emptiness,
     evaluate_gate,
@@ -60,6 +63,7 @@ __all__ = [
     "DETECTORS",
     "FAMILY_SETS",
     "REFERENCE_STANDARDS",
+    "ROUTE_STATES",
     "Confusion",
     "Detector",
     "Emptiness",
@@ -69,6 +73,7 @@ __all__ = [
     "RecordingFeatures",
     "ReferenceStandard",
     "RouteEvaluation",
+    "RouteState",
     "RoutingRule",
     "Ruleset",
     "bracket_type",
@@ -90,6 +95,7 @@ __all__ = [
     "read_store",
     "score_branches",
     "score_detector",
+    "span_label_memberships",
     "sweep_points",
     "tally_families",
     "task_family",

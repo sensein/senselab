@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
     CONSOLIDATION_FLOOR,
     DETECTORS,
@@ -20,7 +22,9 @@ from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     bracket_type,
     extract_features,
+    span_label_memberships,
 )
+from senselab.audio.workflows.triage.routing_analysis.labels import LABEL_SETS
 from senselab.audio.workflows.triage.routing_analysis.report import (
     REFERENCE_STANDARDS,
     Confusion,
@@ -195,6 +199,10 @@ def _silent_store(path: Path) -> Path:
     )
 
 
+PACKAGED_MEMBERSHIPS = span_label_memberships(load_triage_config())
+"""The shipped top-4 / 0.2 rule, so the tests read what the corpus extraction will."""
+
+
 def _features(tmp_path: Path) -> tuple[RecordingFeatures, RecordingFeatures]:
     """One spoken and one silent synthetic recording, extracted.
 
@@ -210,6 +218,7 @@ def _features(tmp_path: Path) -> tuple[RecordingFeatures, RecordingFeatures]:
         str(tmp_path / "a"),
         "rainbow-passage",
         "rainbow-passage",
+        PACKAGED_MEMBERSHIPS,
     )
     silent = extract_features(
         _silent_store(tmp_path / "b" / "run" / "store.jsonl"),
@@ -217,6 +226,7 @@ def _features(tmp_path: Path) -> tuple[RecordingFeatures, RecordingFeatures]:
         str(tmp_path / "b"),
         "voluntary-cough",
         "voluntary-cough",
+        PACKAGED_MEMBERSHIPS,
     )
     return spoken, silent
 
@@ -506,21 +516,25 @@ def _labelled_span_store(path: Path) -> Path:
     )
 
 
-def _labelled(tmp_path: Path) -> RecordingFeatures:
+def _labelled(tmp_path: Path, top_k: int = 4, floor: float = 0.2) -> RecordingFeatures:
     """The labelled-span fixture, extracted.
 
     Args:
         tmp_path: The test's temporary directory.
+        top_k: How many of a span's labels are eligible.
+        floor: The score each eligible label needs.
 
     Returns:
         The record.
     """
+    rule = LabelMembership(top_k=top_k, floor=floor, label_floors={})
     return extract_features(
         _labelled_span_store(tmp_path / "c" / "run" / "store.jsonl"),
         "sub-3_ses-1_task-voluntary-cough",
         str(tmp_path / "c"),
         "voluntary-cough",
         "voluntary-cough",
+        {"yamnet": rule, "hear": rule},
     )
 
 
@@ -549,20 +563,143 @@ def test_span_label_stats_exclude_an_invalidated_span(tmp_path: Path) -> None:
     assert record.span_label_stats["yamnet.Cough.peak_over_floor_db_max"] == pytest.approx(40.0)
 
 
-def test_span_label_stats_take_the_best_window_of_each_span(tmp_path: Path) -> None:
-    """A span's label is the best score over every window its classifier placed on it."""
+def test_span_label_stats_pool_the_windows_of_each_span_before_ranking(tmp_path: Path) -> None:
+    """A label's score on a span is its best over every window, and both labels clear the floor."""
     record = _labelled(tmp_path)
     assert record.span_label_stats["hear.Cough.span_count"] == pytest.approx(1.0)
     assert record.span_label_stats["hear.Cough.peak_over_floor_db_max"] == pytest.approx(40.0)
-    assert not [key for key in record.span_label_stats if key.startswith("hear.Breathe.")]
+    assert record.span_label_stats["hear.Breathe.span_count"] == pytest.approx(1.0)
     assert record.peaks["span|hear|Breathe"] == pytest.approx(0.5)
     assert record.peaks["span|hear|Cough"] == pytest.approx(0.7)
+
+
+def test_a_span_carries_only_its_top_k_however_many_clear_the_floor(tmp_path: Path) -> None:
+    """Top-1 keeps the pooled best of the two windows and drops the label under it."""
+    record = _labelled(tmp_path, top_k=1)
+    assert record.span_label_stats["hear.Cough.span_count"] == pytest.approx(1.0)
+    assert not [key for key in record.span_label_stats if key.startswith("hear.Breathe.")]
 
 
 def test_span_label_stats_are_empty_when_no_span_carries_a_label(tmp_path: Path) -> None:
     """A recording whose store holds no per-span classifier window costs no bytes."""
     _, silent = _features(tmp_path)
     assert silent.span_label_stats == {}
+
+
+def _multi_label_store(path: Path) -> Path:
+    """Three spans exercising the top-K cut, the floor, and a non-``Cough`` cough-set label.
+
+    Args:
+        path: Where to write it.
+
+    Returns:
+        The path.
+    """
+    return _write_store(
+        path,
+        [
+            _entity("stream", "stream-1", {"name": "recording"}, [0.0, 10.0]),
+            _entity("span", "span-a", {"measure": "amplitude", "peak_over_floor_db": 40.0}, [0.0, 1.0]),
+            _entity("span", "span-b", {"measure": "amplitude", "peak_over_floor_db": 20.0}, [2.0, 3.0]),
+            _entity("span", "span-c", {"measure": "amplitude", "peak_over_floor_db": 30.0}, [4.0, 5.0]),
+            _entity(
+                "measurement",
+                "yam-a",
+                {
+                    "name": "span_yamnet",
+                    "span_id": "span-a",
+                    "raw_scores": {
+                        "Cough": 0.9,
+                        "Breathing": 0.8,
+                        "Sneeze": 0.7,
+                        "Sniff": 0.6,
+                        "Snoring": 0.5,
+                    },
+                },
+                [0.0, 1.0],
+            ),
+            _entity(
+                "measurement",
+                "yam-b",
+                {"name": "span_yamnet", "span_id": "span-b", "raw_scores": {"Cough": 0.15, "Speech": 0.1}},
+                [2.0, 3.0],
+            ),
+            _entity(
+                "measurement",
+                "yam-c",
+                {"name": "span_yamnet", "span_id": "span-c", "raw_scores": {"Throat clearing": 0.9}},
+                [4.0, 5.0],
+            ),
+        ],
+    )
+
+
+def _multi_label(tmp_path: Path) -> RecordingFeatures:
+    """The multi-label fixture, extracted under the shipped top-4 / 0.2 rule.
+
+    Args:
+        tmp_path: The test's temporary directory.
+
+    Returns:
+        The record.
+    """
+    return extract_features(
+        _multi_label_store(tmp_path / "d" / "run" / "store.jsonl"),
+        "sub-4_ses-1_task-voluntary-cough",
+        str(tmp_path / "d"),
+        "voluntary-cough",
+        "voluntary-cough",
+        PACKAGED_MEMBERSHIPS,
+    )
+
+
+def test_a_span_contributes_to_every_label_in_its_top_four_over_the_floor(tmp_path: Path) -> None:
+    """One span, four labels, four distributions — argmax kept one of them and dropped three."""
+    record = _multi_label(tmp_path)
+    for label in ("Cough", "Breathing", "Sneeze", "Sniff"):
+        assert record.span_label_stats[f"yamnet.{label}.span_count"] == pytest.approx(1.0), label
+        assert record.span_label_stats[f"yamnet.{label}.peak_over_floor_db_max"] == pytest.approx(40.0), label
+
+
+def test_a_fifth_label_over_the_floor_is_outside_the_top_four_and_contributes_nothing(tmp_path: Path) -> None:
+    """``Snoring`` at 0.5 clears 0.2 and is ranked fifth, so no distribution carries it."""
+    record = _multi_label(tmp_path)
+    assert not [key for key in record.span_label_stats if key.startswith("yamnet.Snoring.")]
+
+
+def test_a_span_whose_best_label_is_under_the_floor_carries_nothing(tmp_path: Path) -> None:
+    """Being top-ranked is not membership; the 20 dB span joins no distribution at all."""
+    record = _multi_label(tmp_path)
+    assert record.span_count["amplitude"] == 3
+    assert record.span_label_stats["yamnet.Cough.span_count"] == pytest.approx(1.0)
+    assert record.span_label_stats["yamnet.Cough.peak_over_floor_db_min"] == pytest.approx(40.0)
+
+
+def test_a_throat_clearing_span_counts_toward_the_cough_set(tmp_path: Path) -> None:
+    """The set is a union read by name, so a cough-set label that is not ``Cough`` still counts."""
+    assert "Throat clearing" in LABEL_SETS["cough_labels"]["yamnet"]
+    record = _multi_label(tmp_path)
+    assert record.span_label_set_stats["yamnet.cough_labels.span_count"] == pytest.approx(2.0)
+    assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"] == pytest.approx(40.0)
+    assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_min"] == pytest.approx(30.0)
+
+
+def test_a_span_counts_once_toward_a_set_however_many_members_it_carries(tmp_path: Path) -> None:
+    """``Breathing`` and ``Sniff`` are both breath-set labels on one span, which is one span."""
+    record = _multi_label(tmp_path)
+    assert record.span_label_set_stats["yamnet.breath_labels.span_count"] == pytest.approx(1.0)
+
+
+def test_the_set_conditioned_cough_detectors_read_the_union(tmp_path: Path) -> None:
+    """The three set-conditioned detectors read the cough-set distribution, or nothing."""
+    record = _multi_label(tmp_path)
+    _, silent = _features(tmp_path)
+    expected = {"max": 40.0, "p75": 37.5, "p90": 39.0}
+    for statistic, value in expected.items():
+        name = f"cough.yamnet_cough_set_span_peak_over_floor_db_{statistic}"
+        detector = next(candidate for candidate in DETECTORS if candidate.name == name)
+        assert detector_value(record, detector) == pytest.approx(value)
+        assert detector_value(silent, detector) is None
 
 
 def test_label_conditioned_detectors_read_the_cough_spans(tmp_path: Path) -> None:

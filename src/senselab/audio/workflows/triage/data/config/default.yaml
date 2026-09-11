@@ -84,22 +84,26 @@ yamnet:
   coverage_threshold: 0.5              # fraction of the file that must read silent to call it empty
   top_k: 521                           # full label space; a SIZE, not a threshold
 
-# Per-classifier window grids, and the thresholds that fold raw scores into per-window label sets.
-# A null default_threshold means the fold cannot run and the window entities are absent -- the raw
-# `<classifier>_scores` derivative is persisted regardless, by its own earlier step.
+# Per-classifier window grids, and the membership rule that folds raw scores into per-window label
+# sets: a label is carried when it is in the window's top label_top_k AND at or above its floor.
+# A null default_threshold means the fold cannot run and the window carries `labelled: false` -- the
+# raw `<classifier>_scores` derivative is persisted regardless, by its own earlier step.
 windows:
   yamnet:
-    default_threshold: null            # score a label needs to join a window's set; no ROC over this corpus exists
+    default_threshold: 0.2             # owner-directed: score a label needs to join a window's set
     label_thresholds: null             # per-label overrides of that default
+    label_top_k: 4                     # owner-directed: how many labels of a window are eligible at all
   ast:
-    default_threshold: null            # as above
+    default_threshold: null            # as above; no ROC over this corpus exists
     label_thresholds: null             # as above
+    label_top_k: 4                     # as above
     win_length_s: 10.24                # owner-directed 10 s window (1024-frame input)
     hop_s: 10.24                       # non-overlapping until a hop is fitted; a null here stopped AST running
     top_k: 527                         # AudioSet's full label space; a size, not a threshold
   hear:
-    default_threshold: null            # as above
+    default_threshold: 0.2             # as yamnet; the same pair governs both
     label_thresholds: null             # as above
+    label_top_k: 4                     # as above
     hop_s: 2.0                         # non-overlapping 2 s windows; a null here stopped HeAR running
 
 # Praat's settings for PREPROCESS's F0 and formant tracks. The sustained-phonation and glide
@@ -196,7 +200,7 @@ taxonomy:
       SPEECH: [speech.transcript_agreement]
       VOICE: []
       DDK: []
-    emptiness:                          # the precondition, evaluated ahead of every branch gate
+    emptiness:                          # the bypass, consulted only when no branch gate fired
       peak_streams: [enhanced|yamnet, residual|yamnet]  # every stream whose top tracked-label score must fall below the floor
       peak_floor: 0.2                   # score under which a stream carries nothing; one value for both streams
     gates:                              # gate -> the one number it reads, the comparison, and the cut
@@ -225,9 +229,9 @@ taxonomy:
         op: at_least
         threshold: 0.10                 # residual fraction that routes AIRWAY
       airway.cough:
-        feature: [span_stat, all.peak_over_floor_db_max]   # loudest span peak over its own floor
+        feature: [span_label_set_stat, yamnet.cough_labels.peak_over_floor_db_max]  # loudest cough-labelled span
         op: at_least
-        threshold: 50.0                 # dB over floor that routes AIRWAY
+        threshold: 50.0                 # dB over floor that routes AIRWAY; carried over unswept on this population
       airway.bracketed_event:
         feature: [bracketed_set, airway]   # typed bracketed consensus tokens in taxonomy.airway_bracket_tokens
         op: at_least
