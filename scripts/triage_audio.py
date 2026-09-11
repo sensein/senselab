@@ -33,7 +33,9 @@ whatever produced it; SPEECH identifies the target by this and by nothing in the
       model_commit_sha: <the resolved 40-hex commit, never a ref>
       source_files: [sub-01_ses-1_task-vowel.wav, sub-01_ses-2_task-vowel.wav]
 
-Layout under ``--out/<stem>_<utc-timestamp>/``:
+Layout under ``--out/<sub-label>/<ses-label>/<stem>_<utc-timestamp>/``, the entity path taken
+from the stem so the output tree mirrors the input BIDS tree (a stem carrying neither entity
+lands directly under ``--out``):
 
     run/store.jsonl        the append-only provenance store: every node's measurements and verdicts
     run/streams/           the conditioned streams

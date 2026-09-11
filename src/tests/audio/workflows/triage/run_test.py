@@ -28,7 +28,7 @@ from senselab.audio.workflows.triage.nodes.redact import RedactResult
 from senselab.audio.workflows.triage.nodes.report import ReportRenderError
 from senselab.audio.workflows.triage.nodes.routing import routing as real_routing
 from senselab.audio.workflows.triage.nodes.taxonomy import TaxonomyResult
-from senselab.audio.workflows.triage.run import run_triage
+from senselab.audio.workflows.triage.run import entity_subdir, prepare_run_layout, run_triage
 from senselab.audio.workflows.triage.vocabulary import (
     FileVerdict,
     NodeVerdict,
@@ -598,6 +598,68 @@ class TestFreshArtifactsDir:
         assert log["artifacts_dir"] == str(result.artifacts_dir)
         assert log["ran"]["VOICE"] == RunState.ERRORED.value
         assert "RuntimeError" in log["errors"]["VOICE"]
+
+
+class TestTheEntityPath:
+    """Run roots nest under the stem's BIDS entities, mirroring the input tree."""
+
+    @pytest.mark.parametrize(
+        ("stem", "expected"),
+        [
+            ("sub-01_ses-02_task-vowel", ("sub-01", "ses-02")),
+            ("sub-01_task-vowel", ("sub-01",)),
+            ("recording", ()),
+            ("nothing_bids_here", ()),
+            (
+                "sub-00053adb-a1f4-4724-a694-c10e01b8cbe6_ses-33F6D051-4580-43FF-BC3B-14CD8B86CA3D"
+                "_task-diadochokinesis-ka",
+                ("sub-00053adb-a1f4-4724-a694-c10e01b8cbe6", "ses-33F6D051-4580-43FF-BC3B-14CD8B86CA3D"),
+            ),
+            ("ses-02_task-vowel", ("ses-02",)),
+            ("sub-_ses-_task-vowel", ()),
+            ("sub-01_ses-_task-vowel", ("sub-01",)),
+        ],
+    )
+    def test_it_reads_the_subject_and_session_entities(self, stem: str, expected: tuple[str, ...]) -> None:
+        """Chunks are split on ``_``, so a label may itself contain hyphens; an empty label is none."""
+        assert entity_subdir(stem) == (Path(*expected) if expected else Path("."))
+
+    def test_a_stem_carrying_neither_entity_stays_flat(self, tmp_path: Path) -> None:
+        """A non-BIDS filename lands directly under the out dir."""
+        layout = prepare_run_layout(tmp_path / "out", "recording")
+        assert layout.entity_dir == tmp_path / "out"
+        assert layout.root.parent == tmp_path / "out"
+
+    def test_it_creates_the_nested_root_and_names_its_parent(self, tmp_path: Path) -> None:
+        """``entity_dir`` is the run root's parent, and every directory exists."""
+        out_dir = tmp_path / "out"
+        stem = "sub-00053adb-a1f4-4724-a694-c10e01b8cbe6_ses-33F6D051-4580-43FF-BC3B-14CD8B86CA3D_task-ka"
+        layout = prepare_run_layout(out_dir, stem)
+        assert layout.entity_dir == out_dir / "sub-00053adb-a1f4-4724-a694-c10e01b8cbe6" / (
+            "ses-33F6D051-4580-43FF-BC3B-14CD8B86CA3D"
+        )
+        assert layout.root.parent == layout.entity_dir
+        assert layout.root.name.startswith(f"{stem}_")
+        assert layout.run_dir.is_dir()
+        assert layout.artifacts_dir.is_dir()
+
+    def test_two_runs_in_one_second_stay_apart_under_the_same_entity_dir(self, tmp_path: Path) -> None:
+        """The collision suffix applies to the leaf; the shared parents are reused, not refused."""
+        out_dir = tmp_path / "out"
+        first = prepare_run_layout(out_dir, "sub-01_ses-02_task-vowel")
+        second = prepare_run_layout(out_dir, "sub-01_ses-02_task-vowel")
+        assert first.entity_dir == second.entity_dir
+        assert first.root != second.root
+
+    def test_the_runner_places_its_run_under_the_entity_path(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A whole run lands under ``out/sub-.../ses-...``, not as a direct child of ``out``."""
+        graph()
+        out_dir = tmp_path / "out"
+        result = run_triage(tmp_path / "sub-01_ses-02_task-vowel.wav", out_dir, config)
+        assert result.run_dir.parent.parent == out_dir / "sub-01" / "ses-02"
+        assert [p.name for p in out_dir.iterdir()] == ["sub-01"]
 
 
 def _cli() -> types.ModuleType:

@@ -49,6 +49,7 @@ SUMMARY_SUBDIR = "summary"
 SIDECAR_SUBDIRS = ("streams", "derivatives")
 
 _RUN_STAMP = "%Y%m%d-%H%M%S"
+_ENTITY_ORDER = ("sub-", "ses-")
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
 
@@ -113,7 +114,10 @@ class RunLayout:
     """One run's directories.
 
     Attributes:
-        root: The per-run root the two trees below are siblings in.
+        entity_dir: The directory the run root sits in — ``out_dir`` joined with
+            :func:`entity_subdir` of the stem. Where a caller puts per-recording files that are
+            siblings of the run root.
+        root: The per-run root the three trees below are siblings in.
         run_dir: Where the store and every sidecar go.
         artifacts_dir: Where REDACT may release a pair. Fresh and empty on every run.
         store_path: Where the store is persisted.
@@ -121,6 +125,7 @@ class RunLayout:
             tree alike.
     """
 
+    entity_dir: Path
     root: Path
     run_dir: Path
     artifacts_dir: Path
@@ -128,25 +133,48 @@ class RunLayout:
     summary_dir: Path
 
 
+def entity_subdir(stem: str) -> Path:
+    """The relative directory a stem's outputs belong in, mirroring the input BIDS tree.
+
+    The stem is split on ``_`` into entity chunks, so a label may itself contain hyphens
+    (``sub-00053adb-a1f4-4724-a694-c10e01b8cbe6``). A chunk with an empty label is not an entity.
+
+    Args:
+        stem: A recording's file stem, such as ``sub-01_ses-02_task-vowel``.
+
+    Returns:
+        ``sub-<label>/ses-<label>`` in BIDS order, with either component dropped when the stem does
+        not carry it, and ``Path(".")`` when it carries neither.
+    """
+    chunks = stem.split("_")
+    parts: list[str] = []
+    for prefix in _ENTITY_ORDER:
+        entity = next((chunk for chunk in chunks if chunk.startswith(prefix) and chunk != prefix), None)
+        if entity is not None:
+            parts.append(entity)
+    return Path(*parts) if parts else Path(".")
+
+
 def prepare_run_layout(out_dir: Path, stem: str) -> RunLayout:
-    """Create a fresh run root under ``out_dir``, with the store tree and the release tree apart.
+    """Create a fresh run root under the stem's entity path, with store tree and release tree apart.
 
     The release directory is created empty on every run and is never reused: a directory still
     holding an earlier run's released pair would let a withheld run appear to have published one.
     Two runs that land in the same second are separated by a numeric suffix rather than merged.
 
     Args:
-        out_dir: Where run roots are created.
-        stem: The recording's file stem, used to name the run root.
+        out_dir: The tree run roots are created in, under each stem's :func:`entity_subdir`.
+        stem: The recording's file stem, used both to place and to name the run root.
 
     Returns:
         The run's directories, all of them created.
     """
+    entity_dir = out_dir / entity_subdir(stem)
     stamp = datetime.now(timezone.utc).strftime(_RUN_STAMP)
     attempt = 0
     while True:
         suffix = "" if attempt == 0 else f"-{attempt}"
-        root = out_dir / f"{stem}_{stamp}{suffix}"
+        root = entity_dir / f"{stem}_{stamp}{suffix}"
         try:
             root.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
@@ -159,6 +187,7 @@ def prepare_run_layout(out_dir: Path, stem: str) -> RunLayout:
     artifacts_dir = root / RELEASE_SUBDIR
     artifacts_dir.mkdir()
     return RunLayout(
+        entity_dir=entity_dir,
         root=root,
         run_dir=run_dir,
         artifacts_dir=artifacts_dir,
