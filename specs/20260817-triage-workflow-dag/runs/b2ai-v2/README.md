@@ -56,9 +56,9 @@ uv run python scripts/triage_audio.py "$WAV" \
     --out    "$SCRATCH/triage_b2ai_v2/$SUB/"
 ```
 
-Layout under `--out/<stem>_<utc-timestamp>/`: `run/` (the provenance store and derivatives),
-`summary/` (the report page and its JSON, written on every outcome), `released/` (only when REDACT
-cleared a release).
+Layout under `--out/<sub-label>/<ses-label>/<stem>_<utc-timestamp>/`: `run/` (the provenance store
+and derivatives), `summary/` (the report page and its JSON, written on every outcome), `released/`
+(only when REDACT cleared a release).
 
 ## Generating the hints
 

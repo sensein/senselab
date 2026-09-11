@@ -3,10 +3,11 @@
 
     uv run python scripts/analyze_routing_evidence.py <run_dir> <out_dir> [--workers N]
 
-``run_dir`` holds ``<stem>.summary.json`` and the run directories they name; ``out_dir`` receives
-the extracted features, the threshold sweeps, the per-family prevalence, the enumerated
-disagreements and a readable summary. Idempotent: the manifest and the feature shards are reused
-when they are already complete, so a killed run resumes.
+``run_dir`` is the triage out dir: each recording's ``<stem>.summary.json`` sits beside the run
+root it names, under that stem's BIDS entity path. ``out_dir`` receives the extracted features,
+the threshold sweeps, the per-family prevalence, the enumerated disagreements and a readable
+summary. Idempotent: the manifest and the feature shards are reused when they are already
+complete, so a killed run resumes.
 """
 
 from __future__ import annotations
@@ -31,8 +32,11 @@ SHARD_DIR = "features"
 def build_manifest(run_dir: Path, out_dir: Path) -> Path:
     """Resolve every recording through its summary's ``run_root`` and record it once.
 
+    Each run root is located beside its own summary, so the entity path the summary sits under is
+    carried over rather than reconstructed from the recorded ``run_root``.
+
     Args:
-        run_dir: The completed run directory.
+        run_dir: The triage out dir, searched recursively for per-recording summaries.
         out_dir: Where the manifest is written.
 
     Returns:
@@ -45,7 +49,7 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
     if manifest.exists():
         print(f"[manifest] reusing {manifest} ({sum(1 for _ in manifest.open())} rows)", flush=True)
         return manifest
-    summaries = sorted(run_dir.glob("*.summary.json"))
+    summaries = sorted(run_dir.rglob("*.summary.json"))
     if not summaries:
         raise FileNotFoundError(f"no *.summary.json under {run_dir}")
     started = time.time()
@@ -55,7 +59,7 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
             summary = json.loads(summary_path.read_text())
             run_root = str(summary.get("run_root") or "")
             stem = str(summary.get("stem") or summary_path.name.removesuffix(".summary.json"))
-            local = run_dir / Path(run_root).name if run_root else None
+            local = summary_path.parent / Path(run_root).name if run_root else None
             handle.write(
                 json.dumps(
                     {
@@ -160,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         0 on success.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run_dir", type=Path, help="a completed triage run's output directory")
+    parser.add_argument("run_dir", type=Path, help="a triage out dir, searched recursively for per-recording summaries")
     parser.add_argument("out_dir", type=Path, help="where the analysis is written")
     parser.add_argument("--workers", type=int, default=min(16, (os.cpu_count() or 4)))
     parser.add_argument("--expect", type=int, default=None, help="assert this many recordings resolved")
