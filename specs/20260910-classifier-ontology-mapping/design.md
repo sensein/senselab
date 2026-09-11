@@ -167,14 +167,114 @@ profile does not map is refused as a typo rather than accepted as an extension.
 with no measurement behind it yet; what changed is that the other six labels are no longer silently
 unconfirmable if someone does widen it.
 
-`contest_labels` still checks disjointness against `taxonomy.audioset_airway_labels`, unchanged.
+`contest_labels` checks disjointness against the AudioSet airway evidence set, which is now derived
+rather than listed — see the next section.
+
+## The airway kind, from the same ontology — 2026-09-11
+
+The section above closed the corroboration duplication and left the airway *kind* hand-listed in two
+places, as its own Open item. This closes that one the same way, and the two definitions that had
+already drifted are what it cost.
+
+### The second defect
+
+`routing_analysis/labels.py`'s `AUDIOSET_AIRWAY` was a nine-name tuple and
+`taxonomy.audioset_airway_labels` restated the same nine names in `data/config/default.yaml`. Two
+definitions of one thing, read by different nodes, with nothing holding them together.
+
+Measured against the shipped profile's `Respiratory sounds` subtree, both were wrong in the same
+three ways:
+
+| finding | why |
+| --- | --- |
+| `Sigh` was in the set and is not respiratory | AudioSet places `Sigh` (`/m/07plz5l`) under `Human voice` |
+| `Pant` and `Snort` were missing | both are direct children of `Breathing`, both `in_yamnet_521` |
+| `Sniff` is in the subtree but in neither HeAR-mapped closure | it is a sibling of `Breathing` under the root, not a descendant of `Cough` or `Breathing` |
+
+The third finding is why `AUDIOSET_COUGH ∪ AUDIOSET_BREATH` is **not** the airway set even though it
+is derived and nearly the same shape. That union answers a corroboration question about HeAR's own
+labels; the airway kind is a question about the ontology, and asking it of HeAR's mapped roots loses
+every respiratory class HeAR has no label for.
+
+### What replaced it
+
+One configuration key, naming ontology **roots** rather than labels:
+
+```yaml
+taxonomy:
+  airway_ontology_roots: [Respiratory sounds]
+```
+
+Both evidence vocabularies are read off that one closure, so they cannot disagree:
+
+* the AudioSet set is the subtree closure of the roots, minus what no classifier can emit;
+* the HeAR set is every HeAR label whose mapped AudioSet node falls inside the same closure.
+
+`taxonomy.audioset_airway_labels` and `taxonomy.hear_airway_labels` are both gone. Pre-alpha: one key
+replaces two, no alias. `classifier_ontology.airway_audioset_labels` and `airway_hear_labels` are the
+readers, and `nodes/taxonomy.py`, `nodes/airway.py` and `routing_analysis/labels.py` all go through
+them. A root that is not an AudioSet display name in the profile is refused, because a misspelled
+root would silently shrink the kind rather than fail.
+
+The HeAR set is unchanged in content — the same six labels — but it is now derived from the roots
+rather than from the two crosswalk groups, so widening the roots widens both sides at once.
+
+### Emittability, as a rule rather than a name
+
+`Respiratory sounds` is `in_audioset_527: false` and `in_yamnet_521: false`: it is an abstract
+ontology node no classifier has an output for. A closure that included it would put a name in a set
+the detectors match against that can never match.
+
+The closure therefore drops every node in neither the released 527 nor YAMNet's 521, checked on the
+node's own flags. Naming `Respiratory sounds` as the exception would have been a literal that the
+next abstract root reintroduces the defect around.
+
+### Which labels moved
+
+| set | before | after |
+| --- | --- | --- |
+| AudioSet airway | Cough, Throat clearing, Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh | Breathing, Cough, Gasp, **Pant**, Sneeze, Sniff, Snoring, **Snort**, Throat clearing, Wheeze |
+| HeAR airway | Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear | unchanged |
+
+### The `Sigh` trade-off
+
+Dropping `Sigh` is a behaviour change, not a tidy-up, and it is the one part of this that the
+ontology decides against clinical intuition. A sigh is an airway event to a clinician; AudioSet
+files it under `Human voice`, arguably because its taxonomy is organised by production rather than
+by physiology. `Sigh` is `in_yamnet_521`, so this is a label YAMNet actually emits — the change is
+observable, not theoretical.
+
+It is dropped anyway, because the whole point of the section above is that a set with one derivation
+beats a set that is nearly right for reasons nobody wrote down. A departure from the ontology needs a
+measurement behind it.
+
+Three readers see the difference:
+
+* **TAXONOMY's airway `acoustic` line.** A span whose only YAMNet label is `Sigh` no longer counts as
+  airway acoustic evidence, and one labelled `Pant`, `Snort` or `Sniff` now does. The airway state
+  itself folds from the `health_acoustic` line, so this moves the reported evidence count and the
+  line's state, not the kind's verdict.
+* **AIRWAY's `contest_labels` disjointness check.** `Sigh` may now be declared a contest label;
+  `Pant`, `Snort` and `Sniff` may not. `Sigh` corroborated nothing already — the section above
+  removed it from `Breathe`'s set — so contesting is now the only role it can hold.
+* **The routing analysis.** `AUDIOSET_AIRWAY` is the `airway` family in `FAMILIES`, so the
+  `airway.<classifier>_peak.<stream>` detectors take their maximum over the new set, and
+  `TRACKED_LABELS` keeps `Pant`, `Snort` and `Sniff` peaks and stops keeping `Sigh`'s.
+
+Adding it back is one line, naming it as a second root:
+
+```yaml
+taxonomy:
+  airway_ontology_roots: [Respiratory sounds, Sigh]
+```
+
+What would justify that line: a firing spread on the triage corpus showing that YAMNet `Sigh`
+windows land on spans a HeAR airway label also covers — that is, that `Sigh` behaves like the rest of
+the subtree rather than like the voice classes it is filed with. Absent that, adding it widens the
+kind on an intuition, which is what the nine-name tuple was.
 
 ## Open
 
-- `taxonomy.audioset_airway_labels`, `taxonomy.hear_airway_labels` and
-  `routing_analysis/labels.py`'s `AUDIOSET_AIRWAY` remain hand-listed, and `AUDIOSET_AIRWAY` does
-  not agree with the derived closure: it carries `Sigh` and `Sniff` and lacks `Pant` and `Snort`.
-  Deriving it would change which peaks the routing detectors track, so it is a routing decision, not
-  a mapping one, and is left alone here.
 - Nothing has been measured about whether widening `labels_of_interest` beyond `Cough` and `Breathe`
   improves anything. The map no longer blocks it; no evidence yet says to do it.
+- The `Sigh` firing spread above has not been run, so the root list stays at one entry.

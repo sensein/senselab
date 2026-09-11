@@ -467,9 +467,14 @@ as well as 0.911 of `respiration-and-cough-fivebreaths` and 0.873 of `maximum-ph
 does not invert against family; it fires on nearly everything long. It discriminates nothing.
 
 Airway under this proposal is therefore the **`Cough` and `Breathing` subtrees only**, with
-`Snoring`, `Sigh`, `Sniff`, `Wheeze` and `Gasp` dropped from
-`taxonomy.audioset_airway_labels` (`default.yaml:176`) and `Snore` from `taxonomy.hear_airway_labels`
-(`default.yaml:177`) unless a measurement argues them back.
+`Snoring`, `Sigh`, `Sniff`, `Wheeze` and `Gasp` dropped from the AudioSet airway set and `Snore`
+from the HeAR one, unless a measurement argues them back.
+
+The two hand-listed keys this paragraph named were replaced on 2026-09-11 by one root list,
+`taxonomy.airway_ontology_roots`, whose ontology closure is the airway kind. Its subtree half is now
+sayable — `[Cough, Breathing]` — while the individual drops are not, which is the contradiction the
+note below is about. See
+[`../20260910-classifier-ontology-mapping/design.md`](../20260910-classifier-ontology-mapping/design.md).
 
 > **The conflict between notions 2 and 3 still needs the owner's ruling.** In the published AudioSet
 > ontology `Snoring` is, to the best of our knowledge, a **child of `Breathing`** — so "take the
@@ -713,9 +718,9 @@ the confirm/contest verb (`_windows_covering`, `airway.py:46-61`, used `:258`). 
 `airway.corroboration_overrides` (which AudioSet classes corroborate which HeAR label — derived
 from the classifier-ontology profile, see
 [`../20260910-classifier-ontology-mapping/design.md`](../20260910-classifier-ontology-mapping/design.md)),
-`taxonomy.audioset_airway_labels`, and `airway.contest_labels` (**null**; when supplied it is
-refused, at branch execution, if it intersects `taxonomy.audioset_airway_labels` rather than the
-corroboration sets).
+`taxonomy.airway_ontology_roots`, and `airway.contest_labels` (**null**; when supplied it is
+refused, at branch execution, if it intersects the AudioSet airway evidence derived from those roots
+rather than the corroboration sets).
 
 *Goals served*: 2.
 

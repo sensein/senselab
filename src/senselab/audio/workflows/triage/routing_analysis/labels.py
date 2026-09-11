@@ -1,20 +1,26 @@
 """The classifier labels each candidate routing detector reads, per classifier and per kind.
 
-AudioSet labels are shared by YAMNet and AST; HeAR carries its own eight-label vocabulary. The
-airway family is the one ``taxonomy.audioset_airway_labels`` already names in
-``data/config/default.yaml``.
+AudioSet labels are shared by YAMNet and AST; HeAR carries its own eight-label vocabulary.
 
-The cough and breath sets are **not** listed here. They are read from the classifier-ontology
-profile in ``data/classifier_ontology/``, so an AudioSet class enters a set by being the mapped node
-of a HeAR label or a descendant of it, not by having been typed into two files that can drift apart.
-See ``specs/20260910-classifier-ontology-mapping/design.md``.
+The airway, cough and breath sets are **not** listed here. They are read from the
+classifier-ontology profile in ``data/classifier_ontology/``, so an AudioSet class enters a set by
+its position in the ontology rather than by having been typed into two files that can drift apart.
+The airway family is the closure of the roots the packaged configuration names in
+``taxonomy.airway_ontology_roots``, minus the nodes no classifier can emit. See
+``specs/20260910-classifier-ontology-mapping/design.md``.
 """
 
 from __future__ import annotations
 
 from typing import Mapping
 
-from senselab.audio.workflows.triage.classifier_ontology import audioset_labels_for_group, hear_labels_in_group
+from senselab.audio.workflows.triage.classifier_ontology import (
+    airway_audioset_labels,
+    airway_hear_labels,
+    audioset_labels_for_group,
+    hear_labels_in_group,
+)
+from senselab.audio.workflows.triage.config import load_triage_config
 
 CLASSIFIERS: tuple[str, ...] = ("yamnet", "ast", "hear")
 """Every classifier PREPROCESS summarises whole-file, kept apart because their grids differ."""
@@ -31,17 +37,11 @@ AUDIOSET_SPEECH: tuple[str, ...] = (
     "Narration, monologue",
 )
 
-AUDIOSET_AIRWAY: tuple[str, ...] = (
-    "Cough",
-    "Throat clearing",
-    "Sneeze",
-    "Sniff",
-    "Breathing",
-    "Wheeze",
-    "Snoring",
-    "Gasp",
-    "Sigh",
-)
+_PACKAGED_CONFIG = load_triage_config()
+"""The packaged configuration, read for the airway roots alone; a run's override does not reach here."""
+
+AUDIOSET_AIRWAY: tuple[str, ...] = airway_audioset_labels(_PACKAGED_CONFIG)
+"""The emittable AudioSet closure of the configured airway roots. Derived; see the module docstring."""
 
 AUDIOSET_VOICE: tuple[str, ...] = (
     "Chant",
@@ -55,7 +55,8 @@ AUDIOSET_VOICE: tuple[str, ...] = (
 
 HEAR_SPEECH: tuple[str, ...] = ("Speech",)
 
-HEAR_AIRWAY: tuple[str, ...] = hear_labels_in_group("cough") + hear_labels_in_group("breath")
+HEAR_AIRWAY: tuple[str, ...] = airway_hear_labels(_PACKAGED_CONFIG)
+"""The HeAR labels whose mapped node falls inside the airway closure. Derived; see the module docstring."""
 
 HEAR_VOICE: tuple[str, ...] = ()
 

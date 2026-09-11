@@ -18,19 +18,37 @@ from senselab.audio.tasks.health_acoustics.hear import HEAR_EVENT_LABELS
 from senselab.audio.workflows.triage.classifier_ontology import (
     PROFILE_DIR,
     PROFILE_VERSION,
+    airway_audioset_labels,
+    airway_hear_labels,
     audioset_labels_for_group,
+    audioset_labels_under_roots,
     corroboration_sets,
     hear_labels,
     hear_labels_in_group,
+    hear_labels_under_roots,
     load_classifier_ontology,
     unemittable_by_yamnet,
 )
+from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.routing_analysis.labels import (
+    AUDIOSET_AIRWAY,
     AUDIOSET_BREATH,
     AUDIOSET_COUGH,
+    FAMILIES,
+    HEAR_AIRWAY,
     HEAR_BREATH,
     HEAR_COUGH,
+    LABEL_SETS,
 )
+
+
+def load_airway_roots() -> list[str]:
+    """The airway ontology roots the packaged configuration names.
+
+    Returns:
+        The root display names.
+    """
+    return [str(root) for root in load_triage_config().require("taxonomy.airway_ontology_roots")]
 
 
 class TestTheProfileIsShipped:
@@ -227,3 +245,109 @@ class TestTheLabelTuplesAreDerived:
         assert AUDIOSET_BREATH == ("Breathing", "Gasp", "Pant", "Snoring", "Snort", "Wheeze")
         assert set(HEAR_COUGH) == {"Cough", "Baby Cough", "Sneeze", "Throat Clear"}
         assert set(HEAR_BREATH) == {"Snore", "Breathe"}
+
+
+class TestTheAirwayKindIsOneOntologyClosure:
+    """The airway set was hand-listed in two files that disagreed; it is now the roots' closure."""
+
+    def test_the_audioset_set_is_the_closure_of_the_configured_roots(self) -> None:
+        """Recomputed from the shipped node table rather than compared against a second list."""
+        profile = load_classifier_ontology()
+        classes = profile["audioset"]["classes"]
+        roots = [node_id for node_id, entry in classes.items() if entry["name"] in load_airway_roots()]
+        assert roots, "the packaged roots must name AudioSet classes"
+        reached: set[str] = set()
+        stack = list(roots)
+        while stack:
+            node_id = stack.pop()
+            if node_id in reached:
+                continue
+            reached.add(node_id)
+            stack.extend(classes[node_id]["child_ids"])
+        expected = sorted(
+            classes[node_id]["name"]
+            for node_id in reached
+            if classes[node_id]["in_audioset_527"] or classes[node_id]["in_yamnet_521"]
+        )
+        assert list(AUDIOSET_AIRWAY) == expected
+
+    def test_the_packaged_roots_are_the_respiratory_subtree(self) -> None:
+        """Pinned, so widening the kind is a visible config change rather than a quiet one."""
+        assert load_airway_roots() == ["Respiratory sounds"]
+        assert AUDIOSET_AIRWAY == (
+            "Breathing",
+            "Cough",
+            "Gasp",
+            "Pant",
+            "Sneeze",
+            "Sniff",
+            "Snoring",
+            "Snort",
+            "Throat clearing",
+            "Wheeze",
+        )
+
+    def test_sigh_is_not_airway_evidence(self) -> None:
+        """The hand list carried it; AudioSet places `Sigh` under `Human voice`, not respiration."""
+        assert "Sigh" not in AUDIOSET_AIRWAY
+
+    def test_pant_and_snort_are_airway_evidence(self) -> None:
+        """Both are children of `Breathing` and both are in YAMNet's 521; the hand list omitted them."""
+        assert {"Pant", "Snort"} <= set(AUDIOSET_AIRWAY)
+
+    def test_sniff_is_airway_evidence(self) -> None:
+        """`Sniff` is a sibling of `Breathing` under the root, so no HeAR-mapped subtree reaches it."""
+        assert "Sniff" in AUDIOSET_AIRWAY
+        assert "Sniff" not in set(AUDIOSET_COUGH) | set(AUDIOSET_BREATH)
+
+    def test_the_two_hear_group_closures_are_not_the_airway_set(self) -> None:
+        """The union answers a corroboration question about HeAR's labels, not what the kind is."""
+        assert set(AUDIOSET_COUGH) | set(AUDIOSET_BREATH) < set(AUDIOSET_AIRWAY)
+
+    def test_the_hear_labels_are_those_whose_mapped_node_is_inside_the_closure(self) -> None:
+        """One root list drives both vocabularies, so the two cannot disagree."""
+        assert HEAR_AIRWAY == hear_labels_under_roots(load_airway_roots())
+        assert set(HEAR_AIRWAY) == {"Cough", "Snore", "Baby Cough", "Breathe", "Sneeze", "Throat Clear"}
+        assert "Laugh" not in HEAR_AIRWAY and "Speech" not in HEAR_AIRWAY
+
+    def test_a_node_no_classifier_can_emit_is_in_no_derived_set(self) -> None:
+        """`Respiratory sounds` is in neither the 527 nor the 521, so it can never match."""
+        classes = load_classifier_ontology()["audioset"]["classes"]
+        unemittable = {
+            entry["name"] for entry in classes.values() if not (entry["in_audioset_527"] or entry["in_yamnet_521"])
+        }
+        assert "Respiratory sounds" in unemittable
+        derived = {
+            name for group in (*FAMILIES.values(), *LABEL_SETS.values()) for names in group.values() for name in names
+        }
+        assert not derived & unemittable
+
+    def test_every_derived_audioset_label_is_a_class_in_the_profile(self) -> None:
+        """A name the profile does not carry is a name no classifier reports under that spelling."""
+        names = {entry["name"] for entry in load_classifier_ontology()["audioset"]["classes"].values()}
+        assert set(AUDIOSET_AIRWAY) <= names
+
+    def test_every_derived_hear_label_is_one_the_profile_maps(self) -> None:
+        """The HeAR side is drawn from the same profile, in the detector's own graph order."""
+        assert set(HEAR_AIRWAY) <= set(hear_labels())
+        assert list(HEAR_AIRWAY) == [label for label in hear_labels() if label in set(HEAR_AIRWAY)]
+
+    def test_a_root_the_ontology_does_not_hold_is_refused(self) -> None:
+        """A misspelled root would silently shrink the kind rather than fail."""
+        with pytest.raises(ValueError, match="not AudioSet classes"):
+            audioset_labels_under_roots(["Respiratory sound"])
+
+    def test_naming_a_second_root_widens_the_kind(self, tmp_path: Path) -> None:
+        """Restoring `Sigh` as airway evidence is one line of configuration, not a code change."""
+        override = tmp_path / "roots.yaml"
+        override.write_text("taxonomy:\n  airway_ontology_roots: [Respiratory sounds, Sigh]\n")
+        config = load_triage_config(override)
+        assert "Sigh" in airway_audioset_labels(config)
+        assert set(AUDIOSET_AIRWAY) < set(airway_audioset_labels(config))
+        assert airway_hear_labels(config) == HEAR_AIRWAY
+
+    def test_the_packaged_configuration_is_what_the_routing_tuples_read(self) -> None:
+        """The config key and the routing tuple are one definition, not two that agree today."""
+        config = load_triage_config()
+        assert airway_audioset_labels(config) == AUDIOSET_AIRWAY
+        assert airway_hear_labels(config) == HEAR_AIRWAY

@@ -76,8 +76,8 @@ flowchart TD
 
 | line | evidence |
 | --- | --- |
-| health-acoustic | a `hear_windows` window whose set contains a member of `taxonomy.hear_airway_labels` |
-| acoustic | a window whose set contains a member of `taxonomy.audioset_airway_labels`, from `yamnet_windows` or `ast_windows` |
+| health-acoustic | a `hear_windows` window whose set contains a HeAR airway label, derived from `taxonomy.airway_ontology_roots` |
+| acoustic | a window whose set contains an AudioSet airway label, derived from `taxonomy.airway_ontology_roots`, from `yamnet_windows` or `ast_windows` |
 
 Present when both lines carry evidence at or above their configured floors; absent when neither does;
 uncertain otherwise.
@@ -107,7 +107,8 @@ line is unavailable is `uncertain`, never `absent`.
 
 | key | governs |
 | --- | --- |
-| `taxonomy.speech_labels`, `taxonomy.audioset_airway_labels`, `taxonomy.hear_airway_labels` | the label families, per kind. Vocabulary, not thresholds |
+| `taxonomy.speech_labels` | the speech label family. Vocabulary, not thresholds |
+| `taxonomy.airway_ontology_roots` | the AudioSet ontology roots whose closure is the airway kind, for the AudioSet line and the HeAR line alike |
 | `taxonomy.presence_floor.<kind>.<line>` | how much of a line's evidence a kind needs |
 | `taxonomy.voice_min_duration_s` | the long-duration cutoff for the voice kind |
 | `taxonomy.voice_uncertain_duration_s` | the shorter floor below which a phonation span is not even uncertain |

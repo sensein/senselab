@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.classifier_ontology import corroboration_sets
+from senselab.audio.workflows.triage.classifier_ontology import airway_audioset_labels, corroboration_sets
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
@@ -131,16 +131,17 @@ def _contest_labels(config: TriageConfig) -> set[str]:
         The declared contest labels; empty while the key is null.
 
     Raises:
-        ValueError: If the declared set intersects ``taxonomy.audioset_airway_labels``.
+        ValueError: If the declared set intersects the AudioSet airway evidence derived from
+            ``taxonomy.airway_ontology_roots``.
     """
     contest_labels = {str(label) for label in (config.get("airway.contest_labels") or [])}
-    airway_evidence = {str(label) for label in config.require("taxonomy.audioset_airway_labels")}
+    airway_evidence = set(airway_audioset_labels(config))
     overlap = contest_labels & airway_evidence
     if overlap:
         raise ValueError(
-            f"airway.contest_labels and taxonomy.audioset_airway_labels must be disjoint; "
-            f"{sorted(overlap)} appear in both, so the same label would be airway evidence and a "
-            "contest of airway evidence"
+            f"airway.contest_labels and the airway evidence set derived from "
+            f"taxonomy.airway_ontology_roots must be disjoint; {sorted(overlap)} appear in both, so "
+            "the same label would be airway evidence and a contest of airway evidence"
         )
     return contest_labels
 
@@ -179,8 +180,9 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         The verdict, the view over the spans and assertions touched, and a null figure path.
 
     Raises:
-        ValueError: If ``airway.contest_labels`` intersects ``taxonomy.audioset_airway_labels``, or
-            if ``airway.corroboration_overrides`` names a label the ontology profile does not map.
+        ValueError: If ``airway.contest_labels`` intersects the airway evidence derived from
+            ``taxonomy.airway_ontology_roots``, or if ``airway.corroboration_overrides`` names a
+            label the ontology profile does not map.
     """
     labels_of_interest = [str(label) for label in config.require("airway.labels_of_interest")]
     corroboration = _corroboration(config)
