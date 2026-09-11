@@ -162,6 +162,22 @@ leaves a non-BIDS filename flat. `RunLayout.entity_dir` is that directory resolv
 than deriving it a second time. The leaf keeps the full stem: BIDS repeats entities in the path and
 in the filename. There is no flag to restore the flat layout.
 
+Enumerating the nested tree has to be depth-bounded. Measured against the relocated corpus
+(62,550 summaries under 1,527 subject and 1,736 session directories):
+
+| enumeration | result |
+| --- | --- |
+| `ls out/*.summary.json`, flat corpus | fails, `Argument list too long` |
+| `run_dir.rglob("*.summary.json")` | killed at 120 s, unfinished |
+| `glob` over `SUMMARY_DEPTHS` | 62,550 found in 1.2 s |
+
+`rglob` descends into all 62,713 run roots and through every `run/`, `released/`, `prov/` and
+`figure/` inside them, which is the whole 1.19 TB tree's metadata for three depths of answer.
+`entity_subdir` can only place a summary at three depths — no entity, subject only, subject and
+session — so `analyze_routing_evidence.SUMMARY_DEPTHS` enumerates exactly those and stops. The
+constant is the enumeration counterpart of `entity_subdir`; a fourth entity in the path would have
+to be added to both.
+
 `summary/` sits **beside** the store tree rather than inside it, and is **not** under `released/`: it
 carries element ids and marked words' extents, so it inherits the store's sensitivity and is not a
 releasable artifact. Three siblings rather than two nested trees is what lets a publish step sweep

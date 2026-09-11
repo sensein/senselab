@@ -27,6 +27,8 @@ from senselab.audio.workflows.triage.routing_analysis.report import load_feature
 
 MANIFEST = "manifest.jsonl"
 SHARD_DIR = "features"
+SUMMARY_DEPTHS = ("*.summary.json", "*/*.summary.json", "*/*/*.summary.json")
+"""Every depth ``entity_subdir`` can place a summary at: no entity, subject only, subject-session."""
 
 
 def build_manifest(run_dir: Path, out_dir: Path) -> Path:
@@ -36,7 +38,7 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
     carried over rather than reconstructed from the recorded ``run_root``.
 
     Args:
-        run_dir: The triage out dir, searched recursively for per-recording summaries.
+        run_dir: The triage out dir, searched at each depth an entity path can place a summary at.
         out_dir: Where the manifest is written.
 
     Returns:
@@ -49,7 +51,7 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
     if manifest.exists():
         print(f"[manifest] reusing {manifest} ({sum(1 for _ in manifest.open())} rows)", flush=True)
         return manifest
-    summaries = sorted(run_dir.rglob("*.summary.json"))
+    summaries = sorted({path for depth in SUMMARY_DEPTHS for path in run_dir.glob(depth)})
     if not summaries:
         raise FileNotFoundError(f"no *.summary.json under {run_dir}")
     started = time.time()
