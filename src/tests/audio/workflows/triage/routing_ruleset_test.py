@@ -14,6 +14,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     evaluate_routes,
     load_ruleset,
     max_token_repeat,
+    score_branches,
     tally_families,
 )
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
@@ -58,25 +59,32 @@ def _features(family: str, **overrides: object) -> RecordingFeatures:
     return record
 
 
-class TestTheDeclaredRoute:
-    """Which branch a family's instruction declares, and which measurement confirms it."""
+class TestTheReferenceStandardIsNotARouter:
+    """The declared family scores the routed set; it never decides which gates run."""
 
-    def test_every_branch_declares_a_family_set_that_exists(self, ruleset: Ruleset) -> None:
-        """A branch naming a set the families module does not have would route nothing, silently."""
-        assert set(ruleset.declared_family_set) == set(BRANCHES)
-        for set_name in ruleset.declared_family_set.values():
+    def test_every_branch_names_a_family_set_that_exists(self, ruleset: Ruleset) -> None:
+        """A branch naming a set the families module does not have would score against nothing."""
+        assert set(ruleset.reference_family_set) == set(BRANCHES)
+        for set_name in ruleset.reference_family_set.values():
             assert set_name in FAMILY_SETS
 
-    def test_the_declared_branch_comes_off_the_task_entity(self, ruleset: Ruleset) -> None:
+    def test_the_reference_branch_comes_off_the_task_entity(self, ruleset: Ruleset) -> None:
         """One family per branch, read through the family sets rather than restated here."""
-        assert ruleset.declared_branches("harvard-sentences-list") == ("SPEECH",)
-        assert ruleset.declared_branches("voluntary-cough") == ("AIRWAY",)
-        assert ruleset.declared_branches("prolonged-vowel") == ("VOICE",)
-        assert ruleset.declared_branches("diadochokinesis-pataka") == ("DDK",)
+        assert ruleset.reference_branches("harvard-sentences-list") == ("SPEECH",)
+        assert ruleset.reference_branches("voluntary-cough") == ("AIRWAY",)
+        assert ruleset.reference_branches("prolonged-vowel") == ("VOICE",)
+        assert ruleset.reference_branches("diadochokinesis-pataka") == ("DDK",)
 
-    def test_a_family_no_set_carries_declares_nothing(self, ruleset: Ruleset) -> None:
+    def test_a_family_no_set_carries_is_a_reference_positive_for_nothing(self, ruleset: Ruleset) -> None:
         """An unrecognised task id is not silently swept into a branch."""
-        assert ruleset.declared_branches("unknown") == ()
+        assert ruleset.reference_branches("unknown") == ()
+
+    def test_every_branch_has_gates_and_they_all_exist(self, ruleset: Ruleset) -> None:
+        """A branch with no gate could never be routed to, whatever a recording carries."""
+        assert set(ruleset.branch_gates) == set(BRANCHES)
+        for names in ruleset.branch_gates.values():
+            assert names
+            assert all(name in ruleset.gates for name in names)
 
 
 class TestEachGateFiresAndDoesNot:
@@ -85,8 +93,8 @@ class TestEachGateFiresAndDoesNot:
     @pytest.mark.parametrize(
         ("gate", "field", "firing", "silent"),
         [
-            ("speech.declared", "words", {"agreement": 4}, {"agreement": 3}),
-            ("speech.intrusion", "words", {"agreement": 2}, {"agreement": 1}),
+            ("speech.lexical", "words", {"lexical": 4}, {"lexical": 3}),
+            ("speech.agreement", "words", {"agreement": 3}, {"agreement": 2}),
             ("voice.sustained", "span_longest_s", {"amplitude": 3.0}, {"amplitude": 2.99}),
             ("airway.breath", "residual", {"energy_fraction": 0.10}, {"energy_fraction": 0.09}),
             (
@@ -115,11 +123,84 @@ class TestEachGateFiresAndDoesNot:
             GateOutcome.SILENT
         )
 
+    def test_the_chant_gate_reads_the_yamnet_chant_label_alone(self, ruleset: Ruleset) -> None:
+        """The union's own cut is 0.05; chant carries VOICE from 0.02 on its single label."""
+        rule = ruleset.gates["voice.chant"]
+        assert evaluate_gate(_features("prolonged-vowel", peaks={"plain|yamnet|Chant": 0.02}), rule) is (
+            GateOutcome.FIRED
+        )
+        assert evaluate_gate(_features("prolonged-vowel", peaks={"plain|yamnet|Chant": 0.019}), rule) is (
+            GateOutcome.SILENT
+        )
+
     def test_the_ddk_gate_counts_repeated_transcript_tokens(self, ruleset: Ruleset) -> None:
         """Three repeats of one syllable carries it; two do not."""
-        rule = ruleset.gates["ddk.declared"]
+        rule = ruleset.gates["ddk.lexical_repetition"]
         assert evaluate_gate(_features("diadochokinesis-pa", transcript="pa pa pa"), rule) is GateOutcome.FIRED
         assert evaluate_gate(_features("diadochokinesis-pa", transcript="pa pa"), rule) is GateOutcome.SILENT
+
+
+class TestContentRoutesWithoutTheInstruction:
+    """Every branch's gates run on every recording, whatever the task asked for."""
+
+    def test_a_branch_the_family_never_declared_still_routes(self, ruleset: Ruleset) -> None:
+        """A cough recording that carries five lexical words routes to SPEECH as well as AIRWAY."""
+        record = _features(
+            "voluntary-cough",
+            words={"agreement": 1, "total": 5, "lexical": 5},
+            span_stats={"all.peak_over_floor_db_max": 55.0},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert result.declared == ("AIRWAY",)
+        assert result.routed == ("AIRWAY", "SPEECH")
+        assert result.agreed == ("AIRWAY",)
+        assert result.extra == ("SPEECH",)
+        assert result.missed == ()
+        assert result.fell_through is False
+
+    def test_a_declared_branch_that_does_not_route_is_missed(self, ruleset: Ruleset) -> None:
+        """A prolonged vowel with no held span, no singing and no chant is a miss, not a pass."""
+        result = evaluate_routes(_features("prolonged-vowel"), ruleset)
+        assert result.declared == ("VOICE",)
+        assert result.routed == ()
+        assert result.missed == ("VOICE",)
+        assert result.agreed == ()
+        assert result.extra == ()
+        assert result.fell_through is True
+
+    def test_speech_routes_on_lexical_words_alone_when_one_recogniser_disagreed(self, ruleset: Ruleset) -> None:
+        """The harvard case: nine lexical words, three agreed, unambiguous read speech."""
+        record = _features("harvard-sentences-list", words={"agreement": 3, "total": 9, "lexical": 9})
+        assert evaluate_gate(record, ruleset.gates["speech.lexical"]) is GateOutcome.FIRED
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("SPEECH",)
+        assert result.agreed == ("SPEECH",)
+
+    def test_speech_routes_on_agreement_alone_when_the_words_are_few(self, ruleset: Ruleset) -> None:
+        """Three words two recognisers agreed on carry SPEECH under the lexical gate's own cut."""
+        record = _features("free-speech", words={"agreement": 3, "total": 3, "lexical": 3})
+        assert evaluate_gate(record, ruleset.gates["speech.lexical"]) is GateOutcome.SILENT
+        assert evaluate_routes(record, ruleset).routed == ("SPEECH",)
+
+    def test_the_four_harvard_recordings_that_the_old_declared_gate_discarded_all_route(self, ruleset: Ruleset) -> None:
+        """Every measured row of the harvard fall-through, at its own lexical and agreement counts."""
+        for lexical, agreement in ((4, 3), (6, 3), (9, 3), (21, 3)):
+            record = _features(
+                "harvard-sentences-list", words={"agreement": agreement, "total": lexical, "lexical": lexical}
+            )
+            assert evaluate_routes(record, ruleset).routed == ("SPEECH",)
+
+    def test_a_recording_can_route_to_more_than_one_branch(self, ruleset: Ruleset) -> None:
+        """A held vowel with an intruding voice routes to both, and neither suppresses the other."""
+        record = _features(
+            "prolonged-vowel",
+            span_longest_s={"amplitude": 6.0},
+            words={"agreement": 3, "total": 6, "lexical": 6},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("SPEECH", "VOICE")
+        assert result.extra == ("SPEECH",)
+        assert result.agreed == ("VOICE",)
 
 
 class TestAMissingMeasurementIsNotANegative:
@@ -138,17 +219,30 @@ class TestAMissingMeasurementIsNotANegative:
     def test_a_gate_with_no_consensus_transcript_reads_unavailable(self, ruleset: Ruleset) -> None:
         """No transcript is no repeat count, which is not a repeat count of zero."""
         record = _features("diadochokinesis-pa", consensus_present=False)
-        assert evaluate_gate(record, ruleset.gates["ddk.declared"]) is GateOutcome.UNAVAILABLE
+        assert evaluate_gate(record, ruleset.gates["ddk.lexical_repetition"]) is GateOutcome.UNAVAILABLE
 
-    def test_an_unavailable_declared_branch_is_neither_confirmed_nor_unconfirmed(self, ruleset: Ruleset) -> None:
+    def test_an_unreadable_gate_is_named_rather_than_counted_as_silent(self, ruleset: Ruleset) -> None:
         """A breath recording with no residual and no span statistic is unmeasured, not empty."""
         record = _features("breath-sounds", residual={}, span_stats={})
         result = evaluate_routes(record, ruleset)
-        assert result.declared == ("AIRWAY",)
-        assert result.unavailable == ("AIRWAY",)
-        assert result.confirmed == ()
-        assert result.unconfirmed == ()
-        assert result.fell_through is True
+        assert result.unavailable["AIRWAY"] == ("airway.breath", "airway.cough")
+        assert result.routed == ()
+        assert result.missed == ("AIRWAY",)
+        assert result.gate_outcomes["airway.breath"] is GateOutcome.UNAVAILABLE
+        assert result.gate_outcomes["voice.sustained"] is GateOutcome.SILENT
+
+    def test_a_silent_branch_carries_no_unavailable_entry(self, ruleset: Ruleset) -> None:
+        """Silent is a measurement; only an unread feature is named in ``unavailable``."""
+        result = evaluate_routes(_features("breath-sounds"), ruleset)
+        assert result.unavailable == {}
+        assert result.routed == ()
+
+    def test_a_branch_routes_on_a_readable_gate_beside_an_unreadable_one(self, ruleset: Ruleset) -> None:
+        """One unread gate does not withhold the branch a second gate fired for."""
+        record = _features("voluntary-cough", residual={}, span_stats={"all.peak_over_floor_db_max": 55.0})
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("AIRWAY",)
+        assert result.unavailable["AIRWAY"] == ("airway.breath",)
 
     def test_the_tally_counts_unavailable_separately_from_a_silent_gate(self, ruleset: Ruleset) -> None:
         """Collapsing the two would report a broken store as a negative measurement."""
@@ -159,42 +253,13 @@ class TestAMissingMeasurementIsNotANegative:
         assert row.recordings == 2
         assert row.declared["AIRWAY"] == 2
         assert row.unavailable["AIRWAY"] == 1
-        assert row.confirmed["AIRWAY"] == 0
+        assert row.routed["AIRWAY"] == 0
+        assert row.missed["AIRWAY"] == 2
         assert row.fell_through == 2
-
-
-class TestTheDiscoveredRouteAdds:
-    """Discovered speech is an addition to the declared route, never a replacement."""
-
-    def test_a_sustained_vowel_with_an_intruding_voice_routes_to_both(self, ruleset: Ruleset) -> None:
-        """The vowel keeps VOICE; the intrusion adds SPEECH."""
-        record = _features("prolonged-vowel", span_longest_s={"amplitude": 6.0}, words={"agreement": 2})
-        result = evaluate_routes(record, ruleset)
-        assert result.declared == ("VOICE",)
-        assert result.confirmed == ("VOICE",)
-        assert result.discovered == ("SPEECH",)
-        assert result.routed == ("SPEECH", "VOICE")
-        assert result.fell_through is False
-
-    def test_a_declared_speech_route_is_not_also_reported_as_discovered(self, ruleset: Ruleset) -> None:
-        """A confirmed branch is confirmed; the discovery gate does not double-count it."""
-        record = _features("free-speech", words={"agreement": 9})
-        result = evaluate_routes(record, ruleset)
-        assert result.confirmed == ("SPEECH",)
-        assert result.discovered == ()
-        assert result.routed == ("SPEECH",)
 
 
 class TestARecordingRoutesToNothing:
     """The fall-through count is a first-class output."""
-
-    def test_a_silent_recording_lands_in_no_bucket(self, ruleset: Ruleset) -> None:
-        """Every gate readable, every gate silent: declared, unconfirmed, routed nowhere."""
-        result = evaluate_routes(_features("prolonged-vowel"), ruleset)
-        assert result.declared == ("VOICE",)
-        assert result.unconfirmed == ("VOICE",)
-        assert result.routed == ()
-        assert result.fell_through is True
 
     def test_the_tally_counts_the_fall_through_per_family(self, ruleset: Ruleset) -> None:
         """Two families, one fall-through each, counted where the owner asked to read them."""
@@ -205,10 +270,45 @@ class TestARecordingRoutesToNothing:
         ]
         tallies = tally_families(evaluations)
         assert tallies["prolonged-vowel"].fell_through == 1
-        assert tallies["prolonged-vowel"].confirmed["VOICE"] == 1
+        assert tallies["prolonged-vowel"].routed["VOICE"] == 1
+        assert tallies["prolonged-vowel"].agreed["VOICE"] == 1
         assert tallies["voluntary-cough"].fell_through == 1
         assert tallies["voluntary-cough"].declared["AIRWAY"] == 1
         assert set(tallies["voluntary-cough"].declared) == set(BRANCHES)
+
+
+class TestScoringContentAgainstTheDeclaredFamily:
+    """Can content-only routing recover the overarching families?"""
+
+    def test_the_two_by_two_counts_every_recording_once_per_branch(self, ruleset: Ruleset) -> None:
+        """Each branch sees every recording, as a positive or a negative, predicted or not."""
+        evaluations = [
+            evaluate_routes(_features("harvard-sentences-list", words={"agreement": 3, "lexical": 9}), ruleset),
+            evaluate_routes(_features("prolonged-vowel"), ruleset),
+            evaluate_routes(_features("prolonged-vowel", peaks={"plain|yamnet|Chant": 0.5}), ruleset),
+        ]
+        scores = score_branches(evaluations)
+        assert list(scores) == list(BRANCHES)
+        for table in scores.values():
+            assert table.tp + table.fp + table.tn + table.fn == 3
+
+    def test_sensitivity_and_specificity_read_off_the_raw_counts(self, ruleset: Ruleset) -> None:
+        """One declared vowel routed, one declared vowel missed, one speech recording not a vowel."""
+        evaluations = [
+            evaluate_routes(_features("prolonged-vowel", peaks={"plain|yamnet|Chant": 0.5}), ruleset),
+            evaluate_routes(_features("prolonged-vowel"), ruleset),
+            evaluate_routes(_features("harvard-sentences-list", words={"agreement": 3, "lexical": 9}), ruleset),
+        ]
+        voice = score_branches(evaluations)["VOICE"]
+        assert (voice.tp, voice.fn, voice.fp, voice.tn) == (1, 1, 0, 1)
+        assert voice.sensitivity == 0.5
+        assert voice.specificity == 1.0
+
+    def test_a_branch_no_recording_declares_has_no_sensitivity(self, ruleset: Ruleset) -> None:
+        """No reference positive is not a sensitivity of zero."""
+        ddk = score_branches([evaluate_routes(_features("prolonged-vowel"), ruleset)])["DDK"]
+        assert ddk.sensitivity is None
+        assert ddk.specificity == 1.0
 
 
 class TestTheTokenRepeatCounter:

@@ -44,6 +44,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     gate_value,
     load_ruleset,
     max_token_repeat,
+    score_branches,
     tally_families,
 )
 
@@ -77,6 +78,7 @@ __all__ = [
     "max_token_repeat",
     "prevalence",
     "read_store",
+    "score_branches",
     "score_detector",
     "sweep_points",
     "tally_families",
