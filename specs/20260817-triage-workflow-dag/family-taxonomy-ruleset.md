@@ -278,3 +278,89 @@ What a DDK arm would still need, none of it done here:
   is why this is empty rather than an error.
 - There is no `nodes/ddk.py`, and `specs/20260817-triage-workflow-dag/dag.md` still documents
   `BRANCHES` as the three.
+
+## Span statistics conditioned on the label the span carries
+
+`RecordingFeatures.span_label_stats` was added because the span/label join was being thrown away at
+extraction, and the whole-file measurements that survived it are the weaker half of the evidence.
+
+### What the whole-corpus cough gateway measured
+
+Reference = the cough-eliciting families, 62,547 recordings.
+
+| detector | best operating point | sens | spec | J |
+| --- | --- | --- | --- | --- |
+| `cough.yamnet_cough_minus_breath` | `>= 0` | 0.731 | 0.902 | 0.632 |
+| `cough.amplitude_peak_over_floor_db_max` | `>= 55 dB` | 0.767 | 0.827 | 0.594 |
+
+The amplitude detector's own sweep grid stopped at 50 dB and reported J 0.534, so the grid ceiling
+was hiding its optimum by 0.06 of J. `DB_OVER_FLOOR_GRID` now runs to 80 dB (45, 55, 60, 70 and 80
+added), which is the only reason the 55 dB point is visible at all. A grid whose best threshold is
+its own last entry has not been swept; it has been truncated.
+
+The two rows are the motivation for conditioning. The classifier detector is the stronger of the
+two and reads no amplitude; the amplitude detector is the weaker and reads no label. A loud
+amplitude span is weak evidence of a cough. A loud amplitude span *that YAMNet labels Cough* is a
+different and much stronger quantity, and nothing in the extracted record could express it, because
+the extractor kept spans and labels in separate tables joined by nothing.
+
+### `all.peak_over_floor_db_*` and `amplitude.peak_over_floor_db_*` are the same numbers
+
+Only amplitude spans carry a finite `peak_db`; continuity and gap spans carry none, and
+`_span_statistics` drops a non-finite peak from the sample before summarising it. So the `all`
+population of the `peak_over_floor_db` distribution *is* the `amplitude` population, and every
+statistic of the two is numerically identical on every recording. This is not a defect and neither
+key is redundant — the same is not true of the duration or SQUIM distributions, where `all` is a
+genuinely wider sample — but a sweep that reports both as independent detectors is reporting one
+detector twice.
+
+### Why the span's best-scoring label, and not the store's own `labels` list
+
+PREPROCESS writes two things per span classifier window: `raw_scores`, the model's full output, and
+`labels`, the subset clearing `windows.<classifier>.default_threshold`. `labels` is the natural
+membership reader, and `nodes/taxonomy.py`'s `_span_label_evidence` uses exactly that.
+
+It cannot be used here. `windows.yamnet.default_threshold` and `windows.hear.default_threshold` are
+both `null` in the shipped config — no ROC over this corpus exists to fit them from — so every
+per-span window in the 62,547-recording extraction carries `labelled: false` and no `labels` key at
+all. Conditioning on `labels` would emit nothing for the entire corpus.
+
+The reduction used instead is the span's **best-scoring label**: the maximum `(label, score)` pair
+over every window the classifier placed on that span, which is `_per_span_label_scores`'s
+per-label-max followed by `top_label`'s argmax, and is the same number either order is taken in. It
+introduces no threshold, so it adds no unfitted literal to the code, and the thresholding stays
+where it belongs — in the detector's own swept grid. A span whose best label is outside
+`TRACKED_LABELS` carries no tracked label and contributes to nothing.
+
+### Size
+
+`span_label_stats` costs 430-520 bytes per emitted label: nine keys (`span_count` plus the eight
+statistics of `_stats`), one label at a time. A recording emits a label only when a live span
+carries it, so the count per recording is bounded by the number of live spans and, in practice,
+concentrates on 2-4 distinct labels — argmax over 521 AudioSet labels is not diverse across the
+spans of one recording. That is 0.9-1.8 kB against a current 15.7 kB per recording (983 MB /
+62,547), so **+6% to +11% on the shard**, well short of the doubling that would have forced
+emission down to `taxonomy.audioset_airway_labels` and `taxonomy.hear_airway_labels`. All of
+`TRACKED_LABELS` is therefore emitted. The absolute worst case is 36 labels (29 tracked for YAMNet,
+7 for HeAR) on a recording with at least 36 spans each argmaxing differently, which is a doubling
+and does not occur.
+
+Extraction now parses the `span_yamnet` records it used to skip by raw-string prefilter. Measured at
+17.3 kB and 99 µs per record for a 521-label dump on this laptop, at a few tens of spans per
+recording that is a few milliseconds per store and a few minutes over the corpus — the prefilter
+was worth having while no detector read those bytes, and is not once one does.
+
+### The detectors added
+
+Three, not the cross-product. The feature is general; these are the ones about to be tested against
+the two rows above:
+
+- `cough.yamnet_cough_span_peak_over_floor_db_max`
+- `cough.yamnet_cough_span_peak_over_floor_db_p75`
+- `cough.yamnet_cough_span_peak_over_floor_db_p90`
+
+Each reads `("span_label_stat", "yamnet.Cough.peak_over_floor_db_<stat>")` over
+`DB_OVER_FLOOR_GRID`. `max` is the direct conditioned analogue of
+`cough.amplitude_peak_over_floor_db_max`; `p75` and `p90` are there because a recording with one
+loud cough and one louder door slam has the same `max` and a lower `p90`, and which of the three
+separates best is a measurement, not a guess.

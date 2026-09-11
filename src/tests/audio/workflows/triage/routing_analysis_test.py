@@ -409,3 +409,138 @@ def test_label_prevalence_counts_only_the_streams_that_ran(tmp_path: Path) -> No
     assert snore["rainbow-passage"] == {"n": 1, "n_over_floor": 1, "fraction": 1.0}
     assert snore["voluntary-cough"] == {"n": 1, "n_over_floor": 0, "fraction": 0.0}
     assert "residual|yamnet|Cough" not in report["labels"]
+
+
+def _labelled_span_store(path: Path) -> Path:
+    """A store whose spans carry per-span YAMNet and HeAR scores.
+
+    Args:
+        path: Where to write it.
+
+    Returns:
+        The path.
+    """
+    return _write_store(
+        path,
+        [
+            _entity("stream", "stream-1", {"name": "recording"}, [0.0, 10.0]),
+            _entity("span", "span-1", {"measure": "amplitude", "peak_over_floor_db": 40.0}, [0.0, 1.0]),
+            _entity("span", "span-2", {"measure": "amplitude", "peak_over_floor_db": 30.0}, [2.0, 3.0]),
+            _entity("span", "span-3", {"measure": "amplitude", "peak_over_floor_db": 55.0}, [4.0, 5.0]),
+            _entity("span", "span-4", {"measure": "amplitude", "peak_over_floor_db": 99.0}, [6.0, 7.0]),
+            _relation("wasInvalidatedBy", "span-4", "activity-1"),
+            _entity(
+                "measurement",
+                "yam-1",
+                {"name": "span_yamnet", "span_id": "span-1", "raw_scores": {"Cough": 0.8, "Speech": 0.1}},
+                [0.0, 1.0],
+            ),
+            _entity(
+                "measurement",
+                "yam-2",
+                {"name": "span_yamnet", "span_id": "span-2", "raw_scores": {"Cough": 0.6, "Speech": 0.2}},
+                [2.0, 3.0],
+            ),
+            _entity(
+                "measurement",
+                "yam-3",
+                {"name": "span_yamnet", "span_id": "span-3", "raw_scores": {"Silence": 0.9, "Cough": 0.1}},
+                [4.0, 5.0],
+            ),
+            _entity(
+                "measurement",
+                "yam-4",
+                {"name": "span_yamnet", "span_id": "span-4", "raw_scores": {"Cough": 0.95}},
+                [6.0, 7.0],
+            ),
+            _entity(
+                "measurement",
+                "hear-1",
+                {"name": "span_hear", "span_id": "span-1", "raw_scores": {"Cough": 0.3, "Breathe": 0.5}},
+                [0.0, 0.5],
+            ),
+            _entity(
+                "measurement",
+                "hear-2",
+                {"name": "span_hear", "span_id": "span-1", "raw_scores": {"Cough": 0.7, "Breathe": 0.2}},
+                [0.5, 1.0],
+            ),
+        ],
+    )
+
+
+def _labelled(tmp_path: Path) -> RecordingFeatures:
+    """The labelled-span fixture, extracted.
+
+    Args:
+        tmp_path: The test's temporary directory.
+
+    Returns:
+        The record.
+    """
+    return extract_features(
+        _labelled_span_store(tmp_path / "c" / "run" / "store.jsonl"),
+        "sub-3_ses-1_task-voluntary-cough",
+        str(tmp_path / "c"),
+        "voluntary-cough",
+        "voluntary-cough",
+    )
+
+
+def test_span_label_stats_aggregate_the_spans_carrying_one_label(tmp_path: Path) -> None:
+    """Two live spans whose best YAMNet label is Cough form one distribution together."""
+    record = _labelled(tmp_path)
+    assert record.span_label_stats["yamnet.Cough.span_count"] == pytest.approx(2.0)
+    assert record.span_label_stats["yamnet.Cough.peak_over_floor_db_n"] == pytest.approx(2.0)
+    assert record.span_label_stats["yamnet.Cough.peak_over_floor_db_min"] == pytest.approx(30.0)
+    assert record.span_label_stats["yamnet.Cough.peak_over_floor_db_max"] == pytest.approx(40.0)
+    assert record.span_label_stats["yamnet.Cough.peak_over_floor_db_mean"] == pytest.approx(35.0)
+
+
+def test_span_label_stats_drop_a_span_whose_best_label_is_untracked(tmp_path: Path) -> None:
+    """``Silence`` is outside TRACKED_LABELS, so the 55 dB span it labels contributes nothing."""
+    record = _labelled(tmp_path)
+    assert not [key for key in record.span_label_stats if key.startswith("yamnet.Silence.")]
+    assert record.span_label_stats["yamnet.Cough.peak_over_floor_db_max"] == pytest.approx(40.0)
+
+
+def test_span_label_stats_exclude_an_invalidated_span(tmp_path: Path) -> None:
+    """The invalidated 99 dB Cough span is dropped exactly as ``live_spans`` drops it elsewhere."""
+    record = _labelled(tmp_path)
+    assert record.span_count["amplitude"] == 3
+    assert record.span_label_stats["yamnet.Cough.span_count"] == pytest.approx(2.0)
+    assert record.span_label_stats["yamnet.Cough.peak_over_floor_db_max"] == pytest.approx(40.0)
+
+
+def test_span_label_stats_take_the_best_window_of_each_span(tmp_path: Path) -> None:
+    """A span's label is the best score over every window its classifier placed on it."""
+    record = _labelled(tmp_path)
+    assert record.span_label_stats["hear.Cough.span_count"] == pytest.approx(1.0)
+    assert record.span_label_stats["hear.Cough.peak_over_floor_db_max"] == pytest.approx(40.0)
+    assert not [key for key in record.span_label_stats if key.startswith("hear.Breathe.")]
+    assert record.peaks["span|hear|Breathe"] == pytest.approx(0.5)
+    assert record.peaks["span|hear|Cough"] == pytest.approx(0.7)
+
+
+def test_span_label_stats_are_empty_when_no_span_carries_a_label(tmp_path: Path) -> None:
+    """A recording whose store holds no per-span classifier window costs no bytes."""
+    _, silent = _features(tmp_path)
+    assert silent.span_label_stats == {}
+
+
+def test_label_conditioned_detectors_read_the_cough_spans(tmp_path: Path) -> None:
+    """The three catalogued cough detectors read the YAMNet-Cough distribution, or nothing."""
+    record = _labelled(tmp_path)
+    _, silent = _features(tmp_path)
+    names = (
+        "cough.yamnet_cough_span_peak_over_floor_db_max",
+        "cough.yamnet_cough_span_peak_over_floor_db_p75",
+        "cough.yamnet_cough_span_peak_over_floor_db_p90",
+    )
+    detectors = {name: next(d for d in DETECTORS if d.name == name) for name in names}
+    assert detector_value(record, detectors[names[0]]) == pytest.approx(40.0)
+    assert detector_value(record, detectors[names[1]]) == pytest.approx(37.5)
+    assert detector_value(record, detectors[names[2]]) == pytest.approx(39.0)
+    for detector in detectors.values():
+        assert detector_value(silent, detector) is None
+        assert max(detector.thresholds) >= 55.0
