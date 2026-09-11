@@ -6,8 +6,10 @@ into :attr:`RouteEvaluation.declared`, which is the reference standard the route
 against and never a filter on which gates run.
 
 Every gate is one feature path, one comparison and one threshold, all of them read from
-``taxonomy.ruleset`` in ``data/config/default.yaml``. The operating points, which of them are
-provisional, and the open questions are in
+``taxonomy.ruleset`` in ``data/config/default.yaml``. A gate either routes a branch or flags it:
+``branch_gates`` decides entry, ``branch_flags`` annotates a branch already entered. Ahead of both,
+one precondition asks whether the recording carried anything at all. The operating points, which of
+them are provisional, and the open questions are in
 ``specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md``.
 """
 
@@ -31,6 +33,12 @@ RULESET_PATH = "taxonomy.ruleset"
 
 TRANSCRIPT_REPEAT = "transcript_repeat"
 """The feature source this module reads itself, because no extracted feature carries it."""
+
+BRACKETED_SET = "bracketed_set"
+"""The feature source whose arguments are a named bracket-token set resolved out of configuration."""
+
+BRACKET_SET_PATHS: Mapping[str, str] = {"airway": "taxonomy.airway_bracket_tokens"}
+"""Each named bracket-token set, and the configuration key that lists its types."""
 
 AT_LEAST = "at_least"
 AT_MOST = "at_most"
@@ -68,19 +76,38 @@ class Gate:
 
 
 @dataclass(frozen=True)
+class Emptiness:
+    """The precondition that decides a recording carried nothing to route.
+
+    Attributes:
+        peak_streams: The ``<stream>|<classifier>`` summaries whose highest tracked-label score
+            must all fall below the floor.
+        peak_floor: The score every named stream must stay under.
+    """
+
+    peak_streams: tuple[str, ...]
+    peak_floor: float
+
+
+@dataclass(frozen=True)
 class Ruleset:
     """The whole declarative rule set, as loaded from the configuration.
 
     Attributes:
         gates: Every gate, by name.
         branch_gates: Branch to its gates, any one of which routes it on any recording.
+        branch_flags: Branch to the gates that annotate it. A flag gate is evaluated and reported
+            and never routes: it is read after a branch is entered, not to enter it.
         reference_family_set: Branch to the :data:`FAMILY_SETS` entry it is scored against. This
             mapping is a reference standard, not a router: no gate is skipped because of it.
+        emptiness: The precondition evaluated ahead of every branch gate.
     """
 
     gates: Mapping[str, Gate]
     branch_gates: Mapping[str, tuple[str, ...]]
+    branch_flags: Mapping[str, tuple[str, ...]]
     reference_family_set: Mapping[str, str]
+    emptiness: Emptiness
 
     def reference_branches(self, family: str) -> tuple[str, ...]:
         """Which branches a family is a reference positive for.
@@ -113,8 +140,13 @@ class RouteEvaluation:
         extra: Routed and not declared.
         unavailable: Per branch, the gates whose feature could not be read, whether or not another
             gate routed the branch anyway. Only branches with such a gate are keyed.
-        fell_through: Whether ``routed`` is empty.
-        gate_outcomes: Every gate's outcome, by gate name.
+        flags: Per branch, the flag gates that fired. A flag annotates a branch and never routes
+            it, so it is absent from every other field here. Only branches with a fired flag are
+            keyed.
+        empty: Whether the emptiness precondition fired, in which case no branch gate ran.
+        fell_through: Whether the recording carried content and still routed nowhere. An empty
+            recording is not a fall-through.
+        gate_outcomes: Every gate's outcome, by gate name; empty when ``empty``.
     """
 
     stem: str
@@ -125,6 +157,8 @@ class RouteEvaluation:
     missed: tuple[str, ...]
     extra: tuple[str, ...]
     unavailable: Mapping[str, tuple[str, ...]]
+    flags: Mapping[str, tuple[str, ...]]
+    empty: bool
     fell_through: bool
     gate_outcomes: Mapping[str, GateOutcome]
 
@@ -142,7 +176,10 @@ class FamilyTally:
         missed: Per branch, how many were declared and not routed.
         extra: Per branch, how many were routed and not declared.
         unavailable: Per branch, how many carried an unreadable gate for it.
-        fell_through: How many routed to no branch at all.
+        flagged: Per branch, how many carried a fired flag gate for it.
+        empty: How many the emptiness precondition fired on.
+        fell_through: How many carried content and still routed to no branch at all. The empty
+            ones are counted in ``empty`` and never here.
     """
 
     family: str
@@ -153,6 +190,8 @@ class FamilyTally:
     missed: Mapping[str, int]
     extra: Mapping[str, int]
     unavailable: Mapping[str, int]
+    flagged: Mapping[str, int]
+    empty: int
     fell_through: int
 
 
@@ -172,6 +211,30 @@ def max_token_repeat(transcript: str) -> int:
     return max(Counter(tokens).values(), default=0)
 
 
+def _resolve_feature(config: TriageConfig, name: str, feature: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Expand a gate's feature path, substituting a named bracket-token set for its members.
+
+    Args:
+        config: The resolved configuration.
+        name: The gate's name, for the error message.
+        feature: The feature path as configured.
+
+    Returns:
+        The path a reader can be built from: unchanged, unless it names a bracket-token set, in
+        which case the set name is replaced by that set's types in sorted order.
+
+    Raises:
+        ValueError: When the path names a bracket-token set :data:`BRACKET_SET_PATHS` does not
+            have.
+    """
+    if feature[0] != BRACKETED_SET:
+        return feature
+    set_name = str(feature[1])
+    if set_name not in BRACKET_SET_PATHS:
+        raise ValueError(f"{RULESET_PATH}.gates[{name}].feature names no bracket-token set: {set_name!r}")
+    return (BRACKETED_SET, *sorted(str(token) for token in config.require(BRACKET_SET_PATHS[set_name])))
+
+
 def load_ruleset(config: TriageConfig) -> Ruleset:
     """Read the ruleset out of a resolved triage configuration.
 
@@ -187,23 +250,69 @@ def load_ruleset(config: TriageConfig) -> Ruleset:
     """
     reference = dict(config.require(f"{RULESET_PATH}.reference_family_set"))
     branch_gates = {branch: tuple(names) for branch, names in config.require(f"{RULESET_PATH}.branch_gates").items()}
+    branch_flags = {branch: tuple(names) for branch, names in config.require(f"{RULESET_PATH}.branch_flags").items()}
     gates = {
-        name: Gate(name=name, feature=tuple(row["feature"]), op=str(row["op"]), threshold=float(row["threshold"]))
+        name: Gate(
+            name=name,
+            feature=_resolve_feature(config, name, tuple(row["feature"])),
+            op=str(row["op"]),
+            threshold=float(row["threshold"]),
+        )
         for name, row in config.require(f"{RULESET_PATH}.gates").items()
     }
+    emptiness = Emptiness(
+        peak_streams=tuple(str(stream) for stream in config.require(f"{RULESET_PATH}.emptiness.peak_streams")),
+        peak_floor=float(config.require(f"{RULESET_PATH}.emptiness.peak_floor")),
+    )
 
     for branch, set_name in reference.items():
         if set_name not in FAMILY_SETS:
             raise ValueError(f"{RULESET_PATH}.reference_family_set[{branch}] names no family set: {set_name!r}")
+    for key, assignment in (("branch_gates", branch_gates), ("branch_flags", branch_flags)):
+        for branch, names in assignment.items():
+            for name in names:
+                if name not in gates:
+                    raise ValueError(f"{RULESET_PATH}.{key}[{branch}] names no gate: {name!r}")
     for branch, names in branch_gates.items():
-        for name in names:
-            if name not in gates:
-                raise ValueError(f"{RULESET_PATH}.branch_gates[{branch}] names no gate: {name!r}")
+        overlap = set(names) & set(branch_flags.get(branch, ()))
+        if overlap:
+            raise ValueError(f"{RULESET_PATH}.branch_flags[{branch}] also gates it: {sorted(overlap)}")
     for gate in gates.values():
         if gate.op not in (AT_LEAST, AT_MOST):
             raise ValueError(f"{RULESET_PATH}.gates[{gate.name}].op is not a comparison: {gate.op!r}")
 
-    return Ruleset(gates=gates, branch_gates=branch_gates, reference_family_set=reference)
+    return Ruleset(
+        gates=gates,
+        branch_gates=branch_gates,
+        branch_flags=branch_flags,
+        reference_family_set=reference,
+        emptiness=emptiness,
+    )
+
+
+def evaluate_emptiness(features: RecordingFeatures, emptiness: Emptiness) -> GateOutcome:
+    """Whether a recording carried nothing at all, before any branch gate is asked anything.
+
+    Args:
+        features: The recording's extracted evidence.
+        emptiness: The precondition.
+
+    Returns:
+        ``FIRED`` when every named stream's highest tracked-label score is under the floor,
+        ``SILENT`` when at least one is at or over it, and ``UNAVAILABLE`` when a named stream's
+        summary is not in the store at all, which is not a stream that scored zero.
+    """
+    for stream in emptiness.peak_streams:
+        name, _, classifier = stream.partition("|")
+        value = detector_value(
+            features,
+            Detector(name="emptiness", kind="", reader=("stream_peak_max", name, classifier), unit="", thresholds=()),
+        )
+        if value is None:
+            return GateOutcome.UNAVAILABLE
+        if value >= emptiness.peak_floor:
+            return GateOutcome.SILENT
+    return GateOutcome.FIRED
 
 
 def gate_value(features: RecordingFeatures, gate: Gate) -> float | None:
@@ -242,7 +351,10 @@ def evaluate_gate(features: RecordingFeatures, gate: Gate) -> GateOutcome:
 def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvaluation:
     """Route one recording from its content, then compare that against what its family declares.
 
-    Every branch's gates are evaluated, whatever the task asked for.
+    The emptiness precondition runs first. When it fires no branch gate is asked anything and the
+    recording routes nowhere, which is distinct from carrying content that matched no gate. When it
+    does not, every branch's gates are evaluated, whatever the task asked for, and every branch's
+    flag gates are evaluated beside them without contributing to ``routed``.
 
     Args:
         features: The recording's extracted evidence.
@@ -251,9 +363,27 @@ def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvalu
     Returns:
         The evaluation.
     """
+    declared = ruleset.reference_branches(features.family)
+    if evaluate_emptiness(features, ruleset.emptiness) is GateOutcome.FIRED:
+        return RouteEvaluation(
+            stem=features.stem,
+            family=features.family,
+            routed=(),
+            declared=declared,
+            agreed=(),
+            missed=declared,
+            extra=(),
+            unavailable={},
+            flags={},
+            empty=True,
+            fell_through=False,
+            gate_outcomes={},
+        )
+
     outcomes: dict[str, GateOutcome] = {}
     routed: list[str] = []
     unavailable: dict[str, tuple[str, ...]] = {}
+    flags: dict[str, tuple[str, ...]] = {}
     for branch in BRANCHES:
         names = ruleset.branch_gates.get(branch, ())
         states = {name: _outcome(features, ruleset, outcomes, name) for name in names}
@@ -262,8 +392,14 @@ def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvalu
         unread = tuple(name for name, state in states.items() if state is GateOutcome.UNAVAILABLE)
         if unread:
             unavailable[branch] = unread
+        raised = tuple(
+            name
+            for name in ruleset.branch_flags.get(branch, ())
+            if _outcome(features, ruleset, outcomes, name) is GateOutcome.FIRED
+        )
+        if raised:
+            flags[branch] = raised
 
-    declared = ruleset.reference_branches(features.family)
     return RouteEvaluation(
         stem=features.stem,
         family=features.family,
@@ -273,6 +409,8 @@ def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvalu
         missed=tuple(branch for branch in declared if branch not in routed),
         extra=tuple(branch for branch in routed if branch not in declared),
         unavailable=unavailable,
+        flags=flags,
+        empty=False,
         fell_through=not routed,
         gate_outcomes=outcomes,
     )
@@ -290,11 +428,13 @@ def tally_families(evaluations: Iterable[RouteEvaluation]) -> dict[str, FamilyTa
     counters: dict[str, dict[str, Counter[str]]] = {}
     recordings: Counter[str] = Counter()
     fell_through: Counter[str] = Counter()
+    empty: Counter[str] = Counter()
     for evaluation in evaluations:
         family = evaluation.family
         rows = counters.setdefault(family, {axis: Counter() for axis in AXES})
         recordings[family] += 1
         fell_through[family] += int(evaluation.fell_through)
+        empty[family] += int(evaluation.empty)
         for axis in AXES:
             rows[axis].update(branches_on(evaluation, axis))
     return {
@@ -307,6 +447,8 @@ def tally_families(evaluations: Iterable[RouteEvaluation]) -> dict[str, FamilyTa
             missed=_per_branch(rows["missed"]),
             extra=_per_branch(rows["extra"]),
             unavailable=_per_branch(rows["unavailable"]),
+            flagged=_per_branch(rows["flagged"]),
+            empty=empty[family],
             fell_through=fell_through[family],
         )
         for family, rows in sorted(counters.items())
@@ -335,8 +477,11 @@ def score_branches(evaluations: Iterable[RouteEvaluation]) -> dict[str, Confusio
     return {branch: Confusion(**row) for branch, row in counts.items()}
 
 
-AXES: Sequence[str] = ("routed", "declared", "agreed", "missed", "extra", "unavailable")
+AXES: Sequence[str] = ("routed", "declared", "agreed", "missed", "extra", "unavailable", "flagged")
 """The per-branch axes an evaluation carries and a tally counts."""
+
+_KEYED_AXES: Mapping[str, str] = {"unavailable": "unavailable", "flagged": "flags"}
+"""The axes an evaluation keys by branch rather than listing, and the field each is keyed in."""
 
 
 def branches_on(evaluation: RouteEvaluation, axis: str) -> tuple[str, ...]:
@@ -347,11 +492,13 @@ def branches_on(evaluation: RouteEvaluation, axis: str) -> tuple[str, ...]:
         axis: One of :data:`AXES`.
 
     Returns:
-        The branches, in branch order. ``unavailable`` is keyed by branch rather than listed, so it
-        contributes each branch that carried at least one unreadable gate.
+        The branches, in branch order. ``unavailable`` and ``flagged`` are keyed by branch rather
+        than listed, so each contributes every branch its mapping names.
     """
-    if axis == "unavailable":
-        return tuple(branch for branch in BRANCHES if branch in evaluation.unavailable)
+    field = _KEYED_AXES.get(axis)
+    if field is not None:
+        keyed: Mapping[str, tuple[str, ...]] = getattr(evaluation, field)
+        return tuple(branch for branch in BRANCHES if branch in keyed)
     branches: tuple[str, ...] = getattr(evaluation, axis)
     return branches
 

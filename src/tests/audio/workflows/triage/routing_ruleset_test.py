@@ -93,8 +93,8 @@ class TestEachGateFiresAndDoesNot:
     @pytest.mark.parametrize(
         ("gate", "field", "firing", "silent"),
         [
-            ("speech.lexical", "words", {"lexical": 4}, {"lexical": 3}),
-            ("speech.agreement", "words", {"agreement": 3}, {"agreement": 2}),
+            ("speech.lexical", "words", {"lexical": 2}, {"lexical": 1}),
+            ("speech.transcript_agreement", "words", {"agreement": 3}, {"agreement": 2}),
             ("voice.sustained", "span_longest_s", {"amplitude": 3.0}, {"amplitude": 2.99}),
             ("airway.breath", "residual", {"energy_fraction": 0.10}, {"energy_fraction": 0.09}),
             (
@@ -175,12 +175,6 @@ class TestContentRoutesWithoutTheInstruction:
         result = evaluate_routes(record, ruleset)
         assert result.routed == ("SPEECH",)
         assert result.agreed == ("SPEECH",)
-
-    def test_speech_routes_on_agreement_alone_when_the_words_are_few(self, ruleset: Ruleset) -> None:
-        """Three words two recognisers agreed on carry SPEECH under the lexical gate's own cut."""
-        record = _features("free-speech", words={"agreement": 3, "total": 3, "lexical": 3})
-        assert evaluate_gate(record, ruleset.gates["speech.lexical"]) is GateOutcome.SILENT
-        assert evaluate_routes(record, ruleset).routed == ("SPEECH",)
 
     def test_the_four_harvard_recordings_that_the_old_declared_gate_discarded_all_route(self, ruleset: Ruleset) -> None:
         """Every measured row of the harvard fall-through, at its own lexical and agreement counts."""
@@ -333,3 +327,176 @@ class TestTheTokenRepeatCounter:
         assert len(transcript) == TRANSCRIPT_CAP
         assert transcript.endswith("diadochokine")
         assert max_token_repeat(transcript) == 18
+
+
+class TestSpeechRoutesOnAsrWordsAlone:
+    """The SPEECH gate is lexical content; agreement is not part of entering the branch."""
+
+    def test_the_branch_has_exactly_one_gate_and_it_reads_lexical_words(self, ruleset: Ruleset) -> None:
+        """A second entry gate would let something other than words decide that speech was said."""
+        assert ruleset.branch_gates["SPEECH"] == ("speech.lexical",)
+        assert ruleset.gates["speech.lexical"].feature == ("words", "lexical")
+
+    def test_two_lexical_words_with_no_agreement_at_all_route(self, ruleset: Ruleset) -> None:
+        """Nothing the recognisers agreed on, and the recording is still speech."""
+        record = _features("free-speech", words={"agreement": 0, "total": 2, "lexical": 2})
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("SPEECH",)
+        assert result.gate_outcomes["speech.transcript_agreement"] is GateOutcome.SILENT
+
+    def test_one_lexical_word_does_not_route(self, ruleset: Ruleset) -> None:
+        """A single spurious token on a held vowel is the artifact the cut of 2 exists to drop."""
+        record = _features("prolonged-vowel", words={"agreement": 0, "total": 1, "lexical": 1})
+        assert evaluate_routes(record, ruleset).routed == ()
+
+    def test_agreement_alone_no_longer_routes(self, ruleset: Ruleset) -> None:
+        """Agreed bracketed tokens are not lexical words and carry no branch on their own."""
+        record = _features("free-speech", words={"agreement": 3, "total": 3, "bracketed": 3, "lexical": 0})
+        assert evaluate_routes(record, ruleset).routed == ()
+
+    def test_the_agreement_gate_is_not_a_branch_gate_anywhere(self, ruleset: Ruleset) -> None:
+        """It was deleted from ``branch_gates``, not moved to another branch's entry list."""
+        for names in ruleset.branch_gates.values():
+            assert "speech.transcript_agreement" not in names
+
+
+class TestAgreementIsAFlagAndNotAGate:
+    """Agreement records doubt about what was said, so it is carried and never routes."""
+
+    def test_the_flag_is_declared_on_the_speech_branch(self, ruleset: Ruleset) -> None:
+        """A flag is per branch, beside the gates it annotates rather than inside them."""
+        assert ruleset.branch_flags["SPEECH"] == ("speech.transcript_agreement",)
+
+    def test_a_routed_recording_carries_the_flag(self, ruleset: Ruleset) -> None:
+        """Nine lexical words, three agreed: routed on the words, annotated by the agreement."""
+        record = _features("harvard-sentences-list", words={"agreement": 3, "total": 9, "lexical": 9})
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("SPEECH",)
+        assert result.flags == {"SPEECH": ("speech.transcript_agreement",)}
+
+    def test_the_flag_does_not_route_a_recording_that_no_gate_carried(self, ruleset: Ruleset) -> None:
+        """Three agreed bracketed tokens raise the flag and leave ``routed`` empty."""
+        record = _features("free-speech", words={"agreement": 3, "total": 3, "bracketed": 3, "lexical": 0})
+        result = evaluate_routes(record, ruleset)
+        assert result.flags == {"SPEECH": ("speech.transcript_agreement",)}
+        assert result.routed == ()
+        assert result.fell_through is True
+
+    def test_a_silent_flag_is_absent_rather_than_keyed_empty(self, ruleset: Ruleset) -> None:
+        """Only a fired flag is reported, so a branch's absence from the mapping is the negative."""
+        record = _features("free-speech", words={"agreement": 0, "total": 4, "lexical": 4})
+        assert evaluate_routes(record, ruleset).flags == {}
+
+    def test_the_tally_counts_the_flag_per_branch(self, ruleset: Ruleset) -> None:
+        """A flag is reported at corpus scale beside the axes it does not belong to."""
+        flagged = _features("free-speech", words={"agreement": 3, "total": 9, "lexical": 9})
+        plain = _features("free-speech", words={"agreement": 0, "total": 9, "lexical": 9})
+        row = tally_families([evaluate_routes(flagged, ruleset), evaluate_routes(plain, ruleset)])["free-speech"]
+        assert row.flagged["SPEECH"] == 1
+        assert row.routed["SPEECH"] == 2
+
+
+def _classified(family: str, enhanced: float, residual: float, **overrides: object) -> RecordingFeatures:
+    """A record whose enhanced and residual YAMNet summaries both exist and carry a top score.
+
+    Args:
+        family: The task family.
+        enhanced: The highest tracked-label score on the enhanced stream.
+        residual: The same on the residual stream.
+        overrides: Further fields to replace.
+
+    Returns:
+        The record.
+    """
+    record = _features(
+        family,
+        classifier_streams=["plain|yamnet", "enhanced|yamnet", "residual|yamnet"],
+        peaks={"enhanced|yamnet|Speech": enhanced, "residual|yamnet|Speech": residual},
+    )
+    for name, value in overrides.items():
+        setattr(record, name, value)
+    return record
+
+
+class TestEmptinessIsCheckedBeforeRouting:
+    """A recording that carried nothing is not a recording whose content matched no gate."""
+
+    def test_both_streams_under_the_floor_is_empty(self, ruleset: Ruleset) -> None:
+        """The short-recording case: the enhanced and the residual stream are both silent."""
+        result = evaluate_routes(_classified("prolonged-vowel", 0.003, 0.0), ruleset)
+        assert result.empty is True
+        assert result.routed == ()
+        assert result.fell_through is False
+
+    def test_one_stream_at_the_floor_is_not_empty(self, ruleset: Ruleset) -> None:
+        """The floor is inclusive on the content side, so a stream at 0.2 carries something."""
+        assert evaluate_routes(_classified("prolonged-vowel", 0.2, 0.0), ruleset).empty is False
+        assert evaluate_routes(_classified("prolonged-vowel", 0.0, 0.2), ruleset).empty is False
+
+    def test_an_empty_recording_is_not_a_fall_through(self, ruleset: Ruleset) -> None:
+        """The owner's number is the content that landed nowhere, not the silence."""
+        blank = evaluate_routes(_classified("prolonged-vowel", 0.001, 0.0), ruleset)
+        content = evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset)
+        assert (blank.empty, blank.fell_through) == (True, False)
+        assert (content.empty, content.fell_through) == (False, True)
+
+    def test_the_tally_counts_the_two_separately(self, ruleset: Ruleset) -> None:
+        """One empty and one content-bearing miss, in a family whose total is two."""
+        blank = evaluate_routes(_classified("prolonged-vowel", 0.001, 0.0), ruleset)
+        content = evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset)
+        row = tally_families([blank, content])["prolonged-vowel"]
+        assert row.recordings == 2
+        assert row.empty == 1
+        assert row.fell_through == 1
+
+    def test_an_empty_recording_runs_no_branch_gate(self, ruleset: Ruleset) -> None:
+        """A precondition is ahead of routing, so a lexical word in a silent file routes nothing."""
+        record = _classified("prolonged-vowel", 0.0, 0.0, words={"agreement": 0, "total": 4, "lexical": 4})
+        result = evaluate_routes(record, ruleset)
+        assert result.empty is True
+        assert result.routed == ()
+        assert result.gate_outcomes == {}
+        assert result.missed == ("VOICE",)
+
+    def test_a_stream_with_no_summary_cannot_be_called_empty(self, ruleset: Ruleset) -> None:
+        """An absent classifier summary is not a stream that scored zero."""
+        assert evaluate_routes(_features("prolonged-vowel"), ruleset).empty is False
+
+
+class TestBracketedTokensAreAirwayEvidence:
+    """``[breath]`` is a detection with a timing, and ``[um]`` is a filler."""
+
+    def test_the_bracket_gate_is_an_airway_branch_gate(self, ruleset: Ruleset) -> None:
+        """It enters AIRWAY beside the residual and span gates rather than annotating it."""
+        assert "airway.bracketed_event" in ruleset.branch_gates["AIRWAY"]
+
+    def test_the_airway_bracket_types_come_off_the_configuration(self, ruleset: Ruleset) -> None:
+        """Which brackets are airway is data, resolved into the gate at load."""
+        assert ruleset.gates["airway.bracketed_event"].feature == (
+            "bracketed_set",
+            "breath",
+            "cough",
+            "sniff",
+            "throatclearing",
+        )
+
+    def test_a_breath_bracket_routes_airway(self, ruleset: Ruleset) -> None:
+        """One bracketed breath is one airway event."""
+        record = _features("breath-sounds", bracketed_types={"breath": 1})
+        assert evaluate_routes(record, ruleset).routed == ("AIRWAY",)
+
+    def test_a_filler_bracket_does_not_route_airway(self, ruleset: Ruleset) -> None:
+        """``[um]`` is speech, and it is not in the airway set."""
+        record = _features("free-speech", bracketed_types={"um": 4})
+        assert evaluate_routes(record, ruleset).routed == ()
+
+    def test_every_airway_bracket_type_carries_the_gate_on_its_own(self, ruleset: Ruleset) -> None:
+        """The gate is a union, so no member depends on another being present."""
+        rule = ruleset.gates["airway.bracketed_event"]
+        for token in ("breath", "cough", "throatclearing", "sniff"):
+            assert evaluate_gate(_features("breath-sounds", bracketed_types={token: 1}), rule) is GateOutcome.FIRED
+
+    def test_no_consensus_transcript_is_not_a_bracket_count_of_zero(self, ruleset: Ruleset) -> None:
+        """A store that never ran consensus has an unread gate, not a silent one."""
+        record = _features("breath-sounds", consensus_present=False)
+        assert evaluate_gate(record, ruleset.gates["airway.bracketed_event"]) is GateOutcome.UNAVAILABLE

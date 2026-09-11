@@ -175,6 +175,8 @@ taxonomy:
   consolidation_floor: 0.2             # owner-directed: consolidation drops a label under this, every classifier
   audioset_airway_labels: [Cough, Throat clearing, Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]
   hear_airway_labels: [Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear]
+  # Bracketed consensus tokens that ARE an airway event. [uh] and [um] are fillers, not airway.
+  airway_bracket_tokens: [breath, cough, throatclearing, sniff]
   # The family taxonomy ruleset: which branches a recording's own content routes it to, and which
   # family set each branch is scored against. Each operating point and the firing spread it came
   # from are in `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`, keyed by gate name.
@@ -185,19 +187,27 @@ taxonomy:
       VOICE: voice
       DDK: syllable_repetition
     branch_gates:                       # branch -> gates, any one of which routes it, on any recording
-      AIRWAY: [airway.breath, airway.cough]
-      SPEECH: [speech.lexical, speech.agreement]
+      AIRWAY: [airway.breath, airway.cough, airway.bracketed_event]
+      SPEECH: [speech.lexical]
       VOICE: [voice.sustained, voice.glide, voice.chant]
       DDK: [ddk.lexical_repetition]
+    branch_flags:                       # branch -> gates that ANNOTATE it; a flag never routes anything
+      AIRWAY: []
+      SPEECH: [speech.transcript_agreement]
+      VOICE: []
+      DDK: []
+    emptiness:                          # the precondition, evaluated ahead of every branch gate
+      peak_streams: [enhanced|yamnet, residual|yamnet]  # every stream whose top tracked-label score must fall below the floor
+      peak_floor: 0.2                   # score under which a stream carries nothing; one value for both streams
     gates:                              # gate -> the one number it reads, the comparison, and the cut
       speech.lexical:
         feature: [words, lexical]       # live consensus words that are not bracketed, any outcome
         op: at_least                    # fires at or above the threshold
-        threshold: 4                    # lexical words that route SPEECH; PROVISIONAL, no sweep exists yet
-      speech.agreement:
+        threshold: 2                    # lexical words that route SPEECH; the artifact boundary, unswept in J
+      speech.transcript_agreement:
         feature: [words, agreement]     # live consensus words carrying the agreement outcome
         op: at_least
-        threshold: 3                    # agreed words that route SPEECH; PROVISIONAL, no sweep exists yet
+        threshold: 3                    # agreed words that FLAG doubt about what was said; routes nothing
       voice.sustained:
         feature: [span_longest, amplitude]   # longest live amplitude span, in seconds
         op: at_least
@@ -218,6 +228,10 @@ taxonomy:
         feature: [span_stat, all.peak_over_floor_db_max]   # loudest span peak over its own floor
         op: at_least
         threshold: 50.0                 # dB over floor that routes AIRWAY
+      airway.bracketed_event:
+        feature: [bracketed_set, airway]   # typed bracketed consensus tokens in taxonomy.airway_bracket_tokens
+        op: at_least
+        threshold: 1                    # one bracketed airway event routes AIRWAY
       ddk.lexical_repetition:
         feature: [transcript_repeat]    # largest repeat count of any normalised transcript token
         op: at_least

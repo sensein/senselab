@@ -16,7 +16,11 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     detector_value,
 )
 from senselab.audio.workflows.triage.routing_analysis.families import declared_kinds, task_family, task_id_of
-from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures, extract_features
+from senselab.audio.workflows.triage.routing_analysis.features import (
+    RecordingFeatures,
+    bracket_type,
+    extract_features,
+)
 from senselab.audio.workflows.triage.routing_analysis.report import (
     REFERENCE_STANDARDS,
     Confusion,
@@ -91,8 +95,18 @@ def _speech_store(path: Path) -> Path:
             _entity("stream", "stream-1", {"name": "recording"}, [0.0, 4.0]),
             _entity("word", "word-1", {"outcome": "agreement", "bracketed": False, "index": 0}, [0.1, 0.4]),
             _entity("word", "word-2", {"outcome": "variant", "bracketed": False, "index": 1}, [0.5, 0.8]),
-            _entity("word", "word-3", {"outcome": "agreement", "bracketed": True, "index": 2}, [0.9, 1.1]),
-            _entity("word", "word-4", {"outcome": "agreement", "bracketed": False, "index": 3}, [1.2, 1.5]),
+            _entity(
+                "word",
+                "word-3",
+                {"text": "[BREATH]", "outcome": "agreement", "bracketed": True, "index": 2},
+                [0.9, 1.1],
+            ),
+            _entity(
+                "word",
+                "word-4",
+                {"text": "[Throat Clearing]", "outcome": "agreement", "bracketed": True, "index": 3},
+                [1.2, 1.5],
+            ),
             _relation("wasInvalidatedBy", "word-4", "activity-1"),
             _entity("measurement", "measurement-1", {"name": "consensus_transcript", "signal": "plain"}),
             _entity(
@@ -243,6 +257,29 @@ def test_extract_counts_live_words_by_outcome(tmp_path: Path) -> None:
     assert spoken.words["lexical"] == 2
     assert spoken.words["agreement_lexical"] == 1
     assert spoken.consensus_present is True
+
+
+def test_extract_types_the_bracketed_tokens_off_the_word_entities(tmp_path: Path) -> None:
+    """The type is normalised, and an invalidated bracket contributes nothing."""
+    spoken, _ = _features(tmp_path)
+    assert spoken.bracketed_types == {"breath": 1}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("[BREATH]", "breath"),
+        ("[Throat Clearing]", "throatclearing"),
+        (" [throat-clearing] ", "throatclearing"),
+        ("[um]", "um"),
+        ("breath", None),
+        ("[]", None),
+        ("[ ]", None),
+    ],
+)
+def test_bracket_type_normalises_one_token(text: str, expected: str | None) -> None:
+    """Casing, spacing and inner punctuation do not split one bracket type into several."""
+    assert bracket_type(text) == expected
 
 
 def test_extract_reads_spans_streams_and_kinds(tmp_path: Path) -> None:
