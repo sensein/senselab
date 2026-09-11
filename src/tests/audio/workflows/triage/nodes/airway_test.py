@@ -431,7 +431,7 @@ class TestContestRequiresColocation:
     def test_a_mapped_label_in_the_same_extent_confirms(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """The confirmation map sends the HeAR label to the AudioSet labels that corroborate it."""
+        """The ontology sends the HeAR label to the AudioSet node it maps onto."""
         _seed_airway_store(
             store,
             tmp_path,
@@ -445,10 +445,28 @@ class TestContestRequiresColocation:
         assert confirm.attributes["yamnet_labels"] == ["Cough"]
         assert result.verdict.outcome is Outcome.PASS
 
-    def test_any_member_of_the_confirmation_set_confirms_not_only_the_identical_label(
+    def test_a_descendant_of_the_mapped_node_confirms_not_only_the_node_itself(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """Breathe's set is {Breathing, Sigh, Gasp}: Sigh corroborates a breath and is not the same word."""
+        """Wheeze is a child of Breathing in the AudioSet ontology, so it corroborates a breath."""
+        _seed_airway_store(
+            store,
+            tmp_path,
+            spans=[(1.0, 1.3, 30.0)],
+            hear_by_span=[["Breathe"]],
+            yamnet_windows=[((1.05, 1.25), ["Wheeze"])],
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        [confirm] = _assertions(store, "confirm")
+        assert confirm.attributes["label"] == "Breathe"
+        assert confirm.attributes["yamnet_labels"] == ["Wheeze"]
+        assert _assertions(store, "abstain") == []
+        assert result.verdict.outcome is Outcome.PASS
+
+    def test_a_sibling_of_the_mapped_node_does_not_confirm(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Sigh sits under Human voice, not under Breathing; the hand map wrongly had it corroborate."""
         _seed_airway_store(
             store,
             tmp_path,
@@ -456,12 +474,52 @@ class TestContestRequiresColocation:
             hear_by_span=[["Breathe"]],
             yamnet_windows=[((1.05, 1.25), ["Sigh"])],
         )
-        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _assertions(store, "confirm") == []
+        assert len(_assertions(store, "abstain")) == 1
+
+    def test_throat_clear_is_corroborated_now_that_it_resolves(self, store: ProvStore, tmp_path: Path) -> None:
+        """HeAR's `Throat Clear` had no entry in the hand map, so AudioSet `Throat clearing` never confirmed it."""
+        config = _override(
+            tmp_path,
+            "airway:\n  labels_of_interest: [Cough, Breathe, Throat Clear]\n  contest_labels: [Speech]\n",
+        )
+        _seed_airway_store(
+            store,
+            tmp_path,
+            spans=[(1.0, 1.3, 30.0)],
+            hear_by_span=[["Throat Clear"]],
+            yamnet_windows=[((1.05, 1.25), ["Throat clearing"])],
+        )
+        result = airway(store, "plain", config, run_dir=tmp_path)
         [confirm] = _assertions(store, "confirm")
-        assert confirm.attributes["label"] == "Breathe"
-        assert confirm.attributes["yamnet_labels"] == ["Sigh"]
-        assert _assertions(store, "abstain") == []
+        assert confirm.attributes["label"] == "Throat Clear"
+        assert confirm.attributes["yamnet_labels"] == ["Throat clearing"]
         assert result.verdict.outcome is Outcome.PASS
+
+    def test_an_override_replaces_a_labels_derived_set(self, store: ProvStore, tmp_path: Path) -> None:
+        """A campaign may state its own corroboration; what it states replaces the derived set."""
+        config = _override(
+            tmp_path,
+            "airway:\n  contest_labels: [Speech]\n  corroboration_overrides:\n    Cough: [Sneeze]\n",
+        )
+        _seed_airway_store(
+            store,
+            tmp_path,
+            spans=[(1.0, 1.3, 30.0), (2.0, 2.3, 30.0)],
+            hear_by_span=[["Cough"], ["Cough"]],
+            yamnet_windows=[((1.05, 1.25), ["Cough"]), ((2.05, 2.25), ["Sneeze"])],
+        )
+        airway(store, "plain", config, run_dir=tmp_path)
+        [confirm] = _assertions(store, "confirm")
+        assert confirm.attributes["yamnet_labels"] == ["Sneeze"]
+
+    def test_an_override_naming_an_unmapped_label_is_refused(self, store: ProvStore, tmp_path: Path) -> None:
+        """A HeAR label the profile does not map is a typo, not an extension."""
+        config = _override(tmp_path, "airway:\n  corroboration_overrides:\n    Coughh: [Cough]\n")
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)])
+        with pytest.raises(ValueError, match="Coughh"):
+            airway(store, "plain", config, run_dir=tmp_path)
 
     def test_no_colocated_window_abstains(self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path) -> None:
         """Nothing co-located either way: the label stands, marked single-source."""
