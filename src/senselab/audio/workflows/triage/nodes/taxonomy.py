@@ -37,6 +37,7 @@ import numpy as np
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.label_scores import label_scores
+from senselab.audio.workflows.triage.classifier_ontology import airway_audioset_labels, airway_hear_labels
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
@@ -562,8 +563,8 @@ def taxonomy(
     """
     software = software_agent(store)
     speech_family = {str(label) for label in (config.get("taxonomy.speech_labels") or [])}
-    audioset_airway = {str(label) for label in config.require("taxonomy.audioset_airway_labels")}
-    hear_airway = {str(label) for label in config.require("taxonomy.hear_airway_labels")}
+    audioset_airway = set(airway_audioset_labels(config))
+    hear_airway = set(airway_hear_labels(config))
     floors = {
         ("speech", "acoustic"): config.get("taxonomy.presence_floor.speech.acoustic"),
         ("speech", "lexical"): config.get("taxonomy.presence_floor.speech.lexical"),

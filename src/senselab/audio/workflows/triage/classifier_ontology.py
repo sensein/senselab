@@ -9,6 +9,10 @@ A HeAR label is corroborated by its mapped AudioSet node **or any descendant of 
 sets here are subtree closures rather than the single names a hand-written map would list. Every
 name a set contains is an AudioSet ``display_name``, which is what YAMNet and AST both report.
 
+The airway kind is the same construction from the other end: it is the closure of the ontology roots
+named in ``taxonomy.airway_ontology_roots``, and both the AudioSet evidence labels and the HeAR
+evidence labels are read off that one closure.
+
 The design, the pinned versions and what the mapping replaced are in
 ``specs/20260910-classifier-ontology-mapping/design.md``.
 """
@@ -18,13 +22,22 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle would be runtime-only
+    from senselab.audio.workflows.triage.config import TriageConfig
 
 PROFILE_VERSION = "1"
 """Schema version of the profile file. A reader refuses any other value."""
 
 PROFILE_DIR = Path(__file__).parent / "data" / "classifier_ontology"
 """Where the bundled profiles live, one dated JSON per build."""
+
+AIRWAY_ROOTS_PATH = "taxonomy.airway_ontology_roots"
+"""The configuration path naming the ontology roots whose closure is the airway kind."""
+
+PROFILE_PATH_KEY = "airway.corroboration_profile"
+"""The configuration path naming which profile to read; null takes the packaged latest."""
 
 
 def _bundled_profile_path() -> Path:
@@ -164,3 +177,135 @@ def unemittable_by_yamnet(path: str | None = None) -> dict[str, tuple[str, ...]]
         for label, entry in mapping.items()
         if entry["not_emittable_by_yamnet"]
     }
+
+
+def _emittable(entry: Mapping[str, Any]) -> bool:
+    """Whether any classifier reading this ontology has an output for the node.
+
+    Args:
+        entry: One node of the profile's AudioSet class table.
+
+    Returns:
+        ``True`` when the class is in AudioSet's released 527 or in YAMNet's 521.
+    """
+    return bool(entry["in_audioset_527"]) or bool(entry["in_yamnet_521"])
+
+
+def _root_ids(roots: Sequence[str], profile: Mapping[str, Any]) -> list[str]:
+    """Resolve ontology display names onto the profile's node ids.
+
+    Args:
+        roots: AudioSet display names.
+        profile: A loaded profile.
+
+    Returns:
+        The node ids, in the order the names were given.
+
+    Raises:
+        ValueError: If a name is not an AudioSet class in this profile.
+    """
+    classes: Mapping[str, Any] = profile["audioset"]["classes"]
+    ids_by_name = {str(entry["name"]): node_id for node_id, entry in classes.items()}
+    unknown = sorted({str(root) for root in roots} - set(ids_by_name))
+    if unknown:
+        raise ValueError(
+            f"{unknown} are not AudioSet classes in the classifier-ontology profile; "
+            "a root must be an ontology display name"
+        )
+    return [ids_by_name[str(root)] for root in roots]
+
+
+def _reachable(root_ids: Iterable[str], classes: Mapping[str, Any]) -> set[str]:
+    """Every node id reachable from the roots through ``child_ids``, the roots included.
+
+    Args:
+        root_ids: Where the walk starts.
+        classes: The profile's AudioSet class table.
+
+    Returns:
+        The closure's node ids.
+    """
+    seen: set[str] = set()
+    stack = list(root_ids)
+    while stack:
+        node_id = stack.pop()
+        if node_id in seen or node_id not in classes:
+            continue
+        seen.add(node_id)
+        stack.extend(classes[node_id]["child_ids"])
+    return seen
+
+
+def audioset_labels_under_roots(roots: Sequence[str], path: str | None = None) -> tuple[str, ...]:
+    """The emittable AudioSet display names in the subtree closure of the named roots, sorted.
+
+    A node in neither AudioSet's released 527 nor YAMNet's 521 is left out: no classifier has an
+    output for it, so it can never match.
+
+    Args:
+        roots: AudioSet display names the closure starts from.
+        path: Profile path, or ``None`` for the bundled one.
+
+    Returns:
+        The display names, sorted so the tuple is stable across builds.
+
+    Raises:
+        ValueError: If a root is not an AudioSet class in the profile.
+    """
+    profile = load_classifier_ontology(path)
+    classes: Mapping[str, Any] = profile["audioset"]["classes"]
+    reached = _reachable(_root_ids(roots, profile), classes)
+    return tuple(sorted(str(classes[node_id]["name"]) for node_id in reached if _emittable(classes[node_id])))
+
+
+def hear_labels_under_roots(roots: Sequence[str], path: str | None = None) -> tuple[str, ...]:
+    """The HeAR labels whose every mapped AudioSet node lies in the closure of the named roots.
+
+    Args:
+        roots: AudioSet display names the closure starts from.
+        path: Profile path, or ``None`` for the bundled one.
+
+    Returns:
+        The HeAR labels, in the detector's graph order.
+
+    Raises:
+        ValueError: If a root is not an AudioSet class in the profile.
+    """
+    profile = load_classifier_ontology(path)
+    reached = _reachable(_root_ids(roots, profile), profile["audioset"]["classes"])
+    mapping = profile["mapping"]
+    return tuple(
+        label
+        for label in hear_labels(path)
+        if mapping[label]["audioset_ids"] and set(mapping[label]["audioset_ids"]) <= reached
+    )
+
+
+def airway_audioset_labels(config: TriageConfig) -> tuple[str, ...]:
+    """The AudioSet labels that are airway evidence, from the configured ontology roots.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        The emittable display names in the roots' closure, sorted.
+
+    Raises:
+        ValueError: If the roots are unset, or if one is not an AudioSet class in the profile.
+    """
+    return audioset_labels_under_roots(config.require(AIRWAY_ROOTS_PATH), config.get(PROFILE_PATH_KEY))
+
+
+def airway_hear_labels(config: TriageConfig) -> tuple[str, ...]:
+    """The HeAR labels that are airway evidence, from the same configured ontology roots.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        The HeAR labels whose mapped node falls inside the roots' closure, in graph order.
+
+    Raises:
+        ValueError: If the roots are unset, or if one is not an AudioSet class in the profile.
+    """
+    return hear_labels_under_roots(config.require(AIRWAY_ROOTS_PATH), config.get(PROFILE_PATH_KEY))

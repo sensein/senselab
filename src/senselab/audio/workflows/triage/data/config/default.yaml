@@ -133,7 +133,7 @@ airway:
   labels_of_interest: [Cough, Breathe]  # the HeAR labels this branch acts on
   corroboration_profile: null           # path to a classifier-ontology profile; null takes the packaged latest
   corroboration_overrides: null         # HeAR label -> AudioSet class names, REPLACING that label's derived set
-  contest_labels: null                  # YAMNet labels that may contest a HeAR label; refused if it intersects taxonomy.audioset_airway_labels
+  contest_labels: null                  # YAMNet labels that may contest a HeAR label; refused if it intersects the airway evidence set derived from taxonomy.airway_ontology_roots
 
 # Praat's harmonicity and pitch settings for the whole-stream F0/formant tracks.
 phonation:
@@ -187,8 +187,11 @@ taxonomy:
   voice_uncertain_duration_s: null     # UNREAD likewise; both await the voice rework onto consensus_taxonomy
   speech_labels: null                  # which classifier labels can express the speech kind
   consolidation_floor: 0.2             # owner-directed: consolidation drops a label under this, every classifier
-  audioset_airway_labels: [Cough, Throat clearing, Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]
-  hear_airway_labels: [Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear]
+  # AudioSet ontology roots whose subtree IS the airway kind. Both evidence vocabularies come from
+  # this one list through the classifier-ontology profile: the AudioSet labels are the closure minus
+  # the nodes no classifier can emit, the HeAR labels are those whose mapped node falls inside it.
+  # Naming a second root widens both at once.
+  airway_ontology_roots: [Respiratory sounds]
   # Bracketed consensus tokens that ARE an airway event. [uh] and [um] are fillers, not airway.
   airway_bracket_tokens: [breath, cough, throatclearing, sniff]
   # The family taxonomy ruleset: which branches a recording's own content routes it to, and which

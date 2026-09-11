@@ -60,8 +60,8 @@ disagreement about this one. The eligible contesting labels are the config key
 | carry a member of `airway.contest_labels` | **contest** — flag the span, do not relabel |
 | carry neither | **abstain** — HeAR's label stands, marked single-source |
 
-**A label may not both support and contest the same conclusion.** A label in
-`taxonomy.audioset_airway_labels` is airway evidence and is therefore barred from
+**A label may not both support and contest the same conclusion.** A label in the AudioSet airway
+evidence set — the ontology closure of `taxonomy.airway_ontology_roots` — is therefore barred from
 `airway.contest_labels`; the two sets are disjoint and the config is refused if they intersect.
 
 ## 3. Lexical contamination

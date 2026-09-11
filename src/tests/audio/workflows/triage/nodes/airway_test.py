@@ -551,6 +551,26 @@ class TestContestRequiresColocation:
             airway(store, "plain", config, run_dir=tmp_path)
         assert len(store.entities()) == before
 
+    def test_a_label_only_the_derived_set_holds_is_refused_too(self, store: ProvStore, tmp_path: Path) -> None:
+        """`Pant` is a child of `Breathing` the hand-listed evidence set omitted; the closure has it."""
+        config = _override(tmp_path, "airway:\n  contest_labels: [Speech, Pant]\n")
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)])
+        with pytest.raises(ValueError, match="disjoint"):
+            airway(store, "plain", config, run_dir=tmp_path)
+
+    def test_sigh_may_contest_now_that_it_is_not_airway_evidence(self, store: ProvStore, tmp_path: Path) -> None:
+        """`Sigh` was hand-listed as airway evidence; AudioSet places it under `Human voice`."""
+        config = _override(tmp_path, "airway:\n  contest_labels: [Sigh]\n")
+        _seed_airway_store(
+            store,
+            tmp_path,
+            spans=[(1.0, 1.3, 30.0)],
+            hear_by_span=[["Cough"]],
+            yamnet_windows=[((1.05, 1.25), ["Sigh"])],
+        )
+        airway(store, "plain", config, run_dir=tmp_path)
+        assert _verdict_entity(store, "AIRWAY").attributes["contested_n"] == 1
+
 
 class TestCertifiedSilence:
     """The label records whether its span lies inside YAMNet-certified silence."""

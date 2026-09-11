@@ -289,6 +289,8 @@ class TestTheV2OpenKeys:
             "phonation.f0_max_hz",
             "voice.f0_range_hz",
             "taxonomy.audioset_speech_labels",
+            "taxonomy.audioset_airway_labels",
+            "taxonomy.hear_airway_labels",
             "taxonomy.min_families",
             "taxonomy.ast_frame_s",
             "taxonomy.lexical_airway_tokens",

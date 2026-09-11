@@ -565,8 +565,8 @@ directly and reads PREPROCESS's own per-span span_hear/span_yamnet measurements 
 re-running HeAR itself at a second, separately-configured gate -- removing a redundant model pass
 along with the stale threshold. airway.contest_labels is the declared set of YAMNet labels that may
 contest a HeAR label; it is null and, when supplied, is refused at load if it intersects
-taxonomy.audioset_airway_labels -- a label cannot be both airway evidence and a contest of airway
-evidence.
+the airway evidence set derived from taxonomy.airway_ontology_roots -- a label cannot be both
+airway evidence and a contest of airway evidence.
 
 ## phonation
 
@@ -713,6 +713,15 @@ Taxonomy label vocabularies -- semantic mappings, not thresholds: which of each 
 can express each kind, read off the label inventories (AudioSet's 521, HEAR_EVENT_LABELS' eight,
 CrisperWhisper's bracketed non-lexical tokens). Not fitted; overridable. benchmarks/taxonomy.md
 records why no single AudioSet roll-up label exists.
+
+taxonomy.airway_ontology_roots [Respiratory sounds] -- the airway vocabulary is no longer a list of
+labels. It is the AudioSet ontology subtree below these roots, resolved through the
+classifier-ontology profile: the AudioSet evidence labels are the closure minus every node in
+neither AudioSet's released 527 nor YAMNet's 521, and the HeAR evidence labels are those whose
+mapped node falls inside the same closure. One key, so the two vocabularies cannot drift; the two
+hand-listed keys it replaces had, and carried Sigh while missing Pant and Snort. Not fitted;
+widening the kind is a second root. specs/20260910-classifier-ontology-mapping/design.md records the
+three findings, the emittability rule and what evidence would put Sigh back.
 
 taxonomy v2 -- taxonomy.md. TAXONOMY runs no models and folds stored evidence only, so the v1
 min_families committee and its per-detector floors are deleted rather than re-derived. Each kind now

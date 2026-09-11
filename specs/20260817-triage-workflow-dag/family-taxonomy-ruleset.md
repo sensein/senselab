@@ -715,8 +715,8 @@ side, each over `COUNT_GRID`.
 
 `airway.bracketed_event` reads `("bracketed_set", "airway")` at `>= 1` and is a member of
 `branch_gates.AIRWAY`. **Which bracket types are airway is config**, at
-`taxonomy.airway_bracket_tokens` beside `taxonomy.audioset_airway_labels` and
-`taxonomy.hear_airway_labels`, currently `[breath, cough, throatclearing, sniff]`. `load_ruleset`
+`taxonomy.airway_bracket_tokens` beside `taxonomy.airway_ontology_roots`, currently
+`[breath, cough, throatclearing, sniff]`. `load_ruleset`
 resolves the set name into the gate's feature tuple at load, so the gate carries its members and
 the reader stays a plain read over `RecordingFeatures`. A gate naming a set `BRACKET_SET_PATHS`
 does not have raises rather than reading an empty union.
