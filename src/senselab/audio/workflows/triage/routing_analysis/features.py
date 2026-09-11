@@ -261,7 +261,8 @@ def _stats(values: Sequence[float]) -> dict[str, float]:
         values: The sample.
 
     Returns:
-        ``n``, ``min``, ``median``, ``mean``, ``max`` and ``iqr``; empty when the sample is.
+        ``n``, ``min``, ``median``, ``mean``, ``max``, ``iqr``, ``p75`` and ``p90``; empty when the
+        sample is. A sample too small to interpolate a percentile reports its largest value for it.
     """
     if not values:
         return {}
@@ -271,6 +272,11 @@ def _stats(values: Sequence[float]) -> dict[str, float]:
         spread = quartiles[2] - quartiles[0]
     else:
         spread = ordered[-1] - ordered[0]
+    if len(ordered) >= 2:
+        upper = statistics.quantiles(ordered, n=4, method="inclusive")[2]
+        ninth = statistics.quantiles(ordered, n=10, method="inclusive")[8]
+    else:
+        upper = ninth = ordered[-1]
     return {
         "n": float(len(ordered)),
         "min": ordered[0],
@@ -278,6 +284,8 @@ def _stats(values: Sequence[float]) -> dict[str, float]:
         "mean": statistics.fmean(ordered),
         "max": ordered[-1],
         "iqr": spread,
+        "p75": upper,
+        "p90": ninth,
     }
 
 
