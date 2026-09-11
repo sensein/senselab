@@ -175,6 +175,52 @@ taxonomy:
   consolidation_floor: 0.2             # owner-directed: consolidation drops a label under this, every classifier
   audioset_airway_labels: [Cough, Throat clearing, Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]
   hear_airway_labels: [Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear]
+  # The family taxonomy ruleset: which branch a task family declares, which measurement confirms
+  # that route, and which gate adds a branch the task never asked for. Each operating point and the
+  # firing spread it came from are in
+  # `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`, keyed by gate name.
+  ruleset:
+    declared_family_set:                # branch -> the routing_analysis.families set that declares it
+      AIRWAY: airway
+      SPEECH: lexical_speech
+      VOICE: voice
+      DDK: syllable_repetition
+    confirming_gates:                   # branch -> gates, any one of which confirms its declared route
+      AIRWAY: [airway.breath, airway.cough]
+      SPEECH: [speech.declared]
+      VOICE: [voice.sustained, voice.glide]
+      DDK: [ddk.declared]
+    discovery_gates:                    # branch -> the gate that adds it whatever the task declared
+      SPEECH: speech.intrusion
+    gates:                              # gate -> the one number it reads, the comparison, and the cut
+      speech.declared:
+        feature: [words, agreement]     # live consensus words carrying the agreement outcome
+        op: at_least                    # fires at or above the threshold
+        threshold: 4                    # agreed words a declared speech route needs
+      speech.intrusion:
+        feature: [words, agreement]     # the same count, read on a task that asked for no speech
+        op: at_least
+        threshold: 2                    # agreed words that add SPEECH to any recording
+      voice.sustained:
+        feature: [span_longest, amplitude]   # longest live amplitude span, in seconds
+        op: at_least
+        threshold: 3.0                  # seconds of held phonation a sustained route needs
+      voice.glide:
+        feature: [peak_set, plain, yamnet, singing]   # YAMNet singing-subtree union peak, plain stream
+        op: at_least
+        threshold: 0.05                 # union score a glide route needs
+      airway.breath:
+        feature: [residual, energy_fraction]   # residual energy as a fraction of the plain stream
+        op: at_least
+        threshold: 0.10                 # residual fraction a breath route needs
+      airway.cough:
+        feature: [span_stat, all.peak_over_floor_db_max]   # loudest span peak over its own floor
+        op: at_least
+        threshold: 50.0                 # dB over floor a cough route needs
+      ddk.declared:
+        feature: [transcript_repeat]    # largest repeat count of any normalised transcript token
+        op: at_least
+        threshold: 3                    # repeats a DDK route needs; UNMEASURED, no sweep exists yet
 
 # SQUIM and disruption tolerances. Every key in this section is currently read by nothing in
 # `src/senselab`: the gate they describe is unimplemented.
