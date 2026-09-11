@@ -68,6 +68,9 @@
 
             </li>
             <li>
+                    <a class="function" href="#derive_f0_range">derive_f0_range</a>
+            </li>
+            <li>
                     <a class="function" href="#f0_track">f0_track</a>
             </li>
             <li>
@@ -107,20 +110,22 @@
 </span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.phonation.api</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
 </span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>    <span class="n">FormantTrack</span><span class="p">,</span>
 </span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a>    <span class="n">PeriodMark</span><span class="p">,</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>    <span class="n">f0_track</span><span class="p">,</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>    <span class="n">formant_track</span><span class="p">,</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>    <span class="n">hnr_track</span><span class="p">,</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="n">period_marks</span><span class="p">,</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="p">)</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>    <span class="s2">&quot;FormantTrack&quot;</span><span class="p">,</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="s2">&quot;PeriodMark&quot;</span><span class="p">,</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>    <span class="s2">&quot;f0_track&quot;</span><span class="p">,</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>    <span class="s2">&quot;formant_track&quot;</span><span class="p">,</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="s2">&quot;hnr_track&quot;</span><span class="p">,</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="s2">&quot;period_marks&quot;</span><span class="p">,</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="p">]</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>    <span class="n">derive_f0_range</span><span class="p">,</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>    <span class="n">f0_track</span><span class="p">,</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>    <span class="n">formant_track</span><span class="p">,</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="n">hnr_track</span><span class="p">,</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>    <span class="n">period_marks</span><span class="p">,</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="p">)</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="s2">&quot;FormantTrack&quot;</span><span class="p">,</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>    <span class="s2">&quot;PeriodMark&quot;</span><span class="p">,</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>    <span class="s2">&quot;derive_f0_range&quot;</span><span class="p">,</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="s2">&quot;f0_track&quot;</span><span class="p">,</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="s2">&quot;formant_track&quot;</span><span class="p">,</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="s2">&quot;hnr_track&quot;</span><span class="p">,</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="s2">&quot;period_marks&quot;</span><span class="p">,</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="p">]</span>
 </span></pre></div>
 
 
@@ -137,19 +142,19 @@
 
     </div>
     <a class="headerlink" href="#FormantTrack"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="FormantTrack-159"><a href="#FormantTrack-159"><span class="linenos">159</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="FormantTrack-160"><a href="#FormantTrack-160"><span class="linenos">160</span></a><span class="k">class</span><span class="w"> </span><span class="nc">FormantTrack</span><span class="p">:</span>
-</span><span id="FormantTrack-161"><a href="#FormantTrack-161"><span class="linenos">161</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Formant frequencies and bandwidths over one stream, on a fixed hop.</span>
-</span><span id="FormantTrack-162"><a href="#FormantTrack-162"><span class="linenos">162</span></a>
-</span><span id="FormantTrack-163"><a href="#FormantTrack-163"><span class="linenos">163</span></a><span class="sd">    Attributes:</span>
-</span><span id="FormantTrack-164"><a href="#FormantTrack-164"><span class="linenos">164</span></a><span class="sd">        times_s: Frame times, in seconds.</span>
-</span><span id="FormantTrack-165"><a href="#FormantTrack-165"><span class="linenos">165</span></a><span class="sd">        f_hz: Four arrays, F1 to F4, each one value per frame. NaN where Praat placed none.</span>
-</span><span id="FormantTrack-166"><a href="#FormantTrack-166"><span class="linenos">166</span></a><span class="sd">        bandwidth_hz: Four arrays, the corresponding 3 dB bandwidths. NaN where the formant is NaN.</span>
-</span><span id="FormantTrack-167"><a href="#FormantTrack-167"><span class="linenos">167</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="FormantTrack-168"><a href="#FormantTrack-168"><span class="linenos">168</span></a>
-</span><span id="FormantTrack-169"><a href="#FormantTrack-169"><span class="linenos">169</span></a>    <span class="n">times_s</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
-</span><span id="FormantTrack-170"><a href="#FormantTrack-170"><span class="linenos">170</span></a>    <span class="n">f_hz</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span>
-</span><span id="FormantTrack-171"><a href="#FormantTrack-171"><span class="linenos">171</span></a>    <span class="n">bandwidth_hz</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="FormantTrack-187"><a href="#FormantTrack-187"><span class="linenos">187</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="FormantTrack-188"><a href="#FormantTrack-188"><span class="linenos">188</span></a><span class="k">class</span><span class="w"> </span><span class="nc">FormantTrack</span><span class="p">:</span>
+</span><span id="FormantTrack-189"><a href="#FormantTrack-189"><span class="linenos">189</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Formant frequencies and bandwidths over one stream, on a fixed hop.</span>
+</span><span id="FormantTrack-190"><a href="#FormantTrack-190"><span class="linenos">190</span></a>
+</span><span id="FormantTrack-191"><a href="#FormantTrack-191"><span class="linenos">191</span></a><span class="sd">    Attributes:</span>
+</span><span id="FormantTrack-192"><a href="#FormantTrack-192"><span class="linenos">192</span></a><span class="sd">        times_s: Frame times, in seconds.</span>
+</span><span id="FormantTrack-193"><a href="#FormantTrack-193"><span class="linenos">193</span></a><span class="sd">        f_hz: Four arrays, F1 to F4, each one value per frame. NaN where Praat placed none.</span>
+</span><span id="FormantTrack-194"><a href="#FormantTrack-194"><span class="linenos">194</span></a><span class="sd">        bandwidth_hz: Four arrays, the corresponding 3 dB bandwidths. NaN where the formant is NaN.</span>
+</span><span id="FormantTrack-195"><a href="#FormantTrack-195"><span class="linenos">195</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="FormantTrack-196"><a href="#FormantTrack-196"><span class="linenos">196</span></a>
+</span><span id="FormantTrack-197"><a href="#FormantTrack-197"><span class="linenos">197</span></a>    <span class="n">times_s</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+</span><span id="FormantTrack-198"><a href="#FormantTrack-198"><span class="linenos">198</span></a>    <span class="n">f_hz</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span>
+</span><span id="FormantTrack-199"><a href="#FormantTrack-199"><span class="linenos">199</span></a>    <span class="n">bandwidth_hz</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span>
 </span></pre></div>
 
 
@@ -223,19 +228,19 @@
 
     </div>
     <a class="headerlink" href="#PeriodMark"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="PeriodMark-18"><a href="#PeriodMark-18"><span class="linenos">18</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="PeriodMark-19"><a href="#PeriodMark-19"><span class="linenos">19</span></a><span class="k">class</span><span class="w"> </span><span class="nc">PeriodMark</span><span class="p">:</span>
-</span><span id="PeriodMark-20"><a href="#PeriodMark-20"><span class="linenos">20</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One glottal period, delimited by two consecutive Praat pulses.</span>
-</span><span id="PeriodMark-21"><a href="#PeriodMark-21"><span class="linenos">21</span></a>
-</span><span id="PeriodMark-22"><a href="#PeriodMark-22"><span class="linenos">22</span></a><span class="sd">    Attributes:</span>
-</span><span id="PeriodMark-23"><a href="#PeriodMark-23"><span class="linenos">23</span></a><span class="sd">        time_s: The opening pulse, in the recording&#39;s clock.</span>
-</span><span id="PeriodMark-24"><a href="#PeriodMark-24"><span class="linenos">24</span></a><span class="sd">        period_s: Time to the next pulse.</span>
-</span><span id="PeriodMark-25"><a href="#PeriodMark-25"><span class="linenos">25</span></a><span class="sd">        amplitude: Peak absolute amplitude of the waveform within the period.</span>
-</span><span id="PeriodMark-26"><a href="#PeriodMark-26"><span class="linenos">26</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="PeriodMark-27"><a href="#PeriodMark-27"><span class="linenos">27</span></a>
-</span><span id="PeriodMark-28"><a href="#PeriodMark-28"><span class="linenos">28</span></a>    <span class="n">time_s</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="PeriodMark-29"><a href="#PeriodMark-29"><span class="linenos">29</span></a>    <span class="n">period_s</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="PeriodMark-30"><a href="#PeriodMark-30"><span class="linenos">30</span></a>    <span class="n">amplitude</span><span class="p">:</span> <span class="nb">float</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="PeriodMark-19"><a href="#PeriodMark-19"><span class="linenos">19</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="PeriodMark-20"><a href="#PeriodMark-20"><span class="linenos">20</span></a><span class="k">class</span><span class="w"> </span><span class="nc">PeriodMark</span><span class="p">:</span>
+</span><span id="PeriodMark-21"><a href="#PeriodMark-21"><span class="linenos">21</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One glottal period, delimited by two consecutive Praat pulses.</span>
+</span><span id="PeriodMark-22"><a href="#PeriodMark-22"><span class="linenos">22</span></a>
+</span><span id="PeriodMark-23"><a href="#PeriodMark-23"><span class="linenos">23</span></a><span class="sd">    Attributes:</span>
+</span><span id="PeriodMark-24"><a href="#PeriodMark-24"><span class="linenos">24</span></a><span class="sd">        time_s: The opening pulse, in the recording&#39;s clock.</span>
+</span><span id="PeriodMark-25"><a href="#PeriodMark-25"><span class="linenos">25</span></a><span class="sd">        period_s: Time to the next pulse.</span>
+</span><span id="PeriodMark-26"><a href="#PeriodMark-26"><span class="linenos">26</span></a><span class="sd">        amplitude: Peak absolute amplitude of the waveform within the period.</span>
+</span><span id="PeriodMark-27"><a href="#PeriodMark-27"><span class="linenos">27</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="PeriodMark-28"><a href="#PeriodMark-28"><span class="linenos">28</span></a>
+</span><span id="PeriodMark-29"><a href="#PeriodMark-29"><span class="linenos">29</span></a>    <span class="n">time_s</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="PeriodMark-30"><a href="#PeriodMark-30"><span class="linenos">30</span></a>    <span class="n">period_s</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="PeriodMark-31"><a href="#PeriodMark-31"><span class="linenos">31</span></a>    <span class="n">amplitude</span><span class="p">:</span> <span class="nb">float</span>
 </span></pre></div>
 
 
@@ -297,6 +302,73 @@
 
                             </div>
                 </section>
+                <section id="derive_f0_range">
+                            <input id="derive_f0_range-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">derive_f0_range</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audio</span><span class="p">:</span> <span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span>,</span><span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">search_floor_hz</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">search_ceiling_hz</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="derive_f0_range-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#derive_f0_range"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="derive_f0_range-42"><a href="#derive_f0_range-42"><span class="linenos">42</span></a><span class="k">def</span><span class="w"> </span><span class="nf">derive_f0_range</span><span class="p">(</span><span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">search_floor_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">search_ceiling_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+</span><span id="derive_f0_range-43"><a href="#derive_f0_range-43"><span class="linenos">43</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;This recording&#39;s own F0 search range, narrowed from a wide search by the standardization method.</span>
+</span><span id="derive_f0_range-44"><a href="#derive_f0_range-44"><span class="linenos">44</span></a>
+</span><span id="derive_f0_range-45"><a href="#derive_f0_range-45"><span class="linenos">45</span></a><span class="sd">    Args:</span>
+</span><span id="derive_f0_range-46"><a href="#derive_f0_range-46"><span class="linenos">46</span></a><span class="sd">        audio: The recording.</span>
+</span><span id="derive_f0_range-47"><a href="#derive_f0_range-47"><span class="linenos">47</span></a><span class="sd">        search_floor_hz: Lowest pitch of the wide search. Read it from ``voice.f0_search_range_hz``.</span>
+</span><span id="derive_f0_range-48"><a href="#derive_f0_range-48"><span class="linenos">48</span></a><span class="sd">        search_ceiling_hz: Highest pitch of that wide search. Read it from ``voice.f0_search_range_hz``.</span>
+</span><span id="derive_f0_range-49"><a href="#derive_f0_range-49"><span class="linenos">49</span></a>
+</span><span id="derive_f0_range-50"><a href="#derive_f0_range-50"><span class="linenos">50</span></a><span class="sd">    Returns:</span>
+</span><span id="derive_f0_range-51"><a href="#derive_f0_range-51"><span class="linenos">51</span></a><span class="sd">        ``(f0_min_hz, f0_max_hz)`` for this recording, to hand to :func:`f0_track`,</span>
+</span><span id="derive_f0_range-52"><a href="#derive_f0_range-52"><span class="linenos">52</span></a><span class="sd">        :func:`hnr_track`, :func:`period_marks` and :func:`formant_track`.</span>
+</span><span id="derive_f0_range-53"><a href="#derive_f0_range-53"><span class="linenos">53</span></a>
+</span><span id="derive_f0_range-54"><a href="#derive_f0_range-54"><span class="linenos">54</span></a><span class="sd">    Raises:</span>
+</span><span id="derive_f0_range-55"><a href="#derive_f0_range-55"><span class="linenos">55</span></a><span class="sd">        ModuleNotFoundError: If parselmouth is not installed.</span>
+</span><span id="derive_f0_range-56"><a href="#derive_f0_range-56"><span class="linenos">56</span></a><span class="sd">        ValueError: If the wide search placed no usable pitch and the narrowing did not resolve —</span>
+</span><span id="derive_f0_range-57"><a href="#derive_f0_range-57"><span class="linenos">57</span></a><span class="sd">            an absence, never a guessed range.</span>
+</span><span id="derive_f0_range-58"><a href="#derive_f0_range-58"><span class="linenos">58</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="derive_f0_range-59"><a href="#derive_f0_range-59"><span class="linenos">59</span></a>    <span class="n">_require_parselmouth</span><span class="p">()</span>
+</span><span id="derive_f0_range-60"><a href="#derive_f0_range-60"><span class="linenos">60</span></a>    <span class="n">values</span> <span class="o">=</span> <span class="n">extract_pitch_values</span><span class="p">(</span><span class="n">audio</span><span class="p">,</span> <span class="n">search_floor_hz</span><span class="o">=</span><span class="n">search_floor_hz</span><span class="p">,</span> <span class="n">search_ceiling_hz</span><span class="o">=</span><span class="n">search_ceiling_hz</span><span class="p">)</span>
+</span><span id="derive_f0_range-61"><a href="#derive_f0_range-61"><span class="linenos">61</span></a>    <span class="n">floor</span><span class="p">,</span> <span class="n">ceiling</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">values</span><span class="p">[</span><span class="s2">&quot;pitch_floor&quot;</span><span class="p">]),</span> <span class="nb">float</span><span class="p">(</span><span class="n">values</span><span class="p">[</span><span class="s2">&quot;pitch_ceiling&quot;</span><span class="p">])</span>
+</span><span id="derive_f0_range-62"><a href="#derive_f0_range-62"><span class="linenos">62</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">floor</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">ceiling</span><span class="p">):</span>
+</span><span id="derive_f0_range-63"><a href="#derive_f0_range-63"><span class="linenos">63</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="derive_f0_range-64"><a href="#derive_f0_range-64"><span class="linenos">64</span></a>            <span class="sa">f</span><span class="s2">&quot;no F0 range could be derived from this recording over [</span><span class="si">{</span><span class="n">search_floor_hz</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">search_ceiling_hz</span><span class="si">}</span><span class="s2">] Hz&quot;</span>
+</span><span id="derive_f0_range-65"><a href="#derive_f0_range-65"><span class="linenos">65</span></a>        <span class="p">)</span>
+</span><span id="derive_f0_range-66"><a href="#derive_f0_range-66"><span class="linenos">66</span></a>    <span class="k">return</span> <span class="n">floor</span><span class="p">,</span> <span class="n">ceiling</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>This recording's own F0 search range, narrowed from a wide search by the standardization method.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audio:</strong>  The recording.</li>
+<li><strong>search_floor_hz:</strong>  Lowest pitch of the wide search. Read it from <code>voice.f0_search_range_hz</code>.</li>
+<li><strong>search_ceiling_hz:</strong>  Highest pitch of that wide search. Read it from <code>voice.f0_search_range_hz</code>.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p><code>(f0_min_hz, f0_max_hz)</code> for this recording, to hand to <code><a href="#f0_track">f0_track()</a></code>,
+  <code><a href="#hnr_track">hnr_track()</a></code>, <code><a href="#period_marks">period_marks()</a></code> and <code><a href="#formant_track">formant_track()</a></code>.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>ModuleNotFoundError:</strong>  If parselmouth is not installed.</li>
+<li><strong>ValueError:</strong>  If the wide search placed no usable pitch and the narrowing did not resolve —
+an absence, never a guessed range.</li>
+</ul>
+</div>
+
+
+                </section>
                 <section id="f0_track">
                             <input id="f0_track-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
@@ -308,38 +380,38 @@
 
     </div>
     <a class="headerlink" href="#f0_track"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="f0_track-125"><a href="#f0_track-125"><span class="linenos">125</span></a><span class="k">def</span><span class="w"> </span><span class="nf">f0_track</span><span class="p">(</span>
-</span><span id="f0_track-126"><a href="#f0_track-126"><span class="linenos">126</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
-</span><span id="f0_track-127"><a href="#f0_track-127"><span class="linenos">127</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="f0_track-128"><a href="#f0_track-128"><span class="linenos">128</span></a>    <span class="n">f0_min_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="f0_track-129"><a href="#f0_track-129"><span class="linenos">129</span></a>    <span class="n">f0_max_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="f0_track-130"><a href="#f0_track-130"><span class="linenos">130</span></a>    <span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="f0_track-131"><a href="#f0_track-131"><span class="linenos">131</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-</span><span id="f0_track-132"><a href="#f0_track-132"><span class="linenos">132</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;F0 and its strength per frame via Praat&#39;s cc pitch: ``(times_s, f0_hz, strength)``.</span>
-</span><span id="f0_track-133"><a href="#f0_track-133"><span class="linenos">133</span></a>
-</span><span id="f0_track-134"><a href="#f0_track-134"><span class="linenos">134</span></a><span class="sd">    Unvoiced frames carry NaN in ``f0_hz`` with their ``strength`` retained, so F0 always travels</span>
-</span><span id="f0_track-135"><a href="#f0_track-135"><span class="linenos">135</span></a><span class="sd">    with the periodicity that placed it and a reader cannot separate them.</span>
-</span><span id="f0_track-136"><a href="#f0_track-136"><span class="linenos">136</span></a>
-</span><span id="f0_track-137"><a href="#f0_track-137"><span class="linenos">137</span></a><span class="sd">    Args:</span>
-</span><span id="f0_track-138"><a href="#f0_track-138"><span class="linenos">138</span></a><span class="sd">        audio: The recording. ``get_sound`` handles channel merging and resampling.</span>
-</span><span id="f0_track-139"><a href="#f0_track-139"><span class="linenos">139</span></a><span class="sd">        f0_min_hz: Lowest F0 to search. Read it from ``voice.f0_range_hz``.</span>
-</span><span id="f0_track-140"><a href="#f0_track-140"><span class="linenos">140</span></a><span class="sd">        f0_max_hz: Highest F0 to search. Read it from ``voice.f0_range_hz``.</span>
-</span><span id="f0_track-141"><a href="#f0_track-141"><span class="linenos">141</span></a><span class="sd">        hop_s: Praat&#39;s ``time_step``. Read it from ``phonation.hop_s``.</span>
-</span><span id="f0_track-142"><a href="#f0_track-142"><span class="linenos">142</span></a>
-</span><span id="f0_track-143"><a href="#f0_track-143"><span class="linenos">143</span></a><span class="sd">    Returns:</span>
-</span><span id="f0_track-144"><a href="#f0_track-144"><span class="linenos">144</span></a><span class="sd">        ``(times_s, f0_hz, strength)``, one value per frame, all three the same length.</span>
-</span><span id="f0_track-145"><a href="#f0_track-145"><span class="linenos">145</span></a>
-</span><span id="f0_track-146"><a href="#f0_track-146"><span class="linenos">146</span></a><span class="sd">    Raises:</span>
-</span><span id="f0_track-147"><a href="#f0_track-147"><span class="linenos">147</span></a><span class="sd">        ModuleNotFoundError: If parselmouth is not installed.</span>
-</span><span id="f0_track-148"><a href="#f0_track-148"><span class="linenos">148</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="f0_track-149"><a href="#f0_track-149"><span class="linenos">149</span></a>    <span class="n">_require_parselmouth</span><span class="p">()</span>
-</span><span id="f0_track-150"><a href="#f0_track-150"><span class="linenos">150</span></a>    <span class="n">snd</span> <span class="o">=</span> <span class="n">get_sound</span><span class="p">(</span><span class="n">audio</span><span class="p">)</span>
-</span><span id="f0_track-151"><a href="#f0_track-151"><span class="linenos">151</span></a>    <span class="n">pitch</span> <span class="o">=</span> <span class="n">snd</span><span class="o">.</span><span class="n">to_pitch_cc</span><span class="p">(</span><span class="n">time_step</span><span class="o">=</span><span class="n">hop_s</span><span class="p">,</span> <span class="n">pitch_floor</span><span class="o">=</span><span class="n">f0_min_hz</span><span class="p">,</span> <span class="n">pitch_ceiling</span><span class="o">=</span><span class="n">f0_max_hz</span><span class="p">)</span>
-</span><span id="f0_track-152"><a href="#f0_track-152"><span class="linenos">152</span></a>    <span class="n">times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">pitch</span><span class="o">.</span><span class="n">xs</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="f0_track-153"><a href="#f0_track-153"><span class="linenos">153</span></a>    <span class="n">f0</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">pitch</span><span class="o">.</span><span class="n">selected_array</span><span class="p">[</span><span class="s2">&quot;frequency&quot;</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="f0_track-154"><a href="#f0_track-154"><span class="linenos">154</span></a>    <span class="n">strength</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">pitch</span><span class="o">.</span><span class="n">selected_array</span><span class="p">[</span><span class="s2">&quot;strength&quot;</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="f0_track-155"><a href="#f0_track-155"><span class="linenos">155</span></a>    <span class="n">f0</span><span class="p">[</span><span class="n">f0</span> <span class="o">==</span> <span class="mf">0.0</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
-</span><span id="f0_track-156"><a href="#f0_track-156"><span class="linenos">156</span></a>    <span class="k">return</span> <span class="n">times</span><span class="p">,</span> <span class="n">f0</span><span class="p">,</span> <span class="n">strength</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="f0_track-153"><a href="#f0_track-153"><span class="linenos">153</span></a><span class="k">def</span><span class="w"> </span><span class="nf">f0_track</span><span class="p">(</span>
+</span><span id="f0_track-154"><a href="#f0_track-154"><span class="linenos">154</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="f0_track-155"><a href="#f0_track-155"><span class="linenos">155</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="f0_track-156"><a href="#f0_track-156"><span class="linenos">156</span></a>    <span class="n">f0_min_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="f0_track-157"><a href="#f0_track-157"><span class="linenos">157</span></a>    <span class="n">f0_max_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="f0_track-158"><a href="#f0_track-158"><span class="linenos">158</span></a>    <span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="f0_track-159"><a href="#f0_track-159"><span class="linenos">159</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+</span><span id="f0_track-160"><a href="#f0_track-160"><span class="linenos">160</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;F0 and its strength per frame via Praat&#39;s cc pitch: ``(times_s, f0_hz, strength)``.</span>
+</span><span id="f0_track-161"><a href="#f0_track-161"><span class="linenos">161</span></a>
+</span><span id="f0_track-162"><a href="#f0_track-162"><span class="linenos">162</span></a><span class="sd">    Unvoiced frames carry NaN in ``f0_hz`` with their ``strength`` retained, so F0 always travels</span>
+</span><span id="f0_track-163"><a href="#f0_track-163"><span class="linenos">163</span></a><span class="sd">    with the periodicity that placed it and a reader cannot separate them.</span>
+</span><span id="f0_track-164"><a href="#f0_track-164"><span class="linenos">164</span></a>
+</span><span id="f0_track-165"><a href="#f0_track-165"><span class="linenos">165</span></a><span class="sd">    Args:</span>
+</span><span id="f0_track-166"><a href="#f0_track-166"><span class="linenos">166</span></a><span class="sd">        audio: The recording. ``get_sound`` handles channel merging and resampling.</span>
+</span><span id="f0_track-167"><a href="#f0_track-167"><span class="linenos">167</span></a><span class="sd">        f0_min_hz: Lowest F0 to search. Read it from :func:`derive_f0_range`.</span>
+</span><span id="f0_track-168"><a href="#f0_track-168"><span class="linenos">168</span></a><span class="sd">        f0_max_hz: Highest F0 to search. Read it from :func:`derive_f0_range`.</span>
+</span><span id="f0_track-169"><a href="#f0_track-169"><span class="linenos">169</span></a><span class="sd">        hop_s: Praat&#39;s ``time_step``. Read it from ``phonation.hop_s``.</span>
+</span><span id="f0_track-170"><a href="#f0_track-170"><span class="linenos">170</span></a>
+</span><span id="f0_track-171"><a href="#f0_track-171"><span class="linenos">171</span></a><span class="sd">    Returns:</span>
+</span><span id="f0_track-172"><a href="#f0_track-172"><span class="linenos">172</span></a><span class="sd">        ``(times_s, f0_hz, strength)``, one value per frame, all three the same length.</span>
+</span><span id="f0_track-173"><a href="#f0_track-173"><span class="linenos">173</span></a>
+</span><span id="f0_track-174"><a href="#f0_track-174"><span class="linenos">174</span></a><span class="sd">    Raises:</span>
+</span><span id="f0_track-175"><a href="#f0_track-175"><span class="linenos">175</span></a><span class="sd">        ModuleNotFoundError: If parselmouth is not installed.</span>
+</span><span id="f0_track-176"><a href="#f0_track-176"><span class="linenos">176</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="f0_track-177"><a href="#f0_track-177"><span class="linenos">177</span></a>    <span class="n">_require_parselmouth</span><span class="p">()</span>
+</span><span id="f0_track-178"><a href="#f0_track-178"><span class="linenos">178</span></a>    <span class="n">snd</span> <span class="o">=</span> <span class="n">get_sound</span><span class="p">(</span><span class="n">audio</span><span class="p">)</span>
+</span><span id="f0_track-179"><a href="#f0_track-179"><span class="linenos">179</span></a>    <span class="n">pitch</span> <span class="o">=</span> <span class="n">snd</span><span class="o">.</span><span class="n">to_pitch_cc</span><span class="p">(</span><span class="n">time_step</span><span class="o">=</span><span class="n">hop_s</span><span class="p">,</span> <span class="n">pitch_floor</span><span class="o">=</span><span class="n">f0_min_hz</span><span class="p">,</span> <span class="n">pitch_ceiling</span><span class="o">=</span><span class="n">f0_max_hz</span><span class="p">)</span>
+</span><span id="f0_track-180"><a href="#f0_track-180"><span class="linenos">180</span></a>    <span class="n">times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">pitch</span><span class="o">.</span><span class="n">xs</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="f0_track-181"><a href="#f0_track-181"><span class="linenos">181</span></a>    <span class="n">f0</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">pitch</span><span class="o">.</span><span class="n">selected_array</span><span class="p">[</span><span class="s2">&quot;frequency&quot;</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="f0_track-182"><a href="#f0_track-182"><span class="linenos">182</span></a>    <span class="n">strength</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">pitch</span><span class="o">.</span><span class="n">selected_array</span><span class="p">[</span><span class="s2">&quot;strength&quot;</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="f0_track-183"><a href="#f0_track-183"><span class="linenos">183</span></a>    <span class="n">f0</span><span class="p">[</span><span class="n">f0</span> <span class="o">==</span> <span class="mf">0.0</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+</span><span id="f0_track-184"><a href="#f0_track-184"><span class="linenos">184</span></a>    <span class="k">return</span> <span class="n">times</span><span class="p">,</span> <span class="n">f0</span><span class="p">,</span> <span class="n">strength</span>
 </span></pre></div>
 
 
@@ -352,8 +424,8 @@ with the periodicity that placed it and a reader cannot separate them.</p>
 
 <ul>
 <li><strong>audio:</strong>  The recording. <code>get_sound</code> handles channel merging and resampling.</li>
-<li><strong>f0_min_hz:</strong>  Lowest F0 to search. Read it from <code>voice.f0_range_hz</code>.</li>
-<li><strong>f0_max_hz:</strong>  Highest F0 to search. Read it from <code>voice.f0_range_hz</code>.</li>
+<li><strong>f0_min_hz:</strong>  Lowest F0 to search. Read it from <code><a href="#derive_f0_range">derive_f0_range()</a></code>.</li>
+<li><strong>f0_max_hz:</strong>  Highest F0 to search. Read it from <code><a href="#derive_f0_range">derive_f0_range()</a></code>.</li>
 <li><strong>hop_s:</strong>  Praat's <code>time_step</code>. Read it from <code>phonation.hop_s</code>.</li>
 </ul>
 
@@ -383,65 +455,65 @@ with the periodicity that placed it and a reader cannot separate them.</p>
 
     </div>
     <a class="headerlink" href="#formant_track"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="formant_track-174"><a href="#formant_track-174"><span class="linenos">174</span></a><span class="k">def</span><span class="w"> </span><span class="nf">formant_track</span><span class="p">(</span>
-</span><span id="formant_track-175"><a href="#formant_track-175"><span class="linenos">175</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
-</span><span id="formant_track-176"><a href="#formant_track-176"><span class="linenos">176</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="formant_track-177"><a href="#formant_track-177"><span class="linenos">177</span></a>    <span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="formant_track-178"><a href="#formant_track-178"><span class="linenos">178</span></a>    <span class="n">max_formants</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="formant_track-179"><a href="#formant_track-179"><span class="linenos">179</span></a>    <span class="n">formant_max_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="formant_track-180"><a href="#formant_track-180"><span class="linenos">180</span></a>    <span class="n">window_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="formant_track-181"><a href="#formant_track-181"><span class="linenos">181</span></a>    <span class="n">preemphasis_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="formant_track-182"><a href="#formant_track-182"><span class="linenos">182</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FormantTrack</span><span class="p">:</span>
-</span><span id="formant_track-183"><a href="#formant_track-183"><span class="linenos">183</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;F1-F4 and their bandwidths over the whole stream, by Praat&#39;s Burg method.</span>
-</span><span id="formant_track-184"><a href="#formant_track-184"><span class="linenos">184</span></a>
-</span><span id="formant_track-185"><a href="#formant_track-185"><span class="linenos">185</span></a><span class="sd">    Computed once over the stream so a consumer slices the track rather than re-tracking a fragment.</span>
-</span><span id="formant_track-186"><a href="#formant_track-186"><span class="linenos">186</span></a>
-</span><span id="formant_track-187"><a href="#formant_track-187"><span class="linenos">187</span></a><span class="sd">    Args:</span>
-</span><span id="formant_track-188"><a href="#formant_track-188"><span class="linenos">188</span></a><span class="sd">        audio: The recording. ``get_sound`` handles channel merging and resampling.</span>
-</span><span id="formant_track-189"><a href="#formant_track-189"><span class="linenos">189</span></a><span class="sd">        hop_s: Praat&#39;s ``time_step``. Read it from ``phonation_spans.hop_s``.</span>
-</span><span id="formant_track-190"><a href="#formant_track-190"><span class="linenos">190</span></a><span class="sd">        max_formants: Praat&#39;s ``max_number_of_formants``. Read it from ``phonation_spans.max_formants``.</span>
-</span><span id="formant_track-191"><a href="#formant_track-191"><span class="linenos">191</span></a><span class="sd">        formant_max_hz: Praat&#39;s ``maximum_formant``. Read it from ``phonation_spans.formant_max_hz``.</span>
-</span><span id="formant_track-192"><a href="#formant_track-192"><span class="linenos">192</span></a><span class="sd">        window_s: Praat&#39;s ``window_length``. Read it from ``phonation_spans.formant_window_s``.</span>
-</span><span id="formant_track-193"><a href="#formant_track-193"><span class="linenos">193</span></a><span class="sd">        preemphasis_hz: Praat&#39;s ``pre_emphasis_from``. Read it from</span>
-</span><span id="formant_track-194"><a href="#formant_track-194"><span class="linenos">194</span></a><span class="sd">            ``phonation_spans.formant_preemphasis_hz``.</span>
-</span><span id="formant_track-195"><a href="#formant_track-195"><span class="linenos">195</span></a>
-</span><span id="formant_track-196"><a href="#formant_track-196"><span class="linenos">196</span></a><span class="sd">    Returns:</span>
-</span><span id="formant_track-197"><a href="#formant_track-197"><span class="linenos">197</span></a><span class="sd">        The track. A frame where Praat placed no formant carries NaN in both arrays, so a missing</span>
-</span><span id="formant_track-198"><a href="#formant_track-198"><span class="linenos">198</span></a><span class="sd">        formant is absent rather than zero.</span>
-</span><span id="formant_track-199"><a href="#formant_track-199"><span class="linenos">199</span></a>
-</span><span id="formant_track-200"><a href="#formant_track-200"><span class="linenos">200</span></a><span class="sd">    Raises:</span>
-</span><span id="formant_track-201"><a href="#formant_track-201"><span class="linenos">201</span></a><span class="sd">        ModuleNotFoundError: If parselmouth is not installed.</span>
-</span><span id="formant_track-202"><a href="#formant_track-202"><span class="linenos">202</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="formant_track-203"><a href="#formant_track-203"><span class="linenos">203</span></a>    <span class="n">_require_parselmouth</span><span class="p">()</span>
-</span><span id="formant_track-204"><a href="#formant_track-204"><span class="linenos">204</span></a>    <span class="n">snd</span> <span class="o">=</span> <span class="n">get_sound</span><span class="p">(</span><span class="n">audio</span><span class="p">)</span>
-</span><span id="formant_track-205"><a href="#formant_track-205"><span class="linenos">205</span></a>    <span class="n">formants</span> <span class="o">=</span> <span class="n">snd</span><span class="o">.</span><span class="n">to_formant_burg</span><span class="p">(</span>
-</span><span id="formant_track-206"><a href="#formant_track-206"><span class="linenos">206</span></a>        <span class="n">time_step</span><span class="o">=</span><span class="n">hop_s</span><span class="p">,</span>
-</span><span id="formant_track-207"><a href="#formant_track-207"><span class="linenos">207</span></a>        <span class="n">max_number_of_formants</span><span class="o">=</span><span class="n">max_formants</span><span class="p">,</span>
-</span><span id="formant_track-208"><a href="#formant_track-208"><span class="linenos">208</span></a>        <span class="n">maximum_formant</span><span class="o">=</span><span class="n">formant_max_hz</span><span class="p">,</span>
-</span><span id="formant_track-209"><a href="#formant_track-209"><span class="linenos">209</span></a>        <span class="n">window_length</span><span class="o">=</span><span class="n">window_s</span><span class="p">,</span>
-</span><span id="formant_track-210"><a href="#formant_track-210"><span class="linenos">210</span></a>        <span class="n">pre_emphasis_from</span><span class="o">=</span><span class="n">preemphasis_hz</span><span class="p">,</span>
-</span><span id="formant_track-211"><a href="#formant_track-211"><span class="linenos">211</span></a>    <span class="p">)</span>
-</span><span id="formant_track-212"><a href="#formant_track-212"><span class="linenos">212</span></a>    <span class="n">times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">formants</span><span class="o">.</span><span class="n">xs</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="formant_track-213"><a href="#formant_track-213"><span class="linenos">213</span></a>    <span class="n">values</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="formant_track-214"><a href="#formant_track-214"><span class="linenos">214</span></a>    <span class="n">bandwidths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="formant_track-215"><a href="#formant_track-215"><span class="linenos">215</span></a>    <span class="k">for</span> <span class="n">order</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">):</span>
-</span><span id="formant_track-216"><a href="#formant_track-216"><span class="linenos">216</span></a>        <span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-</span><span id="formant_track-217"><a href="#formant_track-217"><span class="linenos">217</span></a>            <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
-</span><span id="formant_track-218"><a href="#formant_track-218"><span class="linenos">218</span></a>                <span class="p">[</span><span class="n">formants</span><span class="o">.</span><span class="n">get_value_at_time</span><span class="p">(</span><span class="n">order</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="n">parselmouth</span><span class="o">.</span><span class="n">FormantUnit</span><span class="o">.</span><span class="n">HERTZ</span><span class="p">)</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">times</span><span class="p">],</span>
-</span><span id="formant_track-219"><a href="#formant_track-219"><span class="linenos">219</span></a>                <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span>
-</span><span id="formant_track-220"><a href="#formant_track-220"><span class="linenos">220</span></a>            <span class="p">)</span>
-</span><span id="formant_track-221"><a href="#formant_track-221"><span class="linenos">221</span></a>        <span class="p">)</span>
-</span><span id="formant_track-222"><a href="#formant_track-222"><span class="linenos">222</span></a>        <span class="n">bandwidths</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-</span><span id="formant_track-223"><a href="#formant_track-223"><span class="linenos">223</span></a>            <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
-</span><span id="formant_track-224"><a href="#formant_track-224"><span class="linenos">224</span></a>                <span class="p">[</span><span class="n">formants</span><span class="o">.</span><span class="n">get_bandwidth_at_time</span><span class="p">(</span><span class="n">order</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="n">parselmouth</span><span class="o">.</span><span class="n">FormantUnit</span><span class="o">.</span><span class="n">HERTZ</span><span class="p">)</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">times</span><span class="p">],</span>
-</span><span id="formant_track-225"><a href="#formant_track-225"><span class="linenos">225</span></a>                <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span>
-</span><span id="formant_track-226"><a href="#formant_track-226"><span class="linenos">226</span></a>            <span class="p">)</span>
-</span><span id="formant_track-227"><a href="#formant_track-227"><span class="linenos">227</span></a>        <span class="p">)</span>
-</span><span id="formant_track-228"><a href="#formant_track-228"><span class="linenos">228</span></a>    <span class="k">return</span> <span class="n">FormantTrack</span><span class="p">(</span>
-</span><span id="formant_track-229"><a href="#formant_track-229"><span class="linenos">229</span></a>        <span class="n">times_s</span><span class="o">=</span><span class="n">times</span><span class="p">,</span>
-</span><span id="formant_track-230"><a href="#formant_track-230"><span class="linenos">230</span></a>        <span class="n">f_hz</span><span class="o">=</span><span class="p">(</span><span class="n">values</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">values</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">values</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">values</span><span class="p">[</span><span class="mi">3</span><span class="p">]),</span>
-</span><span id="formant_track-231"><a href="#formant_track-231"><span class="linenos">231</span></a>        <span class="n">bandwidth_hz</span><span class="o">=</span><span class="p">(</span><span class="n">bandwidths</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">bandwidths</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">bandwidths</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">bandwidths</span><span class="p">[</span><span class="mi">3</span><span class="p">]),</span>
-</span><span id="formant_track-232"><a href="#formant_track-232"><span class="linenos">232</span></a>    <span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="formant_track-202"><a href="#formant_track-202"><span class="linenos">202</span></a><span class="k">def</span><span class="w"> </span><span class="nf">formant_track</span><span class="p">(</span>
+</span><span id="formant_track-203"><a href="#formant_track-203"><span class="linenos">203</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="formant_track-204"><a href="#formant_track-204"><span class="linenos">204</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="formant_track-205"><a href="#formant_track-205"><span class="linenos">205</span></a>    <span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="formant_track-206"><a href="#formant_track-206"><span class="linenos">206</span></a>    <span class="n">max_formants</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="formant_track-207"><a href="#formant_track-207"><span class="linenos">207</span></a>    <span class="n">formant_max_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="formant_track-208"><a href="#formant_track-208"><span class="linenos">208</span></a>    <span class="n">window_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="formant_track-209"><a href="#formant_track-209"><span class="linenos">209</span></a>    <span class="n">preemphasis_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="formant_track-210"><a href="#formant_track-210"><span class="linenos">210</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FormantTrack</span><span class="p">:</span>
+</span><span id="formant_track-211"><a href="#formant_track-211"><span class="linenos">211</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;F1-F4 and their bandwidths over the whole stream, by Praat&#39;s Burg method.</span>
+</span><span id="formant_track-212"><a href="#formant_track-212"><span class="linenos">212</span></a>
+</span><span id="formant_track-213"><a href="#formant_track-213"><span class="linenos">213</span></a><span class="sd">    Computed once over the stream so a consumer slices the track rather than re-tracking a fragment.</span>
+</span><span id="formant_track-214"><a href="#formant_track-214"><span class="linenos">214</span></a>
+</span><span id="formant_track-215"><a href="#formant_track-215"><span class="linenos">215</span></a><span class="sd">    Args:</span>
+</span><span id="formant_track-216"><a href="#formant_track-216"><span class="linenos">216</span></a><span class="sd">        audio: The recording. ``get_sound`` handles channel merging and resampling.</span>
+</span><span id="formant_track-217"><a href="#formant_track-217"><span class="linenos">217</span></a><span class="sd">        hop_s: Praat&#39;s ``time_step``. Read it from ``phonation_spans.hop_s``.</span>
+</span><span id="formant_track-218"><a href="#formant_track-218"><span class="linenos">218</span></a><span class="sd">        max_formants: Praat&#39;s ``max_number_of_formants``. Read it from ``phonation_spans.max_formants``.</span>
+</span><span id="formant_track-219"><a href="#formant_track-219"><span class="linenos">219</span></a><span class="sd">        formant_max_hz: Praat&#39;s ``maximum_formant``. Read it from ``phonation_spans.formant_max_hz``.</span>
+</span><span id="formant_track-220"><a href="#formant_track-220"><span class="linenos">220</span></a><span class="sd">        window_s: Praat&#39;s ``window_length``. Read it from ``phonation_spans.formant_window_s``.</span>
+</span><span id="formant_track-221"><a href="#formant_track-221"><span class="linenos">221</span></a><span class="sd">        preemphasis_hz: Praat&#39;s ``pre_emphasis_from``. Read it from</span>
+</span><span id="formant_track-222"><a href="#formant_track-222"><span class="linenos">222</span></a><span class="sd">            ``phonation_spans.formant_preemphasis_hz``.</span>
+</span><span id="formant_track-223"><a href="#formant_track-223"><span class="linenos">223</span></a>
+</span><span id="formant_track-224"><a href="#formant_track-224"><span class="linenos">224</span></a><span class="sd">    Returns:</span>
+</span><span id="formant_track-225"><a href="#formant_track-225"><span class="linenos">225</span></a><span class="sd">        The track. A frame where Praat placed no formant carries NaN in both arrays, so a missing</span>
+</span><span id="formant_track-226"><a href="#formant_track-226"><span class="linenos">226</span></a><span class="sd">        formant is absent rather than zero.</span>
+</span><span id="formant_track-227"><a href="#formant_track-227"><span class="linenos">227</span></a>
+</span><span id="formant_track-228"><a href="#formant_track-228"><span class="linenos">228</span></a><span class="sd">    Raises:</span>
+</span><span id="formant_track-229"><a href="#formant_track-229"><span class="linenos">229</span></a><span class="sd">        ModuleNotFoundError: If parselmouth is not installed.</span>
+</span><span id="formant_track-230"><a href="#formant_track-230"><span class="linenos">230</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="formant_track-231"><a href="#formant_track-231"><span class="linenos">231</span></a>    <span class="n">_require_parselmouth</span><span class="p">()</span>
+</span><span id="formant_track-232"><a href="#formant_track-232"><span class="linenos">232</span></a>    <span class="n">snd</span> <span class="o">=</span> <span class="n">get_sound</span><span class="p">(</span><span class="n">audio</span><span class="p">)</span>
+</span><span id="formant_track-233"><a href="#formant_track-233"><span class="linenos">233</span></a>    <span class="n">formants</span> <span class="o">=</span> <span class="n">snd</span><span class="o">.</span><span class="n">to_formant_burg</span><span class="p">(</span>
+</span><span id="formant_track-234"><a href="#formant_track-234"><span class="linenos">234</span></a>        <span class="n">time_step</span><span class="o">=</span><span class="n">hop_s</span><span class="p">,</span>
+</span><span id="formant_track-235"><a href="#formant_track-235"><span class="linenos">235</span></a>        <span class="n">max_number_of_formants</span><span class="o">=</span><span class="n">max_formants</span><span class="p">,</span>
+</span><span id="formant_track-236"><a href="#formant_track-236"><span class="linenos">236</span></a>        <span class="n">maximum_formant</span><span class="o">=</span><span class="n">formant_max_hz</span><span class="p">,</span>
+</span><span id="formant_track-237"><a href="#formant_track-237"><span class="linenos">237</span></a>        <span class="n">window_length</span><span class="o">=</span><span class="n">window_s</span><span class="p">,</span>
+</span><span id="formant_track-238"><a href="#formant_track-238"><span class="linenos">238</span></a>        <span class="n">pre_emphasis_from</span><span class="o">=</span><span class="n">preemphasis_hz</span><span class="p">,</span>
+</span><span id="formant_track-239"><a href="#formant_track-239"><span class="linenos">239</span></a>    <span class="p">)</span>
+</span><span id="formant_track-240"><a href="#formant_track-240"><span class="linenos">240</span></a>    <span class="n">times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">formants</span><span class="o">.</span><span class="n">xs</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="formant_track-241"><a href="#formant_track-241"><span class="linenos">241</span></a>    <span class="n">values</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="formant_track-242"><a href="#formant_track-242"><span class="linenos">242</span></a>    <span class="n">bandwidths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="formant_track-243"><a href="#formant_track-243"><span class="linenos">243</span></a>    <span class="k">for</span> <span class="n">order</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">):</span>
+</span><span id="formant_track-244"><a href="#formant_track-244"><span class="linenos">244</span></a>        <span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="formant_track-245"><a href="#formant_track-245"><span class="linenos">245</span></a>            <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
+</span><span id="formant_track-246"><a href="#formant_track-246"><span class="linenos">246</span></a>                <span class="p">[</span><span class="n">formants</span><span class="o">.</span><span class="n">get_value_at_time</span><span class="p">(</span><span class="n">order</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="n">parselmouth</span><span class="o">.</span><span class="n">FormantUnit</span><span class="o">.</span><span class="n">HERTZ</span><span class="p">)</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">times</span><span class="p">],</span>
+</span><span id="formant_track-247"><a href="#formant_track-247"><span class="linenos">247</span></a>                <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span>
+</span><span id="formant_track-248"><a href="#formant_track-248"><span class="linenos">248</span></a>            <span class="p">)</span>
+</span><span id="formant_track-249"><a href="#formant_track-249"><span class="linenos">249</span></a>        <span class="p">)</span>
+</span><span id="formant_track-250"><a href="#formant_track-250"><span class="linenos">250</span></a>        <span class="n">bandwidths</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="formant_track-251"><a href="#formant_track-251"><span class="linenos">251</span></a>            <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
+</span><span id="formant_track-252"><a href="#formant_track-252"><span class="linenos">252</span></a>                <span class="p">[</span><span class="n">formants</span><span class="o">.</span><span class="n">get_bandwidth_at_time</span><span class="p">(</span><span class="n">order</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="n">parselmouth</span><span class="o">.</span><span class="n">FormantUnit</span><span class="o">.</span><span class="n">HERTZ</span><span class="p">)</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">times</span><span class="p">],</span>
+</span><span id="formant_track-253"><a href="#formant_track-253"><span class="linenos">253</span></a>                <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span>
+</span><span id="formant_track-254"><a href="#formant_track-254"><span class="linenos">254</span></a>            <span class="p">)</span>
+</span><span id="formant_track-255"><a href="#formant_track-255"><span class="linenos">255</span></a>        <span class="p">)</span>
+</span><span id="formant_track-256"><a href="#formant_track-256"><span class="linenos">256</span></a>    <span class="k">return</span> <span class="n">FormantTrack</span><span class="p">(</span>
+</span><span id="formant_track-257"><a href="#formant_track-257"><span class="linenos">257</span></a>        <span class="n">times_s</span><span class="o">=</span><span class="n">times</span><span class="p">,</span>
+</span><span id="formant_track-258"><a href="#formant_track-258"><span class="linenos">258</span></a>        <span class="n">f_hz</span><span class="o">=</span><span class="p">(</span><span class="n">values</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">values</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">values</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">values</span><span class="p">[</span><span class="mi">3</span><span class="p">]),</span>
+</span><span id="formant_track-259"><a href="#formant_track-259"><span class="linenos">259</span></a>        <span class="n">bandwidth_hz</span><span class="o">=</span><span class="p">(</span><span class="n">bandwidths</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">bandwidths</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">bandwidths</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">bandwidths</span><span class="p">[</span><span class="mi">3</span><span class="p">]),</span>
+</span><span id="formant_track-260"><a href="#formant_track-260"><span class="linenos">260</span></a>    <span class="p">)</span>
 </span></pre></div>
 
 
@@ -488,42 +560,42 @@ with the periodicity that placed it and a reader cannot separate them.</p>
 
     </div>
     <a class="headerlink" href="#hnr_track"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="hnr_track-41"><a href="#hnr_track-41"><span class="linenos">41</span></a><span class="k">def</span><span class="w"> </span><span class="nf">hnr_track</span><span class="p">(</span>
-</span><span id="hnr_track-42"><a href="#hnr_track-42"><span class="linenos">42</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
-</span><span id="hnr_track-43"><a href="#hnr_track-43"><span class="linenos">43</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="hnr_track-44"><a href="#hnr_track-44"><span class="linenos">44</span></a>    <span class="n">f0_min_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="hnr_track-45"><a href="#hnr_track-45"><span class="linenos">45</span></a>    <span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="hnr_track-46"><a href="#hnr_track-46"><span class="linenos">46</span></a>    <span class="n">silence_threshold</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="hnr_track-47"><a href="#hnr_track-47"><span class="linenos">47</span></a>    <span class="n">periods_per_window</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="hnr_track-48"><a href="#hnr_track-48"><span class="linenos">48</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-</span><span id="hnr_track-49"><a href="#hnr_track-49"><span class="linenos">49</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Harmonics-to-noise ratio over time, in dB, via Praat&#39;s cc method.</span>
-</span><span id="hnr_track-50"><a href="#hnr_track-50"><span class="linenos">50</span></a>
-</span><span id="hnr_track-51"><a href="#hnr_track-51"><span class="linenos">51</span></a><span class="sd">    Args:</span>
-</span><span id="hnr_track-52"><a href="#hnr_track-52"><span class="linenos">52</span></a><span class="sd">        audio: The recording. ``get_sound`` handles channel merging and resampling.</span>
-</span><span id="hnr_track-53"><a href="#hnr_track-53"><span class="linenos">53</span></a><span class="sd">        f0_min_hz: Lowest F0 the analysis considers. Read it from ``voice.f0_range_hz``.</span>
-</span><span id="hnr_track-54"><a href="#hnr_track-54"><span class="linenos">54</span></a><span class="sd">        hop_s: Praat&#39;s ``time_step``. Read it from ``phonation.hop_s``.</span>
-</span><span id="hnr_track-55"><a href="#hnr_track-55"><span class="linenos">55</span></a><span class="sd">        silence_threshold: Praat&#39;s silence threshold. Read it from ``phonation.silence_threshold``.</span>
-</span><span id="hnr_track-56"><a href="#hnr_track-56"><span class="linenos">56</span></a><span class="sd">        periods_per_window: Praat&#39;s analysis window length, in periods of ``f0_min_hz``. Read it</span>
-</span><span id="hnr_track-57"><a href="#hnr_track-57"><span class="linenos">57</span></a><span class="sd">            from ``phonation.periods_per_window``.</span>
-</span><span id="hnr_track-58"><a href="#hnr_track-58"><span class="linenos">58</span></a>
-</span><span id="hnr_track-59"><a href="#hnr_track-59"><span class="linenos">59</span></a><span class="sd">    Returns:</span>
-</span><span id="hnr_track-60"><a href="#hnr_track-60"><span class="linenos">60</span></a><span class="sd">        ``(times_s, hnr_db)``, one value per frame. Frames Praat judges silent carry its floor</span>
-</span><span id="hnr_track-61"><a href="#hnr_track-61"><span class="linenos">61</span></a><span class="sd">        value rather than being dropped, so the track and its times stay aligned.</span>
-</span><span id="hnr_track-62"><a href="#hnr_track-62"><span class="linenos">62</span></a>
-</span><span id="hnr_track-63"><a href="#hnr_track-63"><span class="linenos">63</span></a><span class="sd">    Raises:</span>
-</span><span id="hnr_track-64"><a href="#hnr_track-64"><span class="linenos">64</span></a><span class="sd">        ModuleNotFoundError: If parselmouth is not installed.</span>
-</span><span id="hnr_track-65"><a href="#hnr_track-65"><span class="linenos">65</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="hnr_track-66"><a href="#hnr_track-66"><span class="linenos">66</span></a>    <span class="n">_require_parselmouth</span><span class="p">()</span>
-</span><span id="hnr_track-67"><a href="#hnr_track-67"><span class="linenos">67</span></a>    <span class="n">snd</span> <span class="o">=</span> <span class="n">get_sound</span><span class="p">(</span><span class="n">audio</span><span class="p">)</span>
-</span><span id="hnr_track-68"><a href="#hnr_track-68"><span class="linenos">68</span></a>    <span class="n">harmonicity</span> <span class="o">=</span> <span class="n">snd</span><span class="o">.</span><span class="n">to_harmonicity_cc</span><span class="p">(</span>
-</span><span id="hnr_track-69"><a href="#hnr_track-69"><span class="linenos">69</span></a>        <span class="n">time_step</span><span class="o">=</span><span class="n">hop_s</span><span class="p">,</span>
-</span><span id="hnr_track-70"><a href="#hnr_track-70"><span class="linenos">70</span></a>        <span class="n">minimum_pitch</span><span class="o">=</span><span class="n">f0_min_hz</span><span class="p">,</span>
-</span><span id="hnr_track-71"><a href="#hnr_track-71"><span class="linenos">71</span></a>        <span class="n">silence_threshold</span><span class="o">=</span><span class="n">silence_threshold</span><span class="p">,</span>
-</span><span id="hnr_track-72"><a href="#hnr_track-72"><span class="linenos">72</span></a>        <span class="n">periods_per_window</span><span class="o">=</span><span class="n">periods_per_window</span><span class="p">,</span>
-</span><span id="hnr_track-73"><a href="#hnr_track-73"><span class="linenos">73</span></a>    <span class="p">)</span>
-</span><span id="hnr_track-74"><a href="#hnr_track-74"><span class="linenos">74</span></a>    <span class="n">times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">harmonicity</span><span class="o">.</span><span class="n">xs</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="hnr_track-75"><a href="#hnr_track-75"><span class="linenos">75</span></a>    <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">harmonicity</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-</span><span id="hnr_track-76"><a href="#hnr_track-76"><span class="linenos">76</span></a>    <span class="k">return</span> <span class="n">times</span><span class="p">,</span> <span class="n">values</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="hnr_track-69"><a href="#hnr_track-69"><span class="linenos"> 69</span></a><span class="k">def</span><span class="w"> </span><span class="nf">hnr_track</span><span class="p">(</span>
+</span><span id="hnr_track-70"><a href="#hnr_track-70"><span class="linenos"> 70</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="hnr_track-71"><a href="#hnr_track-71"><span class="linenos"> 71</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="hnr_track-72"><a href="#hnr_track-72"><span class="linenos"> 72</span></a>    <span class="n">f0_min_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="hnr_track-73"><a href="#hnr_track-73"><span class="linenos"> 73</span></a>    <span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="hnr_track-74"><a href="#hnr_track-74"><span class="linenos"> 74</span></a>    <span class="n">silence_threshold</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="hnr_track-75"><a href="#hnr_track-75"><span class="linenos"> 75</span></a>    <span class="n">periods_per_window</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="hnr_track-76"><a href="#hnr_track-76"><span class="linenos"> 76</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+</span><span id="hnr_track-77"><a href="#hnr_track-77"><span class="linenos"> 77</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Harmonics-to-noise ratio over time, in dB, via Praat&#39;s cc method.</span>
+</span><span id="hnr_track-78"><a href="#hnr_track-78"><span class="linenos"> 78</span></a>
+</span><span id="hnr_track-79"><a href="#hnr_track-79"><span class="linenos"> 79</span></a><span class="sd">    Args:</span>
+</span><span id="hnr_track-80"><a href="#hnr_track-80"><span class="linenos"> 80</span></a><span class="sd">        audio: The recording. ``get_sound`` handles channel merging and resampling.</span>
+</span><span id="hnr_track-81"><a href="#hnr_track-81"><span class="linenos"> 81</span></a><span class="sd">        f0_min_hz: Lowest F0 the analysis considers. Read it from :func:`derive_f0_range`.</span>
+</span><span id="hnr_track-82"><a href="#hnr_track-82"><span class="linenos"> 82</span></a><span class="sd">        hop_s: Praat&#39;s ``time_step``. Read it from ``phonation.hop_s``.</span>
+</span><span id="hnr_track-83"><a href="#hnr_track-83"><span class="linenos"> 83</span></a><span class="sd">        silence_threshold: Praat&#39;s silence threshold. Read it from ``phonation.silence_threshold``.</span>
+</span><span id="hnr_track-84"><a href="#hnr_track-84"><span class="linenos"> 84</span></a><span class="sd">        periods_per_window: Praat&#39;s analysis window length, in periods of ``f0_min_hz``. Read it</span>
+</span><span id="hnr_track-85"><a href="#hnr_track-85"><span class="linenos"> 85</span></a><span class="sd">            from ``phonation.periods_per_window``.</span>
+</span><span id="hnr_track-86"><a href="#hnr_track-86"><span class="linenos"> 86</span></a>
+</span><span id="hnr_track-87"><a href="#hnr_track-87"><span class="linenos"> 87</span></a><span class="sd">    Returns:</span>
+</span><span id="hnr_track-88"><a href="#hnr_track-88"><span class="linenos"> 88</span></a><span class="sd">        ``(times_s, hnr_db)``, one value per frame. Frames Praat judges silent carry its floor</span>
+</span><span id="hnr_track-89"><a href="#hnr_track-89"><span class="linenos"> 89</span></a><span class="sd">        value rather than being dropped, so the track and its times stay aligned.</span>
+</span><span id="hnr_track-90"><a href="#hnr_track-90"><span class="linenos"> 90</span></a>
+</span><span id="hnr_track-91"><a href="#hnr_track-91"><span class="linenos"> 91</span></a><span class="sd">    Raises:</span>
+</span><span id="hnr_track-92"><a href="#hnr_track-92"><span class="linenos"> 92</span></a><span class="sd">        ModuleNotFoundError: If parselmouth is not installed.</span>
+</span><span id="hnr_track-93"><a href="#hnr_track-93"><span class="linenos"> 93</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="hnr_track-94"><a href="#hnr_track-94"><span class="linenos"> 94</span></a>    <span class="n">_require_parselmouth</span><span class="p">()</span>
+</span><span id="hnr_track-95"><a href="#hnr_track-95"><span class="linenos"> 95</span></a>    <span class="n">snd</span> <span class="o">=</span> <span class="n">get_sound</span><span class="p">(</span><span class="n">audio</span><span class="p">)</span>
+</span><span id="hnr_track-96"><a href="#hnr_track-96"><span class="linenos"> 96</span></a>    <span class="n">harmonicity</span> <span class="o">=</span> <span class="n">snd</span><span class="o">.</span><span class="n">to_harmonicity_cc</span><span class="p">(</span>
+</span><span id="hnr_track-97"><a href="#hnr_track-97"><span class="linenos"> 97</span></a>        <span class="n">time_step</span><span class="o">=</span><span class="n">hop_s</span><span class="p">,</span>
+</span><span id="hnr_track-98"><a href="#hnr_track-98"><span class="linenos"> 98</span></a>        <span class="n">minimum_pitch</span><span class="o">=</span><span class="n">f0_min_hz</span><span class="p">,</span>
+</span><span id="hnr_track-99"><a href="#hnr_track-99"><span class="linenos"> 99</span></a>        <span class="n">silence_threshold</span><span class="o">=</span><span class="n">silence_threshold</span><span class="p">,</span>
+</span><span id="hnr_track-100"><a href="#hnr_track-100"><span class="linenos">100</span></a>        <span class="n">periods_per_window</span><span class="o">=</span><span class="n">periods_per_window</span><span class="p">,</span>
+</span><span id="hnr_track-101"><a href="#hnr_track-101"><span class="linenos">101</span></a>    <span class="p">)</span>
+</span><span id="hnr_track-102"><a href="#hnr_track-102"><span class="linenos">102</span></a>    <span class="n">times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">harmonicity</span><span class="o">.</span><span class="n">xs</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="hnr_track-103"><a href="#hnr_track-103"><span class="linenos">103</span></a>    <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">harmonicity</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="hnr_track-104"><a href="#hnr_track-104"><span class="linenos">104</span></a>    <span class="k">return</span> <span class="n">times</span><span class="p">,</span> <span class="n">values</span>
 </span></pre></div>
 
 
@@ -533,7 +605,7 @@ with the periodicity that placed it and a reader cannot separate them.</p>
 
 <ul>
 <li><strong>audio:</strong>  The recording. <code>get_sound</code> handles channel merging and resampling.</li>
-<li><strong>f0_min_hz:</strong>  Lowest F0 the analysis considers. Read it from <code>voice.f0_range_hz</code>.</li>
+<li><strong>f0_min_hz:</strong>  Lowest F0 the analysis considers. Read it from <code><a href="#derive_f0_range">derive_f0_range()</a></code>.</li>
 <li><strong>hop_s:</strong>  Praat's <code>time_step</code>. Read it from <code>phonation.hop_s</code>.</li>
 <li><strong>silence_threshold:</strong>  Praat's silence threshold. Read it from <code>phonation.silence_threshold</code>.</li>
 <li><strong>periods_per_window:</strong>  Praat's analysis window length, in periods of <code>f0_min_hz</code>. Read it
@@ -567,50 +639,50 @@ from <code>phonation.periods_per_window</code>.</li>
 
     </div>
     <a class="headerlink" href="#period_marks"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="period_marks-79"><a href="#period_marks-79"><span class="linenos"> 79</span></a><span class="k">def</span><span class="w"> </span><span class="nf">period_marks</span><span class="p">(</span>
-</span><span id="period_marks-80"><a href="#period_marks-80"><span class="linenos"> 80</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
-</span><span id="period_marks-81"><a href="#period_marks-81"><span class="linenos"> 81</span></a>    <span class="n">start_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="period_marks-82"><a href="#period_marks-82"><span class="linenos"> 82</span></a>    <span class="n">end_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="period_marks-83"><a href="#period_marks-83"><span class="linenos"> 83</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="period_marks-84"><a href="#period_marks-84"><span class="linenos"> 84</span></a>    <span class="n">f0_min_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="period_marks-85"><a href="#period_marks-85"><span class="linenos"> 85</span></a>    <span class="n">f0_max_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="period_marks-86"><a href="#period_marks-86"><span class="linenos"> 86</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">PeriodMark</span><span class="p">]:</span>
-</span><span id="period_marks-87"><a href="#period_marks-87"><span class="linenos"> 87</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Glottal period marks inside one span, from Praat&#39;s point process.</span>
-</span><span id="period_marks-88"><a href="#period_marks-88"><span class="linenos"> 88</span></a>
-</span><span id="period_marks-89"><a href="#period_marks-89"><span class="linenos"> 89</span></a><span class="sd">    Args:</span>
-</span><span id="period_marks-90"><a href="#period_marks-90"><span class="linenos"> 90</span></a><span class="sd">        audio: The recording.</span>
-</span><span id="period_marks-91"><a href="#period_marks-91"><span class="linenos"> 91</span></a><span class="sd">        start_s: Span onset.</span>
-</span><span id="period_marks-92"><a href="#period_marks-92"><span class="linenos"> 92</span></a><span class="sd">        end_s: Span offset.</span>
-</span><span id="period_marks-93"><a href="#period_marks-93"><span class="linenos"> 93</span></a><span class="sd">        f0_min_hz: Lowest F0 to search. Read it from ``voice.f0_range_hz``.</span>
-</span><span id="period_marks-94"><a href="#period_marks-94"><span class="linenos"> 94</span></a><span class="sd">        f0_max_hz: Highest F0 to search. Read it from ``voice.f0_range_hz``.</span>
-</span><span id="period_marks-95"><a href="#period_marks-95"><span class="linenos"> 95</span></a>
-</span><span id="period_marks-96"><a href="#period_marks-96"><span class="linenos"> 96</span></a><span class="sd">    Returns:</span>
-</span><span id="period_marks-97"><a href="#period_marks-97"><span class="linenos"> 97</span></a><span class="sd">        One mark per pair of consecutive pulses whose gap is a plausible period — within</span>
-</span><span id="period_marks-98"><a href="#period_marks-98"><span class="linenos"> 98</span></a><span class="sd">        ``[1/f0_max_hz, 1/f0_min_hz]``; a longer gap is a voicing break, not a period. Empty when</span>
-</span><span id="period_marks-99"><a href="#period_marks-99"><span class="linenos"> 99</span></a><span class="sd">        Praat places no pulses — absent, not zero.</span>
-</span><span id="period_marks-100"><a href="#period_marks-100"><span class="linenos">100</span></a>
-</span><span id="period_marks-101"><a href="#period_marks-101"><span class="linenos">101</span></a><span class="sd">    Raises:</span>
-</span><span id="period_marks-102"><a href="#period_marks-102"><span class="linenos">102</span></a><span class="sd">        ModuleNotFoundError: If parselmouth is not installed.</span>
-</span><span id="period_marks-103"><a href="#period_marks-103"><span class="linenos">103</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="period_marks-104"><a href="#period_marks-104"><span class="linenos">104</span></a>    <span class="n">_require_parselmouth</span><span class="p">()</span>
-</span><span id="period_marks-105"><a href="#period_marks-105"><span class="linenos">105</span></a>    <span class="n">snd</span> <span class="o">=</span> <span class="n">get_sound</span><span class="p">(</span><span class="n">audio</span><span class="p">)</span>
-</span><span id="period_marks-106"><a href="#period_marks-106"><span class="linenos">106</span></a>    <span class="n">part</span> <span class="o">=</span> <span class="n">snd</span><span class="o">.</span><span class="n">extract_part</span><span class="p">(</span><span class="n">from_time</span><span class="o">=</span><span class="n">start_s</span><span class="p">,</span> <span class="n">to_time</span><span class="o">=</span><span class="n">end_s</span><span class="p">,</span> <span class="n">preserve_times</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="period_marks-107"><a href="#period_marks-107"><span class="linenos">107</span></a>    <span class="n">point_process</span> <span class="o">=</span> <span class="n">parselmouth</span><span class="o">.</span><span class="n">praat</span><span class="o">.</span><span class="n">call</span><span class="p">(</span><span class="n">part</span><span class="p">,</span> <span class="s2">&quot;To PointProcess (periodic, cc)&quot;</span><span class="p">,</span> <span class="n">f0_min_hz</span><span class="p">,</span> <span class="n">f0_max_hz</span><span class="p">)</span>
-</span><span id="period_marks-108"><a href="#period_marks-108"><span class="linenos">108</span></a>    <span class="n">n_points</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">parselmouth</span><span class="o">.</span><span class="n">praat</span><span class="o">.</span><span class="n">call</span><span class="p">(</span><span class="n">point_process</span><span class="p">,</span> <span class="s2">&quot;Get number of points&quot;</span><span class="p">))</span>
-</span><span id="period_marks-109"><a href="#period_marks-109"><span class="linenos">109</span></a>    <span class="n">pulses</span> <span class="o">=</span> <span class="p">[</span><span class="nb">float</span><span class="p">(</span><span class="n">parselmouth</span><span class="o">.</span><span class="n">praat</span><span class="o">.</span><span class="n">call</span><span class="p">(</span><span class="n">point_process</span><span class="p">,</span> <span class="s2">&quot;Get time from index&quot;</span><span class="p">,</span> <span class="n">i</span><span class="p">))</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_points</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)]</span>
-</span><span id="period_marks-110"><a href="#period_marks-110"><span class="linenos">110</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">part</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-</span><span id="period_marks-111"><a href="#period_marks-111"><span class="linenos">111</span></a>    <span class="n">t0</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">part</span><span class="o">.</span><span class="n">xmin</span><span class="p">)</span>
-</span><span id="period_marks-112"><a href="#period_marks-112"><span class="linenos">112</span></a>    <span class="n">sr</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="nb">float</span><span class="p">(</span><span class="n">part</span><span class="o">.</span><span class="n">dx</span><span class="p">)</span>
-</span><span id="period_marks-113"><a href="#period_marks-113"><span class="linenos">113</span></a>    <span class="n">marks</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PeriodMark</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="period_marks-114"><a href="#period_marks-114"><span class="linenos">114</span></a>    <span class="k">for</span> <span class="n">opening</span><span class="p">,</span> <span class="n">closing</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">pulses</span><span class="p">,</span> <span class="n">pulses</span><span class="p">[</span><span class="mi">1</span><span class="p">:]):</span>
-</span><span id="period_marks-115"><a href="#period_marks-115"><span class="linenos">115</span></a>        <span class="n">period</span> <span class="o">=</span> <span class="n">closing</span> <span class="o">-</span> <span class="n">opening</span>
-</span><span id="period_marks-116"><a href="#period_marks-116"><span class="linenos">116</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="n">f0_max_hz</span> <span class="o">&lt;=</span> <span class="n">period</span> <span class="o">&lt;=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">f0_min_hz</span><span class="p">):</span>
-</span><span id="period_marks-117"><a href="#period_marks-117"><span class="linenos">117</span></a>            <span class="k">continue</span>
-</span><span id="period_marks-118"><a href="#period_marks-118"><span class="linenos">118</span></a>        <span class="n">i0</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">int</span><span class="p">((</span><span class="n">opening</span> <span class="o">-</span> <span class="n">t0</span><span class="p">)</span> <span class="o">*</span> <span class="n">sr</span><span class="p">))</span>
-</span><span id="period_marks-119"><a href="#period_marks-119"><span class="linenos">119</span></a>        <span class="n">i1</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="nb">int</span><span class="p">((</span><span class="n">closing</span> <span class="o">-</span> <span class="n">t0</span><span class="p">)</span> <span class="o">*</span> <span class="n">sr</span><span class="p">))</span>
-</span><span id="period_marks-120"><a href="#period_marks-120"><span class="linenos">120</span></a>        <span class="n">amplitude</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="n">i0</span><span class="p">:</span><span class="n">i1</span><span class="p">])</span><span class="o">.</span><span class="n">max</span><span class="p">())</span> <span class="k">if</span> <span class="n">i1</span> <span class="o">&gt;</span> <span class="n">i0</span> <span class="k">else</span> <span class="mf">0.0</span>
-</span><span id="period_marks-121"><a href="#period_marks-121"><span class="linenos">121</span></a>        <span class="n">marks</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">PeriodMark</span><span class="p">(</span><span class="n">time_s</span><span class="o">=</span><span class="n">opening</span><span class="p">,</span> <span class="n">period_s</span><span class="o">=</span><span class="n">period</span><span class="p">,</span> <span class="n">amplitude</span><span class="o">=</span><span class="n">amplitude</span><span class="p">))</span>
-</span><span id="period_marks-122"><a href="#period_marks-122"><span class="linenos">122</span></a>    <span class="k">return</span> <span class="n">marks</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="period_marks-107"><a href="#period_marks-107"><span class="linenos">107</span></a><span class="k">def</span><span class="w"> </span><span class="nf">period_marks</span><span class="p">(</span>
+</span><span id="period_marks-108"><a href="#period_marks-108"><span class="linenos">108</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="period_marks-109"><a href="#period_marks-109"><span class="linenos">109</span></a>    <span class="n">start_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="period_marks-110"><a href="#period_marks-110"><span class="linenos">110</span></a>    <span class="n">end_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="period_marks-111"><a href="#period_marks-111"><span class="linenos">111</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="period_marks-112"><a href="#period_marks-112"><span class="linenos">112</span></a>    <span class="n">f0_min_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="period_marks-113"><a href="#period_marks-113"><span class="linenos">113</span></a>    <span class="n">f0_max_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="period_marks-114"><a href="#period_marks-114"><span class="linenos">114</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">PeriodMark</span><span class="p">]:</span>
+</span><span id="period_marks-115"><a href="#period_marks-115"><span class="linenos">115</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Glottal period marks inside one span, from Praat&#39;s point process.</span>
+</span><span id="period_marks-116"><a href="#period_marks-116"><span class="linenos">116</span></a>
+</span><span id="period_marks-117"><a href="#period_marks-117"><span class="linenos">117</span></a><span class="sd">    Args:</span>
+</span><span id="period_marks-118"><a href="#period_marks-118"><span class="linenos">118</span></a><span class="sd">        audio: The recording.</span>
+</span><span id="period_marks-119"><a href="#period_marks-119"><span class="linenos">119</span></a><span class="sd">        start_s: Span onset.</span>
+</span><span id="period_marks-120"><a href="#period_marks-120"><span class="linenos">120</span></a><span class="sd">        end_s: Span offset.</span>
+</span><span id="period_marks-121"><a href="#period_marks-121"><span class="linenos">121</span></a><span class="sd">        f0_min_hz: Lowest F0 to search. Read it from :func:`derive_f0_range`.</span>
+</span><span id="period_marks-122"><a href="#period_marks-122"><span class="linenos">122</span></a><span class="sd">        f0_max_hz: Highest F0 to search. Read it from :func:`derive_f0_range`.</span>
+</span><span id="period_marks-123"><a href="#period_marks-123"><span class="linenos">123</span></a>
+</span><span id="period_marks-124"><a href="#period_marks-124"><span class="linenos">124</span></a><span class="sd">    Returns:</span>
+</span><span id="period_marks-125"><a href="#period_marks-125"><span class="linenos">125</span></a><span class="sd">        One mark per pair of consecutive pulses whose gap is a plausible period — within</span>
+</span><span id="period_marks-126"><a href="#period_marks-126"><span class="linenos">126</span></a><span class="sd">        ``[1/f0_max_hz, 1/f0_min_hz]``; a longer gap is a voicing break, not a period. Empty when</span>
+</span><span id="period_marks-127"><a href="#period_marks-127"><span class="linenos">127</span></a><span class="sd">        Praat places no pulses — absent, not zero.</span>
+</span><span id="period_marks-128"><a href="#period_marks-128"><span class="linenos">128</span></a>
+</span><span id="period_marks-129"><a href="#period_marks-129"><span class="linenos">129</span></a><span class="sd">    Raises:</span>
+</span><span id="period_marks-130"><a href="#period_marks-130"><span class="linenos">130</span></a><span class="sd">        ModuleNotFoundError: If parselmouth is not installed.</span>
+</span><span id="period_marks-131"><a href="#period_marks-131"><span class="linenos">131</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="period_marks-132"><a href="#period_marks-132"><span class="linenos">132</span></a>    <span class="n">_require_parselmouth</span><span class="p">()</span>
+</span><span id="period_marks-133"><a href="#period_marks-133"><span class="linenos">133</span></a>    <span class="n">snd</span> <span class="o">=</span> <span class="n">get_sound</span><span class="p">(</span><span class="n">audio</span><span class="p">)</span>
+</span><span id="period_marks-134"><a href="#period_marks-134"><span class="linenos">134</span></a>    <span class="n">part</span> <span class="o">=</span> <span class="n">snd</span><span class="o">.</span><span class="n">extract_part</span><span class="p">(</span><span class="n">from_time</span><span class="o">=</span><span class="n">start_s</span><span class="p">,</span> <span class="n">to_time</span><span class="o">=</span><span class="n">end_s</span><span class="p">,</span> <span class="n">preserve_times</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="period_marks-135"><a href="#period_marks-135"><span class="linenos">135</span></a>    <span class="n">point_process</span> <span class="o">=</span> <span class="n">parselmouth</span><span class="o">.</span><span class="n">praat</span><span class="o">.</span><span class="n">call</span><span class="p">(</span><span class="n">part</span><span class="p">,</span> <span class="s2">&quot;To PointProcess (periodic, cc)&quot;</span><span class="p">,</span> <span class="n">f0_min_hz</span><span class="p">,</span> <span class="n">f0_max_hz</span><span class="p">)</span>
+</span><span id="period_marks-136"><a href="#period_marks-136"><span class="linenos">136</span></a>    <span class="n">n_points</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">parselmouth</span><span class="o">.</span><span class="n">praat</span><span class="o">.</span><span class="n">call</span><span class="p">(</span><span class="n">point_process</span><span class="p">,</span> <span class="s2">&quot;Get number of points&quot;</span><span class="p">))</span>
+</span><span id="period_marks-137"><a href="#period_marks-137"><span class="linenos">137</span></a>    <span class="n">pulses</span> <span class="o">=</span> <span class="p">[</span><span class="nb">float</span><span class="p">(</span><span class="n">parselmouth</span><span class="o">.</span><span class="n">praat</span><span class="o">.</span><span class="n">call</span><span class="p">(</span><span class="n">point_process</span><span class="p">,</span> <span class="s2">&quot;Get time from index&quot;</span><span class="p">,</span> <span class="n">i</span><span class="p">))</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_points</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)]</span>
+</span><span id="period_marks-138"><a href="#period_marks-138"><span class="linenos">138</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">part</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="period_marks-139"><a href="#period_marks-139"><span class="linenos">139</span></a>    <span class="n">t0</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">part</span><span class="o">.</span><span class="n">xmin</span><span class="p">)</span>
+</span><span id="period_marks-140"><a href="#period_marks-140"><span class="linenos">140</span></a>    <span class="n">sr</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="nb">float</span><span class="p">(</span><span class="n">part</span><span class="o">.</span><span class="n">dx</span><span class="p">)</span>
+</span><span id="period_marks-141"><a href="#period_marks-141"><span class="linenos">141</span></a>    <span class="n">marks</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PeriodMark</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="period_marks-142"><a href="#period_marks-142"><span class="linenos">142</span></a>    <span class="k">for</span> <span class="n">opening</span><span class="p">,</span> <span class="n">closing</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">pulses</span><span class="p">,</span> <span class="n">pulses</span><span class="p">[</span><span class="mi">1</span><span class="p">:]):</span>
+</span><span id="period_marks-143"><a href="#period_marks-143"><span class="linenos">143</span></a>        <span class="n">period</span> <span class="o">=</span> <span class="n">closing</span> <span class="o">-</span> <span class="n">opening</span>
+</span><span id="period_marks-144"><a href="#period_marks-144"><span class="linenos">144</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="n">f0_max_hz</span> <span class="o">&lt;=</span> <span class="n">period</span> <span class="o">&lt;=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">f0_min_hz</span><span class="p">):</span>
+</span><span id="period_marks-145"><a href="#period_marks-145"><span class="linenos">145</span></a>            <span class="k">continue</span>
+</span><span id="period_marks-146"><a href="#period_marks-146"><span class="linenos">146</span></a>        <span class="n">i0</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">int</span><span class="p">((</span><span class="n">opening</span> <span class="o">-</span> <span class="n">t0</span><span class="p">)</span> <span class="o">*</span> <span class="n">sr</span><span class="p">))</span>
+</span><span id="period_marks-147"><a href="#period_marks-147"><span class="linenos">147</span></a>        <span class="n">i1</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="nb">int</span><span class="p">((</span><span class="n">closing</span> <span class="o">-</span> <span class="n">t0</span><span class="p">)</span> <span class="o">*</span> <span class="n">sr</span><span class="p">))</span>
+</span><span id="period_marks-148"><a href="#period_marks-148"><span class="linenos">148</span></a>        <span class="n">amplitude</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="n">i0</span><span class="p">:</span><span class="n">i1</span><span class="p">])</span><span class="o">.</span><span class="n">max</span><span class="p">())</span> <span class="k">if</span> <span class="n">i1</span> <span class="o">&gt;</span> <span class="n">i0</span> <span class="k">else</span> <span class="mf">0.0</span>
+</span><span id="period_marks-149"><a href="#period_marks-149"><span class="linenos">149</span></a>        <span class="n">marks</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">PeriodMark</span><span class="p">(</span><span class="n">time_s</span><span class="o">=</span><span class="n">opening</span><span class="p">,</span> <span class="n">period_s</span><span class="o">=</span><span class="n">period</span><span class="p">,</span> <span class="n">amplitude</span><span class="o">=</span><span class="n">amplitude</span><span class="p">))</span>
+</span><span id="period_marks-150"><a href="#period_marks-150"><span class="linenos">150</span></a>    <span class="k">return</span> <span class="n">marks</span>
 </span></pre></div>
 
 
@@ -622,8 +694,8 @@ from <code>phonation.periods_per_window</code>.</li>
 <li><strong>audio:</strong>  The recording.</li>
 <li><strong>start_s:</strong>  Span onset.</li>
 <li><strong>end_s:</strong>  Span offset.</li>
-<li><strong>f0_min_hz:</strong>  Lowest F0 to search. Read it from <code>voice.f0_range_hz</code>.</li>
-<li><strong>f0_max_hz:</strong>  Highest F0 to search. Read it from <code>voice.f0_range_hz</code>.</li>
+<li><strong>f0_min_hz:</strong>  Lowest F0 to search. Read it from <code><a href="#derive_f0_range">derive_f0_range()</a></code>.</li>
+<li><strong>f0_max_hz:</strong>  Highest F0 to search. Read it from <code><a href="#derive_f0_range">derive_f0_range()</a></code>.</li>
 </ul>
 
 <h6 id="returns">Returns:</h6>
