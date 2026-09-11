@@ -144,6 +144,12 @@ phonation:
   hnr_floor_interval_db: null          # near-edge HNR interval; Praat calibrates no dB floor, so this needs a measurement
   rms_floor_interval: null             # near-edge RMS interval, same
 
+# Praat's settings for PREPROCESS's whole-file feature set over the `enhanced` stream. The forty
+# scalars it returns become the `praat_features` measurement's own attributes.
+praat_features:
+  time_step_s: 0.005                   # Praat's frame shift for every frame-based descriptor
+  window_length_s: 0.025               # Praat's analysis window for the spectral moments
+
 # VOICE's F0 ranges and task-duration expectations. f0_search_range_hz is also read by PREPROCESS:
 # it is the wide search each recording's own [floor, ceiling] is narrowed from, not a fixed range.
 voice:

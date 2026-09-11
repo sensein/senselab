@@ -11,6 +11,7 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
 from senselab.audio.tasks.classification.yamnet import YAMNET_WINDOW_SECONDS
+from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS, PpgsPosteriorgramUnavailable
 from senselab.audio.tasks.speech_enhancement.residual import compute_residual
 from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -21,7 +22,13 @@ from senselab.audio.workflows.triage.nodes.common import (
     live_entities,
     resolve_stream,
 )
-from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID, preprocess
+from senselab.audio.workflows.triage.nodes.preprocess import (
+    CRISPERWHISPER_ID,
+    PPG_MEASUREMENT,
+    PRAAT_MEASUREMENT,
+    QWEN_ID,
+    preprocess,
+)
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import (
@@ -31,6 +38,7 @@ from tests.audio.workflows.triage.nodes.conftest import (
     _line,
     _seed_admit,
     _stub_models,
+    fake_ppgs,
     window,
 )
 
@@ -829,6 +837,8 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "residual_yamnet",
             "residual_ast",
             "residual_hear",
+            "ppg_posteriorgram",
+            "praat_features",
         }
         for name in ("span_hear", "span_yamnet"):
             windows = find_measurements(store, name)
@@ -1979,3 +1989,140 @@ class TestTheNodeAgreesWithTheLibraryFunction:
         assert independent.residual_energy_fraction == pytest.approx(attrs["energy_fraction"], rel=1e-6)
         assert independent.correlation_signal == pytest.approx(attrs["correlation_enhanced"], rel=1e-6)
         assert independent.correlation_residual == pytest.approx(attrs["correlation_residual"], rel=1e-6)
+
+
+class TestThePosteriorgramAndPraatBlocks:
+    """Both run on ``enhanced``, both register a store entity, and neither inlines its array."""
+
+    def test_the_posteriorgram_is_a_sidecar_the_entity_names_by_digest(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The npz lands under ``derivatives/`` and the entity carries its path, SHA-256 and shape."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1))
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        measurement = find_measurement(store, PPG_MEASUREMENT)
+        assert measurement is not None
+        attrs = measurement.attributes
+        assert attrs["path"] == f"derivatives/{PPG_MEASUREMENT}.npz"
+        assert len(attrs["checksum_sha256"]) == 64
+        assert attrs["size_bytes"] > 0
+        assert attrs["signal"] == "enhanced"
+        assert attrs["n_phonemes"] == len(PHONEME_LABELS)
+        assert attrs["phonemes"] == list(PHONEME_LABELS)
+        assert attrs["dtype"] == "float16"
+        assert "posteriorgram" not in attrs
+
+        payload = np.load(tmp_path / attrs["path"])
+        assert payload["posteriorgram"].dtype == np.float16
+        assert payload["posteriorgram"].shape == (attrs["frames"], len(PHONEME_LABELS))
+        assert list(payload["phonemes"]) == list(PHONEME_LABELS)
+
+        enhanced_id, _ = resolve_stream(store, tmp_path, "enhanced")
+        assert store.derived_from(measurement.id) == [enhanced_id]
+        model_agents = [a for a in store.agents("model") if a.model_id == preprocess_module.PPGS_MODEL_ID]
+        assert model_agents and model_agents[0].commit_sha is None
+        assert model_agents[0].unresolved_reason
+
+    def test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Forty small numbers need no sidecar; a non-finite one is null rather than NaN."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1))
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        measurement = find_measurement(store, PRAAT_MEASUREMENT)
+        assert measurement is not None
+        attrs = measurement.attributes
+        assert attrs["signal"] == "enhanced"
+        assert attrs["time_step_s"] == residual_config.require("praat_features.time_step_s")
+        assert attrs["window_length_s"] == residual_config.require("praat_features.window_length_s")
+        assert attrs["n_features"] == len(attrs["features"])
+        assert attrs["n_features"] > 0
+        assert "path" not in attrs
+        for name, value in attrs["features"].items():
+            assert value is None or not isinstance(value, float) or np.isfinite(value), name
+
+        enhanced_id, _ = resolve_stream(store, tmp_path, "enhanced")
+        assert store.derived_from(measurement.id) == [enhanced_id]
+
+    def test_both_read_the_enhanced_stream_back_out_of_the_store(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Neither block reads this pass's in-memory audio, so an extend pass sees the same input.
+
+        The posteriorgram is written over whatever ``ppg_input`` returns; calling that helper on the
+        finished store — which is all an extend pass has — must return the same samples the block
+        just used, or the two passes would measure different things.
+        """
+        _seed_admit(store, tmp_path, wav_writer)
+        seen: list[int] = []
+
+        def _recording_ppgs(audios: list, device: Any = None) -> list:  # noqa: ANN401
+            seen.append(audios[0].waveform.shape[-1])
+            return fake_ppgs(audios, device)
+
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), ppgs=_recording_ppgs)
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        _, replayed = preprocess_module.ppg_input(store, tmp_path)
+        assert seen == [replayed.waveform.shape[-1]]
+
+    def test_a_model_that_produced_no_posteriorgram_is_a_named_absence(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The typed absence is caught by the block runner: no entity, a reason, and Praat still runs."""
+        _seed_admit(store, tmp_path, wav_writer)
+
+        def _unavailable(audios: list, device: Any = None) -> list:  # noqa: ANN401
+            return [PpgsPosteriorgramUnavailable("ppgs produced no posteriorgram: RuntimeError: shapes")]
+
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), ppgs=_unavailable)
+        result = preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        assert find_measurement(store, PPG_MEASUREMENT) is None
+        assert PPG_MEASUREMENT in result.absent
+        reason = _absent_map(store)[PPG_MEASUREMENT]
+        assert "PpgsPosteriorgramUnavailable" in reason
+        assert not (tmp_path / "derivatives" / f"{PPG_MEASUREMENT}.npz").exists()
+        assert find_measurement(store, PRAAT_MEASUREMENT) is not None
+
+    def test_both_are_absent_when_no_enhanced_stream_was_written(
+        self,
+        store: ProvStore,
+        phonation_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No enhanced stream is a cascading absence, not a failure of the node."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        result = preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+
+        assert PPG_MEASUREMENT in result.absent
+        assert PRAAT_MEASUREMENT in result.absent
+        for name in (PPG_MEASUREMENT, PRAAT_MEASUREMENT):
+            assert "enhanced" in _absent_map(store)[name]
