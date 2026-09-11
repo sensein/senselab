@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import senselab.audio.tasks
+from senselab.audio.workflows.triage import config as config_module
 from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
 from senselab.text.tasks.pii_detection.api import default_detectors
 
@@ -146,26 +147,34 @@ class TestOverrides:
 class TestOverridesMayExtendADataMap:
     """A schema key is a name the code reads; a data-map key is a value the data supplies."""
 
-    def test_a_new_confirmation_map_entry_is_accepted(self, tmp_path: Path) -> None:
-        """A campaign screening for sneezes must be able to say so without editing the package."""
+    def test_a_new_corroboration_override_entry_is_accepted(self, tmp_path: Path) -> None:
+        """A campaign wanting its own corroboration for Sneeze must not have to edit the package."""
         override = tmp_path / "o.yaml"
-        override.write_text("airway:\n  confirmation_map:\n    Sneeze: [Sneeze]\n")
+        override.write_text("airway:\n  corroboration_overrides:\n    Sneeze: [Sneeze]\n")
         cfg = load_triage_config(override)
-        assert cfg.require("airway.confirmation_map")["Sneeze"] == ["Sneeze"]
+        assert cfg.require("airway.corroboration_overrides")["Sneeze"] == ["Sneeze"]
 
-    def test_the_packaged_entries_survive_the_addition(self, tmp_path: Path) -> None:
-        """An additive override that silently dropped Cough would disable the branch it extended."""
+    def test_the_packaged_entries_of_a_non_null_data_map_survive_the_addition(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An additive override that silently dropped a packaged entry would disable it."""
+        packaged = tmp_path / "packaged.yaml"
+        packaged.write_text(
+            (Path(config_module.__file__).parent / "data" / "config" / "default.yaml").read_text()
+            + "\n".join(("", "airway:", "  corroboration_overrides:", "    Cough: [Cough]", ""))
+        )
+        monkeypatch.setattr(config_module, "_DEFAULT", packaged)
         override = tmp_path / "o.yaml"
-        override.write_text("airway:\n  confirmation_map:\n    Sneeze: [Sneeze]\n")
-        confirmation = load_triage_config(override).require("airway.confirmation_map")
-        assert confirmation["Cough"] == ["Cough"]
-        assert confirmation["Breathe"] == ["Breathing", "Sigh", "Gasp"]
+        override.write_text("airway:\n  corroboration_overrides:\n    Sneeze: [Sneeze]\n")
+        resolved = load_triage_config(override).require("airway.corroboration_overrides")
+        assert resolved == {"Cough": ["Cough"], "Sneeze": ["Sneeze"]}
 
     def test_an_existing_entry_is_replaced_not_merged(self, tmp_path: Path) -> None:
         """The value under a data-map key is data; two lists do not deep-merge into one."""
         override = tmp_path / "o.yaml"
-        override.write_text("airway:\n  confirmation_map:\n    Breathe: [Breathing]\n")
-        assert load_triage_config(override).require("airway.confirmation_map")["Breathe"] == ["Breathing"]
+        override.write_text("airway:\n  corroboration_overrides:\n    Breathe: [Breathing]\n")
+        resolved = load_triage_config(override).require("airway.corroboration_overrides")
+        assert resolved == {"Breathe": ["Breathing"]}
 
     def test_a_null_data_map_still_takes_a_whole_mapping(self, tmp_path: Path) -> None:
         """The control: the paths that ship null must keep accepting the mapping that fills them."""
@@ -183,8 +192,8 @@ class TestOverridesMayExtendADataMap:
     def test_a_schema_key_inside_a_section_holding_a_data_map_is_still_refused(self, tmp_path: Path) -> None:
         """The exemption is the map, not the section it sits in."""
         override = tmp_path / "o.yaml"
-        override.write_text("airway:\n  confirmatoin_map:\n    Sneeze: [Sneeze]\n")
-        with pytest.raises(ValueError, match="confirmatoin_map"):
+        override.write_text("airway:\n  corroboratoin_overrides:\n    Sneeze: [Sneeze]\n")
+        with pytest.raises(ValueError, match="corroboratoin_overrides"):
             load_triage_config(override)
 
     def test_every_declared_data_map_path_exists_in_the_packaged_file(self) -> None:
