@@ -709,10 +709,13 @@ applied per span at `:232`), the lexical consensus words, which exclude an alrea
 from the evidence set (`_is_transcribed`, `airway.py:64-79`, used `:216`, and again in the
 lexical-contamination check at `:306-336`), and YAMNet's whole-file per-window labels, which drive
 the confirm/contest verb (`_windows_covering`, `airway.py:46-61`, used `:258`). Config:
-`airway.labels_of_interest` (`Cough`, `Breathe`), `airway.confirmation_map` (which YAMNet labels
-confirm which HeAR label), `taxonomy.audioset_airway_labels`, and `airway.contest_labels` (**null**;
-when supplied it is refused, at branch execution (`airway.py:156`), if it intersects
-`taxonomy.audioset_airway_labels` rather than `airway.confirmation_map`).
+`airway.labels_of_interest` (`Cough`, `Breathe`), `airway.corroboration_profile` and
+`airway.corroboration_overrides` (which AudioSet classes corroborate which HeAR label — derived
+from the classifier-ontology profile, see
+[`../20260910-classifier-ontology-mapping/design.md`](../20260910-classifier-ontology-mapping/design.md)),
+`taxonomy.audioset_airway_labels`, and `airway.contest_labels` (**null**; when supplied it is
+refused, at branch execution, if it intersects `taxonomy.audioset_airway_labels` rather than the
+corroboration sets).
 
 *Goals served*: 2.
 
