@@ -43,6 +43,7 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 CLI = REPO_ROOT / "scripts" / "triage_audio.py"
 
 GRAPH = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
+"""The nodes with an implementation. QUALITY is declared in ``GRAPH_ORDER`` and has none yet."""
 
 _MISSING = object()
 
@@ -239,12 +240,22 @@ class TestHappyPath:
     def test_returns_the_file_verdict_with_every_node_completed(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A graph in which nothing raised reports ``COMPLETED`` for all nine nodes."""
+        """A graph in which nothing raised reports ``COMPLETED`` for every implemented node.
+
+        QUALITY is the exception and is not one: it is declared in ``GRAPH_ORDER`` as the terminal
+        node every recording reaches, no node implements it, and the run says so rather than
+        leaving it out of the record on the paths where nothing skipped it.
+        """
         graph()
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
         assert result.file_verdict.triage is Triage.PASS
-        assert result.ran == {**dict.fromkeys(GRAPH, RunState.COMPLETED), "REPORT": RunState.COMPLETED}
+        assert result.ran == {
+            **dict.fromkeys(GRAPH, RunState.COMPLETED),
+            "QUALITY": RunState.SKIPPED,
+            "REPORT": RunState.COMPLETED,
+        }
+        assert result.file_verdict.ran["QUALITY"] is RunState.SKIPPED
 
     def test_the_layout_is_written_and_the_release_dir_is_disjoint(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path

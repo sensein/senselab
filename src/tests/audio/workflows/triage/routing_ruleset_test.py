@@ -8,7 +8,9 @@ from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.routing_analysis.features import TRANSCRIPT_CAP, RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     FAMILY_SETS,
+    ROUTE_STATES,
     GateOutcome,
+    RouteState,
     Ruleset,
     evaluate_gate,
     evaluate_routes,
@@ -17,7 +19,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     score_branches,
     tally_families,
 )
-from senselab.audio.workflows.triage.vocabulary import BRANCHES
+from senselab.audio.workflows.triage.vocabulary import BRANCHES, GRAPH_ORDER, QUALITY
 
 
 @pytest.fixture(scope="module")
@@ -52,6 +54,7 @@ def _features(family: str, **overrides: object) -> RecordingFeatures:
         residual={"energy_fraction": 0.0},
         span_longest_s={"amplitude": 0.0},
         span_stats={"all.peak_over_floor_db_max": 0.0},
+        span_label_set_stats={"yamnet.cough_labels.peak_over_floor_db_max": 0.0},
         classifier_streams=["plain|yamnet"],
     )
     for name, value in overrides.items():
@@ -99,9 +102,9 @@ class TestEachGateFiresAndDoesNot:
             ("airway.breath", "residual", {"energy_fraction": 0.10}, {"energy_fraction": 0.09}),
             (
                 "airway.cough",
-                "span_stats",
-                {"all.peak_over_floor_db_max": 50.0},
-                {"all.peak_over_floor_db_max": 49.9},
+                "span_label_set_stats",
+                {"yamnet.cough_labels.peak_over_floor_db_max": 50.0},
+                {"yamnet.cough_labels.peak_over_floor_db_max": 49.9},
             ),
         ],
     )
@@ -148,7 +151,7 @@ class TestContentRoutesWithoutTheInstruction:
         record = _features(
             "voluntary-cough",
             words={"agreement": 1, "total": 5, "lexical": 5},
-            span_stats={"all.peak_over_floor_db_max": 55.0},
+            span_label_set_stats={"yamnet.cough_labels.peak_over_floor_db_max": 55.0},
         )
         result = evaluate_routes(record, ruleset)
         assert result.declared == ("AIRWAY",)
@@ -156,7 +159,7 @@ class TestContentRoutesWithoutTheInstruction:
         assert result.agreed == ("AIRWAY",)
         assert result.extra == ("SPEECH",)
         assert result.missed == ()
-        assert result.fell_through is False
+        assert result.state is RouteState.ROUTED
 
     def test_a_declared_branch_that_does_not_route_is_missed(self, ruleset: Ruleset) -> None:
         """A prolonged vowel with no held span, no singing and no chant is a miss, not a pass."""
@@ -166,7 +169,7 @@ class TestContentRoutesWithoutTheInstruction:
         assert result.missed == ("VOICE",)
         assert result.agreed == ()
         assert result.extra == ()
-        assert result.fell_through is True
+        assert result.state is RouteState.UNEXPLAINED
 
     def test_speech_routes_on_lexical_words_alone_when_one_recogniser_disagreed(self, ruleset: Ruleset) -> None:
         """The harvard case: nine lexical words, three agreed, unambiguous read speech."""
@@ -217,7 +220,7 @@ class TestAMissingMeasurementIsNotANegative:
 
     def test_an_unreadable_gate_is_named_rather_than_counted_as_silent(self, ruleset: Ruleset) -> None:
         """A breath recording with no residual and no span statistic is unmeasured, not empty."""
-        record = _features("breath-sounds", residual={}, span_stats={})
+        record = _features("breath-sounds", residual={}, span_label_set_stats={})
         result = evaluate_routes(record, ruleset)
         assert result.unavailable["AIRWAY"] == ("airway.breath", "airway.cough")
         assert result.routed == ()
@@ -233,14 +236,18 @@ class TestAMissingMeasurementIsNotANegative:
 
     def test_a_branch_routes_on_a_readable_gate_beside_an_unreadable_one(self, ruleset: Ruleset) -> None:
         """One unread gate does not withhold the branch a second gate fired for."""
-        record = _features("voluntary-cough", residual={}, span_stats={"all.peak_over_floor_db_max": 55.0})
+        record = _features(
+            "voluntary-cough",
+            residual={},
+            span_label_set_stats={"yamnet.cough_labels.peak_over_floor_db_max": 55.0},
+        )
         result = evaluate_routes(record, ruleset)
         assert result.routed == ("AIRWAY",)
         assert result.unavailable["AIRWAY"] == ("airway.breath",)
 
     def test_the_tally_counts_unavailable_separately_from_a_silent_gate(self, ruleset: Ruleset) -> None:
         """Collapsing the two would report a broken store as a negative measurement."""
-        unmeasured = _features("breath-sounds", residual={}, span_stats={})
+        unmeasured = _features("breath-sounds", residual={}, span_label_set_stats={})
         silent = _features("breath-sounds")
         tallies = tally_families([evaluate_routes(unmeasured, ruleset), evaluate_routes(silent, ruleset)])
         row = tallies["breath-sounds"]
@@ -249,26 +256,32 @@ class TestAMissingMeasurementIsNotANegative:
         assert row.unavailable["AIRWAY"] == 1
         assert row.routed["AIRWAY"] == 0
         assert row.missed["AIRWAY"] == 2
-        assert row.fell_through == 2
+        assert row.states["unexplained"] == 2
 
 
 class TestARecordingRoutesToNothing:
-    """The fall-through count is a first-class output."""
+    """The unexplained count is a first-class output, and the only one that indicts the ruleset."""
 
-    def test_the_tally_counts_the_fall_through_per_family(self, ruleset: Ruleset) -> None:
-        """Two families, one fall-through each, counted where the owner asked to read them."""
+    def test_the_tally_counts_the_unexplained_per_family(self, ruleset: Ruleset) -> None:
+        """Two families, one unexplained each, counted where the owner asked to read them."""
         evaluations = [
             evaluate_routes(_features("prolonged-vowel"), ruleset),
             evaluate_routes(_features("prolonged-vowel", span_longest_s={"amplitude": 4.0}), ruleset),
             evaluate_routes(_features("voluntary-cough"), ruleset),
         ]
         tallies = tally_families(evaluations)
-        assert tallies["prolonged-vowel"].fell_through == 1
+        assert tallies["prolonged-vowel"].states == {"routed": 1, "empty": 0, "unexplained": 1}
         assert tallies["prolonged-vowel"].routed["VOICE"] == 1
         assert tallies["prolonged-vowel"].agreed["VOICE"] == 1
-        assert tallies["voluntary-cough"].fell_through == 1
+        assert tallies["voluntary-cough"].states["unexplained"] == 1
         assert tallies["voluntary-cough"].declared["AIRWAY"] == 1
         assert set(tallies["voluntary-cough"].declared) == set(BRANCHES)
+
+    def test_every_tally_carries_all_three_states_and_they_sum(self, ruleset: Ruleset) -> None:
+        """A state a family never reached reads zero rather than being absent from the row."""
+        row = tally_families([evaluate_routes(_features("voluntary-cough"), ruleset)])["voluntary-cough"]
+        assert list(row.states) == list(ROUTE_STATES)
+        assert sum(row.states.values()) == row.recordings
 
 
 class TestScoringContentAgainstTheDeclaredFamily:
@@ -380,7 +393,7 @@ class TestAgreementIsAFlagAndNotAGate:
         result = evaluate_routes(record, ruleset)
         assert result.flags == {"SPEECH": ("speech.transcript_agreement",)}
         assert result.routed == ()
-        assert result.fell_through is True
+        assert result.state is RouteState.UNEXPLAINED
 
     def test_a_silent_flag_is_absent_rather_than_keyed_empty(self, ruleset: Ruleset) -> None:
         """Only a fired flag is reported, so a branch's absence from the mapping is the negative."""
@@ -418,27 +431,26 @@ def _classified(family: str, enhanced: float, residual: float, **overrides: obje
     return record
 
 
-class TestEmptinessIsCheckedBeforeRouting:
-    """A recording that carried nothing is not a recording whose content matched no gate."""
+class TestEmptinessIsABypassAndNotAPrecondition:
+    """Every gate runs first; emptiness only explains a recording no gate claimed."""
 
     def test_both_streams_under_the_floor_is_empty(self, ruleset: Ruleset) -> None:
         """The short-recording case: the enhanced and the residual stream are both silent."""
         result = evaluate_routes(_classified("prolonged-vowel", 0.003, 0.0), ruleset)
-        assert result.empty is True
+        assert result.state is RouteState.EMPTY
         assert result.routed == ()
-        assert result.fell_through is False
 
     def test_one_stream_at_the_floor_is_not_empty(self, ruleset: Ruleset) -> None:
         """The floor is inclusive on the content side, so a stream at 0.2 carries something."""
-        assert evaluate_routes(_classified("prolonged-vowel", 0.2, 0.0), ruleset).empty is False
-        assert evaluate_routes(_classified("prolonged-vowel", 0.0, 0.2), ruleset).empty is False
+        assert evaluate_routes(_classified("prolonged-vowel", 0.2, 0.0), ruleset).state is RouteState.UNEXPLAINED
+        assert evaluate_routes(_classified("prolonged-vowel", 0.0, 0.2), ruleset).state is RouteState.UNEXPLAINED
 
-    def test_an_empty_recording_is_not_a_fall_through(self, ruleset: Ruleset) -> None:
-        """The owner's number is the content that landed nowhere, not the silence."""
+    def test_an_empty_recording_is_not_unexplained(self, ruleset: Ruleset) -> None:
+        """The number that indicts the ruleset is the content that landed nowhere, not the silence."""
         blank = evaluate_routes(_classified("prolonged-vowel", 0.001, 0.0), ruleset)
         content = evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset)
-        assert (blank.empty, blank.fell_through) == (True, False)
-        assert (content.empty, content.fell_through) == (False, True)
+        assert blank.state is RouteState.EMPTY
+        assert content.state is RouteState.UNEXPLAINED
 
     def test_the_tally_counts_the_two_separately(self, ruleset: Ruleset) -> None:
         """One empty and one content-bearing miss, in a family whose total is two."""
@@ -446,21 +458,67 @@ class TestEmptinessIsCheckedBeforeRouting:
         content = evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset)
         row = tally_families([blank, content])["prolonged-vowel"]
         assert row.recordings == 2
-        assert row.empty == 1
-        assert row.fell_through == 1
+        assert row.states == {"routed": 0, "empty": 1, "unexplained": 1}
 
-    def test_an_empty_recording_runs_no_branch_gate(self, ruleset: Ruleset) -> None:
-        """A precondition is ahead of routing, so a lexical word in a silent file routes nothing."""
+    def test_a_gate_firing_on_a_silent_file_routes_it_rather_than_calling_it_empty(self, ruleset: Ruleset) -> None:
+        """The gates decide first, so a lexical word in a stream-silent file is SPEECH, not empty."""
         record = _classified("prolonged-vowel", 0.0, 0.0, words={"agreement": 0, "total": 4, "lexical": 4})
         result = evaluate_routes(record, ruleset)
-        assert result.empty is True
-        assert result.routed == ()
-        assert result.gate_outcomes == {}
+        assert result.state is RouteState.ROUTED
+        assert result.routed == ("SPEECH",)
+        assert result.extra == ("SPEECH",)
+
+    def test_every_gate_is_evaluated_even_on_an_empty_recording(self, ruleset: Ruleset) -> None:
+        """Emptiness no longer short-circuits, so the gate record is complete on every recording."""
+        result = evaluate_routes(_classified("prolonged-vowel", 0.0, 0.0), ruleset)
+        assert result.state is RouteState.EMPTY
+        assert set(result.gate_outcomes) == set(ruleset.gates)
         assert result.missed == ("VOICE",)
 
     def test_a_stream_with_no_summary_cannot_be_called_empty(self, ruleset: Ruleset) -> None:
         """An absent classifier summary is not a stream that scored zero."""
-        assert evaluate_routes(_features("prolonged-vowel"), ruleset).empty is False
+        assert evaluate_routes(_features("prolonged-vowel"), ruleset).state is RouteState.UNEXPLAINED
+
+
+class TestTheCoughGateIsSetConditioned:
+    """The router reads cough-labelled spans, not the loudest span in the file."""
+
+    def test_the_gate_reads_the_cough_label_set(self, ruleset: Ruleset) -> None:
+        """The blanket ``span_stat`` reader fired on 38.7% of non-airway recordings and is gone."""
+        assert ruleset.gates["airway.cough"].feature == (
+            "span_label_set_stat",
+            "yamnet.cough_labels.peak_over_floor_db_max",
+        )
+        for gate in ruleset.gates.values():
+            assert gate.feature != ("span_stat", "all.peak_over_floor_db_max")
+
+    def test_a_loud_span_no_classifier_called_cough_does_not_route_airway(self, ruleset: Ruleset) -> None:
+        """A door slam is a loud span and is not an airway event."""
+        record = _features("free-speech", span_stats={"all.peak_over_floor_db_max": 70.0})
+        assert evaluate_routes(record, ruleset).routed == ()
+
+    def test_no_cough_labelled_span_is_unreadable_rather_than_silent(self, ruleset: Ruleset) -> None:
+        """A recording with no cough-set span never measured the quantity the gate reads."""
+        record = _features("voluntary-cough", span_label_set_stats={})
+        assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.UNAVAILABLE
+
+
+class TestQualityIsATerminalNodeAndNotABranch:
+    """Everything reaches quality after the branches, so it is a graph edge and never a route."""
+
+    def test_quality_is_in_the_graph_after_every_branch(self) -> None:
+        """It sits after the last branch, which is what "terminal" means for this graph."""
+        assert QUALITY in GRAPH_ORDER
+        assert GRAPH_ORDER.index(QUALITY) > max(
+            GRAPH_ORDER.index(branch) for branch in GRAPH_ORDER if branch in BRANCHES
+        )
+
+    def test_quality_is_not_a_branch_and_has_no_gate(self, ruleset: Ruleset) -> None:
+        """A node every recording reaches cannot be selected by a gate; it would gate nothing."""
+        assert QUALITY not in BRANCHES
+        assert QUALITY not in ruleset.branch_gates
+        assert QUALITY not in ruleset.branch_flags
+        assert QUALITY not in ruleset.reference_family_set
 
 
 class TestBracketedTokensAreAirwayEvidence:

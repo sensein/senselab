@@ -236,11 +236,9 @@ class TestTheV2OpenKeys:
     """Every key the v2 specs owe a measurement exists and is null."""
 
     OPEN_KEYS = (
-        "windows.yamnet.default_threshold",
         "windows.yamnet.label_thresholds",
         "windows.ast.default_threshold",
         "windows.ast.label_thresholds",
-        "windows.hear.default_threshold",
         "windows.hear.label_thresholds",
         "words.onomatopoeic_tokens",
         "taxonomy.presence_floor.speech.acoustic",
@@ -296,15 +294,21 @@ class TestTheV2OpenKeys:
         ``require`` raises on a null, and both hops are read inside the *scores* block, so while they
         were null AST and HeAR never ran under the packaged config -- the expensive model output was
         lost along with the threshold fold V3 exists to let it survive. Both now ship non-overlapping,
-        which is a declared choice the config_hash names, while the thresholds stay null.
+        which is a declared choice the config_hash names.
         """
         config = load_triage_config()
         assert config.require("windows.ast.hop_s") == 10.24
         assert config.require("windows.ast.win_length_s") == 10.24
         assert config.require("windows.hear.hop_s") == 2.0
-        for path in ("windows.ast.default_threshold", "windows.hear.default_threshold"):
-            with pytest.raises(ValueError, match="has no value"):
-                config.require(path)
+        with pytest.raises(ValueError, match="has no value"):
+            config.require("windows.ast.default_threshold")
+
+    def test_the_span_label_membership_pair_is_declared_for_both_span_classifiers(self) -> None:
+        """One pair of values, so PREPROCESS and the routing analysis cannot drift apart."""
+        config = load_triage_config()
+        for classifier in ("yamnet", "hear"):
+            assert config.require(f"windows.{classifier}.default_threshold") == 0.2
+            assert config.require(f"windows.{classifier}.label_top_k") == 4
 
     def test_ast_hop_cannot_imply_finer_temporal_evidence_than_the_model_has(self, tmp_path: Path) -> None:
         """AST's 10.24-second context is summary evidence, so its hop has an explicit lower bound."""
