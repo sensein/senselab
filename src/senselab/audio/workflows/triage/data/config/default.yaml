@@ -141,15 +141,15 @@ phonation:
   silence_threshold: 0.1               # Praat's silence threshold
   periods_per_window: 4.5              # Praat's periods_per_window
   period_doubling_factor: 2.0          # the definition of period doubling; an identity, not a threshold
-  hnr_floor_interval_db: null          # HNR floor; prior work measured it in units that do not transfer
-  rms_floor_interval: null             # RMS floor interval, same
+  hnr_floor_interval_db: null          # near-edge HNR interval; Praat calibrates no dB floor, so this needs a measurement
+  rms_floor_interval: null             # near-edge RMS interval, same
 
-# VOICE's F0 ranges and task-duration expectations. f0_range_hz is also read by PREPROCESS, so a
-# null here removes the phonation tracks and with them the whole voice kind.
+# VOICE's F0 ranges and task-duration expectations. f0_search_range_hz is also read by PREPROCESS:
+# it is the wide search each recording's own [floor, ceiling] is narrowed from, not a fixed range.
 voice:
   hint_tags: [phonation, humming, sustained-vowel, voice]  # unread as of v2; hints route through routing.hint_kind_map alone
-  f0_range_hz: null                    # [min, max] pitch search range
-  f0_range_by_population: null         # per declared age and sex, overriding the above
+  f0_search_range_hz: [50.0, 600.0]    # wide [min, max] the per-recording range is derived from
+  f0_range_by_population: null         # per declared age and sex, replacing the derived range
   f0_range_ratio_max: null             # largest F0 ratio a single production may span
   task_duration_ranges: null           # expected duration per declared task
 

@@ -9,6 +9,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
 from senselab.audio.tasks.features_extraction.ppg import (
+    PPGS_SAMPLE_RATE,
     extract_mean_phoneme_durations,
     extract_ppg_segments,
     extract_ppgs_from_audios,
@@ -351,6 +352,16 @@ def test_extract_ppgs_from_audios(resampled_mono_audio_sample: Audio) -> None:
     # Assert the result is a list of tensors
     assert isinstance(result, list)
     assert all(isinstance(features, torch.Tensor) for features in result)
+
+
+def test_extract_ppgs_refuses_an_off_rate_audio(mono_audio_sample: Audio) -> None:
+    """The worker reads every waveform at the model's rate, so an off-rate one is refused, not resampled.
+
+    Refused before the venv is touched, which is what lets this run without building one.
+    """
+    assert mono_audio_sample.sampling_rate != PPGS_SAMPLE_RATE
+    with pytest.raises(ValueError, match=str(PPGS_SAMPLE_RATE)):
+        extract_ppgs_from_audios([mono_audio_sample])
 
 
 @pytest.mark.skip(reason="sparc runs in subprocess venv; missing-dep path cannot be tested")

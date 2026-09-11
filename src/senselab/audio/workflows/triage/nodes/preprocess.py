@@ -54,7 +54,7 @@ from senselab.audio.tasks.health_acoustics.hear import (
     hear_window_extent,
     span_hear_input,
 )
-from senselab.audio.tasks.phonation.api import f0_track, formant_track
+from senselab.audio.tasks.phonation.api import derive_f0_range, f0_track, formant_track
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
 from senselab.audio.tasks.spans.api import (
     NoContrast,
@@ -1428,9 +1428,14 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         pre-emphasised stream, and the first four formants and their bandwidths over ``plain``, per
         frame. It no longer depends on the consensus transcript at all — word-aligned phonation
         proposal is TAXONOMY's concern now, not a reason for this measurement to wait on ASR.
+
+        The F0 search range is this recording's own, narrowed off ``plain`` from the wide
+        ``voice.f0_search_range_hz`` by :func:`derive_f0_range`, and recorded in the measurement.
         """
-        f0_range = config.require("voice.f0_range_hz")
-        f0_min_hz, f0_max_hz = float(f0_range[0]), float(f0_range[1])
+        search = config.require("voice.f0_search_range_hz")
+        f0_min_hz, f0_max_hz = derive_f0_range(
+            plain, search_floor_hz=float(search[0]), search_ceiling_hz=float(search[1])
+        )
         parameters: dict[str, Any] = {
             "hop_s": float(config.require("phonation_spans.hop_s")),
             "max_formants": int(config.require("phonation_spans.max_formants")),

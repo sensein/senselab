@@ -24,6 +24,7 @@ from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
     parse_subprocess_result,
+    provisioned_venv_dirs,
     venv_python,
 )
 
@@ -31,12 +32,14 @@ from senselab.utils.subprocess_venv import (
 # ppgs runs in a subprocess venv and may not be importable in the main env.
 try:
     from ppgs import PHONEMES as _PPGS_PHONEMES
+    from ppgs import SAMPLE_RATE as _PPGS_SAMPLE_RATE
 
-    _PHONEME_LABELS: Tuple[str, ...] = tuple(str(p) for p in _PPGS_PHONEMES)
+    PHONEME_LABELS: Tuple[str, ...] = tuple(str(p) for p in _PPGS_PHONEMES)
+    PPGS_SAMPLE_RATE: int = int(_PPGS_SAMPLE_RATE)
 except (ImportError, RuntimeError):
     # Fallback: the 40 ARPAbet phonemes used by ppgs 0.0.9.
     # Source: https://github.com/interactiveaudiolab/ppgs/blob/main/ppgs/data/phonemes.py
-    _PHONEME_LABELS = (
+    PHONEME_LABELS = (
         "aa",
         "ae",
         "ah",
@@ -78,6 +81,7 @@ except (ImportError, RuntimeError):
         "zh",
         "<silent>",
     )
+    PPGS_SAMPLE_RATE = 16000
 
 # PPGs venv specification
 _PPGS_VENV = "ppgs"
@@ -133,6 +137,28 @@ print(json.dumps({"output_paths": output_paths}))
 """
 
 
+def ensure_ppgs_venv() -> Path:
+    """Build the isolated ppgs venv if this host has not built it, and return its directory.
+
+    Call it once, on its own, before fanning a batch job out across an array: a cold build is far
+    longer than the lock's patience window, so every task that races one waits on it.
+
+    Returns:
+        The venv's directory.
+    """
+    return ensure_venv(_PPGS_VENV, _PPGS_REQUIREMENTS, python_version=_PPGS_PYTHON)
+
+
+def ppgs_venv_is_provisioned() -> bool:
+    """Whether a completed ppgs venv already exists on this host.
+
+    Returns:
+        True when at least one ppgs venv carries the completion marker. A half-built tree is not
+        provisioned.
+    """
+    return bool(provisioned_venv_dirs(_PPGS_VENV))
+
+
 def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] = None) -> List[torch.Tensor]:
     """Extracts phonetic posteriorgrams (PPGs) from every audio.
 
@@ -140,19 +166,29 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
     Python and dependencies. Audio is transferred via WAV files.
 
     Args:
-        audios: The audios to extract PPGs from.
+        audios: The audios to extract PPGs from. Every one must be mono and at
+            :data:`PPGS_SAMPLE_RATE`.
         device: Device to use (CUDA or CPU).
 
     Returns:
-        List of PPG tensors, one per input audio.
+        List of PPG tensors, one per input audio, in ``(1, phonemes, frames)`` layout with the
+        phoneme axis ordered as :data:`PHONEME_LABELS`. A recording the model raised on yields a
+        scalar NaN tensor rather than an exception, so one bad recording does not lose the batch.
+
+    Raises:
+        ValueError: If any audio is multi-channel, or is not at :data:`PPGS_SAMPLE_RATE`.
     """
     device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
 
     if any(audio.waveform.shape[0] != 1 for audio in audios):
         raise ValueError("Only mono audio is supported by ppgs model.")
+    off_rate = sorted({audio.sampling_rate for audio in audios if audio.sampling_rate != PPGS_SAMPLE_RATE})
+    if off_rate:
+        raise ValueError(
+            f"ppgs reads every waveform at {PPGS_SAMPLE_RATE} Hz and is given {off_rate}; resample before calling."
+        )
 
-    venv_dir = ensure_venv(_PPGS_VENV, _PPGS_REQUIREMENTS, python_version=_PPGS_PYTHON)
-    python = venv_python(venv_dir)
+    python = venv_python(ensure_ppgs_venv())
 
     with tempfile.TemporaryDirectory(prefix="senselab-ppgs-") as tmpdir:
         tmp = Path(tmpdir)
@@ -224,9 +260,9 @@ def to_frame_major_posteriorgram(posteriorgram: torch.Tensor) -> torch.Tensor:
     if t.ndim < 2:
         raise ValueError(f"Expected at least a 2-D posteriorgram after squeezing, got shape {t.shape}")
     # The ppgs library outputs (phonemes, frames) where the phoneme count
-    # matches len(_PHONEME_LABELS).  Use that knowledge first; fall back to
+    # matches len(PHONEME_LABELS).  Use that knowledge first; fall back to
     # the "smaller dimension = phonemes" heuristic for unknown inventories.
-    n_phonemes = len(_PHONEME_LABELS)
+    n_phonemes = len(PHONEME_LABELS)
     if t.shape[0] == n_phonemes and t.shape[1] != n_phonemes:
         # (phonemes, frames) -> (frames, phonemes)
         t = t.T
@@ -274,7 +310,7 @@ def extract_ppg_segments(
     seconds_per_frame = total_duration / num_frames
 
     argmax_indices = torch.argmax(frame_major_posteriorgram, dim=1)
-    phoneme_labels = _PHONEME_LABELS
+    phoneme_labels = PHONEME_LABELS
     num_labels = len(phoneme_labels)
 
     segments: List[Dict[str, Any]] = []
