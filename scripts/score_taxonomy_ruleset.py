@@ -5,8 +5,9 @@
 
 ``features.jsonl`` is what ``analyze_routing_evidence.py`` wrote under ``features/``. The ruleset
 is read from the triage configuration, so a partial override changes the gates without touching
-this script. ``out_dir`` receives ``ruleset_score.json``: the corpus totals, the per-branch counts
-and one tally per family.
+this script. ``out_dir`` receives ``ruleset_score.json``: the corpus totals, the per-branch counts,
+the per-branch sensitivity and specificity against the reference family sets, and one tally per
+family.
 """
 
 from __future__ import annotations
@@ -19,20 +20,20 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.routing_analysis.report import load_features
+from senselab.audio.workflows.triage.routing_analysis.report import Confusion, load_features
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
+    AXES,
     RouteEvaluation,
     Ruleset,
+    branches_on,
     evaluate_routes,
     load_ruleset,
+    score_branches,
     tally_families,
 )
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
 
 SCORE_FILE = "ruleset_score.json"
-
-
-TOTAL_FIELDS = ("declared", "confirmed", "discovered", "unconfirmed", "unavailable")
 
 
 def corpus_totals(evaluations: list[RouteEvaluation]) -> tuple[int, int, dict[str, dict[str, int]]]:
@@ -43,38 +44,49 @@ def corpus_totals(evaluations: list[RouteEvaluation]) -> tuple[int, int, dict[st
 
     Returns:
         The recording count, the fall-through count, and per-branch counts for each of
-        :data:`TOTAL_FIELDS`.
+        :data:`~senselab.audio.workflows.triage.routing_analysis.ruleset.AXES`.
     """
-    per_field = {field: dict.fromkeys(BRANCHES, 0) for field in TOTAL_FIELDS}
+    per_axis = {axis: dict.fromkeys(BRANCHES, 0) for axis in AXES}
     fell_through = 0
     for evaluation in evaluations:
-        for field, counts in per_field.items():
-            for branch in getattr(evaluation, field):
+        for axis, counts in per_axis.items():
+            for branch in branches_on(evaluation, axis):
                 counts[branch] += 1
         fell_through += int(evaluation.fell_through)
-    return len(evaluations), fell_through, per_field
+    return len(evaluations), fell_through, per_axis
 
 
 def print_table(
-    recordings: int, fell_through: int, per_field: dict[str, dict[str, int]], tallies: dict[str, dict[str, Any]]
+    recordings: int,
+    fell_through: int,
+    per_axis: dict[str, dict[str, int]],
+    scores: dict[str, Confusion],
+    tallies: dict[str, dict[str, Any]],
 ) -> None:
-    """Write the corpus totals and the worst fall-through families to stdout.
+    """Write the corpus totals, the per-branch scores and the worst fall-through families to stdout.
 
     Args:
         recordings: How many recordings were scored.
         fell_through: How many routed to no branch at all.
-        per_field: The per-branch counts from :func:`corpus_totals`.
+        per_axis: The per-branch counts from :func:`corpus_totals`.
+        scores: The per-branch 2x2 against the reference family sets.
         tallies: Family name to its tally, as dictionaries.
     """
-    print(f"\nrecordings {recordings}   fell through every branch {fell_through} ({fell_through / recordings:.1%})\n")
-    print(f"{'branch':8s} {'declared':>9s} {'confirmed':>10s} {'rate':>7s} {'discovered':>11s} {'unavailable':>12s}")
+    print(f"\nrecordings {recordings}   routed to no branch {fell_through} ({fell_through / recordings:.1%})\n")
+    print(f"{'branch':8s} {'routed':>8s} {'declared':>9s} {'agreed':>8s} {'missed':>8s} {'extra':>8s} {'unavail':>8s}")
     for branch in BRANCHES:
-        declared = per_field["declared"][branch]
-        confirmed = per_field["confirmed"][branch]
-        rate = f"{confirmed / declared:.3f}" if declared else "-"
         print(
-            f"{branch:8s} {declared:9d} {confirmed:10d} {rate:>7s} "
-            f"{per_field['discovered'][branch]:11d} {per_field['unavailable'][branch]:12d}"
+            f"{branch:8s} {per_axis['routed'][branch]:8d} {per_axis['declared'][branch]:9d} "
+            f"{per_axis['agreed'][branch]:8d} {per_axis['missed'][branch]:8d} "
+            f"{per_axis['extra'][branch]:8d} {per_axis['unavailable'][branch]:8d}"
+        )
+
+    print(f"\n{'branch':8s} {'tp':>8s} {'fp':>8s} {'tn':>8s} {'fn':>8s} {'sens':>7s} {'spec':>7s}")
+    for branch, table in scores.items():
+        sensitivity = f"{table.sensitivity:.3f}" if table.sensitivity is not None else "-"
+        specificity = f"{table.specificity:.3f}" if table.specificity is not None else "-"
+        print(
+            f"{branch:8s} {table.tp:8d} {table.fp:8d} {table.tn:8d} {table.fn:8d} {sensitivity:>7s} {specificity:>7s}"
         )
 
     worst = sorted(tallies.values(), key=lambda tally: -int(tally["fell_through"]))[:12]
@@ -108,12 +120,18 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[ruleset] scoring {len(records)} recordings", flush=True)
     evaluations = [evaluate_routes(record, ruleset) for record in records]
     tallies = {family: asdict(tally) for family, tally in tally_families(evaluations).items()}
-    recordings, fell_through, per_field = corpus_totals(evaluations)
+    scores = score_branches(evaluations)
+    recordings, fell_through, per_axis = corpus_totals(evaluations)
 
-    totals = {"recordings": recordings, "fell_through": fell_through, **per_field}
-    score = {"config_hash": config.config_hash, "totals": totals, "families": tallies}
+    totals = {"recordings": recordings, "fell_through": fell_through, **per_axis}
+    score = {
+        "config_hash": config.config_hash,
+        "totals": totals,
+        "branches": {branch: table.as_json() for branch, table in scores.items()},
+        "families": tallies,
+    }
     (arguments.out_dir / SCORE_FILE).write_text(json.dumps(score, indent=1))
-    print_table(recordings, fell_through, per_field, tallies)
+    print_table(recordings, fell_through, per_axis, scores, tallies)
     print(f"\n[ruleset] wrote {arguments.out_dir / SCORE_FILE}", flush=True)
     return 0
 
