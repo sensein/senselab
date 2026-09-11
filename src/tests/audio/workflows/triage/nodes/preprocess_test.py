@@ -801,6 +801,8 @@ class TestThePackagedConfigStillRunsEveryClassifier:
         The hops are what made this worth pinning: while ``windows.ast.hop_s`` and
         ``windows.hear.hop_s`` were null, ``require`` raised inside the scores block, so AST and HeAR
         never ran at all under the packaged config and V3 held for one classifier out of three.
+        ``phonation_tracks`` was absent here for the same reason until the F0 range became a
+        per-recording derivation rather than a null the caller had to supply.
         """
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(
@@ -820,7 +822,6 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "yamnet_windows",
             "ast_windows",
             "hear_windows",
-            "phonation_tracks",
             "residual",
             "enhanced_yamnet",
             "enhanced_ast",
@@ -886,7 +887,7 @@ class TestPhonationTracks:
         assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
         assert not find_measurements(store, "formant_tracks")
 
-    def test_a_null_criterion_leaves_the_tracks_absent(
+    def test_an_underivable_range_leaves_the_tracks_absent(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -894,9 +895,14 @@ class TestPhonationTracks:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The packaged config leaves ``voice.f0_range_hz`` null, so the pass is absent, not guessed."""
+        """A recording no range derives from leaves the pass absent, rather than guessing one."""
+
+        def _no_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float) -> tuple[float, float]:
+            raise ValueError("no F0 range could be derived from this recording")
+
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch)
+        monkeypatch.setattr(preprocess_module, "derive_f0_range", _no_range)
         result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         assert "phonation_tracks" in result.absent
         assert find_measurement(store, "phonation_tracks") is None

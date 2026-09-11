@@ -11,6 +11,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.phonation import (
     FormantTrack,
     PeriodMark,
+    derive_f0_range,
     f0_track,
     formant_track,
     hnr_track,
@@ -103,6 +104,29 @@ class TestPeriodMarks:
     def test_noise_yields_no_marks(self) -> None:
         """White noise gives Praat no periodic pulses, so the answer is absent, not zero."""
         assert period_marks(_noise(), 0.2, 0.8, f0_min_hz=60.0, f0_max_hz=400.0) == []
+
+
+class TestDeriveF0Range:
+    """The range is the recording's own, narrowed off a wide search rather than declared."""
+
+    def test_a_low_voice_and_a_high_voice_get_different_ranges(self) -> None:
+        """The narrowing is what the standardization method does; a fixed corpus range cannot."""
+        low = derive_f0_range(_buzz(110.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        high = derive_f0_range(_buzz(230.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert low == (60.0, 250.0)
+        assert high == (100.0, 500.0)
+        assert low != high
+
+    def test_a_recording_with_no_pitch_refuses_rather_than_returning_a_range(self) -> None:
+        """An underivable range is an absence, never a guess the caller cannot see."""
+        silence = Audio(waveform=np.zeros((1, SR), dtype=np.float32), sampling_rate=SR)
+        with pytest.raises(ValueError, match="no F0 range could be derived"):
+            derive_f0_range(silence, search_floor_hz=50.0, search_ceiling_hz=600.0)
+
+    def test_every_parameter_is_required(self) -> None:
+        """No default stands in for a search range the caller did not choose."""
+        with pytest.raises(TypeError):
+            derive_f0_range(_buzz(110.0))  # type: ignore[call-arg]
 
 
 class TestF0Track:

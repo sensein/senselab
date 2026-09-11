@@ -190,14 +190,13 @@ def residual_config(tmp_path: Path) -> TriageConfig:
 
 @pytest.fixture
 def phonation_config(tmp_path: Path) -> TriageConfig:
-    """The packaged config with the F0 range supplied, which VOICE reads for its own measurement.
+    """The packaged config with the residual PREPROCESS block off, for the phonation-track pass.
 
-    The value is a test fixture, not a fit: the packaged file leaves it null, and this is the
-    override mechanism a caller would use to state which population is being measured. The
-    phonation-span criteria this fixture also used to supply went with the detector that read them.
+    The F0 range is no longer part of this fixture: PREPROCESS derives the recording's own from
+    ``voice.f0_search_range_hz``, which the packaged file states.
     """
     override = tmp_path / "phonation.yaml"
-    override.write_text("voice:\n  f0_range_hz: [75.0, 500.0]\nresidual:\n  enabled: false\n")
+    override.write_text("residual:\n  enabled: false\n")
     return load_triage_config(override)
 
 
