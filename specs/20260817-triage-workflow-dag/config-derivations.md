@@ -595,6 +595,32 @@ phonation.period_doubling_factor 2.0 -- the definition of period doubling, an id
 than a threshold: a run is ambiguous when its median F0 times or divided by this factor also
 lies inside the caller's declared range.
 
+## praat_features
+
+Praat's settings for PREPROCESS's whole-file feature set over the `enhanced` stream. Two keys,
+both forwarded verbatim to `extract_praat_parselmouth_features_from_audios`.
+
+praat_features.time_step_s 0.005 -- the frame shift every frame-based descriptor is computed on:
+the pitch, intensity, harmonicity, formant and CPP tracks the forty scalars are pooled from. It is
+the value the extractor itself has shipped since the module was written and the value every
+Praat-derived number in senselab has been produced at; declaring it makes the pooling reproducible
+from the config rather than from a signature default. Half the `phonation_spans.hop_s` used for the
+F0/formant tracks, which is a different measurement with a different consumer (TAXONOMY reads the
+tracks per frame; this section reads only pooled scalars), so the two are not required to agree.
+
+praat_features.window_length_s 0.025 -- the analysis window the spectral moments are computed over,
+25 ms, the same conventional short-time window `spectrogram.wideband_window_ms` names. Also the
+extractor's own shipped value.
+
+Neither is a threshold: nothing is compared against them and no verdict turns on them. They are
+here because the measurement's provenance has to name the settings it was taken at, and a signature
+default is not part of a run's recorded configuration.
+
+The unit the pitch descriptors are reported in is deliberately not a key. It is baked into the
+returned key names (`mean_f0_hertz`), so making it configurable would make the measurement's own
+attribute names depend on the config, and every consumer would have to read the config to know what
+to look up.
+
 ## voice
 
 VOICE's F0 ranges and task-duration expectations.

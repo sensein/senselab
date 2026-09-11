@@ -114,7 +114,7 @@ import ppgs
 
 gpu = 0 if device == "cuda" else None
 
-output_paths = []
+outputs = []
 for i, audio_path in enumerate(audio_paths):
     data, sr = sf.read(audio_path, dtype="float32")
     waveform = torch.from_numpy(data).unsqueeze(0) if data.ndim == 1 else torch.from_numpy(data.T)
@@ -127,14 +127,19 @@ for i, audio_path in enumerate(audio_paths):
     except RuntimeError as e:
         print(f"RuntimeError extracting PPGs for audio {i}: {e}", file=sys.stderr)
         print(traceback.format_exc(), file=sys.stderr)
-        posteriorgram = torch.tensor(float("nan"))
+        outputs.append({"path": None, "error": f"{type(e).__name__}: {e}"})
+        continue
 
     out_path = str(Path(output_dir) / f"ppg_{i}.npy")
     np.save(out_path, posteriorgram.float().numpy())
-    output_paths.append(out_path)
+    outputs.append({"path": out_path, "error": None})
 
-print(json.dumps({"output_paths": output_paths}))
+print(json.dumps({"outputs": outputs}))
 """
+
+
+class PpgsPosteriorgramUnavailable(ValueError):
+    """The ppgs model produced no posteriorgram for one recording; attribute it as an absence."""
 
 
 def ensure_ppgs_venv() -> Path:
@@ -159,7 +164,26 @@ def ppgs_venv_is_provisioned() -> bool:
     return bool(provisioned_venv_dirs(_PPGS_VENV))
 
 
-def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] = None) -> List[torch.Tensor]:
+def require_posteriorgram(result: "torch.Tensor | PpgsPosteriorgramUnavailable") -> torch.Tensor:
+    """Unwrap one entry of :func:`extract_ppgs_from_audios`, raising the absence it may hold.
+
+    Args:
+        result: One entry of the returned list.
+
+    Returns:
+        The posteriorgram, when the model produced one.
+
+    Raises:
+        PpgsPosteriorgramUnavailable: When the entry is the recorded absence rather than a tensor.
+    """
+    if isinstance(result, PpgsPosteriorgramUnavailable):
+        raise result
+    return result
+
+
+def extract_ppgs_from_audios(
+    audios: List[Audio], device: Optional[DeviceType] = None
+) -> List["torch.Tensor | PpgsPosteriorgramUnavailable"]:
     """Extracts phonetic posteriorgrams (PPGs) from every audio.
 
     The ppgs model runs in an isolated subprocess venv with its own
@@ -171,9 +195,10 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
         device: Device to use (CUDA or CPU).
 
     Returns:
-        List of PPG tensors, one per input audio, in ``(1, phonemes, frames)`` layout with the
-        phoneme axis ordered as :data:`PHONEME_LABELS`. A recording the model raised on yields a
-        scalar NaN tensor rather than an exception, so one bad recording does not lose the batch.
+        One entry per input audio, in input order: a PPG tensor in ``(1, phonemes, frames)`` layout
+        with the phoneme axis ordered as :data:`PHONEME_LABELS`, or a
+        :class:`PpgsPosteriorgramUnavailable` carrying the model's own message for a recording it
+        raised on. :func:`require_posteriorgram` unwraps one entry.
 
     Raises:
         ValueError: If any audio is multi-channel, or is not at :data:`PPGS_SAMPLE_RATE`.
@@ -223,10 +248,13 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
         output = parse_subprocess_result(result, "PPGs")
 
         # Load results
-        posteriorgrams = []
-        for out_path in output.get("output_paths", []):
-            tensor = torch.from_numpy(np.load(out_path))
-            posteriorgrams.append(tensor)
+        posteriorgrams: List["torch.Tensor | PpgsPosteriorgramUnavailable"] = []
+        for record in output.get("outputs", []):
+            message = record.get("error")
+            if message:
+                posteriorgrams.append(PpgsPosteriorgramUnavailable(f"ppgs produced no posteriorgram: {message}"))
+                continue
+            posteriorgrams.append(torch.from_numpy(np.load(record["path"])))
 
         return posteriorgrams
 

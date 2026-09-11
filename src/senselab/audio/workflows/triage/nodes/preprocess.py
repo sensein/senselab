@@ -41,6 +41,17 @@ from senselab.audio.tasks.envelope.api import (
     global_floor_dbfs,
     hilbert_envelope_dbfs,
 )
+from senselab.audio.tasks.features_extraction.ppg import (
+    PHONEME_LABELS,
+    PPGS_SAMPLE_RATE,
+    PpgsPosteriorgramUnavailable,
+    extract_ppgs_from_audios,
+    require_posteriorgram,
+    to_frame_major_posteriorgram,
+)
+from senselab.audio.tasks.features_extraction.praat_parselmouth import (
+    extract_praat_parselmouth_features_from_audios,
+)
 from senselab.audio.tasks.features_extraction.torchaudio import extract_spectrogram_from_audios
 from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
@@ -88,6 +99,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     describe_exception,
     live_entities,
     path_attributes,
+    resolve_stream,
     software_agent,
     write_stream,
     write_verdict,
@@ -106,6 +118,9 @@ QWEN_TIMESTAMP_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
 AST_ID = "MIT/ast-finetuned-audioset-10-10-0.4593"
 YAMNET_MODEL_URI = "https://tfhub.dev/google/yamnet/1"
 FRCRN_ID = "alibabasglab/FRCRN_SE_16K"
+PPGS_MODEL_ID = "interactiveaudiolab/ppgs"
+PPG_MEASUREMENT = "ppg_posteriorgram"
+PRAAT_MEASUREMENT = "praat_features"
 
 
 def _crisperwhisper_model() -> HFModel:
@@ -356,6 +371,198 @@ def _covering_window_attribution(
     return scores, covering_windows_n, covering_seconds
 
 
+def _activity(store: ProvStore, step: str, parameters: dict[str, Any], reads: tuple[str, ...], agent_id: str) -> str:
+    """One PREPROCESS sub-activity, associated with its agent and with its reads recorded.
+
+    Args:
+        store: The provenance store.
+        step: The step's name.
+        parameters: The values the step ran with.
+        reads: Entities the step read.
+        agent_id: The agent answerable for it.
+
+    Returns:
+        The activity's id.
+    """
+    activity_id = store.activity(node=NODE, step=step, parameters=parameters)
+    store.was_associated_with(activity_id, agent_id)
+    for entity_id in reads:
+        store.used(activity_id, entity_id)
+    return activity_id
+
+
+def ppg_model_agent(store: ProvStore) -> str:
+    """The ppgs agent: a model whose checkpoint ships with the PyPI release, so no commit resolves.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The agent's id.
+    """
+    return store.agent(
+        agent_type="model",
+        model_id=PPGS_MODEL_ID,
+        unresolved_reason="ppgs ships its checkpoint with the PyPI release; no commit exists to resolve",
+    )
+
+
+def ppg_input(store: ProvStore, run_dir: Path) -> tuple[str, Audio]:
+    """The ``enhanced`` stream, conditioned as ppgs reads it: mono at :data:`PPGS_SAMPLE_RATE`.
+
+    The one place the posteriorgram's input is prepared, so a batching caller and the block itself
+    hand the model the same samples.
+
+    Args:
+        store: The provenance store, read for the live ``enhanced`` stream entity.
+        run_dir: The run directory the stream's sidecar path is relative to.
+
+    Returns:
+        The stream entity's id and the conditioned audio.
+
+    Raises:
+        LookupError: If no live ``enhanced`` stream is in the store.
+    """
+    enhanced_id, audio = resolve_stream(store, run_dir, "enhanced")
+    if audio.waveform.shape[0] != 1:
+        audio = Audio(waveform=audio.waveform.mean(dim=0, keepdim=True), sampling_rate=audio.sampling_rate)
+    if int(audio.sampling_rate) != PPGS_SAMPLE_RATE:
+        [audio] = resample_audios([audio], PPGS_SAMPLE_RATE)
+    return enhanced_id, audio
+
+
+def write_ppg_posteriorgram(
+    store: ProvStore,
+    *,
+    run_dir: Path,
+    enhanced_id: str,
+    audio: Audio,
+    posteriorgram: torch.Tensor,
+) -> str:
+    """Persist one posteriorgram beside the run and register the measurement that names it.
+
+    The array is written frame-major in float16 to ``derivatives/ppg_posteriorgram.npz`` with the
+    phoneme order beside it; the entity carries the path, its SHA-256, its size and its shape, never
+    the array.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory the sidecar is written under.
+        enhanced_id: The ``enhanced`` stream entity the posteriorgram was measured on.
+        audio: The conditioned audio the model read, for the frame rate.
+        posteriorgram: The tensor ppgs returned, in any of its layouts.
+
+    Returns:
+        The measurement entity's id.
+    """
+    frame_major = to_frame_major_posteriorgram(posteriorgram)
+    frames, phonemes = int(frame_major.shape[0]), int(frame_major.shape[1])
+    duration_s = audio.waveform.shape[-1] / int(audio.sampling_rate)
+    agent = ppg_model_agent(store)
+    activity = _activity(store, "ppg_posteriorgram", {"model": PPGS_MODEL_ID}, (enhanced_id,), agent)
+    relative = f"derivatives/{PPG_MEASUREMENT}.npz"
+    np.savez(
+        run_dir / relative,
+        posteriorgram=frame_major.numpy().astype(np.float16),
+        phonemes=np.asarray(PHONEME_LABELS, dtype=np.str_),
+        seconds_per_frame=np.float64(duration_s / frames if frames else np.nan),
+        duration_s=np.float64(duration_s),
+        sampling_rate=np.int64(audio.sampling_rate),
+    )
+    return _measurement(
+        store,
+        activity,
+        agent,
+        name=PPG_MEASUREMENT,
+        signal="enhanced",
+        extent=(0.0, duration_s),
+        attributes={
+            **path_attributes(relative, run_dir),
+            "frames": frames,
+            "n_phonemes": phonemes,
+            "phonemes": list(PHONEME_LABELS),
+            "seconds_per_frame": duration_s / frames if frames else None,
+            "sampling_rate": int(audio.sampling_rate),
+            "dtype": "float16",
+            "layout": "frames_by_phonemes",
+        },
+        derived_from=(enhanced_id,),
+    )
+
+
+def ppg_posteriorgram(store: ProvStore, *, run_dir: Path) -> str:
+    """The phonetic posteriorgram over the ``enhanced`` stream, to one npz sidecar.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory the sidecar is written under.
+
+    Returns:
+        The measurement entity's id.
+
+    Raises:
+        LookupError: If no live ``enhanced`` stream is in the store.
+        PpgsPosteriorgramUnavailable: If the model produced no posteriorgram for this recording.
+    """
+    enhanced_id, audio = ppg_input(store, run_dir)
+    [result] = extract_ppgs_from_audios([audio])
+    return write_ppg_posteriorgram(
+        store,
+        run_dir=run_dir,
+        enhanced_id=enhanced_id,
+        audio=audio,
+        posteriorgram=require_posteriorgram(result),
+    )
+
+
+def _praat_scalar(value: Any) -> Any:  # noqa: ANN401 — Praat's own value, of whatever type it returned
+    """One Praat feature as the store takes it: a finite float, or None for a non-finite one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.floating, np.integer)):
+        return value
+    number = float(value)
+    return number if np.isfinite(number) else None
+
+
+def praat_features(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
+    """Praat/Parselmouth's whole-file feature set over the ``enhanced`` stream.
+
+    Every scalar is an attribute of the measurement: the set is forty numbers, small enough that a
+    sidecar would only add an indirection. A non-finite scalar is recorded as null, JSON's only
+    representation of a number Praat could not place.
+
+    Args:
+        store: The provenance store.
+        config: The triage configuration.
+        run_dir: The run directory the ``enhanced`` stream's path is relative to.
+
+    Returns:
+        The measurement entity's id.
+
+    Raises:
+        LookupError: If no live ``enhanced`` stream is in the store.
+    """
+    parameters: dict[str, Any] = {
+        "time_step_s": float(config.require("praat_features.time_step_s")),
+        "window_length_s": float(config.require("praat_features.window_length_s")),
+    }
+    enhanced_id, audio = resolve_stream(store, run_dir, "enhanced")
+    software = software_agent(store)
+    activity = _activity(store, PRAAT_MEASUREMENT, parameters, (enhanced_id,), software)
+    [features] = extract_praat_parselmouth_features_from_audios(
+        [audio], time_step=parameters["time_step_s"], window_length=parameters["window_length_s"]
+    )
+    scalars = {name: _praat_scalar(value) for name, value in sorted(features.items())}
+    return _measurement(
+        store,
+        activity,
+        software,
+        name=PRAAT_MEASUREMENT,
+        signal="enhanced",
+        attributes={**parameters, "n_features": len(scalars), "features": scalars},
+        derived_from=(enhanced_id,),
+    )
+
+
 def preprocess(  # noqa: C901 — one block per derivative, each independent
     store: ProvStore,
     source: Audio,
@@ -465,11 +672,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 
     def _step(step: str, parameters: dict[str, Any], reads: tuple[str, ...], agent_id: str) -> str:
         """One sub-activity, associated and with its reads recorded."""
-        activity_id = store.activity(node=NODE, step=step, parameters=parameters)
-        store.was_associated_with(activity_id, agent_id)
-        for entity_id in reads:
-            store.used(activity_id, entity_id)
-        return activity_id
+        return _activity(store, step, parameters, reads, agent_id)
 
     def _clip_spans() -> None:
         """Clip-event spans over the ORIGINAL recording (ClipDaT), before any normalization runs."""
@@ -1601,6 +1804,22 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         derivatives["gammatone"] = entity_id
         view.append(entity_id)
 
+    def _ppg_posteriorgram() -> None:
+        """The phonetic posteriorgram over the ``enhanced`` stream, to one npz sidecar.
+
+        Reads the stream back out of the store rather than out of ``state``, so this pass and an
+        extend pass over a finished run hand the model the same samples and write the same entity.
+        """
+        entity_id = ppg_posteriorgram(store, run_dir=run_dir)
+        derivatives[PPG_MEASUREMENT] = entity_id
+        view.append(entity_id)
+
+    def _praat_features() -> None:
+        """Praat's whole-file feature set over the ``enhanced`` stream, read back from the store."""
+        entity_id = praat_features(store, config, run_dir=run_dir)
+        derivatives[PRAAT_MEASUREMENT] = entity_id
+        view.append(entity_id)
+
     def _speech_regions() -> tuple[list[tuple[float, float]], str]:
         """Speech regions for the residual's ``speech_overlap``, and which source produced them.
 
@@ -1935,6 +2154,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ("span_hear", _span_hear),
         ("span_yamnet", _span_yamnet),
         ("gammatone", _gammatone),
+        (PPG_MEASUREMENT, _ppg_posteriorgram),
+        (PRAAT_MEASUREMENT, _praat_features),
     ]
     hard_failures: list[tuple[str, str]] = []
     for name, block in blocks:

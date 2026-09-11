@@ -23,7 +23,7 @@ from senselab.utils.data_structures import DeviceType
 from senselab.utils.data_structures.logging import logger
 
 from .opensmile import extract_opensmile_features_from_audios
-from .ppg import extract_ppgs_from_audios
+from .ppg import extract_ppgs_from_audios, require_posteriorgram
 from .praat_parselmouth import extract_praat_parselmouth_features_from_audios
 from .sparc import SparcFeatureExtractor
 from .torchaudio import extract_torchaudio_features_from_audios
@@ -569,7 +569,7 @@ def extract_features_from_audios(
         if use_sparc:
             out["sparc"] = SparcFeatureExtractor.extract_sparc_features([a], device=device, resample=True)[0]
         if use_ppgs:
-            out["ppgs"] = extract_ppgs_from_audios([a], device=device)[0]
+            out["ppgs"] = require_posteriorgram(extract_ppgs_from_audios([a], device=device)[0])
         return out
 
     # Cache

@@ -7,8 +7,10 @@ from typing import Any, Callable, Sequence
 import numpy as np
 import pytest
 import soundfile as sf
+import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.consensus import ALGORITHM, NORMALISATION, ROUTINE, SOURCE_ORDER, TIME_FIT
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
@@ -70,6 +72,23 @@ def _audio(tmp_path: Path) -> Audio:
     return Audio(filepath=str(tmp_path / "input.wav"))
 
 
+def fake_ppgs(audios: list, device: Any = None) -> list:  # noqa: ANN401
+    """One posteriorgram per input, in the model's own ``(1, phonemes, frames)`` layout.
+
+    Args:
+        audios: The conditioned audios.
+        device: Accepted for the real signature; unread.
+
+    Returns:
+        One random tensor per audio, at 100 frames per second of audio.
+    """
+    out = []
+    for audio in audios:
+        frames = max(1, int(100 * audio.waveform.shape[-1] / audio.sampling_rate))
+        out.append(torch.rand(1, len(PHONEME_LABELS), frames))
+    return out
+
+
 def _stub_models(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -80,8 +99,13 @@ def _stub_models(
     qwen: ScriptLine | None = None,
     record: dict[str, Any] | None = None,
     enhance: Callable[..., list] | None = None,
+    ppgs: Callable[..., list] | None = None,
 ) -> None:
-    """Replace every model call PREPROCESS makes, on the node module, and record each one's kwargs."""
+    """Replace every model call PREPROCESS makes, on the node module, and record each one's kwargs.
+
+    ``ppgs`` defaults to a random posteriorgram of the right shape: the real one lives in a
+    subprocess venv whose first build takes 810 s, so no test may reach it.
+    """
     seen = record if record is not None else {}
 
     def fake_classify(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
@@ -111,6 +135,7 @@ def _stub_models(
     monkeypatch.setattr(preprocess_module, "detect_health_acoustic_events", fake_hear)
     monkeypatch.setattr(preprocess_module, "transcribe_audios", fake_transcribe)
     monkeypatch.setattr(preprocess_module, "extract_objective_quality_features_from_audios", fake_squim)
+    monkeypatch.setattr(preprocess_module, "extract_ppgs_from_audios", ppgs or fake_ppgs)
     if enhance is not None:
         monkeypatch.setattr(preprocess_module, "_frcrn_model", lambda: _FakeModel("alibabasglab/FRCRN_SE_16K"))
         monkeypatch.setattr(preprocess_module, "enhance_audios", enhance)
