@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import statistics
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Sequence
@@ -63,6 +65,26 @@ _SUMMARY_ALL_SUFFIX = "_summary_all"
 TRANSCRIPT_CAP = 300
 """How much of the consensus transcript is kept, so a disagreement can be read, not just counted."""
 
+_BRACKET_TYPE_DROP = re.compile(r"[^a-z0-9]+")
+
+
+def bracket_type(text: str) -> str | None:
+    """The type a bracketed consensus token names, normalised.
+
+    Args:
+        text: A consensus word's ``text`` attribute, as the recognizer or the onomatopoeic
+            vocabulary spelled it.
+
+    Returns:
+        The bracket's content, casefolded with every non-alphanumeric character removed, so
+        ``"[Throat Clearing]"`` and ``"[THROATCLEARING]"`` are one type; None when the token is not
+        bracketed or carries nothing between the brackets.
+    """
+    stripped = text.strip()
+    if len(stripped) < 2 or not stripped.startswith("[") or not stripped.endswith("]"):
+        return None
+    return _BRACKET_TYPE_DROP.sub("", stripped[1:-1].casefold()) or None
+
 
 @dataclass
 class RecordingFeatures:
@@ -76,6 +98,9 @@ class RecordingFeatures:
         duration_s: The recording's extent, from the ``recording`` stream entity.
         words: How many live consensus words carry each outcome, plus ``total``, ``bracketed``
             and ``lexical`` (non-bracketed, any outcome).
+        bracketed_types: How many live consensus words carry each :func:`bracket_type`, taken off
+            the word entities rather than off the capped transcript. Only types the recording
+            carries are keyed.
         consensus_present: Whether a ``consensus_transcript`` measurement was written at all.
         transcript: The consensus transcript's first :data:`TRANSCRIPT_CAP` characters.
         residual: The ``residual`` measurement's scalar attributes, or empty when it is absent.
@@ -109,6 +134,7 @@ class RecordingFeatures:
     family: str
     duration_s: float | None = None
     words: dict[str, int] = field(default_factory=dict)
+    bracketed_types: dict[str, int] = field(default_factory=dict)
     consensus_present: bool = False
     transcript: str = ""
     residual: dict[str, float] = field(default_factory=dict)
@@ -518,6 +544,13 @@ def extract_features(store_path: Path, stem: str, run_root: str, task_id: str, f
         1 for word in live_words if word.get("outcome") == "agreement" and not word.get("bracketed")
     )
     features.words = counts
+    typed: Counter[str] = Counter()
+    for word in live_words:
+        if word.get("bracketed"):
+            named = bracket_type(str(word.get("text") or ""))
+            if named is not None:
+                typed[named] += 1
+    features.bracketed_types = dict(sorted(typed.items()))
 
     live_spans = [span for span in spans if span["id"] not in invalidated]
     for measure in SPAN_MEASURES:

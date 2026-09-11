@@ -694,6 +694,18 @@ for speech presence: a completed empty consensus remains speech-absent despite a
 label, which is retained as corroboration. lexical_airway_tokens is deleted: airway's lexical evidence
 line no longer exists, because a bracketed event is not a word and carries no lexical evidence at all.
 
+taxonomy.airway_bracket_tokens [breath, cough, throatclearing, sniff] -- which typed bracketed
+consensus tokens are an airway event, read by the family taxonomy ruleset's airway.bracketed_event
+gate. This does NOT reinstate lexical_airway_tokens or a lexical evidence line for airway: a
+bracketed event is still not a word, and this key names it as an acoustic detection with a timing
+rather than as lexical content. [uh] and [um] are deliberately absent -- they are fillers and they
+separate the other way. The counts behind the set, and why the gate reads extracted typed counts
+rather than the capped consensus transcript, are in family-taxonomy-ruleset.md.
+
+taxonomy.ruleset -- the whole ruleset block (reference_family_set, branch_gates, branch_flags,
+emptiness, gates) is derived in family-taxonomy-ruleset.md, keyed by gate name, and is not repeated
+here.
+
 ## quality
 
 SQUIM and disruption tolerances. Every key here is currently read by nothing.

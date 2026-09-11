@@ -50,9 +50,12 @@ supposed to cover them. Every one of the 74 is unambiguous read speech. Four mea
 `speech.declared` gated on `words.agreement >= 4`. Every row has ample lexical content and was
 discarded because one recogniser disagreed. Reading the same recording twice and keeping only the
 recordings where both readings match is not a measurement of speech; it is a measurement of
-recogniser concordance. That is the concrete defect this restructure fixes, and it is why the two
-old speech gates — two cuts on the *same* number, one for declared families and one for everything
-else — were replaced by two gates on *different* numbers, either of which routes.
+recogniser concordance. That is the concrete defect this restructure fixes. The first pass replaced
+the two old speech gates — two cuts on the *same* number, one for declared families and one for
+everything else — with two gates on *different* numbers, either of which routed. That was still one
+gate too many: concordance had been demoted from the only reading to one of two, when it is not a
+reading of whether speech occurred at all. SPEECH is now one gate on lexical content, and
+concordance is a flag. See "SPEECH routes on ASR words alone" below.
 
 ## The 48 families are not restated here
 
@@ -87,19 +90,36 @@ gates fires.
 
 | branch | gate | feature | op | threshold | corpus J | max-family firing | median-family firing |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| SPEECH | `speech.lexical` | `words.lexical` | >= | 4 words | **provisional** | — | — |
-| SPEECH | `speech.agreement` | `words.agreement` | >= | 3 words | **provisional** | — | — |
+| SPEECH | `speech.lexical` | `words.lexical` | >= | 2 words | 0.809 | — | — |
 | VOICE | `voice.sustained` | `span_longest_s.amplitude` | >= | 3.0 s | 0.65 | 0.93 | 0.25 |
 | VOICE | `voice.glide` | YAMNet singing-union peak, plain stream | >= | 0.05 | 0.75 | 0.93 | 0.10 |
 | VOICE | `voice.chant` | YAMNet `Chant` peak, plain stream | >= | 0.02 | 0.83 | 0.94 | 0.14 |
 | AIRWAY | `airway.breath` | `residual.energy_fraction` | >= | 0.10 | 0.66 | 0.98 | 0.16 |
 | AIRWAY | `airway.cough` | `span_stats["all.peak_over_floor_db_max"]` | >= | 50.0 dB | 0.79 | 0.96 | 0.07 |
+| AIRWAY | `airway.bracketed_event` | `bracketed_types` over `taxonomy.airway_bracket_tokens` | >= | 1 token | ~0.710 | — | — |
 | DDK | `ddk.lexical_repetition` | max token repetition in `transcript` | >= | 3 | **not measured** | — | — |
+
+Beside the gates, and never among them:
+
+| branch | flag | feature | op | threshold |
+| --- | --- | --- | --- | --- |
+| SPEECH | `speech.transcript_agreement` | `words.agreement` | >= | 3 words |
+
+And ahead of all of them, one precondition:
+
+| precondition | feature | rule |
+| --- | --- | --- |
+| `emptiness` | max tracked-label peak of `enhanced\|yamnet` and of `residual\|yamnet` | both `< 0.2` |
+
+The SPEECH J above is `sens 0.954 + spec-excluding-DDK 0.855 - 1`; `airway.bracketed_event`'s comes
+off the capped transcript and is a lower bound. Both are derived in their own sections below, and
+neither is a max-Youden point over a swept grid — SPEECH's threshold sits on an artifact boundary
+and the bracket gate has not been re-measured from the extracted counts yet.
 
 "Max-family firing" is the highest per-family firing rate at that threshold, "median-family firing"
 the median across all 48. The pair is the spread the operating point was chosen against, and it is
-what says whether a J is carried by separation or by prevalence. Every measured row above is the
-max-Youden operating point from the 62,547-recording corpus sweep.
+what says whether a J is carried by separation or by prevalence. Every VOICE and residual/span
+AIRWAY row above is the max-Youden operating point from the 62,547-recording corpus sweep.
 
 `voice.sustained`, `voice.glide`, `airway.breath` and `airway.cough` are unchanged: they sit at
 measured operating points and this restructure had no evidence against any of them.
@@ -114,33 +134,69 @@ VOICE gate rather than replacing `voice.glide`, because the two read different c
 same evidence (one label against a twelve-label union) and either firing is enough — the content-first
 rule is that a reading is used, not that the readings must agree.
 
-### The SPEECH thresholds are provisional and unswept
+### SPEECH routes on ASR words alone, at two of them
 
-`speech.lexical >= 4` and `speech.agreement >= 3` are **starting values, not operating points.** No
-sweep exists over the pair, and they are deliberately not the old 4-and-2: keeping those would have
-carried an instruction-first cut into a content-first ruleset while reporting it as measured.
+**The gate for speech is the ASR.** `branch_gates.SPEECH` is one entry, `speech.lexical`, reading
+`words.lexical`. `speech.agreement` is **deleted from `branch_gates`** — it was never a statement
+that speech occurred. Agreement is a statement about *what* was said, and it is now a flag; see
+"Agreement is a SPEECH-branch flag" below.
 
-What they are chosen to do: route every row of the harvard table above. `speech.lexical >= 4`
-carries all four on lexical content alone, at the smallest of the four counts.
-`speech.agreement >= 3` carries them again on the other reading, at the value all four share, and it
-is what routes a short utterance — three words both recognisers returned — that the lexical cut is
-above. Since a lexical word count is at least its agreement count, the agreement gate's only
-independent contribution is at exactly three lexical words, all of them agreed.
+**Why 2 and not 1.** With `LEXICAL_SPEECH` as the reference set, `lexical >= 1` fires on 0.569 of
+glide families and 0.403 of sustained families — a single spurious token on a held vowel, which is
+an ASR artifact rather than speech. At `>= 2` the glide rate collapses to 0.065. Two is where that
+artifact dies, and it is chosen on that artifact boundary rather than on a swept J.
 
-**The sweep that would settle them**, and it is a scoring change rather than an extraction one,
-because `words.lexical` and `words.agreement` are both already extracted and both already carry a
-single-gate detector in `detectors.py` (`speech.words_lexical`, `speech.words_agreement`):
+**Why not 4.** Going further does not remove noise, it removes speech. `prolonged-vowel` drops from
+0.786 at `>= 3` to 0.293 at `>= 4`, and its word-count histogram says exactly why: a spike of 791
+recordings at *exactly three* lexical words, which is the protocol's spoken preamble
+*"1, 2, 3 aah"*. Threshold 4 discards the whole spike.
 
-1. Score the **disjunction** over the 2-D grid `COUNT_GRID x COUNT_GRID` (100 points) against the
-   `lexical_speech` reference set, on the full 62,547-recording corpus. The OR's operating point is
-   not the pair of each gate's own max-J point, so sweeping the two gates separately — which is all
-   that has ever been done — does not answer this.
-2. Report max-family and median-family firing at each of the 100 points beside J, so a J carried by
-   prevalence is visible.
-3. Take the max-J point subject to the constraint that all 74 harvard fall-throughs route, and state
-   the constraint as a constraint rather than folding it into the objective.
+| threshold | sens | spec (excluding DDK) | `prolonged-vowel` firing | glide-family firing |
+| --- | --- | --- | --- | --- |
+| >= 1 | — | — | — | 0.569 |
+| >= 2 | 0.954 | 0.855 | — | 0.065 |
+| >= 3 | 0.932 | 0.877 | 0.786 | — |
+| >= 4 | — | 0.933 | 0.293 | — |
 
-Until that runs, every SPEECH count out of this ruleset is provisional in both directions.
+**2 is chosen and still unswept in the J sense**: it is an artifact boundary, not a max-Youden
+point over a grid. **3 is the defensible alternative** — sens 0.932 and spec-excluding-DDK 0.877,
+against 0.954 / 0.855 at 2 — and choosing between them is a judgement about which error costs more,
+which no number here settles.
+
+**The headline specificity understates the gate badly, and the reason is the reference set.** At
+`>= 4`, 7,468 of the 8,899 false positives (83.9%) are diadochokinesis families. Those recordings
+are speech. They sit in the negative set only because `LEXICAL_SPEECH` excludes DDK by
+construction. Excluding DDK from the negatives, specificity at `>= 4` is **0.933** rather than
+0.696. At `>= 2` the same correction runs 71.3% DDK and **0.855** excluding DDK. Every
+specificity quoted in this section is the DDK-excluded one unless it says otherwise.
+
+**`words.total` is the wrong field to read.** `total >= 1` scores specificity **0.075**, because
+bracketed tokens fire almost everywhere — nearly every recording carries a `[breath]` or an `[uh]`.
+`lexical`, the non-bracketed count, is the field that separates. The bracketed half is not noise
+either; it is airway evidence, and it has its own gate now.
+
+**What a sweep would still add**, unchanged from the earlier pass and no longer blocking: score
+`speech.lexical` over `COUNT_GRID` against `LEXICAL_SPEECH` with DDK held out of the negatives, and
+report max-family and median-family firing at each point beside J, so a J carried by prevalence is
+visible.
+
+### Agreement is a SPEECH-branch flag
+
+`speech.transcript_agreement` (`words.agreement >= 3`, renamed from `speech.agreement`) is declared
+in `taxonomy.ruleset.branch_flags`, not in `branch_gates`. It is evaluated on every recording, its
+outcome is recorded in `gate_outcomes` like any gate's, and a branch it fired on is named in
+`RouteEvaluation.flags` and counted in `FamilyTally.flagged`. It contributes to nothing else:
+`routed`, `agreed`, `missed`, `extra` and `fell_through` are all computed without it, and
+`load_ruleset` refuses a configuration that lists one gate as both a gate and a flag of the same
+branch.
+
+The distinction it encodes: **agreement is not the hallmark of whether speech was said, it is about
+whether there was doubt about what was said.** Three recognisers converging on the same three words
+says the transcript is trustworthy, not that the recording contains speech — the lexical count
+already said that. Three recognisers diverging says the transcript is doubtful, which is a fact a
+downstream consumer of the SPEECH branch needs and a fact the router must not act on.
+
+**No downstream consumer is implemented.** The flag is carried and reported; nothing reads it yet.
 
 ### `ddk.lexical_repetition` is lexical, and the acoustic gate is missing
 
@@ -210,8 +266,11 @@ an error.
 - `unavailable` — per branch, the *names* of the gates whose feature could not be read. A branch is
   keyed only when it has such a gate, and it is keyed whether or not another gate routed the branch
   anyway: an unreadable feature is a fact about the store, not about the recording.
-- `fell_through` — `routed` is empty.
-- `gate_outcomes` — every gate's own outcome, each gate evaluated once.
+- `flags` — per branch, the *names* of the flag gates that fired. Keyed only when one did.
+- `empty` — the emptiness precondition fired, so no branch gate was asked anything.
+- `fell_through` — the recording carried content and still routed nowhere. **An empty recording is
+  not a fall-through**, and the two are separate columns in the tally.
+- `gate_outcomes` — every gate's own outcome, each gate evaluated once; empty when `empty`.
 
 **`unavailable` is not `silent`.** `GateOutcome` has three members — `FIRED`, `SILENT`,
 `UNAVAILABLE` — and a gate whose feature was never written to the store reads `UNAVAILABLE`. An
@@ -226,9 +285,9 @@ non-declared branch's gate would have fired on — the 74 harvard recordings did
 that class of fall-through no longer exists by construction.
 
 `tally_families(evaluations) -> dict[str, FamilyTally]` aggregates a stream of evaluations into the
-per-family counts, per branch on each of `routed`, `declared`, `agreed`, `missed`, `extra` and
-`unavailable`, plus the fall-through count, so the ruleset can be scored over the corpus without
-holding it.
+per-family counts, per branch on each of `routed`, `declared`, `agreed`, `missed`, `extra`,
+`unavailable` and `flagged`, plus the empty count and the fall-through count, so the ruleset can be
+scored over the corpus without holding it.
 
 `score_branches(evaluations) -> dict[str, Confusion]` answers the question this restructure exists
 to ask: **can content-only routing recover the overarching families?** One 2x2 per branch — a
@@ -364,3 +423,119 @@ Each reads `("span_label_stat", "yamnet.Cough.peak_over_floor_db_<stat>")` over
 `cough.amplitude_peak_over_floor_db_max`; `p75` and `p90` are there because a recording with one
 loud cough and one louder door slam has the same `max` and a lower `p90`, and which of the three
 separates best is a measurement, not a guess.
+
+## Emptiness is its own check, ahead of routing
+
+A recording that contains nothing and a recording whose content matched no gate are two different
+outcomes, and `fell_through` conflated them. It no longer does.
+
+`taxonomy.ruleset.emptiness` is a precondition, evaluated before any branch gate: a recording is
+**empty** when the highest tracked-label peak of **both** `enhanced|yamnet` and `residual|yamnet`
+falls below `peak_floor`. When it fires, no branch gate is asked anything, `routed` is empty,
+`gate_outcomes` is empty, and `empty` is true while `fell_through` is false. A named stream whose
+summary is absent from the store reads unavailable and the recording is **not** called empty — an
+absent classifier summary is not a stream that scored zero.
+
+### What the two streams measure on short recordings
+
+Of the 1,615 recordings under 0.5 s:
+
+| stream | median max peak | fraction below 0.2 |
+| --- | --- | --- |
+| `enhanced\|yamnet` | 0.003 | 0.83 |
+| `residual\|yamnet` | 0.000 | 0.98 |
+
+Median silence fraction on that set is **1.000**. For the 60,932 recordings at 0.5 s or longer,
+`enhanced|yamnet`'s median max peak is **0.999** and only 8% fall below 0.2. The separation is not
+marginal: three orders of magnitude between the two populations on the same statistic.
+
+Applying `enhanced < 0.2 AND residual < 0.2` marks **1,336 of the 1,615** short recordings empty,
+of which only **53** carry any lexical word at all. The remaining 252 short recordings are real but
+truncated — `Speech = 1.00`, one to three lexical words, in clips of 0.2 to 0.45 s — and the AND
+correctly leaves them out of the empty set. **0.2** is the floor, one config value read for both
+streams.
+
+### Why both streams and not the enhanced one alone
+
+The enhanced stream is FRCRN's output and the residual is what enhancement removed. A recording
+where enhancement suppressed everything reads low on `enhanced` while the residual still carries
+the removed content, so the enhanced stream on its own would call a noisy-but-non-empty recording
+empty. Requiring both to be under the floor means the claim is that neither the cleaned signal nor
+what was subtracted from it carried anything a classifier could name.
+
+### This belongs in ADMIT eventually
+
+Emptiness is **ADMIT-shaped**: it is a statement that the recording should not have entered the
+graph at all, which is that node's question, not the ruleset's. It lives in the ruleset now for one
+reason — that is where it can be measured against the routed set, over an extracted feature shard,
+without re-running the graph. `nodes/admit.py` is deliberately untouched. Moving it there is an open
+item, and the move should carry the floor and both stream names with it rather than restating them.
+
+### What the empty set does to the scores
+
+An empty recording stays a reference positive for whatever branch its family declares, so its
+`declared` branch lands in `missed` and it counts as a false negative in `score_branches`. That is
+the honest reading — a branch genuinely was not recovered — but it means a corpus with many empties
+reports a depressed sensitivity for a reason that has nothing to do with the gates. `FamilyTally`
+counts `empty` separately so that reason is visible rather than inferred, and
+`scripts/score_taxonomy_ruleset.py` prints the empty count on its own line above the fall-through
+count.
+
+## Bracketed tokens are AIRWAY evidence, not speech
+
+`[breath]` is a detection with a timing. The ruleset was discarding it as "not lexical", which is
+true and is not a reason to throw it away.
+
+### Bracket types are strongly separable
+
+Counts over the corpus, taken from the consensus transcript — which is capped at
+`TRANSCRIPT_CAP = 300` characters, so **every number in this table is a floor**:
+
+| token | total | airway families | lexical-speech families | other |
+| --- | --- | --- | --- | --- |
+| `[uh]` | 15,746 | 354 | 10,991 | 4,401 |
+| `[breath]` | 10,896 | **9,037** | 980 | 879 |
+| `[um]` | 10,117 | 292 | 9,663 | 162 |
+| `[cough]` | 2,045 | **2,001** | 24 | 20 |
+| `[laughter]` | 1,924 | 777 | 569 | 578 |
+| `[throatclearing]` | 542 | 360 | 172 | 10 |
+| `[sniff]` | 100 | 82 | 17 | 1 |
+
+Breath, cough, throat-clearing and sniff brackets fire on **0.734** of airway families against
+**0.024** of lexical-speech ones: roughly sens 0.734 / spec 0.976, **J ~0.710**, which is better
+than the current best AIRWAY entry (`airway.cough` at J 0.79 is on a different reference set;
+against the same one this is the strongest bracket-derived reading available). `[uh]` and `[um]` go
+the other way entirely — they are fillers, they are speech, and they are **not** in the airway set.
+`[laughter]` splits 777/569 and is in neither set.
+
+### Typed counts, extracted rather than re-parsed
+
+`words.bracketed` was a bare count with no type, and the transcript it could have been recovered
+from is capped. `RecordingFeatures.bracketed_types` is therefore extracted from the **word
+entities**: every live consensus word whose `bracketed` attribute is true contributes its
+`bracket_type(text)` — the text between the brackets, casefolded, with every non-alphanumeric
+character removed, so `[Throat Clearing]`, `[throat-clearing]` and `[THROATCLEARING]` are one type.
+A word invalidated in the store contributes nothing, as everywhere else. The field is
+`dict[str, int]`, keyed only by types the recording carries, sorted, and it costs nothing on a
+recording with no brackets.
+
+Because it comes off the entities, it is not subject to the 300-character cap and it is not subject
+to whatever the transcript renderer did to the tokens. **The table above came from the capped
+transcript and is a lower bound; the gate must be re-measured from the extracted counts before its
+J is quoted as settled.** `detectors.py` carries the candidates that sweep does:
+`airway.bracketed_breath`, `_cough`, `_throatclearing`, `_sniff`, `_laughter`, the union
+`airway.bracketed_airway_union`, and `speech.bracketed_uh`, `_um` and `_filler_union` on the other
+side, each over `COUNT_GRID`.
+
+### The gate
+
+`airway.bracketed_event` reads `("bracketed_set", "airway")` at `>= 1` and is a member of
+`branch_gates.AIRWAY`. **Which bracket types are airway is config**, at
+`taxonomy.airway_bracket_tokens` beside `taxonomy.audioset_airway_labels` and
+`taxonomy.hear_airway_labels`, currently `[breath, cough, throatclearing, sniff]`. `load_ruleset`
+resolves the set name into the gate's feature tuple at load, so the gate carries its members and
+the reader stays a plain read over `RecordingFeatures`. A gate naming a set `BRACKET_SET_PATHS`
+does not have raises rather than reading an empty union.
+
+A store that never ran consensus reads `UNAVAILABLE` on this gate rather than zero, matching the
+rule everywhere else: an unwritten measurement is not a measurement of nothing.

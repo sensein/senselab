@@ -187,6 +187,16 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
     source, *arguments = detector.reader
     if source == "words":
         return float(features.words.get(arguments[0], 0))
+    if source == "bracketed_set":
+        if not features.consensus_present:
+            return None
+        return float(sum(features.bracketed_types.get(str(name), 0) for name in arguments))
+    if source == "stream_peak_max":
+        stream, classifier = arguments
+        if f"{stream}|{classifier}" not in features.classifier_streams:
+            return None
+        prefix = peak_key(stream, classifier, "")
+        return max((score for key, score in features.peaks.items() if key.startswith(prefix)), default=0.0)
     if source == "residual":
         if not features.residual:
             return None
@@ -555,6 +565,35 @@ _NEW_DERIVATIVES: tuple[Detector, ...] = (
 )
 """Detectors reading a derivative the first sweep ignored, on the three kinds it already covered."""
 
+_BRACKETED_TOKENS: tuple[Detector, ...] = (
+    Detector("airway.bracketed_breath", "airway", ("bracketed_set", "breath"), "tokens", COUNT_GRID),
+    Detector("airway.bracketed_cough", "airway", ("bracketed_set", "cough"), "tokens", COUNT_GRID),
+    Detector("airway.bracketed_throatclearing", "airway", ("bracketed_set", "throatclearing"), "tokens", COUNT_GRID),
+    Detector("airway.bracketed_sniff", "airway", ("bracketed_set", "sniff"), "tokens", COUNT_GRID),
+    Detector("airway.bracketed_laughter", "airway", ("bracketed_set", "laughter"), "tokens", COUNT_GRID),
+    Detector(
+        "airway.bracketed_airway_union",
+        "airway",
+        ("bracketed_set", "breath", "cough", "throatclearing", "sniff"),
+        "tokens",
+        COUNT_GRID,
+    ),
+    Detector("speech.bracketed_uh", "speech", ("bracketed_set", "uh"), "tokens", COUNT_GRID),
+    Detector("speech.bracketed_um", "speech", ("bracketed_set", "um"), "tokens", COUNT_GRID),
+    Detector("speech.bracketed_filler_union", "speech", ("bracketed_set", "uh", "um"), "tokens", COUNT_GRID),
+)
+"""Typed bracketed consensus tokens, so the AIRWAY bracket gate can be swept rather than assumed."""
+
+_STREAM_PEAKS: tuple[Detector, ...] = (
+    Detector(
+        "speech.enhanced_yamnet_peak_max", "speech", ("stream_peak_max", "enhanced", "yamnet"), "score", SCORE_GRID
+    ),
+    Detector(
+        "speech.residual_yamnet_peak_max", "speech", ("stream_peak_max", "residual", "yamnet"), "score", SCORE_GRID
+    ),
+)
+"""The highest tracked-label score a whole stream carries, which is what an empty recording lacks."""
+
 _LABEL_CONDITIONED_SPANS: tuple[Detector, ...] = (
     Detector(
         "cough.yamnet_cough_span_peak_over_floor_db_max",
@@ -684,5 +723,7 @@ DETECTORS: tuple[Detector, ...] = tuple(
     + list(_GLIDES)
     + list(_NEW_DERIVATIVES)
     + list(_LABEL_CONDITIONED_SPANS)
+    + list(_BRACKETED_TOKENS)
+    + list(_STREAM_PEAKS)
 )
 """Every candidate detector, scored at every threshold in its own grid."""
