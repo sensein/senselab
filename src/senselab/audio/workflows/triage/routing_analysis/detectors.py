@@ -138,6 +138,56 @@ SEGMENT_RATE_GRID: tuple[float, ...] = (2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20
 SEGMENT_DURATION_GRID: tuple[float, ...] = (0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5)
 """Thresholds for one posteriorgram argmax segment's duration, in seconds."""
 
+SEGMENT_LAG_GRID: tuple[float, ...] = (
+    1.0,
+    2.0,
+    3.0,
+    4.0,
+    5.0,
+    6.0,
+    8.0,
+    10.0,
+    13.0,
+    16.0,
+    20.0,
+    25.0,
+    30.0,
+    40.0,
+    60.0,
+    100.0,
+    160.0,
+    250.0,
+    400.0,
+    650.0,
+    1200.0,
+)
+"""Thresholds for the lag a posteriorgram's repetition peaks at, in argmax segments."""
+
+SATURATING_PROPORTION_GRID: tuple[float, ...] = (
+    0.02,
+    0.05,
+    0.1,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.7,
+    0.75,
+    0.8,
+    0.85,
+    0.9,
+    0.93,
+    0.95,
+    0.97,
+    0.98,
+    0.99,
+    0.995,
+    0.999,
+    1.0,
+)
+"""Thresholds for a proportion bounded at 1.0 whose mass piles against that bound."""
+
 SIGNED_SCORE_GRID: tuple[float, ...] = (
     -0.9,
     -0.7,
@@ -618,8 +668,12 @@ _PITCH_SWEEP: tuple[Detector, ...] = (
         "Hz",
         F0_SPREAD_HZ_GRID,
     ),
-    Detector("glide.praat_phonation_ratio", "glide", ("praat", "phonation_ratio"), "fraction", PROPORTION_GRID),
-    Detector("voice.praat_phonation_ratio", "voice", ("praat", "phonation_ratio"), "fraction", PROPORTION_GRID),
+    Detector(
+        "glide.praat_phonation_ratio", "glide", ("praat", "phonation_ratio"), "fraction", SATURATING_PROPORTION_GRID
+    ),
+    Detector(
+        "voice.praat_phonation_ratio", "voice", ("praat", "phonation_ratio"), "fraction", SATURATING_PROPORTION_GRID
+    ),
     Detector("voice.praat_mean_hnr_db", "voice", ("praat", "mean_hnr_db"), "dB", VOICE_QUALITY_DB_GRID),
     Detector(
         "voice.praat_cepstral_peak_prominence_mean",
@@ -638,7 +692,7 @@ _SYLLABLE_REPETITION: tuple[Detector, ...] = (
     Detector("ddk.ppg_repetition_peak", "ddk", ("ppg", "repetition_peak"), "fraction", PROPORTION_GRID),
     Detector("ddk.ppg_repetition_prominence", "ddk", ("ppg", "repetition_prominence"), "fraction", PROPORTION_GRID),
     Detector(
-        "ddk.ppg_repetition_lag_segments", "ddk", ("ppg", "repetition_lag_segments"), "segments", COUNT_GRID, "below"
+        "ddk.ppg_repetition_lag_segments", "ddk", ("ppg", "repetition_lag_segments"), "segments", SEGMENT_LAG_GRID
     ),
     Detector(
         "ddk.ppg_segment_duration_median",
@@ -654,7 +708,12 @@ _SYLLABLE_REPETITION: tuple[Detector, ...] = (
 
 _UNVOICED_AIRWAY: tuple[Detector, ...] = (
     Detector(
-        "airway.praat_phonation_ratio", "airway", ("praat", "phonation_ratio"), "fraction", PROPORTION_GRID, "below"
+        "airway.praat_phonation_ratio",
+        "airway",
+        ("praat", "phonation_ratio"),
+        "fraction",
+        SATURATING_PROPORTION_GRID,
+        "below",
     ),
     Detector("airway.praat_pause_rate", "airway", ("praat", "pause_rate"), "pauses/s", PAUSE_RATE_GRID),
     Detector("airway.praat_mean_pause_duration", "airway", ("praat", "mean_pause_duration"), "seconds", DURATION_GRID),

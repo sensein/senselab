@@ -55,6 +55,7 @@ def _features(family: str, **overrides: object) -> RecordingFeatures:
         span_longest_s={"amplitude": 0.0},
         span_stats={"all.peak_over_floor_db_max": 0.0},
         span_label_set_stats={"yamnet.cough_labels.peak_over_floor_db_max": 0.0},
+        ppg={"silent_fraction": 0.0, "segment_rate_per_s": 0.0},
         classifier_streams=["plain|yamnet"],
     )
     for name, value in overrides.items():
@@ -106,6 +107,8 @@ class TestEachGateFiresAndDoesNot:
                 {"yamnet.cough_labels.peak_over_floor_db_max": 50.0},
                 {"yamnet.cough_labels.peak_over_floor_db_max": 49.9},
             ),
+            ("airway.ppg_silent_fraction", "ppg", {"silent_fraction": 0.90}, {"silent_fraction": 0.89}),
+            ("ddk.ppg_segment_rate_per_s", "ppg", {"segment_rate_per_s": 10.0}, {"segment_rate_per_s": 9.9}),
         ],
     )
     def test_a_scalar_gate_fires_at_its_threshold_and_not_below(
@@ -521,6 +524,66 @@ class TestQualityIsATerminalNodeAndNotABranch:
         assert QUALITY not in ruleset.branch_gates
         assert QUALITY not in ruleset.branch_flags
         assert QUALITY not in ruleset.reference_family_set
+
+
+class TestThePosteriorgramGatesRouteWithoutATranscript:
+    """A posteriorgram is taken whether or not any recogniser could spell what was said."""
+
+    def test_both_gates_are_branch_gates_whose_thresholds_come_off_the_configuration(self, ruleset: Ruleset) -> None:
+        """Neither cut is a literal: the gate carries whatever ``taxonomy.ruleset.gates`` says."""
+        gates = load_triage_config().require("taxonomy.ruleset.gates")
+        assert "ddk.ppg_segment_rate_per_s" in ruleset.branch_gates["DDK"]
+        assert "airway.ppg_silent_fraction" in ruleset.branch_gates["AIRWAY"]
+        for name in ("ddk.ppg_segment_rate_per_s", "airway.ppg_silent_fraction"):
+            assert ruleset.gates[name].threshold == float(gates[name]["threshold"])
+            assert ruleset.gates[name].op == "at_least"
+
+    def test_the_silent_fraction_gate_joins_the_residual_rather_than_replacing_it(self, ruleset: Ruleset) -> None:
+        """Both gates carry AIRWAY, so a recording either one reads is a recording AIRWAY gets."""
+        assert ruleset.branch_gates["AIRWAY"] == (
+            "airway.breath",
+            "airway.cough",
+            "airway.bracketed_event",
+            "airway.ppg_silent_fraction",
+        )
+        assert ruleset.gates["airway.ppg_silent_fraction"].feature == ("ppg", "silent_fraction")
+        assert ruleset.gates["ddk.ppg_segment_rate_per_s"].feature == ("ppg", "segment_rate_per_s")
+
+    def test_ddk_routes_on_the_segment_rate_with_no_repeated_token_in_the_transcript(self, ruleset: Ruleset) -> None:
+        """The syllable train the recogniser spelled three different ways still reaches DDK."""
+        record = _features(
+            "diadochokinesis-pa",
+            transcript="pa ta ka",
+            ppg={"silent_fraction": 0.0, "segment_rate_per_s": 12.0},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert result.gate_outcomes["ddk.lexical_repetition"] is GateOutcome.SILENT
+        assert result.routed == ("DDK",)
+        assert result.agreed == ("DDK",)
+
+    def test_airway_routes_on_the_silent_fraction_with_no_residual_measurement(self, ruleset: Ruleset) -> None:
+        """The 2345 recordings with no posteriorgram are not the ones with no residual."""
+        record = _features(
+            "respiration-and-cough-threequickbreaths",
+            residual={},
+            ppg={"silent_fraction": 0.95, "segment_rate_per_s": 0.0},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("AIRWAY",)
+        assert result.unavailable["AIRWAY"] == ("airway.breath",)
+
+    def test_airway_still_routes_on_the_residual_with_no_posteriorgram(self, ruleset: Ruleset) -> None:
+        """The converse: each gate covers the population the other cannot read."""
+        record = _features("respiration-and-cough-threequickbreaths", residual={"energy_fraction": 0.5}, ppg={})
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("AIRWAY",)
+        assert result.unavailable["AIRWAY"] == ("airway.ppg_silent_fraction",)
+
+    def test_no_posteriorgram_is_not_a_silent_fraction_of_zero(self, ruleset: Ruleset) -> None:
+        """An absent sidecar leaves the gate unread, which is not the gate staying silent."""
+        record = _features("respiration-and-cough-threequickbreaths", ppg={})
+        assert evaluate_gate(record, ruleset.gates["airway.ppg_silent_fraction"]) is GateOutcome.UNAVAILABLE
+        assert evaluate_gate(record, ruleset.gates["ddk.ppg_segment_rate_per_s"]) is GateOutcome.UNAVAILABLE
 
 
 class TestBracketedTokensAreAirwayEvidence:

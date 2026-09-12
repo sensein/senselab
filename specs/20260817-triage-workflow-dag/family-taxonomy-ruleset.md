@@ -97,7 +97,12 @@ gates fires.
 | AIRWAY | `airway.breath` | `residual.energy_fraction` | >= | 0.10 | 0.66 | 0.98 | 0.16 |
 | AIRWAY | `airway.cough` | `span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"]` | >= | 50.0 dB | **not re-measured** | — | — |
 | AIRWAY | `airway.bracketed_event` | `bracketed_types` over `taxonomy.airway_bracket_tokens` | >= | 1 token | ~0.710 | — | — |
+| AIRWAY | `airway.ppg_silent_fraction` | `ppg.silent_fraction` | >= | 0.90 | recall-first, not J | — | — |
 | DDK | `ddk.lexical_repetition` | max token repetition in `transcript` | >= | 3 | **not measured** | — | — |
+| DDK | `ddk.ppg_segment_rate_per_s` | `ppg.segment_rate_per_s` | >= | 10 /s | recall-first, not J | — | — |
+
+The two posteriorgram gates were chosen by recall at an over-routing budget rather than by J, and
+their measurements are in `specs/20260911-praat-ppg-detectors/design.md` rather than here.
 
 Beside the gates, and never among them:
 
@@ -232,12 +237,10 @@ of something that has no transcript.
 **Threshold 3 has not been swept.** No sweep exists over this feature, so there is no J, no firing
 spread, and no operating point.
 
-**The missing gate is acoustic, and this document deliberately does not invent it.** What DDK needs
-is a detector of periodic syllabic repetition in the signal — envelope periodicity, or a
-rate-of-repetition estimate — which is independent of whether any recogniser can spell the unit. No
-such feature is extracted today and no sweep exists for one. Adding an unfitted acoustic heuristic
-here would repeat exactly the defect that threshold-3 already is, so it is recorded as an open
-item instead.
+**The acoustic gate beside it is `ddk.ppg_segment_rate_per_s`**, added 2026-09-12: the
+posteriorgram's argmax-segment rate, which is a rate of articulatory change and needs no recogniser
+to spell the unit. It was fitted rather than assumed, and its measurements are in
+`specs/20260911-praat-ppg-detectors/design.md`. Threshold 3 on the lexical gate is still unswept.
 
 ## What `speech.intrusion` on prolonged vowels actually was
 
