@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from pathlib import Path
+
 import pytest
 
 from senselab.audio.workflows.triage.classifier_ontology import canonical_names
@@ -185,3 +187,44 @@ class TestTheClassifierSetIsUnchanged:
     def test_only_yamnet_and_hear_are_per_span(self) -> None:
         """Widening this set is a separate change with its own measurement behind it."""
         assert PER_SPAN_CLASSIFIERS == {"yamnet": "span_yamnet", "hear": "span_hear"}
+
+
+class TestTheFeatureShardKeepsEachClassifiersOwnSpelling:
+    """An ontology-named row must still reach a detector that knows only HeAR's vocabulary."""
+
+    def test_a_merged_row_is_emitted_under_the_spelling_its_classifier_used(self, tmp_path: Path) -> None:
+        """`Throat clearing` is the row; `airway.hear_peak.consensus` looks for `Throat Clear`."""
+        from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures, _absorb_measurement
+
+        features = RecordingFeatures(stem="s", run_root="r", task_id="t", family="f")
+        _absorb_measurement(
+            features,
+            {
+                "name": "consensus_taxonomy",
+                "labels": [
+                    {
+                        "label": "Throat clearing",
+                        "peak_by_classifier": {"hear": 0.7, "yamnet": 0.4},
+                        "labels_by_classifier": {"hear": ["Throat Clear"], "yamnet": ["Throat clearing"]},
+                    }
+                ],
+            },
+            {},
+            tmp_path,
+        )
+        assert features.peaks["consensus|hear|Throat Clear"] == pytest.approx(0.7)
+        assert features.peaks["consensus|yamnet|Throat clearing"] == pytest.approx(0.4)
+        assert "consensus|hear|Throat clearing" not in features.peaks
+
+    def test_a_row_without_native_spellings_falls_back_to_its_own_label(self, tmp_path: Path) -> None:
+        """A row the merge never touched carries no spelling map, and must still be read."""
+        from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures, _absorb_measurement
+
+        features = RecordingFeatures(stem="s", run_root="r", task_id="t", family="f")
+        _absorb_measurement(
+            features,
+            {"name": "consensus_taxonomy", "labels": [{"label": "Cough", "peak_by_classifier": {"yamnet": 0.9}}]},
+            {},
+            tmp_path,
+        )
+        assert features.peaks["consensus|yamnet|Cough"] == pytest.approx(0.9)
