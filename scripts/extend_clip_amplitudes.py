@@ -43,8 +43,12 @@ from typing import Any, Sequence
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
+    ERROR,
+    OK,
     RUN_SUBDIR,
+    SKIPPED,
     SLICES_SUBDIR,
+    attempt_derivation,
     export_prov,
     read_manifest,
     read_store,
@@ -55,10 +59,7 @@ from senselab.audio.workflows.triage.extend import (
 from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception, find_measurement
 from senselab.audio.workflows.triage.nodes.preprocess import extend_clip_amplitudes
 from senselab.audio.workflows.triage.nodes.quality import CLIP_AMPLITUDE_MEASUREMENT
-
-_OK = "ok"
-_ERROR = "error"
-_SKIPPED = "skipped"
+from senselab.utils.prov_store import ProvStore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,6 +85,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+NO_SPAN = "no clip span over the recording; QUALITY needs no measurement to read"
+"""What a store with nothing to measure records. Nothing was asserted, so nothing is read."""
+
+
+def measure(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
+    """Append one finished run's clip amplitudes, or say there are none to append.
+
+    Args:
+        store: The run's store.
+        config: The triage configuration.
+        run_dir: The run directory stream paths are relative to.
+
+    Returns:
+        The measurement's id, or :data:`NO_SPAN` when the store carries no clip span.
+    """
+    measurement_id = extend_clip_amplitudes(store, config, run_dir=run_dir)
+    return NO_SPAN if measurement_id is None else measurement_id
+
+
 def extend_one(run_root: Path, config: TriageConfig) -> tuple[str, str]:
     """Give one finished run the measurement it is missing, or say why it gets none.
 
@@ -98,19 +118,19 @@ def extend_one(run_root: Path, config: TriageConfig) -> tuple[str, str]:
     try:
         store = read_store(run_root)
     except (OSError, ValueError) as error:
-        return _ERROR, describe_exception(error)
+        return ERROR, describe_exception(error)
     if find_measurement(store, CLIP_AMPLITUDE_MEASUREMENT) is not None:
-        return _SKIPPED, "the store already carries a live clip_amplitude measurement"
-    try:
-        measurement_id = extend_clip_amplitudes(store, config, run_dir=run_root / RUN_SUBDIR)
-    except (OSError, ValueError, LookupError) as error:
-        return _ERROR, describe_exception(error)
-    if measurement_id is None:
-        return _SKIPPED, "no clip span over the recording; QUALITY needs no measurement to read"
+        return SKIPPED, "the store already carries a live clip_amplitude measurement"
+    before = store.fingerprint()
+    outcome = attempt_derivation(lambda: measure(store, config, run_dir=run_root / RUN_SUBDIR))
+    if outcome.failed:
+        return ERROR, outcome.detail
+    if store.fingerprint() == before:
+        return SKIPPED, outcome.detail
     capture_environments(store, {})
     write_store(store, run_root)
     export_prov(store, run_root)
-    return _OK, measurement_id
+    return OK, outcome.detail
 
 
 def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[str, Any]]:
@@ -131,7 +151,7 @@ def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[s
         try:
             run_root = run_root_of(Path(row["enhanced"]))
         except ValueError as error:
-            out.append({**row, "status": _ERROR, "clip_amplitude": describe_exception(error)})
+            out.append({**row, "status": ERROR, "clip_amplitude": describe_exception(error)})
             continue
         status, detail = extend_one(run_root, config)
         out.append({**row, "status": status, "clip_amplitude": detail})
@@ -220,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Log:     {summary['log']}")
     for status, number in sorted(summary["counts"].items()):
         print(f"  {status:<9} {number}")
-    return 1 if summary["counts"].get(_ERROR) else 0
+    return 1 if summary["counts"].get(ERROR) else 0
 
 
 if __name__ == "__main__":

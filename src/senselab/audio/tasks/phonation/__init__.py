@@ -1,6 +1,7 @@
 """Phonation measurements through Praat."""
 
 from senselab.audio.tasks.phonation.api import (
+    F0RangeUnavailable,
     FormantTrack,
     PeriodMark,
     derive_f0_range,
@@ -11,6 +12,7 @@ from senselab.audio.tasks.phonation.api import (
 )
 
 __all__ = [
+    "F0RangeUnavailable",
     "FormantTrack",
     "PeriodMark",
     "derive_f0_range",

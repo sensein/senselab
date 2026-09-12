@@ -38,6 +38,10 @@ def _require_parselmouth() -> None:
         )
 
 
+class F0RangeUnavailable(ValueError):
+    """The wide search placed no usable pitch in this recording; attribute it as an absence."""
+
+
 def derive_f0_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float) -> tuple[float, float]:
     """This recording's own F0 search range, narrowed from a wide search by the standardization method.
 
@@ -52,14 +56,14 @@ def derive_f0_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: 
 
     Raises:
         ModuleNotFoundError: If parselmouth is not installed.
-        ValueError: If the wide search placed no usable pitch and the narrowing did not resolve —
-            an absence, never a guessed range.
+        F0RangeUnavailable: If the wide search placed no usable pitch and the narrowing did not
+            resolve — an absence, never a guessed range.
     """
     _require_parselmouth()
     values = extract_pitch_values(audio, search_floor_hz=search_floor_hz, search_ceiling_hz=search_ceiling_hz)
     floor, ceiling = float(values["pitch_floor"]), float(values["pitch_ceiling"])
     if not np.isfinite(floor) or not np.isfinite(ceiling):
-        raise ValueError(
+        raise F0RangeUnavailable(
             f"no F0 range could be derived from this recording over [{search_floor_hz}, {search_ceiling_hz}] Hz"
         )
     return floor, ceiling

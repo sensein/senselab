@@ -12,14 +12,25 @@ Supersession lives here too. A driver that recomputes a measurement the store al
 retire the old one, or the store asserts two readings of the same thing; the store is append-only, so
 retiring is an invalidation edge and never a deletion. The design is in
 ``specs/20260912-extend-reprocessed-outputs/design.md``.
+
+So does the outcome vocabulary every driver records per derivation, and the rule that separates a
+derivation which *cannot apply* to a recording from one that *failed*: :data:`UNAVAILABLE`,
+:class:`DerivationOutcome` and :func:`attempt_derivation`. One rule, in one place, rather than a
+per-derivation list of words a driver treats as determinate.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
+from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
+from senselab.audio.tasks.classification.yamnet import SpanTooShortForYAMNet
+from senselab.audio.tasks.features_extraction.ppg import PpgsPosteriorgramUnavailable
+from senselab.audio.tasks.phonation.api import F0RangeUnavailable
+from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.consensus import (
     Rebracketed,
@@ -30,14 +41,19 @@ from senselab.audio.workflows.triage.consensus import (
     word_from_attributes,
 )
 from senselab.audio.workflows.triage.nodes.common import (
+    NodeResult,
+    describe_exception,
     find_measurement,
+    find_verdict,
     live_entities,
     software_agent,
     write_measurement,
 )
 from senselab.audio.workflows.triage.nodes.preprocess import NODE as PREPROCESS_NODE
+from senselab.audio.workflows.triage.nodes.quality import quality
 from senselab.audio.workflows.triage.nodes.taxonomy import NODE as TAXONOMY_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import _write_consensus_taxonomy
+from senselab.audio.workflows.triage.vocabulary import QUALITY
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
 from senselab.utils.prov_store import ProvStore
 
@@ -53,8 +69,83 @@ WORD_SUPERSEDED = "word_superseded"
 ONOMATOPOEIC_TOKENS_KEY = "words.onomatopoeic_tokens"
 ASR_MEASURE = "asr"
 
+SOURCE_STREAM = "recording"
+"""The stream QUALITY's clip spans were detected on, and the one it names its findings about."""
+
 _WORD_REASON = "the token is in words.onomatopoeic_tokens; this reading spells it unbracketed"
 _TRANSCRIPT_REASON = "its words were re-flagged against words.onomatopoeic_tokens"
+
+OK = "ok"
+"""A derivation that ran and wrote what it derives."""
+
+ERROR = "error"
+"""A row on which something failed. The only status that makes an array task exit nonzero."""
+
+SKIPPED = "skipped"
+"""A row whose store was left exactly as it was found, every derivation having landed."""
+
+PRESENT = "present"
+"""The store already carries this derivation's output, so it was not recomputed."""
+
+CURRENT = "current"
+"""The store already holds this derivation's own answer; recomputing it moved nothing."""
+
+REWRITTEN = "rewritten"
+"""This derivation replaced a reading the store held, retiring the old one."""
+
+ABSENT = "absent"
+"""This derivation has nothing in the store to work from, or cannot apply to this recording.
+
+The bare word is the first case. The second carries the typed absence that said so, as
+``absent: <Class>: <message>``.
+"""
+
+UNAVAILABLE: tuple[type[BaseException], ...] = (
+    AudioTooShortForAST,
+    CrisperWhisperDecoderPositionsExceeded,
+    F0RangeUnavailable,
+    PpgsPosteriorgramUnavailable,
+    SpanTooShortForYAMNet,
+)
+"""Every typed absence a derivation may raise: each says this recording has no such thing to derive.
+
+A derivation raising one of these has answered; :func:`attempt_derivation` records it under
+:data:`ABSENT` and the row's status stays what the other derivations made it.
+"""
+
+
+@dataclass(frozen=True)
+class DerivationOutcome:
+    """What one derivation did to one store, and whether anything failed.
+
+    Attributes:
+        detail: What the slice log records under the derivation's own name — one of the outcome
+            words above, ``absent: <reason>``, or the failure's class and message.
+        failed: Whether this derivation failed. A derivation that could not apply did not.
+    """
+
+    detail: str
+    failed: bool
+
+
+def attempt_derivation(call: Callable[[], str]) -> DerivationOutcome:
+    """Run one derivation over a store, separating what cannot apply from what failed.
+
+    Args:
+        call: The derivation, already bound to its store and configuration, returning the outcome
+            word to record for it.
+
+    Returns:
+        The outcome. A typed absence from :data:`UNAVAILABLE` is recorded under :data:`ABSENT` with
+        its reason and is not a failure; any other ``OSError``, ``ValueError`` or ``LookupError`` is
+        recorded with its class and message and is.
+    """
+    try:
+        return DerivationOutcome(call(), failed=False)
+    except UNAVAILABLE as error:
+        return DerivationOutcome(f"{ABSENT}: {describe_exception(error)}", failed=False)
+    except (OSError, ValueError, LookupError) as error:
+        return DerivationOutcome(describe_exception(error), failed=True)
 
 
 def read_manifest(path: Path, *, required: Sequence[str] = ("stem",)) -> list[dict[str, Any]]:
@@ -384,3 +475,33 @@ def rebracket_words(store: ProvStore, config: TriageConfig) -> str | None:
         derived_from=(written,),
     )
     return written
+
+
+def extend_quality(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> NodeResult | None:
+    """Run QUALITY over a finished run, whose graph pass never reached it.
+
+    QUALITY reads stored outputs only, so the finished run holds every input it takes: PREPROCESS's
+    clip spans over the ``recording`` stream and the ``clip_amplitude`` measurement beside them.
+    Nothing is retired — the run carries no QUALITY verdict to replace — and the verdict written
+    here names, in its ``preceded_by``, the nodes that had actually concluded when it was reached.
+
+    A store already carrying a live QUALITY verdict is left alone. The recomputation would mint the
+    activity, the assertions and the verdict it already holds, so a second pass is a set-union
+    no-op either way; skipping is what makes it free.
+
+    Args:
+        store: The finished run's store, read under the run's own id.
+        config: The triage configuration, read for ``quality.clip_contradiction_margin``.
+        run_dir: The run directory, for the shared node shape. QUALITY opens nothing under it.
+
+    Returns:
+        QUALITY's result, or None when the store already carries a live QUALITY verdict.
+
+    Raises:
+        ValueError: If ``quality.clip_contradiction_margin`` is unmeasured.
+        LookupError: If the store holds no live ``recording`` stream, or holds clip spans over it
+            with no ``clip_amplitude`` measurement to read them against.
+    """
+    if find_verdict(store, QUALITY) is not None:
+        return None
+    return quality(store, SOURCE_STREAM, config, run_dir=run_dir)

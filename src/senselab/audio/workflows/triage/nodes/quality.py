@@ -15,6 +15,12 @@ the spans say what was asserted, the measurement says what the samples were.
 with no clip-amplitude measurement beside them raise, and the runner records the node ``ERRORED``.
 A contradiction QUALITY *can* measure is always a finding and never a raise.
 
+**What its verdict names about the run.** ``preceded_by`` lists the nodes whose verdicts were live
+in the store when QUALITY read it. A fresh run reaches QUALITY after routing and the branches; the
+extend pass that gives a finished run its verdict
+(``scripts/extend_quality.py``) reaches it after whatever that run actually ran, which on a run that
+never routed is neither.
+
 Its first check is clip consistency. A clip span asserts that the signal reached its ceiling over
 that extent; a sample outside every clip span, louder than that ceiling, contradicts the assertion.
 QUALITY records each contradiction as an ``assertion`` derived from the span it contests and names
@@ -95,6 +101,24 @@ class _Contradiction:
             "louder_time_s": self.louder_time_s,
             "louder_samples_n": self.louder_samples_n,
         }
+
+
+def preceded_by(store: ProvStore) -> list[str]:
+    """The nodes that had concluded, in this store, by the time QUALITY read it.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The ``node`` of every live verdict entity other than QUALITY's own, sorted and deduplicated.
+    """
+    return sorted(
+        {
+            str(entity.attributes["node"])
+            for entity in live_entities(store, "verdict")
+            if entity.attributes.get("node") != NODE
+        }
+    )
 
 
 def _stream_id(store: ProvStore, name: str) -> str:
@@ -205,6 +229,7 @@ def quality(
     del hint, run_dir
     margin = float(config.require("quality.clip_contradiction_margin"))
     stream_id = _stream_id(store, source)
+    preceded = preceded_by(store)
     software = software_agent(store)
 
     spans = clip_spans(store, source)
@@ -292,6 +317,7 @@ def quality(
         why=why,
         detail={
             "signal": source,
+            "preceded_by": preceded,
             "clip_spans_n": len(spans),
             "checked_n": len(measured),
             "unmeasurable_n": len(spans) - len(measured),

@@ -316,6 +316,82 @@ decode and two Praat passes and the presence check is a dictionary lookup.
 truncated store for the next pass to read, and a task killed mid-slice restarts and redoes only what
 never landed.
 
+## A derivation that cannot apply is an absence, not a failure
+
+The corpus pass over 60,202 recordings reported **613 errors**, and every array task exited nonzero.
+All 613 were one thing:
+
+```
+phonation_tracks: ValueError: no F0 range could be derived from this recording over [50.0, 600.0] Hz
+```
+
+on 0.33 s fragments, coughs and breaths — 271 harvard fragments and 243 airway recordings. Unvoiced
+audio has no derivable pitch. `derive_f0_range` is right to refuse: the alternative is a guessed
+range, and the function's own contract is "an absence, never a guessed range". What was wrong is the
+classification. The work on those recordings was not lost — each store carries its phonation record,
+its merged consensus and its re-flagged words — and the row still read `error`, the slice still
+counted it, and the task still exited 1.
+
+### Where the line is drawn
+
+This codebase already separates the two, with a typed `ValueError` subclass that a caller catches as
+a cascading absence: `SpanTooShortForYAMNet`, `AudioTooShortForAST`,
+`CrisperWhisperDecoderPositionsExceeded`, `PpgsPosteriorgramUnavailable`. `derive_f0_range` now
+raises `F0RangeUnavailable` in that idiom, which is a `ValueError` subclass, so every existing
+caller — PREPROCESS's block loop, VOICE, the tests — is unchanged in behaviour.
+
+What was missing is the other half: the **driver** has to know that such a raise is an answer. It is
+recorded once, at the driver level, rather than per case:
+
+* `extend.UNAVAILABLE` — the five typed absences, in one tuple. Whether a raise is an absence is a
+  property of the exception, not of which derivation raised it.
+* `extend.attempt_derivation(call)` — runs one derivation and returns
+  `DerivationOutcome(detail, failed)`. A `UNAVAILABLE` raise is `absent: <Class>: <message>`, not
+  failed; any other `OSError`/`ValueError`/`LookupError` is the class and message, failed.
+* The row's `status` is `error` iff some derivation failed, and `ok`/`skipped` otherwise by the
+  fingerprint. The three drivers no longer each carry their own list of words to treat as
+  determinate — that list was the per-case form of this rule, and it is what let one derivation's
+  absence read as the whole row's failure.
+
+The outcome words themselves (`ok`, `error`, `skipped`, `present`, `current`, `rewritten`, `absent`)
+moved into `extend.py` with the rule, so the three drivers spell them identically.
+
+**`absent` covers two things and says which.** The bare word is "the store holds nothing of this to
+work from" — no consensus transcript, no consolidation. `absent: <reason>` is "this recording has no
+such thing to derive". Both are absences of the derivation and neither is a failure; only the second
+needs a reason, and it carries one.
+
+### What this does not soften
+
+A store that will not open, a run tree with no conditioned stream, a `LookupError` from a
+prerequisite the store should hold — all still fail, still make the row `error` and still exit the
+task nonzero. The distinction is between *this recording has no such thing* and *this pass could not
+do its job*, and only the exception's own type decides which.
+
+## Two guards on the extract path
+
+The same defect in a different place, and worth stating here because it is the same reading error:
+silence taken for success.
+
+`build_manifest` in `scripts/analyze_routing_evidence.py` reused an existing manifest
+unconditionally, printing one line. Pointed at a stale output directory it reused a manifest built
+before the corpus was relocated: every row intact, every `store` path resolving to nothing. Each row
+became `missing`, the extract wrote **0 features out of 62,550 rows**, and the job exited **0**.
+`--expect` checks the manifest's row count, which was right; what was wrong was what the rows
+pointed at. The only signal was a downstream scorer reporting zero recordings, one job later.
+
+1. **A reused manifest must still resolve the tree it names.** `check_manifest_resolves` stats up to
+   `MANIFEST_PROBE` = 64 rows, evenly spread through the file, and refuses when **not one** of them
+   exists. The rule is threshold-free on purpose: "no evidence this manifest resolves at all" needs
+   no fitted fraction, and a manifest that has lost individual recordings — deleted since it was
+   built — still resolves and is still reused, because those are the extract's `missing.jsonl` rows
+   and always have been. The probe is bounded rather than exhaustive so that reuse stays a
+   constant-cost check on a 62,550-row manifest.
+2. **A zero-feature extract fails.** After `load_features`, a manifest with rows in it and no
+   features out of it raises `SystemExit` naming `missing.jsonl`, rather than scoring an empty
+   record set and returning 0. This one catches whatever the first misses — a manifest that resolves
+   a handful of stores and no more, a shard directory that never landed.
+
 ## What a consumer of an extended store must know
 
 1. **`phonation_tracks` was measured after the run finished, from the streams the run left behind.**
@@ -373,3 +449,14 @@ only in surfaces and the `bracketed` flag, and two onomatopoeic spellings stay t
 `src/tests/audio/workflows/triage/routing_analysis_test.py` pins the reader: a store holding a live
 and a retired `consensus_taxonomy` reports the live one's peaks whichever order they were written
 in.
+
+The absence rule is pinned in `extend_reprocessed_outputs_test.py::TestADerivationThatCannotApply`,
+over a run whose conditioned streams are silence: the phonation row reads
+`absent: F0RangeUnavailable`, the run's status is `ok`, the store gains no phonation measurement, the
+other two derivations still land on that recording, and a run whose streams the tree no longer holds
+is still an `error`.
+
+The two guards are pinned in `src/tests/scripts/analyze_routing_evidence_test.py`: a manifest none of
+whose stores exist is refused, one that still resolves is reused, a manifest missing a few recordings
+is not refused, an empty one is not refused by the probe, and an extract that writes no features from
+a non-empty manifest exits nonzero instead of scoring nothing.

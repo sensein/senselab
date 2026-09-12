@@ -312,6 +312,94 @@ measurement, so a verdict always names the guard its numbers were measured under
 configuration's values are unchanged by any of this, so `config_hash` alone does not separate a run
 made before this change from one made after.
 
+## Running QUALITY over a finished run
+
+The corpus pass ran ADMIT → PREPROCESS → TAXONOMY → FIGURE. ROUTING, the branches and QUALITY never
+executed: `branch_decision` and `QUALITY` appear in 0 of 150 sampled stores. So the node itself has
+to be run over the finished stores, and `scripts/extend_quality.py` is that pass —
+`extend.extend_quality(store, config, run_dir=...)` per recording, over the same run layout, store
+read/write, BEP028 re-export and manifest slicing as the two drivers above.
+
+Derivable, and trivially so: QUALITY's contract is that it reads stored outputs only. Every input it
+takes — the `recording` stream, the `clip` spans over it, the `clip_amplitude` measurement beside
+them — is in the store the finished run left behind, and the last of the three is what
+`scripts/extend_clip_amplitudes.py` appended. **That ordering is the pass's one prerequisite**: run
+the clip driver first, or every store carrying a clip span is a refusal.
+
+### What a verdict written after the fact may claim
+
+QUALITY writes a verdict, and a verdict is a conclusion. Nothing is retired here — the run carries
+no QUALITY verdict to replace, so the question the re-bracketing work answered (never retire a
+conclusion into a hole) does not arise. The question that does arise is the opposite one: a verdict
+is normally reached at a particular place in the graph, and this one is not.
+
+The position is part of QUALITY's contract — "after every branch, on every path PREPROCESS
+completed" — and it is a claim about what *had been written* when the node read. On a corpus store
+nothing had: no routing decision, no branch verdict. The reading QUALITY produces is unaffected,
+because it reads none of them, and the entity it mints is the entity a fresh run would mint from the
+same records. What differs is what stands beside it in the store, and a verdict that did not say so
+would be indistinguishable from one reached after a full graph pass.
+
+So the verdict says so, in a field measured off the store rather than asserted by the driver:
+**`preceded_by`, the `node` of every live verdict entity other than QUALITY's own**, sorted. A fresh
+run's QUALITY verdict carries `ADMIT, PREPROCESS, TAXONOMY, routing` and whichever branches ran; a
+corpus store's carries `ADMIT, PREPROCESS, TAXONOMY` and no branch at all. The same field on both
+paths, because it is a fact about the store either way, and a reader needs it on the fresh path too:
+a branch that raised also wrote no verdict.
+
+QUALITY's own node name is excluded, which is what keeps the field stable under a second pass — see
+convergence below.
+
+The activity is the fresh path's `QUALITY`/`clip_consistency`, with the fresh path's parameters,
+because that computation really ran on those inputs. There is nothing here for a different name to
+protect against, which is the judgement `PREPROCESS`/`clip_amplitude` failed and this one passes.
+
+### The file verdict is not re-folded
+
+VERDICT already ran on these recordings and folded a file verdict from an execution record with no
+QUALITY in it. This pass does not re-fold: `fold_file_verdict` folds the runner's per-node `ran`
+mapping, which is the runner's record and not a store fact, and a QUALITY flag raising a file to
+`Triage.FLAG` on a run whose branches never executed would be a file verdict for a pass that never
+happened. The store therefore holds a QUALITY verdict the file verdict predates, and `preceded_by`
+naming `VERDICT` is exactly how a reader tells: a fold cannot have included a verdict written after
+it. This is consumer note 4 of the re-bracketing design in its own terms — the words were re-flagged
+and the conclusions drawn from them were not.
+
+### No clip span is a pass, not a refusal
+
+Roughly 84 % of the corpus carries no clip span (`clip_amplitude` is present in 43 of 150 sampled
+stores after the clip pass, which is the ~16 % carrying clip spans). QUALITY passes such a store —
+nothing was asserted, so nothing can contradict it — and that verdict is written like any other.
+Writing nothing there would leave those recordings indistinguishable from the 62,550 that had not
+been read at all, which is the state this pass exists to end. The refusal is the other case, and
+only the other case: clip spans present with no `clip_amplitude` beside them, which is a store the
+clip driver has not reached, recorded as that recording's error.
+
+### Convergence
+
+Per recording: read the store, take `store.fingerprint()`, run the node, and write the store,
+re-export `prov/` and record the environment **only if the fingerprint moved** — the reprocessed
+driver's rule, for the same reason. Neither the activity's parameters nor the assertions' nor the
+verdict's attributes carry a path, a timestamp or anything else that varies between two readings of
+the same records, and `preceded_by` excludes QUALITY itself, so a second pass over an extended store
+recomputes exactly the activity, assertions and verdict it already holds: a set-union no-op that
+leaves the fingerprint where it was. The driver also skips a store already carrying a live QUALITY
+verdict outright, which saves the recomputation rather than buying the convergence.
+
+A refusal leaves the store unwritten. QUALITY adds its software agent before it reads the
+measurement, so a refused store's in-memory copy has moved; it is discarded rather than written, and
+the recording keeps the store it had.
+
+### Verification
+
+`src/tests/scripts/extend_quality_test.py`, over synthetic finished runs: the verdict and its
+contest land, the contested span is kept and the contest is derived from it, `preceded_by` names
+what had concluded and never QUALITY itself, a run with no clip span passes rather than refusing, a
+clip nothing is louder than passes, clip spans with no amplitudes are refused and that store is left
+byte-identical, a second pass is a fingerprint no-op reporting `present`, `prov/` is re-exported
+carrying the verdict, the host environment is recorded, and a missing store is one recording's error
+with its neighbour still reaching a verdict.
+
 ## What this check does and does not tell you
 
 It measures **internal inconsistency of the detector's output**, not clip ground truth. A contested

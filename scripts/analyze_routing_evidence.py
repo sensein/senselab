@@ -9,6 +9,11 @@ the threshold sweeps, the per-family prevalence, the enumerated disagreements an
 summary. Idempotent: the manifest and the feature shards are reused when they are already
 complete, so a killed run resumes.
 
+A reused manifest is checked against the tree it names: none of its sampled store paths resolving
+means it resolves some other tree, and it is refused rather than extracted from. An extract that
+writes no features from a manifest with rows in it fails too. Both are the same defect -- a run that
+reads nothing and reports success -- caught at the two places it can appear.
+
 Which labels a span carries is read from ``windows.<classifier>`` in the triage configuration, the
 same pair PREPROCESS stamps its own windows with, so ``--config`` changes both together.
 """
@@ -23,7 +28,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.label_membership import LabelMembership
@@ -48,8 +53,33 @@ SHARD_DIR = "features"
 PART_NAME = "part-{part:05d}" + SHARD_SUFFIX
 PART_ROWS = 4000
 """How many recordings fill one shard part before it is written and the next one begins."""
+MANIFEST_PROBE = 64
+"""How many rows of a reused manifest are stat'd before it is trusted to name this tree."""
 SUMMARY_DEPTHS = ("*.summary.json", "*/*.summary.json", "*/*/*.summary.json")
 """Every depth ``entity_subdir`` can place a summary at: no entity, subject only, subject-session."""
+
+
+def check_manifest_resolves(manifest: Path, rows: Sequence[Mapping[str, str]]) -> None:
+    """Refuse a manifest whose stores are not where it says they are.
+
+    Args:
+        manifest: The manifest being reused, named in the refusal.
+        rows: Its rows, each carrying the ``store`` it resolved a recording to.
+
+    Raises:
+        FileNotFoundError: When not one of the probed rows names a store that exists.
+    """
+    if not rows:
+        return
+    step = max(1, len(rows) // MANIFEST_PROBE)
+    probed = [str(row.get("store") or "") for row in rows[::step][:MANIFEST_PROBE]]
+    if any(path and Path(path).is_file() for path in probed):
+        return
+    raise FileNotFoundError(
+        f"{manifest} names {len(rows)} recordings and none of the {len(probed)} probed stores "
+        f"exists (e.g. {probed[0] or '<no store>'}); it resolves a tree that is not there. Delete it "
+        "to rebuild against the tree this run was pointed at."
+    )
 
 
 def build_manifest(run_dir: Path, out_dir: Path) -> Path:
@@ -63,14 +93,17 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
         out_dir: Where the manifest is written.
 
     Returns:
-        The manifest path. Reused unchanged when it already exists.
+        The manifest path. Reused unchanged when it already exists and still resolves.
 
     Raises:
-        FileNotFoundError: When ``run_dir`` holds no summaries.
+        FileNotFoundError: When ``run_dir`` holds no summaries, or when a reused manifest names
+            stores that no longer exist.
     """
     manifest = out_dir / MANIFEST
     if manifest.exists():
-        print(f"[manifest] reusing {manifest} ({sum(1 for _ in manifest.open())} rows)", flush=True)
+        rows = [json.loads(line) for line in manifest.open("r", encoding="utf-8") if line.strip()]
+        check_manifest_resolves(manifest, rows)
+        print(f"[manifest] reusing {manifest} ({len(rows)} rows)", flush=True)
         return manifest
     summaries = sorted({path for depth in SUMMARY_DEPTHS for path in run_dir.glob(depth)})
     if not summaries:
@@ -223,6 +256,10 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 on success.
+
+    Raises:
+        SystemExit: When the manifest resolves a different number of recordings than ``--expect``,
+            or when the extract wrote no features from a manifest that has rows.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path, help="a triage out dir, searched recursively for per-recording summaries")
@@ -244,6 +281,11 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"resolved {n_rows} recordings, expected {arguments.expect}")
     shard_dir = extract_all(manifest, arguments.out_dir, arguments.workers, memberships, onomatopoeic)
     records: list[RecordingFeatures] = load_features(shard_dir)
+    if n_rows and not records:
+        raise SystemExit(
+            f"extracted 0 features from {n_rows} manifest rows; every store was unreadable or "
+            f"missing. See {shard_dir / 'missing.jsonl'}"
+        )
     print(f"[report] scoring {len(records)} recordings", flush=True)
     index = write_report(records, arguments.out_dir)
     print(json.dumps({key: index[key] for key in ("n_recordings", "n_families")}), flush=True)

@@ -32,6 +32,12 @@ None runs a model and none reads the source recording. What each one retires, wh
 does not recompute, and what a consumer of an extended store must therefore know are in
 ``specs/20260912-extend-reprocessed-outputs/design.md``.
 
+A derivation that **cannot apply** to a recording -- an unvoiced fragment has no F0 range to narrow,
+so it has no phonation track -- is recorded as an absence under that derivation's own name and
+leaves the row's status to the others. Which raises are absences is
+``senselab.audio.workflows.triage.extend.UNAVAILABLE``, and the rule is
+``extend.attempt_derivation``; neither is this driver's own.
+
 Nothing is written outside the recording's own run. A store the three derivations leave unchanged --
 its fingerprint before and after is the test -- is not rewritten at all, so a completed slice re-run
 is a pass over ``store.jsonl`` and nothing else, and a task that dies mid-slice restarts where it
@@ -52,11 +58,20 @@ from typing import Any, Sequence
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
+    ABSENT,
     CONSENSUS_TAXONOMY,
     CONSENSUS_TRANSCRIPT,
+    CURRENT,
+    ERROR,
+    OK,
+    PRESENT,
     REBRACKET,
+    REWRITTEN,
     RUN_SUBDIR,
+    SKIPPED,
     SLICES_SUBDIR,
+    DerivationOutcome,
+    attempt_derivation,
     export_prov,
     read_manifest,
     read_store,
@@ -69,14 +84,6 @@ from senselab.audio.workflows.triage.extend import (
 from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception, find_measurement
 from senselab.audio.workflows.triage.nodes.preprocess import PHONATION_TRACKS_MEASUREMENT, phonation_tracks
 from senselab.utils.prov_store import ProvStore
-
-_OK = "ok"
-_ERROR = "error"
-_SKIPPED = "skipped"
-_PRESENT = "present"
-_CURRENT = "current"
-_REWRITTEN = "rewritten"
-_ABSENT = "absent"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -114,7 +121,7 @@ def _reasons(reason: str) -> dict[str, str]:
     return {REBRACKET: reason, PHONATION_TRACKS_MEASUREMENT: reason, CONSENSUS_TAXONOMY: reason}
 
 
-def extend_rebracket(store: ProvStore, config: TriageConfig) -> str:
+def extend_rebracket(store: ProvStore, config: TriageConfig) -> DerivationOutcome:
     """Re-flag one finished run's consensus words, or say why none is re-flagged.
 
     Args:
@@ -126,16 +133,17 @@ def extend_rebracket(store: ProvStore, config: TriageConfig) -> str:
         when the store carries no consensus transcript, or the reason the words could not be
         re-read.
     """
-    try:
+
+    def _rebracket() -> str:
         written = rebracket_words(store, config)
-    except (OSError, ValueError, LookupError) as error:
-        return describe_exception(error)
-    if written is not None:
-        return _REWRITTEN
-    return _CURRENT if find_measurement(store, CONSENSUS_TRANSCRIPT) is not None else _ABSENT
+        if written is not None:
+            return REWRITTEN
+        return CURRENT if find_measurement(store, CONSENSUS_TRANSCRIPT) is not None else ABSENT
+
+    return attempt_derivation(_rebracket)
 
 
-def extend_phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
+def extend_phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> DerivationOutcome:
     """Give one finished run the phonation tracks it has none of, or say why it gets none.
 
     Args:
@@ -144,19 +152,21 @@ def extend_phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: 
         run_dir: The run directory the streams and the npz sidecar live under.
 
     Returns:
-        ``ok``, ``present`` when the store already carries the measurement, or the reason no track
+        ``ok``, ``present`` when the store already carries the measurement, ``absent`` and the typed
+        absence when the recording carries no pitch to derive a range from, or the reason no track
         could be measured.
     """
     if find_measurement(store, PHONATION_TRACKS_MEASUREMENT) is not None:
-        return _PRESENT
-    try:
+        return DerivationOutcome(PRESENT, failed=False)
+
+    def _track() -> str:
         phonation_tracks(store, config, run_dir=run_dir)
-    except (OSError, ValueError, LookupError) as error:
-        return describe_exception(error)
-    return _OK
+        return OK
+
+    return attempt_derivation(_track)
 
 
-def extend_consensus_taxonomy(store: ProvStore, config: TriageConfig) -> str:
+def extend_consensus_taxonomy(store: ProvStore, config: TriageConfig) -> DerivationOutcome:
     """Make one finished run's consolidated taxonomy current, or say why it is not touched.
 
     Args:
@@ -167,13 +177,14 @@ def extend_consensus_taxonomy(store: ProvStore, config: TriageConfig) -> str:
         ``rewritten``, ``current`` when the store already holds this consolidation, ``absent`` when
         it holds none to make current, or the reason the consolidation could not be recomputed.
     """
-    try:
+
+    def _consolidate() -> str:
         written = rewrite_consensus_taxonomy(store, config)
-    except (OSError, ValueError, LookupError) as error:
-        return describe_exception(error)
-    if written is not None:
-        return _REWRITTEN
-    return _CURRENT if find_measurement(store, CONSENSUS_TAXONOMY) is not None else _ABSENT
+        if written is not None:
+            return REWRITTEN
+        return CURRENT if find_measurement(store, CONSENSUS_TAXONOMY) is not None else ABSENT
+
+    return attempt_derivation(_consolidate)
 
 
 def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
@@ -188,32 +199,29 @@ def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
         config: The triage configuration.
 
     Returns:
-        ``{status, rebracket, phonation_tracks, consensus_taxonomy}`` — ``ok`` when all three
-        reached a determinate outcome, ``skipped`` when none changed the store, ``error`` otherwise.
+        ``{status, rebracket, phonation_tracks, consensus_taxonomy}`` — ``ok`` when nothing failed
+        and the store changed, ``skipped`` when nothing failed and it did not, ``error`` when a
+        derivation failed. A derivation that could not apply to this recording did not fail.
     """
     try:
         store = read_store(run_root)
     except (OSError, ValueError) as error:
-        return {"status": _ERROR, **_reasons(describe_exception(error))}
+        return {"status": ERROR, **_reasons(describe_exception(error))}
     before = store.fingerprint()
-    rebracketed = extend_rebracket(store, config)
-    phonation = extend_phonation_tracks(store, config, run_dir=run_root / RUN_SUBDIR)
-    taxonomy = extend_consensus_taxonomy(store, config)
-    determinate = (_REWRITTEN, _CURRENT, _ABSENT)
-    landed = [rebracketed in determinate, phonation in (_OK, _PRESENT), taxonomy in determinate]
+    derived = {
+        REBRACKET: extend_rebracket(store, config),
+        PHONATION_TRACKS_MEASUREMENT: extend_phonation_tracks(store, config, run_dir=run_root / RUN_SUBDIR),
+        CONSENSUS_TAXONOMY: extend_consensus_taxonomy(store, config),
+    }
+    failed = any(outcome.failed for outcome in derived.values())
     if store.fingerprint() != before:
         capture_environments(store, {})
         write_store(store, run_root)
         export_prov(store, run_root)
-        status = _OK if all(landed) else _ERROR
+        status = ERROR if failed else OK
     else:
-        status = _SKIPPED if all(landed) else _ERROR
-    return {
-        "status": status,
-        REBRACKET: rebracketed,
-        PHONATION_TRACKS_MEASUREMENT: phonation,
-        CONSENSUS_TAXONOMY: taxonomy,
-    }
+        status = ERROR if failed else SKIPPED
+    return {"status": status, **{name: outcome.detail for name, outcome in derived.items()}}
 
 
 def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[str, Any]]:
@@ -234,7 +242,7 @@ def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[s
         try:
             run_root = run_root_of(Path(row["enhanced"]))
         except ValueError as error:
-            out.append({**row, "status": _ERROR, **_reasons(describe_exception(error))})
+            out.append({**row, "status": ERROR, **_reasons(describe_exception(error))})
             continue
         out.append({**row, **extend_one(run_root, config)})
     return out
@@ -322,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Log:     {summary['log']}")
     for status, number in sorted(summary["counts"].items()):
         print(f"  {status:<9} {number}")
-    return 1 if summary["counts"].get(_ERROR) else 0
+    return 1 if summary["counts"].get(ERROR) else 0
 
 
 if __name__ == "__main__":
