@@ -2,11 +2,12 @@
 
 import inspect
 import random
-from dataclasses import fields
+from dataclasses import fields, replace
 from typing import Sequence
 
 import pytest
 
+from senselab.audio.workflows.audio_analysis.harmonize import harmonize_transcripts
 from senselab.audio.workflows.triage.consensus import (
     Consensus,
     ConsensusWord,
@@ -15,8 +16,11 @@ from senselab.audio.workflows.triage.consensus import (
     bracketed_form,
     is_bracketed,
     isotonic_median_fit,
+    rebracket,
     render_transcript,
     vocabulary_key,
+    word_attributes,
+    word_from_attributes,
 )
 
 
@@ -400,3 +404,104 @@ class TestRenderingAndProvenance:
         names = {f.name for f in fields(ConsensusWord)}
         assert not any("slot" in name or "span" in name for name in names)
         assert set(inspect.signature(align_sources).parameters) == {"sources", "onomatopoeic"}
+
+
+class TestBracketingDoesNotMoveTheAlignment:
+    """The claim re-bracketing a finished run rests on: a vocabulary decides surfaces, not columns."""
+
+    LEXICON = {"cough", "khh", "hack"}
+    """Three entries of the shipped vocabulary, enough for an agreement and a variant column."""
+
+    def _pair(self) -> tuple[SourceHypothesis, SourceHypothesis]:
+        """Two hypotheses sharing an onomatopoeic agreement column and an onomatopoeic variant one.
+
+        Returns:
+            The two hypotheses.
+        """
+        a = _timed("a", [("I", 0.1, 0.2), ("cough", 0.3, 0.45), ("khh", 0.6, 0.7), ("hello", 0.9, 1.1)])
+        b = _timed("b", [("I", 0.11, 0.21), ("Cough,", 0.31, 0.46), ("hack", 0.61, 0.72), ("hello", 0.92, 1.13)])
+        return a, b
+
+    def test_the_lattice_is_the_same_under_either_display(self) -> None:
+        """``harmonize_transcripts`` normalises, and normalisation drops brackets."""
+        plain = harmonize_transcripts({"a": [(0.3, 0.45, "cough")], "b": [(0.31, 0.46, "Cough,")]})
+        bracketed = harmonize_transcripts({"a": [(0.3, 0.45, "[COUGH]")], "b": [(0.31, 0.46, "[COUGH]")]})
+        assert [slot.indices for slot in plain.slots] == [slot.indices for slot in bracketed.slots]
+        assert [(slot.start_s, slot.end_s) for slot in plain.slots] == [
+            (slot.start_s, slot.end_s) for slot in bracketed.slots
+        ]
+
+    def test_only_the_surfaces_and_the_flag_move(self) -> None:
+        """Column membership, order, timings, extents, outcomes and agreement are all fixed."""
+        plain = _align(*self._pair())
+        bracketed = _align(*self._pair(), onomatopoeic=self.LEXICON)
+        assert len(plain.words) == len(bracketed.words)
+        for before, after in zip(plain.words, bracketed.words):
+            assert (before.index, before.outcome, before.agreement) == (after.index, after.outcome, after.agreement)
+            assert before.sources == after.sources
+            assert before.readings == after.readings
+            assert before.timings == after.timings
+            assert before.extent == after.extent
+            assert before.onset_spread_s == after.onset_spread_s
+            assert before.offset_spread_s == after.offset_spread_s
+            assert before.temporal_uncertainty_s == after.temporal_uncertainty_s
+            assert [v.sources for v in before.variants] == [v.sources for v in after.variants]
+            assert [v.share for v in before.variants] == [v.share for v in after.variants]
+        assert _texts(plain) == ["I", "cough", "khh", "hello"]
+        assert _texts(bracketed) == ["I", "[COUGH]", "[KHH]", "hello"]
+        assert [word.bracketed for word in bracketed.words] == [False, True, True, False]
+
+    def test_the_two_recognizers_do_not_agree_just_because_both_are_bracketed(self) -> None:
+        """``bracketed_form`` brackets each token's own key, so two spellings stay two readings."""
+        bracketed = _align(*self._pair(), onomatopoeic=self.LEXICON)
+        variant = bracketed.words[2]
+        assert variant.outcome == "variant"
+        assert [v.text for v in variant.variants] == ["[KHH]", "[HACK]"]
+        assert bracketed.provenance["outcomes"] == _align(*self._pair()).provenance["outcomes"]
+
+
+class TestReadingOneStoredColumnAgain:
+    """What an extend pass does to a finished run's words, at the level of one column."""
+
+    def _stored(self, onomatopoeic: set[str] | None = None) -> tuple[ConsensusWord, ...]:
+        """The stream a run under this vocabulary would have stored.
+
+        Args:
+            onomatopoeic: The vocabulary the run was made under.
+
+        Returns:
+            The words.
+        """
+        a = _timed("a", [("I", 0.1, 0.2), ("cough", 0.3, 0.45), ("khh", 0.6, 0.7)])
+        b = _timed("b", [("I", 0.11, 0.21), ("Cough,", 0.31, 0.46), ("hack", 0.61, 0.72)])
+        return _align(a, b, onomatopoeic=onomatopoeic).words
+
+    def test_a_word_round_trips_through_its_stored_attributes(self) -> None:
+        """The attribute writer and the reader are inverses, so a store loses nothing."""
+        for word in self._stored():
+            assert word_from_attributes(word_attributes(word), word.extent) == word
+
+    def test_re_reading_under_the_vocabulary_gives_the_run_that_vocabulary_would_have_made(self) -> None:
+        """The extend path and a fresh run under the cough lexicon mint the same words."""
+        fresh = self._stored({"cough", "khh", "hack"})
+        reread = [rebracket(word, onomatopoeic={"cough", "khh", "hack"}, n_sources=2) for word in self._stored()]
+        assert [result.word for result in reread] == list(fresh)
+        assert [result.word.bracketed for result in reread] == [False, True, True]
+
+    def test_re_reading_under_the_vocabulary_it_was_made_under_changes_nothing(self) -> None:
+        """Convergence: a second pass over an already-re-flagged word is the identity."""
+        lexicon = {"cough", "khh", "hack"}
+        for word in self._stored(lexicon):
+            assert rebracket(word, onomatopoeic=lexicon, n_sources=2).word == word
+
+    def test_a_column_that_does_not_read_back_as_the_alignment_recorded_it_is_refused(self) -> None:
+        """A word whose agreement cannot be reproduced was not rebuilt from its own readings."""
+        word = self._stored()[0]
+        with pytest.raises(ValueError, match="reads back as"):
+            rebracket(replace(word, agreement=0.5), onomatopoeic=set(), n_sources=2)
+
+    def test_the_override_count_is_reported_beside_the_word(self) -> None:
+        """A bracketed token outvoting a plain twin is what ``bracket_overrides_n`` counts."""
+        mixed = _align(_timed("a", [("[KHH]", 0.1, 0.2)]), _timed("b", [("khh", 0.11, 0.21)])).words[0]
+        assert rebracket(mixed, onomatopoeic=set(), n_sources=2).bracket_overrides == 1
+        assert rebracket(mixed, onomatopoeic={"khh"}, n_sources=2).bracket_overrides == 0

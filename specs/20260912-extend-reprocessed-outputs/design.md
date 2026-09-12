@@ -15,8 +15,10 @@ day on a 128-task array: enhancement, YAMNet, AST, HeAR and every ASR recomputed
    floor and ceiling is derived from. It was null when the corpus ran, and `config.require` on a null
    raises, so the block never executed: **the corpus has no phonation tracks at all.**
 
-**Two of the three are in `scripts/extend_reprocessed_outputs.py`. Re-bracketing is not, and the
-rest of this document is mostly about why.**
+**All three are in `scripts/extend_reprocessed_outputs.py`.** Re-bracketing was left out of the
+first version of the driver on the grounds that it moves span extents and the whole alignment
+lattice. Measured and read against the code, neither is true, and §3 replaces that argument with
+what the vocabulary does change.
 
 ## The question each change has to answer
 
@@ -139,104 +141,163 @@ produced nothing writes no consolidation and still writes none here). Synthesisi
 the run a TAXONOMY output beside none of TAXONOMY's others, which reads as the node having run. The
 driver reports `absent` and writes nothing.
 
-## 3. Re-bracketing — not derivable, and left out
+## 3. Re-bracketing — a rewrite
 
-The measured case for it is strong. At the ≥1-token threshold the reader actually applies:
+Derivable, containable, and in the driver. An earlier version of this document argued it was none of
+those, on two claims about the code. Both are wrong, and what replaces them is below.
+
+### The vocabulary decides surfaces, not columns
+
+The first claim was that `bracketed_form` is applied before alignment, so the vocabulary "changes the
+lattice itself: slot count, column membership, each word's `index`, the fitted extents".
+
+`harmonize_transcripts` normalises before it aligns:
+
+```python
+tokens = {m: [normalise_token(t) for _, _, t in words[m]] for m in models}
+```
+
+and `normalise_token` keeps only alphanumerics and the apostrophe — its own docstring says
+"Brackets and punctuation drop, so `[UM]`, `um` and `Um.` share one key". `bracketed_form` builds
+its display from the token's own `vocabulary_key`, which differs from the raw token only by
+casefolding and edge punctuation, and `normalise_token` drops both. So
+`normalise_token(bracketed_form(t, v) or t) == normalise_token(t)` for every token and every
+vocabulary: **the key a member groups on is invariant under bracketing.**
+
+Everything the alignment decides is therefore fixed — the reference model, the slot keys, column
+membership, each word's `index`, its per-source `readings` and `timings`, its fitted `extent`, the
+spreads, `outcome`, `agreement`, and the provenance counts `n_words`, `outcomes`,
+`n_words_time_shifted`, `max_time_shift_s`. What moves is each member's *display*, and through it
+the column's surface `text`, its `bracketed` flag, its variants' surfaces and `bracket_overrides_n`.
+`consensus_test.py::TestBracketingDoesNotMoveTheAlignment` pins it: one pair of hypotheses aligned
+under the null vocabulary and under the lexicon gives columns equal in every other field.
+
+Bracketing manufactures no agreement either. `bracketed_form` returns `f"[{key.upper()}]"` from the
+token's *own* key, so `cough` → `[COUGH]` and `咳` → `[咳]`, which normalise to `cough` and `咳` and
+stay two readings. A variant column of two onomatopoeic spellings is still a variant column.
+
+The words are therefore re-read, not re-aligned: `bracketed_form` is evaluated again over the
+`readings` each stored word already carries, and `_column_word` — the same function the fresh path
+calls — returns the column's new surface. No model runs, no audio is decoded, nothing is re-timed.
+
+### The measured effect
+
+At the ≥1-token threshold the reader actually applies:
 
 ```
-group              n   >=1 fires   drops below the SPEECH gate
-cough           2813       0.704       849
-breath         10204       0.003         3
-DDK             7989       0.007        26
-voice           8306       0.001         0
-lexical speech 33235       0.003         0
+group              n   fires at >=1   drops below the SPEECH gate
+cough           2813          0.704       849
+breath         10204          0.003         3
+DDK             7989          0.007        26
+voice           8306          0.001         0
+lexical speech 33235          0.003         0
 ```
 
 849 cough recordings route to SPEECH on transcribed coughs and would stop. No lexical-speech
-recording loses its SPEECH routing. That is exactly the correction the change was made for.
+recording loses its SPEECH routing.
 
-It is still not an extend, and the reason is mechanical rather than a matter of taste.
+### What is retired with the words
 
-### The words themselves are derivable
+A word entity's id is a digest over its attributes, so a re-flagged word is a new entity and the old
+one is retired — but only the ones that moved. A column no vocabulary entry touches recomputes to
+the id it already has, stays live, and keeps every edge into it.
 
-`align_sources` is a pure function of the stored `asr_hypothesis` measurements — each carries its
-recognizer's verbatim `text`, `start` and `end` per word — and of the vocabulary. Recomputing the
-consensus needs no ASR.
+The `consensus_transcript` lists the words by id and renders them into `text`, so it is retired and
+rewritten: the new id list, the new text, the new `bracket_overrides_n`. Every other field is the
+alignment's and is carried through verbatim, which is what makes the rewritten measurement **the
+entity a fresh run under the lexicon would have minted** — asserted in
+`extend_reprocessed_outputs_test.py::TestRebracketingTheWords::test_the_re_flagged_run_is_the_run_the_lexicon_would_have_made`.
 
-It is also a larger recomputation than "one boolean flips". `bracketed_form` is applied to each
-token **before** alignment, and the bracketed display is what
-`harmonize_transcripts` aligns on (`consensus.py:282`, `:293`). The vocabulary therefore changes the
-lattice itself: slot count, column membership, each word's `index`, the fitted extents, `outcome`,
-`agreement`, `variants`, and the provenance counts `n_words`, `bracket_overrides_n`,
-`n_words_time_shifted`. Every `word` entity in the store is replaced, not amended.
+Nothing else is retired, and `supersede`'s own contract is the reason: it retires an entity *in
+favour of a replacement already written beside it*. What is downstream of the words — TAXONOMY's
+`kind` lines, ROUTING's `branch_decision`s, the branch verdicts, VERDICT's fold — are conclusions
+reached under the reading the run then held. This pass writes no competing conclusion, and retiring
+one with nothing to put in its place would turn "the run concluded X under the words it had", which
+is true and recoverable, into "the run concluded nothing", which is false. They stay live, they
+still name the retired words in their own `element_ids` and `word_ids`, and a reader that resolves
+those ids is told they are retired. Re-deriving them is a re-run of the graph from TAXONOMY onward:
+TAXONOMY and ROUTING are store arithmetic, but a changed route selects branches that never ran, and
+SPEECH's diarization, embeddings and PII are models. That is a different program from this one, and
+point 4 of the consumer notes below says so in the store's own terms.
 
-### What is not derivable is everything the words fed
+### The spans the ASR proposer contributed
 
-**Words propose spans.** `_spans` takes the extents of the *non-bracketed* words, groups them with
-`group_extents_into_runs`, and keeps those that overlap nothing already proposed
-(`preprocess.py:1345-1357`). Re-bracketing removes words from that set, so a run either disappears,
-shortens, or splits — and three further things move with it:
+The second claim was that re-flagging moves span extents, and that a moved span needs HeAR, YAMNet
+and SQUIM re-run over it. The mechanism is real — this is the one thing downstream of the flag that
+is not a decision — but the size is not what the claim assumed, and the conclusion drawn from it is
+not the only one available.
 
-* candidates that *overlapped* an existing span are not discarded but recorded as `corroborated_by`
-  entries on it, so amplitude spans' own attributes change even where no span is added or removed;
-* `measure="gap"` spans are cut against the covered set, so losing an ASR span widens or creates a
-  gap span;
-* if ASR was the only source that proposed anything, the block falls into its `spans_no_contrast`
-  branch and `span_hear`, `span_yamnet` and `squim` all become absent.
+`_spans` builds its ASR candidates from the extents of the **non-bracketed** words, so re-flagging
+does change that proposer's input. The set it changes is small:
 
-**Changed spans need models.** `span_hear` runs HeAR per span; `span_yamnet` runs YAMNet per span
-(only the sub-window case is re-derivable, from the stored whole-file windows); `squim` runs SQUIM
-per span. A span whose extent moved has no stored measurement that belongs to it, and no arithmetic
-over the store produces one.
+```
+cough families: 150 stores, 1 carrying an asr-measure span   (0.01 per recording)
+harvard:        150 stores, 2                                 (0.01 per recording)
+free-speech:    150 stores, 27                                (0.21 per recording)
+```
 
-That is the end of the argument. A driver that rewrote the words would have to retire every per-span
-measurement over a moved span and could not replace it — the store would come out of the pass
-holding fewer measurements than it went in with, which is not "updated" in any sense a consumer
-would accept.
+`_novel` rejects nearly every ASR candidate, because the 4–30 amplitude spans a recording already
+carries cover the same audio.
 
-### And the rest of the graph reads them too
+They are kept, not recomputed. A span's extent is what `span_hear`, `span_yamnet` and `squim` were
+measured over at PREPROCESS time; a recomputed span carries none of those and no arithmetic over the
+store produces one, so recomputing would retire measurements of real audio and put in their place
+spans every per-span consumer reads as unclassified. The store says which reading proposed them in
+two places: each such span keeps its `wasDerivedFrom` edge to the transcript that proposed it, which
+is now the retired one, and the `rebracket` measurement names the span ids beside
+`asr_proposed_spans_recomputed: false`.
 
-For completeness, since it decides what a re-bracketing pass would have to be even if the spans were
-free: TAXONOMY's `_lexical_line` and `_transcribed_span_ids` read `lexical_words`, so the `kind`
-entities change and ROUTING's branch selection with them; AIRWAY skips transcribed spans and flags
-lexical contamination; SPEECH derives its diarization interval from the first to the last lexical
-word and its PII haystack from the consensus text, so its `speaker` entities, embeddings, enrollment
-match and PII findings all rest on it. Diarization, embeddings and PII are models.
+### Deciding whether a store is already re-bracketed
 
-Re-bracketing the corpus is therefore a **re-run of the graph from the consensus step onward**, not
-an extend. It is cheaper than a full PREPROCESS — the ASR hypotheses, the enhancement, the whole-file
-classifier sidecars, the envelopes and the spectrograms all survive — but it is a different program
-from this one, and it is not written here. A driver that quietly did the derivable half would leave a
-store whose words and whose spans disagreed about the same recording, which is worse than a store
-that is honestly out of date.
+By recomputation, as with the taxonomy, and never by probing for a bracketed token. Each word is
+re-read and its attributes compared with the stored ones; a store where no column moves is not
+touched and the driver reports `current`. The same test is the convergence proof: a second pass
+re-reads the words the first pass wrote, finds every one equal, writes nothing, and leaves the
+fingerprint where it was.
 
-### One consolation
+A store carrying no `consensus_transcript` is reported `absent` and given nothing, for the reason a
+store carrying no consolidation is given none: PREPROCESS wrote none there.
 
-`config.py` hashes the whole merged mapping, and `words.onomatopoeic_tokens` is inside it. A corpus
-store is stamped with the old `config_hash`, so a run made under the null vocabulary and one made
-under the cough lexicon are distinguishable by identity rather than silently conflated.
+### What the activity claims
+
+`PREPROCESS`/`rebracket`, carrying `words.onomatopoeic_tokens` — not `PREPROCESS`/`consensus`, whose
+parameters are the routine, the source order and the sources it aligned. This pass aligned nothing,
+and an activity carrying those would assert that it had. The two retirements are their own
+activities, `PREPROCESS`/`word_superseded` and `PREPROCESS`/`consensus_transcript_superseded`, by
+the same argument as the taxonomy's.
+
+### The config hash, and what the store now adds to it
+
+`config.py` hashes the whole merged mapping and `words.onomatopoeic_tokens` is inside it, so a run
+made under the null vocabulary and one made under the cough lexicon were already distinguishable by
+identity rather than silently conflated. After an extend pass the store says it directly: it carries
+a `rebracket` measurement naming what moved, and the reading it replaced is still in the store,
+retired.
 
 ## One pass, and the order within it
 
-One driver, one pass, because both remaining derivations are independent of each other and of
-everything else, and two passes would read and rewrite every store twice.
+One driver, one pass, because the three derivations are independent of each other and of everything
+else, and two passes would read and rewrite every store twice.
 
 * Phonation tracks read `plain` and the pre-emphasised stream. The consensus taxonomy reads
-  `span_yamnet` and `span_hear`. Neither reads the other's output, in either direction.
-* Neither depends on the words, which is what lets the driver ship while re-bracketing does not. The
-  consensus taxonomy is a consolidation of per-span classifier scores and has never read a word; the
-  phonation block stopped depending on the consensus transcript when span *detection* moved out of
-  it into TAXONOMY.
+  `span_yamnet` and `span_hear`. Re-bracketing reads the `consensus_transcript` and the words it
+  names. None reads another's output, in either direction.
+* `_write_consensus_taxonomy` reads `find_measurements(store, "span_yamnet")` and
+  `find_measurements(store, "span_hear")` and nothing else. It has never read a word, so
+  re-bracketing would have to precede it only if it changed the per-span classifier set — which is
+  exactly what recomputing the ASR-proposed spans would have done, and one more cost that decision
+  would have carried. As the three stand the order is free.
+* The phonation block stopped depending on the consensus transcript when span *detection* moved out
+  of it into TAXONOMY.
 
-So the order inside `extend_one` is fixed for determinism and nothing else. Had re-bracketing been
-included it would have had to run **first** — it changes the spans the consensus taxonomy
-consolidates — which is a further reason the three do not compose into one pass as they stand.
+So the order inside `extend_one` — re-bracketing, phonation, taxonomy — is fixed for determinism and
+nothing else.
 
 ## Convergence, for the pass as a whole
 
 The driver does not decide to skip per derivation. It takes `store.fingerprint()` before applying
-both, applies them, and writes the store, re-exports `prov/` and records the environment **only if
-the fingerprint moved**.
+the three, applies them, and writes the store, re-exports `prov/` and records the environment **only
+if the fingerprint moved**.
 
 `fingerprint()` is a content hash over the sorted entity, activity, agent, environment and relation
 keys, so it ignores insertion order and is exactly "does this store hold different records than it
@@ -267,32 +328,48 @@ never landed.
    filter on `is_invalidated` — `find_measurement`, `find_measurements` and `live_entities` all do —
    and a reader that walks `entities("measurement")` raw will see two.
 
-   **One reader in the tree does not filter.** `routing_analysis/features.py`'s `extract_features`
-   collects the invalidated ids while streaming the JSONL and applies them to `word` and `span`
-   records, but `_absorb_measurement` is called for every measurement record whatever its state. It
-   would therefore absorb both readings, and for `consensus_taxonomy` it *assigns* each peak rather
-   than taking a maximum, so the record written later in the file wins. `write_jsonl` emits entities
-   in insertion order and the replacement is inserted after the retirement, so the current reading
-   does win — by write order, which is not a property anyone designed. Nothing in the corpus is
-   affected today: `extract_features` reaches a live store only through TAXONOMY's `ruleset_routing`
-   measurement, and no corpus store carries one. A store that is both extended and re-routed is the
-   case to fix first, in that reader, by filtering measurements the way it already filters words.
+   **The one reader in the tree that did not filter now does.** `routing_analysis/features.py`'s
+   `extract_features` collected the invalidated ids while streaming the JSONL and applied them to
+   `word` and `span` records only; `_absorb_measurement` ran for every measurement record whatever
+   its state, and for `consensus_taxonomy` it *assigns* each peak rather than taking a maximum, so
+   the record written later in the file won. It was right by insertion order alone. Since an extend
+   pass leaves every extended store carrying two consensus readings and two transcripts, that is now
+   load-bearing, so the invalidated ids are collected in their own pass over the file
+   (`invalidated_ids`, which decodes nothing but the retirement edges) and every entity record —
+   measurements, kinds and verdicts included — is filtered against them before it is absorbed.
 3. **The generating activity does not separate the two readings.** Its parameters are unchanged by
    the merge-rule change, so both measurements hang off the same activity id. The retirement
    activity, `TAXONOMY/consensus_taxonomy_superseded`, is the only record that says which is which,
    and the only edge into it comes from the retired measurement.
-4. **The words are the corpus's own.** An extended store still spells transcribed coughs as lexical
-   words, its spans still include the ones those words proposed, and its routing still reflects
-   them. The extension did not touch that and does not claim to.
+4. **The words are re-flagged; the conclusions drawn from them are not.** An extended store spells
+   transcribed coughs as bracketed words and its `consensus_transcript` is the one the lexicon would
+   have produced. Its TAXONOMY `kind` lines, its ROUTING decisions and its branch verdicts are still
+   the ones the run reached under the old reading, and they name retired word ids in their own
+   `element_ids` and `word_ids` — which is how a reader tells. Its ASR-proposed spans are likewise
+   the ones the old reading proposed, still carrying their `span_hear`, `span_yamnet` and `squim`
+   measurements, and still derived from the retired transcript. The extension does not claim
+   otherwise, and re-deriving any of it is a re-run of the graph from TAXONOMY onward.
 5. **The `prov/` tree was re-exported from the merged store.** BEP028 carries entity attributes
    through verbatim, including the invalidation, so the exported graph agrees with `store.jsonl`.
 
 ## Verification
 
 `src/tests/scripts/extend_reprocessed_outputs_test.py`, over synthetic finished runs with real FLAC
-streams and real per-span scores. Both derivations land and are correct; the superseded
-consolidation is no longer live and the retirement names why; a run already carrying both forms is
-skipped with a byte-identical store and an unchanged fingerprint and gains no retirement edge; three
-passes produce exactly one retirement; the extend path's phonation measurement equals a fresh
-pass's; `prov/` is re-exported carrying both; a store with no conditioned stream records the failure
-and still has its taxonomy made current; a store with no consolidation is given none.
+streams, real per-span scores and a real two-recognizer consensus. All three derivations land and
+are correct; the superseded consolidation and the superseded words are no longer live and each
+retirement names why; a word no vocabulary entry touches keeps its id; the re-flagged words and the
+rewritten transcript are the entities a fresh run under the lexicon mints; the ASR-proposed span is
+kept, still derived from the retired transcript, and the `rebracket` measurement records that it was
+not recomputed; a run already carrying all three forms is skipped with a byte-identical store and an
+unchanged fingerprint and gains no retirement edge; three passes retire exactly what the first pass
+retired; the extend path's phonation measurement equals a fresh pass's; `prov/` is re-exported
+carrying them; a store with no conditioned stream records the failure and still has its taxonomy
+made current; a store with no consolidation is given none, and one with no transcript is given none.
+
+`src/tests/audio/workflows/triage/consensus_test.py` pins what re-bracketing rests on: one pair of
+hypotheses aligned under either vocabulary gives the same lattice and the same columns, differing
+only in surfaces and the `bracketed` flag, and two onomatopoeic spellings stay two readings.
+
+`src/tests/audio/workflows/triage/routing_analysis_test.py` pins the reader: a store holding a live
+and a retired `consensus_taxonomy` reports the live one's peaks whichever order they were written
+in.

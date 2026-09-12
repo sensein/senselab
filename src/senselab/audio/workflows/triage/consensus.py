@@ -9,8 +9,8 @@ rulings R-1..R-5 in ``consensus-asr-rulings.md`` beside it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Literal, Sequence
+from dataclasses import dataclass, replace
+from typing import Any, Literal, Mapping, Sequence, cast
 
 from senselab.audio.workflows.audio_analysis.harmonize import harmonize_transcripts, normalise_token
 
@@ -22,14 +22,18 @@ __all__ = [
     "TIME_FIT",
     "Consensus",
     "ConsensusWord",
+    "Rebracketed",
     "SourceHypothesis",
     "Variant",
     "align_sources",
     "bracketed_form",
     "is_bracketed",
     "isotonic_median_fit",
+    "rebracket",
     "render_transcript",
     "vocabulary_key",
+    "word_attributes",
+    "word_from_attributes",
 ]
 
 ALGORITHM = "star_sequence_alignment"
@@ -41,6 +45,7 @@ ROUTINE = "senselab.audio.workflows.triage.consensus.align_sources"
 Outcome = Literal["agreement", "variant", "insertion"]
 
 _VOCABULARY_EDGE_PUNCTUATION = ".,;:!?\"'()"
+_AGREEMENT_TOLERANCE = 1e-9
 
 
 @dataclass(frozen=True)
@@ -122,6 +127,21 @@ class Consensus:
 
     words: tuple[ConsensusWord, ...]
     provenance: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Rebracketed:
+    """One aligned column read again under a vocabulary.
+
+    Attributes:
+        word: The position, with its surfaces and its ``bracketed`` flag re-read. Every other field
+            is the alignment's and is unchanged.
+        bracket_overrides: How many of the column's reading groups are a bracketed token outvoting a
+            plain twin sharing its key.
+    """
+
+    word: ConsensusWord
+    bracket_overrides: int
 
 
 @dataclass(frozen=True)
@@ -366,6 +386,119 @@ def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]
         "max_time_shift_s": max_shift,
     }
     return Consensus(words=tuple(words), provenance=provenance)
+
+
+def word_attributes(word: ConsensusWord) -> dict[str, Any]:
+    """The attributes one position of the stream is stored under.
+
+    Args:
+        word: The position.
+
+    Returns:
+        The mapping a ``word`` entity carries. The extent is the entity's own and is not in it.
+    """
+    return {
+        "text": word.text,
+        "bracketed": word.bracketed,
+        "outcome": word.outcome,
+        "sources": list(word.sources),
+        "readings": dict(word.readings),
+        "timings": {source: list(span) for source, span in word.timings.items()},
+        "onset_spread_s": word.onset_spread_s,
+        "offset_spread_s": word.offset_spread_s,
+        "temporal_uncertainty_s": word.temporal_uncertainty_s,
+        "variants": [
+            {"text": variant.text, "sources": list(variant.sources), "share": variant.share}
+            for variant in word.variants
+        ],
+        "agreement": word.agreement,
+        "index": word.index,
+    }
+
+
+def word_from_attributes(attributes: Mapping[str, Any], extent: tuple[float, float]) -> ConsensusWord:
+    """One stored position, back as the record :func:`align_sources` emitted.
+
+    The inverse of :func:`word_attributes`, so a reader that has only the store can work in the
+    stream's own vocabulary rather than in raw mappings.
+
+    Args:
+        attributes: The ``word`` entity's attributes.
+        extent: The entity's own extent, which the attributes do not carry.
+
+    Returns:
+        The position.
+
+    Raises:
+        KeyError: If the mapping is missing a field every ``word`` entity carries.
+    """
+    return ConsensusWord(
+        index=int(attributes["index"]),
+        text=str(attributes["text"]),
+        bracketed=bool(attributes["bracketed"]),
+        outcome=cast(Outcome, str(attributes["outcome"])),
+        sources=tuple(str(source) for source in attributes["sources"]),
+        readings={str(source): str(text) for source, text in attributes["readings"].items()},
+        timings={str(source): (float(span[0]), float(span[1])) for source, span in attributes["timings"].items()},
+        extent=(float(extent[0]), float(extent[1])),
+        onset_spread_s=float(attributes["onset_spread_s"]),
+        offset_spread_s=float(attributes["offset_spread_s"]),
+        temporal_uncertainty_s=float(attributes["temporal_uncertainty_s"]),
+        variants=tuple(
+            Variant(
+                text=str(variant["text"]),
+                sources=tuple(str(source) for source in variant["sources"]),
+                share=float(variant["share"]),
+            )
+            for variant in attributes["variants"]
+        ),
+        agreement=float(attributes["agreement"]),
+    )
+
+
+def rebracket(word: ConsensusWord, *, onomatopoeic: set[str], n_sources: int) -> Rebracketed:
+    """Read one already-aligned column again under a vocabulary, aligning nothing.
+
+    A member's group key is ``normalise_token`` of its display, and a display differs from its raw
+    token only by brackets and edge punctuation, both of which ``normalise_token`` drops. The key is
+    therefore the same under every vocabulary, and so are the column's membership, its ``outcome``
+    and its ``agreement``; what the vocabulary decides is each member's display, and through it the
+    column's surface, its ``bracketed`` flag and its variants' surfaces.
+
+    Args:
+        word: The stored position, from :func:`word_from_attributes`.
+        onomatopoeic: The ``words.onomatopoeic_tokens`` vocabulary, each entry a
+            :func:`vocabulary_key`.
+        n_sources: How many recognizers the stream was aligned over, from the consensus provenance.
+
+    Returns:
+        The re-read position and its bracket-override count.
+
+    Raises:
+        ValueError: If the re-read column's outcome or agreement differs from the stored one. The
+            column was then not rebuilt from the readings it was built from, and nothing is written.
+    """
+    members = [
+        _Member(
+            source=source,
+            raw=word.readings[source],
+            display=bracketed_form(word.readings[source], onomatopoeic) or word.readings[source],
+            key=normalise_token(bracketed_form(word.readings[source], onomatopoeic) or word.readings[source]),
+            start=word.timings[source][0],
+            end=word.timings[source][1],
+        )
+        for source in word.sources
+    ]
+    text, outcome, variants, agreement, overrides = _column_word(members, n_sources)
+    if outcome != word.outcome or abs(agreement - word.agreement) > _AGREEMENT_TOLERANCE:
+        raise ValueError(
+            f"word {word.index} reads back as {outcome} at {agreement} where the store holds "
+            f"{word.outcome} at {word.agreement}"
+        )
+    return Rebracketed(
+        word=replace(word, text=text, bracketed=is_bracketed(text), variants=variants),
+        bracket_overrides=overrides,
+    )
 
 
 def render_transcript(words: Sequence[ConsensusWord], *, strong: tuple[str, str] = ("**", "**")) -> str:

@@ -225,21 +225,42 @@ class RecordingFeatures:
 
 
 def read_store(path: Path) -> Iterator[dict[str, Any]]:
-    """Yield the store's decoded entity records, and its invalidation relations, one at a time.
+    """Yield the store's decoded entity records, one at a time.
 
     Args:
         path: The ``run/store.jsonl`` to read.
 
     Yields:
-        Each decoded record. Activity, agent, environment and non-invalidation relation records are
-        skipped without being decoded.
+        Each decoded entity record. Activity, agent, environment and relation records are skipped
+        without being decoded; which entities are retired is :func:`invalidated_ids`.
     """
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if line.startswith(_ENTITY_PREFIX):
                 yield json.loads(line)
-            elif _RELATION_MARKER in line and _INVALIDATED in line:
-                yield json.loads(line)
+
+
+def invalidated_ids(path: Path) -> set[str]:
+    """Every retired entity's id, from a pass that decodes nothing else.
+
+    A store writes its relations after its entities, so which entities are live is not known until
+    the file has been read to the end. This pass answers that first, at the cost of reading the file
+    twice and the gain of never holding a record longer than the line it came on.
+
+    Args:
+        path: The ``run/store.jsonl`` to read.
+
+    Returns:
+        The ids carrying a ``wasInvalidatedBy`` edge.
+    """
+    retired: set[str] = set()
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if _RELATION_MARKER in line and _INVALIDATED in line:
+                record = json.loads(line)
+                if record.get("relation") == _INVALIDATED:
+                    retired.add(str(record.get("source")))
+    return retired
 
 
 def _peak_of(entry: Any) -> float | None:  # noqa: ANN401
@@ -426,7 +447,10 @@ def _absorb_measurement(
     span_scores: dict[str, dict[str, dict[str, float]]],
     run_dir: Path,
 ) -> None:
-    """Fold one ``measurement`` entity into the record.
+    """Fold one live ``measurement`` entity into the record.
+
+    Its caller filters the retired ones out, so a name this folds by assignment rather than by a
+    maximum — ``consensus_taxonomy`` — reaches it once per store.
 
     Args:
         features: The record being built.
@@ -767,8 +791,10 @@ def extract_features(
 ) -> RecordingFeatures:
     """Stream one store and reduce it to the routing evidence.
 
-    Invalidated entities are dropped, matching the store's shared read rule in
-    :func:`senselab.audio.workflows.triage.nodes.common.live_entities`.
+    Every invalidated entity is dropped, measurements included, matching the store's shared read
+    rule in :func:`senselab.audio.workflows.triage.nodes.common.live_entities`. Which entities those
+    are is decided by the relations, which a store writes after its entities, so the file is read
+    twice: :func:`invalidated_ids` first, then this pass.
 
     Args:
         store_path: The ``run/store.jsonl`` to read. A sidecar a measurement names by relative path
@@ -787,32 +813,29 @@ def extract_features(
         The record.
     """
     features = RecordingFeatures(stem=stem, run_root=run_root, task_id=task_id, family=family)
-    invalidated: set[str] = set()
-    words: list[dict[str, Any]] = []
-    spans: list[dict[str, Any]] = []
+    invalidated = invalidated_ids(store_path)
+    live_words: list[dict[str, Any]] = []
+    live_spans: list[dict[str, Any]] = []
     squim: list[tuple[tuple[float, float], dict[str, Any]]] = []
     span_scores: dict[str, dict[str, dict[str, float]]] = {}
-    kinds: dict[str, str] = {}
 
     for record in read_store(store_path):
-        if record.get("record") == "relation":
-            if record.get("relation") == _INVALIDATED:
-                invalidated.add(str(record.get("source")))
-            continue
         prov_type = record.get("prov_type")
-        attributes = record.get("attributes") or {}
         if prov_type is None:
             continue
+        attributes = record.get("attributes") or {}
         features.n_entities += 1
         entity_id = str(record.get("id"))
+        if entity_id in invalidated:
+            continue
         if prov_type == "measurement":
             _absorb_measurement(features, attributes, span_scores, store_path.parent)
         elif prov_type == "word":
-            words.append({"id": entity_id, **attributes})
+            live_words.append({"id": entity_id, **attributes})
         elif prov_type == "span":
             extent = record.get("extent")
             if extent is not None:
-                spans.append(
+                live_spans.append(
                     {
                         "id": entity_id,
                         "measure": str(attributes.get("measure")),
@@ -827,7 +850,6 @@ def extract_features(
             if extent is not None:
                 squim.append((_extent_key(extent), attributes))  # type: ignore[arg-type]
         elif prov_type == "kind":
-            kinds[entity_id] = str(attributes.get("kind"))
             features.kind_state[str(attributes.get("kind"))] = str(attributes.get("state"))
         elif prov_type == "verdict":
             features.verdicts[str(attributes.get("node"))] = str(attributes.get("outcome"))
@@ -836,7 +858,6 @@ def extract_features(
             if extent is not None:
                 features.duration_s = float(extent[1]) - float(extent[0])
 
-    live_words = [word for word in words if word["id"] not in invalidated]
     counts = {outcome: 0 for outcome in WORD_OUTCOMES}
     for word in live_words:
         outcome = str(word.get("outcome"))
@@ -863,7 +884,6 @@ def extract_features(
     features.bracketed_types = dict(sorted(typed.items()))
     features.onomatopoeic_types = dict(sorted(rendered.items()))
 
-    live_spans = [span for span in spans if span["id"] not in invalidated]
     for measure in SPAN_MEASURES:
         durations = [float(span["duration"]) for span in live_spans if span["measure"] == measure]
         features.span_count[measure] = len(durations)

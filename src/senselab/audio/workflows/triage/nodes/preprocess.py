@@ -88,6 +88,7 @@ from senselab.audio.workflows.triage.consensus import (
     align_sources,
     render_transcript,
     vocabulary_key,
+    word_attributes,
 )
 from senselab.audio.workflows.triage.label_membership import (
     LabelMembership,
@@ -1932,24 +1933,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         )
         word_ids: list[str] = []
         for word in consensus.words:
-            word_id = store.entity(
-                prov_type="word",
-                extent=word.extent,
-                attributes={
-                    "text": word.text,
-                    "bracketed": word.bracketed,
-                    "outcome": word.outcome,
-                    "sources": list(word.sources),
-                    "readings": dict(word.readings),
-                    "timings": {source: list(span) for source, span in word.timings.items()},
-                    "onset_spread_s": word.onset_spread_s,
-                    "offset_spread_s": word.offset_spread_s,
-                    "temporal_uncertainty_s": word.temporal_uncertainty_s,
-                    "variants": [asdict(variant) for variant in word.variants],
-                    "agreement": word.agreement,
-                    "index": word.index,
-                },
-            )
+            word_id = store.entity(prov_type="word", extent=word.extent, attributes=word_attributes(word))
             store.was_generated_by(word_id, activity)
             store.was_attributed_to(word_id, software)
             for source in word.sources:
