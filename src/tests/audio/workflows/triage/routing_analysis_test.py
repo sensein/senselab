@@ -14,13 +14,18 @@ from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
+    CONSENSUS_CLASSIFIERS,
     CONSOLIDATION_FLOOR,
+    COUNT_UNITS,
+    DENSE_INTEGER_SPAN,
     DETECTORS,
     GATE_CLOSED,
-    SATURATING_PROPORTION_GRID,
-    SEGMENT_LAG_GRID,
+    PINNED_THRESHOLDS,
+    QUANTILE_LADDER,
     Detector,
+    build_catalogue,
     detector_value,
+    load_detector_profile,
 )
 from senselab.audio.workflows.triage.routing_analysis.families import (
     SYLLABLE_REPETITION,
@@ -367,9 +372,12 @@ def test_score_detector_sweeps_and_marks_the_consolidation_floor(tmp_path: Path)
     assert scored["n_scored"] == 2
     assert scored["n_reference_positive"] == 1
     rows = {row["threshold"]: row for row in scored["rows"]}
-    assert rows[0.2]["marker"] == "taxonomy.consolidation_floor"
-    assert (rows[0.5]["tp"], rows[0.5]["fp"], rows[0.5]["tn"], rows[0.5]["fn"]) == (1, 0, 1, 0)
-    assert (rows[0.01]["tp"], rows[0.01]["fp"], rows[0.01]["tn"], rows[0.01]["fn"]) == (1, 1, 0, 0)
+    assert rows[CONSOLIDATION_FLOOR]["marker"] == "taxonomy.consolidation_floor"
+    quiet, spoken = sorted(value for value in (detector_value(record, detector) for record in records) if value)
+    separating = rows[min(cut for cut in detector.thresholds if quiet < cut <= spoken)]
+    admitting = rows[min(cut for cut in detector.thresholds if cut <= quiet)]
+    assert (separating["tp"], separating["fp"], separating["tn"], separating["fn"]) == (1, 0, 1, 0)
+    assert (admitting["tp"], admitting["fp"], admitting["tn"], admitting["fn"]) == (1, 1, 0, 0)
 
 
 def test_score_detector_excludes_recordings_with_no_evidence(tmp_path: Path) -> None:
@@ -994,6 +1002,19 @@ def _fires(value: float, threshold: float, polarity: str) -> bool:
     return value <= threshold if polarity == "below" else value >= threshold
 
 
+def _profiled(name: str) -> dict[str, Any]:
+    """One detector's entry in the bundled corpus profile.
+
+    Args:
+        name: The detector's id.
+
+    Returns:
+        The entry: its state, extremes and quantile ladder.
+    """
+    entry: dict[str, Any] = load_detector_profile()["detectors"][name]
+    return entry
+
+
 def test_the_repetition_lag_fires_above_its_threshold_over_a_grid_that_holds_its_range(tmp_path: Path) -> None:
     """A syllable train repeats at a longer segment lag than a sentence does, so it fires above."""
     record = _derivatives(tmp_path, _repeated([0, 1, 2], 8))
@@ -1002,26 +1023,27 @@ def test_the_repetition_lag_fires_above_its_threshold_over_a_grid_that_holds_its
     assert value is not None
     assert value == pytest.approx(3.0)
     assert detector.polarity == "above"
-    assert detector.thresholds == SEGMENT_LAG_GRID
     assert min(detector.thresholds) <= value <= max(detector.thresholds)
+    assert max(detector.thresholds) >= _profiled(detector.name)["max"]
     assert _fires(value, 3.0, detector.polarity)
     assert not _fires(value, 4.0, detector.polarity)
 
 
-def test_the_phonation_ratio_grid_resolves_the_top_of_a_ratio_bounded_at_one(tmp_path: Path) -> None:
-    """The corpus piles this ratio against 1.0, so the cuts that separate it are above 0.95."""
+def test_the_phonation_ratio_grid_reaches_the_bound_its_corpus_piles_against(tmp_path: Path) -> None:
+    """Over half the corpus reads exactly 1.0, so 1.0 is the cut that separates it and it is in."""
     record = _derivatives(tmp_path, _repeated([0, 1], 10))
     saturated = replace(record, praat={**record.praat, "phonation_ratio": 0.97})
     for name in ("airway.praat_phonation_ratio", "glide.praat_phonation_ratio", "voice.praat_phonation_ratio"):
         detector = next(candidate for candidate in DETECTORS if candidate.name == name)
-        assert detector.thresholds == SATURATING_PROPORTION_GRID
+        assert max(detector.thresholds) == pytest.approx(1.0)
+        assert _profiled(name)["quantiles"]["0.5"] == pytest.approx(1.0)
     detector = next(candidate for candidate in DETECTORS if candidate.name == "airway.praat_phonation_ratio")
     value = detector_value(saturated, detector)
     assert value is not None
     assert value == pytest.approx(0.97)
     assert min(detector.thresholds) <= value <= max(detector.thresholds)
-    assert _fires(value, 0.98, detector.polarity)
-    assert not _fires(value, 0.95, detector.polarity)
+    assert _fires(value, 1.0, detector.polarity)
+    assert not _fires(value, 0.878922, detector.polarity)
 
 
 def test_the_syllable_repetition_detectors_have_a_reference_standard_to_be_scored_against(tmp_path: Path) -> None:
@@ -1255,3 +1277,118 @@ class TestFamiliesExcludedFromAReferenceByConstruction:
         scored = score_detector(records, detector, reference)
         assert scored["excluded_by_construction"] is None
         assert all("excluding_construction" not in row for row in scored["rows"])
+
+
+class TestDerivedGrids:
+    """Every sweep grid comes off the corpus profile, and nothing falls back to a default."""
+
+    def test_every_grid_reaches_the_profiled_extreme_on_its_firing_side(self) -> None:
+        """A value past the last threshold is a block no cut divides, which is the defect."""
+        for detector in DETECTORS:
+            entry = _profiled(detector.name)
+            grid = sorted(detector.thresholds)
+            if detector.polarity == "above":
+                assert grid[-1] >= entry["max"], detector.name
+            else:
+                assert grid[0] <= entry["min"], detector.name
+
+    def test_every_threshold_is_a_measured_value_or_a_declared_cut(self) -> None:
+        """Nothing is interpolated: a threshold is a quantile, an extreme, an integer, or a pin."""
+        declared = {CONSOLIDATION_FLOOR} | {value for values in PINNED_THRESHOLDS.values() for value in values}
+        for detector in DETECTORS:
+            if detector.reader[0] == "gated":
+                continue
+            entry = _profiled(detector.name)
+            measured = {float(entry["min"]), float(entry["max"])}
+            measured |= {float(entry["quantiles"][q]) for q in QUANTILE_LADDER}
+            if detector.unit in COUNT_UNITS:
+                measured = {float(round(value)) for value in measured}
+                measured |= {float(count) for count in range(0, DENSE_INTEGER_SPAN + 1)}
+            assert not set(detector.thresholds) - measured - declared, detector.name
+
+    def test_a_gated_grid_carries_its_primary_feature_s_ladder(self) -> None:
+        """A gate selects which recordings are scored, not what is read, so the grid is the same."""
+        ungated = {detector.reader: detector.name for detector in DETECTORS if detector.reader[0] != "gated"}
+        gated = [detector for detector in DETECTORS if detector.reader[0] == "gated"]
+        assert gated
+        for detector in gated:
+            primary = ungated.get(detector.reader[1])
+            assert primary is not None, detector.name
+            ladder = {float(_profiled(primary)["quantiles"][q]) for q in QUANTILE_LADDER}
+            if detector.unit in COUNT_UNITS:
+                ladder = {float(round(value)) for value in ladder}
+            assert ladder <= set(detector.thresholds), detector.name
+
+    def test_no_grid_carries_the_closed_gate_sentinel(self) -> None:
+        """GATE_CLOSED is what a gate wrote, not what the feature read; a cut there means nothing."""
+        for detector in DETECTORS:
+            assert GATE_CLOSED not in detector.thresholds, detector.name
+
+    def test_a_detector_the_profile_does_not_cover_raises_at_construction(self) -> None:
+        """A silent fallback is how a grid that never covered its feature survived three sweeps."""
+        unprofiled = Detector("speech.invented", "speech", ("words", "invented"), "words", ())
+        with pytest.raises(ValueError, match="absent from the detector profile"):
+            build_catalogue([unprofiled])
+
+    def test_a_constant_detector_raises_at_construction(self) -> None:
+        """The consensus AST peaks were constant at zero; nothing may read one and score it."""
+        constant = next(
+            name for name, entry in load_detector_profile()["detectors"].items() if entry["state"] != "varies"
+        )
+        with pytest.raises(ValueError, match="is constant at"):
+            build_catalogue([Detector(constant, "speech", ("peak", "consensus", "ast", "speech"), "score", ())])
+
+    def test_the_consensus_ast_peaks_are_gone_and_nothing_reads_them(self) -> None:
+        """AST never runs per span, so the consensus stream can never carry an AST peak."""
+        assert "ast" not in CONSENSUS_CLASSIFIERS
+        gone = {"speech.ast_peak.consensus", "airway.ast_peak.consensus", "voice.ast_peak.consensus"}
+        assert gone & {detector.name for detector in DETECTORS} == set()
+        assert all(
+            detector.reader[:3] != ("peak", "consensus", "ast")
+            for detector in DETECTORS
+            if detector.reader[0] == "peak"
+        )
+
+    def test_a_sign_test_cut_point_survives_the_quantile_grid(self) -> None:
+        """Zero is a property of the comparison, and no quantile of this corpus lands on it."""
+        assert PINNED_THRESHOLDS
+        for name, pinned in PINNED_THRESHOLDS.items():
+            detector = next(candidate for candidate in DETECTORS if candidate.name == name)
+            entry = _profiled(name)
+            for value in pinned:
+                assert value in detector.thresholds, name
+                assert value not in {float(entry["quantiles"][q]) for q in QUANTILE_LADDER}, name
+
+    def test_an_integer_valued_feature_gets_its_integers(self) -> None:
+        """Quantiles of a small count collide; a token count wants one threshold per token."""
+        detector = next(candidate for candidate in DETECTORS if candidate.name == "airway.bracketed_throatclearing")
+        assert sorted(detector.thresholds) == [0.0, 1.0, 2.0, 3.0, 4.0]
+        words = next(candidate for candidate in DETECTORS if candidate.name == "speech.words_lexical")
+        assert {float(count) for count in range(0, DENSE_INTEGER_SPAN + 1)} <= set(words.thresholds)
+        assert max(words.thresholds) == _profiled("speech.words_lexical")["max"]
+        for detector in DETECTORS:
+            if detector.unit in COUNT_UNITS:
+                assert all(float(value).is_integer() for value in detector.thresholds), detector.name
+
+    def test_every_grid_is_ascending_and_distinct(self) -> None:
+        """A repeated threshold is a duplicated row in the sweep, and a cost with no information."""
+        for detector in DETECTORS:
+            grid = list(detector.thresholds)
+            assert grid == sorted(set(grid)), detector.name
+            assert len(grid) >= 2, detector.name
+
+    def test_the_configured_consolidation_floor_is_markable_on_every_score_grid(self) -> None:
+        """The report marks where taxonomy.consolidation_floor falls; it must be a point to mark."""
+        scores = [detector for detector in DETECTORS if detector.unit == "score"]
+        assert scores
+        for detector in scores:
+            assert CONSOLIDATION_FLOOR in detector.thresholds, detector.name
+
+    def test_the_profile_records_what_produced_it(self) -> None:
+        """A profile whose corpus is unnamed cannot be re-derived, and cannot be superseded."""
+        profile = load_detector_profile()
+        assert profile["profile_version"] == "1"
+        assert profile["n_recordings"] == profile["corpus"]["n_recordings"] > 0
+        assert profile["corpus"]["description"]
+        assert profile["generated"] == "2026-09-12"
+        assert tuple(profile["quantiles"]) == QUANTILE_LADDER
