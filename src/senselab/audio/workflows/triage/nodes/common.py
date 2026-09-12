@@ -238,6 +238,25 @@ def find_measurement(store: ProvStore, name: str) -> Entity | None:
     return found[-1] if found else None
 
 
+def find_verdict(store: ProvStore, node: str) -> Entity | None:
+    """The latest non-invalidated verdict entity one node wrote, or None.
+
+    Reads by the store's shared rule, as :func:`find_measurement` does for measurements: an
+    invalidated entity is never returned, and of the survivors the latest write wins.
+
+    Args:
+        store: The provenance store.
+        node: The node's name, as the verdict's ``node`` attribute carries it.
+
+    Returns:
+        The entity, or None when that node concluded nothing that is still live.
+    """
+    found = [
+        e for e in store.entities("verdict") if e.attributes.get("node") == node and not store.is_invalidated(e.id)
+    ]
+    return found[-1] if found else None
+
+
 def find_measurements(store: ProvStore, name: str) -> list[Entity]:
     """Every live measurement entity carrying this name, in write order.
 

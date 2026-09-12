@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
-r"""Extend finished triage runs with the clip-amplitude measurement QUALITY reads, in place.
+r"""Give a finished triage run the QUALITY verdict its graph pass never reached, in place.
 
-    uv run python scripts/extend_clip_amplitudes.py MANIFEST --slice-index I --slice-count N \
+    uv run python scripts/extend_quality.py MANIFEST --slice-index I --slice-count N \
         [--log-dir DIR] [--config OVERRIDE.yaml]
 
 ``MANIFEST`` is a JSONL, one object per line, each carrying ``stem`` and ``enhanced`` (the absolute
 path of that recording's ``run/streams/enhanced.flac``) -- the same manifest
-``scripts/extend_ppg_praat.py`` takes, and the run root is derived from ``enhanced`` the same way:
-``<run_root>/run/store.jsonl`` and ``<run_root>/prov/``.
-
-**The source audio is not the enhanced stream and is not in the run tree.** It is the original
-recording, whose absolute path and SHA-256 ADMIT recorded on the ``recording`` stream entity, so
-every run names its own source and this driver holds no corpus path of its own. A recording whose
-bytes no longer match that digest is refused rather than measured.
+``scripts/extend_clip_amplitudes.py`` and ``scripts/extend_reprocessed_outputs.py`` take, and the
+run root is derived from ``enhanced`` the same way: ``<run_root>/run/store.jsonl`` and
+``<run_root>/prov/``.
 
 ``--slice-index`` / ``--slice-count`` shard the manifest for a Slurm array: task *i* of *n* takes
 ``rows[i::n]``.
 
-Nothing is written outside the recording's own run: the store gains one activity and one
-measurement, ``run/store.jsonl`` is replaced atomically and ``prov/`` is re-exported. No clip span
-is touched, and no other PREPROCESS block is recomputed. A recording whose store already holds a
-live ``clip_amplitude`` measurement is skipped and its store is not rewritten at all.
+QUALITY reads stored outputs only -- no audio, no sidecar, no stream decode -- so a finished run
+holds every input it takes, and this pass is the node itself over the store it would have read.
+**Run it after** ``scripts/extend_clip_amplitudes.py``: a store carrying clip spans with no
+``clip_amplitude`` measurement beside them is a refusal, which is that recording's error.
 
-There is no venv, no model and no batching, which is why this is its own driver rather than a mode
-of ``extend_ppg_praat.py``; what the two share -- the run layout, the store read/write, the BEP028
-re-export, the manifest slicing -- is ``senselab.audio.workflows.triage.extend``.
+A run with no clip span at all is not a refusal. QUALITY passes it -- nothing was asserted, so
+nothing can be contradicted -- and the verdict saying so is written like any other.
+
+Nothing is written outside the recording's own run: the store gains one activity, one assertion per
+contested clip span and one verdict, ``run/store.jsonl`` is replaced atomically and ``prov/`` is
+re-exported. A store already carrying a live QUALITY verdict is skipped and not rewritten at all.
 
 The design is in ``specs/20260912-quality-clip-consistency/design.md``.
 
@@ -45,20 +44,21 @@ from senselab.audio.workflows.triage.config import TriageConfig, load_triage_con
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
+    PRESENT,
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
     attempt_derivation,
     export_prov,
+    extend_quality,
     read_manifest,
     read_store,
     run_root_of,
     take_slice,
     write_store,
 )
-from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception, find_measurement
-from senselab.audio.workflows.triage.nodes.preprocess import extend_clip_amplitudes
-from senselab.audio.workflows.triage.nodes.quality import CLIP_AMPLITUDE_MEASUREMENT
+from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception
+from senselab.audio.workflows.triage.vocabulary import QUALITY
 from senselab.utils.prov_store import ProvStore
 
 
@@ -85,59 +85,60 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-NO_SPAN = "no clip span over the recording; QUALITY needs no measurement to read"
-"""What a store with nothing to measure records. Nothing was asserted, so nothing is read."""
-
-
-def measure(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
-    """Append one finished run's clip amplitudes, or say there are none to append.
+def run_quality(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
+    """Read one finished run for internal contradiction, or say why it is not read again.
 
     Args:
         store: The run's store.
         config: The triage configuration.
-        run_dir: The run directory stream paths are relative to.
+        run_dir: The run directory, for the shared node shape.
 
     Returns:
-        The measurement's id, or :data:`NO_SPAN` when the store carries no clip span.
+        The verdict's outcome — ``pass`` or ``flag`` — or ``present`` when the store already carries
+        a live QUALITY verdict.
     """
-    measurement_id = extend_clip_amplitudes(store, config, run_dir=run_dir)
-    return NO_SPAN if measurement_id is None else measurement_id
+    result = extend_quality(store, config, run_dir=run_dir)
+    return PRESENT if result is None else result.verdict.outcome.value
 
 
-def extend_one(run_root: Path, config: TriageConfig) -> tuple[str, str]:
-    """Give one finished run the measurement it is missing, or say why it gets none.
+def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
+    """Run QUALITY over one finished run and write the store only if it changed.
+
+    The fingerprint before and after is the convergence argument the other extend drivers use: a
+    second pass recomputes the activity, the assertions and the verdict the store already holds,
+    which is a set-union no-op, and a store whose fingerprint did not move has nothing to write
+    back. A refusal leaves the store unwritten, so a recording QUALITY cannot read keeps the store
+    it had.
 
     Args:
         run_root: The run root.
         config: The triage configuration.
 
     Returns:
-        ``(status, detail)`` — ``ok`` and the measurement id, ``skipped`` and why nothing was
-        needed, or ``error`` and the reason.
+        ``{status, QUALITY}`` — ``ok`` when the verdict landed, ``skipped`` when the store was
+        already as this pass would leave it, ``error`` when QUALITY refused the store.
     """
     try:
         store = read_store(run_root)
     except (OSError, ValueError) as error:
-        return ERROR, describe_exception(error)
-    if find_measurement(store, CLIP_AMPLITUDE_MEASUREMENT) is not None:
-        return SKIPPED, "the store already carries a live clip_amplitude measurement"
+        return {"status": ERROR, QUALITY: describe_exception(error)}
     before = store.fingerprint()
-    outcome = attempt_derivation(lambda: measure(store, config, run_dir=run_root / RUN_SUBDIR))
+    outcome = attempt_derivation(lambda: run_quality(store, config, run_dir=run_root / RUN_SUBDIR))
     if outcome.failed:
-        return ERROR, outcome.detail
+        return {"status": ERROR, QUALITY: outcome.detail}
     if store.fingerprint() == before:
-        return SKIPPED, outcome.detail
+        return {"status": SKIPPED, QUALITY: outcome.detail}
     capture_environments(store, {})
     write_store(store, run_root)
     export_prov(store, run_root)
-    return OK, outcome.detail
+    return {"status": OK, QUALITY: outcome.detail}
 
 
 def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[str, Any]]:
-    """Extend every run named by these rows, one at a time.
+    """Run QUALITY over every run named by these rows, one at a time.
 
-    A recording whose store will not open, whose source recording has moved or whose bytes changed
-    gets an outcome record; its neighbours are unaffected.
+    A recording whose store will not open, or whose clip spans carry no amplitudes, gets an outcome
+    record; its neighbours are unaffected.
 
     Args:
         rows: The manifest rows this task owns.
@@ -151,10 +152,9 @@ def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[s
         try:
             run_root = run_root_of(Path(row["enhanced"]))
         except ValueError as error:
-            out.append({**row, "status": ERROR, "clip_amplitude": describe_exception(error)})
+            out.append({**row, "status": ERROR, QUALITY: describe_exception(error)})
             continue
-        status, detail = extend_one(run_root, config)
-        out.append({**row, "status": status, "clip_amplitude": detail})
+        out.append({**row, **extend_one(run_root, config)})
     return out
 
 
@@ -166,7 +166,7 @@ def run_slice(
     config: TriageConfig,
     log_dir: Path,
 ) -> dict[str, Any]:
-    """Extend every run in one array task's stride of the manifest.
+    """Read every run in one array task's stride of the manifest.
 
     Args:
         manifest: The manifest JSONL.
@@ -187,10 +187,13 @@ def run_slice(
     counts: dict[str, int] = {}
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
+    verdicts: dict[str, int] = {}
+    for record in log:
+        verdicts[str(record[QUALITY])] = verdicts.get(str(record[QUALITY]), 0) + 1
 
     slices_dir = log_dir / SLICES_SUBDIR
     slices_dir.mkdir(parents=True, exist_ok=True)
-    label = f"clip-amplitudes-slice-{slice_index}-of-{slice_count}"
+    label = f"quality-slice-{slice_index}-of-{slice_count}"
     log_path = slices_dir / f"{label}.jsonl"
     log_path.write_text("".join(json.dumps(record, sort_keys=True) + "\n" for record in log), encoding="utf-8")
 
@@ -201,6 +204,7 @@ def run_slice(
         "config_hash": config.config_hash,
         "rows": len(mine),
         "counts": counts,
+        "verdicts": verdicts,
         "elapsed_s": time.time() - started,
         "log": str(log_path),
     }
@@ -209,15 +213,15 @@ def run_slice(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Extend every run in one shard and print what happened.
+    """Run QUALITY over every run in one shard and print what happened.
 
     Args:
         argv: The command line, or None to read ``sys.argv``.
 
     Returns:
-        0 when every recording in the shard reached a determinate outcome, 1 when any row is
+        0 when every recording in the shard reached a verdict or already had one, 1 when any row is
         ``error`` — the other stores are written either way — and 2 when the arguments could not be
-        resolved and nothing was measured.
+        resolved and nothing was read.
     """
     args = build_parser().parse_args(argv)
 
@@ -240,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Log:     {summary['log']}")
     for status, number in sorted(summary["counts"].items()):
         print(f"  {status:<9} {number}")
+    for outcome, number in sorted(summary["verdicts"].items()):
+        print(f"  {QUALITY} {outcome:<9} {number}")
     return 1 if summary["counts"].get(ERROR) else 0
 
 

@@ -80,7 +80,16 @@ def _voiced() -> np.ndarray:
     return (0.7 * shaped / np.abs(shaped).max()).astype(np.float32)
 
 
-def _stream(store: ProvStore, run_dir: Path, name: str, activity: str, agent: str) -> str:
+def _unvoiced() -> np.ndarray:
+    """Silence, in which Praat's wide search places no pitch at all.
+
+    Returns:
+        The waveform, mono float32.
+    """
+    return np.zeros(int(SR * DURATION_S), dtype=np.float32)
+
+
+def _stream(store: ProvStore, run_dir: Path, name: str, activity: str, agent: str, samples: np.ndarray) -> str:
     """Write one conditioned stream to the run tree and register its entity.
 
     Args:
@@ -89,12 +98,13 @@ def _stream(store: ProvStore, run_dir: Path, name: str, activity: str, agent: st
         name: The stream's name, which is also its file stem.
         activity: The conditioning activity.
         agent: The agent answerable for it.
+        samples: The stream's waveform.
 
     Returns:
         The stream entity's id.
     """
     relative = f"streams/{name}.flac"
-    sf.write(str(run_dir / relative), _voiced(), SR)
+    sf.write(str(run_dir / relative), samples, SR)
     entity_id = store.entity(
         prov_type="stream",
         extent=(0.0, DURATION_S),
@@ -305,6 +315,7 @@ def _seed_run(
     streams: bool = True,
     words: str = "null",
     asr_span: bool = False,
+    voiced: bool = True,
 ) -> None:
     """Write one finished run in the shape the corpus is in, or one of its variations.
 
@@ -318,19 +329,22 @@ def _seed_run(
             ``"current"`` for one written under the shipped lexicon, ``"lexical"`` for a recording
             no entry of the lexicon appears in, ``"none"`` for a store carrying no transcript.
         asr_span: Whether the store carries a span the ASR proposer contributed.
+        voiced: Whether the conditioned streams carry pitch. False is a cough, a breath or a 0.33 s
+            fragment: no F0 range can be derived from it, so it has no phonation track.
     """
     run_dir = root / "run"
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
     (run_dir / "derivatives").mkdir(parents=True, exist_ok=True)
-    sf.write(str(run_dir / "streams" / "enhanced.flac"), _voiced(), SR)
+    samples = _voiced() if voiced else _unvoiced()
+    sf.write(str(run_dir / "streams" / "enhanced.flac"), samples, SR)
 
     store = ProvStore(run_id=root.name)
     agent = software_agent(store)
     condition = store.activity(node="PREPROCESS", step="condition", parameters={"target_hz": SR})
     store.was_associated_with(condition, agent)
     if streams:
-        _stream(store, run_dir, "plain", condition, agent)
-        _stream(store, run_dir, "preemphasised", condition, agent)
+        _stream(store, run_dir, "plain", condition, agent, samples)
+        _stream(store, run_dir, "preemphasised", condition, agent, samples)
     _seed_span_scores(store, agent)
     if words != "none":
         _seed_consensus(
@@ -485,6 +499,48 @@ class TestThePhonationTracks:
         assert "plain" in str(record[PHONATION_TRACKS])
         assert record[CONSENSUS_TAXONOMY] == "rewritten"
         assert find_measurement(_store_of(roots[0]), CONSENSUS_TAXONOMY) is not None
+
+
+class TestADerivationThatCannotApply:
+    """An unvoiced recording has no F0 range. That is the answer, not a failure of the pass."""
+
+    def test_a_recording_with_no_pitch_records_an_absence_and_not_an_error(
+        self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
+    ) -> None:
+        """613 rows of the last corpus pass were this, and every array task exited nonzero."""
+        manifest, roots = corpus(1, voiced=False)
+
+        assert _run(manifest) == 0
+
+        record = _log(tmp_path)[0]
+        assert record[PHONATION_TRACKS].startswith("absent: F0RangeUnavailable")
+        assert record["status"] == "ok"
+        assert find_measurement(_store_of(roots[0]), PHONATION_TRACKS) is None
+
+    def test_the_other_derivations_still_land_on_that_recording(
+        self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
+    ) -> None:
+        """The work is not lost: only the derivation that cannot apply is absent."""
+        manifest, roots = corpus(1, voiced=False)
+
+        _run(manifest)
+
+        record = _log(tmp_path)[0]
+        assert record[CONSENSUS_TAXONOMY] == "rewritten"
+        assert record[REBRACKET] == "rewritten"
+        assert find_measurement(_store_of(roots[0]), CONSENSUS_TAXONOMY) is not None
+
+    def test_a_real_failure_is_still_an_error(
+        self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
+    ) -> None:
+        """The absence must not swallow a run whose streams the tree no longer holds."""
+        manifest, _ = corpus(1, streams=False)
+
+        assert _run(manifest) == 1
+
+        record = _log(tmp_path)[0]
+        assert not str(record[PHONATION_TRACKS]).startswith("absent")
+        assert record["status"] == "error"
 
 
 class TestTheConsensusTaxonomyRewrite:
