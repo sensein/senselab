@@ -356,3 +356,26 @@ floor and no RMS interval at all. There is nothing to derive per recording the w
 derived, so resolving these two requires a measurement in the implementation's own units that nobody
 has taken. While null the near-edge row is inert and the verdict records
 `gate_interval: "unmeasured"`.
+
+
+## The worker timeout was flat, and four array tasks lost their whole batch to it
+
+The first corpus pass extended 58,308 of 60,202 recordings. Every one of the 1,883 absences was the
+same `TimeoutExpired` on the ppgs subprocess, and Praat succeeded on all of them, so the model was
+never the problem. Each array task carried 471 rows and therefore one batch, and 1,883 / 471 is
+exactly four: four whole batches exceeded the timeout and every recording in them was recorded
+absent.
+
+The timeout was `timeout=600` at the `subprocess.run` call, a constant that did not move with the
+batch. A batch's cost is dominated by its total audio, and the corpus is skewed — median 7.22 s,
+p95 60.02 s, longest 307.46 s — so a batch that happens to collect the long recordings costs several
+times one that does not, against the same fixed allowance. The absent set's duration profile shows
+it: p95 60.02 s against the corpus median of 7.22 s.
+
+It is now `WORKER_STARTUP_S + WORKER_SECONDS_PER_AUDIO_SECOND * audio_seconds`. The startup term
+covers what the worker pays before it reads any audio — interpreter, torch, checkpoint — and the
+per-second term covers the work itself, at a multiple far above the 185x realtime measured
+marginal, because the point is to catch a hung worker rather than to bound a slow one.
+
+The failures are recoverable without recomputing anything: the driver skips a recording whose store
+already holds both measurements, so re-running the same manifest touches only the 1,883.
