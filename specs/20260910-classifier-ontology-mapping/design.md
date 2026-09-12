@@ -273,6 +273,158 @@ windows land on spans a HeAR airway label also covers — that is, that `Sigh` b
 the subtree rather than like the voice classes it is filed with. Absent that, adding it widens the
 kind on an intuition, which is what the nine-name tuple was.
 
+## The consensus taxonomy, from the same ontology — 2026-09-12
+
+The two sections above fixed corroboration in AIRWAY and the airway kind in TAXONOMY. Both were
+described at the time as closing the string-matching defect. They closed half of it: the same defect
+survived in `_write_consensus_taxonomy`, which is a second place where two classifiers are merged
+and was still merged on the exact label string.
+
+### The third defect
+
+`consensus_taxonomy` is one row per label with `peak`, `peak_by_classifier`, `classifiers` and
+`n_classifiers`, folded from `PER_SPAN_CLASSIFIERS` = `{yamnet: span_yamnet, hear: span_hear}`. The
+fold keyed its rows on the label string each classifier emitted, so HeAR's spelling and AudioSet's
+spelling of one event were two rows, each reading `n_classifiers: 1`:
+
+| HeAR row | AudioSet row | the one node both denote |
+| --- | --- | --- |
+| `Baby Cough` | `Cough` | `Cough` (`/m/01b_21`) |
+| `Snore` | `Snoring` | `Snoring` (`/m/01d3sd`) |
+| `Breathe` | `Breathing` | `Breathing` (`/m/0lyf6`) |
+| `Throat Clear` | `Throat clearing` | `Throat clearing` (`/m/0dl9sf8`) |
+| `Laugh` | `Laughter` | `Laughter` (`/m/01j3sz`) |
+
+Five of HeAR's eight labels could therefore never reach `n_classifiers: 2` however loudly YAMNet
+agreed with them. `Cough`, `Sneeze` and `Speech` merged, and only because HeAR happens to spell
+those three the way AudioSet does — a coincidence of the authored crosswalk, not a property the fold
+relied on.
+
+### Identity is the mapped node, and never its subtree
+
+Corroboration and identity are two different questions asked of the same profile, and the fix is not
+to reuse `corroboration_sets` here. Corroboration is directional and closed over descendants: does
+this AudioSet name fall inside that HeAR label's subtree. Identity is which single node a spelling
+denotes, and it is the mapped root alone.
+
+Merging a table on subtree membership would be wrong twice over. `Throat clearing` is in `Cough`'s
+closure, so it would have to fold into the `Cough` row — and YAMNet emits both names, which are two
+different AudioSet classes that the released 527 keeps apart. And `Snoring` is in both `Snore`'s
+closure and `Breathe`'s, so one YAMNet window would enter two rows and be counted twice.
+
+`classifier_ontology.canonical_names` is the identity read: every AudioSet display name maps to
+itself, and every HeAR label maps to the display name of the single node its crosswalk entry denotes.
+A HeAR label denoting several nodes at once is absent from the map, because no one node names it; it
+keeps its own spelling and its own row. The profile's names are a bijection over its 632 classes, so
+one map covers both vocabularies in one namespace.
+
+Three HeAR labels — `Cough`, `Sneeze`, `Speech` — are also AudioSet display names. All three denote
+exactly the class they are spelled as, so the namespace is consistent. A profile where that stopped
+being true would silently merge two different events into one row, so the loader now refuses one: a
+mapped label whose own spelling is an AudioSet class name must denote that class.
+
+### The merged row is named by the ontology
+
+A merged row needs one name, and it is the AudioSet display name: `Throat clearing`, not
+`Throat Clear`.
+
+The ontology is the authority everywhere else in this document — the airway kind is a closure over
+its nodes, corroboration is subtree membership in it, and the crosswalk exists only to get HeAR's
+labels *into* it. The crosswalk is also the one authored input the profile carries, so its spellings
+are the least derived strings in the system; naming a derived row after one of them would make a
+hand-typed string the identity of a measured thing. Naming the row by the node also means a reader
+who has the profile can resolve the row, and one who does not still gets the name the released
+527-class list uses.
+
+Each classifier's own spellings are not discarded: the row carries `labels_by_classifier`,
+`{classifier: the spellings of its own that reached this node}`. That is what a consumer matching on
+a classifier's native vocabulary reads, and it is also where the `Cough`/`Baby Cough` merge is
+visible rather than inferred.
+
+### Overlaps are counted once, by construction
+
+The `overlaps` block records two shapes, and identity-merging handles both without a deduplication
+pass:
+
+* **One node, two HeAR roots.** `Snoring` is `Snore`'s mapped node and also a descendant of
+  `Breathe`'s. Under identity it is one row, `Snoring`, which HeAR reaches through `Snore`; `Breathe`
+  is its own row, `Breathing`. A YAMNet `Snoring` window lifts `n_classifiers` on one row, once. It
+  is subtree merging that would have double-counted here, which is the argument for identity stated
+  from the other end.
+* **Two HeAR labels, one node.** `Cough` and `Baby Cough` both denote `Cough`. They fold to one row,
+  and because `n_classifiers` counts *classifiers* rather than labels, HeAR contributes one entry to
+  `peak_by_classifier` — the higher of its two scores — not two. Both spellings appear under
+  `labels_by_classifier`.
+
+Resolution happens per span, before consolidation. Folding after consolidation would have left two
+medians and two span counts per classifier per row with no defined way to combine them; folding
+before means `_consolidate` computes `peak`, `median` and `n_spans` over the node directly.
+
+### Labels outside the mapping
+
+Most of what YAMNet emits has no HeAR counterpart, and nothing may drop it. The identity map is total
+over the profile's AudioSet names, so every such label maps to itself and keeps its row with
+`n_classifiers: 1` — the fold's output is the same size it was for them. A spelling in neither
+vocabulary — a classifier reporting a name the profile does not hold — is carried through unchanged
+rather than dropped, so an unrecognised label is visible as a row instead of vanishing.
+
+### AST is not widened
+
+`PER_SPAN_CLASSIFIERS` stays `{yamnet, hear}`. AST runs whole-file in this pipeline and writes no
+`span_ast` measurement, which is why the three `*.ast_peak.consensus` detectors read a constant 0 and
+were removed. Adding AST here is a PREPROCESS change — a per-span AST pass that does not exist —
+and belongs to whoever measures whether it is worth its cost.
+
+### Configuration
+
+One profile per run, named once. `airway.corroboration_profile` is gone;
+`taxonomy.classifier_ontology_profile` replaces it. Pre-alpha: renamed and replaced, no alias.
+
+```yaml
+taxonomy:
+  classifier_ontology_profile: null   # path to a profile; null takes the packaged latest
+  airway_ontology_roots: [Respiratory sounds]
+```
+
+Every ontology read in a run now goes through that one key: AIRWAY's corroboration, the airway
+closure, and the consensus taxonomy's label identity. It sits beside `airway_ontology_roots` because
+both are ontology configuration and neither belongs to one branch; a profile named under `airway:`
+and read by TAXONOMY was a key whose section no longer said who read it. The resolved profile's
+filename is recorded in the `consensus_taxonomy` activity's parameters, so a run says which ontology
+decided its merges.
+
+### Which readers see the difference
+
+`consensus_taxonomy` has one consumer in the tree, `routing_analysis/features.py`, which reads
+`peak_by_classifier` and keeps a peak only when the row's `label` is in `TRACKED_LABELS[classifier]`.
+`TRACKED_LABELS["hear"]` is built from HeAR's own spellings, so the rename moves four keys out from
+under that gate:
+
+| feature key | before | after |
+| --- | --- | --- |
+| `consensus\|hear\|Baby Cough` | emitted | folded into `consensus\|hear\|Cough`, which may rise |
+| `consensus\|hear\|Snore` | emitted | absent — the row is now `Snoring` |
+| `consensus\|hear\|Breathe` | emitted | absent — the row is now `Breathing` |
+| `consensus\|hear\|Throat Clear` | emitted | absent — the row is now `Throat clearing` |
+| `consensus\|hear\|Cough`, `\|Sneeze`, `\|Speech` | emitted | unchanged |
+| `consensus\|yamnet\|*` | emitted | unchanged; YAMNet's labels are already AudioSet names |
+
+One detector reads those keys: `airway.hear_peak.consensus`, whose maximum is taken over
+`FAMILIES["airway"]["hear"]` — HeAR's six airway spellings. Four of the six now find nothing and
+contribute 0.0, so the detector reads lower than it did. `speech.hear_peak.consensus` is unaffected
+(`Speech` is spelled the same), `voice.hear_peak.consensus` is not built (HeAR has no voice label),
+and every `*.yamnet_peak.consensus` is unchanged. No `peak_set` or `peak_label` detector reads the
+consensus stream.
+
+That gate is the routing analysis's to close, not this change's: `labels_by_classifier` is on the row
+for exactly that, and matching it rather than `label` restores all six keys under HeAR's spellings
+while the row stays named by the ontology. Until it is closed, `airway.hear_peak.consensus` is a
+detector reading a narrowed set, and its sweep numbers are not comparable across this commit.
+
+`nodes/figure.py` and `nodes/report.py` read `consensus_taxonomy` not at all, and no TAXONOMY line
+folds from it — `voice`'s rework onto it is still pending — so no kind's state and no branch's route
+moves. `n_labels` falls by the number of merges a recording produces.
+
 ## Open
 
 - Nothing has been measured about whether widening `labels_of_interest` beyond `Cough` and `Breathe`

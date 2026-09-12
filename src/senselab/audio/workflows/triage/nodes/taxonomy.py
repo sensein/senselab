@@ -31,13 +31,19 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.label_scores import label_scores
-from senselab.audio.workflows.triage.classifier_ontology import airway_audioset_labels, airway_hear_labels
+from senselab.audio.workflows.triage.classifier_ontology import (
+    PROFILE_PATH_KEY,
+    airway_audioset_labels,
+    airway_hear_labels,
+    canonical_names,
+    resolved_profile_path,
+)
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
@@ -404,6 +410,46 @@ def _per_span_label_scores(store: ProvStore, measurement_name: str) -> dict[str,
     return by_span
 
 
+def _on_ontology_nodes(
+    per_span: dict[str, dict[str, float]], identity: Mapping[str, str]
+) -> dict[str, dict[str, float]]:
+    """Rewrite each span's labels onto the ontology node each denotes, best score per node.
+
+    Args:
+        per_span: :func:`_per_span_label_scores`' result, in the classifier's own vocabulary.
+        identity: :func:`~senselab.audio.workflows.triage.classifier_ontology.canonical_names`'
+            map. A label it does not name keeps its own spelling.
+
+    Returns:
+        ``{span_id: {AudioSet display name: score}}``, the two spellings of one node folded to one
+        entry carrying the higher score.
+    """
+    resolved: dict[str, dict[str, float]] = {}
+    for span_id, scores in per_span.items():
+        slot = resolved.setdefault(span_id, {})
+        for label, score in scores.items():
+            name = identity.get(label, label)
+            slot[name] = max(slot.get(name, 0.0), float(score))
+    return resolved
+
+
+def _spellings_by_node(per_span: dict[str, dict[str, float]], identity: Mapping[str, str]) -> dict[str, list[str]]:
+    """Which of one classifier's own label spellings reached each ontology node.
+
+    Args:
+        per_span: :func:`_per_span_label_scores`' result, in the classifier's own vocabulary.
+        identity: The same map :func:`_on_ontology_nodes` reads.
+
+    Returns:
+        ``{AudioSet display name: the classifier's own spellings}``, each list sorted.
+    """
+    gathered: dict[str, set[str]] = {}
+    for scores in per_span.values():
+        for label in scores:
+            gathered.setdefault(identity.get(label, label), set()).add(label)
+    return {name: sorted(spellings) for name, spellings in gathered.items()}
+
+
 def _consolidate(per_span: dict[str, dict[str, float]], floor: float | None) -> dict[str, dict[str, float]]:
     """One classifier's per-span scores consolidated to one row per label over the whole file.
 
@@ -434,18 +480,33 @@ def _consolidate(per_span: dict[str, dict[str, float]], floor: float | None) -> 
 def _write_consensus_taxonomy(store: ProvStore, config: TriageConfig, software: str) -> list[str]:
     """Consolidate the per-span labels into one file-level taxonomy, for downstream to read.
 
+    Every classifier's labels are resolved onto the AudioSet ontology node each denotes before they
+    are consolidated, so a row is one node rather than one spelling: HeAR ``Throat Clear`` and
+    YAMNet ``Throat clearing`` are one row reaching ``n_classifiers: 2``, and the row is named by
+    the ontology. A label the profile does not name keeps its own spelling and its own row.
+
+    Resolution is onto the label's mapped node alone, never its subtree, so HeAR ``Cough`` and
+    YAMNet ``Throat clearing`` stay two rows. Two of one classifier's own labels landing on one node
+    — HeAR ``Cough`` and ``Baby Cough`` both denote AudioSet ``Cough`` — contribute one entry to
+    ``peak_by_classifier`` and are both named in ``labels_by_classifier``.
+
     Args:
         store: The provenance store.
-        config: The run's configuration, read for the YAMNet consolidation floor.
+        config: The run's configuration, read for the consolidation floor and the ontology profile.
         software: This node's software agent.
 
     Returns:
         The ids written, for the node's view. Empty when no per-span classifier produced scores,
         so "no consensus" and "a consensus over nothing" stay distinguishable.
+
+    Raises:
+        ValueError: If the configured classifier-ontology profile fails validation.
     """
     floor = config.get("taxonomy.consolidation_floor")
     consolidation_floor = None if floor is None else float(floor)
+    identity = canonical_names(config.get(PROFILE_PATH_KEY))
     by_classifier: dict[str, dict[str, dict[str, float]]] = {}
+    spellings: dict[str, dict[str, list[str]]] = {}
     read_ids: list[str] = []
     for classifier, measurement_name in PER_SPAN_CLASSIFIERS.items():
         measurements = list(find_measurements(store, measurement_name))
@@ -453,15 +514,17 @@ def _write_consensus_taxonomy(store: ProvStore, config: TriageConfig, software: 
             continue
         read_ids.extend(measurement.id for measurement in measurements)
         per_span = _per_span_label_scores(store, measurement_name)
-        by_classifier[classifier] = _consolidate(per_span, consolidation_floor)
+        spellings[classifier] = _spellings_by_node(per_span, identity)
+        by_classifier[classifier] = _consolidate(_on_ontology_nodes(per_span, identity), consolidation_floor)
     if not by_classifier:
         return []
 
     labels: dict[str, dict[str, Any]] = {}
     for classifier, consolidated in by_classifier.items():
         for label, stats in consolidated.items():
-            row = labels.setdefault(label, {"label": label, "classifiers": {}})
+            row = labels.setdefault(label, {"label": label, "classifiers": {}, "labels_by_classifier": {}})
             row["classifiers"][classifier] = stats
+            row["labels_by_classifier"][classifier] = spellings[classifier][label]
     ranked = sorted(
         labels.values(),
         key=lambda row: (-max(float(s["peak"]) for s in row["classifiers"].values()), str(row["label"])),
@@ -472,11 +535,16 @@ def _write_consensus_taxonomy(store: ProvStore, config: TriageConfig, software: 
         row["peak_by_classifier"] = peaks
         row["n_classifiers"] = len(peaks)
         row["classifiers"] = sorted(peaks)
+        row["labels_by_classifier"] = dict(sorted(row["labels_by_classifier"].items()))
 
     activity = store.activity(
         node=NODE,
         step="consensus_taxonomy",
-        parameters={"consolidation_floor": consolidation_floor, "classifiers": sorted(by_classifier)},
+        parameters={
+            "consolidation_floor": consolidation_floor,
+            "classifiers": sorted(by_classifier),
+            "ontology_profile": str(resolved_profile_path(config.get(PROFILE_PATH_KEY)).name),
+        },
     )
     store.was_associated_with(activity, software)
     for element_id in read_ids:
