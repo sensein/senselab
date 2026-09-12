@@ -1,15 +1,18 @@
 #!/usr/bin/env python
 """Score the family taxonomy ruleset over a completed triage run's extracted features.
 
-    uv run python scripts/score_taxonomy_ruleset.py <features.jsonl> <out_dir> [--config FILE]
+    uv run python scripts/score_taxonomy_ruleset.py <features> <out_dir> [--config FILE]
 
-``features.jsonl`` is what ``analyze_routing_evidence.py`` wrote under ``features/``. The ruleset
-is read from the triage configuration, so a partial override changes the gates without touching
-this script. ``out_dir`` receives ``ruleset_score.json``: the corpus totals, the per-branch counts,
-the per-branch sensitivity and specificity against the reference family sets, one recall-at-budget
-curve per routing gate, and one tally per family. Every recording lands in exactly one of
-``routed``, ``empty`` and ``unexplained``, and only the last of those is a charge against the
-ruleset.
+``features`` is the shard directory ``analyze_routing_evidence.py`` wrote under ``features/``, or
+one shard file out of it. The ruleset is read from the triage configuration, so a partial override
+changes the gates without touching this script.
+
+``out_dir`` receives three outputs. ``ruleset_score.json`` carries what belongs to the corpus and
+to no single row: the config hash, the budgets, how many recordings landed in each route state, the
+per-branch counts on each axis, and the per-branch sensitivity and specificity against the reference
+family sets. ``families.parquet`` is one row per task family, and ``recall_at_budget.parquet`` one
+row per routing gate and budget. Every recording lands in exactly one of ``routed``, ``empty`` and
+``unexplained``, and only the last of those is a charge against the ruleset.
 
 Each branch is scored twice: over every recording, and with the families its reference set excludes
 by construction held out of the population. Each routing gate is scored twice too: at the operating
@@ -44,9 +47,12 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     score_branches,
     tally_families,
 )
+from senselab.audio.workflows.triage.routing_analysis.tables import flatten, write_rows
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
 
 SCORE_FILE = "ruleset_score.json"
+FAMILIES_FILE = "families.parquet"
+RECALL_FILE = "recall_at_budget.parquet"
 
 
 def corpus_totals(evaluations: list[RouteEvaluation]) -> tuple[int, dict[str, int], dict[str, dict[str, int]]]:
@@ -165,6 +171,54 @@ def print_recall_at_budget(reports: list[GateRecall]) -> None:
             )
 
 
+def family_rows(tallies: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """One flat row per family, each per-branch axis folded into ``<axis>.<branch>`` columns.
+
+    Args:
+        tallies: Family name to its
+            :class:`~senselab.audio.workflows.triage.routing_analysis.ruleset.FamilyTally` as a
+            mapping.
+
+    Returns:
+        The rows, in family order.
+    """
+    rows: list[dict[str, Any]] = []
+    for family in sorted(tallies):
+        row: dict[str, Any] = {}
+        for key, value in tallies[family].items():
+            flatten(key, value, row)
+        rows.append(row)
+    return rows
+
+
+def recall_rows(reports: list[GateRecall]) -> list[dict[str, Any]]:
+    """One flat row per routing gate and budget, with the gate's own columns repeated on each.
+
+    Args:
+        reports: What :func:`~senselab.audio.workflows.triage.routing_analysis.ruleset.
+            branch_recall_curves` returned.
+
+    Returns:
+        The rows, one per point of every curve.
+    """
+    rows: list[dict[str, Any]] = []
+    for report in reports:
+        gate: dict[str, Any] = {}
+        entry = report.as_json()
+        curve = entry.pop("curve")
+        points = curve.pop("points")
+        for key, value in entry.items():
+            flatten(key, value, gate)
+        for key, value in curve.items():
+            flatten(f"curve.{key}", value, gate)
+        for point in points:
+            row = dict(gate)
+            for key, value in point.items():
+                flatten(f"point.{key}", value, row)
+            rows.append(row)
+    return rows
+
+
 def main(argv: list[str] | None = None) -> int:
     """Score the ruleset and write the report.
 
@@ -175,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         0 on success.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("features", type=Path, help="a features.jsonl written by analyze_routing_evidence.py")
+    parser.add_argument("features", type=Path, help="a features shard written by analyze_routing_evidence.py")
     parser.add_argument("out_dir", type=Path, help="where the score is written")
     parser.add_argument("--config", type=Path, default=None, help="a partial triage config override")
     parser.add_argument(
@@ -208,13 +262,17 @@ def main(argv: list[str] | None = None) -> int:
         "budgets": list(budgets),
         "totals": totals,
         "branches": {branch: branch_score.as_json() for branch, branch_score in scores.items()},
-        "recall_at_budget": [report.as_json() for report in recalls],
-        "families": tallies,
     }
     (arguments.out_dir / SCORE_FILE).write_text(json.dumps(score, indent=1))
+    header = {"config_hash": config.config_hash, "budgets": list(budgets), "recordings": recordings}
+    n_families = write_rows(family_rows(tallies), arguments.out_dir / FAMILIES_FILE, header)
+    n_points = write_rows(recall_rows(recalls), arguments.out_dir / RECALL_FILE, header)
     print_table(recordings, states, per_axis, scores, tallies)
     print_recall_at_budget(recalls)
-    print(f"\n[ruleset] wrote {arguments.out_dir / SCORE_FILE}", flush=True)
+    print(
+        f"\n[ruleset] wrote {arguments.out_dir / SCORE_FILE}, {n_families} families and {n_points} gate-budget rows",
+        flush=True,
+    )
     return 0
 
 
