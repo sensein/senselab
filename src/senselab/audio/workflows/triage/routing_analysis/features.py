@@ -7,6 +7,10 @@ in them is dropped. A span carries every label its classifier put in the span's 
 above the floor, both read from ``windows.<classifier>`` through
 :class:`~senselab.audio.workflows.triage.label_membership.LabelMembership`, so a span may carry
 several labels and counts toward each. A label outside ``TRACKED_LABELS`` is dropped.
+
+The ``praat_features`` scalars are carried as the store keys them. The ``ppg_posteriorgram``
+sidecar the store references is opened, reduced to the summary in :data:`PPG_SUMMARY_KEYS` and
+closed; the array itself never enters a record.
 """
 
 from __future__ import annotations
@@ -19,6 +23,8 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
+
+import numpy as np
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.label_membership import LabelMembership, optional_label_membership
@@ -60,6 +66,33 @@ RESIDUAL_BANDS: tuple[str, ...] = ("0_200", "200_1000", "1000_4000", "4000_8000"
 
 WORD_OUTCOMES: tuple[str, ...] = ("agreement", "variant", "insertion")
 """The consensus outcomes a ``word`` entity can carry."""
+
+PPG_ENTITY_KEYS: tuple[str, ...] = ("frames", "n_phonemes", "seconds_per_frame")
+"""The ``ppg_posteriorgram`` scalars the measurement itself carries, readable without the sidecar."""
+
+PPG_SUMMARY_KEYS: tuple[str, ...] = (
+    *PPG_ENTITY_KEYS,
+    "segment_count",
+    "segment_rate_per_s",
+    "segment_duration_n",
+    "segment_duration_min",
+    "segment_duration_median",
+    "segment_duration_mean",
+    "segment_duration_max",
+    "segment_duration_iqr",
+    "segment_duration_p75",
+    "segment_duration_p90",
+    "distinct_phonemes",
+    "silent_fraction",
+    "repetition_peak",
+    "repetition_lag_segments",
+    "repetition_mean",
+    "repetition_prominence",
+)
+"""Every key a posteriorgram is reduced to. The keys past the entity ones need the sidecar."""
+
+SILENT_PHONEME = "<silent>"
+"""The ppgs inventory's silence label, as its own ``PHONEME_LABELS`` spells it."""
 
 _ENTITY_PREFIX = '{"attributes"'
 _RELATION_MARKER = '"relation"'
@@ -131,6 +164,12 @@ class RecordingFeatures:
         disruptions: The whole-file ``disruptions_file`` measurement's scalars.
         silence: ``threshold``, ``n_windows``, ``n_silence`` and ``fraction`` from the YAMNet
             ``Silence`` projection.
+        praat: The ``praat_features`` scalars, keyed as the measurement keys them. A scalar the
+            store recorded as null is not keyed at all, so an unmeasured quantity stays distinct
+            from a measured zero, and the whole mapping is empty when the measurement is absent.
+        ppg: The ``ppg_posteriorgram`` sidecar reduced to :data:`PPG_SUMMARY_KEYS`. The keys in
+            :data:`PPG_ENTITY_KEYS` come off the measurement; the rest need the sidecar and are
+            absent when it cannot be read.
         peaks: ``{peak_key: score}`` for every tracked label on every stream and classifier.
         classifier_streams: Which ``<stream>|<classifier>`` summaries were present at all.
         kind_state: TAXONOMY's own state per kind, so its current behaviour can be measured too.
@@ -158,6 +197,8 @@ class RecordingFeatures:
     level: dict[str, float] = field(default_factory=dict)
     disruptions: dict[str, float] = field(default_factory=dict)
     silence: dict[str, float] = field(default_factory=dict)
+    praat: dict[str, float] = field(default_factory=dict)
+    ppg: dict[str, float] = field(default_factory=dict)
     peaks: dict[str, float] = field(default_factory=dict)
     classifier_streams: list[str] = field(default_factory=list)
     kind_state: dict[str, str] = field(default_factory=dict)
@@ -254,8 +295,130 @@ def _absorb_span_window(
             pooled[key] = value
 
 
+def _finite_scalars(table: Mapping[str, Any]) -> dict[str, float]:
+    """The finite numbers in a mapping, under the keys the mapping already uses.
+
+    Args:
+        table: The mapping, whose values may be of any type.
+
+    Returns:
+        Every value that is a finite real number, keyed unchanged. A null, a bool, a string and a
+        non-finite number are all left out rather than coerced.
+    """
+    kept: dict[str, float] = {}
+    for key, value in table.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        number = float(value)
+        if math.isfinite(number):
+            kept[str(key)] = number
+    return kept
+
+
+def _ppg_segments(path: Path) -> tuple[list[dict[str, Any]], float, int]:
+    """The posteriorgram sidecar's contiguous argmax-phoneme segments.
+
+    Args:
+        path: The ``ppg_posteriorgram.npz`` the measurement's ``path`` attribute names.
+
+    Returns:
+        The segments :func:`~senselab.audio.tasks.features_extraction.ppg.extract_ppg_segments`
+        found, the analysed duration in seconds and the frame count. The segments are empty when
+        the array holds no frame.
+
+    Raises:
+        OSError: When the sidecar cannot be opened.
+        ValueError: When it holds no readable posteriorgram.
+    """
+    import torch
+
+    from senselab.audio.data_structures import Audio
+    from senselab.audio.tasks.features_extraction.ppg import extract_ppg_segments, to_frame_major_posteriorgram
+
+    with np.load(path) as archive:
+        posteriorgram = torch.from_numpy(archive["posteriorgram"].astype(np.float32))
+        duration_s = float(archive["duration_s"])
+        sampling_rate = int(archive["sampling_rate"])
+    frame_major = to_frame_major_posteriorgram(posteriorgram)
+    frames = int(frame_major.shape[0])
+    if frames == 0 or duration_s <= 0.0:
+        return [], duration_s, frames
+    clock = Audio(waveform=torch.zeros(1, round(duration_s * sampling_rate)), sampling_rate=sampling_rate)
+    return extract_ppg_segments(clock, frame_major), duration_s, frames
+
+
+def _repetition(labels: Sequence[int]) -> dict[str, float]:
+    """How strongly the argmax phoneme sequence repeats itself.
+
+    Args:
+        labels: Each segment's dominant phoneme index, in order.
+
+    Returns:
+        ``repetition_peak``, the largest fraction of positions agreeing with the sequence shifted
+        by one lag, over every lag up to half the sequence; ``repetition_lag_segments``, the lag it
+        was reached at; ``repetition_mean`` over every lag, which is this sequence's own agreement
+        by chance; and ``repetition_prominence``, the peak over that mean. Empty when the sequence
+        is too short to carry two lags.
+    """
+    length = len(labels)
+    if length // 2 < 2:
+        return {}
+    sequence = np.asarray(labels, dtype=np.int64)
+    matches = np.array(
+        [np.count_nonzero(sequence[:-lag] == sequence[lag:]) / (length - lag) for lag in range(1, length // 2 + 1)]
+    )
+    peak = int(np.argmax(matches))
+    mean = float(matches.mean())
+    return {
+        "repetition_peak": float(matches[peak]),
+        "repetition_lag_segments": float(peak + 1),
+        "repetition_mean": mean,
+        "repetition_prominence": float(matches[peak]) - mean,
+    }
+
+
+def _ppg_summary(attributes: Mapping[str, Any], run_dir: Path) -> dict[str, float]:
+    """One ``ppg_posteriorgram`` measurement reduced to :data:`PPG_SUMMARY_KEYS`.
+
+    Args:
+        attributes: The measurement's attributes, carrying the sidecar's relative path.
+        run_dir: The run directory that path is relative to.
+
+    Returns:
+        The summary. Only the :data:`PPG_ENTITY_KEYS` are keyed when the sidecar names no path,
+        cannot be opened or holds no readable array; a summary key is absent rather than zero
+        whenever the quantity it names was not computed.
+    """
+    summary = _finite_scalars({key: attributes.get(key) for key in PPG_ENTITY_KEYS})
+    relative = attributes.get("path")
+    if not relative:
+        return summary
+    try:
+        segments, duration_s, frames = _ppg_segments(run_dir / str(relative))
+    except (OSError, ValueError, KeyError):
+        return summary
+    if not segments:
+        return summary
+    durations = [float(segment["duration_seconds"]) for segment in segments]
+    summary["segment_count"] = float(len(segments))
+    if duration_s > 0.0:
+        summary["segment_rate_per_s"] = len(segments) / duration_s
+    for key, value in _stats(durations).items():
+        summary[f"segment_duration_{key}"] = value
+    labels = [int(segment["phoneme_index"]) for segment in segments]
+    summary["distinct_phonemes"] = float(len(set(labels)))
+    if frames > 0:
+        silent = sum(int(segment["frame_count"]) for segment in segments if segment["phoneme"] == SILENT_PHONEME)
+        summary["silent_fraction"] = silent / frames
+    summary.update(_repetition(labels))
+    return summary
+
+
 def _absorb_measurement(
-    features: RecordingFeatures, attributes: dict[str, Any], span_scores: dict[str, dict[str, dict[str, float]]]
+    features: RecordingFeatures,
+    attributes: dict[str, Any],
+    span_scores: dict[str, dict[str, dict[str, float]]],
+    run_dir: Path,
 ) -> None:
     """Fold one ``measurement`` entity into the record.
 
@@ -263,6 +426,7 @@ def _absorb_measurement(
         features: The record being built.
         attributes: The measurement's attributes.
         span_scores: The per-span per-label maxima table, updated in place.
+        run_dir: The run directory a sidecar-bearing measurement's path is relative to.
     """
     name = str(attributes.get("name") or "")
     if name == "consensus_transcript":
@@ -286,6 +450,12 @@ def _absorb_measurement(
         return
     if name == "disruptions_file":
         features.disruptions = {key: float(attributes[key]) for key in DISRUPTION_KEYS if key in attributes}
+        return
+    if name == "praat_features":
+        features.praat = _finite_scalars(attributes.get("features") or {})
+        return
+    if name == "ppg_posteriorgram":
+        features.ppg = _ppg_summary(attributes, run_dir)
         return
     if name == "silence":
         windows = attributes.get("windows") or []
@@ -577,7 +747,8 @@ def extract_features(
     :func:`senselab.audio.workflows.triage.nodes.common.live_entities`.
 
     Args:
-        store_path: The ``run/store.jsonl`` to read.
+        store_path: The ``run/store.jsonl`` to read. A sidecar a measurement names by relative path
+            is resolved against its directory.
         stem: The recording's BIDS stem.
         run_root: The run directory the summary named.
         task_id: The sanitized task id.
@@ -608,7 +779,7 @@ def extract_features(
         features.n_entities += 1
         entity_id = str(record.get("id"))
         if prov_type == "measurement":
-            _absorb_measurement(features, attributes, span_scores)
+            _absorb_measurement(features, attributes, span_scores, store_path.parent)
         elif prov_type == "word":
             words.append({"id": entity_id, **attributes})
         elif prov_type == "span":
