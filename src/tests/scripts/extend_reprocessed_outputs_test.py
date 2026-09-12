@@ -21,8 +21,18 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.consensus import (
+    SourceHypothesis,
+    align_sources,
+    render_transcript,
+    vocabulary_key,
+    word_attributes,
+)
+from senselab.audio.workflows.triage.extend import CONSENSUS_TRANSCRIPT, ONOMATOPOEIC_TOKENS_KEY, REBRACKET
 from senselab.audio.workflows.triage.nodes.common import (
+    consensus_words,
     find_measurement,
+    lexical_words,
     path_attributes,
     software_agent,
     write_measurement,
@@ -48,6 +58,9 @@ DURATION_S = 1.5
 
 PHONATION_TRACKS = "phonation_tracks"
 CONSENSUS_TAXONOMY = "consensus_taxonomy"
+
+_LEXICON = {vocabulary_key(str(token)) for token in load_triage_config().require(ONOMATOPOEIC_TOKENS_KEY)}
+"""The shipped onomatopoeic vocabulary, which is what the extend pass re-flags against."""
 
 SPELLINGS = {"hear": "Throat Clear", "yamnet": "Throat clearing"}
 """One AudioSet node, two classifier spellings — the pair the identity merge exists for."""
@@ -159,7 +172,140 @@ def _seed_string_matched_taxonomy(store: ProvStore, agent: str) -> str:
     )
 
 
-def _seed_run(root: Path, *, taxonomy: str = "old", tracks: bool = False, streams: bool = True) -> None:
+HYPOTHESES: dict[str, tuple[tuple[str, float, float], ...]] = {
+    "asr_a": (
+        ("I", 0.10, 0.20),
+        ("cough", 0.30, 0.45),
+        ("khh", 0.60, 0.70),
+        ("[BREATH]", 0.85, 0.95),
+        ("hello", 1.10, 1.30),
+    ),
+    "asr_b": (
+        ("I", 0.11, 0.21),
+        ("Cough,", 0.31, 0.46),
+        ("hack", 0.61, 0.72),
+        ("[BREATH]", 0.86, 0.96),
+        ("hello", 1.12, 1.33),
+    ),
+}
+"""Two recognizers over one recording: an agreement column and a variant column of the lexicon, one
+token already bracketed, and two ordinary words that no vocabulary touches."""
+
+LEXICAL_HYPOTHESES: dict[str, tuple[tuple[str, float, float], ...]] = {
+    "asr_a": (("I", 0.10, 0.20), ("said", 0.30, 0.45), ("hello", 0.60, 0.80)),
+    "asr_b": (("I", 0.11, 0.21), ("said", 0.31, 0.46), ("hello", 0.61, 0.82)),
+}
+"""A recording no entry of the vocabulary appears in."""
+
+
+def _seed_consensus(
+    store: ProvStore,
+    agent: str,
+    *,
+    lexicon: set[str],
+    hypotheses: dict[str, tuple[tuple[str, float, float], ...]],
+) -> None:
+    """Write the ASR hypotheses and the consensus stream a run under this vocabulary would hold.
+
+    The same writes PREPROCESS's own consensus block makes, in the same order: one measurement per
+    recognizer, one ``word`` entity per aligned column, and the transcript listing them.
+
+    Args:
+        store: The store to write into.
+        agent: The agent answerable for the writes.
+        lexicon: The ``words.onomatopoeic_tokens`` vocabulary the run was made under.
+        hypotheses: ``{source: ((text, start, end), ...)}``, the recognizers' own words.
+    """
+    asr = store.activity(node="PREPROCESS", step="asr", parameters={})
+    store.was_associated_with(asr, agent)
+    measurement_ids: dict[str, str] = {}
+    for source, words in hypotheses.items():
+        measurement_ids[source] = write_measurement(
+            store,
+            asr,
+            agent,
+            name=source,
+            signal="plain",
+            attributes={
+                "role": "asr_hypothesis",
+                "source": source,
+                "model_id": f"test/{source}",
+                "commit_sha": None,
+                "words": [{"text": text, "start": start, "end": end} for text, start, end in words],
+                "n_words": len(words),
+                "timestamp_source": "native",
+                "timestamp_model": None,
+            },
+        )
+    consensus = align_sources(
+        [
+            SourceHypothesis(name=source, words=words, timestamp_source="native", timestamp_model=None)
+            for source, words in hypotheses.items()
+        ],
+        onomatopoeic=lexicon,
+    )
+    activity = store.activity(node="PREPROCESS", step="consensus", parameters={"sources": sorted(hypotheses)})
+    store.was_associated_with(activity, agent)
+    word_ids: list[str] = []
+    for word in consensus.words:
+        word_id = store.entity(prov_type="word", extent=word.extent, attributes=word_attributes(word))
+        store.was_generated_by(word_id, activity)
+        store.was_attributed_to(word_id, agent)
+        word_ids.append(word_id)
+    write_measurement(
+        store,
+        activity,
+        agent,
+        name=CONSENSUS_TRANSCRIPT,
+        signal="plain",
+        attributes={
+            "role": "consensus",
+            **consensus.provenance,
+            "sources": [
+                {**row, "measurement_id": measurement_ids[str(row["name"])], "agent_id": agent}
+                for row in consensus.provenance["sources"]
+            ],
+            "word_ids": word_ids,
+            "text": render_transcript(consensus.words, strong=("", "")),
+        },
+        derived_from=tuple(measurement_ids[source] for source in sorted(hypotheses)),
+    )
+
+
+def _seed_asr_span(store: ProvStore, agent: str) -> str:
+    """One span the ASR proposer contributed, derived from the transcript that proposed it.
+
+    Args:
+        store: The store to write into, already carrying a consensus transcript.
+        agent: The agent answerable for the writes.
+
+    Returns:
+        The span entity's id.
+    """
+    consensus = find_measurement(store, CONSENSUS_TRANSCRIPT)
+    assert consensus is not None, "an ASR-proposed span needs the transcript that proposed it"  # noqa: S101
+    activity = store.activity(node="PREPROCESS", step="spans", parameters={"measure": "asr"})
+    store.was_associated_with(activity, agent)
+    span_id = store.entity(
+        prov_type="span",
+        extent=(0.10, 0.70),
+        attributes={"signal": "consensus", "measure": "asr", "merged_proposals": 3, "contains_clip": False},
+    )
+    store.was_generated_by(span_id, activity)
+    store.was_attributed_to(span_id, agent)
+    store.was_derived_from(span_id, consensus.id)
+    return span_id
+
+
+def _seed_run(
+    root: Path,
+    *,
+    taxonomy: str = "old",
+    tracks: bool = False,
+    streams: bool = True,
+    words: str = "null",
+    asr_span: bool = False,
+) -> None:
     """Write one finished run in the shape the corpus is in, or one of its variations.
 
     Args:
@@ -168,6 +314,10 @@ def _seed_run(root: Path, *, taxonomy: str = "old", tracks: bool = False, stream
             merge a fresh run writes, ``"none"`` for a store carrying no consolidation at all.
         tracks: Whether the store already carries a ``phonation_tracks`` measurement.
         streams: Whether the conditioned streams exist at all.
+        words: ``"null"`` for a consensus written under the null vocabulary the corpus ran with,
+            ``"current"`` for one written under the shipped lexicon, ``"lexical"`` for a recording
+            no entry of the lexicon appears in, ``"none"`` for a store carrying no transcript.
+        asr_span: Whether the store carries a span the ASR proposer contributed.
     """
     run_dir = root / "run"
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
@@ -182,6 +332,15 @@ def _seed_run(root: Path, *, taxonomy: str = "old", tracks: bool = False, stream
         _stream(store, run_dir, "plain", condition, agent)
         _stream(store, run_dir, "preemphasised", condition, agent)
     _seed_span_scores(store, agent)
+    if words != "none":
+        _seed_consensus(
+            store,
+            agent,
+            lexicon=_LEXICON if words == "current" else set(),
+            hypotheses=LEXICAL_HYPOTHESES if words == "lexical" else HYPOTHESES,
+        )
+    if asr_span:
+        _seed_asr_span(store, agent)
     if taxonomy == "old":
         _seed_string_matched_taxonomy(store, agent)
     elif taxonomy == "current":
@@ -218,6 +377,18 @@ def _store_of(root: Path) -> ProvStore:
         The store.
     """
     return ProvStore.read_jsonl(root / "run" / "store.jsonl", run_id=root.name)
+
+
+def _retired(store: ProvStore) -> set[str]:
+    """Every entity the store has marked ``wasInvalidatedBy``.
+
+    Args:
+        store: The store.
+
+    Returns:
+        The retired entities' ids.
+    """
+    return {source for relation, source, _ in store.relations() if relation == "wasInvalidatedBy"}
 
 
 def _log(tmp_path: Path) -> list[dict[str, Any]]:
@@ -387,11 +558,11 @@ class TestTheConsensusTaxonomyRewrite:
 class TestAFreshRun:
     """A run that never had the old form must be left alone, not rewritten into an identical one."""
 
-    def test_a_run_already_carrying_both_outputs_is_not_rewritten(
+    def test_a_run_already_carrying_all_three_outputs_is_not_rewritten(
         self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
     ) -> None:
         """The store is byte-identical and nothing is retired."""
-        manifest, roots = corpus(1, taxonomy="current", tracks=True)
+        manifest, roots = corpus(1, taxonomy="current", tracks=True, words="current")
         before = (roots[0] / "run" / "store.jsonl").read_bytes()
         fingerprint = _store_of(roots[0]).fingerprint()
 
@@ -401,12 +572,13 @@ class TestAFreshRun:
         assert _store_of(roots[0]).fingerprint() == fingerprint
         record = _log(tmp_path)[0]
         assert record["status"] == "skipped"
+        assert record[REBRACKET] == "current"
         assert record[PHONATION_TRACKS] == "present"
         assert record[CONSENSUS_TAXONOMY] == "current"
 
     def test_a_fresh_run_is_never_given_a_retirement_edge(self, corpus: Callable[..., tuple[Path, list[Path]]]) -> None:
         """Recomputing the current consolidation mints the id the store already holds."""
-        manifest, roots = corpus(1, taxonomy="current", tracks=True)
+        manifest, roots = corpus(1, taxonomy="current", tracks=True, words="current")
         _run(manifest)
         store = _store_of(roots[0])
         assert [relation for relation, _, _ in store.relations() if relation == "wasInvalidatedBy"] == []
@@ -435,11 +607,11 @@ class TestASecondPass:
         """One retirement per superseded reading, however many times the driver is run."""
         manifest, roots = corpus(1)
         _run(manifest)
+        after_first = _retired(_store_of(roots[0]))
         _run(manifest)
         _run(manifest)
-        store = _store_of(roots[0])
-        retired = [relation for relation, _, _ in store.relations() if relation == "wasInvalidatedBy"]
-        assert len(retired) == 1
+        assert _retired(_store_of(roots[0])) == after_first
+        assert len(after_first) == 1 + 1 + 2
 
 
 class TestWhatTheRunGains:
@@ -498,3 +670,187 @@ class TestOneBadRecording:
         """A wrong guess would rewrite the wrong recording's store."""
         with pytest.raises(ValueError, match="no run root"):
             cli.run_root_of(Path("/corpus/enhanced.flac"))
+
+
+class TestRebracketingTheWords:
+    """A rewrite: the corpus spells transcribed coughs as lexical words, and re-flagging is derivable."""
+
+    def _words(self, root: Path) -> list[Any]:
+        """The run's live consensus words, in stream order.
+
+        Args:
+            root: The run root.
+
+        Returns:
+            The live ``word`` entities.
+        """
+        return consensus_words(_store_of(root))
+
+    def test_the_words_are_re_flagged_and_the_lexical_count_falls(
+        self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
+    ) -> None:
+        """Two of the five columns are vocabulary tokens; the other three are untouched."""
+        manifest, roots = corpus(1)
+        assert [word.attributes["text"] for word in self._words(roots[0])] == [
+            "I",
+            "cough",
+            "khh",
+            "[BREATH]",
+            "hello",
+        ]
+        assert len(lexical_words(_store_of(roots[0]))) == 4
+
+        assert _run(manifest) == 0
+
+        assert [word.attributes["text"] for word in self._words(roots[0])] == [
+            "I",
+            "[COUGH]",
+            "[KHH]",
+            "[BREATH]",
+            "hello",
+        ]
+        assert len(lexical_words(_store_of(roots[0]))) == 2
+        assert _log(tmp_path)[0][REBRACKET] == "rewritten"
+
+    def test_a_variant_column_keeps_both_readings_and_brackets_each_on_its_own_key(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """``[KHH]`` and ``[HACK]`` are still two readings; re-bracketing manufactures no agreement."""
+        manifest, roots = corpus(1)
+        _run(manifest)
+        variant = self._words(roots[0])[2]
+        assert variant.attributes["outcome"] == "variant"
+        assert [reading["text"] for reading in variant.attributes["variants"]] == ["[KHH]", "[HACK]"]
+        assert variant.attributes["readings"] == {"asr_a": "khh", "asr_b": "hack"}
+        assert variant.attributes["agreement"] == 0.5
+
+    def test_the_superseded_words_are_retired_and_the_retirement_names_why(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """The store is append-only: the old reading stays readable and stops being current."""
+        manifest, roots = corpus(1)
+        before = {word.attributes["text"]: word.id for word in self._words(roots[0])}
+
+        _run(manifest)
+
+        store = _store_of(roots[0])
+        assert store.is_invalidated(before["cough"]) and store.is_invalidated(before["khh"])
+        assert store.get_entity(before["cough"]).attributes["bracketed"] is False
+        [activity_id] = [target for _, source, target in store.relations() if source == before["cough"]][-1:]
+        activity = store.get_activity(activity_id)
+        assert (activity.node, activity.step) == ("PREPROCESS", "word_superseded")
+        assert activity.parameters["superseded"] == before["cough"]
+        assert "words.onomatopoeic_tokens" in activity.parameters["reason"]
+
+    def test_a_word_no_vocabulary_entry_touches_keeps_its_id(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """Only the columns whose reading moved are rewritten; the rest are not re-minted."""
+        manifest, roots = corpus(1)
+        before = {word.attributes["text"]: word.id for word in self._words(roots[0])}
+
+        _run(manifest)
+
+        after = {word.attributes["text"]: word.id for word in self._words(roots[0])}
+        assert after["I"] == before["I"]
+        assert after["hello"] == before["hello"]
+        assert after["[BREATH]"] == before["[BREATH]"]
+        assert after["[COUGH]"] != before["cough"]
+
+    def test_the_transcript_is_retired_and_rewritten_over_the_new_words(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """A transcript listing retired words would contradict the words the store now holds."""
+        manifest, roots = corpus(1)
+        before = find_measurement(_store_of(roots[0]), CONSENSUS_TRANSCRIPT)
+        assert before is not None and before.attributes["text"] == "I cough khh [BREATH] hello"
+
+        _run(manifest)
+
+        store = _store_of(roots[0])
+        after = find_measurement(store, CONSENSUS_TRANSCRIPT)
+        assert after is not None and after.id != before.id
+        assert after.attributes["text"] == "I [COUGH] [KHH] [BREATH] hello"
+        assert store.is_invalidated(before.id)
+        assert not any(store.is_invalidated(word_id) for word_id in after.attributes["word_ids"])
+        assert after.attributes["n_words"] == before.attributes["n_words"]
+        assert after.attributes["outcomes"] == before.attributes["outcomes"]
+
+    def test_the_re_flagged_run_is_the_run_the_lexicon_would_have_made(
+        self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
+    ) -> None:
+        """Both paths mint the same entity ids, so an extended store and a fresh one are one store."""
+        manifest, roots = corpus(1)
+        _run(manifest)
+
+        fresh_root = tmp_path / "fresh" / roots[0].name
+        fresh_root.mkdir(parents=True)
+        _seed_run(fresh_root, words="current")
+
+        extended, fresh = _store_of(roots[0]), _store_of(fresh_root)
+        assert [word.id for word in consensus_words(extended)] == [word.id for word in consensus_words(fresh)]
+        extended_transcript = find_measurement(extended, CONSENSUS_TRANSCRIPT)
+        fresh_transcript = find_measurement(fresh, CONSENSUS_TRANSCRIPT)
+        assert extended_transcript is not None and fresh_transcript is not None
+        assert extended_transcript.id == fresh_transcript.id
+
+    def test_a_recording_no_vocabulary_entry_appears_in_is_untouched(
+        self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
+    ) -> None:
+        """Nothing to re-flag is not the same outcome as nothing to re-flag against."""
+        manifest, roots = corpus(1, taxonomy="current", tracks=True, words="lexical")
+        before = (roots[0] / "run" / "store.jsonl").read_bytes()
+
+        assert _run(manifest) == 0
+
+        assert (roots[0] / "run" / "store.jsonl").read_bytes() == before
+        assert _log(tmp_path)[0][REBRACKET] == "current"
+
+    def test_a_store_carrying_no_transcript_is_given_none(
+        self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
+    ) -> None:
+        """PREPROCESS wrote no consensus there; synthesising one would assert that it had."""
+        manifest, roots = corpus(1, words="none")
+
+        assert _run(manifest) == 0
+
+        assert find_measurement(_store_of(roots[0]), CONSENSUS_TRANSCRIPT) is None
+        assert _log(tmp_path)[0][REBRACKET] == "absent"
+
+
+class TestTheSpansTheAsrProposed:
+    """A re-flagged word changes the proposer's input; the spans it already proposed are kept."""
+
+    def test_the_span_is_kept_and_the_store_records_that_it_was_not_recomputed(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """A recomputed ASR span would carry no per-span measurement, and none is derivable here."""
+        manifest, roots = corpus(1, asr_span=True)
+        before = [span for span in _store_of(roots[0]).entities("span") if span.attributes.get("measure") == "asr"]
+        assert len(before) == 1
+
+        _run(manifest)
+
+        store = _store_of(roots[0])
+        assert not store.is_invalidated(before[0].id)
+        record = find_measurement(store, REBRACKET)
+        assert record is not None
+        assert record.attributes["asr_proposed_span_ids"] == [before[0].id]
+        assert record.attributes["asr_proposed_spans_recomputed"] is False
+        assert (record.attributes["n_lexical_before"], record.attributes["n_lexical_after"]) == (4, 2)
+        assert record.attributes["n_rebracketed"] == 2
+
+    def test_the_kept_span_still_names_the_reading_that_proposed_it(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """Its ``wasDerivedFrom`` edge points at the retired transcript, which is the whole record."""
+        manifest, roots = corpus(1, asr_span=True)
+        proposing = find_measurement(_store_of(roots[0]), CONSENSUS_TRANSCRIPT)
+        assert proposing is not None
+
+        _run(manifest)
+
+        store = _store_of(roots[0])
+        [span] = [entity for entity in store.entities("span") if entity.attributes.get("measure") == "asr"]
+        assert store.derived_from(span.id) == [proposing.id]
+        assert store.is_invalidated(proposing.id)

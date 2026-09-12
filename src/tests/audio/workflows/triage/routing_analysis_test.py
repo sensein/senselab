@@ -46,6 +46,7 @@ from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     bracket_type,
     extract_features,
+    invalidated_ids,
     onomatopoeic_vocabulary,
     span_label_memberships,
 )
@@ -1659,3 +1660,60 @@ class TestFeaturesShard:
         path = tmp_path / f"features{SHARD_SUFFIX}"
         assert dump_features([], path) == 0
         assert load_features(path) == []
+
+
+def _two_consolidations(path: Path, *, retired_first: bool) -> Path:
+    """A store holding two ``consensus_taxonomy`` readings, one of them retired.
+
+    The shape an extend pass leaves behind: the rewrite is beside the reading it superseded, and
+    only the invalidation edge says which is current.
+
+    Args:
+        path: Where to write it.
+        retired_first: Whether the retired reading is written before the live one.
+
+    Returns:
+        The path.
+    """
+    retired = _entity(
+        "measurement",
+        "measurement-old",
+        {"name": "consensus_taxonomy", "labels": [{"label": "Cough", "peak_by_classifier": {"yamnet": 0.9}}]},
+    )
+    live = _entity(
+        "measurement",
+        "measurement-new",
+        {"name": "consensus_taxonomy", "labels": [{"label": "Cough", "peak_by_classifier": {"yamnet": 0.1}}]},
+    )
+    ordered = [retired, live] if retired_first else [live, retired]
+    return _write_store(
+        path,
+        [
+            _entity("stream", "stream-1", {"name": "recording"}, [0.0, 4.0]),
+            *ordered,
+            _relation("wasInvalidatedBy", "measurement-old", "activity-1"),
+        ],
+    )
+
+
+@pytest.mark.parametrize("retired_first", [True, False])
+def test_extract_reads_the_live_consolidation_whatever_order_it_was_written_in(
+    tmp_path: Path, retired_first: bool
+) -> None:
+    """A retired measurement is dropped like a retired word, not absorbed and then overwritten."""
+    record = extract_features(
+        _two_consolidations(tmp_path / f"{retired_first}" / "run" / "store.jsonl", retired_first=retired_first),
+        "sub-1_ses-1_task-voluntary-cough",
+        str(tmp_path),
+        "voluntary-cough",
+        "voluntary-cough",
+        PACKAGED_MEMBERSHIPS,
+        onomatopoeic=PACKAGED_ONOMATOPOEIA,
+    )
+    assert record.peaks["consensus|yamnet|Cough"] == pytest.approx(0.1)
+
+
+def test_invalidated_ids_reads_only_the_retirement_edges(tmp_path: Path) -> None:
+    """The first pass answers which entities are live, and decodes nothing else."""
+    path = _two_consolidations(tmp_path / "run" / "store.jsonl", retired_first=True)
+    assert invalidated_ids(path) == {"measurement-old"}

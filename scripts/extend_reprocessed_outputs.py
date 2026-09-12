@@ -12,8 +12,13 @@ derived from ``enhanced`` the same way: ``<run_root>/run/store.jsonl`` and ``<ru
 ``--slice-index`` / ``--slice-count`` shard the manifest for a Slurm array: task *i* of *n* takes
 ``rows[i::n]``.
 
-Two derivations, both of them functions of what the store and the run tree already hold:
+Three derivations, all of them functions of what the store and the run tree already hold:
 
+* ``rebracket`` -- every consensus word re-flagged against ``words.onomatopoeic_tokens``, from the
+  recognizer readings each word already carries. A rewrite: a word whose surface moved is a new
+  entity, the old one is retired, and the ``consensus_transcript`` listing them is retired and
+  rewritten. Nothing is re-aligned, because the alignment key a token groups on is invariant under
+  bracketing.
 * ``phonation_tracks`` -- F0 over the pre-emphasised stream and the first four formants over
   ``plain``, both read back out of the run's own ``run/streams/``. An append: a corpus run has no
   phonation tracks at all, because ``voice.f0_search_range_hz`` was null when it ran and that null
@@ -23,11 +28,11 @@ Two derivations, both of them functions of what the store and the run tree alrea
   rewrite: the older reading is retired with a ``wasInvalidatedBy`` edge naming why, because the
   store is append-only and two live consolidations of one recording would contradict each other.
 
-Neither runs a model and neither reads the source recording. **Re-bracketing the onomatopoeic words
-is deliberately not here**; it is not derivable from stored state, and
-``specs/20260912-extend-reprocessed-outputs/design.md`` says what stops it.
+None runs a model and none reads the source recording. What each one retires, what it deliberately
+does not recompute, and what a consumer of an extended store must therefore know are in
+``specs/20260912-extend-reprocessed-outputs/design.md``.
 
-Nothing is written outside the recording's own run. A store the two derivations leave unchanged --
+Nothing is written outside the recording's own run. A store the three derivations leave unchanged --
 its fingerprint before and after is the test -- is not rewritten at all, so a completed slice re-run
 is a pass over ``store.jsonl`` and nothing else, and a task that dies mid-slice restarts where it
 stopped.
@@ -47,11 +52,15 @@ from typing import Any, Sequence
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
+    CONSENSUS_TAXONOMY,
+    CONSENSUS_TRANSCRIPT,
+    REBRACKET,
     RUN_SUBDIR,
     SLICES_SUBDIR,
     export_prov,
     read_manifest,
     read_store,
+    rebracket_words,
     rewrite_consensus_taxonomy,
     run_root_of,
     take_slice,
@@ -93,6 +102,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _reasons(reason: str) -> dict[str, str]:
+    """One failure, recorded against every derivation it stopped.
+
+    Args:
+        reason: Why the run could not be extended at all.
+
+    Returns:
+        The reason under each derivation's own key.
+    """
+    return {REBRACKET: reason, PHONATION_TRACKS_MEASUREMENT: reason, CONSENSUS_TAXONOMY: reason}
+
+
+def extend_rebracket(store: ProvStore, config: TriageConfig) -> str:
+    """Re-flag one finished run's consensus words, or say why none is re-flagged.
+
+    Args:
+        store: The run's store.
+        config: The triage configuration.
+
+    Returns:
+        ``rewritten``, ``current`` when no word's reading moves under the vocabulary, ``absent``
+        when the store carries no consensus transcript, or the reason the words could not be
+        re-read.
+    """
+    try:
+        written = rebracket_words(store, config)
+    except (OSError, ValueError, LookupError) as error:
+        return describe_exception(error)
+    if written is not None:
+        return _REWRITTEN
+    return _CURRENT if find_measurement(store, CONSENSUS_TRANSCRIPT) is not None else _ABSENT
+
+
 def extend_phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
     """Give one finished run the phonation tracks it has none of, or say why it gets none.
 
@@ -131,11 +173,11 @@ def extend_consensus_taxonomy(store: ProvStore, config: TriageConfig) -> str:
         return describe_exception(error)
     if written is not None:
         return _REWRITTEN
-    return _CURRENT if find_measurement(store, "consensus_taxonomy") is not None else _ABSENT
+    return _CURRENT if find_measurement(store, CONSENSUS_TAXONOMY) is not None else _ABSENT
 
 
 def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
-    """Apply both derivations to one finished run and write the store only if either changed.
+    """Apply the three derivations to one finished run and write the store only if any changed.
 
     The fingerprint before and after is the whole convergence argument: a derivation that produces
     records the store already holds is a set-union no-op, which leaves the fingerprint where it was,
@@ -146,18 +188,19 @@ def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
         config: The triage configuration.
 
     Returns:
-        ``{status, phonation_tracks, consensus_taxonomy}`` — ``ok`` when both derivations reached a
-        determinate outcome, ``skipped`` when neither changed the store, ``error`` otherwise.
+        ``{status, rebracket, phonation_tracks, consensus_taxonomy}`` — ``ok`` when all three
+        reached a determinate outcome, ``skipped`` when none changed the store, ``error`` otherwise.
     """
     try:
         store = read_store(run_root)
     except (OSError, ValueError) as error:
-        reason = describe_exception(error)
-        return {"status": _ERROR, PHONATION_TRACKS_MEASUREMENT: reason, "consensus_taxonomy": reason}
+        return {"status": _ERROR, **_reasons(describe_exception(error))}
     before = store.fingerprint()
+    rebracketed = extend_rebracket(store, config)
     phonation = extend_phonation_tracks(store, config, run_dir=run_root / RUN_SUBDIR)
     taxonomy = extend_consensus_taxonomy(store, config)
-    landed = [phonation in (_OK, _PRESENT), taxonomy in (_REWRITTEN, _CURRENT, _ABSENT)]
+    determinate = (_REWRITTEN, _CURRENT, _ABSENT)
+    landed = [rebracketed in determinate, phonation in (_OK, _PRESENT), taxonomy in determinate]
     if store.fingerprint() != before:
         capture_environments(store, {})
         write_store(store, run_root)
@@ -165,7 +208,12 @@ def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
         status = _OK if all(landed) else _ERROR
     else:
         status = _SKIPPED if all(landed) else _ERROR
-    return {"status": status, PHONATION_TRACKS_MEASUREMENT: phonation, "consensus_taxonomy": taxonomy}
+    return {
+        "status": status,
+        REBRACKET: rebracketed,
+        PHONATION_TRACKS_MEASUREMENT: phonation,
+        CONSENSUS_TAXONOMY: taxonomy,
+    }
 
 
 def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[str, Any]]:
@@ -186,8 +234,7 @@ def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[s
         try:
             run_root = run_root_of(Path(row["enhanced"]))
         except ValueError as error:
-            reason = describe_exception(error)
-            out.append({**row, "status": _ERROR, PHONATION_TRACKS_MEASUREMENT: reason, "consensus_taxonomy": reason})
+            out.append({**row, "status": _ERROR, **_reasons(describe_exception(error))})
             continue
         out.append({**row, **extend_one(run_root, config)})
     return out

@@ -21,7 +21,21 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent
+from senselab.audio.workflows.triage.consensus import (
+    Rebracketed,
+    rebracket,
+    render_transcript,
+    vocabulary_key,
+    word_attributes,
+    word_from_attributes,
+)
+from senselab.audio.workflows.triage.nodes.common import (
+    find_measurement,
+    live_entities,
+    software_agent,
+    write_measurement,
+)
+from senselab.audio.workflows.triage.nodes.preprocess import NODE as PREPROCESS_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import NODE as TAXONOMY_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import _write_consensus_taxonomy
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
@@ -33,6 +47,14 @@ PROV_SUBDIR = "prov"
 PROV_LABEL = "triage"
 SLICES_SUBDIR = "slices"
 CONSENSUS_TAXONOMY = "consensus_taxonomy"
+CONSENSUS_TRANSCRIPT = "consensus_transcript"
+REBRACKET = "rebracket"
+WORD_SUPERSEDED = "word_superseded"
+ONOMATOPOEIC_TOKENS_KEY = "words.onomatopoeic_tokens"
+ASR_MEASURE = "asr"
+
+_WORD_REASON = "the token is in words.onomatopoeic_tokens; this reading spells it unbracketed"
+_TRANSCRIPT_REASON = "its words were re-flagged against words.onomatopoeic_tokens"
 
 
 def read_manifest(path: Path, *, required: Sequence[str] = ("stem",)) -> list[dict[str, Any]]:
@@ -243,3 +265,122 @@ def rewrite_consensus_taxonomy(store: ProvStore, config: TriageConfig) -> str | 
         software=software,
     )
     return after
+
+
+def rebracket_words(store: ProvStore, config: TriageConfig) -> str | None:
+    """Re-flag one finished run's consensus words against the vocabulary, retiring the old reading.
+
+    Each stored word carries every recognizer's own reading of its column verbatim, so
+    :func:`~senselab.audio.workflows.triage.consensus.rebracket` re-evaluates ``bracketed_form``
+    over those readings and returns the column re-read. Nothing is re-aligned and no timing moves:
+    the alignment key a token groups on is invariant under bracketing.
+
+    A word whose attributes read back unchanged keeps its id and stays live. A word whose surface or
+    flag moved is a new entity derived from the old one, and the old one is retired. The
+    ``consensus_transcript`` listing them is retired and rewritten with the new ids, its rendered
+    text and its bracket-override count; every other field of it is the alignment's and is carried
+    through verbatim.
+
+    The spans the ASR proposer contributed are not recomputed. They keep their ``wasDerivedFrom``
+    edge to the retired transcript, which is what says which reading proposed them, and the
+    ``rebracket`` measurement names them and records that they were not.
+
+    Args:
+        store: The finished run's store, read under the run's own id.
+        config: The triage configuration, read for ``words.onomatopoeic_tokens``.
+
+    Returns:
+        The rewritten transcript's id when this call re-flagged anything, or None when the store
+        carries no ``consensus_transcript``, or no word's reading moved.
+
+    Raises:
+        ValueError: If a word carries no extent, if its attributes are not the set this writer
+            emits, or if a column does not read back as the alignment recorded it.
+    """
+    consensus = find_measurement(store, CONSENSUS_TRANSCRIPT)
+    if consensus is None:
+        return None
+    onomatopoeic = {vocabulary_key(str(token)) for token in (config.get(ONOMATOPOEIC_TOKENS_KEY) or [])}
+    n_sources = int(consensus.attributes["n_sources"])
+    stored = [store.get_entity(str(word_id)) for word_id in consensus.attributes["word_ids"]]
+    stored = [entity for entity in stored if not store.is_invalidated(entity.id)]
+    reread: list[Rebracketed] = []
+    for entity in stored:
+        if entity.extent is None:
+            raise ValueError(f"word {entity.id} carries no extent; it was not written by this graph")
+        result = rebracket(
+            word_from_attributes(entity.attributes, entity.extent), onomatopoeic=onomatopoeic, n_sources=n_sources
+        )
+        if set(word_attributes(result.word)) != set(entity.attributes):
+            raise ValueError(
+                f"word {entity.id} carries {sorted(entity.attributes)}, not "
+                f"{sorted(word_attributes(result.word))}; re-flagging would rewrite fields this pass never read"
+            )
+        reread.append(result)
+    moved = {entity.id for entity, result in zip(stored, reread) if word_attributes(result.word) != entity.attributes}
+    if not moved:
+        return None
+
+    software = software_agent(store)
+    activity = store.activity(
+        node=PREPROCESS_NODE, step=REBRACKET, parameters={ONOMATOPOEIC_TOKENS_KEY: sorted(onomatopoeic)}
+    )
+    store.was_associated_with(activity, software)
+    store.used(activity, consensus.id)
+    word_ids: list[str] = []
+    for entity, result in zip(stored, reread):
+        if entity.id not in moved:
+            word_ids.append(entity.id)
+            continue
+        word_id = store.entity(prov_type="word", extent=entity.extent, attributes=word_attributes(result.word))
+        store.was_generated_by(word_id, activity)
+        store.was_attributed_to(word_id, software)
+        store.was_derived_from(word_id, entity.id)
+        supersede(store, entity.id, node=PREPROCESS_NODE, step=WORD_SUPERSEDED, reason=_WORD_REASON, software=software)
+        word_ids.append(word_id)
+
+    words = [result.word for result in reread]
+    signal = str(consensus.attributes["signal"])
+    written = write_measurement(
+        store,
+        activity,
+        software,
+        name=CONSENSUS_TRANSCRIPT,
+        signal=signal,
+        attributes={
+            **consensus.attributes,
+            "word_ids": word_ids,
+            "text": render_transcript(words, strong=("", "")),
+            "bracket_overrides_n": sum(result.bracket_overrides for result in reread),
+        },
+        derived_from=(consensus.id,),
+        extent=consensus.extent,
+    )
+    supersede(
+        store,
+        consensus.id,
+        node=PREPROCESS_NODE,
+        step=f"{CONSENSUS_TRANSCRIPT}_superseded",
+        reason=_TRANSCRIPT_REASON,
+        software=software,
+    )
+    write_measurement(
+        store,
+        activity,
+        software,
+        name=REBRACKET,
+        signal=signal,
+        attributes={
+            "n_words": len(stored),
+            "n_rebracketed": len(moved),
+            "n_lexical_before": sum(1 for entity in stored if not entity.attributes["bracketed"]),
+            "n_lexical_after": sum(1 for word in words if not word.bracketed),
+            "superseded_consensus_transcript": consensus.id,
+            "asr_proposed_span_ids": [
+                span.id for span in live_entities(store, "span") if span.attributes.get("measure") == ASR_MEASURE
+            ],
+            "asr_proposed_spans_recomputed": False,
+        },
+        derived_from=(written,),
+    )
+    return written
