@@ -379,3 +379,55 @@ marginal, because the point is to catch a hung worker rather than to bound a slo
 
 The failures are recoverable without recomputing anything: the driver skips a recording whose store
 already holds both measurements, so re-running the same manifest touches only the 1,883.
+
+
+## Reading one range back: `plot_range_with_ppg`
+
+The corpus pass writes a posteriorgram per recording and nothing that looks at one. `plot_range_with_ppg`
+in `senselab.audio.tasks.plotting.plotting` is that reader: a start and an end in seconds, drawn as
+waveform, spectrogram and PPG phoneme boundaries on one shared axis.
+
+**The range is a pair of numbers and nothing else.** It comes from a consensus word's extent, a span
+entity, a detector's firing region or a hand-typed pair, and the function cannot tell which, because
+knowing would make it a different function per source. The three sources that already exist would
+have been three signatures, and the fourth — the number someone types while looking at a waveform —
+would have had none.
+
+**It composes `plot_aligned_panels` rather than drawing panels itself.** That function already owns
+the shared axis, the range check, the page-window spectrogram (a ten-second page does not allocate a
+full-recording transform), and the token lane that measures every label against its own bar at draw
+time and shrinks or drops it rather than overprinting. Three additions were needed and were made
+there, not copied:
+
+- `_resolved_time_range(duration, start, end, name=)` — the bound check `plot_aligned_panels` already
+  did inline, lifted so both callers raise the same message. `name` is what the message calls the
+  pair, so each caller's own parameters are named: `time_limits` for one, `(start_s, end_s)` for the
+  other. Reversed, zero-length and out-of-range are one condition, `0 <= start < end <= duration`,
+  and the message carries both received values.
+- `"boundaries": True` on a tokens panel — a vertical rule at every visible token edge. A lane of
+  abutting bars shows its boundaries only where two colours meet, and the staggered rows that keep
+  short labels legible put neighbouring bars at different heights, so the edge that matters is the
+  rule and not the bar.
+- `load_ppg_posteriorgram(path)` in `features_extraction.ppg` — the npz reader that
+  `routing_analysis.features._ppg_segments` had inline. One reader of the sidecar format now, so a
+  change to what `write_ppg_posteriorgram` writes has one place to land.
+
+**A segment straddling the range edge is clipped and kept.** `plot_aligned_panels` already clipped
+token extents to the page; what matters here is that the label survives the clip, because the
+phoneme crossing the boundary is usually the one the range was opened to look at. Dropping it would
+leave a gap at exactly the position under examination.
+
+**An absent posteriorgram is a third panel, not two panels.** The recording with no derivative, the
+sidecar that will not open and the array with no frame all resolve to a text panel reading
+`PPG phonemes: absent — <reason>`, naming the path where there is one. A figure with two panels
+looks like a figure of a recording whose phonemes were not asked for; an empty third lane looks like
+a recording with no phonemes in it. Neither is the claim. This is why an unreadable path is an
+absence rather than a raise: on this corpus the overwhelmingly likely cause is a run that predates
+the block, which is a fact about the recording and not an error by the caller.
+
+**The clock comes from the posteriorgram's own sidecar when there is one.** A tensor handed in
+directly is timed against the `audio` argument, as `extract_ppg_segments` has always done; a sidecar
+is timed against its own `duration_s` and `sampling_rate`, through the same zero-waveform clock
+`_ppg_segments` uses. The two agree for a posteriorgram measured on the recording being drawn, and
+where they would not — a caller drawing a trimmed stream — the sidecar's own clock is the one that
+placed the frames.

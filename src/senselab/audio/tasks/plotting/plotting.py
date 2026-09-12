@@ -3,6 +3,7 @@
 import math
 import os
 import textwrap
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union, cast
 
 # Use non-interactive backend when not in a notebook (e.g., papermill, CI)
@@ -42,6 +43,7 @@ TOKEN_BAR_HEIGHT_FRACTION = 0.7  # the share of its row's pitch a token's bar fi
 REPORT_LANE_GUTTER_MIN_IN = 0.72  # a separate left column for a panel's descriptive lane title
 REPORT_LANE_GUTTER_MAX_IN = 1.45  # long names wrap rather than taking time pixels from the report
 REPORT_COLORBAR_GUTTER_IN = 0.72  # a shared right column for score-raster probability scales
+PPG_LANE_NAME = "PPG phonemes"  # the lane title of the phoneme panel, and of the line stating its absence
 
 
 def _fitted_token_fontsize(
@@ -498,6 +500,27 @@ def _power_to_db(spectrogram: np.ndarray, ref: float = 1.0, amin: float = 1e-10,
     return log_spec
 
 
+def _resolved_time_range(duration: float, start_s: float, end_s: float, *, name: str) -> Tuple[float, float]:
+    """One requested interval of a recording, as floats, or a refusal naming what was asked for.
+
+    Args:
+        duration: The recording's length in seconds.
+        start_s: The requested start, in seconds from the start of the recording.
+        end_s: The requested end, in seconds from the start of the recording.
+        name: What to call the pair in the message, so it names the caller's own parameters.
+
+    Returns:
+        The ``(start, end)`` pair as floats.
+
+    Raises:
+        ValueError: If the pair is reversed, zero-length, or reaches outside the recording.
+    """
+    start, end = float(start_s), float(end_s)
+    if not 0.0 <= start < end <= duration:
+        raise ValueError(f"{name} must satisfy 0 <= start < end <= {duration:g}; received ({start:g}, {end:g})")
+    return start, end
+
+
 def _as_numpy(values: Any) -> np.ndarray:  # noqa: ANN401 — a tensor, a sequence or an array
     """One curve's x or y values as an array, whatever the caller handed in."""
     return values.cpu().numpy() if torch.is_tensor(values) else np.asarray(values)
@@ -943,7 +966,8 @@ def plot_aligned_panels(
       measured at draw time, in points, against the slot its row leaves it — its own bar at one row,
       up to ``R`` times its bar when the row's neighbours leave the space — and one that does not fit
       at ``fontsize`` is shrunk towards ``floor_fontsize`` and dropped if it does not fit there
-      either. The bar is never dropped.
+      either. The bar is never dropped. ``boundaries`` draws a vertical rule across the lane at
+      every visible token edge, so a lane of abutting tokens reads as the boundaries between them.
     - ``{"type": "score_raster", "rows": [str, ...], "windows": [{"start": float,
       "end": float, "scores": {str: float}}], "name": str}`` -- one fixed row per selected
       label, with each native classifier window colored by its score. Missing cells mean the label
@@ -996,12 +1020,7 @@ def plot_aligned_panels(
     if time_limits is None:
         x_limits = (0.0, duration)
     else:
-        start_s, end_s = (float(value) for value in time_limits)
-        if not 0.0 <= start_s < end_s <= duration:
-            raise ValueError(
-                f"time_limits must satisfy 0 <= start < end <= {duration:g}; received ({start_s:g}, {end_s:g})"
-            )
-        x_limits = (start_s, end_s)
+        x_limits = _resolved_time_range(duration, time_limits[0], time_limits[1], name="time_limits")
 
     # Height ratios
     ratio_map = {
@@ -1150,6 +1169,7 @@ def plot_aligned_panels(
                 count = max(len(blocks), 1)
                 cmap = plt.get_cmap("tab20", count)
                 placements: List[_TokenPlacement] = []
+                edges: List[float] = []
                 for token in tokens:
                     block = block_of[str(token.get("row") or "")]
                     start, end = float(token["start"]), float(token["end"])
@@ -1183,6 +1203,10 @@ def plot_aligned_panels(
                         label.set_clip_path(ax.patch)
                         ax.add_artist(label)
                     placements.append(_TokenPlacement(block, bars[0], label, start + width / 2.0, width / 2.0))
+                    edges.extend((start, end))
+                if panel.get("boundaries"):
+                    for edge in sorted(set(edges)):
+                        ax.axvline(edge, color="0.25", linewidth=0.5, alpha=0.8, zorder=3)
                 if placements:
                     ax.add_artist(
                         _StaggeredTokenLane(
@@ -1394,6 +1418,143 @@ def plot_aligned_panels(
             lane_text.set_gid("senselab-lane-title")
         plt.show(block=False)
         return fig
+
+
+def _ppg_absence_panel(reason: str) -> Dict[str, Any]:
+    """The panel a recording with no phoneme posteriorgram gets in place of the token lane.
+
+    Args:
+        reason: What was missing, in the caller's own terms.
+
+    Returns:
+        A ``text`` panel specification stating the absence.
+    """
+    return {"type": "text", "lines": [f"{PPG_LANE_NAME}: absent — {reason}"], "family": "sans-serif", "fontsize": 9}
+
+
+def _ppg_panel(audio: Audio, posteriorgram: "torch.Tensor | Path | str | None") -> Dict[str, Any]:
+    """The phoneme panel for one recording: a labelled token lane, or a stated absence.
+
+    Args:
+        audio: The recording the lane is drawn over, used as the frame clock when the posteriorgram
+            is handed over as a tensor.
+        posteriorgram: A posteriorgram tensor in any of the layouts
+            :func:`~senselab.audio.tasks.features_extraction.ppg.to_frame_major_posteriorgram`
+            accepts, the path of a ``ppg_posteriorgram.npz`` sidecar, or ``None``.
+
+    Returns:
+        A ``tokens`` panel specification carrying one bar per contiguous argmax-phoneme segment, or
+        the ``text`` panel from :func:`_ppg_absence_panel`.
+    """
+    from senselab.audio.tasks.features_extraction.ppg import (
+        extract_ppg_segments,
+        load_ppg_posteriorgram,
+        to_frame_major_posteriorgram,
+    )
+
+    if posteriorgram is None:
+        return _ppg_absence_panel("no posteriorgram was given for this recording")
+    if isinstance(posteriorgram, (str, Path)):
+        try:
+            frame_major, duration_s, sampling_rate = load_ppg_posteriorgram(posteriorgram)
+        except (OSError, KeyError, ValueError) as error:
+            return _ppg_absence_panel(f"{posteriorgram} could not be read ({error})")
+        clock = Audio(waveform=torch.zeros(1, round(duration_s * sampling_rate)), sampling_rate=sampling_rate)
+    else:
+        if posteriorgram.numel() == 0 or bool(torch.isnan(posteriorgram).any()):
+            return _ppg_absence_panel("the posteriorgram given is empty or holds NaN")
+        frame_major = to_frame_major_posteriorgram(posteriorgram)
+        clock = audio
+    segments = extract_ppg_segments(clock, frame_major)
+    if not segments:
+        return _ppg_absence_panel("the posteriorgram holds no frame")
+    cmap = plt.get_cmap("tab20")
+    return {
+        "type": "tokens",
+        "name": PPG_LANE_NAME,
+        "tokens": [
+            {
+                "text": str(segment["phoneme"]),
+                "start": float(segment["start_seconds"]),
+                "end": float(segment["end_seconds"]),
+                "color": cmap(int(segment["phoneme_index"]) % 20),
+            }
+            for segment in segments
+        ],
+        "boundaries": True,
+        "expand_label_slots": True,
+        "show_row_labels": False,
+    }
+
+
+def plot_range_with_ppg(
+    audio: Audio,
+    start_s: float,
+    end_s: float,
+    *,
+    posteriorgram: "torch.Tensor | Path | str | None" = None,
+    title: str = "",
+    mel: bool = False,
+    context: _Context = "auto",
+    figsize: Tuple[float, float] | None = None,
+    spectrogram_params: Dict[str, Any] | None = None,
+) -> Figure:
+    """Draw one time range of a recording as waveform, spectrogram and PPG phoneme boundaries.
+
+    The three panels share one time axis, and that axis is the requested range; its ticks stay in
+    absolute recording time. Phoneme segments are the contiguous argmax runs
+    :func:`~senselab.audio.tasks.features_extraction.ppg.extract_ppg_segments` finds, each drawn as
+    a labelled bar with a rule at its edges; one straddling the range edge is clipped to the range
+    and still labelled. A recording with no posteriorgram gets a third panel stating that absence.
+
+    Args:
+        audio: The mono recording the range is taken from.
+        start_s: The range's start, in seconds from the start of the recording.
+        end_s: The range's end, in seconds from the start of the recording.
+        posteriorgram: A posteriorgram tensor, the path of the recording's
+            ``run/derivatives/ppg_posteriorgram.npz`` sidecar, or ``None`` for a recording that has
+            none. A path that cannot be read is an absence, not a failure.
+        title: The figure's title.
+        mel: Whether the spectrogram panel is on the mel scale rather than linear frequency.
+        context: Size preset or numeric scale, as :func:`plot_aligned_panels` takes it.
+        figsize: Base ``(width, height)`` in inches **before** context scaling.
+        spectrogram_params: Parameters forwarded to the torchaudio spectrogram transform.
+
+    Returns:
+        matplotlib.figure.Figure: The created figure (also displayed).
+
+    Raises:
+        ValueError: If ``audio`` is not mono, or if the range is reversed, zero-length, or reaches
+            outside the recording. The message names the offending values.
+
+    Example:
+        >>> from pathlib import Path
+        >>> from senselab.audio.data_structures import Audio
+        >>> recording = Audio(filepath=Path("run/streams/enhanced.flac").resolve())
+        >>> figure = plot_range_with_ppg(
+        ...     recording,
+        ...     3.10,
+        ...     3.85,
+        ...     posteriorgram=Path("run/derivatives/ppg_posteriorgram.npz"),
+        ...     title="consensus word 'grandfather'",
+        ... )
+    """
+    duration = audio.waveform.shape[-1] / audio.sampling_rate
+    time_limits = _resolved_time_range(duration, start_s, end_s, name="(start_s, end_s)")
+    panels: List[Dict[str, Any]] = [
+        {"type": "waveform"},
+        {"type": "spectrogram", "mel": mel},
+        _ppg_panel(audio, posteriorgram),
+    ]
+    return plot_aligned_panels(
+        audio,
+        panels,
+        title=title,
+        figsize=figsize,
+        spectrogram_params=spectrogram_params,
+        context=context,
+        time_limits=time_limits,
+    )
 
 
 def play_audio(audio: Audio) -> None:
