@@ -203,6 +203,11 @@ taxonomy:
       SPEECH: lexical_speech
       VOICE: voice
       DDK: syllable_repetition
+    excluded_by_construction:           # branch -> families HELD OUT of its scoring; not negatives, not positives
+      AIRWAY: null
+      SPEECH: syllable_repetition       # DDK is speech, and sits outside lexical_speech only by construction
+      VOICE: null
+      DDK: null
     branch_gates:                       # branch -> gates, any one of which routes it, on any recording
       AIRWAY: [airway.breath, airway.cough, airway.bracketed_event]
       SPEECH: [speech.lexical]
