@@ -476,10 +476,12 @@ def _absorb_measurement(
         return
     if name == "consensus_taxonomy":
         for row in attributes.get("labels") or []:
-            label = str(row.get("label"))
+            spellings = row.get("labels_by_classifier") or {}
             for classifier, peak in (row.get("peak_by_classifier") or {}).items():
-                if label in TRACKED_LABELS.get(str(classifier), frozenset()):
-                    features.peaks[peak_key("consensus", str(classifier), label)] = float(peak)
+                tracked = TRACKED_LABELS.get(str(classifier), frozenset())
+                own = [str(name) for name in spellings.get(str(classifier), ()) if str(name) in tracked]
+                for spelling in own or ([str(row.get("label"))] if str(row.get("label")) in tracked else []):
+                    features.peaks[peak_key("consensus", str(classifier), spelling)] = float(peak)
         return
     pair = _summary_stream_classifier(name)
     if pair is None:
