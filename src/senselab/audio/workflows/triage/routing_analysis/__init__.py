@@ -10,6 +10,7 @@ The reference standards, their weakness and the measurements taken with this mod
 
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
     DETECTORS,
+    UNPROFILED_DETECTORS,
     Detector,
     detector_value,
     sweep_points,
@@ -19,6 +20,7 @@ from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     bracket_type,
     extract_features,
+    onomatopoeic_vocabulary,
     read_store,
     span_label_memberships,
 )
@@ -66,6 +68,7 @@ __all__ = [
     "FAMILY_SETS",
     "REFERENCE_STANDARDS",
     "ROUTE_STATES",
+    "UNPROFILED_DETECTORS",
     "Confusion",
     "Detector",
     "Emptiness",
@@ -94,6 +97,7 @@ __all__ = [
     "load_features",
     "load_ruleset",
     "max_token_repeat",
+    "onomatopoeic_vocabulary",
     "prevalence",
     "read_store",
     "score_branches",

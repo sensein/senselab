@@ -13,6 +13,7 @@ import pytest
 
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
     CONSENSUS_CLASSIFIERS,
@@ -26,7 +27,9 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     PROFILE_NAME_COLUMN,
     PROFILE_SUFFIX,
     QUANTILE_LADDER,
+    UNPROFILED_DETECTORS,
     Detector,
+    _check_unprofiled,
     build_catalogue,
     detector_value,
     load_detector_profile,
@@ -43,6 +46,7 @@ from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     bracket_type,
     extract_features,
+    onomatopoeic_vocabulary,
     span_label_memberships,
 )
 from senselab.audio.workflows.triage.routing_analysis.labels import LABEL_SETS
@@ -233,6 +237,9 @@ def _silent_store(path: Path) -> Path:
 PACKAGED_MEMBERSHIPS = span_label_memberships(load_triage_config())
 """The shipped top-4 / 0.2 rule, so the tests read what the corpus extraction will."""
 
+PACKAGED_ONOMATOPOEIA = onomatopoeic_vocabulary(load_triage_config())
+"""The shipped ``words.onomatopoeic_tokens`` vocabulary, for the same reason."""
+
 
 def _features(tmp_path: Path) -> tuple[RecordingFeatures, RecordingFeatures]:
     """One spoken and one silent synthetic recording, extracted.
@@ -250,6 +257,7 @@ def _features(tmp_path: Path) -> tuple[RecordingFeatures, RecordingFeatures]:
         "rainbow-passage",
         "rainbow-passage",
         PACKAGED_MEMBERSHIPS,
+        onomatopoeic=PACKAGED_ONOMATOPOEIA,
     )
     silent = extract_features(
         _silent_store(tmp_path / "b" / "run" / "store.jsonl"),
@@ -258,6 +266,7 @@ def _features(tmp_path: Path) -> tuple[RecordingFeatures, RecordingFeatures]:
         "voluntary-cough",
         "voluntary-cough",
         PACKAGED_MEMBERSHIPS,
+        onomatopoeic=PACKAGED_ONOMATOPOEIA,
     )
     return spoken, silent
 
@@ -321,6 +330,109 @@ def test_extract_types_the_bracketed_tokens_off_the_word_entities(tmp_path: Path
 def test_bracket_type_normalises_one_token(text: str, expected: str | None) -> None:
     """Casing, spacing and inner punctuation do not split one bracket type into several."""
     assert bracket_type(text) == expected
+
+
+def _consensus_store(path: Path, texts: Sequence[str], *, consensus: bool = True) -> Path:
+    """A store whose consensus stream is exactly the given words, in order.
+
+    Args:
+        path: Where to write it.
+        texts: Each consensus word's ``text``. One wrapped in brackets is written bracketed.
+        consensus: Whether the consensus step ran at all. False writes neither the transcript
+            measurement nor a word, which is the store PREPROCESS leaves when no recognizer ran.
+
+    Returns:
+        The path.
+    """
+    lines = [_entity("stream", "stream-1", {"name": "recording"}, [0.0, 4.0])]
+    if not consensus:
+        return _write_store(path, lines)
+    lines.append(
+        _entity(
+            "measurement", "measurement-1", {"name": "consensus_transcript", "signal": "plain", "text": " ".join(texts)}
+        )
+    )
+    for index, text in enumerate(texts):
+        lines.append(
+            _entity(
+                "word",
+                f"word-{index}",
+                {"text": text, "outcome": "agreement", "bracketed": text.startswith("["), "index": index},
+                [float(index), float(index) + 0.5],
+            )
+        )
+    return _write_store(path, lines)
+
+
+def _spoken(tmp_path: Path, texts: Sequence[str], *, name: str = "w", consensus: bool = True) -> RecordingFeatures:
+    """One record extracted from a store carrying exactly those consensus words.
+
+    Args:
+        tmp_path: The test's temporary directory.
+        texts: Each consensus word's ``text``.
+        name: The subdirectory, so one test can build several.
+        consensus: Whether the consensus step ran at all.
+
+    Returns:
+        The record.
+    """
+    return extract_features(
+        _consensus_store(tmp_path / name / "run" / "store.jsonl", texts, consensus=consensus),
+        "sub-9_ses-1_task-voluntary-cough",
+        str(tmp_path / name),
+        "voluntary-cough",
+        "voluntary-cough",
+        PACKAGED_MEMBERSHIPS,
+        onomatopoeic=PACKAGED_ONOMATOPOEIA,
+    )
+
+
+class TestOnomatopoeicRenderings:
+    """A cough the recognizer spelled as a word is counted where it was spelled, and only once."""
+
+    DETECTOR = next(candidate for candidate in UNPROFILED_DETECTORS if candidate.name == "cough.words_onomatopoeic")
+    FIRES_AT = 2
+    """The two-token point the lexicon was measured at; see the spec section named in the module."""
+
+    def test_the_shipped_vocabulary_is_populated_and_already_normalised(self) -> None:
+        """A token that is not its own vocabulary key could never match a word."""
+        vocabulary = onomatopoeic_vocabulary(load_triage_config())
+        assert {"cough", "coughs", "coughing", "咳", "呵"} <= vocabulary
+        assert all(token == vocabulary_key(token) for token in vocabulary)
+
+    def test_a_repeated_cough_counts_every_instance(self, tmp_path: Path) -> None:
+        """`cough cough cough` is three renderings of one event each, not one repeated token."""
+        record = _spoken(tmp_path, ["cough", "cough", "cough"], name="repeat")
+        assert record.onomatopoeic_types == {"cough": 3}
+        assert detector_value(record, self.DETECTOR) == 3.0
+
+    def test_one_cough_inside_ordinary_speech_stays_under_the_firing_point(self, tmp_path: Path) -> None:
+        """The lexicon is strict, so a spoken mention is counted and does not reach two."""
+        record = _spoken(tmp_path, ["i", "have", "a", "cough"], name="mention")
+        assert record.onomatopoeic_types == {"cough": 1}
+        counted = detector_value(record, self.DETECTOR)
+        assert counted == 1.0
+        assert counted is not None and counted < self.FIRES_AT
+
+    def test_the_chinese_renderings_count(self, tmp_path: Path) -> None:
+        """Two recognizers rendering one cough differently is the case agreement cannot see."""
+        record = _spoken(tmp_path, ["咳", "咳", "呵"], name="han")
+        assert record.onomatopoeic_types == {"呵": 1, "咳": 2}
+        assert detector_value(record, self.DETECTOR) == 3.0
+
+    def test_a_bracketed_cough_belongs_to_the_bracket_field_alone(self, tmp_path: Path) -> None:
+        """Two fields counting one event would inflate both; the rendering decides which counts."""
+        record = _spoken(tmp_path, ["[cough]", "cough"], name="both")
+        assert record.bracketed_types == {"cough": 1}
+        assert record.onomatopoeic_types == {"cough": 1}
+        assert detector_value(record, self.DETECTOR) == 1.0
+
+    def test_a_store_that_never_ran_consensus_reads_none(self, tmp_path: Path) -> None:
+        """An unwritten measurement is not a measurement of nothing."""
+        record = _spoken(tmp_path, [], name="silent", consensus=False)
+        assert record.consensus_present is False
+        assert record.onomatopoeic_types == {}
+        assert detector_value(record, self.DETECTOR) is None
 
 
 def test_extract_reads_spans_streams_and_kinds(tmp_path: Path) -> None:
@@ -569,6 +681,7 @@ def _labelled(tmp_path: Path, top_k: int = 4, floor: float = 0.2) -> RecordingFe
         "voluntary-cough",
         "voluntary-cough",
         {"yamnet": rule, "hear": rule},
+        onomatopoeic=PACKAGED_ONOMATOPOEIA,
     )
 
 
@@ -684,6 +797,7 @@ def _multi_label(tmp_path: Path) -> RecordingFeatures:
         "voluntary-cough",
         "voluntary-cough",
         PACKAGED_MEMBERSHIPS,
+        onomatopoeic=PACKAGED_ONOMATOPOEIA,
     )
 
 
@@ -866,6 +980,7 @@ def _derivatives(tmp_path: Path, indices: Sequence[int], name: str = "e", *, sid
         "diadochokinesis-pa",
         "diadochokinesis-pa",
         PACKAGED_MEMBERSHIPS,
+        onomatopoeic=PACKAGED_ONOMATOPOEIA,
     )
 
 
@@ -1338,6 +1453,29 @@ class TestDerivedGrids:
         unprofiled = Detector("speech.invented", "speech", ("words", "invented"), "words", ())
         with pytest.raises(ValueError, match="absent from the detector profile"):
             build_catalogue([unprofiled])
+
+    def test_a_staged_detector_is_declared_without_a_grid_and_stays_out_of_the_catalogue(self) -> None:
+        """No profile has measured it, so it has no grid and is scored at no threshold."""
+        assert UNPROFILED_DETECTORS
+        catalogue = {detector.name for detector in DETECTORS}
+        for detector in UNPROFILED_DETECTORS:
+            assert detector.name not in catalogue
+            assert detector.thresholds == ()
+            with pytest.raises(ValueError, match="absent from the detector profile"):
+                build_catalogue([detector])
+
+    def test_a_staged_detector_the_profile_now_covers_raises(self) -> None:
+        """A profiled candidate has a derivable grid; leaving it staged would leave it unscored."""
+        profiled = next(iter(load_detector_profile()["detectors"]))
+        staged = Detector(profiled, "speech", ("onomatopoeic",), "tokens", ())
+        with pytest.raises(ValueError, match="are in the detector profile"):
+            _check_unprofiled([staged], [])
+
+    def test_a_staged_detector_may_not_repeat_a_catalogue_name(self) -> None:
+        """One id, one grid: a name in both places would be scored twice and differently."""
+        staged = Detector(DETECTORS[0].name, "speech", ("onomatopoeic",), "tokens", ())
+        with pytest.raises(ValueError, match="already in the catalogue"):
+            _check_unprofiled([staged], DETECTORS)
 
     def test_a_constant_detector_raises_at_construction(self) -> None:
         """The consensus AST peaks were constant at zero; nothing may read one and score it."""

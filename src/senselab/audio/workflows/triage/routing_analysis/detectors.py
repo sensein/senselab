@@ -8,6 +8,8 @@ preferred here: every one in a detector's grid is scored, and
 No grid is written down. Each is derived at catalogue construction from the detector's own
 distribution over the corpus, read from the dated profile under ``data/detector_profile/``. A
 detector the profile does not cover, or covers as a constant, raises rather than taking a default.
+A candidate declared ahead of the sweep that would profile it is staged in
+:data:`UNPROFILED_DETECTORS`, outside the catalogue, and carries no grid at all.
 
 ``specs/20260912-detector-grids/design.md`` says which quantiles, why the extremes are in, how a
 count and a gate are handled, and which cut points are pinned regardless of the corpus.
@@ -408,6 +410,30 @@ def _check_pins(candidates: Iterable[Detector]) -> None:
         raise ValueError(f"PINNED_THRESHOLDS names detectors the catalogue does not declare: {unpinnable}")
 
 
+def _check_unprofiled(candidates: Iterable[Detector], catalogue: Iterable[Detector], path: str | None = None) -> None:
+    """Refuse a staged candidate that repeats a catalogue name, or that the profile now covers.
+
+    Args:
+        candidates: The candidates staged for the next sweep, declared without a profile entry.
+        catalogue: Every candidate the catalogue builds a grid for.
+        path: Profile path, or ``None`` for the bundled one.
+
+    Raises:
+        ValueError: If a staged name is already in the catalogue, or if the newest profile carries
+            it — a profiled detector has a derivable grid and belongs in the catalogue.
+    """
+    staged = {candidate.name for candidate in candidates}
+    repeated = sorted(staged & {candidate.name for candidate in catalogue})
+    if repeated:
+        raise ValueError(f"staged detectors are already in the catalogue: {repeated}")
+    profiled = sorted(name for name in staged if name in load_detector_profile(path)["detectors"])
+    if profiled:
+        raise ValueError(
+            f"staged detectors are in the detector profile: {profiled}; move them into the catalogue, "
+            "where their grids are derived, rather than leaving them unscored"
+        )
+
+
 def sweep_points(detector: Detector) -> tuple[float, ...]:
     """The thresholds a detector is scored at.
 
@@ -441,6 +467,10 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         if not features.consensus_present:
             return None
         return float(sum(features.bracketed_types.get(str(name), 0) for name in arguments))
+    if source == "onomatopoeic":
+        if not features.consensus_present:
+            return None
+        return float(sum(features.onomatopoeic_types.values()))
     if source == "stream_peak_max":
         stream, classifier = arguments
         if f"{stream}|{classifier}" not in features.classifier_streams:
@@ -1395,3 +1425,13 @@ _check_pins(_CANDIDATES)
 
 DETECTORS: tuple[Detector, ...] = build_catalogue(_CANDIDATES)
 """Every candidate detector, scored at every threshold of its corpus-derived grid."""
+
+UNPROFILED_DETECTORS: tuple[Detector, ...] = (
+    _candidate("cough.words_onomatopoeic", "cough", ("onomatopoeic",), "tokens"),
+)
+"""Candidates whose feature no shipped profile has measured. Each carries an empty ``thresholds``
+and is absent from :data:`DETECTORS`; :func:`detector_value` reads one like any other, which is what
+a corpus sweep needs to profile it. Once a profile carries one, :func:`_check_unprofiled` raises
+until it is moved into the catalogue."""
+
+_check_unprofiled(UNPROFILED_DETECTORS, _CANDIDATES)

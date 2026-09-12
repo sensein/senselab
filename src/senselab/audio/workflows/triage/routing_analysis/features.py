@@ -27,6 +27,7 @@ from typing import Any, Iterator, Mapping, Sequence
 import numpy as np
 
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.label_membership import LabelMembership, optional_label_membership
 from senselab.audio.workflows.triage.routing_analysis.labels import (
     CLASSIFIERS,
@@ -105,6 +106,9 @@ TRANSCRIPT_CAP = 300
 
 _BRACKET_TYPE_DROP = re.compile(r"[^a-z0-9]+")
 
+ONOMATOPOEIC_TOKENS_KEY = "words.onomatopoeic_tokens"
+"""The configuration key listing the renderings a recognizer emits as ordinary words."""
+
 
 def bracket_type(text: str) -> str | None:
     """The type a bracketed consensus token names, normalised.
@@ -139,6 +143,11 @@ class RecordingFeatures:
         bracketed_types: How many live consensus words carry each :func:`bracket_type`, taken off
             the word entities rather than off the capped transcript. Only types the recording
             carries are keyed.
+        onomatopoeic_types: How many live consensus words are an unbracketed rendering of each
+            vocabulary key in ``words.onomatopoeic_tokens``, taken off the word entities. A
+            bracketed word contributes to ``bracketed_types`` and never here. Only keys the
+            recording carries appear, so the mapping is empty on a recording carrying none and on
+            a recording extracted against an empty vocabulary.
         consensus_present: Whether a ``consensus_transcript`` measurement was written at all.
         transcript: The consensus transcript's first :data:`TRANSCRIPT_CAP` characters.
         residual: The ``residual`` measurement's scalar attributes, or empty when it is absent.
@@ -184,6 +193,7 @@ class RecordingFeatures:
     duration_s: float | None = None
     words: dict[str, int] = field(default_factory=dict)
     bracketed_types: dict[str, int] = field(default_factory=dict)
+    onomatopoeic_types: dict[str, int] = field(default_factory=dict)
     consensus_present: bool = False
     transcript: str = ""
     residual: dict[str, float] = field(default_factory=dict)
@@ -731,6 +741,20 @@ def span_label_memberships(config: TriageConfig) -> dict[str, LabelMembership]:
     return memberships
 
 
+def onomatopoeic_vocabulary(config: TriageConfig) -> frozenset[str]:
+    """The onomatopoeic token vocabulary, normalised to the keys a consensus word is matched on.
+
+    Args:
+        config: The resolved triage configuration.
+
+    Returns:
+        Each entry of ``words.onomatopoeic_tokens`` as a
+        :func:`~senselab.audio.workflows.triage.consensus.vocabulary_key`, or an empty set while
+        the key is null.
+    """
+    return frozenset(vocabulary_key(str(token)) for token in (config.get(ONOMATOPOEIC_TOKENS_KEY) or []))
+
+
 def extract_features(
     store_path: Path,
     stem: str,
@@ -738,6 +762,8 @@ def extract_features(
     task_id: str,
     family: str,
     memberships: Mapping[str, LabelMembership],
+    *,
+    onomatopoeic: frozenset[str],
 ) -> RecordingFeatures:
     """Stream one store and reduce it to the routing evidence.
 
@@ -753,6 +779,9 @@ def extract_features(
         family: The task family.
         memberships: Which labels a span carries, per classifier, from
             :func:`span_label_memberships`.
+        onomatopoeic: The vocabulary an unbracketed consensus word is counted against, from
+            :func:`onomatopoeic_vocabulary`. It is the reader's own vocabulary, not the one the run
+            being read was produced under.
 
     Returns:
         The record.
@@ -821,12 +850,18 @@ def extract_features(
     )
     features.words = counts
     typed: Counter[str] = Counter()
+    rendered: Counter[str] = Counter()
     for word in live_words:
         if word.get("bracketed"):
             named = bracket_type(str(word.get("text") or ""))
             if named is not None:
                 typed[named] += 1
+            continue
+        key = vocabulary_key(str(word.get("text") or ""))
+        if key and key in onomatopoeic:
+            rendered[key] += 1
     features.bracketed_types = dict(sorted(typed.items()))
+    features.onomatopoeic_types = dict(sorted(rendered.items()))
 
     live_spans = [span for span in spans if span["id"] not in invalidated]
     for measure in SPAN_MEASURES:

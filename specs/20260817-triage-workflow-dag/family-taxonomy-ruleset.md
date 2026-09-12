@@ -726,3 +726,154 @@ does not have raises rather than reading an empty union.
 
 A store that never ran consensus reads `UNAVAILABLE` on this gate rather than zero, matching the
 rule everywhere else: an unwritten measurement is not a measurement of nothing.
+
+## Onomatopoeic renderings are the same events, spelled as words
+
+`[cough]` is a bracket the previous section can count. `Cough` is the same event, in the same
+recording, spelled by the recognizer as an ordinary word — and `words.lexical` counts it as speech.
+The corpus carries **1,176** instances of `cough` as a lexical token, plus the Chinese renderings
+`咳` and `呵`.
+
+`words.onomatopoeic_tokens` has existed for exactly this since the v2 configuration was drawn, and
+was `null` in every shipped release. It is populated now.
+
+### What the null key was costing
+
+**545** `respiration-and-cough-*` recordings carry `words.lexical >= 4`. **523** of those also trip
+the `ddk.lexical_repetition` gate, because `cough cough cough cough` is four repeats of one token —
+which is what that gate counts, and it is counting a cough. Those recordings route to AIRWAY,
+SPEECH **and** DDK. AIRWAY is right; the other two are handed a subject they cannot assess, which is
+the failure mode "Four branches, because diadochokinesis was in none of three" describes for DDK
+firing the speech detectors, arriving here from the opposite direction.
+
+Three from the corpus:
+
+```
+lex=  6 agr=  1  '[cough] Cough Cough Cough Cough Cough Cough'
+lex=  5 agr=  0  '[cough] 咳 咳 咳 咳 咳'
+lex=  4 agr=  0  '[throatclearing] cough cough cough cough'
+```
+
+**Agreement does not catch it, and cannot.** Mean `words.agreement` over those 545 is **0.39**, and
+only **20 of 545** reach 2. The two recognizers pick *different* onomatopoeia — English `cough`
+against Chinese `咳` — so they never agree on the token even though both heard the same event.
+This is the case the agreement flag was separated from the speech gate for (see "Agreement is a
+SPEECH-branch flag"): concordance is a statement about what was said, and here both readings are
+right about the event and disagree about its spelling.
+
+Note also the first and third rows: a bracketed `[cough]` and a lexical `Cough` in the *same*
+recording. One recognizer's bracket does not suppress the other's word, so the bracket gate already
+fires on some of these and the lexical count still routes them to SPEECH.
+
+### The lexicon, measured
+
+A strict lexicon — `{cough, coughs, coughing, 咳, 呵, ahem, hack, khh, kof, cof}` — firing at
+**at least 2 tokens**, over all 62,547 recordings:
+
+| population | fires |
+| --- | --- |
+| cough families | **0.361** (1,015 of 2,813) |
+| breath families | 0.001 |
+| DDK families | 0.005 |
+| lexical speech | 0.001 |
+
+As a COUGH gate: **sens 0.361, spec 0.999**, tp 1,015, fp 81 of 59,734.
+
+Low recall, near-perfect precision. Under this document's router framing — over-routing costs a
+branch some discarded work, under-routing loses the recording entirely — that is nearly free recall,
+and it is recall on a population the acoustic cough gate reaches by a different route.
+
+**Two tokens, not one, and the reason is `hack` and `cough`.** Both are ordinary English words. One
+of either inside read speech is a mention, not a manoeuvre; two of them in one recording is not how
+anyone discusses a cough. The 0.001 lexical-speech rate above is what that cut buys.
+
+### One flat list, and no invented breath set
+
+The key's comment says "cough/breath-like". Only the cough set has been measured, so only the cough
+set is shipped. There is no `breath:` group holding an empty list waiting for someone to fill it
+from intuition.
+
+It is **one flat list rather than a mapping of event to tokens**, for a mechanical reason:
+`nodes/preprocess.py` already reads this key as a token sequence, one `vocabulary_key` per entry. A
+mapping would make that reader take the group names as the vocabulary and bracket the literal word
+`cough` while ignoring every token under it — a silent, total inversion of what the key means. When
+a breath set is measured, the shape to reach for is a second key beside this one, not a grouping
+inside it.
+
+### Populating the key changes PREPROCESS, at one token rather than two
+
+This is the same key `consensus.bracketed_form` reads, and that reader has **no threshold**: from
+now on, one `cough` in a recording is rendered `[COUGH]`, leaves `words.lexical`, and lands in
+`bracketed_types["cough"]`, where `airway.bracketed_event` reads it at `>= 1`. That fixes the 545 at
+their source and is why the key exists.
+
+It is not the operating point measured above. **The firing rate of this lexicon at `>= 1` token was
+not measured**, so the cost of the difference — a genuine spoken mention of a cough or a hack, now
+rendered non-lexical — is stated here rather than quantified. The 81 lexical-speech false positives
+at `>= 2` are a *lower* bound on it and nothing more: every recording that fires at two tokens fires
+at one, and an unknown number more join them. Measuring the `>= 1` rate is the next thing to do with
+this key, and it is a question about PREPROCESS's reader, not about the detector below.
+
+### The feature counts word entities, and the detector is staged, not gating
+
+`RecordingFeatures.onomatopoeic_types` is `dict[str, int]`, keyed by vocabulary key, counting
+**live, unbracketed consensus word entities** whose key is in the vocabulary. It is exactly the
+construction `bracketed_types` uses in the previous section, and for the same reason: the transcript
+is capped at `TRANSCRIPT_CAP = 300` characters, so a count taken from it is a **floor** — every
+number in the bracket-type table above is one — while a count taken off the entities is **exact**.
+On these particular recordings the cap would cost little, since fifty `cough`s fit inside 300
+characters; but "costs little on this corpus" is a property of the corpus, and the entity count is
+exact on every corpus. It also survives whatever the transcript renderer did to the tokens.
+
+The two fields never count the same word. A bracketed token goes to `bracketed_types` and stops
+there; an unbracketed one goes to `onomatopoeic_types`. Counting `[cough]` in both would inflate
+both, and the pair would no longer add up to the recording's word stream.
+
+**The vocabulary the extractor reads is the reader's own, not the run's.** A store produced while
+the key was null carries `cough` as a lexical word; extracting it under the populated vocabulary is
+what makes the 62,547-recording sweep readable at all. `extract_features` therefore takes the
+vocabulary as an argument — from `onomatopoeic_vocabulary(config)`, beside `span_label_memberships`
+— rather than reaching for a packaged default.
+
+`cough.words_onomatopoeic` reads `("onomatopoeic",)`, the sum over every key, and returns `None`
+where no consensus measurement was written — an unwritten measurement is not a measurement of
+nothing, as everywhere else. It is **not in `branch_gates`** and **not in `DETECTORS`**. The threshold above is a
+hand-measurement, not a recall-first operating point chosen over a swept grid, and this document's
+rule is that a gate's cut comes off a sweep.
+
+### A detector the profile has never seen
+
+Since `specs/20260912-detector-grids/design.md`, a detector's grid is derived from that detector's
+own distribution in `data/detector_profile/`, and a detector the profile does not carry raises at
+`build_catalogue`. That is the intended way to learn the corpus needs re-sweeping — and it is a
+deadlock for a detector that has never been swept, because the sweep that would profile it cannot
+run until it is declared, and declaring it in the catalogue breaks the import.
+
+It is resolved by declaring it **outside** the catalogue. `UNPROFILED_DETECTORS` holds candidates
+with no grid at all: `detector_value` reads one exactly like a catalogue detector, which is all a
+profiling sweep needs, and `sweep_points` returns nothing, so no threshold is ever scored. Nothing
+is defaulted, interpolated or borrowed from a sibling.
+
+Two checks keep the staging area from becoming a place things are forgotten, both at import, both
+modelled on `_check_pins`:
+
+| check | raises when |
+| --- | --- |
+| name collision | a staged id is already in the catalogue — one id, one grid |
+| now profiled | the newest profile carries a staged id, so its grid is derivable and it belongs in the catalogue |
+
+The second is the one that matters. The next corpus sweep profiles `cough.words_onomatopoeic`, the
+new profile ships, and the import raises until the candidate is moved into `_CANDIDATES` — where it
+gets its integer grid and is scored at every count from 0 upward, including the 2 measured here.
+A staged detector that quietly stayed staged after its profile arrived would be a detector reported
+as unmeasured while its measurement sat in the file, which is the same failure as a silent grid
+fallback.
+
+Rejected, and why:
+
+| candidate | why not |
+| --- | --- |
+| declare it in `_CANDIDATES` and ship a hand-written grid | the grid constants were removed for cause; a hand grid is exactly what `specs/20260912-detector-grids/design.md` deleted |
+| let `build_catalogue` skip a detector the profile lacks | a silent skip is how three detectors scored 0.000 everywhere for three sweeps |
+| derive the grid from a sibling reading `words.lexical` | the siblings rule is for a *gated* detector reading the same primary feature; a different feature's distribution is not this one's |
+| a second onomatopoeia key, so `words.onomatopoeic_tokens` could stay null | pre-alpha: one lexicon, not two that drift |

@@ -1306,12 +1306,14 @@ class TestWordsAreBracketAware:
     def test_a_null_vocabulary_leaves_an_onomatopoeic_token_a_word(
         self,
         store: ProvStore,
-        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The honest unfitted state: nobody drew the vocabulary, so nothing is normalised."""
+        """With the vocabulary emptied, `khh` stays the word the recognizer produced."""
+        override = tmp_path / "no-tokens.yaml"
+        override.write_text("words:\n  onomatopoeic_tokens: null\nresidual:\n  enabled: false\n")
+        config = load_triage_config(override)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello khh world"), qwen=_line("hello khh world"))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)

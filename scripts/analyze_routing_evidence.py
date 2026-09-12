@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.routing_analysis.families import task_famil
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     extract_features,
+    onomatopoeic_vocabulary,
     span_label_memberships,
 )
 from senselab.audio.workflows.triage.routing_analysis.report import (
@@ -102,12 +103,17 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
     return manifest
 
 
-def _extract_one(row: dict[str, str], memberships: Mapping[str, LabelMembership]) -> RecordingFeatures | str | None:
+def _extract_one(
+    row: dict[str, str],
+    memberships: Mapping[str, LabelMembership],
+    onomatopoeic: frozenset[str],
+) -> RecordingFeatures | str | None:
     """Extract one recording's features, or say why it could not be read.
 
     Args:
         row: One manifest row.
         memberships: Which labels a span carries, per classifier.
+        onomatopoeic: The vocabulary an unbracketed consensus word is counted against.
 
     Returns:
         The features, the reason the store could not be read, or None when it is missing.
@@ -116,7 +122,15 @@ def _extract_one(row: dict[str, str], memberships: Mapping[str, LabelMembership]
     if not store.is_file():
         return None
     try:
-        return extract_features(store, row["stem"], row["run_root"], row["task_id"], row["family"], memberships)
+        return extract_features(
+            store,
+            row["stem"],
+            row["run_root"],
+            row["task_id"],
+            row["family"],
+            memberships,
+            onomatopoeic=onomatopoeic,
+        )
     except (OSError, ValueError) as error:
         return f"{type(error).__name__}: {error}"
 
@@ -133,7 +147,13 @@ def _extracted_stems(shard_dir: Path) -> set[str]:
     return {str(stem) for shard in shard_files(shard_dir) for stem in load_feature_column(shard, "stem")}
 
 
-def extract_all(manifest: Path, out_dir: Path, workers: int, memberships: Mapping[str, LabelMembership]) -> Path:
+def extract_all(
+    manifest: Path,
+    out_dir: Path,
+    workers: int,
+    memberships: Mapping[str, LabelMembership],
+    onomatopoeic: frozenset[str],
+) -> Path:
     """Extract features for every manifest row, resuming from what is already on disk.
 
     Each completed part is a shard file of its own, so a killed run loses at most the part it was
@@ -144,6 +164,7 @@ def extract_all(manifest: Path, out_dir: Path, workers: int, memberships: Mappin
         out_dir: Where the shard directory lives.
         workers: How many processes read stores in parallel.
         memberships: Which labels a span carries, per classifier.
+        onomatopoeic: The vocabulary an unbracketed consensus word is counted against.
 
     Returns:
         The shard directory.
@@ -167,7 +188,7 @@ def extract_all(manifest: Path, out_dir: Path, workers: int, memberships: Mappin
         missing_path.open("a", encoding="utf-8") as misses,
         ProcessPoolExecutor(max_workers=workers) as pool,
     ):
-        extract = partial(_extract_one, memberships=memberships)
+        extract = partial(_extract_one, memberships=memberships, onomatopoeic=onomatopoeic)
         for index, (row, result) in enumerate(zip(pending, pool.map(extract, pending, chunksize=8)), start=1):
             if isinstance(result, RecordingFeatures):
                 buffered.append(result)
@@ -214,12 +235,14 @@ def main(argv: list[str] | None = None) -> int:
     arguments.out_dir.mkdir(parents=True, exist_ok=True)
     config = load_triage_config(arguments.config)
     memberships = span_label_memberships(config)
+    onomatopoeic = onomatopoeic_vocabulary(config)
     print(f"[extract] span labels: config hash {config.config_hash}, {memberships}", flush=True)
+    print(f"[extract] onomatopoeic vocabulary: {sorted(onomatopoeic)}", flush=True)
     manifest = build_manifest(arguments.run_dir, arguments.out_dir)
     n_rows = sum(1 for line in manifest.open() if line.strip())
     if arguments.expect is not None and n_rows != arguments.expect:
         raise SystemExit(f"resolved {n_rows} recordings, expected {arguments.expect}")
-    shard_dir = extract_all(manifest, arguments.out_dir, arguments.workers, memberships)
+    shard_dir = extract_all(manifest, arguments.out_dir, arguments.workers, memberships, onomatopoeic)
     records: list[RecordingFeatures] = load_features(shard_dir)
     print(f"[report] scoring {len(records)} recordings", flush=True)
     index = write_report(records, arguments.out_dir)
