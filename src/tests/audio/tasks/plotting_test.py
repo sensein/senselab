@@ -1,8 +1,10 @@
 """This script contains unit tests for the plotting tasks."""
 
-from typing import Any, Dict, List, cast
+from pathlib import Path
+from typing import Any, Dict, List, Sequence, cast
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 import torch
 from matplotlib.artist import Artist
@@ -13,6 +15,7 @@ from matplotlib.text import Text
 from matplotlib.transforms import Bbox
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.tasks.plotting.plotting import (
     TOKEN_LABEL_FLOOR_FONTSIZE,
     TOKEN_LABEL_FONTSIZE,
@@ -23,6 +26,7 @@ from senselab.audio.tasks.plotting.plotting import (
     _token_label_slots,
     play_audio,
     plot_aligned_panels,
+    plot_range_with_ppg,
     plot_specgram,
     plot_waveform,
 )
@@ -1195,3 +1199,123 @@ class TestPlottingIntegration:
 
             assert isinstance(waveform_fig, Figure)
             assert isinstance(specgram_fig, Figure)
+
+
+def _one_hot_posteriorgram(frames_per_segment: int, phoneme_indices: Sequence[int]) -> torch.Tensor:
+    """A frame-major posteriorgram whose argmax runs are equal blocks of the given phonemes."""
+    posteriorgram = torch.zeros(frames_per_segment * len(phoneme_indices), len(PHONEME_LABELS))
+    for block, index in enumerate(phoneme_indices):
+        posteriorgram[block * frames_per_segment : (block + 1) * frames_per_segment, index] = 1.0
+    return posteriorgram
+
+
+_PPG_BLOCKS = (0, 1, 2, 3, 4, 5, 6, 7)
+_PPG_RECORDING_SECONDS = 4.0
+_PPG_RANGE = (1.25, 2.75)
+
+
+def _ppg_sidecar(directory: Path) -> Path:
+    """A ``ppg_posteriorgram.npz`` over the same blocks, written as the run derivative is written."""
+    posteriorgram = _one_hot_posteriorgram(50, _PPG_BLOCKS)
+    path = directory / "ppg_posteriorgram.npz"
+    np.savez(
+        path,
+        posteriorgram=posteriorgram.numpy().astype(np.float16),
+        phonemes=np.asarray(PHONEME_LABELS, dtype=np.str_),
+        seconds_per_frame=np.float64(_PPG_RECORDING_SECONDS / posteriorgram.shape[0]),
+        duration_s=np.float64(_PPG_RECORDING_SECONDS),
+        sampling_rate=np.int64(16000),
+    )
+    return path
+
+
+class TestATimeRangeWithItsPhonemes:
+    """One requested range of a recording, as waveform, spectrogram and PPG phoneme boundaries."""
+
+    @staticmethod
+    def _figure(posteriorgram: Any = "tensor") -> Figure:  # noqa: ANN401 — a tensor, a path or None
+        """The three-panel figure over ``_PPG_RANGE`` of a four-second recording."""
+        return plot_range_with_ppg(
+            _tone(_PPG_RECORDING_SECONDS),
+            *_PPG_RANGE,
+            posteriorgram=_one_hot_posteriorgram(50, _PPG_BLOCKS) if posteriorgram == "tensor" else posteriorgram,
+        )
+
+    @staticmethod
+    def _labels(figure: Figure) -> list[str]:
+        """The phoneme labels a real draw placed on the lane."""
+        figure.canvas.draw()
+        return [text.get_text() for text in figure.axes[2].texts if text.get_visible()]
+
+    def test_the_figure_is_returned(self) -> None:
+        """The caller composes further pages from it, so it must come back rather than be shown only."""
+        assert isinstance(self._figure(), Figure)
+
+    def test_the_three_panels_share_the_requested_range(self) -> None:
+        """One axis over three panels is what makes a boundary relatable to the sound under it."""
+        figure = self._figure()
+        assert len(figure.axes) == 3
+        for axis in figure.axes:
+            assert axis.get_xlim() == pytest.approx(_PPG_RANGE)
+
+    def test_the_axis_is_the_range_and_not_the_whole_file(self) -> None:
+        """The waveform keeps recording-time coordinates, so the ticks relate back to the file."""
+        figure = self._figure()
+        drawn = np.asarray(figure.axes[0].lines[0].get_xdata(), dtype=float)
+        assert drawn.min() >= _PPG_RANGE[0]
+        assert drawn.max() <= _PPG_RANGE[1]
+        assert figure.axes[1].images[0].get_extent()[:2] == list(_PPG_RANGE)
+
+    def test_a_segment_straddling_the_range_edge_is_clipped_and_still_labelled(self) -> None:
+        """Dropping it would hide the phoneme the range was most likely opened to look at."""
+        figure = self._figure()
+        bars = sorted((cast(Rectangle, patch) for patch in figure.axes[2].patches), key=lambda bar: bar.get_x())
+        assert [bar.get_x() for bar in bars] == pytest.approx([1.25, 1.5, 2.0, 2.5])
+        assert [bar.get_width() for bar in bars] == pytest.approx([0.25, 0.5, 0.5, 0.25])
+        assert set(self._labels(figure)) == {PHONEME_LABELS[index] for index in (2, 3, 4, 5)}
+
+    def test_a_segment_outside_the_range_is_not_drawn(self) -> None:
+        """An off-page phoneme is not evidence on this page."""
+        assert PHONEME_LABELS[0] not in self._labels(self._figure())
+
+    def test_the_lane_rules_every_visible_boundary(self) -> None:
+        """The boundaries are the measurement; the bars only carry the labels that name them."""
+        figure = self._figure()
+        rules = sorted(float(np.asarray(line.get_xdata(), dtype=float)[0]) for line in figure.axes[2].lines)
+        assert rules == pytest.approx([1.25, 1.5, 2.0, 2.5, 2.75])
+
+    def test_a_sidecar_path_draws_the_same_lane_as_the_tensor(self, tmp_path: Path) -> None:
+        """A caller holds one or the other, never reliably both."""
+        from_tensor = self._labels(self._figure())
+        from_sidecar = self._labels(self._figure(_ppg_sidecar(tmp_path)))
+        assert from_sidecar == from_tensor
+
+    def test_a_recording_with_no_posteriorgram_states_the_absence(self) -> None:
+        """A silently missing lane reads as a recording with no phonemes in it."""
+        figure = self._figure(None)
+        assert len(figure.axes) == 3
+        assert figure.axes[0].lines and figure.axes[1].images
+        assert not figure.axes[2].axison
+        assert any("absent" in text.get_text() for text in figure.axes[2].texts)
+
+    def test_an_unreadable_sidecar_states_the_absence_and_names_the_path(self, tmp_path: Path) -> None:
+        """A run that never got the derivative is the same case as a run that has none."""
+        missing = tmp_path / "ppg_posteriorgram.npz"
+        figure = self._figure(missing)
+        lines = [text.get_text() for text in figure.axes[2].texts]
+        assert any("absent" in line and str(missing) in line for line in lines)
+
+    def test_an_empty_posteriorgram_states_the_absence(self) -> None:
+        """An empty lane and an absent one are different claims and must not look alike."""
+        figure = self._figure(torch.zeros(0, len(PHONEME_LABELS)))
+        assert any("absent" in text.get_text() for text in figure.axes[2].texts)
+
+    @pytest.mark.parametrize(
+        ("start_s", "end_s"),
+        [(2.0, 1.0), (1.0, 1.0), (-1.0, 2.0), (1.0, 9.0)],
+        ids=["reversed", "zero_length", "before_the_start", "past_the_end"],
+    )
+    def test_a_bad_range_names_its_values(self, start_s: float, end_s: float) -> None:
+        """A figure of the wrong range is worse than no figure, so the pair is refused by name."""
+        with pytest.raises(ValueError, match=rf"received \({start_s:g}, {end_s:g}\)"):
+            plot_range_with_ppg(_tone(_PPG_RECORDING_SECONDS), start_s, end_s)

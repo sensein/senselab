@@ -333,13 +333,9 @@ def _ppg_segments(path: Path) -> tuple[list[dict[str, Any]], float, int]:
     import torch
 
     from senselab.audio.data_structures import Audio
-    from senselab.audio.tasks.features_extraction.ppg import extract_ppg_segments, to_frame_major_posteriorgram
+    from senselab.audio.tasks.features_extraction.ppg import extract_ppg_segments, load_ppg_posteriorgram
 
-    with np.load(path) as archive:
-        posteriorgram = torch.from_numpy(archive["posteriorgram"].astype(np.float32))
-        duration_s = float(archive["duration_s"])
-        sampling_rate = int(archive["sampling_rate"])
-    frame_major = to_frame_major_posteriorgram(posteriorgram)
+    frame_major, duration_s, sampling_rate = load_ppg_posteriorgram(path)
     frames = int(frame_major.shape[0])
     if frames == 0 or duration_s <= 0.0:
         return [], duration_s, frames

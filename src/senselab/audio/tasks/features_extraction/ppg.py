@@ -324,6 +324,28 @@ def to_frame_major_posteriorgram(posteriorgram: torch.Tensor) -> torch.Tensor:
     return t
 
 
+def load_ppg_posteriorgram(path: str | Path) -> Tuple[torch.Tensor, float, int]:
+    """Read a ``ppg_posteriorgram.npz`` sidecar into a frame-major tensor and its clock.
+
+    Args:
+        path: The sidecar ``write_ppg_posteriorgram`` wrote.
+
+    Returns:
+        The posteriorgram as float32 in ``(frames, phonemes)`` layout, the duration in seconds it
+        covers, and the sampling rate it was measured at.
+
+    Raises:
+        OSError: If the sidecar cannot be opened.
+        KeyError: If it carries none of ``posteriorgram``, ``duration_s`` or ``sampling_rate``.
+        ValueError: If the array it carries is not a posteriorgram.
+    """
+    with np.load(Path(path)) as archive:
+        posteriorgram = torch.from_numpy(archive["posteriorgram"].astype(np.float32))
+        duration_s = float(archive["duration_s"])
+        sampling_rate = int(archive["sampling_rate"])
+    return to_frame_major_posteriorgram(posteriorgram), duration_s, sampling_rate
+
+
 def extract_ppg_segments(
     audio: Audio,
     frame_major_posteriorgram: torch.Tensor,
