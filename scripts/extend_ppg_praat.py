@@ -40,7 +40,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Sequence
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import (
@@ -49,6 +49,17 @@ from senselab.audio.tasks.features_extraction import (
     ppgs_venv_is_provisioned,
 )
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.extend import (
+    RUN_SUBDIR,
+    SLICES_SUBDIR,
+    batches,
+    export_prov,
+    read_manifest,
+    read_store,
+    run_root_of,
+    take_slice,
+    write_store,
+)
 from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception, find_measurement
 from senselab.audio.workflows.triage.nodes.preprocess import (
     PPG_MEASUREMENT,
@@ -58,18 +69,11 @@ from senselab.audio.workflows.triage.nodes.preprocess import (
     write_ppg_posteriorgram,
 )
 from senselab.utils.data_structures import DeviceType
-from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
 DEFAULT_BATCH_SIZE = 500
 """Recordings per ``extract_ppgs_from_audios`` call. Its derivation is in the spec."""
-
-RUN_SUBDIR = "run"
-STORE_FILE = "store.jsonl"
-PROV_SUBDIR = "prov"
-PROV_LABEL = "triage"
-SLICES_SUBDIR = "slices"
 
 _OK = "ok"
 _ABSENT = "absent"
@@ -110,140 +114,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
     return parser
-
-
-def read_manifest(path: Path) -> list[dict[str, Any]]:
-    """Read the manifest into rows.
-
-    Args:
-        path: The JSONL file.
-
-    Returns:
-        One dict per non-blank line, in file order.
-
-    Raises:
-        ValueError: If a line is not a JSON object, or does not carry ``stem`` and ``enhanced``.
-    """
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            payload = json.loads(line)
-            if not isinstance(payload, dict):
-                raise ValueError(f"{path}:{number} is not a JSON object")
-            missing = [key for key in ("stem", "enhanced") if not payload.get(key)]
-            if missing:
-                raise ValueError(f"{path}:{number} carries no {' or '.join(missing)}")
-            rows.append(payload)
-    return rows
-
-
-def take_slice(rows: Sequence[dict[str, Any]], index: int, count: int) -> list[dict[str, Any]]:
-    """The stride of the manifest this array task owns.
-
-    Args:
-        rows: Every manifest row.
-        index: This task's 0-based index.
-        count: How many tasks the array has.
-
-    Returns:
-        ``rows[index::count]``.
-
-    Raises:
-        ValueError: If ``count`` is not positive, or ``index`` is outside it.
-    """
-    if count < 1:
-        raise ValueError(f"--slice-count must be at least 1, got {count}")
-    if not 0 <= index < count:
-        raise ValueError(f"--slice-index must be in [0, {count}), got {index}")
-    return list(rows[index::count])
-
-
-def batches(rows: Sequence[dict[str, Any]], size: int) -> Iterator[list[dict[str, Any]]]:
-    """Split rows into fixed-size batches, the last one as short as it needs to be.
-
-    Args:
-        rows: The rows to split.
-        size: Rows per batch.
-
-    Yields:
-        Each batch, in order.
-
-    Raises:
-        ValueError: If ``size`` is not positive.
-    """
-    if size < 1:
-        raise ValueError(f"--batch-size must be at least 1, got {size}")
-    for start in range(0, len(rows), size):
-        yield list(rows[start : start + size])
-
-
-def run_root_of(enhanced: Path) -> Path:
-    """The run root holding one recording's store, from its enhanced stream's path.
-
-    Args:
-        enhanced: ``<run_root>/run/streams/enhanced.flac``.
-
-    Returns:
-        ``<run_root>``.
-
-    Raises:
-        ValueError: If the path is not that shape.
-    """
-    parents = enhanced.parents
-    if len(parents) < 3 or parents[0].name != "streams" or parents[1].name != RUN_SUBDIR:
-        raise ValueError(f"{enhanced} is not <run_root>/{RUN_SUBDIR}/streams/<stream>; no run root to extend")
-    return parents[2]
-
-
-def read_store(run_root: Path) -> ProvStore:
-    """Read one run's store under the run's own id, so re-derived entity ids match the run's.
-
-    Args:
-        run_root: The run root.
-
-    Returns:
-        The store, with ``run_id`` set to the run root's own name.
-
-    Raises:
-        FileNotFoundError: If the run holds no store.
-    """
-    store_path = run_root / RUN_SUBDIR / STORE_FILE
-    if not store_path.is_file():
-        raise FileNotFoundError(f"no store at {store_path}")
-    return ProvStore.read_jsonl(store_path, run_id=run_root.name)
-
-
-def write_store(store: ProvStore, run_root: Path) -> Path:
-    """Replace one run's store atomically, so a killed task never leaves a truncated one.
-
-    Args:
-        store: The merged store.
-        run_root: The run root.
-
-    Returns:
-        The store's path.
-    """
-    store_path = run_root / RUN_SUBDIR / STORE_FILE
-    partial = store_path.with_suffix(store_path.suffix + ".partial")
-    store.write_jsonl(partial)
-    partial.replace(store_path)
-    return store_path
-
-
-def export_prov(store: ProvStore, run_root: Path) -> list[Path]:
-    """Re-export the BEP028 files from the merged store, so ``prov/`` agrees with it.
-
-    Args:
-        store: The merged store.
-        run_root: The run root ``prov/`` is a directory of.
-
-    Returns:
-        The files written.
-    """
-    graph = to_bep028_graph(store, label=PROV_LABEL)
-    return write_bep028_files(graph, run_root / PROV_SUBDIR, label=PROV_LABEL)
 
 
 def pending(store: ProvStore) -> tuple[bool, bool]:
@@ -406,7 +276,7 @@ def run_slice(
         The task's summary: its counts, its parameters, and where its log went.
     """
     started = time.time()
-    mine = take_slice(read_manifest(manifest), slice_index, slice_count)
+    mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
     print(
         f"[slice {slice_index}/{slice_count}] {len(mine)} rows, in batches of {batch_size}",
         flush=True,

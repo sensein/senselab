@@ -54,25 +54,56 @@ likely a false positive, which is what this check exists to reduce.
 ## Who measures what
 
 The waveform is in hand exactly once, in `_clip_spans`, which already reads it to detect the events.
-Everything the check needs about amplitude is measured there, in that one pass, and stored:
+Everything the check needs about amplitude is measured there, in that one pass, and stored **in one
+`clip_amplitude` measurement** over the same signal:
 
-* **On each `clip` span** — `clip_level`, the peak absolute amplitude over the samples the span
-  covers (null where the extent names no sample of the signal), and `unclipped_louder_n`, how many
-  unclipped samples are louder than that span's own level.
-* **Beside them, one `clip_amplitude` measurement** over the same signal — `unclipped_peak`, the
-  loudest unclipped sample's absolute amplitude; `unclipped_peak_time_s`, where it sits;
-  `unclipped_samples_n`, how many samples were unclipped evidence; and `edge_guard_samples`, the
-  guard that produced all of the above. It is `wasDerivedFrom` the recording stream and every span,
-  because it is that recording read with those spans excluded.
+* Whole-file — `unclipped_peak`, the loudest unclipped sample's absolute amplitude;
+  `unclipped_peak_time_s`, where it sits; `unclipped_samples_n`, how many samples were unclipped
+  evidence; and `edge_guard_samples`, the guard that produced all of the above.
+* Per span, **keyed by the span's entity id** — `clip_levels`, the peak absolute amplitude over the
+  samples each span covers (null where the extent names no sample of the signal), and
+  `unclipped_louder_n`, how many unclipped samples are louder than that span's own level.
+
+It is `wasDerivedFrom` the recording stream and every span, because it is that recording read with
+those spans excluded. A `clip` span itself carries `family`, `signal` and its extent, and no
+amplitude at all.
 
 All of these are scalars, so they sit in entity attributes and there is no sidecar: `path_attributes`
-and its digest exist for arrays written to `derivatives/`, and four numbers are not an array.
-`preprocess.write_clip_spans` writes the spans and the measurement together — they are one reading
-of one waveform, and splitting them would let a store carry spans whose levels were measured under a
-different guard from the peak they are compared against.
+and its digest exist for arrays written to `derivatives/`, and two small maps of numbers are not an
+array. `preprocess.write_clip_spans` writes the spans and the measurement together — they are one
+reading of one waveform, and splitting them would let a store carry spans whose levels were measured
+under a different guard from the peak they are compared against.
 
-QUALITY then reads `clip_level` per span against `unclipped_peak`, applies its own tolerance, and
-writes assertions. No pass over samples, no `Audio`, no stream load.
+QUALITY then reads each span's level out of the measurement against `unclipped_peak`, applies its
+own tolerance, and writes assertions. No pass over samples, no `Audio`, no stream load.
+
+### Why the levels are in the measurement and not on the spans
+
+This was a specification error, corrected here rather than lived with. The per-span levels were
+first stamped on each `clip` span as `clip_level` and `unclipped_louder_n` attributes, which is the
+natural home for them on a fresh run and forecloses every other one.
+
+**The store is append-only.** An entity is `sha256([run_id, prov_type, extent, attributes])` and
+nothing is modified after it is added, so an attribute cannot be added to a span that already
+exists — writing the span again with the level in it mints a *different entity*, and the store would
+then hold two live clip spans over the same extent. The 62,550 recordings of the completed corpus
+carry clip spans written before any of this existed. Under the span-attribute design the only way to
+give QUALITY its inputs was a full PREPROCESS re-run — enhancement, YAMNet, AST, HeAR and every ASR
+recomputed, roughly a day on a 128-task array — to obtain a handful of amplitude scalars.
+
+A measurement is an entity of its own. It can be appended beside spans that already exist, computed
+from the stored spans plus the source audio, and nothing else is recomputed and nothing existing is
+touched.
+
+The keying is the span's entity id rather than its index, because an index is only meaningful
+against the list that produced it and the reader selects live spans by family and signal rather than
+replaying a write order. A level a reader cannot attribute to a particular span is not a level.
+
+There is a second property, and it is the one that makes the corpus's spans and a fresh run's the
+*same* entities: with no amplitude in a span's attributes, a clip span is identified by its family,
+its signal and its extent alone — exactly what the corpus's spans carry. Had the level stayed an
+attribute, an extended corpus and a re-run one would disagree about which entity a given clip span
+is, for every clip span in the corpus.
 
 ## What amplitude represents a clip span
 
@@ -119,8 +150,10 @@ what the control test uses.
 derivation above is the reason it has the value it has. `_clip_spans` reads it, records it in the
 step's activity parameters and stamps it on the measurement as `edge_guard_samples`; QUALITY reports
 the value it finds there rather than re-reading the key, so the guard a verdict names is always the
-guard its numbers were measured under. Changing it is a PREPROCESS-side change that needs the pass
-re-run, which is the honest consequence of the statistic being a measurement rather than a view.
+guard its numbers were measured under. Changing it is a PREPROCESS-side change that needs the
+amplitudes measured again, which is the honest consequence of the statistic being a measurement
+rather than a view — but only the amplitudes, not the whole pass, because the extend path below
+recomputes them from the stored spans alone.
 
 Samples *inside* a span, including the interior of a merged one, are claimed clipped and are
 therefore not evidence.
@@ -191,7 +224,8 @@ findings:
 * Clip spans over that signal with **no live `clip_amplitude` measurement** beside them. This is the
   input the check is built on, and the alternative to refusing is the failure mode that matters
   most here: the node would find no contradiction it could measure and write a `pass`, which reads
-  exactly like a recording whose clip evidence is consistent.
+  exactly like a recording whose clip evidence is consistent. The refusal is what makes the extend
+  pass below necessary rather than optional.
 
 The absence of clip spans is not a refusal. Nothing was asserted, so there is nothing to read
 against, and a store where `_clip_spans` never ran already records that in PREPROCESS's `absent`.
@@ -208,13 +242,75 @@ not routing itself raised — `run_test` pins both of those as well.
 The clip spans are PREPROCESS's, and a run that never conditioned has none to read, which is why the
 call sits inside the PREPROCESS gate rather than outside it.
 
-## Re-running
+## Extending a finished run
 
-`quality.clip_edge_guard_samples` is now read by PREPROCESS, and PREPROCESS writes two things it did
-not write before. A store from an earlier run carries clip spans with no `clip_level` and no
-`clip_amplitude` measurement, so QUALITY refuses on it: the corpus has to be re-run for the check to
-have inputs. The merged configuration's values are unchanged, but the pass that consumes them is
-not, so `config_hash` alone does not separate a run made before this change from one made after.
+A store from an earlier run carries clip spans and no `clip_amplitude` measurement, so QUALITY
+refuses on it. **The corpus needs an append, not a PREPROCESS re-run.** The measurement is a
+function of two things the finished run already identifies: its clip spans, which are in the store,
+and the source recording, whose absolute path and SHA-256 ADMIT wrote onto the `recording` stream
+entity. Neither is a model output and neither needs any other block re-run.
+
+`scripts/extend_clip_amplitudes.py` is that pass, and
+`preprocess.extend_clip_amplitudes(store, config, run_dir=...)` is the block it drives. Per
+recording: read `store.jsonl` with `ProvStore.read_jsonl(path, run_id=<run root name>)`, select the
+live `clip` spans over `recording`, load the source the stream entity names, measure, append one
+activity and one measurement, capture environments, write the store back and re-export `prov/`.
+Nothing is written outside the recording's own run and no existing record is touched.
+
+**It is its own driver rather than a mode of `extend_ppg_praat.py`.** That driver's whole shape —
+the batch size, the device, the venv gate, the whole-batch failure handling — exists for a model
+call, and this pass has none: it is a decode and a numpy scan. What the two genuinely share is the
+run layout, the store read/write, the BEP028 re-export and the manifest slicing, and those are now
+`senselab.audio.workflows.triage.extend`, imported by both, so a layout change cannot fix one driver
+and miss the other.
+
+### Where the source audio comes from
+
+Not from the run tree: `run/streams/` holds the conditioned streams, and clip spans are detected on
+the *original*. Not from `summary.json` either. The `recording` stream entity ADMIT wrote carries
+`path`, an absolute resolved path, together with `checksum_sha256` — so every run names its own
+source, the library holds no corpus path, and the manifest is needed only to enumerate which runs an
+array task owns.
+
+The digest is checked before anything is measured, and a mismatch refuses that recording. This is
+the one failure the pass could otherwise commit silently: amplitudes measured on bytes other than
+the ones the spans were detected on would be keyed against those spans and indistinguishable, in the
+store, from amplitudes that belong to them.
+
+### Convergence
+
+The PPG extend pass found that `path_attributes` includes `mtime_ns`, so re-running a block that
+writes a sidecar produces a byte-identical file at a new mtime, which is a different attribute set,
+which is a **differently identified entity**; set-union merging does not save you, and convergence
+has to come from skipping.
+
+This measurement writes no sidecar, and neither its activity's parameters nor its own attributes
+carry a path, a timestamp or anything else that varies between two readings of the same file. Two
+passes therefore mint the *same* activity id and the *same* entity id, and the second is a genuine
+set-union no-op. That property is worth having and is not what the driver relies on: a recording
+whose store already holds a live `clip_amplitude` measurement is skipped outright and its store is
+not rewritten at all, so a completed slice re-run is a pass over `store.jsonl` and no decodes. A
+recording with no clip span is skipped too — nothing was asserted, QUALITY passes such a store
+without the measurement, and writing an empty one would be noise.
+
+A task killed mid-slice restarts and redoes only what never landed; `store.jsonl` is written to a
+`.partial` sibling and `replace`d, so a task killed mid-write leaves no truncated store for the next
+pass to read.
+
+### What the extend pass does not converge on
+
+The activity it writes is `PREPROCESS`/`clip_amplitude`, not the fresh path's
+`PREPROCESS`/`clip_spans`. The fresh path detects and measures in one activity over one waveform;
+the extend pass measures over spans it did not detect, and an activity carrying `near_threshold`,
+`leniency_samples`, `minimum_extreme` and `merge_gap_ms` it never ran would be a claim that the
+detector executed here. The entities agree between the two paths — the spans are identical and the
+measurement is identical — and the activity that generated the measurement differs, which is the
+honest reading.
+
+`quality.clip_edge_guard_samples` is read by PREPROCESS on both paths and stamped on the
+measurement, so a verdict always names the guard its numbers were measured under. The merged
+configuration's values are unchanged by any of this, so `config_hash` alone does not separate a run
+made before this change from one made after.
 
 ## What this check does and does not tell you
 
