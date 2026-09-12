@@ -114,6 +114,30 @@ RATE_GRID: tuple[float, ...] = (0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 
 DB_SPREAD_GRID: tuple[float, ...] = (0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 13.0, 16.0, 20.0, 25.0, 30.0)
 """Thresholds for an interquartile spread whose unit is dB."""
 
+PROPORTION_GRID: tuple[float, ...] = (0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95)
+"""Thresholds for a quantity that is a proportion of a whole, spanning the unit interval."""
+
+F0_SPREAD_HZ_GRID: tuple[float, ...] = (1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0, 40.0, 60.0, 80.0, 120.0)
+"""Thresholds for the standard deviation of F0 over a recording, in hertz."""
+
+RELATIVE_SPREAD_GRID: tuple[float, ...] = (0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0)
+"""Thresholds for a spread divided by its own mean, which is dimensionless."""
+
+VOICE_QUALITY_DB_GRID: tuple[float, ...] = (0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 25.0, 30.0)
+"""Thresholds for a Praat voice-quality level — harmonics-to-noise, cepstral peak — in dB."""
+
+SYLLABLE_RATE_GRID: tuple[float, ...] = (1.0, 2.0, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 7.0, 8.0, 10.0)
+"""Thresholds for a Praat syllable rate, in syllables per second."""
+
+PAUSE_RATE_GRID: tuple[float, ...] = (0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0)
+"""Thresholds for a Praat pause rate, in pauses per second."""
+
+SEGMENT_RATE_GRID: tuple[float, ...] = (2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0, 40.0)
+"""Thresholds for the posteriorgram's argmax-segment rate, in segments per second."""
+
+SEGMENT_DURATION_GRID: tuple[float, ...] = (0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5)
+"""Thresholds for one posteriorgram argmax segment's duration, in seconds."""
+
 SIGNED_SCORE_GRID: tuple[float, ...] = (
     -0.9,
     -0.7,
@@ -142,7 +166,8 @@ class Detector:
 
     Attributes:
         name: The detector's id, unique across the catalogue.
-        kind: ``speech``, ``airway`` or ``voice`` — the branch it would route to.
+        kind: The branch it would route to. ``speech``, ``airway`` and ``voice`` are the branches
+            TAXONOMY carries a state for; ``cough``, ``glide`` and ``ddk`` are analysis-only.
         reader: What to read, as ``(source, *arguments)``; see :func:`detector_value`. A
             ``gated`` reader nests two of these.
         unit: The unit of the number it reads.
@@ -254,6 +279,16 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         return _optional(features.disruptions, arguments[0])
     if source == "silence":
         return _optional(features.silence, arguments[0])
+    if source == "praat":
+        return _optional(features.praat, arguments[0])
+    if source == "ppg":
+        return _optional(features.ppg, arguments[0])
+    if source == "ratio":
+        numerator = detector_value(features, Detector(detector.name, detector.kind, arguments[0], detector.unit, ()))
+        denominator = detector_value(features, Detector(detector.name, detector.kind, arguments[1], detector.unit, ()))
+        if numerator is None or denominator is None or denominator == 0.0:
+            return None
+        return numerator / denominator
     if source == "difference":
         left = detector_value(features, Detector(detector.name, detector.kind, arguments[0], detector.unit, ()))
         right = detector_value(features, Detector(detector.name, detector.kind, arguments[1], detector.unit, ()))
@@ -567,6 +602,67 @@ _NEW_DERIVATIVES: tuple[Detector, ...] = (
 )
 """Detectors reading a derivative the first sweep ignored, on the three kinds it already covered."""
 
+_PITCH_SWEEP: tuple[Detector, ...] = (
+    Detector("glide.praat_std_f0_hertz", "glide", ("praat", "std_f0_hertz"), "Hz", F0_SPREAD_HZ_GRID),
+    Detector(
+        "glide.praat_f0_relative_spread",
+        "glide",
+        ("ratio", ("praat", "std_f0_hertz"), ("praat", "mean_f0_hertz")),
+        "ratio",
+        RELATIVE_SPREAD_GRID,
+    ),
+    Detector(
+        "glide.praat_std_f0_hertz+no_agreed_word",
+        "glide",
+        ("gated", ("praat", "std_f0_hertz"), ("words", "agreement"), 1, "below"),
+        "Hz",
+        F0_SPREAD_HZ_GRID,
+    ),
+    Detector("glide.praat_phonation_ratio", "glide", ("praat", "phonation_ratio"), "fraction", PROPORTION_GRID),
+    Detector("voice.praat_phonation_ratio", "voice", ("praat", "phonation_ratio"), "fraction", PROPORTION_GRID),
+    Detector("voice.praat_mean_hnr_db", "voice", ("praat", "mean_hnr_db"), "dB", VOICE_QUALITY_DB_GRID),
+    Detector(
+        "voice.praat_cepstral_peak_prominence_mean",
+        "voice",
+        ("praat", "cepstral_peak_prominence_mean"),
+        "dB",
+        VOICE_QUALITY_DB_GRID,
+    ),
+)
+"""Pitch spread and phonation read off Praat, neither of which needs a span to reach 3 s."""
+
+_SYLLABLE_REPETITION: tuple[Detector, ...] = (
+    Detector("ddk.praat_articulation_rate", "ddk", ("praat", "articulation_rate"), "syllables/s", SYLLABLE_RATE_GRID),
+    Detector("ddk.praat_speaking_rate", "ddk", ("praat", "speaking_rate"), "syllables/s", SYLLABLE_RATE_GRID),
+    Detector("ddk.ppg_segment_rate_per_s", "ddk", ("ppg", "segment_rate_per_s"), "segments/s", SEGMENT_RATE_GRID),
+    Detector("ddk.ppg_repetition_peak", "ddk", ("ppg", "repetition_peak"), "fraction", PROPORTION_GRID),
+    Detector("ddk.ppg_repetition_prominence", "ddk", ("ppg", "repetition_prominence"), "fraction", PROPORTION_GRID),
+    Detector(
+        "ddk.ppg_repetition_lag_segments", "ddk", ("ppg", "repetition_lag_segments"), "segments", COUNT_GRID, "below"
+    ),
+    Detector(
+        "ddk.ppg_segment_duration_median",
+        "ddk",
+        ("ppg", "segment_duration_median"),
+        "seconds",
+        SEGMENT_DURATION_GRID,
+        "below",
+    ),
+    Detector("ddk.ppg_distinct_phonemes", "ddk", ("ppg", "distinct_phonemes"), "phonemes", COUNT_GRID, "below"),
+)
+"""Candidate detectors for diadochokinesis, which is a rate and a repetition rather than a word."""
+
+_UNVOICED_AIRWAY: tuple[Detector, ...] = (
+    Detector(
+        "airway.praat_phonation_ratio", "airway", ("praat", "phonation_ratio"), "fraction", PROPORTION_GRID, "below"
+    ),
+    Detector("airway.praat_pause_rate", "airway", ("praat", "pause_rate"), "pauses/s", PAUSE_RATE_GRID),
+    Detector("airway.praat_mean_pause_duration", "airway", ("praat", "mean_pause_duration"), "seconds", DURATION_GRID),
+    Detector("airway.praat_mean_hnr_db", "airway", ("praat", "mean_hnr_db"), "dB", VOICE_QUALITY_DB_GRID, "below"),
+    Detector("airway.ppg_silent_fraction", "airway", ("ppg", "silent_fraction"), "fraction", PROPORTION_GRID),
+)
+"""Candidate detectors for a breath, which is unvoiced and need not accumulate energy to be read."""
+
 _BRACKETED_TOKENS: tuple[Detector, ...] = (
     Detector("airway.bracketed_breath", "airway", ("bracketed_set", "breath"), "tokens", COUNT_GRID),
     Detector("airway.bracketed_cough", "airway", ("bracketed_set", "cough"), "tokens", COUNT_GRID),
@@ -741,6 +837,9 @@ DETECTORS: tuple[Detector, ...] = tuple(
     + list(_NEW_DERIVATIVES)
     + list(_LABEL_CONDITIONED_SPANS)
     + list(_LABEL_SET_CONDITIONED_SPANS)
+    + list(_PITCH_SWEEP)
+    + list(_SYLLABLE_REPETITION)
+    + list(_UNVOICED_AIRWAY)
     + list(_BRACKETED_TOKENS)
     + list(_STREAM_PEAKS)
 )

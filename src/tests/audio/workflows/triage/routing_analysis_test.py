@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
+import numpy as np
 import pytest
 
+from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
@@ -19,6 +21,8 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
 )
 from senselab.audio.workflows.triage.routing_analysis.families import declared_kinds, task_family, task_id_of
 from senselab.audio.workflows.triage.routing_analysis.features import (
+    PPG_SUMMARY_KEYS,
+    SILENT_PHONEME,
     RecordingFeatures,
     bracket_type,
     extract_features,
@@ -718,3 +722,252 @@ def test_label_conditioned_detectors_read_the_cough_spans(tmp_path: Path) -> Non
     for detector in detectors.values():
         assert detector_value(silent, detector) is None
         assert max(detector.thresholds) >= 55.0
+
+
+SECONDS_PER_FRAME = 0.1
+"""The synthetic posteriorgram's frame period, chosen so a segment's duration is readable by eye."""
+
+PRAAT_SCALARS: dict[str, Any] = {
+    "articulation_rate": 6.4,
+    "cepstral_peak_prominence_mean": 14.2,
+    "local_jitter": 0.0,
+    "localabsolute_jitter": None,
+    "mean_f0_hertz": 210.0,
+    "mean_hnr_db": 11.5,
+    "mean_pause_duration": 0.45,
+    "pause_rate": 0.8,
+    "phonation_ratio": 0.62,
+    "speaking_rate": 5.1,
+    "std_f0_hertz": 42.0,
+}
+"""One recording's Praat scalars, as PREPROCESS writes them: a measured zero and an absent one."""
+
+
+def _write_posteriorgram(run_dir: Path, indices: Sequence[int]) -> tuple[str, int]:
+    """One synthetic one-hot posteriorgram sidecar, under the run's own ``derivatives``.
+
+    Args:
+        run_dir: The run directory the store sits in.
+        indices: The dominant phoneme index of each frame, in order.
+
+    Returns:
+        The sidecar's path relative to ``run_dir``, and its frame count.
+    """
+    frames = len(indices)
+    array = np.zeros((frames, len(PHONEME_LABELS)), dtype=np.float16)
+    array[np.arange(frames), np.asarray(indices, dtype=np.int64)] = 1.0
+    relative = "derivatives/ppg_posteriorgram.npz"
+    (run_dir / "derivatives").mkdir(parents=True, exist_ok=True)
+    np.savez(
+        run_dir / relative,
+        posteriorgram=array,
+        phonemes=np.asarray(PHONEME_LABELS, dtype=np.str_),
+        seconds_per_frame=np.float64(SECONDS_PER_FRAME),
+        duration_s=np.float64(frames * SECONDS_PER_FRAME),
+        sampling_rate=np.int64(16000),
+    )
+    return relative, frames
+
+
+def _derivative_store(path: Path, indices: Sequence[int], *, sidecar: bool = True) -> Path:
+    """A store carrying the two PREPROCESS derivatives and nothing else a detector reads.
+
+    Args:
+        path: Where the store goes.
+        indices: The dominant phoneme index of each posteriorgram frame.
+        sidecar: Whether the npz the measurement names is actually written.
+
+    Returns:
+        The store path.
+    """
+    run_dir = path.parent
+    run_dir.mkdir(parents=True, exist_ok=True)
+    relative, frames = "derivatives/ppg_posteriorgram.npz", len(indices)
+    if sidecar:
+        relative, frames = _write_posteriorgram(run_dir, indices)
+    return _write_store(
+        path,
+        [
+            _entity("stream", "stream-1", {"name": "recording"}, [0.0, frames * SECONDS_PER_FRAME]),
+            _entity(
+                "measurement",
+                "praat-1",
+                {
+                    "name": "praat_features",
+                    "signal": "enhanced",
+                    "n_features": len(PRAAT_SCALARS),
+                    "features": dict(PRAAT_SCALARS),
+                },
+            ),
+            _entity(
+                "measurement",
+                "ppg-1",
+                {
+                    "name": "ppg_posteriorgram",
+                    "signal": "enhanced",
+                    "path": relative,
+                    "frames": frames,
+                    "n_phonemes": len(PHONEME_LABELS),
+                    "seconds_per_frame": SECONDS_PER_FRAME,
+                    "layout": "frames_by_phonemes",
+                },
+                [0.0, frames * SECONDS_PER_FRAME],
+            ),
+        ],
+    )
+
+
+def _derivatives(tmp_path: Path, indices: Sequence[int], name: str = "e", *, sidecar: bool = True) -> RecordingFeatures:
+    """The derivative fixture, extracted.
+
+    Args:
+        tmp_path: The test's temporary directory.
+        indices: The dominant phoneme index of each posteriorgram frame.
+        name: The subdirectory, so one test can build several.
+        sidecar: Whether the npz the measurement names is actually written.
+
+    Returns:
+        The record.
+    """
+    return extract_features(
+        _derivative_store(tmp_path / name / "run" / "store.jsonl", indices, sidecar=sidecar),
+        "sub-5_ses-1_task-diadochokinesis-pa",
+        str(tmp_path / name),
+        "diadochokinesis-pa",
+        "diadochokinesis-pa",
+        PACKAGED_MEMBERSHIPS,
+    )
+
+
+def _repeated(pattern: Sequence[int], times: int, frames_per_segment: int = 4) -> list[int]:
+    """A frame sequence whose argmax segments are one pattern repeated.
+
+    Args:
+        pattern: The phoneme indices of one period, in order.
+        times: How many periods.
+        frames_per_segment: How many frames each segment holds.
+
+    Returns:
+        The per-frame indices.
+    """
+    return [index for _ in range(times) for index in pattern for _ in range(frames_per_segment)]
+
+
+def test_praat_scalars_are_surfaced_under_the_store_keys(tmp_path: Path) -> None:
+    """The mapping is keyed as the measurement keys it, with no prefix and no renaming."""
+    record = _derivatives(tmp_path, _repeated([0, 1], 10))
+    assert record.praat["std_f0_hertz"] == pytest.approx(42.0)
+    assert record.praat["articulation_rate"] == pytest.approx(6.4)
+    assert set(record.praat) <= set(PRAAT_SCALARS)
+
+
+def test_an_unmeasured_praat_scalar_is_absent_and_a_measured_zero_is_not(tmp_path: Path) -> None:
+    """Praat's null jitter is not keyed at all; a jitter it measured as zero is keyed as zero."""
+    record = _derivatives(tmp_path, _repeated([0, 1], 10))
+    assert "localabsolute_jitter" not in record.praat
+    assert record.praat["local_jitter"] == 0.0
+    measured = Detector("d", "voice", ("praat", "local_jitter"), "ratio", (0.5,))
+    unmeasured = Detector("d", "voice", ("praat", "localabsolute_jitter"), "ratio", (0.5,))
+    assert detector_value(record, measured) == 0.0
+    assert detector_value(record, unmeasured) is None
+
+
+def test_the_praat_mapping_is_empty_when_the_measurement_is_absent(tmp_path: Path) -> None:
+    """A recording Praat never ran on excludes every Praat detector rather than scoring zero."""
+    _, silent = _features(tmp_path)
+    assert silent.praat == {}
+    assert detector_value(silent, Detector("d", "voice", ("praat", "std_f0_hertz"), "Hz", (1.0,))) is None
+
+
+def test_the_posteriorgram_is_reduced_to_its_segments_and_never_carried(tmp_path: Path) -> None:
+    """Twenty four-frame segments over eight seconds, and no array anywhere in the record."""
+    record = _derivatives(tmp_path, _repeated([0, 1], 10))
+    assert record.ppg["frames"] == pytest.approx(80.0)
+    assert record.ppg["segment_count"] == pytest.approx(20.0)
+    assert record.ppg["segment_rate_per_s"] == pytest.approx(2.5)
+    assert record.ppg["segment_duration_mean"] == pytest.approx(0.4)
+    assert record.ppg["segment_duration_median"] == pytest.approx(0.4)
+    assert record.ppg["distinct_phonemes"] == pytest.approx(2.0)
+    assert set(record.ppg) <= set(PPG_SUMMARY_KEYS)
+
+
+def test_the_silent_phoneme_is_carried_as_a_frame_fraction(tmp_path: Path) -> None:
+    """Half the frames dominated by the inventory's silence label read as half the recording."""
+    silent_index = PHONEME_LABELS.index(SILENT_PHONEME)
+    record = _derivatives(tmp_path, _repeated([0, silent_index], 10))
+    assert record.ppg["silent_fraction"] == pytest.approx(0.5)
+
+
+def test_the_repetition_measure_separates_a_syllable_train_from_a_sentence(tmp_path: Path) -> None:
+    """A three-phoneme cycle repeats exactly; twenty distinct phonemes agree with nothing."""
+    periodic = _derivatives(tmp_path, _repeated([0, 1, 2], 8), "periodic")
+    varied = _derivatives(tmp_path, _repeated(list(range(20)), 1), "varied")
+    assert periodic.ppg["repetition_peak"] == pytest.approx(1.0)
+    assert periodic.ppg["repetition_lag_segments"] == pytest.approx(3.0)
+    assert periodic.ppg["repetition_prominence"] > 0.5
+    assert varied.ppg["repetition_peak"] == pytest.approx(0.0)
+    assert varied.ppg["repetition_prominence"] == pytest.approx(0.0)
+
+
+def test_a_posteriorgram_too_short_to_carry_two_lags_reports_no_repetition(tmp_path: Path) -> None:
+    """Three segments admit one lag, which is a period nothing was compared against."""
+    record = _derivatives(tmp_path, _repeated([0, 1, 0], 1), "short")
+    assert record.ppg["segment_count"] == pytest.approx(3.0)
+    assert "repetition_peak" not in record.ppg
+
+
+def test_an_unreadable_sidecar_keeps_the_entity_keys_and_no_summary(tmp_path: Path) -> None:
+    """The measurement is still evidence that a posteriorgram was taken; its statistics are not."""
+    record = _derivatives(tmp_path, _repeated([0, 1], 10), "gone", sidecar=False)
+    assert record.ppg["frames"] == pytest.approx(80.0)
+    assert record.ppg["seconds_per_frame"] == pytest.approx(SECONDS_PER_FRAME)
+    assert "segment_count" not in record.ppg
+    assert detector_value(record, Detector("d", "ddk", ("ppg", "segment_rate_per_s"), "segments/s", (1.0,))) is None
+
+
+NEW_DETECTOR_NAMES: tuple[str, ...] = (
+    "glide.praat_std_f0_hertz",
+    "glide.praat_f0_relative_spread",
+    "glide.praat_std_f0_hertz+no_agreed_word",
+    "glide.praat_phonation_ratio",
+    "voice.praat_phonation_ratio",
+    "voice.praat_mean_hnr_db",
+    "voice.praat_cepstral_peak_prominence_mean",
+    "ddk.praat_articulation_rate",
+    "ddk.praat_speaking_rate",
+    "ddk.ppg_segment_rate_per_s",
+    "ddk.ppg_repetition_peak",
+    "ddk.ppg_repetition_prominence",
+    "ddk.ppg_repetition_lag_segments",
+    "ddk.ppg_segment_duration_median",
+    "ddk.ppg_distinct_phonemes",
+    "airway.praat_phonation_ratio",
+    "airway.praat_pause_rate",
+    "airway.praat_mean_pause_duration",
+    "airway.praat_mean_hnr_db",
+    "airway.ppg_silent_fraction",
+)
+"""Every detector reading one of the two new derivatives."""
+
+
+@pytest.mark.parametrize("name", NEW_DETECTOR_NAMES)
+def test_each_new_detector_reads_its_derivative_or_nothing(tmp_path: Path, name: str) -> None:
+    """The value is there when the derivative is, and None — not zero — when it is not."""
+    record = _derivatives(tmp_path, _repeated([0, 1], 10))
+    _, silent = _features(tmp_path)
+    detector = next(candidate for candidate in DETECTORS if candidate.name == name)
+    assert detector_value(record, detector) is not None
+    assert detector_value(silent, detector) is None
+
+
+def test_the_normalised_pitch_spread_is_the_ratio_of_the_two_praat_scalars(tmp_path: Path) -> None:
+    """Absolute spread scales with register, so the sweep is offered the spread over the mean too."""
+    record = _derivatives(tmp_path, _repeated([0, 1], 10))
+    detector = next(candidate for candidate in DETECTORS if candidate.name == "glide.praat_f0_relative_spread")
+    assert detector_value(record, detector) == pytest.approx(42.0 / 210.0)
+
+
+def test_the_breath_detectors_fire_below_their_threshold(tmp_path: Path) -> None:
+    """A breath is unvoiced, so it is a low phonation ratio and a low harmonics-to-noise ratio."""
+    for name in ("airway.praat_phonation_ratio", "airway.praat_mean_hnr_db"):
+        assert next(candidate for candidate in DETECTORS if candidate.name == name).polarity == "below"
