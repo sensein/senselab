@@ -11,6 +11,13 @@ Every gate is one feature path, one comparison and one threshold, all of them re
 one bypass asks whether the recording carried anything at all, and it is consulted only where no
 gate fired. The operating points, which of them are provisional, and the open questions are in
 ``specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md``.
+
+A branch's reference family set may leave out families whose content is exactly what the branch is
+for — ``lexical_speech`` excludes the syllable-repetition families by construction — so
+``excluded_by_construction`` names them per branch and :func:`score_branches` reports the 2x2 both
+with them in the negatives and with them held out of the population. :func:`branch_recall_curves`
+scores every routing gate the way a router is scored, by recall at a fixed over-routing budget;
+``specs/20260911-recall-first-thresholds/design.md`` says why that criterion and not Youden's J.
 """
 
 from __future__ import annotations
@@ -25,7 +32,12 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.routing_analysis.detectors import Detector, detector_value
 from senselab.audio.workflows.triage.routing_analysis.families import DECLARED_KIND, SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures
-from senselab.audio.workflows.triage.routing_analysis.report import Confusion
+from senselab.audio.workflows.triage.routing_analysis.report import (
+    OVER_ROUTING_BUDGETS,
+    Confusion,
+    RecallCurve,
+    recall_at_budgets,
+)
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
 
 RULESET_PATH = "taxonomy.ruleset"
@@ -42,6 +54,9 @@ BRACKET_SET_PATHS: Mapping[str, str] = {"airway": "taxonomy.airway_bracket_token
 
 AT_LEAST = "at_least"
 AT_MOST = "at_most"
+
+_POLARITY: Mapping[str, str] = {AT_LEAST: "above", AT_MOST: "below"}
+"""Each comparison's firing side, in the polarity vocabulary the recall curve reads."""
 
 FAMILY_SETS: Mapping[str, frozenset[str]] = {**DECLARED_KIND, "syllable_repetition": SYLLABLE_REPETITION}
 """Every named family set a branch's reference standard may be taken from."""
@@ -116,6 +131,11 @@ class Ruleset:
             and never routes: it is read after a branch is entered, not to enter it.
         reference_family_set: Branch to the :data:`FAMILY_SETS` entry it is scored against. This
             mapping is a reference standard, not a router: no gate is skipped because of it.
+        excluded_by_construction: Branch to the :data:`FAMILY_SETS` entry its reference set leaves
+            out although the content is what the branch is for. Those families are neither
+            positives nor negatives: scoring holds them out of the population rather than charging
+            the branch for routing them. A branch with nothing to hold out is absent from the
+            mapping.
         emptiness: The bypass evaluated after every branch gate, and only where none fired.
     """
 
@@ -123,7 +143,20 @@ class Ruleset:
     branch_gates: Mapping[str, tuple[str, ...]]
     branch_flags: Mapping[str, tuple[str, ...]]
     reference_family_set: Mapping[str, str]
+    excluded_by_construction: Mapping[str, str]
     emptiness: Emptiness
+
+    def held_out(self, branch: str) -> frozenset[str]:
+        """The families held out of one branch's scored population.
+
+        Args:
+            branch: The branch.
+
+        Returns:
+            That branch's construction exclusions, empty when it declares none.
+        """
+        set_name = self.excluded_by_construction.get(branch)
+        return FAMILY_SETS[set_name] if set_name else frozenset()
 
     def reference_branches(self, family: str) -> tuple[str, ...]:
         """Which branches a family is a reference positive for.
@@ -257,10 +290,16 @@ def load_ruleset(config: TriageConfig) -> Ruleset:
         The ruleset.
 
     Raises:
-        ValueError: When a branch names a family set that does not exist, when a branch names a gate
-            the ``gates`` mapping does not define, or when a gate names an unsupported comparison.
+        ValueError: When a branch names a family set that does not exist, when a branch holds out
+            families its own reference set calls positive, when a branch names a gate the ``gates``
+            mapping does not define, or when a gate names an unsupported comparison.
     """
     reference = dict(config.require(f"{RULESET_PATH}.reference_family_set"))
+    excluded = {
+        branch: str(set_name)
+        for branch, set_name in config.require(f"{RULESET_PATH}.excluded_by_construction").items()
+        if set_name
+    }
     branch_gates = {branch: tuple(names) for branch, names in config.require(f"{RULESET_PATH}.branch_gates").items()}
     branch_flags = {branch: tuple(names) for branch, names in config.require(f"{RULESET_PATH}.branch_flags").items()}
     gates = {
@@ -280,6 +319,15 @@ def load_ruleset(config: TriageConfig) -> Ruleset:
     for branch, set_name in reference.items():
         if set_name not in FAMILY_SETS:
             raise ValueError(f"{RULESET_PATH}.reference_family_set[{branch}] names no family set: {set_name!r}")
+    for branch, set_name in excluded.items():
+        if set_name not in FAMILY_SETS:
+            raise ValueError(f"{RULESET_PATH}.excluded_by_construction[{branch}] names no family set: {set_name!r}")
+        contradiction = FAMILY_SETS[set_name] & FAMILY_SETS.get(reference.get(branch, ""), frozenset())
+        if contradiction:
+            raise ValueError(
+                f"{RULESET_PATH}.excluded_by_construction[{branch}] holds out families the reference set "
+                f"calls positive: {sorted(contradiction)}"
+            )
     for key, assignment in (("branch_gates", branch_gates), ("branch_flags", branch_flags)):
         for branch, names in assignment.items():
             for name in names:
@@ -298,6 +346,7 @@ def load_ruleset(config: TriageConfig) -> Ruleset:
         branch_gates=branch_gates,
         branch_flags=branch_flags,
         reference_family_set=reference,
+        excluded_by_construction=excluded,
         emptiness=emptiness,
     )
 
@@ -455,26 +504,196 @@ def tally_families(evaluations: Iterable[RouteEvaluation]) -> dict[str, FamilyTa
     }
 
 
-def score_branches(evaluations: Iterable[RouteEvaluation]) -> dict[str, Confusion]:
-    """Score content-only routing against the declared family sets, one 2x2 per branch.
+@dataclass(frozen=True)
+class BranchScore:
+    """One branch's content-only routing, scored against its reference family set two ways.
+
+    Attributes:
+        branch: The branch.
+        reference_family_set: The :data:`FAMILY_SETS` entry positives were taken from.
+        against_reference: The 2x2 over every recording.
+        excluding_construction: The same, with the branch's construction exclusions dropped from
+            the population. Identical to ``against_reference`` when the branch declares none.
+        held_out_family_set: The :data:`FAMILY_SETS` entry that was held out, or None.
+        n_held_out: How many recordings the exclusion removed.
+    """
+
+    branch: str
+    reference_family_set: str
+    against_reference: Confusion
+    excluding_construction: Confusion
+    held_out_family_set: str | None
+    n_held_out: int
+
+    def as_json(self) -> dict[str, Any]:
+        """This branch's score, for the machine-readable output.
+
+        Returns:
+            Both 2x2 tables with their derived rates, and what was held out of the second.
+        """
+        return {
+            "branch": self.branch,
+            "reference_family_set": self.reference_family_set,
+            "held_out_family_set": self.held_out_family_set,
+            "n_held_out": self.n_held_out,
+            "against_reference": self.against_reference.as_json(),
+            "excluding_construction": self.excluding_construction.as_json(),
+        }
+
+
+def score_branches(evaluations: Iterable[RouteEvaluation], ruleset: Ruleset) -> dict[str, BranchScore]:
+    """Score content-only routing against the reference family sets, one branch at a time.
+
+    Each branch gets two 2x2 tables over the same evaluations. The first counts every recording.
+    The second holds out the branch's construction exclusions — families the reference set leaves
+    out although their content is what the branch is for — because a recording routed there is not
+    an error, and counting it as one charges the branch for behaving correctly.
 
     Args:
         evaluations: The evaluations, in any order.
+        ruleset: The loaded ruleset, read for each branch's reference and exclusion sets.
 
     Returns:
-        One :class:`~senselab.audio.workflows.triage.routing_analysis.report.Confusion` per branch,
-        in branch order, carrying the raw counts and the sensitivity and specificity derived from
-        them. A recording is a reference positive for a branch when its family is in that branch's
-        reference family set, and a prediction positive when the branch is in ``routed``.
+        One :class:`BranchScore` per branch, in branch order. A recording is a reference positive
+        for a branch when its family is in that branch's reference family set, and a prediction
+        positive when the branch is in ``routed``.
     """
     counts = {branch: {"tp": 0, "fp": 0, "tn": 0, "fn": 0} for branch in BRANCHES}
+    kept = {branch: {"tp": 0, "fp": 0, "tn": 0, "fn": 0} for branch in BRANCHES}
+    held_out = dict.fromkeys(BRANCHES, 0)
     for evaluation in evaluations:
         for branch in BRANCHES:
             predicted = branch in evaluation.routed
             positive = branch in evaluation.declared
-            counts[branch]["tp" if predicted else "fn"] += int(positive)
-            counts[branch]["fp" if predicted else "tn"] += int(not positive)
-    return {branch: Confusion(**row) for branch, row in counts.items()}
+            cell = ("tp" if positive else "fp") if predicted else ("fn" if positive else "tn")
+            counts[branch][cell] += 1
+            if evaluation.family in ruleset.held_out(branch):
+                held_out[branch] += 1
+            else:
+                kept[branch][cell] += 1
+    return {
+        branch: BranchScore(
+            branch=branch,
+            reference_family_set=ruleset.reference_family_set.get(branch, ""),
+            against_reference=Confusion(**counts[branch]),
+            excluding_construction=Confusion(**kept[branch]),
+            held_out_family_set=ruleset.excluded_by_construction.get(branch),
+            n_held_out=held_out[branch],
+        )
+        for branch in BRANCHES
+    }
+
+
+@dataclass(frozen=True)
+class GateRecall:
+    """One routing gate's configured operating point, read against its recall-at-budget curve.
+
+    Attributes:
+        branch: The branch the gate routes.
+        gate: The gate's name.
+        threshold: The configured cut.
+        configured: The 2x2 the configured cut produces on the curve's population.
+        curve: What the same gate reaches at each over-routing budget.
+    """
+
+    branch: str
+    gate: str
+    threshold: float
+    configured: Confusion
+    curve: RecallCurve
+
+    def as_json(self) -> dict[str, Any]:
+        """This gate's recall report, for the machine-readable output.
+
+        Returns:
+            The configured point with its rates, and the curve.
+        """
+        return {
+            "branch": self.branch,
+            "gate": self.gate,
+            "threshold": self.threshold,
+            "configured": self.configured.as_json(),
+            "curve": self.curve.as_json(),
+        }
+
+
+def gate_recall(
+    records: Sequence[RecordingFeatures],
+    ruleset: Ruleset,
+    branch: str,
+    gate_name: str,
+    *,
+    budgets: Sequence[float] = OVER_ROUTING_BUDGETS,
+) -> GateRecall:
+    """One gate's recall at each over-routing budget, beside the operating point it is configured at.
+
+    Args:
+        records: The recordings to score over.
+        ruleset: The loaded ruleset.
+        branch: The branch whose reference and exclusion sets define positives and the population.
+        gate_name: The gate.
+        budgets: The false-positive rates over the negatives that each point may not exceed.
+
+    Returns:
+        The report. A recording whose evidence the gate cannot read counts as a non-firing, both at
+        the configured point and along the curve: a router that cannot read a recording does not
+        route it.
+    """
+    gate = ruleset.gates[gate_name]
+    positives = FAMILY_SETS[ruleset.reference_family_set[branch]]
+    excluded = ruleset.held_out(branch)
+    observations: list[tuple[float | None, bool]] = []
+    counts = {"tp": 0, "fp": 0, "tn": 0, "fn": 0}
+    for record in records:
+        if record.family in excluded:
+            continue
+        value = gate_value(record, gate)
+        positive = record.family in positives
+        observations.append((value, positive))
+        fired = evaluate_gate(record, gate) is GateOutcome.FIRED
+        counts[("tp" if positive else "fp") if fired else ("fn" if positive else "tn")] += 1
+    population = f"{ruleset.reference_family_set[branch]} as positives"
+    if ruleset.excluded_by_construction.get(branch):
+        population += f", {ruleset.excluded_by_construction[branch]} held out"
+    return GateRecall(
+        branch=branch,
+        gate=gate_name,
+        threshold=gate.threshold,
+        configured=Confusion(**counts),
+        curve=recall_at_budgets(
+            observations,
+            name=gate_name,
+            reference=ruleset.reference_family_set[branch],
+            polarity=_POLARITY[gate.op],
+            budgets=budgets,
+            population=population,
+        ),
+    )
+
+
+def branch_recall_curves(
+    records: Sequence[RecordingFeatures],
+    ruleset: Ruleset,
+    *,
+    budgets: Sequence[float] = OVER_ROUTING_BUDGETS,
+) -> list[GateRecall]:
+    """Every routing gate's recall-at-budget report, in branch and declaration order.
+
+    Args:
+        records: The recordings to score over.
+        ruleset: The loaded ruleset.
+        budgets: The false-positive rates over the negatives that each point may not exceed.
+
+    Returns:
+        One :class:`GateRecall` per gate in ``branch_gates``. Flag gates route nothing and are not
+        reported here.
+    """
+    return [
+        gate_recall(records, ruleset, branch, name, budgets=budgets)
+        for branch in BRANCHES
+        if branch in ruleset.reference_family_set
+        for name in ruleset.branch_gates.get(branch, ())
+    ]
 
 
 AXES: Sequence[str] = ("routed", "declared", "agreed", "missed", "extra", "unavailable", "flagged")

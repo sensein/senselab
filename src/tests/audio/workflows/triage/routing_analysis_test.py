@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,12 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     Detector,
     detector_value,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import declared_kinds, task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import (
+    SYLLABLE_REPETITION,
+    declared_kinds,
+    task_family,
+    task_id_of,
+)
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     bracket_type,
@@ -26,11 +32,16 @@ from senselab.audio.workflows.triage.routing_analysis.features import (
 )
 from senselab.audio.workflows.triage.routing_analysis.labels import LABEL_SETS
 from senselab.audio.workflows.triage.routing_analysis.report import (
+    LIMIT_AVAILABILITY,
+    LIMIT_BUDGET,
+    OVER_ROUTING_BUDGETS,
     REFERENCE_STANDARDS,
     Confusion,
+    detector_recall_at_budgets,
     disagreements,
     label_prevalence,
     prevalence,
+    recall_at_budgets,
     score_detector,
     taxonomy_as_run,
     write_report,
@@ -718,3 +729,221 @@ def test_label_conditioned_detectors_read_the_cough_spans(tmp_path: Path) -> Non
     for detector in detectors.values():
         assert detector_value(silent, detector) is None
         assert max(detector.thresholds) >= 55.0
+
+
+def _retitled(record: RecordingFeatures, family: str) -> RecordingFeatures:
+    """The same extracted evidence, presented as a recording of another task family.
+
+    Args:
+        record: The record to copy.
+        family: The family the copy declares.
+
+    Returns:
+        The copy, with its stem and task id following the family.
+
+    """
+    return replace(record, stem=f"sub-1_ses-1_task-{family}", task_id=family, family=family)
+
+
+def _synthetic(n_positive: int, n_negative: int, separation: float) -> list[tuple[float | None, bool]]:
+    """A detector with a known ROC: positives on one ramp, negatives on another below it.
+
+    Args:
+        n_positive: How many reference positives.
+        n_negative: How many reference negatives.
+        separation: How far the positive ramp starts above the negative one.
+
+    Returns:
+        One ``(value, is_reference_positive)`` per recording.
+
+    """
+    positives = [(separation + index / n_positive, True) for index in range(n_positive)]
+    negatives = [(index / n_negative, False) for index in range(n_negative)]
+    return [*positives, *negatives]
+
+
+class TestRecallAtOverRoutingBudget:
+    """A router's two errors are not symmetric, so the criterion is recall inside a budget."""
+
+    def test_a_perfectly_separated_detector_recalls_everything_at_every_budget(self) -> None:
+        """Positives strictly above every negative: the loosest clean cut costs no false positive."""
+        curve = recall_at_budgets(_synthetic(50, 100, 2.0), name="d", reference="r")
+        for point in curve.points:
+            assert point.recall == pytest.approx(1.0)
+            assert point.false_positive_rate == pytest.approx(0.0)
+            assert point.limit == LIMIT_AVAILABILITY
+
+    def test_a_wider_budget_never_recalls_less(self) -> None:
+        """Recall is monotone in the budget, because looseness buys both together."""
+        curve = recall_at_budgets(_synthetic(50, 100, 0.5), name="d", reference="r")
+        recalls = [point.recall for point in curve.points]
+        assert recalls == sorted(recalls)
+        assert recalls[0] is not None and recalls[-1] is not None
+        assert recalls[0] < recalls[-1]
+
+    def test_the_over_routing_stays_inside_every_budget(self) -> None:
+        """The chosen point is the loosest one whose false-positive rate the budget allows."""
+        curve = recall_at_budgets(_synthetic(50, 100, 0.2), name="d", reference="r")
+        for point in curve.points:
+            assert point.false_positive_rate is not None
+            assert point.false_positive_rate <= point.budget
+
+    def test_a_rate_equal_to_the_budget_is_inside_it(self) -> None:
+        """The boundary is inclusive: five false positives in a hundred negatives is exactly 5%."""
+        observations: list[tuple[float | None, bool]] = [(1.0, True)] * 5 + [(0.9, True)] * 5
+        observations += [(0.9, False)] * 5 + [(0.1, False)] * 95
+        point = recall_at_budgets(observations, name="d", reference="r", budgets=(0.05,)).point(0.05)
+        assert point.threshold == pytest.approx(0.9)
+        assert point.false_positive_rate == pytest.approx(0.05)
+        assert point.recall == pytest.approx(1.0)
+
+    def test_one_false_positive_over_the_budget_takes_the_stricter_cut(self) -> None:
+        """Six in a hundred is outside a 5% budget, so the point below it is chosen and half is lost."""
+        observations: list[tuple[float | None, bool]] = [(1.0, True)] * 5 + [(0.9, True)] * 5
+        observations += [(0.9, False)] * 6 + [(0.1, False)] * 94
+        point = recall_at_budgets(observations, name="d", reference="r", budgets=(0.05,)).point(0.05)
+        assert point.threshold == pytest.approx(1.0)
+        assert point.false_positive_rate == pytest.approx(0.0)
+        assert point.recall == pytest.approx(0.5)
+
+    def test_a_point_is_tightened_back_to_the_strictest_cut_at_the_same_recall(self) -> None:
+        """Loosening past the last positive buys over-routing and nothing else, so it is not taken."""
+        observations: list[tuple[float | None, bool]] = [(1.0, True)] * 10
+        observations += [(0.9, False)] * 2 + [(0.1, False)] * 98
+        point = recall_at_budgets(observations, name="d", reference="r", budgets=(0.02,)).point(0.02)
+        assert point.threshold == pytest.approx(1.0)
+        assert point.recall == pytest.approx(1.0)
+        assert point.false_positive_rate == pytest.approx(0.0)
+
+    def test_a_detector_that_cannot_stay_inside_the_budget_fires_on_nothing(self) -> None:
+        """Every firing threshold over-routes, so the point inside the budget is the empty one."""
+        observations: list[tuple[float | None, bool]] = [(1.0, True)] * 5 + [(1.0, False)] * 95
+        point = recall_at_budgets(observations, name="d", reference="r", budgets=(0.02,)).point(0.02)
+        assert point.threshold is None
+        assert point.recall == pytest.approx(0.0)
+        assert point.false_positive_rate == pytest.approx(0.0)
+        assert point.limit == LIMIT_BUDGET
+
+    def test_a_detector_whose_feature_is_absent_is_availability_capped_not_threshold_capped(self) -> None:
+        """Three positives in ten carry the feature, so the curve is flat at 0.3 from the first budget."""
+        observations: list[tuple[float | None, bool]] = [(5.0, True)] * 3 + [(None, True)] * 7
+        observations += [(None, False)] * 90 + [(0.0, False)] * 10
+        curve = recall_at_budgets(observations, name="d", reference="r")
+        assert curve.recall_ceiling == pytest.approx(0.3)
+        assert curve.availability == pytest.approx(13 / 110)
+        assert curve.n_positive_unreadable == 7
+        for point in curve.points:
+            assert point.recall == pytest.approx(0.3)
+            assert point.limit == LIMIT_AVAILABILITY
+
+    def test_a_readable_detector_at_the_same_recall_is_budget_capped(self) -> None:
+        """The same 0.3 recall, but every positive readable: a wider budget would buy more."""
+        observations: list[tuple[float | None, bool]] = [(5.0, True)] * 3 + [(0.5, True)] * 7
+        observations += [(0.6, False)] * 30 + [(0.0, False)] * 70
+        curve = recall_at_budgets(observations, name="d", reference="r", budgets=(0.02, 0.5))
+        assert curve.recall_ceiling == pytest.approx(1.0)
+        assert curve.point(0.02).recall == pytest.approx(0.3)
+        assert curve.point(0.02).limit == LIMIT_BUDGET
+        assert curve.point(0.5).recall == pytest.approx(1.0)
+        assert curve.point(0.5).limit == LIMIT_AVAILABILITY
+
+    def test_unreadable_evidence_is_a_non_firing_rather_than_a_dropped_recording(self) -> None:
+        """A router that cannot read a recording does not route it, so it is a miss not an exclusion."""
+        curve = recall_at_budgets(
+            [(1.0, True), (None, True), (0.0, False), (None, False)], name="d", reference="r", budgets=(0.5,)
+        )
+        assert curve.n_scored == 4
+        assert curve.n_unreadable == 2
+        assert curve.point(0.5).confusion.fn == 1
+
+    def test_a_below_polarity_detector_loosens_upward(self) -> None:
+        """``below`` fires at or under the threshold, so its loosest cut is its highest."""
+        observations: list[tuple[float | None, bool]] = [(0.1, True)] * 10 + [(0.9, False)] * 10
+        point = recall_at_budgets(observations, name="d", reference="r", polarity="below", budgets=(0.0,)).point(0.0)
+        assert point.threshold == pytest.approx(0.1)
+        assert point.recall == pytest.approx(1.0)
+
+    def test_a_population_with_no_positive_carries_no_limit(self) -> None:
+        """With nothing to recall, neither the budget nor availability is what bounds anything."""
+        curve = recall_at_budgets([(1.0, False), (0.0, False)], name="d", reference="r", budgets=(0.5,))
+        assert curve.recall_ceiling is None
+        assert curve.point(0.5).limit is None
+
+    def test_an_unknown_budget_is_an_error_rather_than_a_silent_zero(self) -> None:
+        """Reading a budget the curve was not computed at is a mistake, not a missing value."""
+        curve = recall_at_budgets([(1.0, True)], name="d", reference="r", budgets=(0.5,))
+        with pytest.raises(KeyError, match="no point at budget"):
+            curve.point(0.02)
+
+    def test_the_default_budgets_are_the_four_reported_ones(self) -> None:
+        """The defaults are a viewing parameter and every caller may replace them."""
+        assert OVER_ROUTING_BUDGETS == (0.02, 0.05, 0.10, 0.20)
+        assert len(recall_at_budgets([(1.0, True), (0.0, False)], name="d", reference="r").points) == 4
+
+
+class TestFamiliesExcludedFromAReferenceByConstruction:
+    """A family the reference set leaves out although its content is the branch's is not an error."""
+
+    @staticmethod
+    def _mixed(tmp_path: Path) -> list[RecordingFeatures]:
+        """Two diadochokinesis recordings, two held vowels and one lexical-speech recording.
+
+        Args:
+            tmp_path: The test's temporary directory.
+
+        Returns:
+            Five records, four of them carrying two lexical words and one carrying none.
+
+        """
+        spoken, silent = _features(tmp_path)
+        return [
+            _retitled(spoken, "diadochokinesis-pataka"),
+            _retitled(spoken, "diadochokinesis-ka"),
+            _retitled(spoken, "prolonged-vowel"),
+            _retitled(spoken, "free-speech"),
+            _retitled(silent, "maximum-phonation-time"),
+        ]
+
+    def test_the_lexical_speech_standard_holds_out_the_syllable_repetition_families(self) -> None:
+        """Diadochokinesis is speech; it sits outside ``LEXICAL_SPEECH`` only by construction."""
+        reference = next(r for r in REFERENCE_STANDARDS if r.name == "declared_lexical_speech")
+        assert reference.excluded_by_construction == SYLLABLE_REPETITION
+        assert "syllable-repetition" in reference.scored_population()
+
+    def test_every_other_standard_holds_out_nothing(self) -> None:
+        """An exclusion is declared, never inferred, so no other standard acquires one silently."""
+        for reference in REFERENCE_STANDARDS:
+            if reference.name != "declared_lexical_speech":
+                assert reference.excluded_by_construction == frozenset()
+                assert reference.scored_population() == reference.population_description
+
+    def test_exactly_the_named_families_leave_the_population(self, tmp_path: Path) -> None:
+        """Both diadochokinesis recordings go; the held vowels, which are not named, stay."""
+        reference = next(r for r in REFERENCE_STANDARDS if r.name == "declared_lexical_speech")
+        detector = next(d for d in DETECTORS if d.name == "speech.words_lexical")
+        curve = detector_recall_at_budgets(self._mixed(tmp_path), detector, reference)
+        assert curve.n_scored == 3
+        assert curve.n_positive == 1
+        assert curve.n_negative == 2
+
+    def test_the_sweep_reports_both_specificities_side_by_side(self, tmp_path: Path) -> None:
+        """The plain table charges the diadochokinesis recordings; the corrected one does not."""
+        reference = next(r for r in REFERENCE_STANDARDS if r.name == "declared_lexical_speech")
+        detector = next(d for d in DETECTORS if d.name == "speech.words_lexical")
+        scored = score_detector(self._mixed(tmp_path), detector, reference)
+        assert scored["excluded_by_construction"] == "the syllable-repetition families"
+        row = next(row for row in scored["rows"] if row["threshold"] == 1)
+        assert (row["tp"], row["fp"], row["tn"], row["fn"]) == (1, 3, 1, 0)
+        assert row["specificity"] == pytest.approx(0.25)
+        corrected = row["excluding_construction"]
+        assert (corrected["tp"], corrected["fp"], corrected["tn"], corrected["fn"]) == (1, 1, 1, 0)
+        assert corrected["specificity"] == pytest.approx(0.5)
+
+    def test_a_standard_with_no_exclusion_carries_no_corrected_table(self, tmp_path: Path) -> None:
+        """Only a standard that declares an exclusion reports a second table."""
+        records = list(_features(tmp_path))
+        reference = next(r for r in REFERENCE_STANDARDS if r.name == "declared_speech")
+        detector = next(d for d in DETECTORS if d.name == "speech.words_lexical")
+        scored = score_detector(records, detector, reference)
+        assert scored["excluded_by_construction"] is None
+        assert all("excluding_construction" not in row for row in scored["rows"])
