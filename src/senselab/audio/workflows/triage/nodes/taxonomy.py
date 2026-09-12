@@ -24,6 +24,10 @@ either (see ``taxonomy()``'s own docstring) — evidence must be found in what t
 show, since a single recording can genuinely carry more than one task's content (a counting task
 and a prolonged vowel in the same file), and a hint naming one must never suppress evidence for
 the other.
+
+Beside the kind lines it also records the family taxonomy ruleset's reading of the same store, as
+the ``ruleset_routing`` measurement. That reading selects nothing: ``kind_state`` still decides what
+runs. ``specs/20260912-ruleset-in-pipeline/design.md`` holds the staging.
 """
 
 from __future__ import annotations
@@ -45,8 +49,14 @@ from senselab.audio.workflows.triage.classifier_ontology import (
     resolved_profile_path,
 )
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.live_evidence import (
+    evaluate_live_routes,
+    failed_route_attributes,
+    route_attributes,
+)
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
+    describe_exception,
     find_measurement,
     find_measurements,
     lexical_words,
@@ -55,7 +65,8 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_measurement,
     write_verdict,
 )
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.routing_analysis.ruleset import load_ruleset
+from senselab.audio.workflows.triage.vocabulary import RULESET_ROUTING, Outcome
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "TAXONOMY"
@@ -605,6 +616,41 @@ def _write_label_summaries(store: ProvStore, run_dir: Path, software: str) -> li
     return written
 
 
+def _write_ruleset_routing(
+    store: ProvStore, config: TriageConfig, run_dir: Path, software: str, source: str
+) -> list[str]:
+    """Evaluate the family taxonomy ruleset over the store as it stands, and record what it made.
+
+    A failure to evaluate is recorded on the measurement rather than raised: the measurement then
+    carries a null ``state`` and the failure in ``error``, and the node concludes normally. See
+    ``specs/20260912-ruleset-in-pipeline/design.md``.
+
+    Args:
+        store: The provenance store, holding PREPROCESS's derivatives and the summaries this node
+            has already written. Called after both, since gates read both.
+        config: The triage configuration.
+        run_dir: The run directory the store's sidecar paths are relative to.
+        software: This node's software agent.
+        source: The stream the measurement names.
+
+    Returns:
+        The one id written, for the node's view.
+    """
+    activity = store.activity(
+        node=NODE, step="ruleset_routing", parameters={"config_hash": config.config_hash, "stream": source}
+    )
+    store.was_associated_with(activity, software)
+    try:
+        attributes = route_attributes(evaluate_live_routes(store, config, run_dir=run_dir), load_ruleset(config))
+    except Exception as error:  # noqa: BLE001 — a reading that decides nothing never fails the node
+        attributes = failed_route_attributes(describe_exception(error))
+    return [
+        write_measurement(
+            store, activity, software, name=RULESET_ROUTING, signal=source, attributes=attributes, extent=None
+        )
+    ]
+
+
 def taxonomy(
     store: ProvStore,
     source: str,
@@ -626,8 +672,9 @@ def taxonomy(
             writes none of its own.
 
     Returns:
-        The verdict, the three kind element ids plus each classifier's whole-file label summary as
-        the view, and the state per kind.
+        The verdict, the three kind element ids plus each classifier's whole-file label summary, the
+        consensus taxonomy and the ``ruleset_routing`` measurement as the view, and the state per
+        kind.
     """
     software = software_agent(store)
     speech_family = {str(label) for label in (config.get("taxonomy.speech_labels") or [])}
@@ -669,6 +716,7 @@ def taxonomy(
     }
     summary_view = _write_label_summaries(store, run_dir, software)
     summary_view += _write_consensus_taxonomy(store, config, software)
+    summary_view += _write_ruleset_routing(store, config, run_dir, software, source)
     voice_line, voice_state = _retired_voice_line()
     lines["voice"] = {"phonation": voice_line}
 

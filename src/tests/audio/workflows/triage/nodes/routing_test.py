@@ -6,9 +6,9 @@ from pathlib import Path
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.nodes.common import live_entities
-from senselab.audio.workflows.triage.nodes.routing import BRANCH_FOR_KIND, routing
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.nodes.common import live_entities, write_measurement
+from senselab.audio.workflows.triage.nodes.routing import BRANCH_FOR_KIND, UNCLASSIFIED_BRANCHES, routing
+from senselab.audio.workflows.triage.vocabulary import BRANCHES, RULESET_ROUTING, Outcome
 from senselab.utils.prov_store import ProvStore
 
 
@@ -39,6 +39,75 @@ def _kinds(store: ProvStore, **states: str) -> None:
             prov_type="kind", extent=None, attributes={"kind": kind, "state": state, "lines": {}, "stream": "plain"}
         )
         store.was_generated_by(entity_id, activity)
+
+
+def _ruleset_routing(store: ProvStore, state: str, routed: list[str]) -> None:
+    """Write the ``ruleset_routing`` measurement TAXONOMY would have written."""
+    activity = store.activity(node="TAXONOMY", step="ruleset_routing", parameters={})
+    agent = store.agent(agent_type="software", version="test")
+    write_measurement(
+        store,
+        activity,
+        agent,
+        name=RULESET_ROUTING,
+        signal="plain",
+        attributes={"authoritative": False, "error": None, "state": state, "routed": routed},
+    )
+
+
+class TestTheRulesetIsRecordedAndNotObeyed:
+    """The content-routed set is written beside every decision and decides nothing."""
+
+    def test_a_branch_the_ruleset_routed_alone_still_does_not_run(self, store: ProvStore, tmp_path: Path) -> None:
+        """``kind_state`` decides execution; the ruleset's selection is a second column, not a vote."""
+        _kinds(store, speech="absent", airway="absent", voice="absent")
+        _ruleset_routing(store, "routed", ["SPEECH", "DDK"])
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.runs == ()
+        assert result.ruleset_runs == ("SPEECH", "DDK")
+        assert result.ruleset_state == "routed"
+
+    def test_each_decision_carries_both_selections(self, store: ProvStore, tmp_path: Path) -> None:
+        """One entity carries ``will_run`` and ``ruleset_will_run``, so agreement is a column pair."""
+        _kinds(store, speech="present", airway="absent", voice="absent")
+        _ruleset_routing(store, "routed", ["AIRWAY"])
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
+        assert decisions["SPEECH"]["will_run"] is True
+        assert decisions["SPEECH"]["ruleset_will_run"] is False
+        assert decisions["AIRWAY"]["will_run"] is False
+        assert decisions["AIRWAY"]["ruleset_will_run"] is True
+        assert decisions["AIRWAY"]["ruleset_route_state"] == "routed"
+
+    def test_an_evaluation_that_was_never_made_is_not_a_branch_that_routed_nothing(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """A null state reads as no reading, so a failed evaluation cannot be counted as agreement."""
+        _kinds(store, speech="present")
+        _ruleset_routing(store, "", [])
+        store.entity(prov_type="measurement", extent=None, attributes={"name": RULESET_ROUTING, "state": None})
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.ruleset_runs == ()
+        assert result.ruleset_state is None
+
+    def test_a_missing_measurement_leaves_the_second_column_empty(self, store: ProvStore, tmp_path: Path) -> None:
+        """TAXONOMY never ran, so there is nothing to compare and nothing is invented."""
+        _kinds(store, speech="present")
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.ruleset_runs == ()
+        assert result.ruleset_state is None
+
+
+class TestTheBranchVocabulary:
+    """Every branch the ruleset can name, whether or not a kind line decides it."""
+
+    def test_every_mapped_branch_is_a_branch(self) -> None:
+        """A kind mapping to a branch the vocabulary does not have would route into nothing."""
+        assert set(BRANCH_FOR_KIND.values()) <= set(BRANCHES)
+
+    def test_ddk_is_the_branch_no_kind_line_decides(self) -> None:
+        """It is expressible in a routed set and has no kind, which is why nothing here runs it."""
+        assert UNCLASSIFIED_BRANCHES == ("DDK",)
 
 
 class TestTheRule:
