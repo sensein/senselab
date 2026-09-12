@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence, get_args, get_origin, get_type_hints
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
     CONSOLIDATION_FLOOR,
@@ -32,6 +35,7 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
 from senselab.audio.workflows.triage.routing_analysis.families import DECLARED_KIND, SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.labels import CLASSIFIERS, TRACKED_LABELS, peak_key
+from senselab.audio.workflows.triage.routing_analysis.tables import COMPRESSION, ROW_GROUP_ROWS
 
 DISAGREEMENT_CAP = 200
 """How many individual disagreements are listed per family and direction."""
@@ -1167,37 +1171,196 @@ def _markdown(
     return "\n".join(lines)
 
 
+SHARD_SUFFIX = ".parquet"
+"""What one features shard file is named with. A shard directory holds one or more of them."""
+
+_COLUMN_SEPARATOR = "."
+"""What a mapping field's name is joined to one of its keys with, to make a column name."""
+
+_ARROW_BY_SCALAR: Mapping[Any, pa.DataType] = {
+    str: pa.string(),
+    bool: pa.bool_(),
+    int: pa.int64(),
+    float: pa.float64(),
+}
+
+
+@dataclass(frozen=True)
+class _ColumnPlan:
+    """How one declared field of ``RecordingFeatures`` becomes columns of the shard.
+
+    Attributes:
+        name: The field's name.
+        arrow: The arrow type one value of it takes.
+        mapping: Whether the field is a mapping, and so becomes one column per key it carries.
+        listed: Whether the field is a list, and so becomes one list-typed column.
+    """
+
+    name: str
+    arrow: pa.DataType
+    mapping: bool
+    listed: bool
+
+
+def _column_plans() -> tuple[_ColumnPlan, ...]:
+    """How every declared field of ``RecordingFeatures`` maps onto arrow.
+
+    Returns:
+        One plan per field, in declaration order.
+
+    Raises:
+        TypeError: If a field carries an annotation the shard schema has no rule for, which is a
+            new field nobody has decided the column shape of.
+    """
+    hints = get_type_hints(RecordingFeatures)
+    plans: list[_ColumnPlan] = []
+    for declared in fields(RecordingFeatures):
+        hint = hints[declared.name]
+        arguments = [argument for argument in get_args(hint) if argument is not type(None)]
+        origin = get_origin(hint)
+        if origin in (dict, Mapping):
+            plans.append(_ColumnPlan(declared.name, _ARROW_BY_SCALAR[arguments[1]], True, False))
+        elif origin is list:
+            plans.append(_ColumnPlan(declared.name, pa.list_(_ARROW_BY_SCALAR[arguments[0]]), False, True))
+        elif origin is None:
+            plans.append(_ColumnPlan(declared.name, _ARROW_BY_SCALAR[hint], False, False))
+        elif len(arguments) == 1:
+            plans.append(_ColumnPlan(declared.name, _ARROW_BY_SCALAR[arguments[0]], False, False))
+        else:
+            raise TypeError(f"RecordingFeatures.{declared.name}: {hint} has no features-shard column shape")
+    return tuple(plans)
+
+
+_COLUMN_PLANS = _column_plans()
+"""The column shape of every field, derived once from the dataclass rather than written down."""
+
+
+def shard_schema(records: Sequence[RecordingFeatures]) -> pa.Schema:
+    """The flattened schema a set of records needs.
+
+    Args:
+        records: The records the mapping fields' key union is taken over.
+
+    Returns:
+        One column per scalar field and one per ``<field>.<key>`` a mapping field carries, in
+        field order and then key order.
+    """
+    columns: list[pa.Field] = []
+    for plan in _COLUMN_PLANS:
+        if not plan.mapping:
+            columns.append(pa.field(plan.name, plan.arrow))
+            continue
+        keys = sorted({key for record in records for key in getattr(record, plan.name)})
+        columns.extend(pa.field(f"{plan.name}{_COLUMN_SEPARATOR}{key}", plan.arrow) for key in keys)
+    return pa.schema(columns)
+
+
+def _as_row(record: RecordingFeatures) -> dict[str, Any]:
+    """One record as a flat mapping keyed by column name.
+
+    Args:
+        record: The record.
+
+    Returns:
+        Only the columns the record carries a value for. A key its mapping fields omit is left out,
+        so it is written as null rather than as a zero.
+    """
+    row: dict[str, Any] = {}
+    for plan in _COLUMN_PLANS:
+        value = getattr(record, plan.name)
+        if not plan.mapping:
+            row[plan.name] = value
+            continue
+        for key, nested in value.items():
+            row[f"{plan.name}{_COLUMN_SEPARATOR}{key}"] = nested
+    return row
+
+
+def _records_from_table(table: pa.Table) -> list[RecordingFeatures]:
+    """Rebuild the records one table holds, reading it column by column.
+
+    Args:
+        table: One shard file's table.
+
+    Returns:
+        The records, in row order. A null is an absent value: it leaves the field at its declared
+        default and leaves a mapping key out altogether.
+    """
+    listed = {plan.name for plan in _COLUMN_PLANS if plan.listed}
+    payloads: list[dict[str, Any]] = [{} for _ in range(table.num_rows)]
+    for name in table.schema.names:
+        field_name, _, key = name.partition(_COLUMN_SEPARATOR)
+        for index, value in enumerate(table.column(name).to_pylist()):
+            if value is None:
+                continue
+            if not key:
+                payloads[index][field_name] = list(value) if field_name in listed else value
+            else:
+                payloads[index].setdefault(field_name, {})[key] = value
+    return [RecordingFeatures(**payload) for payload in payloads]
+
+
+def shard_files(path: Path) -> list[Path]:
+    """The shard files one features path names.
+
+    Args:
+        path: A shard directory, or one shard file.
+
+    Returns:
+        Every shard file, in name order, so a directory written in parts reads back in the order
+        the parts were produced.
+    """
+    return sorted(path.glob(f"*{SHARD_SUFFIX}")) if path.is_dir() else [path]
+
+
 def load_features(path: Path) -> list[RecordingFeatures]:
     """Read a features shard back.
 
     Args:
-        path: A JSONL file of :meth:`RecordingFeatures.as_json` lines.
+        path: A shard directory, or one parquet file :func:`dump_features` wrote.
 
     Returns:
         The records.
     """
     records: list[RecordingFeatures] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                records.append(RecordingFeatures(**json.loads(line)))
+    for shard in shard_files(path):
+        records.extend(_records_from_table(pq.read_table(shard)))
     return records
 
 
+def load_feature_column(path: Path, column: str) -> list[Any]:
+    """Read one column out of a features shard without decoding the rest.
+
+    Args:
+        path: A shard directory, or one shard file.
+        column: The column name, which for a mapping field is ``<field>.<key>``.
+
+    Returns:
+        Every row's value, in shard order, with a null read back as None.
+    """
+    values: list[Any] = []
+    for shard in shard_files(path):
+        values.extend(pq.read_table(shard, columns=[column]).column(column).to_pylist())
+    return values
+
+
 def dump_features(records: Iterable[RecordingFeatures], path: Path) -> int:
-    """Write records as one JSONL shard.
+    """Write records as one parquet shard file.
 
     Args:
         records: The records.
         path: Where to write.
 
     Returns:
-        How many lines were written.
+        How many rows were written.
     """
-    written = 0
-    with path.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(asdict(record), sort_keys=True))
-            handle.write("\n")
-            written += 1
-    return written
+    rows = list(records)
+    schema = shard_schema(rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with pq.ParquetWriter(path, schema, compression=COMPRESSION) as writer:
+        for start in range(0, len(rows), ROW_GROUP_ROWS):
+            batch = [_as_row(record) for record in rows[start : start + ROW_GROUP_ROWS]]
+            writer.write_table(pa.Table.from_pylist(batch, schema=schema))
+        if not rows:
+            writer.write_table(pa.Table.from_pylist([], schema=schema))
+    return len(rows)

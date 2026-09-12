@@ -11,19 +11,24 @@ detector the profile does not cover, or covers as a constant, raises rather than
 
 ``specs/20260912-detector-grids/design.md`` says which quantiles, why the extremes are in, how a
 count and a gate are handled, and which cut points are pinned regardless of the corpus.
+``specs/20260912-parquet-tables/design.md`` says why the profile is a parquet table and why a
+derived grid stops at what its feature attains.
 """
 
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from senselab.audio.workflows.triage.routing_analysis.features import SPAN_CLASSIFIERS, RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.labels import FAMILIES, LABEL_SETS, peak_key
+from senselab.audio.workflows.triage.routing_analysis.tables import read_header
 
 GATE_CLOSED = -1.0
 """The value a gated detector reads when its corroborator did not fire: below every threshold."""
@@ -41,7 +46,19 @@ PROFILE_VERSION = "1"
 """Schema version of the detector profile. A reader refuses any other value."""
 
 PROFILE_DIR = Path(__file__).resolve().parent.parent / "data" / "detector_profile"
-"""Where the bundled profiles live, one dated JSON per corpus sweep."""
+"""Where the bundled profiles live, one dated parquet per corpus sweep."""
+
+PROFILE_SUFFIX = ".parquet"
+"""What a bundled profile is named with."""
+
+PROFILE_NAME_COLUMN = "detector"
+"""The profile table's key column."""
+
+PROFILE_ENTRY_KEYS: tuple[str, ...] = ("n", "availability", "polarity", "state", "min", "max", "distinct", "value")
+"""Every non-quantile column one detector's row can carry. A row leaves out what its state has no value for."""
+
+PROFILE_QUANTILE_PREFIX = "q"
+"""What a quantile of the ladder is columned as, so ``0.001`` becomes ``q0.001``."""
 
 QUANTILE_LADDER: tuple[str, ...] = (
     "0.001",
@@ -66,7 +83,7 @@ COUNT_UNITS: frozenset[str] = frozenset({"words", "spans", "tokens", "phonemes",
 """The units whose feature is a count, so its own integers are the operating points, not quantiles."""
 
 DENSE_INTEGER_SPAN = 32
-"""How far up from zero a count's integers are enumerated before the quantile ladder takes over."""
+"""How far up a count's integers are enumerated before the quantile ladder takes over."""
 
 PINNED_THRESHOLDS: Mapping[str, tuple[float, ...]] = {
     "cough.yamnet_cough_minus_breath.plain": (0.0,),
@@ -131,7 +148,7 @@ def _bundled_profile_path() -> Path:
         FileNotFoundError: If the package ships no profile, which leaves every grid underivable
             rather than silently defaulted.
     """
-    bundled = sorted(PROFILE_DIR.glob("*.json"))
+    bundled = sorted(PROFILE_DIR.glob(f"*{PROFILE_SUFFIX}"))
     if not bundled:
         raise FileNotFoundError(f"no detector profile in {PROFILE_DIR}")
     return bundled[-1]
@@ -193,8 +210,55 @@ def load_detector_profile(path: str | None = None) -> dict[str, Any]:
     resolved = _bundled_profile_path() if path is None else Path(path)
     if not resolved.exists():
         raise FileNotFoundError(f"detector profile not found: {resolved}")
-    profile: dict[str, Any] = json.loads(resolved.read_text())
+    profile = profile_from_table(pq.read_table(resolved))
     _validate(profile, str(resolved))
+    return profile
+
+
+def profile_as_table(profile: Mapping[str, Any]) -> tuple[pa.Table, dict[str, Any]]:
+    """One profile as its detector table and the header that describes the whole sweep.
+
+    Args:
+        profile: A profile in the shape :func:`load_detector_profile` returns.
+
+    Returns:
+        One row per detector, and the scalars that belong to no row.
+    """
+    rows = []
+    for name, entry in sorted(profile["detectors"].items()):
+        quantiles = entry.get("quantiles") or {}
+        row: dict[str, Any] = {key: entry.get(key) for key in PROFILE_ENTRY_KEYS}
+        row[PROFILE_NAME_COLUMN] = name
+        row.update({f"{PROFILE_QUANTILE_PREFIX}{step}": quantiles.get(step) for step in QUANTILE_LADDER})
+        rows.append(row)
+    header = {key: value for key, value in profile.items() if key != "detectors"}
+    return pa.Table.from_pylist(rows), header
+
+
+def profile_from_table(table: pa.Table) -> dict[str, Any]:
+    """Rebuild a profile from the table :func:`profile_as_table` produced.
+
+    Args:
+        table: The detector table, carrying the header in its file metadata.
+
+    Returns:
+        The profile, in the shape every reader of it expects. A detector's entry carries only the
+        keys its row has a value for, so a ``constant`` entry has no quantile ladder rather than a
+        ladder of zeros.
+    """
+    profile: dict[str, Any] = dict(read_header(table))
+    detectors: dict[str, Any] = {}
+    for row in table.to_pylist():
+        entry: dict[str, Any] = {key: row[key] for key in PROFILE_ENTRY_KEYS if row.get(key) is not None}
+        quantiles = {
+            step: row[f"{PROFILE_QUANTILE_PREFIX}{step}"]
+            for step in QUANTILE_LADDER
+            if row.get(f"{PROFILE_QUANTILE_PREFIX}{step}") is not None
+        }
+        if quantiles:
+            entry["quantiles"] = quantiles
+        detectors[str(row[PROFILE_NAME_COLUMN])] = entry
+    profile["detectors"] = detectors
     return profile
 
 
@@ -257,7 +321,8 @@ def derive_thresholds(
         source: Where the profile came from, for the message.
 
     Returns:
-        The thresholds, ascending and distinct.
+        The thresholds, ascending and distinct, none of them outside what the contributing ladders
+        attain apart from the declared cut points.
 
     Raises:
         ValueError: If the grid cannot be derived, or if it fails to reach the profiled extreme on
@@ -269,9 +334,13 @@ def derive_thresholds(
     for sibling in siblings:
         points |= _ladder(_profile_entry(sibling, profile, source), drop_sentinel=False)
     if candidate.unit in COUNT_UNITS:
-        ceiling = min(DENSE_INTEGER_SPAN, int(math.floor(float(entry["max"]))))
         points = {float(round(value)) for value in points}
-        points |= {float(count) for count in range(0, ceiling + 1)}
+    attained = (min(points), max(points))
+    if candidate.unit in COUNT_UNITS:
+        floor = max(0, int(math.ceil(attained[0])))
+        ceiling = min(DENSE_INTEGER_SPAN, int(math.floor(attained[1])))
+        points |= {float(count) for count in range(floor, ceiling + 1)}
+    points = {value for value in points if attained[0] <= value <= attained[1]}
     if candidate.unit == "score":
         points.add(CONSOLIDATION_FLOOR)
     points |= {float(pinned) for pinned in PINNED_THRESHOLDS.get(candidate.name, ())}
