@@ -128,6 +128,7 @@ FRCRN_ID = "alibabasglab/FRCRN_SE_16K"
 PPGS_MODEL_ID = "interactiveaudiolab/ppgs"
 PPG_MEASUREMENT = "ppg_posteriorgram"
 PRAAT_MEASUREMENT = "praat_features"
+PHONATION_TRACKS_MEASUREMENT = "phonation_tracks"
 
 
 def _crisperwhisper_model() -> HFModel:
@@ -749,6 +750,103 @@ def praat_features(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
         signal="enhanced",
         attributes={**parameters, "n_features": len(scalars), "features": scalars},
         derived_from=(enhanced_id,),
+    )
+
+
+def sharp_stream(store: ProvStore, run_dir: Path) -> tuple[str, Audio, str]:
+    """The pre-emphasised stream when the run wrote one, else ``plain``, with the name it goes by.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory stream paths are relative to.
+
+    Returns:
+        The stream entity's id, its audio, and the signal name a measurement over it states.
+
+    Raises:
+        LookupError: If the store holds neither stream.
+    """
+    try:
+        stream_id, audio = resolve_stream(store, run_dir, "preemphasised")
+    except LookupError:
+        stream_id, audio = resolve_stream(store, run_dir, "plain")
+        return stream_id, audio, "plain"
+    return stream_id, audio, "preemphasised"
+
+
+def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
+    """F0 over the pre-emphasised stream and the first four formants over ``plain``, per frame.
+
+    Both streams are read back out of the store rather than taken from a conditioning pass's own
+    arrays, so this pass and an extend pass over a finished run hand the trackers the same samples
+    and write the same entity.
+
+    Args:
+        store: The provenance store, read for the live ``plain`` and pre-emphasised streams.
+        config: The triage configuration.
+        run_dir: The run directory the npz sidecar is written under.
+
+    Returns:
+        The measurement entity's id.
+
+    Raises:
+        LookupError: If no live ``plain`` stream is in the store.
+        ValueError: If ``voice.f0_search_range_hz`` is unmeasured.
+    """
+    search = config.require("voice.f0_search_range_hz")
+    plain_id, plain = resolve_stream(store, run_dir, "plain")
+    sharp_id, sharp, sharp_signal = sharp_stream(store, run_dir)
+    f0_min_hz, f0_max_hz = derive_f0_range(plain, search_floor_hz=float(search[0]), search_ceiling_hz=float(search[1]))
+    parameters: dict[str, Any] = {
+        "hop_s": float(config.require("phonation_spans.hop_s")),
+        "max_formants": int(config.require("phonation_spans.max_formants")),
+        "formant_max_hz": float(config.require("phonation_spans.formant_max_hz")),
+        "formant_window_s": float(config.require("phonation_spans.formant_window_s")),
+        "formant_preemphasis_hz": float(config.require("phonation_spans.formant_preemphasis_hz")),
+        "f0_min_hz": f0_min_hz,
+        "f0_max_hz": f0_max_hz,
+    }
+    times, f0_hz, strength = f0_track(sharp, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz, hop_s=parameters["hop_s"])
+    formants = formant_track(
+        plain,
+        hop_s=parameters["hop_s"],
+        max_formants=parameters["max_formants"],
+        formant_max_hz=parameters["formant_max_hz"],
+        window_s=parameters["formant_window_s"],
+        preemphasis_hz=parameters["formant_preemphasis_hz"],
+    )
+    software = software_agent(store)
+    activity = _activity(store, PHONATION_TRACKS_MEASUREMENT, parameters, (sharp_id, plain_id), software)
+    (run_dir / "derivatives").mkdir(parents=True, exist_ok=True)
+    np.savez(
+        run_dir / "derivatives" / f"{PHONATION_TRACKS_MEASUREMENT}.npz",
+        times_s=times,
+        f0_hz=f0_hz,
+        strength=strength,
+        formant_times_s=formants.times_s,
+        f1_hz=formants.f_hz[0],
+        f2_hz=formants.f_hz[1],
+        f3_hz=formants.f_hz[2],
+        f4_hz=formants.f_hz[3],
+        f1_bw_hz=formants.bandwidth_hz[0],
+        f2_bw_hz=formants.bandwidth_hz[1],
+        f3_bw_hz=formants.bandwidth_hz[2],
+        f4_bw_hz=formants.bandwidth_hz[3],
+    )
+    return _measurement(
+        store,
+        activity,
+        software,
+        name=PHONATION_TRACKS_MEASUREMENT,
+        signal=sharp_signal,
+        attributes={
+            "hop_s": parameters["hop_s"],
+            "f0_min_hz": f0_min_hz,
+            "f0_max_hz": f0_max_hz,
+            "f0_signal": sharp_signal,
+            "formant_signal": "plain",
+        },
+        derived_from=(sharp_id, plain_id),
     )
 
 
@@ -1895,70 +1993,12 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         """F0 and formant tracks over the whole stream — measured once, localised nowhere.
 
         Sustained-phonation and glide span *detection* used to happen here; it has moved to
-        TAXONOMY (owner-directed), which reads this measurement back and runs the same proposal
-        functions over it, so a decision about which stretch counts as phonation is no longer made
-        during conditioning. This block keeps only the part that is a measurement: F0 over the
-        pre-emphasised stream, and the first four formants and their bandwidths over ``plain``, per
-        frame. It no longer depends on the consensus transcript at all — word-aligned phonation
-        proposal is TAXONOMY's concern now, not a reason for this measurement to wait on ASR.
-
-        The F0 search range is this recording's own, narrowed off ``plain`` from the wide
-        ``voice.f0_search_range_hz`` by :func:`derive_f0_range`, and recorded in the measurement.
+        TAXONOMY, which reads this measurement back and runs the same proposal functions over it.
+        This block keeps only the part that is a measurement, and it reads its streams back out of
+        the store, so a finished run can gain the tracks without conditioning being replayed.
         """
-        search = config.require("voice.f0_search_range_hz")
-        f0_min_hz, f0_max_hz = derive_f0_range(
-            plain, search_floor_hz=float(search[0]), search_ceiling_hz=float(search[1])
-        )
-        parameters: dict[str, Any] = {
-            "hop_s": float(config.require("phonation_spans.hop_s")),
-            "max_formants": int(config.require("phonation_spans.max_formants")),
-            "formant_max_hz": float(config.require("phonation_spans.formant_max_hz")),
-            "formant_window_s": float(config.require("phonation_spans.formant_window_s")),
-            "formant_preemphasis_hz": float(config.require("phonation_spans.formant_preemphasis_hz")),
-            "f0_min_hz": f0_min_hz,
-            "f0_max_hz": f0_max_hz,
-        }
-        activity = _step("phonation_tracks", parameters, (sharp_id, plain_id), software)
-        times, f0_hz, strength = f0_track(sharp, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz, hop_s=parameters["hop_s"])
-        formants = formant_track(
-            plain,
-            hop_s=parameters["hop_s"],
-            max_formants=parameters["max_formants"],
-            formant_max_hz=parameters["formant_max_hz"],
-            window_s=parameters["formant_window_s"],
-            preemphasis_hz=parameters["formant_preemphasis_hz"],
-        )
-        np.savez(
-            run_dir / "derivatives" / "phonation_tracks.npz",
-            times_s=times,
-            f0_hz=f0_hz,
-            strength=strength,
-            formant_times_s=formants.times_s,
-            f1_hz=formants.f_hz[0],
-            f2_hz=formants.f_hz[1],
-            f3_hz=formants.f_hz[2],
-            f4_hz=formants.f_hz[3],
-            f1_bw_hz=formants.bandwidth_hz[0],
-            f2_bw_hz=formants.bandwidth_hz[1],
-            f3_bw_hz=formants.bandwidth_hz[2],
-            f4_bw_hz=formants.bandwidth_hz[3],
-        )
-        entity_id = _measurement(
-            store,
-            activity,
-            software,
-            name="phonation_tracks",
-            signal=sharp_signal,
-            attributes={
-                "hop_s": parameters["hop_s"],
-                "f0_min_hz": f0_min_hz,
-                "f0_max_hz": f0_max_hz,
-                "f0_signal": sharp_signal,
-                "formant_signal": "plain",
-            },
-            derived_from=(sharp_id, plain_id),
-        )
-        derivatives["phonation_tracks"] = entity_id
+        entity_id = phonation_tracks(store, config, run_dir=run_dir)
+        derivatives[PHONATION_TRACKS_MEASUREMENT] = entity_id
         view.append(entity_id)
 
     def _spectrogram(name: str, window_key: str) -> None:
@@ -2403,7 +2443,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             lambda: _asr("asr_qwen", _qwen_model, "bundled_aligner", QWEN_TIMESTAMP_MODEL, return_timestamps=True),
         ),
         ("consensus_transcript", _consensus),
-        ("phonation_tracks", _phonation_tracks),
+        (PHONATION_TRACKS_MEASUREMENT, _phonation_tracks),
         ("energy_envelope", _envelope),
         ("normalized_envelope", _normalized_envelope),
         ("spectrogram_wideband", lambda: _spectrogram("spectrogram_wideband", "spectrogram.wideband_window_ms")),
