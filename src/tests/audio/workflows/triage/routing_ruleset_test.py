@@ -7,6 +7,7 @@ import pytest
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.routing_analysis.features import TRANSCRIPT_CAP, RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
+    AT_LEAST,
     FAMILY_SETS,
     ROUTE_STATES,
     GateOutcome,
@@ -95,29 +96,30 @@ class TestEachGateFiresAndDoesNot:
     """Every gate, at and under its own threshold."""
 
     @pytest.mark.parametrize(
-        ("gate", "field", "firing", "silent"),
+        ("gate", "field", "key"),
         [
-            ("speech.lexical", "words", {"lexical": 2}, {"lexical": 1}),
-            ("speech.transcript_agreement", "words", {"agreement": 3}, {"agreement": 2}),
-            ("voice.sustained", "span_longest_s", {"amplitude": 3.0}, {"amplitude": 2.99}),
-            ("airway.breath", "residual", {"energy_fraction": 0.10}, {"energy_fraction": 0.09}),
-            (
-                "airway.cough",
-                "span_label_set_stats",
-                {"yamnet.cough_labels.peak_over_floor_db_max": 50.0},
-                {"yamnet.cough_labels.peak_over_floor_db_max": 49.9},
-            ),
-            ("airway.ppg_silent_fraction", "ppg", {"silent_fraction": 0.90}, {"silent_fraction": 0.89}),
-            ("ddk.ppg_segment_rate_per_s", "ppg", {"segment_rate_per_s": 10.0}, {"segment_rate_per_s": 9.9}),
+            ("speech.lexical", "words", "lexical"),
+            ("speech.transcript_agreement", "words", "agreement"),
+            ("voice.sustained", "span_longest_s", "amplitude"),
+            ("airway.breath", "residual", "energy_fraction"),
+            ("airway.cough", "span_label_set_stats", "yamnet.cough_labels.peak_over_floor_db_max"),
+            ("airway.ppg_silent_fraction", "ppg", "silent_fraction"),
+            ("ddk.ppg_segment_rate_per_s", "ppg", "segment_rate_per_s"),
         ],
     )
     def test_a_scalar_gate_fires_at_its_threshold_and_not_below(
-        self, ruleset: Ruleset, gate: str, field: str, firing: dict[str, float], silent: dict[str, float]
+        self, ruleset: Ruleset, gate: str, field: str, key: str
     ) -> None:
-        """The comparison is inclusive, so the threshold itself is a firing value."""
+        """The comparison is inclusive, so the threshold itself is a firing value.
+
+        The firing pair is read from the gate's own threshold rather than restated, so a fitted
+        threshold moving in the configuration cannot leave this test asserting the old one.
+        """
         rule = ruleset.gates[gate]
-        assert evaluate_gate(_features("free-speech", **{field: firing}), rule) is GateOutcome.FIRED
-        assert evaluate_gate(_features("free-speech", **{field: silent}), rule) is GateOutcome.SILENT
+        step = abs(rule.threshold) * 1e-6 or 1e-6
+        below = rule.threshold - step if rule.op == AT_LEAST else rule.threshold + step
+        assert evaluate_gate(_features("free-speech", **{field: {key: rule.threshold}}), rule) is GateOutcome.FIRED
+        assert evaluate_gate(_features("free-speech", **{field: {key: below}}), rule) is GateOutcome.SILENT
 
     def test_the_glide_gate_reads_the_yamnet_singing_union(self, ruleset: Ruleset) -> None:
         """Any member of the union carries the gate, not only the bare ``Singing`` label."""

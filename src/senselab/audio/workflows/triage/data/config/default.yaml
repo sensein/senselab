@@ -257,7 +257,7 @@ taxonomy:
       airway.ppg_silent_fraction:
         feature: [ppg, silent_fraction]   # posteriorgram frames whose argmax phoneme is <silent>
         op: at_least
-        threshold: 0.90                 # silent frame fraction that routes AIRWAY, beside airway.breath
+        threshold: 0.757                # silent frame fraction that routes AIRWAY, beside airway.breath
       ddk.lexical_repetition:
         feature: [transcript_repeat]    # largest repeat count of any normalised transcript token
         op: at_least
