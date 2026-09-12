@@ -6,7 +6,135 @@ prose. Where an older spec doc disagrees with what is written here, the code is 
 the older doc is stale. Re-verify against those files (not against this one) after any change to
 them; nothing enforces that this stays current.
 
-Regenerated 2026-09-07 at `f62f716e`, from the code rather than by patching the previous text.
+Regenerated 2026-09-07 at `f62f716e` from the code rather than by patching the previous text, and
+brought forward to 2026-09-12 at `46f73787` — the posteriorgram and Praat preprocessing blocks, the
+content-first ruleset, the fourth branch and the QUALITY edge. The glossary below is new and is the
+first thing to read: the document's vocabulary is exact, and the exactness is load-bearing.
+
+## Glossary
+
+The vocabulary below is used precisely and its terms are not interchangeable. More than one defect
+this week came from collapsing a pair of them, **detector into gate** most often of all. Every
+example is read off the shipped ruleset (`taxonomy.ruleset` in `data/config/default.yaml`) or off
+`routing_analysis/{detectors,ruleset,report,families,labels}.py`; none is invented.
+
+**detector** — a named reading of **one** number out of a recording's evidence, with a polarity and
+a sweep grid. **It decides nothing**: every threshold in its grid is scored and none is preferred
+(`detectors.py:1-7`). There are **175**, in `DETECTORS`. Example:
+`airway.residual_energy_fraction` reads `("residual", "energy_fraction")` — the residual stream's
+energy as a fraction of `plain` — polarity `above`, over the fourteen points of `FRACTION_GRID`. A
+detector's `kind` (`airway`, `speech`, `voice`, `cough`, `glide`, `ddk`) names the reference standard
+it is scored against, not a branch it commands.
+
+**gate** — a detector **plus one threshold**, named in `taxonomy.ruleset.gates`, that a branch
+routes on. There are **11** declared: ten route and one only flags. **Every gate is a
+detector-shaped reading; most detectors are not gates** — 175 readings, 11 of them pinned to a cut,
+and the pinning is the whole difference. `airway.residual_energy_fraction` becomes the gate
+`airway.breath` by being fixed at `>= 0.10`; `speech.words_lexical` becomes `speech.lexical` at
+`>= 2`; `voice.longest_amplitude_span` becomes `voice.sustained` at `>= 3.0 s`;
+`voice.yamnet_chant_peak.plain` becomes `voice.chant` at `>= 0.02`. Two gates happen to carry their
+detector's own name — `airway.ppg_silent_fraction` and `ddk.ppg_segment_rate_per_s` — which is
+spelling, not identity: the detector is the sweep, the gate is the one point taken off it. Two
+others, `airway.bracketed_event` and `ddk.lexical_repetition`, read sources no detector reads
+(`BRACKETED_SET`, `TRANSCRIPT_REPEAT` in `ruleset.py`) and carry cuts that were never swept.
+A gate is evaluated on **every** recording and reports one of `FIRED`, `SILENT` or `UNAVAILABLE`;
+`UNAVAILABLE` is a fact about the store, never a negative measurement.
+
+**flag** — a gate listed in `taxonomy.ruleset.branch_flags` instead of `branch_gates`. It is
+evaluated, recorded in `gate_outcomes` and named in `RouteEvaluation.flags`, and it **routes
+nothing**: it annotates a branch already entered. There is one, `speech.transcript_agreement`
+(`words.agreement >= 3`). `load_ruleset` refuses a configuration listing the same gate as both.
+
+**branch** — `AIRWAY`, `SPEECH`, `VOICE`, `DDK`: `vocabulary.BRANCHES`. A gate firing routes the
+recording to its branch, and a branch is the authority on its own kind and on no other. Any one of
+a branch's gates firing is enough; they are OR'd, never conjoined.
+
+**QUALITY** — in `GRAPH_ORDER`, after `VOICE` and before `REDACT`, and **not** in `BRANCHES`. Every
+recording reaches it whatever routed, which is exactly why it cannot be a route: a gate firing on
+everything selects nothing. It is a graph edge. It has no entry in `branch_gates`, `branch_flags` or
+`reference_family_set`, there is no `nodes/quality.py`, and the runner records it `SKIPPED` on every
+path. Emptiness reaches it directly, bypassing the branches.
+
+**route state** — `ROUTED`, `EMPTY` or `UNEXPLAINED` (`ruleset.RouteState`), **exactly one per
+recording**, replacing a pair of booleans that could both be false. `ROUTED` is a charge against
+nothing, `EMPTY` is a charge against the recording, and only `UNEXPLAINED` — nothing fired and the
+audio does not say why — is a charge against the ruleset. It is the number to drive the gates from.
+
+**bypass** — `taxonomy.ruleset.emptiness`: the max tracked-label peak of `enhanced|yamnet` and of
+`residual|yamnet` both under `0.2`. It is consulted **only where no gate fired**, as the explanation
+for that, never as a precondition that could stop a gate from running. A gate firing on a recording
+the bypass would have called empty routes it normally, and that disagreement is a measurement of the
+bypass rather than something the evaluation suppresses.
+
+**family** — the elicitation group a BIDS stem's `task-` entity collapses into, by removing trailing
+numeric segments only (`families.task_family`). There are **48** across the four declared sets in
+`families.py`. Example: `..._task-harvard-sentences-list-10-3` collapses to
+`harvard-sentences-list`; a `v2` marker is not numeric, so `respiration-and-cough-breath` and
+`respiration-and-cough-v2-breath` stay two families.
+
+**reference standard** — the declared families a branch is **scored** against,
+`taxonomy.ruleset.reference_family_set`: `AIRWAY: airway`, `SPEECH: lexical_speech`, `VOICE: voice`,
+`DDK: syllable_repetition`. **It routes nothing** — no gate is skipped, relaxed or tightened because
+of it — and **it is a proxy, not ground truth**: a recording can genuinely contain content its task
+never asked for. 938 of 1,258 `prolonged-vowel` transcripts open with `'One two three'` because the
+protocol instructs the count-in, so SPEECH firing there is the gate reading content correctly and
+the `extra` it scores is the proxy's error, not the gate's.
+
+**held out by construction** — families dropped from a branch's scored population,
+`taxonomy.ruleset.excluded_by_construction`, because they are **neither** positives **nor**
+negatives for it. One branch declares one: `SPEECH: syllable_repetition`. Diadochokinesis *is*
+speech; it sits outside `lexical_speech` only because that set is the lexical half. Counting a DDK
+recording SPEECH routed as a false positive charges the branch for behaving correctly — at the
+shipped cut of 2, **71.3%** of `speech.lexical`'s apparent false positives are diadochokinesis, and
+holding them out takes specificity from **0.633** to **0.855**. `score_branches` reports both 2x2
+tables rather than choosing, and `load_ruleset` refuses a branch that holds out families its own
+reference set calls positive.
+
+**polarity** — `above` or `below`: which side of the threshold fires. 155 of the 175 detectors are
+`above` and 20 are `below`. A gate spells the same thing as `op: at_least` / `at_most`, which
+`ruleset._POLARITY` maps back onto the polarity vocabulary the recall curve reads. It is not
+cosmetic: `ddk.ppg_repetition_lag_segments` scored a flat line at every budget until its polarity
+was corrected, which read as a measured null and was not one.
+
+**sweep grid** — the candidate thresholds a detector is scored at (`Detector.thresholds`,
+ascending via `sweep_points`). **A grid that fails to cover its feature's range makes a detector
+look measured-and-weak when it was never measured.** `airway.praat_phonation_ratio` is the worked
+case: 31,464 of its 60,048 readable values sit above `PROPORTION_GRID`'s last point, so every
+threshold in the grid saw the same undivided block at the top and no cut could separate anything
+inside it. A register of ten such grid/feature pairs — read off the grid constants against each
+feature's own bounds, and explicitly *not* confirmed against the corpus — is in
+[`../20260911-praat-ppg-detectors/design.md`](../20260911-praat-ppg-detectors/design.md), "Grids
+that may not cover their feature's range". A grid whose best threshold is its own last entry has not
+been swept; it has been truncated.
+
+**availability** — the share of the population whose evidence a detector can read at all
+(`RecallCurve.availability`), the complement of `n_unreadable`. **A detector absent on part of the
+corpus has a recall ceiling below 1 whatever its threshold**, and `RecallCurve.recall_ceiling` names
+that ceiling so a flat curve is not mistaken for a weak one. `airway.ppg_silent_fraction` is absent
+on the 2,345 recordings with no consensus transcript and therefore no posteriorgram: availability
+**0.963**, ceiling **0.875**. That is why it is OR'd beside `airway.breath`, whose own feature is
+absent on 31, rather than replacing it — each reads a population the other cannot.
+
+**over-routing budget** — the false-positive rate a threshold is allowed to spend
+(`OVER_ROUTING_BUDGETS` = 2%, 5%, 10%, 20%). A threshold is chosen as **the loosest cut inside a
+budget**, tightened back to the strictest cut reaching the same recall, **not** by maximising
+Youden's J, **because a router's errors are asymmetric**: an over-routed recording costs a branch
+some discarded work, an under-routed one is never seen by anything that could interpret it. J prices
+the two the same. `airway.ppg_silent_fraction` shipped at 0.90 — recall 0.499 at a false-positive
+rate of 0.042, well inside the 10% budget and so stricter than a router should be — and the criterion
+moved it to **0.757**, for recall 0.761, 193 recordings that reached no branch now reaching one, at
+1,929 additional branch invocations the branches discard. Each `BudgetPoint` records whether the
+budget or availability is what bounds it (`LIMIT_BUDGET` / `LIMIT_AVAILABILITY`).
+
+**kind**, **evidence line** — TAXONOMY's own vocabulary, older than the ruleset's and not the same
+thing. A **kind** (`speech`, `airway`, `voice`) is folded to `present`, `absent` or `uncertain` from
+named **evidence lines**, each counting stored elements against a `taxonomy.presence_floor`. A
+branch has a kind; a gate does not. Nothing in the fold reads `taxonomy.ruleset`.
+
+**node outcome** vs **file verdict** — `Outcome.PASS/FLAG/FAIL` is what one node concluded;
+`Triage.PASS/FLAG/DISCARD` is what should happen to the recording. They are different axes and a
+node's outcome is never a file result. Restated below where the fold is described, because this is
+the second most-collapsed pair in the document.
 
 ## The goal this graph exists to serve
 
@@ -40,6 +168,13 @@ than asserting outcomes that cannot occur (`TestTheOutcome`, `taxonomy_test.py:2
 `:256`). This lifts when voice is
 reworked onto `consensus_taxonomy`; it is a consequence of the retirement, not of any recording.
 
+**The measured replacement exists and is not wired in.** `taxonomy.ruleset` and
+`routing_analysis/` carry a content-first ruleset scored over 62,547 recordings, which routes
+99.2% of the corpus to a branch. **No node reads any of it**: `nodes/taxonomy.py` is untouched,
+every `taxonomy.presence_floor` is still null, and `nodes/routing.py` still selects branches from
+the kind states above. The ruleset is a measurement of what routing *would* do, held one commit
+away from the graph — see step 3c.
+
 ## How to read this document
 
 Each step states **what it does**, **what decides something and on which config parameters** (a
@@ -56,8 +191,10 @@ source — was closed on 2026-09-05 by deleting the key (see PREPROCESS below); 
 in `taxonomy.speech_labels`, read `get ... or []` by both its readers, where a null empties the
 speech family without a word anywhere.
 
-The config is **215 lines, 108 keys, 38 of them null**. It carries a short `#` description per
-section and per key and nothing longer. There is no `derivation:` key: it used to hold 50 kB of
+The config is **306 lines, 164 leaf keys, 40 of them null** — three of the forty are the
+`excluded_by_construction` entries of the branches that hold nothing out, where null is the value
+and not an absence of one. It carries a short `#` description per section and per key and nothing
+longer. There is no `derivation:` key: it used to hold 50 kB of
 prose, and because the loader hashes the merged mapping that prose sat inside `config_hash`, so
 correcting a word of it made two behaviourally identical runs report different identities. The
 derivations now live in [`config-derivations.md`](config-derivations.md), keyed by the same section
@@ -73,6 +210,11 @@ graph TD
   ROUTING -->|selected branches| AIRWAY
   ROUTING --> SPEECH
   ROUTING --> VOICE
+  ROUTING -.never selected.-> DDK
+  AIRWAY --> QUALITY
+  SPEECH --> QUALITY
+  VOICE --> QUALITY
+  DDK --> QUALITY
   SPEECH -->|pii found| REDACT
   ADMIT --> VERDICT
   PREPROCESS --> VERDICT
@@ -81,6 +223,7 @@ graph TD
   AIRWAY --> VERDICT
   SPEECH --> VERDICT
   VOICE --> VERDICT
+  QUALITY --> VERDICT
   REDACT --> VERDICT
   VERDICT --> REPORT
   PREPROCESS -.re-read later.-> FIGURE
@@ -88,21 +231,27 @@ graph TD
 ```
 
 `GRAPH_ORDER` is `("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE",
-"REDACT", "VERDICT")` and `BRANCHES` is `("AIRWAY", "SPEECH", "VOICE")` (`vocabulary.py:14-18`).
-REPORT runs after VERDICT and is not in `GRAPH_ORDER` (`run.py:41`, `:391`). FIGURE is in neither:
-the in-tree runner never calls it, though the pipeline as actually run does, right after TAXONOMY
-(see step 3b).
+"QUALITY", "REDACT", "VERDICT")` and `BRANCHES` is `("AIRWAY", "SPEECH", "VOICE", "DDK")`
+(`vocabulary.py:14-31`). **The two lists are not the same list and neither contains the other**:
+`QUALITY` is a graph edge every recording reaches and not a branch, and `DDK` is a branch the graph
+does not yet order — see step 5d. REPORT runs after VERDICT and is not in `GRAPH_ORDER` (`run.py:41`).
+FIGURE is in neither: the in-tree runner never calls it, though the pipeline as actually run does,
+right after TAXONOMY (see step 3b).
 
-**Three gates, each of a different kind** (`run.py:333-346`, `_drive_branches`):
+**Three places the graph stops short, each of a different kind** (`run.py:_drive_branches`). These
+are dependency checks in the runner and are *not* gates in the ruleset's sense — nothing here reads
+a threshold:
 
-- **ADMIT** is the initial gate. A `fail` leaves every other node `skipped` and only VERDICT runs,
+- **ADMIT** is the initial one. A `fail` leaves every other node `skipped` and only VERDICT runs,
   which is what makes "could not measure" distinguishable from "measured, found nothing".
 - **PREPROCESS** cannot flag or fail, but it can raise, and everything after it reads what it
-  measured — so a raise skips TAXONOMY, routing, every branch and REDACT (`run.py:243-247`).
-- **ROUTING** is a dependency gate: if it raises, no branch has an authorised decision, so every
-  branch is `skipped` (`run.py:249-260`).
+  measured — so a raise skips TAXONOMY, routing, every branch, QUALITY and REDACT.
+- **ROUTING** is a dependency check: if it raises, no branch has an authorised decision, so every
+  branch is `skipped`.
 
 A branch that raises is recorded `errored` and its siblings still run: none reads another's output.
+`QUALITY` is recorded `SKIPPED` after the branch loop on the happy path as well, so every path
+agrees rather than the node being absent on some of them.
 
 ## The linear walk
 
@@ -137,9 +286,35 @@ The blocks, in execution order (`preprocess.py`, the `blocks` list):
 `consensus_transcript`, `phonation_tracks`, `energy_envelope`, `normalized_envelope`,
 `spectrogram_wideband`, `spectrogram_narrowband`, `continuity_trace`, `spans`, `residual`,
 `enhanced_yamnet`, `enhanced_ast`, `enhanced_hear`, `residual_yamnet`, `residual_ast`,
-`residual_hear`, `squim`, `span_hear`, `span_yamnet`, `gammatone`. The six classifier blocks are
-`_stream_yamnet`/`_stream_ast`/`_stream_hear` (`preprocess.py:1853`, `:1872`, `:1893`) parameterised
-by stream prefix (`enhanced`, `residual`).
+`residual_hear`, `squim`, `span_hear`, `span_yamnet`, `gammatone`, `ppg_posteriorgram`,
+`praat_features`. The six classifier blocks are
+`_stream_yamnet`/`_stream_ast`/`_stream_hear` parameterised by stream prefix (`enhanced`,
+`residual`); the last two are new and are described below.
+
+**Two blocks read the `enhanced` stream and nothing else: `ppg_posteriorgram` and `praat_features`**
+(`preprocess.py:434-560`, block entries at `:2157-2158`). They run last, after `residual` has
+written the stream they read, and both are measurements with no boundary decided.
+
+- **`ppg_posteriorgram`** runs `interactiveaudiolab/ppgs` over the enhanced stream resampled to
+  `PPGS_SAMPLE_RATE` and writes the frame-major float16 array to
+  `derivatives/ppg_posteriorgram.npz` with its phoneme order, seconds-per-frame, duration and
+  sampling rate beside it. The entity carries the **path, its SHA-256, its size and its shape** and
+  never the array. Its agent records `unresolved_reason` rather than a commit: ppgs ships its
+  checkpoint inside the PyPI release, so there is no commit to resolve — the one model in the graph
+  where recording nothing is the honest answer. It runs in the `ppgs` subprocess venv, so the run's
+  environment record gains that venv's own row.
+- **`praat_features`** is Praat/Parselmouth's whole-file set over the same stream, at
+  `praat_features.time_step_s` and `praat_features.window_length_s`. Its **forty scalars are
+  attributes of the measurement** rather than a sidecar — at that size a file would only add an
+  indirection — and a non-finite scalar is written `null`, JSON's only representation of a number
+  Praat could not place.
+
+Neither block decides anything, and no node reads either. Both are read by `routing_analysis`:
+`RecordingFeatures.ppg` reduces the posteriorgram to `PPG_SUMMARY_KEYS` (segment rate, segment
+duration statistics, distinct phonemes, silent fraction, the repetition triple) and
+`RecordingFeatures.praat` carries the scalars. Two of the detectors over them are gates today —
+`airway.ppg_silent_fraction` and `ddk.ppg_segment_rate_per_s`. **FIGURE draws neither**, so the two
+newest derivatives are the only ones with no panel.
 
 **Residual.** FRCRN_SE_16K (`FRCRN_ID`, `preprocess.py:102`) runs on `plain`
 (`preprocess.py:1630-1775`), is cross-correlation lag-aligned via `compute_residual`
@@ -182,20 +357,36 @@ Points that decide something, or that are currently deciding something by omissi
 
 **Raw scores and thresholded labels are two different things, and only one of them survives a
 null.** `<classifier>_scores` persists every window's raw score and reads no threshold.
-`_windows(classifier)` then folds thresholds over those stored scores into per-window label sets —
-and it uses `config.require(f"windows.{classifier}.default_threshold")` (`preprocess.py:888`). All
-three thresholds are null, so **`yamnet_windows`, `ast_windows` and `hear_windows` are all absent
-under the packaged config**, while the raw scores they were folded from are present.
+`_windows(classifier)` then folds a **membership rule** over those stored scores into per-window
+label sets. The rule is one object, `LabelMembership` in `label_membership.py`, read from the three
+`windows.<classifier>` keys — a label is carried when it is in the window's top `label_top_k`
+**and** at or above `default_threshold` (or its own `label_thresholds` override). One
+implementation, two callers: `_confident_labels` here and `_label_span_statistics` in
+`routing_analysis/features.py`, so what PREPROCESS stamps and what the analysis re-derives cannot
+drift.
 
-**The per-span passes no longer share that fate.** `_span_hear` (`preprocess.py:1116`) and
-`_span_yamnet` (`:1185`) read the same key with `config.get`, so they run whatever the
-configuration says. `_span_window_attributes` (`:282-327`) then writes `raw_scores`
-unconditionally — the model ran, so its output is a measurement — and writes `labels`/`scores` only
-when a threshold existed, with a `labelled` flag distinguishing **"no threshold was set"**
-(`labelled: false`, no labels) from **"nothing cleared the bar"** (`labelled: true`, empty labels).
-This asymmetry between the per-span passes and the whole-file fold is deliberate on the per-span
-side and simply not yet applied on the other; it is why airway's lines have data today and
-speech's `acoustic` line does not.
+The two loaders are not interchangeable and the difference is where the nulls land:
+
+- `load_label_membership` **requires all three keys**, `label_thresholds` included, and
+  `_windows(classifier)` uses it. `windows.{yamnet,hear}.default_threshold` are now **0.2** and
+  `label_top_k` is 4 for all three — but `label_thresholds` is null everywhere, so
+  **`yamnet_windows`, `ast_windows` and `hear_windows` are still all absent under the packaged
+  config**, while the raw scores they were folded from are present. The absent-derivative reason has
+  changed; the absence has not.
+- `optional_label_membership` reads a null `label_thresholds` as *no override* — the overrides refine
+  a floor that is already declared, so their absence is a complete rule rather than a missing one —
+  and returns `None` only when `default_threshold` itself is null. `_span_hear` and `_span_yamnet`
+  use it, so **both per-span passes now produce a membership** where they used to produce none;
+  `windows.ast.default_threshold` is still null, and there is no per-span AST pass at all.
+
+`_span_window_attributes` writes `raw_scores` unconditionally — the model ran, so its output is a
+measurement — and writes `labels`/`scores` only when a rule existed, with a `labelled` flag
+distinguishing **"no threshold was set"** (`labelled: false`, no labels) from **"nothing cleared the
+bar"** (`labelled: true`, empty labels). **The 62,547-recording corpus was produced under the old
+nulls**, so every per-span window in it is stamped `labelled: false`; the analysis re-derives
+membership from the stored `raw_scores` either way, and nothing needs re-running to read it. A
+future run stamps the same membership the analysis derives. The floors moving changes
+`config_hash`.
 
 A short span borrows from the whole-file YAMNet pass instead: `_covering_window_attribution`
 (`preprocess.py:330-363`) computes `score[label] = Σ(score_w · overlap_w) / Σ overlap_w` over
@@ -258,16 +449,21 @@ with their own timestamps, so grouping them needs no gap threshold, and
 `group_extents_into_runs` merges on adjacency alone (`spans/api.py`). ASR spans exist again, and
 the deletion also unblocked SPEECH, which had been `require`-ing the same null key.
 
-**`phonation_tracks` does not run under the packaged config.** It requires `voice.f0_range_hz`
-(`preprocess.py:1445`), which is null, so it raises and is recorded absent. What it *would* measure
-is F0 over the pre-emphasised stream and the first four formants over `plain`, per frame — a
-measurement with no boundary decided. The five surviving `phonation_spans.*` keys (`hop_s`,
-`max_formants`, `formant_max_hz`, `formant_window_s`, `formant_preemphasis_hz`) are its Praat
-settings and are populated; the eight *detection* keys that used to sit beside them were deleted
-with the detector.
+**`phonation_tracks` runs under the packaged config.** It used to require a fixed
+`voice.f0_range_hz`, which was null; it now requires `voice.f0_search_range_hz` — the wide
+`[50.0, 600.0]` each recording's own `[floor, ceiling]` is narrowed from by `derive_f0_range` off
+`plain` — and that key is populated, so the block completes and records the derived range on the
+measurement. What it measures is F0 over the pre-emphasised stream and the first four formants over
+`plain`, per frame: a measurement with no boundary decided. The five surviving `phonation_spans.*`
+keys (`hop_s`, `max_formants`, `formant_max_hz`, `formant_window_s`, `formant_preemphasis_hz`) are
+its Praat settings and are populated; the eight *detection* keys that used to sit beside them were
+deleted with the detector. A fixed range is still expressible, per declared population, through
+`voice.f0_range_by_population`, which is null.
 
 *Goals served*: 1 (measures level, SQUIM, disruptions), 2 (the span set and its per-span classifier
-evidence), 3 (the consensus transcript PII is scanned from).
+evidence), 3 (the consensus transcript PII is scanned from). The posteriorgram and the Praat set
+serve none of the three directly; they are routing evidence, and routing serves all three by
+deciding which branch gets to look.
 
 ### 3. TAXONOMY — fold the evidence into speech/airway/voice, and consolidate the labels
 
@@ -303,6 +499,13 @@ authoritative/corroboration shape as speech above. Corroboration count is never 
 strength: a span's `corroborated_by` says other *sources* proposed something overlapping it, not
 that its *content* is more certain.
 
+**Airway's two lines now have something to read, and the fold is unchanged.**
+`windows.{yamnet,hear}.default_threshold` moving off null means `_span_label_evidence` finds a
+`labels` list on a future run's per-span windows where it used to find `labelled: false` and read
+`unavailable`. The four presence floors are still null, so `_line_state` still returns `unavailable`
+on every line and no kind's state changes. The evidence arrived; the floor deciding what it means
+did not.
+
 **Voice's line is a placeholder that says so.** `_retired_voice_line` (`taxonomy.py:311-336`)
 returns `state: unavailable`, `evidence: 0`, and a `why` naming the retirement — "the phonation-span
 source was retired; voice is pending a rework onto consensus_taxonomy". The `why` exists so a report
@@ -336,303 +539,6 @@ any is uncertain, `pass` otherwise. As above, only `flag` is reachable today.
 *Goals served*: 2, by deciding whether the airway/speech content is there at all. The floors that
 would let it decide are all null.
 
-
----
-
-#### PROPOSED — deciding the kinds, so ROUTING can route
-
-> **Everything from here to the end of this subsection is a plan, not the code.** Today's behaviour
-> is the table above: every floor null, every line `unavailable`, every kind `uncertain`, every
-> recording flagged. Nothing below is implemented. It is written here for the owner to mark up.
-
-Rewritten 2026-09-10 against a 62,550-recording measurement of what each candidate detector would
-actually route. Every figure quoted here comes from
-[`specs/20260910-taxonomy-routing-evidence/measurements.md`](../20260910-taxonomy-routing-evidence/measurements.md),
-which carries the full threshold sweeps, the per-family breakdowns and the enumerated
-disagreements. The earlier 388-recording tables that stood here have been discarded: they predate
-covering-window span attribution and a resample fix, and are not a valid baseline.
-
-**The framing this section now serves.** A file belongs in the speech branch if **someone spoke in
-it**, whatever the declared task. The declaration is a prior, never ground truth. No branch outcome
-is used anywhere below: no branch has been run.
-
-##### 0. What is being replaced — specificity 0.000
-
-TAXONOMY wrote `uncertain` for all three kinds on 62,518 of 62,547 stores (29 have no `kind`
-entity). ROUTING runs a branch unless the kind is `absent` (`routing.py:185-187`), so every branch
-would run on every recording: sensitivity 1.000 and specificity **0.000** against every reference
-standard tried. Any pathway below is an improvement on that.
-
-Seven nulls hold it there, not one:
-
-| null | where | consequence |
-| --- | --- | --- |
-| `windows.{yamnet,ast,hear}.default_threshold` | `default.yaml:92,95,101` | `_windows()` requires it (`preprocess.py:892`), so no `<classifier>_windows` (`preprocess.py:934`) reaches the store and `_window_evidence` (`taxonomy.py:98`) is always unavailable; `span_hear`/`span_yamnet` carry `labelled: false`, which `taxonomy.py:200` reads as unavailable too |
-| `taxonomy.presence_floor.*` (4) | `default.yaml:165-171` | `_line_state` returns `unavailable` on a null floor (`taxonomy.py:269`) |
-
-`taxonomy.voice_min_duration_s` is a null of a third kind: unread, because
-`_retired_voice_line` (`taxonomy.py:311`) returns `unavailable` unconditionally.
-
-##### 1. Speech — lexical content, with agreement *not* required
-
-The rule: **at least one live consensus word that is not bracketed ⇒ speech present, certain.**
-Read through `lexical_words` (`common.py:291`), which is `consensus_words` filtered on the word's
-own `bracketed` attribute. No classifier can raise or lower it.
-
-Two amendments to the rule as previously proposed, both measured:
-
-**(a) Do not require `outcome: agreement`.** Against the declaration, `≥1 agreed word` scores
-sens 0.824 / spec 0.879; `≥1 non-bracketed word of any outcome` scores sens 0.965 / spec 0.738,
-and `≥5` scores sens 0.896 / spec 0.967 — the best Youden of any speech detector measured. The
-14-point sensitivity gap is almost entirely diadochokinesis: 5,677 of the 7,239 speech-declared
-recordings with no agreed word are DDK, and their transcripts are not empty — both recognizers
-transcribe the syllable train (`'Ca-ca-ca-ca-…'`, `'Ca-caxacaca-caxacaca-…'`) and disagree on how,
-so every word lands as `variant`. The `buttercup` variants, whose target is a real word, disagree at
-0.27 against 0.93 for `/ka/`. **Requiring agreement measures lexical agreement between recognizers,
-not speech presence.**
-
-**(b) Bracketed-only must not count.** 449 recordings across 12 families have an agreed word where
-*every* agreed word is bracketed — `'[cough]'`, `'[UH]'`, `'[cough] Cough Cough Cough Cough'` —
-concentrated in `respiration-and-cough-cough` (202) and `-v2-hardcough` (120). Reading
-`lexical_words` rather than the raw word list removes all 449 at a cost of one true positive.
-
-**`words.onomatopoeic_tokens` is the remaining leak, and it is now quantified.** The vocabulary is
-already wired — `preprocess.py:1372` reads it and `bracketed_form` (`consensus.py:162`, applied at
-`:282`) rewrites a matching token to `[KEY]` — and it is null (`default.yaml:116`). While it is
-null, `respiration-and-cough-cough` yields 37 recordings whose only unbracketed words are
-`'cough cough cough'`, `maximum-phonation-time` yields 50 `'Ah.'`, and `glides-low-to-high` alone
-yields 145 `'E.'` plus 44 `'E'`/`'E-'`. Those are the manoeuvre transcribed as a word, and filling the
-vocabulary is the whole fix. **The candidate tokens are readable off the corpus; choosing them is
-the owner's, not this document's.**
-
-**The disagreements are the point, and most are not errors.** 2,584 recordings carry an agreed word
-in a family that does not ask for words. Split by transcript:
-
-| cause | scale | what to do |
-| --- | --- | --- |
-| the protocol asks for speech first — 938 of 1,258 `prolonged-vowel` transcripts begin `'One two three'` | 1,258 | route to speech; this is correct, not a false positive |
-| genuine off-task speech, much of it the examiner — `"I'll have you do that one more time. [breath]"`, `"Now do I stop?"`, and one `breath-sounds` recording carrying a conversation about surgery rotations | 73/73 in `respiration-and-cough-breath`, 62/64 in `-fivebreaths` | route to speech; **this is the goal-2 condition the graph exists to find** |
-| the manoeuvre transcribed as a word | 239 in `respiration-and-cough-cough`, of which 37 survive the bracket test | `words.onomatopoeic_tokens` |
-
-*Owed*: `_is_bracketed_token` (`speech_to_text_ensemble/api.py:61`) is private to another module and
-used only for display; TAXONOMY reads the stored `bracketed` attribute instead and needs nothing
-from it. `words.onomatopoeic_tokens` needs its vocabulary.
-
-##### 2. The AudioSet ontology, not a hand-built concept layer
-
-Unchanged from the previous draft, and still owed. YAMNet's 521 and AST's 527 classes are
-**AudioSet classes with a published parent–child ontology**; kinds should be expressed as subtrees
-of it rather than as flat string lists. Only **HeAR's eight labels** need mapping in by hand.
-
-**The ontology is not in this repository.** `audio_analysis/data/audioset_source_map.json` is a
-*flattening* onto four categories and cannot serve: `Cough`, `Breathing`, `Snoring`, `Wheeze`,
-`Gasp`, `Sniff` and `Throat clearing` all flatten to `people`. It also belongs to another workflow.
-
-*Owed*: vendor and pin the AudioSet `ontology.json` with its release identifier, the same way a
-model revision is pinned. Until then any subtree claim below is unverified.
-
-##### 3. Airway is two phenomena, and one detector does not serve both
-
-Firing fraction per family at the best whole-corpus threshold for each:
-
-| family | `residual.energy_fraction ≥ 0.1` | YAMNet airway family `≥ 0.3` |
-| --- | --- | --- |
-| `respiration-and-cough-v2-breath` | **0.977** | 0.674 |
-| `respiration-and-cough-breath` | **0.904** | 0.554 |
-| `respiration-and-cough-fivebreaths` | **0.887** | 0.821 |
-| `respiration-and-cough-cough` | 0.569 | **0.825** |
-| `voluntary-cough` | 0.621 | **0.963** |
-| `respiration-and-cough-v2-hardcough` | 0.352 | **0.855** |
-
-Whole corpus: the residual at 0.1 is sens 0.785 / spec 0.874; YAMNet at 0.3 is sens 0.805 /
-spec 0.869. **The residual catches breathing and misses coughing; YAMNet catches coughing and is
-weakest on quiet breathing.** No threshold in either sweep repairs the other's blind spot, so
-airway should be raised by **either** line, and `breath` and `cough` should be counted separately
-rather than pooled into one `airway` verdict.
-
-`residual.enabled` is `true` by default (`default.yaml:209`), so the residual line has an input on
-every run.
-
-**YAMNet `Cough` is the most specific single label measured** — 0.006 on `harvard-sentences-list`,
-0.019 on `free-speech`, against 0.749–0.872 on the cough tasks. HeAR `Cough` is more sensitive
-(0.928–0.978) and fires on 0.828 of `word-color-stroop` and 0.746 of `story-recall-v2`: sensitive,
-and not usable alone. That is the same authoritative/corroborating shape as before, with the roles
-the previous draft assigned — **AudioSet raises, HeAR corroborates** — confirmed at scale.
-
-**`Snoring` / `Snore` must not raise or corroborate anything.** The previous draft dropped it on the
-grounds that HeAR's `Snore` "peaks on sustained voicing, not respiration". **That is not what this
-corpus shows, and the corrected reason is stronger:** `Snore` at 0.2 fires on 0.983 of
-`word-color-stroop`, 0.917 of `animal-fluency` and 0.804 of `story-recall-v2` — connected speech —
-as well as 0.911 of `respiration-and-cough-fivebreaths` and 0.873 of `maximum-phonation-time`. It
-does not invert against family; it fires on nearly everything long. It discriminates nothing.
-
-Airway under this proposal is therefore the **`Cough` and `Breathing` subtrees only**, with
-`Snoring`, `Sigh`, `Sniff`, `Wheeze` and `Gasp` dropped from the AudioSet airway set and `Snore`
-from the HeAR one, unless a measurement argues them back.
-
-The two hand-listed keys this paragraph named were replaced on 2026-09-11 by one root list,
-`taxonomy.airway_ontology_roots`, whose ontology closure is the airway kind. Its subtree half is now
-sayable — `[Cough, Breathing]` — while the individual drops are not, which is the contradiction the
-note below is about. See
-[`../20260910-classifier-ontology-mapping/design.md`](../20260910-classifier-ontology-mapping/design.md).
-
-> **The conflict between notions 2 and 3 still needs the owner's ruling.** In the published AudioSet
-> ontology `Snoring` is, to the best of our knowledge, a **child of `Breathing`** — so "take the
-> `Breathing` subtree" and "drop `Snoring`" contradict each other. Either the rule is a subtree
-> *minus an explicit exclusion list*, or airway names its members directly. Check it against the
-> pinned ontology before either is written.
-
-Two further measured facts constrain the airway line:
-
-- **The per-span HeAR reading is worse than the whole-file one.** `_span_label_evidence`
-  (`taxonomy.py:167`) is written to read `span_hear` as airway's authoritative line; scored that
-  way it reaches Youden 0.366 against 0.570 for the whole-file HeAR summary. Whichever line is
-  chosen, **this one is the weakest airway detector measured** and the choice needs a reason.
-- **The enhanced stream is not an airway input.** YAMNet's airway family on `enhanced` reaches
-  Youden 0.357 against 0.674 on `plain`: enhancement removes the airway content with the noise.
-  `residual.enhanced_energy_fraction` is worse still — it fires on 99.99% of everything at every
-  threshold, Youden ≈ 0.
-
-##### 4. Voice — the chant family, not the span duration
-
-**The proposed rule is beaten by a label.** `voice.longest_amplitude_span ≥ 3 s` scores sens 0.859 /
-spec 0.790, with 11,394 false positives that are connected speech (`caterpillar-passage` 0.712,
-`story-recall-v2` 0.664, `free-speech` 0.509 all clear 3 s). A 2 s floor is much worse — 24,569
-false positives — which reproduces the earlier small-sample result at 62,550.
-
-The YAMNet chant family (`Chant`, `Mantra`, `Singing`, `Humming`, `Choir`, `Vocal music`,
-`Yodeling`) at peak ≥ 0.05 scores **sens 0.906 / spec 0.940**: 4.7 points more sensitive and 15
-points more specific than the duration floor. Per family:
-
-| family | `≥ 0.05` |
-| --- | --- |
-| `prolonged-vowel`, `maximum-phonation-time`(-v2) | 0.911–0.930 |
-| `glides-low-to-high`, `glides-high-to-low`, `high-to-low` | 0.860–0.907 |
-| every family that is not declared voice | ≤ 0.306 |
-
-Conjoining the two (chant ≥ 0.02 **and** amplitude span ≥ 3 s) trades sensitivity for specificity —
-0.837 / 0.958 — and is a reasonable alternative if false positives are the worry. **Which of the
-two the owner wants is open; that the duration floor alone is the worst of the three is not.**
-
-**`continuity` spans carry no phonation signal.** `voice.longest_continuity_span` has *negative*
-Youden at every threshold from 0.25 s to 2 s and 0.003 at its best. This is the measured form of
-the note above: a continuity candidate overlapping an amplitude span is absorbed as a
-`corroborated_by` entry rather than surviving as a span (`preprocess.py:819-821`), so the standalone
-continuity span is anti-correlated with sustained phonation. **A pathway reading `corroborated_by`
-may still work; one reading standalone continuity spans cannot.** Nothing here measures the former.
-
-*Owed*: whether voice reads the chant labels, the amplitude duration, or their conjunction; and, if
-a duration takes part, its value — which belongs in `taxonomy` as a new key with its derivation in
-`specs/`, not as a literal.
-
-##### 5. What the classifiers cannot do, stated plainly
-
-| claim | measurement |
-| --- | --- |
-| YAMNet `Speech` cannot route speech | at 0.2 (`consolidation_floor`), sens 0.997 / spec **0.217**; its per-family firing fraction never drops below 0.560 in any of the 48 families (minimum `respiration-and-cough-breath`, maximum `animal-fluency` 1.000). Only at 0.99 is it a discriminator (0.938 / 0.769) |
-| AST is the best classifier for speech | `Speech` peak ≥ 0.5 on `plain`: sens 0.899 / spec 0.915 against agreed ASR, Youden 0.814 against YAMNet's best 0.708 — and still below the ASR rule |
-| AST cannot corroborate anything through `consensus_taxonomy` | `PER_SPAN_CLASSIFIERS` is `{yamnet, hear}` (`taxonomy.py:380`) and no `span_ast` measurement exists anywhere in the tree; every AST detector read off `consensus_taxonomy` has sensitivity 0.0000 at every threshold |
-| five of HeAR's eight labels can never corroborate | `_write_consensus_taxonomy` merges on the exact label string (`taxonomy.py:461`). Checked against a run's own 521 YAMNet label keys, only `Cough`, `Sneeze` and `Speech` are spelled the same; `Baby Cough`, `Breathe`, `Laugh`, `Snore` and `Throat Clear` have only near-misses (`Breathing`, `Laughter`, `Snoring`, `Throat clearing`) and so can never reach `n_classifiers: 2` |
-| the residual is not a speech input | YAMNet `Speech` on `residual` reaches Youden 0.043, HeAR `Speech` 0.057 |
-
-##### 6. No certain pathway ⇒ flag the file
-
-Unchanged. **A kind no pathway raised with certainty is `uncertain`, and any uncertain kind flags
-the file** — which is what the fold already does (`taxonomy.py:635-640`). The change is not the fold
-but that pathways can reach certainty, which none can today.
-
-##### Background, and the gap spans
-
-Unchanged in substance and not re-measured here. PREPROCESS writes the complement of the proposed
-set as `measure: "gap"` and classifies it like any other span. **Background should be neither a kind
-nor a pathway**: the three kinds answer "is the content the protocol asked for present"; a mains hum
-is a property of the room. Proposed instead: gaps feed a **file-level quality flag** alongside the
-disruption counting.
-
-##### What FIGURE already draws
-
-`_stream_summary_lines` (`figure.py:865`) is called for `enhanced` and `residual`
-(`figure.py:908,910`) and emits, per stream, one block per classifier off `*_summary_all` plus one
-speech-free line per classifier off `*_summary_speech_free` — **all twelve stream summaries**. A
-kind decision taken from these measurements is therefore already visible on the page that
-accompanies it.
-
-##### The hint: a flag, never a state
-
-Unchanged. TAXONOMY refuses hints today, with a reason worth preserving (`taxonomy.py:22-26`): a
-recording can genuinely carry two tasks' content. This section's own measurement is the strongest
-case yet for that refusal — 78% of `prolonged-vowel` recordings contain real speech, and a hint
-naming `voice` must not suppress it.
-
-**The hint may not set, raise, lower or suppress any kind's state.** What it may do is produce its
-own finding: when the content the task declares is absent, or a strongly-supported label
-contradicts the declaration, that is a `hint_contradiction` flag on the file.
-
-##### Every state, and what produces it
-
-| level | state | produced by | reachable today |
-| --- | --- | --- | --- |
-| kind | `present` | its pathway raised with certainty | no — no pathway implemented |
-| kind | `absent` | pathway ran, raised nothing, inputs available | no |
-| kind | `uncertain` | no certain pathway, or its inputs unavailable | **yes, always** |
-| node | `FAIL` | all three kinds `absent` | no |
-| node | `FLAG` | any kind `uncertain` | **yes, the only outcome** |
-| node | `PASS` | none uncertain, at least one present | no |
-| file | `DISCARD` | ADMIT `fail` | yes, independently of anything here |
-| file | `DISCARD` (acoustically empty) | every kind `absent` | no |
-| file *(proposed)* | `hint_contradiction` | declared content absent, or contradicted | not implemented |
-| file *(proposed)* | background quality flag | gap spans carry competing background | not implemented |
-
-**Two levels people conflate.** `FAIL`/`FLAG`/`PASS` above are **TAXONOMY's node outcome**. They are
-not the **file** result: `Triage.PASS` and the acoustically-empty `DISCARD` are VERDICT's, and
-`DISCARD` stays reachable through ADMIT `fail` regardless of anything here.
-
-##### The pathways, their inputs, and the flags
-
-```mermaid
-graph LR
-  subgraph inputs
-    ASR["consensus words<br/>bracketed?"]
-    AST["AST<br/>AudioSet, whole file"]
-    YAM["YAMNet<br/>AudioSet"]
-    HEAR["HeAR<br/>8 labels"]
-    RES["residual<br/>energy_fraction"]
-    SPN["spans: measure<br/>+ corroborated_by"]
-    GAP["gap spans"]
-  end
-  ASR --> P1{{"1. non-bracketed word<br/>any outcome<br/>CERTAIN"}}
-  AST -.corroborates.-> P1
-  YAM --> P2{{"2. cough<br/>Cough subtree"}}
-  YAM --> P3{{"3. breath<br/>Breathing subtree<br/>or residual energy"}}
-  RES --> P3
-  HEAR -.corroborates only.-> P2
-  HEAR -.corroborates only.-> P3
-  YAM --> P4{{"4. chant family"}}
-  SPN -.optional conjunct.-> P4
-  P1 --> SPE["speech"]
-  P2 --> AIR["airway"]
-  P3 --> AIR
-  P4 --> VOI["voice"]
-  SPE --> FOLD{{"any kind uncertain?"}}
-  AIR --> FOLD
-  VOI --> FOLD
-  FOLD -->|yes| FLAG["FLAG the file"]
-  FOLD -->|no| DEC["PASS or FAIL"]
-  GAP -.background.-> QF["quality flag<br/>not a kind"]
-  HINT["hint tags"] -.never sets a state.-> HC["hint_contradiction"]
-```
-
-##### What each pathway still needs
-
-| pathway | owed |
-| --- | --- |
-| 1 speech | `words.onomatopoeic_tokens` vocabulary (null, `default.yaml:116`); the ruling that `outcome` is not read |
-| 2 ontology | the AudioSet `ontology.json` vendored and pinned — **not currently in the repository** |
-| 3 airway | the subtree-minus-exclusions ruling; whether `breath` and `cough` become two counted lines; whether the HeAR line reads `span_hear` (Youden 0.366) or the whole-file summary (0.570) |
-| 4 voice | chant labels, amplitude duration, or their conjunction — and, if a duration, its value in `taxonomy` with a derivation |
-| 5 floors | the four `taxonomy.presence_floor.*` and the three `windows.*.default_threshold` nulls; nothing in this node can decide while they stand |
-| 6 fold | nothing — the fold already flags on uncertainty; pathways are what is missing |
-| background | whether a competing background is a quality flag or nothing at all |
 
 ### 3b. FIGURE — rendering, folded into the preprocessing sequence
 
@@ -685,6 +591,213 @@ absent names the missing derivative and prints the reason the producing node rec
 
 Its own drawing choices live in a `FigureStyle` dataclass, disjoint from anything the pipeline reads.
 
+---
+
+### 3c. The ruleset — what routes a recording, measured and not yet wired in
+
+This subsection used to be a plan headed PROPOSED. It is now data and code: `taxonomy.ruleset` in
+`data/config/default.yaml` and the evaluator over it in `routing_analysis/ruleset.py`, scored over
+the 62,547-recording corpus. What has *not* changed is that **no node reads it**. `nodes/taxonomy.py`
+is untouched, every `taxonomy.presence_floor` is null, and `nodes/routing.py` still selects branches
+from the kind states of step 3. Adopting the ruleset is a later step, and until it happens the
+behaviour of the running graph is the one described above: every recording flags.
+
+Everything below is a structural description. The operating points, the firing spreads they were
+chosen against, the per-family tables and the enumerated disagreements are in
+[`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md),
+[`../20260910-taxonomy-routing-evidence/measurements.md`](../20260910-taxonomy-routing-evidence/measurements.md)
+and [`../20260911-praat-ppg-detectors/design.md`](../20260911-praat-ppg-detectors/design.md), and
+they are not restated here.
+
+#### Routing is content-first
+
+**Every branch's gates are evaluated on every recording.** The declared family no longer filters
+which gates run; it is a reference standard and nothing else. The ruleset used to read the task
+family first, resolve it to the branches that family declares, and evaluate only those branches'
+gates, with one hand-cut exception for discovered speech. The reversal is the whole change, and the
+evidence that forced it is a concrete defect: 74 unambiguous `harvard-sentences-list` read-speech
+recordings routed to no branch on their own declared gate and were rescued only by the exception.
+`confirming_gates` and `discovery_gates` are deleted, `branch_gates` replaces both, and
+`declared_family_set` is renamed `reference_family_set` to say what it now is. Pre-alpha: no
+aliases, no flag that restores instruction-first routing.
+
+Three rules follow from it, and they are the ones a reader is most likely to violate:
+
+1. **A reading is evidence.** No detector output is treated as a hallucination or an error because
+   it failed some other cut. Where two readings of the same phenomenon disagree, both gates stay and
+   the branch routes on either.
+2. **The declaration is a prior, never ground truth.** A recording carries whatever the participant
+   produced, which is not restricted to what the protocol asked for.
+3. **The hint layer is deliberately deferred.** A hint would name which routed branch is the target
+   of the elicitation and flag a `missed` or an `extra` as a contradiction. It may never suppress a
+   routed branch and no gate's threshold may depend on the family — that would put the instruction
+   back into the routing path through a side door.
+
+#### The gates, the flag and the bypass
+
+```mermaid
+graph LR
+  R["recording"] --> G["every gate,<br/>every branch"]
+  G -->|"airway.breath / .cough<br/>.bracketed_event<br/>.ppg_silent_fraction"| AIR["AIRWAY"]
+  G -->|"speech.lexical"| SPE["SPEECH"]
+  G -->|"voice.sustained<br/>voice.glide / .chant"| VOI["VOICE"]
+  G -->|"ddk.lexical_repetition<br/>ddk.ppg_segment_rate_per_s"| DDK["DDK"]
+  G -.-> FL["speech.transcript_agreement<br/>flags SPEECH, routes nothing"]
+  G -->|"nothing fired"| E{{"emptiness bypass<br/>consulted only here"}}
+  E -->|fired| EMP["EMPTY"]
+  E -->|silent| UNX["UNEXPLAINED"]
+  AIR --> Q["QUALITY"]
+  SPE --> Q
+  VOI --> Q
+  DDK --> Q
+  EMP --> Q
+```
+
+| branch | gates, any one of which routes it | what each reads |
+| --- | --- | --- |
+| AIRWAY | `airway.breath`, `airway.cough`, `airway.bracketed_event`, `airway.ppg_silent_fraction` | residual energy fraction `>= 0.10`; loudest cough-labelled span `>= 50 dB` over its own floor; one typed bracketed airway token from `taxonomy.airway_bracket_tokens`; posteriorgram frames whose argmax phoneme is `<silent>` `>= 0.757` |
+| SPEECH | `speech.lexical` | live consensus words that are not bracketed, any outcome, `>= 2` |
+| VOICE | `voice.sustained`, `voice.glide`, `voice.chant` | longest live amplitude span `>= 3.0 s`; YAMNet singing-subtree union peak on `plain` `>= 0.05`; YAMNet `Chant` peak on `plain` `>= 0.02` |
+| DDK | `ddk.lexical_repetition`, `ddk.ppg_segment_rate_per_s` | largest repeat count of any normalised transcript token `>= 3`; contiguous argmax-phoneme segments per second `>= 10` |
+
+**SPEECH routes on ASR words alone.** `words.total` is the wrong field — bracketed tokens fire
+almost everywhere, so `total >= 1` scores specificity 0.075 — and the bracketed half is not noise
+either: it is airway evidence, with a gate of its own. Two, not one, because a single spurious token
+on a held vowel is an ASR artifact: `lexical >= 1` fires on 0.569 of the glide families and `>= 2`
+collapses that to 0.065. Two is an artifact boundary, not a max-Youden point, and **3 is the
+defensible alternative**; choosing between them is a judgement about which error costs more.
+
+**Agreement is a flag, not a gate.** `speech.transcript_agreement` (`words.agreement >= 3`) is in
+`branch_flags`. **It records doubt about *what* was said, not whether speech occurred.** Three
+recognizers converging says the transcript is trustworthy; three diverging says it is doubtful. The
+lexical count already said whether there was speech. Reading the same recording twice and keeping
+only the cases where both readings match measures recognizer concordance, and gating on it was the
+defect that discarded the 74 harvard recordings. No downstream consumer reads the flag yet.
+
+**Emptiness is a bypass, not a precondition.** Owner's model: *everything reaches QUALITY after the
+other branches, but emptiness reaches QUALITY directly*, and *emptiness is only evaluated if the
+other rules have not found a route*. The previous pass asked it first and returned early, so no gate
+ran on a recording it called empty and `gate_outcomes` came back empty. Now nothing short-circuits:
+every gate and every flag runs, and the bypass is consulted only where none fired, as the
+explanation for that. A gate firing on a recording the bypass would have called empty routes it
+normally, and **that disagreement is a measurement of the bypass** — do not suppress it, and do not
+add a rule letting emptiness veto a gate. The rule itself is unchanged as data: both stream names
+and the 0.2 floor stay exactly as they were; only *when* it is consulted has changed.
+
+**Emptiness is ADMIT-shaped and does not live there.** It is a statement that the recording should
+not have entered the graph at all, which is ADMIT's question. It sits in the ruleset because that is
+where it can be measured against the routed set without re-running the graph. Moving it must carry
+the bypass ordering with it: ADMIT runs before any gate, so an ADMIT that discarded on emptiness
+would restore the short-circuit this pass removed.
+
+#### The four branches, and why diadochokinesis is one of them
+
+`BRANCHES` gained `DDK`. Diadochokinesis is syllable repetition whose target is a syllable rather
+than a word: it holds no lexical content for SPEECH to be the authority on, it is not sustained or
+glided phonation for VOICE, and it is not an airway manoeuvre. What it *does* do is fire the lexical
+detectors at 92–99%, because a recognizer asked for words on `pa pa pa pa` returns words. Routing it
+through SPEECH does not fail loudly; **it succeeds for the wrong reason** and hands a branch a
+subject it cannot assess.
+
+`families.py` was not changed for it. `SYLLABLE_REPETITION` already existed and the DDK families are
+already inside `DECLARED_KIND["speech"]`; the ruleset reads the narrower set by name, so
+`declared_kinds("diadochokinesis-ka")` still returns `{"speech"}` and the existing sweep's reference
+standards are unchanged.
+
+`ddk.lexical_repetition` was called `ddk.declared` and is renamed because measurement shows it only
+works when the elicited unit is a dictionary word: `diadochokinesis-buttercup` ("repeat the **word**
+/buttercup/") falls through at 1.6%, `diadochokinesis-v2-puh` ("repeat the **syllable** /PA/") at
+24.6%. `ddk.ppg_segment_rate_per_s` is the acoustic gate beside it — a rate of articulatory change
+that never had to spell the unit — and it was fitted rather than assumed. The lexical cut of 3 has
+never been swept.
+
+#### Three outcomes, and only one of them indicts the ruleset
+
+| state | what happened | a charge against | corpus |
+| --- | --- | --- | --- |
+| `ROUTED` | one or more branches claimed the recording | nothing | 62,027 (99.2%) |
+| `EMPTY` | nothing routed, and the audio explains why | the recording | 187 (0.3%) |
+| `UNEXPLAINED` | nothing routed, and the audio does not | **the ruleset** | 333 (0.5%) |
+
+`RouteState` replaced an `empty`/`fell_through` boolean pair that could both be false and then said
+nothing about which of the three had happened. `FamilyTally.states` carries all three keys per family
+whether or not the family reached one, and they sum to `recordings`.
+
+`GateOutcome` has three members for the same reason. **`UNAVAILABLE` is not `SILENT`**: an absent
+residual measurement is not a residual energy fraction of zero, a run with no YAMNet summary is not a
+run with no chant, and a recording with no consensus transcript is not a recording with no repeated
+syllable. Collapsing them into a boolean would report a broken or partial store as a negative
+measurement, which is the failure mode that makes a scored ruleset look better than it is.
+`RouteEvaluation.unavailable` names the unread gates per branch **whether or not another gate routed
+the branch anyway**, because that is a fact about the store and not about the recording.
+
+Per-branch, against the reference family sets:
+
+| branch | sensitivity | specificity | held out by construction |
+| --- | --- | --- | --- |
+| AIRWAY | 0.972 | 0.780 | — |
+| SPEECH | 0.954 | 0.633, or **0.855** excluding DDK | `syllable_repetition` |
+| VOICE | 0.957 | 0.736 | — |
+| DDK | 0.937 | 0.727 | — |
+
+**Read SPEECH's two specificities together or neither.** The reference set is `lexical_speech`, DDK
+sits outside it by construction, and at the shipped cut of 2 **71.3% of the false positives are
+diadochokinesis recordings**. They are speech. Charging the branch for routing them measures the
+reference set, not the gate. `score_branches` reports both tables rather than choosing.
+
+An empty recording stays a reference positive for whatever its family declares, so it lands in
+`missed` and counts as a false negative. That is the honest reading — a branch genuinely was not
+recovered — but it means a corpus with many empties reports a depressed sensitivity for a reason
+that has nothing to do with the gates, which is why `states` counts `empty` beside it.
+
+#### What the earlier plan got wrong, corrected in place
+
+| the plan said | what is true now |
+| --- | --- |
+| the AudioSet ontology is **not in this repository** and any subtree claim is unverified | it is vendored and pinned at `data/classifier_ontology/2026-09-10.json`, generated by `scripts/build_classifier_ontology_map.py` from three commit-pinned artifacts and never hand-edited |
+| airway is the `Cough` and `Breathing` subtrees, with `Snoring`, `Sigh`, `Sniff`, `Wheeze`, `Gasp` dropped | airway is the closure of `taxonomy.airway_ontology_roots`, which is **`[Respiratory sounds]`**, minus the nodes no classifier can emit: `Breathing`, `Cough`, `Gasp`, `Pant`, `Sneeze`, `Sniff`, `Snoring`, `Snort`, `Throat clearing`, `Wheeze`. The subtree-minus-exclusion-list question is closed by taking the whole closure; naming a second root widens the AudioSet and the HeAR vocabularies at once |
+| corroboration is a hand-written HeAR→AudioSet string map, and six of HeAR's eight labels have no entry | a HeAR label is corroborated by its mapped AudioSet node **or any descendant of it**, read from the profile; `airway.corroboration_overrides` replaces one label's derived set and raises on a label the profile does not map |
+| voice should read the chant labels, or the duration, or their conjunction — open | all three VOICE gates ship and are OR'd: `voice.chant` was the best voice separator in the sweep and was sitting unrouted. It was added beside `voice.glide` rather than replacing it, because the two read different constructions of the same evidence |
+| speech should not require `outcome: agreement` — proposed | done, and agreement is a flag |
+| DDK is not a branch | it is the fourth |
+
+**One string-match survives, and it is not the corroboration one.** `_write_consensus_taxonomy`
+(step 3) still merges the per-span classifiers on the **exact label string**, so of HeAR's eight
+labels only `Cough`, `Sneeze` and `Speech` are spelled as YAMNet spells them; `Baby Cough`,
+`Breathe`, `Laugh`, `Snore` and `Throat Clear` have only near-misses (`Breathing`, `Laughter`,
+`Snoring`, `Throat clearing`) and can never reach `n_classifiers: 2`. The ontology profile is
+exactly what would fix it, and `consensus_taxonomy` does not read it.
+
+#### What the classifiers cannot do, stated plainly
+
+Unchanged and still measured. YAMNet `Speech` cannot route speech — at the consolidation floor it is
+sens 0.997 / spec 0.217 and its per-family firing never drops below 0.560 in any of the 48 families.
+AST is the best classifier for speech and still below the ASR rule, and it **cannot corroborate
+anything through `consensus_taxonomy`**: `PER_SPAN_CLASSIFIERS` is `{yamnet, hear}` and no `span_ast`
+measurement exists anywhere in the tree. The residual is not a speech input. The enhanced stream is
+not an airway input — YAMNet's airway family on `enhanced` reaches Youden 0.357 against 0.674 on
+`plain`, because enhancement removes the airway content with the noise.
+
+#### Background, and the gap spans
+
+Unchanged. PREPROCESS writes the complement of the proposed span set as `measure: "gap"` and
+classifies it like any other span. **Background is neither a kind nor a branch**: the kinds answer
+"is the content the protocol asked for present"; a mains hum is a property of the room. It belongs
+to QUALITY, which is the node that now exists for questions of that shape and has no implementation.
+
+#### What the ruleset still owes
+
+| item | what is owed |
+| --- | --- |
+| `airway.cough` | its 50 dB cut is **carried over unswept** onto a population smaller and louder than the one it was fitted on. Re-fitting it from the corpus run is the first thing to do with that run |
+| `ddk.lexical_repetition` | threshold 3 has **never been swept**: no J, no firing spread, no operating point |
+| `airway.bracketed_event` | its J came off the 300-character-capped transcript and is a lower bound; the gate must be re-measured from the extracted `bracketed_types` counts |
+| `speech.lexical` | 2 against 3 is a judgement no number here settles; a `COUNT_GRID` sweep with DDK held out of the negatives, reporting max- and median-family firing beside J, is what would inform it |
+| `words.onomatopoeic_tokens` | null. While it is, the manoeuvre transcribed as a word leaks into SPEECH: 145 `'E.'` in `glides-low-to-high` alone. The candidate tokens are readable off the corpus; choosing them is the owner's |
+| the presence floors | the four `taxonomy.presence_floor.*` nulls and `taxonomy.speech_labels`. Nothing in TAXONOMY can decide while they stand, and adopting the ruleset is what would retire the question rather than answer it |
+| the hint layer | designed above, not implemented |
+| a DDK arm | there is no `nodes/ddk.py`; see step 5d |
+
 ### 4. routing — turn classification (+ hints) into an execution set
 
 Measures nothing and classifies nothing: it reads TAXONOMY's `kind` elements and the caller's hints
@@ -693,17 +806,27 @@ never rewrites the classification, never removes a branch and never relaxes a th
 verdict is always `pass` — an empty execution set is recorded on the decisions for VERDICT to read,
 not flagged here.
 
-The rule (`routing.py:185-187`): `by_classification = state != absent`; `forced_by_hint` is true
-only when the hint named the kind **and** classification did not already select it; `will_run` is
-the disjunction. Since no kind can be `absent` while voice is uncertain and the floors are null,
-**every branch runs on every recording** today.
+The rule: `by_classification = state != absent`; `forced_by_hint` is true only when the hint named
+the kind **and** classification did not already select it; `will_run` is the disjunction. Since no
+kind can be `absent` while voice is uncertain and the floors are null, **every branch this node
+knows about runs on every recording** today.
 
-Hints reach it through `routing.hint_kind_map` (`routing.py:160`), read with `config.get` and
-**null in the packaged config** — so every declared tag maps to no kind, forces nothing, and is
-recorded `unmapped`. Extraction exists (`runs/b2ai-v2/make_hints.py`) but the map it checks against
-lives only in that campaign's override.
+**This node knows about three branches, and `BRANCHES` has four.** It iterates `BRANCH_FOR_KIND`,
+which is `{airway: AIRWAY, speech: SPEECH, voice: VOICE}` — there is no `ddk` kind, so `DDK` can
+never be selected, no `branch_decision` is written for it, and the runner's loop records it
+`SKIPPED` on every path. It does not raise: `run.py`'s dispatch table has no `DDK` entry, and the
+only reason that is not a `KeyError` is that nothing can put `DDK` in the selected set. See step 5d.
 
-*Goals served*: none directly; it gates the branches that serve them.
+**This node reads none of the ruleset of step 3c.** No gate, no threshold, no family: the two
+routings are different mechanisms measured on different populations, and only this one runs.
+
+Hints reach it through `routing.hint_kind_map`, read with `config.get` and **null in the packaged
+config** — so every declared tag maps to no kind, forces nothing, and is recorded `unmapped`.
+Extraction exists (`runs/b2ai-v2/make_hints.py`) but the map it checks against lives only in that
+campaign's override. The ruleset's deferred hint layer is a separate, later design (step 3c); this
+one is the hint mechanism that exists, and it is inert.
+
+*Goals served*: none directly; it selects the branches that serve them.
 
 ### 5a. AIRWAY — confirm or contest PREPROCESS's per-span HeAR labels
 
@@ -777,9 +900,53 @@ path and writes `Outcome.FAIL` with a `why` naming the retirement rather than th
 span in the store" a reader would take for a property of the recording (`voice.py:231-237`).
 
 Its measurement machinery is intact and unreached: HNR, F0 and RMS tracks over the whole stream,
-sliced per span. `voice.f0_range_hz` is `require`d at `voice.py:68` and is null.
+sliced per span. **Its F0 range is no longer a null that would stop it.** It reads
+`voice.f0_search_range_hz` — the same populated `[50.0, 600.0]` PREPROCESS narrows from — through
+`_f0_range`, which prefers a declared population's range from `voice.f0_range_by_population` when
+the hint names one and derives the range off the stream otherwise. `voice.f0_range_ratio_max` and
+`voice.task_duration_ranges` are read with `config.get` and null, so the period-doubling check and
+the task-duration comparison are both skipped rather than raising. **Nothing but the missing span
+source stops this branch now.**
 
 *Goals served*: none of the three; it was never one of them.
+
+### 5d. DDK — declared, unbuilt
+
+A branch with no node. `DDK` is in `BRANCHES` and in `taxonomy.ruleset` — a reference family set, a
+construction exclusion on SPEECH, two gates and a scored 2x2 — and there is **no `nodes/ddk.py`**,
+no `ddk` kind in `routing.BRANCH_FOR_KIND`, no `DDK` in `GRAPH_ORDER`, and no entry in `run.py`'s
+dispatch table. The branch is consequently never selected, always recorded `SKIPPED`, and reported
+nowhere: `verdict.py` orders through `GRAPH_ORDER`, which does not name it.
+
+One artifact of the half-state is visible: `report.py` builds `_EVIDENCE_BRANCHES = (*BRANCHES,
+"REDACT")`, so `_branch_evidence` emits an always-empty `"DDK"` key in the report JSON. Its
+`source_spans` table has no `DDK` entry, which is why that is empty rather than an error.
+
+What an arm would need, none of it done: the four structural entries above, and a subject — the
+acoustic syllable-repetition evidence `ddk.ppg_segment_rate_per_s` reads is a routing feature, not a
+branch's measurement of the manoeuvre.
+
+*Goals served*: none yet.
+
+### 5e. QUALITY — a graph edge every recording reaches
+
+In `GRAPH_ORDER` after `VOICE` and before `REDACT`, and **not** in `BRANCHES`. Every recording
+reaches it whatever routed, which is precisely why it cannot be a route: a gate firing on everything
+selects nothing. Emptiness reaches it directly, bypassing the branches (step 3c).
+
+**There is no `nodes/quality.py`.** The runner has no dispatch entry for it and records it `SKIPPED`
+after the branch loop, so the ADMIT-fail path, the PREPROCESS-fail path and the happy path all agree
+rather than the node being absent on some of them. `verdict.py`'s `_GRAPH_ORDER` is
+`GRAPH_ORDER[:-1]`, so `FileVerdict.ran` already carried `QUALITY: skipped` from the store's own
+reading with or without the runner's line, and `report.py` orders node rows by `GRAPH_ORDER`, so a
+`QUALITY` row reads `skipped`.
+
+The `quality:` config section — `stoi_floor`, `pesq_floor`, `disruption_clipped_s_max`,
+`disruption_dropout_s_max` — is still null and still read by nothing in `src/senselab`. **Declaring
+the node did not adopt those values.** Goal 1 is the goal this node exists for, and it is the goal
+with the widest gap between what is measured and what decides.
+
+*Goals served*: 1, in intent. None reached.
 
 ### 7. VERDICT — the file-level fold
 
@@ -819,8 +986,8 @@ them, since REPORT writes its JSON before it draws.
 
 | goal | measured | decides anything | where it stops |
 | --- | --- | --- | --- |
-| 1. bad quality | yes — SQUIM, level, `disruptions_file`, per-span SQUIM | **no** | `quality.stoi_floor`, `quality.pesq_floor`, `quality.disruption_clipped_s_max`, `quality.disruption_dropout_s_max` are read by **nothing in `src/senselab`**; the gate they describe is unimplemented |
-| 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | partially | every `taxonomy.presence_floor.*` is null, so no kind can be `present` or `absent`; `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design |
+| 1. bad quality | yes — SQUIM, level, `disruptions_file`, per-span SQUIM, and now forty Praat scalars | **no** | QUALITY is a declared node with no implementation (step 5e); `quality.stoi_floor`, `quality.pesq_floor`, `quality.disruption_clipped_s_max` and `quality.disruption_dropout_s_max` are read by **nothing in `src/senselab`** |
+| 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | partially | every `taxonomy.presence_floor.*` is null, so no kind can be `present` or `absent`; `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design. The ruleset of step 3c is the measured replacement for the first half of that and no node reads it |
 | 3. PII | yes — the consensus transcript and each recognizer's own transcript are scanned in one call | **yes** | the one goal fully wired to a decision, and the only one whose acting node cannot run: `redaction.padding_ms` and `redaction.fill` are null and both `require`d, so REDACT raises. SPEECH marks PII; nothing releases a redacted product |
 
 ## What each run records about itself
@@ -828,7 +995,7 @@ them, since REPORT writes its JSON before it draws.
 The store is `ProvStore` (`utils/prov_store.py`), modelled on W3C PROV: entities, activities, agents
 and PROV's own relations, append-only, so merging two stores is a set union and order-independent.
 
-Three things it now records that a reader of an older run will not find:
+Four things it now records that a reader of an older run will not find:
 
 - **Checksums.** Every entity carrying a `path` gets a SHA-256 with `size_bytes` and `mtime_ns`,
   computed in the process that wrote the file (`CHECKSUM_KEY`, `prov_store.py:41`). The input
@@ -840,7 +1007,12 @@ Three things it now records that a reader of an older run will not find:
   versions of a declared package set plus a digest of the full listing. This exists because the
   venvs do not agree: a 62,550-recording run recorded host torch 2.11.0 against `clearvoice-cpu`
   and `crisperwhisper-cpu` on 2.14.0+cpu and `qwen-asr-cpu` on 2.8.0+cpu, with `yamnet`/`hear` on
-  TensorFlow 2.21.0 and no torch at all.
+  TensorFlow 2.21.0 and no torch at all. The `ppgs` venv joins that list on every run that reaches
+  `ppg_posteriorgram`.
+- **An agent that says why it has no commit.** Every model agent records a resolved commit; the
+  ppgs agent records `unresolved_reason` instead — its checkpoint ships inside the PyPI release, so
+  no commit exists to resolve. Recording a SHA while loading through something that is not one is
+  the only outcome worse than recording nothing, and this is the place the graph would have had to.
 - **A BEP028 PROV-O JSON-LD projection.** `utils/prov_bep028.py` serialises a written `store.jsonl`
   into the four BIDS-Prov files (`_io`, `_act`, `_soft`, `_env`) without re-running anything.
 
@@ -853,28 +1025,52 @@ nothing at all, which is why a stalled task leaves no evidence of where it stopp
 the verdict carries no discriminating information for any file that ADMIT accepts. Anything reading
 triage verdicts downstream is reading a constant.
 
-**`require` and `get` are not interchangeable, and the choice is currently inconsistent.**
-`windows.*.default_threshold` is `require` in the whole-file fold (three
-derivatives absent) and `get` in the per-span passes (raw scores kept). `taxonomy.speech_labels` is
-`get ... or []` in both its readers (`taxonomy.py:564`, `speech.py:588`), so a null empties the
-speech family without a word anywhere. The per-span behaviour is the intended one; the others have
-not been brought to it. `residual.enabled` is `require`d and now true by default (`preprocess.py:1657`), so an
-intentionally-off block reports through the same absent-derivative channel as an unmeasured null.
+**Two routings exist and only the weaker one runs.** The ruleset of step 3c routes 99.2% of the
+corpus on content and is read by no node; `nodes/routing.py` routes on kind states that cannot
+become `absent` and runs every branch it knows about on everything. The gap between them is the
+single largest open item in this document, and it is not a defect in either piece — it is the step
+nobody has taken.
 
-**Eight keys are read by nothing**: the four `quality.*`; `taxonomy.voice_min_duration_s` and
-`taxonomy.voice_uncertain_duration_s`, orphaned by the voice retirement; and `voice.hint_tags` and
-`speech.hint_tags` (`default.yaml:142`, `:154`, both self-described "unread as of v2" —
-`routing.py:184`'s own `hint_tags` is a local built from `hint_kind_map`, not this key). Pre-alpha
-says delete outright; they are the only written record of gates nobody built.
+**`require` and `get` are not interchangeable, and the choice is currently inconsistent.** The
+`windows.<classifier>` triple is read by two loaders on purpose now — `load_label_membership`
+(`require` on all three keys, so the whole-file folds stay absent on a null `label_thresholds`) and
+`optional_label_membership` (a null override is no override, so the per-span passes run). The
+per-span behaviour is the intended one and the whole-file fold has not been brought to it.
+`taxonomy.speech_labels` is `get ... or []` in both its readers (`taxonomy.py`, `speech.py`), so a
+null empties the speech family without a word anywhere. `residual.enabled` is `require`d and true
+by default, so an intentionally-off block reports through the same absent-derivative channel as an
+unmeasured null.
+
+**Eight keys are read by nothing**: the four `quality.*`, which QUALITY's declaration did not
+adopt; `taxonomy.voice_min_duration_s` and `taxonomy.voice_uncertain_duration_s`, orphaned by the
+voice retirement; and `voice.hint_tags` and `speech.hint_tags`, both self-described "unread as of
+v2" — `routing.py`'s own `hint_tags` is a local built from `hint_kind_map`, not this key. Pre-alpha
+says delete outright; they are the only written record of decisions nobody built.
+
+**A ninth section is read by nothing *in the graph*, which is a different statement.**
+`taxonomy.ruleset` is read by `routing_analysis/ruleset.py` and by
+`scripts/score_taxonomy_ruleset.py`, and by no node. It is not an orphan; it is a measurement
+waiting on adoption. Note that its mappings are **schema**, not data: `DATA_MAP_PATHS` does not name
+them, so a campaign override may change a gate's threshold but may not add a gate.
 
 **Hints are extractable but inert.** `routing.hint_kind_map` is null in the packaged config, so a
 correctly extracted hint forces nothing. See [`benchmarks/open.md`](benchmarks/open.md), "Hints:
-mapping, extraction and vocabulary".
+mapping, extraction and vocabulary". The ruleset's own hint layer is deferred by design, not by a
+null.
+
+**Three id namespaces stay distinct.** A gate's name, a detector's name and a branch's name are not
+interchangeable even where two of them are spelled the same — `airway.ppg_silent_fraction` is both a
+detector (a sweep) and a gate (one point off it), and `AIRWAY` is neither. See the glossary.
 
 ## Branch authority, not shown as edges
 
 The mermaid graph shows execution order. It does not show that **each branch is the authority on
-its own kind and no other** — AIRWAY on `airway`, SPEECH on `speech`, VOICE on `voice`. A branch's
-conclusion replaces TAXONOMY's classification for its own kind in the file verdict, and the
-disagreement is recorded as a `mismatch` reason rather than resolved by precedence. No branch reads
-another's output, which is why a branch that raises does not stop its siblings.
+its own kind and no other** — AIRWAY on `airway`, SPEECH on `speech`, VOICE on `voice`, and DDK on
+nothing yet, because it has no node. A branch's conclusion replaces TAXONOMY's classification for
+its own kind in the file verdict, and the disagreement is recorded as a `mismatch` reason rather
+than resolved by precedence. No branch reads another's output, which is why a branch that raises
+does not stop its siblings.
+
+It also does not show that **QUALITY is an edge rather than a branch**. It is the authority on no
+kind, it is reached by every recording including the ones the emptiness bypass explains, and it is
+in `GRAPH_ORDER` for exactly that reason.
