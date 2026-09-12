@@ -17,6 +17,8 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     CONSOLIDATION_FLOOR,
     DETECTORS,
     GATE_CLOSED,
+    SATURATING_PROPORTION_GRID,
+    SEGMENT_LAG_GRID,
     Detector,
     detector_value,
 )
@@ -976,6 +978,59 @@ def test_the_normalised_pitch_spread_is_the_ratio_of_the_two_praat_scalars(tmp_p
     record = _derivatives(tmp_path, _repeated([0, 1], 10))
     detector = next(candidate for candidate in DETECTORS if candidate.name == "glide.praat_f0_relative_spread")
     assert detector_value(record, detector) == pytest.approx(42.0 / 210.0)
+
+
+def _fires(value: float, threshold: float, polarity: str) -> bool:
+    """Whether a detector at one threshold fires on one value.
+
+    Args:
+        value: What the detector read.
+        threshold: The cut.
+        polarity: ``above`` fires at or over the threshold, ``below`` at or under it.
+
+    Returns:
+        True when the value is on the firing side.
+    """
+    return value <= threshold if polarity == "below" else value >= threshold
+
+
+def test_the_repetition_lag_fires_above_its_threshold_over_a_grid_that_holds_its_range(tmp_path: Path) -> None:
+    """A syllable train repeats at a longer segment lag than a sentence does, so it fires above."""
+    record = _derivatives(tmp_path, _repeated([0, 1, 2], 8))
+    detector = next(candidate for candidate in DETECTORS if candidate.name == "ddk.ppg_repetition_lag_segments")
+    value = detector_value(record, detector)
+    assert value is not None
+    assert value == pytest.approx(3.0)
+    assert detector.polarity == "above"
+    assert detector.thresholds == SEGMENT_LAG_GRID
+    assert min(detector.thresholds) <= value <= max(detector.thresholds)
+    assert _fires(value, 3.0, detector.polarity)
+    assert not _fires(value, 4.0, detector.polarity)
+
+
+def test_the_phonation_ratio_grid_resolves_the_top_of_a_ratio_bounded_at_one(tmp_path: Path) -> None:
+    """The corpus piles this ratio against 1.0, so the cuts that separate it are above 0.95."""
+    record = _derivatives(tmp_path, _repeated([0, 1], 10))
+    saturated = replace(record, praat={**record.praat, "phonation_ratio": 0.97})
+    for name in ("airway.praat_phonation_ratio", "glide.praat_phonation_ratio", "voice.praat_phonation_ratio"):
+        detector = next(candidate for candidate in DETECTORS if candidate.name == name)
+        assert detector.thresholds == SATURATING_PROPORTION_GRID
+    detector = next(candidate for candidate in DETECTORS if candidate.name == "airway.praat_phonation_ratio")
+    value = detector_value(saturated, detector)
+    assert value is not None
+    assert value == pytest.approx(0.97)
+    assert min(detector.thresholds) <= value <= max(detector.thresholds)
+    assert _fires(value, 0.98, detector.polarity)
+    assert not _fires(value, 0.95, detector.polarity)
+
+
+def test_the_syllable_repetition_detectors_have_a_reference_standard_to_be_scored_against(tmp_path: Path) -> None:
+    """A detector no standard matches is scored nowhere, which reads as a null it never earned."""
+    standards = [standard for standard in REFERENCE_STANDARDS if standard.kind == "ddk"]
+    assert [standard.name for standard in standards] == ["declared_ddk"]
+    record = _derivatives(tmp_path, _repeated([0, 1], 10))
+    assert standards[0].predicate(record)
+    assert not standards[0].predicate(_retitled(record, "free-speech"))
 
 
 def test_the_breath_detectors_fire_below_their_threshold(tmp_path: Path) -> None:

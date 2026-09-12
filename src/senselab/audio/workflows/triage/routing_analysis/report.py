@@ -230,6 +230,13 @@ REFERENCE_STANDARDS: tuple[ReferenceStandard, ...] = (
         predicate=_declared("voice"),
     ),
     ReferenceStandard(
+        name="declared_ddk",
+        kind="ddk",
+        is_proxy=True,
+        description="the declared task family asks for one syllable repeated as fast as possible",
+        predicate=lambda features: features.family in SYLLABLE_REPETITION,
+    ),
+    ReferenceStandard(
         name="declared_cough_vs_breath",
         kind="cough",
         is_proxy=True,
