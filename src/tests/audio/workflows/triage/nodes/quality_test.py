@@ -1,9 +1,13 @@
 """QUALITY — clip spans read against the amplitudes PREPROCESS measured beside them.
 
 The spans are seeded rather than detected: this module's subject is what QUALITY does with a clip
-span it was handed, and ``src/tests/audio/tasks/clipping`` owns where ClipDaT opens an event. The
-seeding goes through PREPROCESS's own :func:`write_clip_spans`, so the attributes QUALITY reads are
-the attributes a run would hand it, over a real recording that went through the real ADMIT.
+span it was handed, and ``src/tests/audio/tasks/clipping`` owns where ClipDaT opens an event.
+
+There are two seedings, because there are two ways a store gets its inputs. :func:`_seed` goes
+through PREPROCESS's own ``write_clip_spans``, which is a fresh run. :func:`_seed_bare` writes the
+spans alone and leaves ``extend_clip_amplitudes`` to append the measurement, which is a finished run
+extended in place. Both run over a real recording that went through the real ADMIT, and QUALITY must
+not be able to tell them apart.
 """
 
 from __future__ import annotations
@@ -17,10 +21,13 @@ import pytest
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import live_entities
-from senselab.audio.workflows.triage.nodes.preprocess import write_clip_spans
+from senselab.audio.workflows.triage.nodes.preprocess import extend_clip_amplitudes, write_clip_spans
 from senselab.audio.workflows.triage.nodes.quality import (
     CLIP_AMPLITUDE_MEASUREMENT,
+    CLIP_FAMILY,
+    CLIP_LEVELS,
     CONTRADICTED_CLIP,
+    UNCLIPPED_LOUDER_N,
     quality,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
@@ -103,6 +110,46 @@ def _seed(
         signal="recording",
         guard_samples=int(settings.require("quality.clip_edge_guard_samples")),
     )
+    return path
+
+
+def _seed_bare(
+    store: ProvStore,
+    tmp_path: Path,
+    wav_writer: Callable[..., Path],
+    samples: np.ndarray,
+    clip_ranges: list[tuple[int, int]],
+) -> Path:
+    """Write the recording, ADMIT it, and place clip spans carrying no amplitudes at all.
+
+    This is the completed corpus's shape: 62,550 recordings whose clip spans were written before
+    the amplitudes existed, so each span carries its ``family``, its ``signal`` and its extent and
+    nothing else, and no ``clip_amplitude`` measurement sits beside them.
+
+    Args:
+        store: The store to seed.
+        tmp_path: The run directory.
+        wav_writer: The fixture WAV writer.
+        samples: The recording.
+        clip_ranges: Half-open sample ranges PREPROCESS is to have called clipped.
+
+    Returns:
+        The recording's path on disk.
+    """
+    path = wav_writer("input.wav", samples, SR)
+    admitted = admit(store, path, load_triage_config(), run_dir=tmp_path)
+    assert admitted.audio is not None
+    agent = store.agent(agent_type="software", version="senselab test-seed")
+    activity = store.activity(node="PREPROCESS", step="clip_spans", parameters={})
+    store.was_associated_with(activity, agent)
+    for first, stop in clip_ranges:
+        span_id = store.entity(
+            prov_type="span",
+            extent=(first / SR, stop / SR),
+            attributes={"family": CLIP_FAMILY, "signal": "recording"},
+        )
+        store.was_generated_by(span_id, activity)
+        store.was_attributed_to(span_id, agent)
     return path
 
 
@@ -409,3 +456,118 @@ class TestWhatItMayRead:
         store.was_invalidated_by(measurement.id, store.activity(node="TEST", step="drop", parameters={}))
         result = quality(store, "recording", config, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.PASS
+
+
+class TestAStoreTheMeasurementWasAppendedTo:
+    """The corpus's shape after an extend pass: untouched spans, the amplitudes beside them.
+
+    The store is append-only, so an attribute cannot be added to a span that already exists. Every
+    level therefore lives in the measurement, keyed by span id, and a span that carries no attribute
+    beyond its family and its signal is checked exactly as a freshly written one is.
+    """
+
+    def test_spans_carrying_no_amplitudes_are_checked_from_the_measurement(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """The finding is the one a fresh run produces, off spans nothing was stamped on."""
+        samples = _bed()
+        clipped = _plateau(samples, 8000, 8400, 0.5)
+        samples[24000] = np.float32(0.9)
+        _seed_bare(store, tmp_path, wav_writer, samples, [clipped])
+        spans = [entity for entity in live_entities(store, "span") if entity.attributes.get("family") == CLIP_FAMILY]
+        assert [sorted(span.attributes) for span in spans] == [["family", "signal"]]
+
+        assert extend_clip_amplitudes(store, config, run_dir=tmp_path) is not None
+
+        result = quality(store, "recording", config, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FLAG
+        contest = _contests(store)
+        assert len(contest) == 1
+        assert contest[0].attributes["clip_level"] == pytest.approx(0.5, abs=QUANTISATION)
+        assert contest[0].attributes["louder_amplitude"] == pytest.approx(0.9, abs=QUANTISATION)
+        assert contest[0].attributes["louder_samples_n"] == 1
+        assert store.get_entity(result.verdict_entity_id).attributes["checked_n"] == 1
+
+    def test_the_appended_measurement_keys_every_level_by_span_id(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """A level a reader cannot attribute to a span is not a level; the key is the span's id."""
+        samples = _bed()
+        loud = _plateau(samples, 4000, 4400, 0.95)
+        quiet = _plateau(samples, 12000, 12400, 0.4)
+        _seed_bare(store, tmp_path, wav_writer, samples, [loud, quiet])
+        measurement_id = extend_clip_amplitudes(store, config, run_dir=tmp_path)
+        assert measurement_id is not None
+
+        amplitudes = store.get_entity(measurement_id).attributes
+        spans = [entity for entity in live_entities(store, "span") if entity.attributes.get("family") == CLIP_FAMILY]
+        assert set(amplitudes[CLIP_LEVELS]) == {span.id for span in spans}
+        assert set(amplitudes[UNCLIPPED_LOUDER_N]) == {span.id for span in spans}
+        by_extent = {span.extent: span.id for span in spans}
+        assert amplitudes[CLIP_LEVELS][by_extent[(4000 / SR, 4400 / SR)]] == pytest.approx(0.95, abs=QUANTISATION)
+        assert amplitudes[CLIP_LEVELS][by_extent[(12000 / SR, 12400 / SR)]] == pytest.approx(0.4, abs=QUANTISATION)
+
+    def test_an_extended_span_is_the_same_entity_a_fresh_run_writes(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """No amplitude is stamped on a span, so the two paths mint the same id for the same extent.
+
+        Entity ids digest the attributes, so a span carrying a level would be identified by it, and
+        an extended corpus and a re-run one would disagree about which entity a clip span is.
+        """
+        samples = _bed()
+        clipped = _plateau(samples, 8000, 8400, 0.5)
+        _seed_bare(store, tmp_path, wav_writer, samples, [clipped])
+        extended = [e.id for e in live_entities(store, "span") if e.attributes.get("family") == CLIP_FAMILY]
+
+        fresh = ProvStore(run_id=store.run_id)
+        _seed(fresh, tmp_path, wav_writer, samples, [clipped])
+        written = [e.id for e in live_entities(fresh, "span") if e.attributes.get("family") == CLIP_FAMILY]
+        assert extended == written
+
+    def test_the_same_store_refuses_until_the_measurement_is_appended(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """The refusal is what makes the extend pass necessary rather than optional."""
+        samples = _bed()
+        clipped = _plateau(samples, 8000, 8400, 0.5)
+        samples[24000] = np.float32(0.9)
+        _seed_bare(store, tmp_path, wav_writer, samples, [clipped])
+        with pytest.raises(LookupError, match=CLIP_AMPLITUDE_MEASUREMENT):
+            quality(store, "recording", config, run_dir=tmp_path)
+        assert store.activities(node="QUALITY") == []
+
+    def test_appending_twice_writes_nothing_the_second_time(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """The measurement carries no path and no timestamp, so a recompute is a set-union no-op."""
+        samples = _bed()
+        clipped = _plateau(samples, 8000, 8400, 0.5)
+        _seed_bare(store, tmp_path, wav_writer, samples, [clipped])
+        first = extend_clip_amplitudes(store, config, run_dir=tmp_path)
+        fingerprint = store.fingerprint()
+
+        assert extend_clip_amplitudes(store, config, run_dir=tmp_path) == first
+        assert store.fingerprint() == fingerprint
+
+    def test_a_store_with_no_clip_span_gets_no_measurement(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """Nothing was asserted, so there is nothing to measure and QUALITY refuses nothing."""
+        _seed_bare(store, tmp_path, wav_writer, _bed(), [])
+        assert extend_clip_amplitudes(store, config, run_dir=tmp_path) is None
+        assert quality(store, "recording", config, run_dir=tmp_path).verdict.outcome is Outcome.PASS
+
+    def test_a_recording_whose_bytes_changed_is_refused_rather_than_measured(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """Amplitudes from other bytes would not belong to the spans they are keyed against."""
+        samples = _bed()
+        clipped = _plateau(samples, 8000, 8400, 0.5)
+        path = _seed_bare(store, tmp_path, wav_writer, samples, [clipped])
+        replaced = _bed()
+        _plateau(replaced, 8000, 8400, 0.8)
+        wav_writer(path.name, replaced, SR)
+
+        with pytest.raises(ValueError, match="digests to"):
+            extend_clip_amplitudes(store, config, run_dir=tmp_path)
