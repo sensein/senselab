@@ -40,6 +40,9 @@ TOKEN_LABEL_FLOOR_FONTSIZE = 4.0  # the smallest point size a token label is shr
 TOKEN_LABEL_PADDING_PT = 1.0  # points of the bar kept clear of its label, shared by the two ends
 TOKEN_ROW_PITCH_EM = 2.0  # the least pitch a staggered row is given, in multiples of the label's point size
 TOKEN_BAR_HEIGHT_FRACTION = 0.7  # the share of its row's pitch a token's bar fills
+TOKEN_BAND_ALPHA = 0.30  # the wash a full-height background band is drawn at, under a lane's curves
+TOKEN_BAND_LABEL_STRIP = 0.26  # the share of a banded lane reserved at its head for the band labels
+TOKEN_BAND_LABEL_HALO_PT = 2.4  # the white casing a band label carries, so it reads over any curve
 REPORT_LANE_GUTTER_MIN_IN = 0.72  # a separate left column for a panel's descriptive lane title
 REPORT_LANE_GUTTER_MAX_IN = 1.45  # long names wrap rather than taking time pixels from the report
 REPORT_COLORBAR_GUTTER_IN = 0.72  # a shared right column for score-raster probability scales
@@ -299,6 +302,9 @@ class _StaggeredTokenLane(Artist):
 
     Draws nothing itself. It sits below every bar and label in the lane so that its ``draw`` runs
     first, sets each bar's row and each label's slot, and leaves the drawing to them.
+
+    In ``background_bands`` mode every bar fills its block's whole height and only the labels
+    stagger, inside a strip of :data:`TOKEN_BAND_LABEL_STRIP` at the block's head.
     """
 
     zorder = -1.0
@@ -311,6 +317,7 @@ class _StaggeredTokenLane(Artist):
         fontsize: float,
         floor_fontsize: float,
         expand_to_row_neighbours: bool = False,
+        background_bands: bool = False,
     ) -> None:
         """Lay ``placements`` out over ``blocks`` stacked blocks of the lane.
 
@@ -321,6 +328,8 @@ class _StaggeredTokenLane(Artist):
             fontsize: The point size the labels are drawn at when they fit.
             floor_fontsize: The point size below which a label is dropped rather than shrunk.
             expand_to_row_neighbours: Whether labels may use unused horizontal room in their cycling row.
+            background_bands: Whether each bar fills its block's whole height, with only the labels
+                staggered in the strip at the block's head.
         """
         super().__init__()
         self._placements = placements
@@ -329,6 +338,7 @@ class _StaggeredTokenLane(Artist):
         self._fontsize = fontsize
         self._floor_fontsize = floor_fontsize
         self._expand_to_row_neighbours = expand_to_row_neighbours
+        self._background_bands = background_bands
 
     def _row_count(self, renderer: RendererBase, axes: Axes, points_per_pixel: float) -> int:
         """The number of rows the block of undeclared tokens is spread over for this draw.
@@ -347,6 +357,8 @@ class _StaggeredTokenLane(Artist):
         (x0, _), (x1, _) = axes.transData.transform([(lower, 0.0), (upper, 0.0)])
         width_pt = abs(float(x1) - float(x0)) * points_per_pixel
         block_pt = float(axes.get_window_extent(renderer).height) * points_per_pixel / float(self._blocks)
+        if self._background_bands:
+            block_pt *= TOKEN_BAND_LABEL_STRIP
         widths = [
             placement.label._text_width_pt(renderer, self._floor_fontsize)
             for placement in self._placements
@@ -387,15 +399,21 @@ class _StaggeredTokenLane(Artist):
                     limits,
                     expand_to_row_neighbours=self._expand_to_row_neighbours,
                 )
-                pitch = 1.0 / float(self._blocks * count)
-                top = float(block + 1) / float(self._blocks)
+                block_height = 1.0 / float(self._blocks)
+                top = float(block + 1) * block_height
+                pitch = block_height / float(count)
                 for placement, row, slot in zip(members, assignment, slots):
-                    centre = top - (row + 0.5) * pitch
-                    height = TOKEN_BAR_HEIGHT_FRACTION * pitch
-                    placement.bar.set_y(centre - height / 2.0)
-                    placement.bar.set_height(height)
+                    if self._background_bands:
+                        placement.bar.set_y(top - block_height)
+                        placement.bar.set_height(block_height)
+                        label_y = top - (row + 0.5) * TOKEN_BAND_LABEL_STRIP * pitch
+                    else:
+                        centre = top - (row + 0.5) * pitch
+                        placement.bar.set_y(centre - TOKEN_BAR_HEIGHT_FRACTION * pitch / 2.0)
+                        placement.bar.set_height(TOKEN_BAR_HEIGHT_FRACTION * pitch)
+                        label_y = centre
                     if placement.label is not None:
-                        placement.label.set_y(centre)
+                        placement.label.set_y(label_y)
                         placement.label.set_span(slot)
         finally:
             for artist, callback in zip(touched, callbacks):
@@ -1076,7 +1094,11 @@ def plot_aligned_panels(
       axis of its own, named by ``name`` and spanning ``limits`` (default ``(0.0, 1.0)``). Each
       curve is drawn across the whole page window rather than over any span of its own, and carries
       a white casing that keeps it legible over every bar colour. A lane carrying ``curves`` is
-      drawn twice as tall, since two readings share it.
+      drawn twice as tall, since two readings share it, and its bars become full-height washed
+      background bands: a bar of any other height would put its edges at two arbitrary heights of
+      the curves' scale, which are then read as values on it. The bands' labels move to the strip
+      at the head of the lane and onto the curve axis, so a name is drawn over the curves rather
+      than under them.
     - ``{"type": "score_raster", "rows": [str, ...], "windows": [{"start": float,
       "end": float, "scores": {str: float}}], "name": str}`` -- one fixed row per selected
       label, with each native classifier window colored by its score. Missing cells mean the label
@@ -1278,6 +1300,8 @@ def plot_aligned_panels(
                 floor = float(panel.get("floor_fontsize", TOKEN_LABEL_FLOOR_FONTSIZE))
                 count = max(len(blocks), 1)
                 cmap = plt.get_cmap("tab20", count)
+                token_curves = panel.get("curves") or {}
+                banded = bool(token_curves.get("data"))
                 placements: List[_TokenPlacement] = []
                 edges: List[float] = []
                 for token in tokens:
@@ -1288,10 +1312,19 @@ def plot_aligned_panels(
                         continue
                     start, end = visible
                     width = end - start
-                    height = TOKEN_BAR_HEIGHT_FRACTION / float(count)
+                    height = (1.0 if banded else TOKEN_BAR_HEIGHT_FRACTION) / float(count)
                     centre = (block + 0.5) / float(count)
                     color = token.get("color") or cmap(block)
-                    bars = ax.barh(centre, width, left=start, height=height, color=color, alpha=0.92, edgecolor="none")
+                    bars = ax.barh(
+                        centre,
+                        width,
+                        left=start,
+                        height=height,
+                        color=color,
+                        alpha=TOKEN_BAND_ALPHA if banded else 0.92,
+                        edgecolor="none",
+                        zorder=0.5 if banded else None,
+                    )
                     text = str(token.get("text") or "")
                     label = None
                     if text:
@@ -1305,13 +1338,18 @@ def plot_aligned_panels(
                             ha="center",
                             va="center",
                             fontsize=fontsize,
-                            fontweight="bold" if token.get("bold") else "normal",
+                            fontweight="bold" if banded or token.get("bold") else "normal",
                             color="black",
-                            transform=ax.transData,
                             clip_on=True,
+                            path_effects=(
+                                [
+                                    patheffects.Stroke(linewidth=TOKEN_BAND_LABEL_HALO_PT, foreground="white"),
+                                    patheffects.Normal(),
+                                ]
+                                if banded
+                                else None
+                            ),
                         )
-                        label.set_clip_path(ax.patch)
-                        ax.add_artist(label)
                     placements.append(_TokenPlacement(block, bars[0], label, start + width / 2.0, width / 2.0))
                     edges.extend((start, end))
                 if panel.get("boundaries"):
@@ -1325,6 +1363,7 @@ def plot_aligned_panels(
                             fontsize,
                             floor,
                             bool(panel.get("expand_label_slots", False)),
+                            banded,
                         )
                     )
                 ax.set_ylim(0.0, 1.0)
@@ -1338,9 +1377,14 @@ def plot_aligned_panels(
                     ax.set_yticklabels(blocks, fontsize=7)
                 ax.set_ylabel(panel.get("name") or "Tokens")
                 ax.grid(axis="x", linestyle="--", alpha=0.3)
-                token_curves = panel.get("curves") or {}
-                if token_curves.get("data"):
-                    _draw_curve_axis(ax, token_curves, time_limits=x_limits)
+                # A banded lane's labels go on the curve axis, which draws after this one, so a name
+                # is never crossed out by the curve that happens to pass through it.
+                label_axis = _draw_curve_axis(ax, token_curves, time_limits=x_limits) if banded else ax
+                for placement in placements:
+                    if placement.label is not None:
+                        placement.label.set_transform(label_axis.transData)
+                        placement.label.set_clip_path(label_axis.patch)
+                        label_axis.add_artist(placement.label)
 
             elif ptype == "score_raster":
                 rows = [str(label) for label in panel.get("rows") or []]
@@ -1597,7 +1641,7 @@ def _ppg_panel(
         time_limits: The window the lane is drawn over, which selects the phonemes that get a curve.
 
     Returns:
-        A ``tokens`` panel specification carrying one bar per contiguous argmax-phoneme segment and
+        A ``tokens`` panel specification carrying one band per contiguous argmax-phoneme segment and
         a ``curves`` block of their posterior columns, or the ``text`` panel from
         :func:`_ppg_absence_panel`.
     """
@@ -1665,16 +1709,17 @@ def plot_range_with_ppg(
     The three panels share one time axis, and that axis is the requested range; its ticks stay in
     absolute recording time. Phoneme segments are the contiguous argmax runs
     :func:`~senselab.audio.tasks.features_extraction.ppg.extract_ppg_segments` finds, each drawn as
-    a labelled bar; one straddling the range edge is clipped to the range and still labelled. Every
-    segment edge is ruled across **all three** panels at the same time, so an edge can be read
-    against the closure, burst or voicing onset under it.
+    a full-height washed background band carrying the phoneme's name in the strip at the head of the
+    lane; one straddling the range edge is clipped to the range and still named. Every segment edge
+    is ruled across **all three** panels at the same time, so an edge can be read against the
+    closure, burst or voicing onset under it.
 
     The phoneme lane also carries the posterior curves of the phonemes that win the argmax anywhere
-    in the range, against a right-hand ``0``--``1`` scale. Each curve runs across the whole range
-    rather than stopping at its own segment, which is what makes the crossover at a boundary — one
-    phoneme's posterior falling as the next rises — visible. At most :data:`PPG_CURVE_LIMIT` are
-    drawn, the ones with the highest peak inside the range; each is coloured like the bars of the
-    phoneme it belongs to.
+    in the range, against a right-hand ``0``--``1`` scale which the bands run the whole height of.
+    Each curve runs across the whole range rather than stopping at its own segment, which is what
+    makes the crossover at a boundary — one phoneme's posterior falling as the next rises — visible.
+    At most :data:`PPG_CURVE_LIMIT` are drawn, the ones with the highest peak inside the range; each
+    is coloured like the band of the phoneme it belongs to.
 
     A recording with no posteriorgram gets a third panel stating that absence, with no rules on the
     other two panels and no right-hand scale.
