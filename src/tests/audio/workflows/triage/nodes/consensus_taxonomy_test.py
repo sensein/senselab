@@ -8,9 +8,8 @@ eight labels unable to reach ``n_classifiers: 2``. See
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
-
 from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 import pytest
 
