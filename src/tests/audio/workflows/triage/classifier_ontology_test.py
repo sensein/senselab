@@ -22,6 +22,7 @@ from senselab.audio.workflows.triage.classifier_ontology import (
     airway_hear_labels,
     audioset_labels_for_group,
     audioset_labels_under_roots,
+    canonical_names,
     corroboration_sets,
     hear_labels,
     hear_labels_in_group,
@@ -351,3 +352,50 @@ class TestTheAirwayKindIsOneOntologyClosure:
         config = load_triage_config()
         assert airway_audioset_labels(config) == AUDIOSET_AIRWAY
         assert airway_hear_labels(config) == HEAR_AIRWAY
+
+
+class TestLabelIdentity:
+    """``canonical_names`` answers which ontology node a spelling denotes, not what corroborates it."""
+
+    def test_every_audioset_class_names_itself(self) -> None:
+        """An AudioSet display name is already the ontology's own name for its node."""
+        identity = canonical_names()
+        classes = load_classifier_ontology()["audioset"]["classes"]
+        assert all(identity[entry["name"]] == entry["name"] for entry in classes.values())
+
+    @pytest.mark.parametrize(
+        ("spelling", "node"),
+        [
+            ("Throat Clear", "Throat clearing"),
+            ("Snore", "Snoring"),
+            ("Baby Cough", "Cough"),
+            ("Breathe", "Breathing"),
+            ("Laugh", "Laughter"),
+            ("Cough", "Cough"),
+            ("Sneeze", "Sneeze"),
+            ("Speech", "Speech"),
+        ],
+    )
+    def test_each_hear_label_names_its_mapped_node(self, spelling: str, node: str) -> None:
+        """All eight, including the three whose spelling already matched."""
+        assert canonical_names()[spelling] == node
+
+    def test_identity_is_the_mapped_root_and_not_the_subtree(self) -> None:
+        """``Throat clearing`` corroborates ``Cough`` and is still its own node."""
+        identity = canonical_names()
+        assert identity["Throat clearing"] == "Throat clearing"
+        assert "Throat clearing" in corroboration_sets()["Cough"]
+
+    def test_a_spelling_the_profile_does_not_hold_is_absent(self) -> None:
+        """The map names what the ontology names; a caller decides what to do with the rest."""
+        assert "Not an AudioSet class" not in canonical_names()
+
+    def test_a_profile_whose_label_shadows_a_different_class_is_refused(self, tmp_path: Path) -> None:
+        """One spelling standing for two nodes would merge two different events into one row."""
+        profile: dict[str, Any] = json.loads((sorted(PROFILE_DIR.glob("*.json"))[-1]).read_text())
+        sneeze = [node_id for node_id, entry in profile["audioset"]["classes"].items() if entry["name"] == "Sneeze"]
+        profile["mapping"]["Cough"]["audioset_ids"] = sneeze
+        path = tmp_path / "shadowed.json"
+        path.write_text(json.dumps(profile))
+        with pytest.raises(ValueError, match="itself an AudioSet class name"):
+            load_classifier_ontology(str(path))

@@ -521,8 +521,10 @@ Two **file-scoped measurements** are written here, both `extent=None`:
 - **`consensus_taxonomy`** (`_write_consensus_taxonomy`, `taxonomy.py:433`) — the per-span labels of
   every per-span classifier (`PER_SPAN_CLASSIFIERS` = `{yamnet: span_yamnet, hear: span_hear}`,
   `:380`) consolidated into one file-level taxonomy for downstream to read instead of re-deriving.
-  One row per label with `peak`, `peak_by_classifier`, `classifiers` and `n_classifiers`, ranked by
-  peak. **Disagreement is recorded, not resolved**: a label only one vocabulary contains is not a
+  One row per **ontology node** with `peak`, `peak_by_classifier`, `labels_by_classifier`,
+  `classifiers` and `n_classifiers`, ranked by peak. A row is named by the AudioSet display name of
+  the node its classifiers' labels denote, so HeAR `Throat Clear` and YAMNet `Throat clearing` are
+  one row; `labels_by_classifier` holds each classifier's own spellings. **Disagreement is recorded, not resolved**: a label only one vocabulary contains is not a
   vote against it, so `n_classifiers` counts corroboration only. It is a measurement — no floor
   turning it into present/absent. Empty when no per-span classifier produced scores, so "no
   consensus" and "a consensus over nothing" stay distinguishable.
@@ -761,12 +763,15 @@ that has nothing to do with the gates, which is why `states` counts `empty` besi
 | speech should not require `outcome: agreement` — proposed | done, and agreement is a flag |
 | DDK is not a branch | it is the fourth |
 
-**One string-match survives, and it is not the corroboration one.** `_write_consensus_taxonomy`
-(step 3) still merges the per-span classifiers on the **exact label string**, so of HeAR's eight
-labels only `Cough`, `Sneeze` and `Speech` are spelled as YAMNet spells them; `Baby Cough`,
-`Breathe`, `Laugh`, `Snore` and `Throat Clear` have only near-misses (`Breathing`, `Laughter`,
-`Snoring`, `Throat clearing`) and can never reach `n_classifiers: 2`. The ontology profile is
-exactly what would fix it, and `consensus_taxonomy` does not read it.
+**The second string-match is closed too, 2026-09-12.** `_write_consensus_taxonomy` (step 3) merged
+the per-span classifiers on the **exact label string**, so of HeAR's eight labels only `Cough`,
+`Sneeze` and `Speech` were spelled as YAMNet spells them; `Baby Cough`, `Breathe`, `Laugh`, `Snore`
+and `Throat Clear` had only near-misses (`Breathing`, `Laughter`, `Snoring`, `Throat clearing`) and
+could never reach `n_classifiers: 2`. The fold now resolves every label onto the AudioSet node it
+denotes before consolidating, names the row by the ontology, and keeps each classifier's own
+spellings in `labels_by_classifier`. One consumer's view moves with it —
+`routing_analysis/features.py` gates on HeAR's spellings — which is written up in
+[`../20260910-classifier-ontology-mapping/design.md`](../20260910-classifier-ontology-mapping/design.md).
 
 #### What the classifiers cannot do, stated plainly
 
@@ -837,7 +842,7 @@ applied per span at `:232`), the lexical consensus words, which exclude an alrea
 from the evidence set (`_is_transcribed`, `airway.py:64-79`, used `:216`, and again in the
 lexical-contamination check at `:306-336`), and YAMNet's whole-file per-window labels, which drive
 the confirm/contest verb (`_windows_covering`, `airway.py:46-61`, used `:258`). Config:
-`airway.labels_of_interest` (`Cough`, `Breathe`), `airway.corroboration_profile` and
+`airway.labels_of_interest` (`Cough`, `Breathe`), `taxonomy.classifier_ontology_profile` and
 `airway.corroboration_overrides` (which AudioSet classes corroborate which HeAR label — derived
 from the classifier-ontology profile, see
 [`../20260910-classifier-ontology-mapping/design.md`](../20260910-classifier-ontology-mapping/design.md)),

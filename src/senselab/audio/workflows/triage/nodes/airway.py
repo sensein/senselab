@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.classifier_ontology import airway_audioset_labels, corroboration_sets
+from senselab.audio.workflows.triage.classifier_ontology import (
+    PROFILE_PATH_KEY,
+    airway_audioset_labels,
+    corroboration_sets,
+)
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
@@ -109,7 +113,7 @@ def _corroboration(config: TriageConfig) -> dict[str, frozenset[str]]:
         ValueError: If an override names a HeAR label the profile does not map, which is a typo
             rather than an extension.
     """
-    sets = corroboration_sets(config.get("airway.corroboration_profile"))
+    sets = corroboration_sets(config.get(PROFILE_PATH_KEY))
     overrides = config.get("airway.corroboration_overrides") or {}
     unknown = sorted(str(label) for label in overrides if str(label) not in sets)
     if unknown:
