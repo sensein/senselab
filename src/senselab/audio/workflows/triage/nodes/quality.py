@@ -1,4 +1,18 @@
-"""QUALITY — the terminal node, reading the recording's own evidence for internal contradiction.
+"""QUALITY — the terminal node, reading the store's own records for internal contradiction.
+
+**When it runs.** After every branch, on every path PREPROCESS completed — whatever routing
+selected, and whether or not routing itself raised. It is the last node before REDACT and VERDICT,
+so every branch has already written whatever it was going to write. ``run._drive_branches`` places
+the call; ``run_test`` pins the position.
+
+**What it may read.** Stored outputs only: entities and their attributes. QUALITY decodes no audio,
+opens no sidecar and re-derives nothing — every amplitude it compares was measured by the node that
+held the signal. The clip-consistency check reads PREPROCESS's ``clip`` spans and the
+:data:`CLIP_AMPLITUDE_MEASUREMENT` measurement written beside them.
+
+**What it refuses.** A dependency that is absent is an operational fact, not a finding: clip spans
+with no clip-amplitude measurement beside them raise, and the runner records the node ``ERRORED``.
+A contradiction QUALITY *can* measure is always a finding and never a raise.
 
 Its first check is clip consistency. A clip span asserts that the signal reached its ceiling over
 that extent; a sample outside every clip span, louder than that ceiling, contradicts the assertion.
@@ -14,14 +28,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
+    find_measurement,
     live_entities,
-    resolve_stream,
     software_agent,
     write_verdict,
 )
@@ -34,6 +46,15 @@ CLIP_FAMILY = "clip"
 CONTRADICTED_CLIP = "clip_above_unclipped_sample"
 """The vocabulary token for a clip span an unclipped sample is louder than."""
 
+CLIP_AMPLITUDE_MEASUREMENT = "clip_amplitude"
+"""PREPROCESS's whole-file amplitude reading of the signal its clip spans were detected on."""
+
+CLIP_LEVEL = "clip_level"
+"""The clip span attribute carrying the peak absolute amplitude inside the span."""
+
+UNCLIPPED_LOUDER_N = "unclipped_louder_n"
+"""The clip span attribute carrying how many unclipped samples exceed that span's own level."""
+
 
 @dataclass(frozen=True)
 class _Contradiction:
@@ -45,7 +66,7 @@ class _Contradiction:
         clip_level: The peak absolute amplitude inside the span — the level it calls the ceiling.
         louder_amplitude: The loudest unclipped sample's absolute amplitude.
         louder_time_s: Where that sample sits, in seconds.
-        louder_samples_n: How many unclipped samples exceed ``clip_level`` by more than the margin.
+        louder_samples_n: How many unclipped samples exceed ``clip_level``.
     """
 
     span_id: str
@@ -70,6 +91,29 @@ class _Contradiction:
         }
 
 
+def _stream_id(store: ProvStore, name: str) -> str:
+    """The live stream entity's id, by name, without decoding it.
+
+    Reads by the store's shared rule — invalidated entities are never returned, latest write wins —
+    which is ``resolve_stream``'s rule with the load left out: QUALITY names the stream its findings
+    are about and never opens it.
+
+    Args:
+        store: The provenance store.
+        name: The stream entity's ``name`` attribute.
+
+    Returns:
+        The stream entity's id.
+
+    Raises:
+        LookupError: If no live stream entity carries that name.
+    """
+    found = [entity for entity in live_entities(store, "stream") if entity.attributes.get("name") == name]
+    if not found:
+        raise LookupError(f"no stream named {name!r} in the store; the node that writes it has not run")
+    return found[-1].id
+
+
 def _clip_spans(store: ProvStore, signal: str) -> list[Entity]:
     """Every live clip span PREPROCESS proposed over this signal, in time order.
 
@@ -91,38 +135,26 @@ def _clip_spans(store: ProvStore, signal: str) -> list[Entity]:
     return sorted(spans, key=lambda entity: entity.extent or (0.0, 0.0))
 
 
-def _sample_range(extent: tuple[float, float], sampling_rate: int, samples_n: int) -> tuple[int, int]:
-    """The half-open sample range an extent names, clamped to the decoded signal.
+def _clip_amplitudes(store: ProvStore, signal: str) -> Entity:
+    """PREPROCESS's clip-amplitude measurement over this signal.
 
     Args:
-        extent: ``(start, end)`` in seconds.
-        sampling_rate: The signal's sampling rate.
-        samples_n: How many samples the signal decoded to.
+        store: The provenance store.
+        signal: The stream name the clip spans were detected on.
 
     Returns:
-        ``(first, stop)`` with ``stop`` exclusive; ``stop <= first`` when the extent names no
-        sample of this signal.
+        The live :data:`CLIP_AMPLITUDE_MEASUREMENT` measurement entity.
+
+    Raises:
+        LookupError: If nothing live carries that name over ``signal``.
     """
-    first = int(round(extent[0] * sampling_rate))
-    stop = int(round(extent[1] * sampling_rate))
-    return max(0, min(first, samples_n)), max(0, min(stop, samples_n))
-
-
-def _unclipped_mask(samples_n: int, ranges: list[tuple[int, int]], guard: int) -> np.ndarray:
-    """Which samples are outside every clip span and outside every span's guard band.
-
-    Args:
-        samples_n: How many samples the signal decoded to.
-        ranges: The half-open sample range of each clip span.
-        guard: How many samples each side of a span are excluded with it.
-
-    Returns:
-        A boolean mask, true where a sample is unclipped evidence.
-    """
-    excluded = np.zeros(samples_n, dtype=bool)
-    for first, stop in ranges:
-        excluded[max(0, first - guard) : min(samples_n, stop + guard)] = True
-    return ~excluded
+    found = find_measurement(store, CLIP_AMPLITUDE_MEASUREMENT)
+    if found is None or found.attributes.get("signal") != signal:
+        raise LookupError(
+            f"no live {CLIP_AMPLITUDE_MEASUREMENT!r} measurement over {signal!r}, but the store carries "
+            "clip spans over it; PREPROCESS writes the two together and QUALITY reads no audio of its own"
+        )
+    return found
 
 
 def quality(
@@ -133,35 +165,44 @@ def quality(
     *,
     run_dir: Path,
 ) -> NodeResult:
-    """Read PREPROCESS's clip spans against the recording, and contest the ones a louder sample denies.
+    """Read PREPROCESS's clip spans against its own amplitude reading, and contest the denied ones.
 
-    A clip span's level is the peak absolute amplitude of the samples it covers, on the same
-    channel-averaged signal ``detect_clip_events`` read. An unclipped sample contradicts that span
-    when its own absolute amplitude exceeds the level by more than
-    ``quality.clip_contradiction_margin`` of the level; samples within
-    ``quality.clip_edge_guard_samples`` of any span edge are not unclipped evidence.
+    A clip span's level is the peak absolute amplitude of the samples it covers, which PREPROCESS
+    measured while it held the signal and stored on the span. An unclipped sample contradicts that
+    span when its own absolute amplitude exceeds the level by more than
+    ``quality.clip_contradiction_margin`` of the level. What counts as unclipped — the edge guard
+    included — was decided by PREPROCESS, and the guard it used is recorded on the measurement.
 
     Args:
-        store: The provenance store, holding ADMIT's recording stream and PREPROCESS's clip spans.
+        store: The provenance store, holding ADMIT's recording stream, PREPROCESS's clip spans and
+            the clip-amplitude measurement beside them.
         source: The store-held stream the clip spans were detected on, ``"recording"``.
         config: The triage configuration.
         hint: Accepted for the shared node shape; not read. No declaration can make a recording
             internally consistent.
-        run_dir: The run directory sidecar paths are relative to.
+        run_dir: Accepted for the shared node shape; not read. QUALITY writes no sidecar and opens
+            none.
 
     Returns:
         The verdict, the view over the assertions written, and the verdict entity id.
 
     Raises:
-        ValueError: If either key read at entry is null — raised before the store is written to.
-        LookupError: If the ``source`` stream is absent.
+        ValueError: If the key read at entry is null — raised before the store is written to.
+        LookupError: If the ``source`` stream is absent, or if clip spans over it carry no
+            clip-amplitude measurement to read them against.
     """
+    del hint, run_dir
     margin = float(config.require("quality.clip_contradiction_margin"))
-    guard = int(config.require("quality.clip_edge_guard_samples"))
-    stream_id, recording = resolve_stream(store, run_dir, source)
+    stream_id = _stream_id(store, source)
     software = software_agent(store)
 
     spans = _clip_spans(store, source)
+    amplitudes = _clip_amplitudes(store, source).attributes if spans else {}
+    guard = int(amplitudes.get("edge_guard_samples", 0))
+    peak = amplitudes.get("unclipped_peak")
+    peak_time_s = amplitudes.get("unclipped_peak_time_s")
+    unclipped_samples_n = int(amplitudes.get("unclipped_samples_n", 0))
+
     activity = store.activity(
         node=NODE,
         step="clip_consistency",
@@ -177,22 +218,12 @@ def quality(
     for span in spans:
         store.used(activity, span.id)
 
-    magnitude = np.abs(recording.waveform.mean(dim=0).numpy().astype(np.float64))
-    sampling_rate = int(recording.sampling_rate)
-    samples_n = int(magnitude.shape[0])
-    ranges = [_sample_range(span.extent or (0.0, 0.0), sampling_rate, samples_n) for span in spans]
-    measured = [(span, first, stop) for span, (first, stop) in zip(spans, ranges) if stop > first]
-
-    unclipped = np.flatnonzero(_unclipped_mask(samples_n, ranges, guard))
-    levels = np.sort(magnitude[unclipped]) if unclipped.size else np.empty(0)
-    peak = float(levels[-1]) if levels.size else None
-    peak_time_s = float(unclipped[int(np.argmax(magnitude[unclipped]))] / sampling_rate) if unclipped.size else None
-
+    measured = [
+        (span, float(span.attributes[CLIP_LEVEL])) for span in spans if span.attributes.get(CLIP_LEVEL) is not None
+    ]
     contradictions: list[_Contradiction] = []
-    for span, first, stop in measured:
-        clip_level = float(magnitude[first:stop].max())
-        louder_samples_n = int(levels.size - np.searchsorted(levels, clip_level * (1.0 + margin), side="right"))
-        if louder_samples_n == 0 or peak is None or peak_time_s is None:
+    for span, clip_level in measured:
+        if peak is None or peak_time_s is None or float(peak) <= clip_level * (1.0 + margin):
             continue
         start_s, end_s = span.extent or (0.0, 0.0)
         contradictions.append(
@@ -200,9 +231,9 @@ def quality(
                 span_id=span.id,
                 extent=(float(start_s), float(end_s)),
                 clip_level=clip_level,
-                louder_amplitude=peak,
-                louder_time_s=peak_time_s,
-                louder_samples_n=louder_samples_n,
+                louder_amplitude=float(peak),
+                louder_time_s=float(peak_time_s),
+                louder_samples_n=int(span.attributes.get(UNCLIPPED_LOUDER_N, 0)),
             )
         )
 
@@ -254,9 +285,9 @@ def quality(
             "checked_n": len(measured),
             "unmeasurable_n": len(spans) - len(measured),
             "contradicted_n": len(contradictions),
-            "unclipped_samples_n": int(unclipped.size),
-            "unclipped_peak": peak,
-            "unclipped_peak_time_s": peak_time_s,
+            "unclipped_samples_n": unclipped_samples_n,
+            "unclipped_peak": None if peak is None else float(peak),
+            "unclipped_peak_time_s": None if peak_time_s is None else float(peak_time_s),
             "clip_contradiction_margin": margin,
             "clip_edge_guard_samples": guard,
             "contradictions": [contradiction.as_detail() for contradiction in contradictions],

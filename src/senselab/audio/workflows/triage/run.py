@@ -252,7 +252,10 @@ def _drive_branches(
     raises is still recorded ``ERRORED`` and its siblings still run: none of them reads another's
     output. REDACT is a step of SPEECH and runs only when SPEECH ran and its scan found PII. QUALITY
     is the terminal node every recording reaches whatever routing selected, so it is called on every
-    path PREPROCESS completed, over the source recording rather than over a branch's view of it.
+    path PREPROCESS completed, over the source recording rather than over a branch's view of it. Its
+    call sits after the branch loop and before REDACT because it reads stored outputs and nothing
+    else: every branch has written whatever it was going to write, and a branch that raised has
+    finished too. It decodes no audio, so the position is the only thing that decides what it sees.
 
     PREPROCESS is the one dependency every later node in this function shares — TAXONOMY reads its
     stored derivatives, routing and the branches read TAXONOMY's fold, and none of that evidence
