@@ -21,7 +21,7 @@ import json
 from dataclasses import asdict, dataclass
 from importlib.metadata import version as _dist_version
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
@@ -106,6 +106,12 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.nodes.common import (
     write_measurement as _measurement,
+)
+from senselab.audio.workflows.triage.nodes.quality import (
+    CLIP_AMPLITUDE_MEASUREMENT,
+    CLIP_FAMILY,
+    CLIP_LEVEL,
+    UNCLIPPED_LOUDER_N,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.data_structures import HFModel
@@ -389,6 +395,134 @@ def _activity(store: ProvStore, step: str, parameters: dict[str, Any], reads: tu
     for entity_id in reads:
         store.used(activity_id, entity_id)
     return activity_id
+
+
+@dataclass(frozen=True)
+class ClipAmplitudes:
+    """The amplitude facts a clip span's consistency is read against.
+
+    Attributes:
+        levels: Per span, in the order the extents were given, the peak absolute amplitude inside
+            it; None where the extent names no sample of the signal.
+        louder_counts: Per span, how many unclipped samples exceed that span's own level. Zero for
+            a span whose level is None.
+        unclipped_peak: The loudest unclipped sample's absolute amplitude, or None when the guarded
+            spans leave no sample of the signal outside them.
+        unclipped_peak_time_s: Where that sample sits, in seconds, or None.
+        unclipped_samples_n: How many samples are unclipped evidence.
+    """
+
+    levels: tuple[float | None, ...]
+    louder_counts: tuple[int, ...]
+    unclipped_peak: float | None
+    unclipped_peak_time_s: float | None
+    unclipped_samples_n: int
+
+
+def clip_amplitudes(audio: Audio, extents: Sequence[tuple[float, float]], *, guard_samples: int) -> ClipAmplitudes:
+    """Measure each clip span's level and the loudest sample outside every one of them.
+
+    Read from the channel-averaged signal ``detect_clip_events`` reads, at the sampling rate the
+    extents are stated against. See ``specs/20260912-quality-clip-consistency/design.md``.
+
+    Args:
+        audio: The signal the extents were detected on.
+        extents: Each clip span's ``(start, end)``, in seconds.
+        guard_samples: How many samples each side of a span are excluded with it.
+
+    Returns:
+        The per-span levels and counts and the whole-file unclipped reading.
+    """
+    x = np.asarray(audio.waveform, dtype=np.float64)
+    if x.ndim > 1:
+        x = x.mean(axis=0)
+    magnitude = np.abs(x)
+    sampling_rate = int(audio.sampling_rate)
+    samples_n = int(magnitude.shape[0])
+    ranges = [
+        (
+            max(0, min(int(round(start * sampling_rate)), samples_n)),
+            max(0, min(int(round(end * sampling_rate)), samples_n)),
+        )
+        for start, end in extents
+    ]
+    excluded = np.zeros(samples_n, dtype=bool)
+    for first, stop in ranges:
+        excluded[max(0, first - guard_samples) : min(samples_n, stop + guard_samples)] = True
+    unclipped = np.flatnonzero(~excluded)
+    ordered = np.sort(magnitude[unclipped]) if unclipped.size else np.empty(0)
+    levels = [float(magnitude[first:stop].max()) if stop > first else None for first, stop in ranges]
+    return ClipAmplitudes(
+        levels=tuple(levels),
+        louder_counts=tuple(
+            0 if level is None else int(ordered.size - np.searchsorted(ordered, level, side="right"))
+            for level in levels
+        ),
+        unclipped_peak=float(ordered[-1]) if ordered.size else None,
+        unclipped_peak_time_s=(
+            float(unclipped[int(np.argmax(magnitude[unclipped]))] / sampling_rate) if unclipped.size else None
+        ),
+        unclipped_samples_n=int(unclipped.size),
+    )
+
+
+def write_clip_spans(
+    store: ProvStore,
+    activity_id: str,
+    agent_id: str,
+    *,
+    audio: Audio,
+    extents: Sequence[tuple[float, float]],
+    signal: str,
+    guard_samples: int,
+    derived_from: tuple[str, ...] = (),
+) -> tuple[list[str], str]:
+    """Write the clip spans and, beside them, the amplitude reading QUALITY checks them against.
+
+    The two are written together because the waveform is in hand exactly once: QUALITY reads stored
+    outputs and never decodes audio of its own.
+
+    Args:
+        store: The provenance store.
+        activity_id: The activity that detected the spans.
+        agent_id: The agent answerable for them.
+        audio: The signal the spans were detected on.
+        extents: Each span's ``(start, end)``, in seconds, in time order.
+        signal: The stream name the spans and the measurement are stated against.
+        guard_samples: How many samples each side of a span are excluded from unclipped evidence.
+        derived_from: Entities the spans and the measurement derive from.
+
+    Returns:
+        The span ids, in the order the extents were given, and the measurement's id.
+    """
+    amplitudes = clip_amplitudes(audio, extents, guard_samples=guard_samples)
+    span_ids: list[str] = []
+    for extent, level, louder in zip(extents, amplitudes.levels, amplitudes.louder_counts):
+        span_id = store.entity(
+            prov_type="span",
+            extent=extent,
+            attributes={"family": CLIP_FAMILY, "signal": signal, CLIP_LEVEL: level, UNCLIPPED_LOUDER_N: louder},
+        )
+        store.was_generated_by(span_id, activity_id)
+        store.was_attributed_to(span_id, agent_id)
+        for source_id in derived_from:
+            store.was_derived_from(span_id, source_id)
+        span_ids.append(span_id)
+    measurement_id = _measurement(
+        store,
+        activity_id,
+        agent_id,
+        name=CLIP_AMPLITUDE_MEASUREMENT,
+        signal=signal,
+        attributes={
+            "unclipped_peak": amplitudes.unclipped_peak,
+            "unclipped_peak_time_s": amplitudes.unclipped_peak_time_s,
+            "unclipped_samples_n": amplitudes.unclipped_samples_n,
+            "edge_guard_samples": int(guard_samples),
+        },
+        derived_from=(*derived_from, *span_ids),
+    )
+    return span_ids, measurement_id
 
 
 def ppg_model_agent(store: ProvStore) -> str:
@@ -675,7 +809,13 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         return _activity(store, step, parameters, reads, agent_id)
 
     def _clip_spans() -> None:
-        """Clip-event spans over the ORIGINAL recording (ClipDaT), before any normalization runs."""
+        """Clip-event spans over the ORIGINAL recording (ClipDaT), before any normalization runs.
+
+        Each span carries the peak absolute amplitude inside it and how many unclipped samples are
+        louder, and one ``clip_amplitude`` measurement beside them carries the loudest unclipped
+        sample and where it sits. QUALITY's consistency check reads those numbers; measuring them
+        here is what lets it read no audio.
+        """
         if not recording_ids:
             raise LookupError("no recording stream in the store")
         parameters: dict[str, Any] = {
@@ -683,6 +823,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "leniency_samples": int(config.require("clipping.leniency_samples")),
             "minimum_extreme": float(config.require("clipping.minimum_extreme")),
             "merge_gap_ms": float(config.require("clipping.merge_gap_ms")),
+            "clip_edge_guard_samples": int(config.require("quality.clip_edge_guard_samples")),
         }
         activity = _step("clip_spans", parameters, (recording_ids[-1],), software)
         sr = int(source.sampling_rate)
@@ -700,22 +841,21 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 merged[-1][1] = max(merged[-1][1], event.end_sample)
             else:
                 merged.append([event.start_sample, event.end_sample])
-        span_ids: list[str] = []
-        extents: list[tuple[float, float]] = []
-        for start_sample, end_sample in merged:
-            extent = (start_sample / sr, (end_sample + 1) / sr)
-            span_id = store.entity(
-                prov_type="span",
-                extent=extent,
-                attributes={"family": "clip", "signal": "recording"},
-            )
-            store.was_generated_by(span_id, activity)
-            store.was_attributed_to(span_id, software)
-            store.was_derived_from(span_id, recording_ids[-1])
-            span_ids.append(span_id)
-            extents.append(extent)
+        extents = [(start_sample / sr, (end_sample + 1) / sr) for start_sample, end_sample in merged]
+        span_ids, amplitude_id = write_clip_spans(
+            store,
+            activity,
+            software,
+            audio=source,
+            extents=extents,
+            signal="recording",
+            guard_samples=parameters["clip_edge_guard_samples"],
+            derived_from=(recording_ids[-1],),
+        )
         derivatives["clip_spans"] = span_ids
+        derivatives[CLIP_AMPLITUDE_MEASUREMENT] = amplitude_id
         view.extend(span_ids)
+        view.append(amplitude_id)
         state["clip_span_extents"] = extents
 
     def _envelope() -> None:

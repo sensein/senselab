@@ -23,13 +23,14 @@ from senselab.audio.workflows.triage import run as run_module
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import AdmitResult
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
-from senselab.audio.workflows.triage.nodes.preprocess import PreprocessResult
+from senselab.audio.workflows.triage.nodes.preprocess import PreprocessResult, write_clip_spans
 from senselab.audio.workflows.triage.nodes.redact import RedactResult
 from senselab.audio.workflows.triage.nodes.report import ReportRenderError
 from senselab.audio.workflows.triage.nodes.routing import routing as real_routing
 from senselab.audio.workflows.triage.nodes.taxonomy import TaxonomyResult
 from senselab.audio.workflows.triage.run import entity_subdir, prepare_run_layout, run_triage
 from senselab.audio.workflows.triage.vocabulary import (
+    BRANCHES,
     FileVerdict,
     NodeVerdict,
     Outcome,
@@ -106,9 +107,9 @@ def _fakes(
         pii: Whether the fake SPEECH writes a live ``pii`` entity, which is REDACT's whole gate.
         routing_outcome: ``"raise"`` makes the routing entry raise; ``"none"`` makes it return no
             result instead of calling the real node.
-        clip_span: An extent the fake PREPROCESS writes a ``clip`` span over, for the real QUALITY
-            to read. The tone's own extremes sit at its two ends, so a span over its quiet middle is
-            one the recording contradicts.
+        clip_span: An extent the fake PREPROCESS writes a ``clip`` span over, with the amplitude
+            measurement the real QUALITY reads it against. The tone's own extremes sit at its two
+            ends, so a span over its quiet middle is one the recording contradicts.
 
     Returns:
         The fakes, keyed by the attribute name they replace on the runner's module.
@@ -147,10 +148,15 @@ def _fakes(
         _record("PREPROCESS")
         if clip_span is not None:
             clip_activity = store.activity(node="PREPROCESS", step="clip_spans", parameters={})
-            span_id = store.entity(
-                prov_type="span", extent=clip_span, attributes={"family": "clip", "signal": "recording"}
+            write_clip_spans(
+                store,
+                clip_activity,
+                software_agent(store),
+                audio=source,
+                extents=[clip_span],
+                signal="recording",
+                guard_samples=int(config.require("quality.clip_edge_guard_samples")),
             )
-            store.was_generated_by(span_id, clip_activity)
         entity_id, verdict = _conclude(store, "PREPROCESS", Outcome.PASS, None)
         return PreprocessResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, absent=())
 
@@ -1072,3 +1078,28 @@ class TestTheExitCodeSaysWhetherTheGraphRanClean:
         nodes = {"VOICE": run_module.NodeOutcome(node="VOICE", state=RunState.ERRORED, error="RuntimeError: boom")}
         self._drive(_cli(), monkeypatch, tmp_path, fake_result(nodes=nodes))
         assert "VOICE" in capsys.readouterr().err
+
+
+class TestTheTerminalNodeContract:
+    """When QUALITY runs, and on what. Both are properties of the graph, not of line order."""
+
+    def test_it_runs_after_every_branch_and_before_the_fold(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Every branch has written whatever it was going to write by the time QUALITY reads."""
+        calls = graph()
+        run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        ran_branches = [branch for branch in BRANCHES if branch in calls]
+        assert ran_branches
+        assert all(calls.index(branch) < calls.index("QUALITY") for branch in ran_branches)
+        assert calls.index("QUALITY") < calls.index("REDACT") < calls.index("VERDICT")
+
+    def test_it_runs_after_a_branch_that_errored(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A branch raising is a branch that has finished; QUALITY still runs, and still runs last."""
+        calls = graph(raising="VOICE")
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.ran["VOICE"] is RunState.ERRORED
+        assert calls.index("VOICE") < calls.index("QUALITY")
+        assert result.ran["QUALITY"] is RunState.COMPLETED

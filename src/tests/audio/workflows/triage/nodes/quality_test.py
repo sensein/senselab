@@ -1,9 +1,9 @@
-"""QUALITY — clip spans read against the recording they were detected on.
+"""QUALITY — clip spans read against the amplitudes PREPROCESS measured beside them.
 
-The spans are seeded by hand rather than detected: this module's subject is what QUALITY does with a
-clip span it was handed, and ``src/tests/audio/tasks/clipping`` owns where ClipDaT opens an event.
-The recording is real and goes through the real ADMIT, so the samples QUALITY reads are the samples
-a run would hand it.
+The spans are seeded rather than detected: this module's subject is what QUALITY does with a clip
+span it was handed, and ``src/tests/audio/tasks/clipping`` owns where ClipDaT opens an event. The
+seeding goes through PREPROCESS's own :func:`write_clip_spans`, so the attributes QUALITY reads are
+the attributes a run would hand it, over a real recording that went through the real ADMIT.
 """
 
 from __future__ import annotations
@@ -17,7 +17,12 @@ import pytest
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import live_entities
-from senselab.audio.workflows.triage.nodes.quality import CONTRADICTED_CLIP, quality
+from senselab.audio.workflows.triage.nodes.preprocess import write_clip_spans
+from senselab.audio.workflows.triage.nodes.quality import (
+    CLIP_AMPLITUDE_MEASUREMENT,
+    CONTRADICTED_CLIP,
+    quality,
+)
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -66,8 +71,9 @@ def _seed(
     wav_writer: Callable[..., Path],
     samples: np.ndarray,
     clip_ranges: list[tuple[int, int]],
-) -> None:
-    """Write the recording, ADMIT it, and place PREPROCESS's clip spans over the named samples.
+    config: TriageConfig | None = None,
+) -> Path:
+    """Write the recording, ADMIT it, and let PREPROCESS place its clip spans over the named samples.
 
     Args:
         store: The store to seed.
@@ -75,21 +81,29 @@ def _seed(
         wav_writer: The fixture WAV writer.
         samples: The recording.
         clip_ranges: Half-open sample ranges PREPROCESS is to have called clipped.
+        config: The configuration PREPROCESS runs under — the edge guard is its decision. The
+            packaged one unless a test widens or removes the guard.
+
+    Returns:
+        The recording's path on disk.
     """
     path = wav_writer("input.wav", samples, SR)
-    admitted = admit(store, path, load_triage_config(), run_dir=tmp_path)
+    settings = config if config is not None else load_triage_config()
+    admitted = admit(store, path, settings, run_dir=tmp_path)
     assert admitted.audio is not None
     agent = store.agent(agent_type="software", version="senselab test-seed")
     activity = store.activity(node="PREPROCESS", step="clip_spans", parameters={})
     store.was_associated_with(activity, agent)
-    for first, stop in clip_ranges:
-        span_id = store.entity(
-            prov_type="span",
-            extent=(first / SR, stop / SR),
-            attributes={"family": "clip", "signal": "recording"},
-        )
-        store.was_generated_by(span_id, activity)
-        store.was_attributed_to(span_id, agent)
+    write_clip_spans(
+        store,
+        activity,
+        agent,
+        audio=admitted.audio,
+        extents=[(first / SR, stop / SR) for first, stop in clip_ranges],
+        signal="recording",
+        guard_samples=int(settings.require("quality.clip_edge_guard_samples")),
+    )
+    return path
 
 
 def _override(tmp_path: Path, text: str) -> TriageConfig:
@@ -311,16 +325,21 @@ class TestTheEdgeGuard:
     def test_without_the_guard_the_same_sample_contradicts(
         self, store: ProvStore, tmp_path: Path, wav_writer: Callable[..., Path]
     ) -> None:
-        """The control: the guard is what silences it, and it is the configuration's to set."""
+        """The control: the guard is what silences it, and it is the configuration's to set.
+
+        The guard is applied where the samples are, so the override belongs to the PREPROCESS pass
+        that measured them; QUALITY reads the guard back off the measurement.
+        """
         samples = _bed()
         loud = _plateau(samples, 4000, 4400, 0.95)
         quiet = _plateau(samples, 12000, 12400, 0.4)
         samples[4401] = np.float32(0.9)
-        _seed(store, tmp_path, wav_writer, samples, [loud, quiet])
         unguarded = _override(tmp_path, "quality:\n  clip_edge_guard_samples: 0\n")
+        _seed(store, tmp_path, wav_writer, samples, [loud, quiet], unguarded)
         result = quality(store, "recording", unguarded, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FLAG
         assert _contests(store)[0].extent == (12000 / SR, 12400 / SR)
+        assert store.get_entity(result.verdict_entity_id).attributes["clip_edge_guard_samples"] == 0
 
 
 class TestTheStreamItReads:
@@ -344,3 +363,49 @@ class TestTheStreamItReads:
         result = quality(store, "recording", config, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.PASS
         assert store.get_entity(result.verdict_entity_id).attributes["clip_spans_n"] == 0
+
+
+class TestWhatItMayRead:
+    """QUALITY reads stored outputs. Not audio, and not an input it was never handed."""
+
+    def test_the_node_works_with_no_audio_left_on_disk(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """Every amplitude was measured by PREPROCESS, so there is nothing left for QUALITY to decode."""
+        samples = _bed()
+        clipped = _plateau(samples, 8000, 8400, 0.5)
+        samples[24000] = np.float32(0.9)
+        path = _seed(store, tmp_path, wav_writer, samples, [clipped])
+        for stream in [path, *(tmp_path / "streams").glob("*")]:
+            stream.unlink()
+        result = quality(store, "recording", config, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FLAG
+        assert _contests(store)[0].attributes["louder_amplitude"] == pytest.approx(0.9, abs=QUANTISATION)
+
+    def test_clip_spans_with_no_amplitude_measurement_refuse(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """A weaker finding from a missing input would read as a clean recording; the run errors instead."""
+        samples = _bed()
+        clipped = _plateau(samples, 8000, 8400, 0.5)
+        samples[24000] = np.float32(0.9)
+        _seed(store, tmp_path, wav_writer, samples, [clipped])
+        measurement = [
+            entity for entity in live_entities(store, "measurement") if entity.attributes["name"] == "clip_amplitude"
+        ][0]
+        store.was_invalidated_by(measurement.id, store.activity(node="TEST", step="drop", parameters={}))
+        with pytest.raises(LookupError, match=CLIP_AMPLITUDE_MEASUREMENT):
+            quality(store, "recording", config, run_dir=tmp_path)
+        assert store.activities(node="QUALITY") == []
+
+    def test_no_clip_span_needs_no_measurement(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """Nothing was asserted, so there is nothing to read it against, and nothing to refuse."""
+        _seed(store, tmp_path, wav_writer, _bed(), [])
+        measurement = [
+            entity for entity in live_entities(store, "measurement") if entity.attributes["name"] == "clip_amplitude"
+        ][0]
+        store.was_invalidated_by(measurement.id, store.activity(node="TEST", step="drop", parameters={}))
+        result = quality(store, "recording", config, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.PASS
