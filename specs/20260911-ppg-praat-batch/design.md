@@ -431,3 +431,41 @@ is timed against its own `duration_s` and `sampling_rate`, through the same zero
 `_ppg_segments` uses. The two agree for a posteriorgram measured on the recording being drawn, and
 where they would not — a caller drawing a trimmed stream — the sidecar's own clock is the one that
 placed the frames.
+
+**The bars are full-height washed bands, because a bar of any other height is read as a pair of
+probabilities.** The lane and the posterior curves share one panel and one right-hand `0`–`1` scale.
+Bars used to fill `TOKEN_BAR_HEIGHT_FRACTION = 0.7` of the lane, centred: rendered, their edges sat
+at 0.15 and 0.85 of the posterior scale, and a reader taking a value off that scale reads two
+horizontal lines at 0.15 and 0.85 that mean nothing at all — they are where the bar was drawn. On
+the crowded synthetic window the fault compounded: the label stagger puts neighbouring bars on
+different rows, so the same lane showed *four* such edges, at four different heights, none of them a
+probability. The band now runs the full height of the scale, so its only horizontal edges are 0 and
+1, which are the two values the scale actually has.
+
+The wash is `TOKEN_BAND_ALPHA = 0.30`. Rendered against a two-phoneme crossover in the light half of
+`tab20` and the same window recoloured into the dark half, 0.14 and 0.18 left the band too faint to
+say which phoneme won without reading the name, and 0.40 lost the worst case — a curve crossing its
+*own* band, where the two are the same hue and only the curve's white casing separates them. 0.30
+holds that case in both halves of the cycle and still registers as a colour.
+
+**The names moved to the head strip of the lane, and onto the curve axis.** They need a home that no
+curve destroys, and there is none: a posteriorgram's losers hug 0 and its winner hugs 1, so every
+height is occupied somewhere. Two things resolve it. The strip is at the head
+(`TOKEN_BAND_LABEL_STRIP = 0.26` of the lane) rather than the foot, because the foot is where `N-1`
+competitors tangle and the head carries at most one curve — the winner's plateau, which is the band's
+own phoneme and carries the least information in the window. Rendering the foot variant showed
+exactly that: the names punched white holes through the competitor tangle, which is the part of a
+posteriorgram worth looking at. And the names are added to the twin curve axis rather than to the
+lane, because matplotlib draws a twin after its host, so a name left on the lane is drawn *under*
+every curve and crossed out by any that passes through it; on the twin it is drawn last. A white
+casing (`TOKEN_BAND_LABEL_HALO_PT`) carries it over the winner's plateau where the two do meet.
+
+Only the labels stagger now. `_StaggeredTokenLane` still decides a row count against the renderer,
+but in banded mode it applies it to the names inside the head strip and leaves every band at full
+height, so the row count buys horizontal room for the names without putting bar edges at four
+heights. The row ceiling is measured against the strip rather than the whole lane.
+
+**The treatment follows the curves, not a flag.** A `tokens` panel draws bands exactly when it
+carries a `curves` block, because that is exactly when there is a second scale for a bar edge to be
+misread against. A lane of words with no probability axis keeps its bars at row height, where the
+bar *is* the reading.

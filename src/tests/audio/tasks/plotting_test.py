@@ -18,6 +18,10 @@ from matplotlib.transforms import Bbox
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.tasks.plotting.plotting import (
+    PPG_CURVE_AXIS_NAME,
+    PPG_LANE_NAME,
+    TOKEN_BAND_ALPHA,
+    TOKEN_BAND_LABEL_STRIP,
     TOKEN_LABEL_FLOOR_FONTSIZE,
     TOKEN_LABEL_FONTSIZE,
     TOKEN_ROW_PITCH_EM,
@@ -1260,10 +1264,26 @@ class TestATimeRangeWithItsPhonemes:
         )
 
     @staticmethod
-    def _labels(figure: Figure) -> list[str]:
-        """The phoneme labels a real draw placed on the lane."""
+    def _lane(figure: Figure) -> Axes:
+        """The phoneme lane's own axis."""
+        return next(axis for axis in figure.axes if axis.get_ylabel() == PPG_LANE_NAME)
+
+    @staticmethod
+    def _posterior(figure: Figure) -> Axes:
+        """The right-hand probability axis twinning the lane."""
+        return next(axis for axis in figure.axes if axis.get_ylabel() == PPG_CURVE_AXIS_NAME)
+
+    @classmethod
+    def _label_texts(cls, figure: Figure) -> list[Text]:
+        """Every band label a real draw placed, wherever the lane chose to hang it."""
         figure.canvas.draw()
-        return [text.get_text() for text in figure.axes[2].texts if text.get_visible()]
+        lane, posterior = cls._lane(figure), cls._posterior(figure)
+        return [text for axis in (lane, posterior) for text in axis.texts if text.get_visible()]
+
+    @classmethod
+    def _labels(cls, figure: Figure) -> list[str]:
+        """The phoneme labels a real draw placed on the lane."""
+        return [text.get_text() for text in cls._label_texts(figure)]
 
     def test_the_figure_is_returned(self) -> None:
         """The caller composes further pages from it, so it must come back rather than be shown only."""
@@ -1335,6 +1355,54 @@ class TestATimeRangeWithItsPhonemes:
     def test_a_segment_outside_the_range_is_not_drawn(self) -> None:
         """An off-page phoneme is not evidence on this page."""
         assert PHONEME_LABELS[0] not in self._labels(self._figure())
+
+    def test_every_band_fills_the_lane_so_no_edge_falls_inside_the_probability_scale(self) -> None:
+        """A bar edge at 0.2 and 0.85 of a scale that is a probability is read as 0.2 and 0.85."""
+        figure = self._figure()
+        figure.canvas.draw()
+        bands = [cast(Rectangle, band) for band in self._lane(figure).patches]
+        assert bands, "the lane carries no band"
+        for band in bands:
+            assert band.get_y() == pytest.approx(0.0)
+            assert band.get_height() == pytest.approx(1.0)
+
+    def test_the_bands_are_washed_and_sit_under_the_curves(self) -> None:
+        """A band the curves cannot be read through is a band that has replaced them."""
+        figure = self._figure()
+        lane, posterior = self._lane(figure), self._posterior(figure)
+        for band in (cast(Rectangle, artist) for artist in lane.patches):
+            wash = band.get_alpha()
+            assert wash is not None and wash == pytest.approx(TOKEN_BAND_ALPHA) and wash < 0.5
+            assert band.get_zorder() < min(line.get_zorder() for line in posterior.get_lines())
+
+    def test_a_band_name_is_drawn_over_the_curves_rather_than_under_them(self) -> None:
+        """The lane draws before its twin, so a name left on it is crossed out by any curve."""
+        figure = self._figure()
+        texts = self._label_texts(figure)
+        assert texts, "no band was named"
+        assert all(text.axes is self._posterior(figure) for text in texts)
+
+    def test_a_band_name_sits_in_the_strip_at_the_head_of_the_lane(self) -> None:
+        """The competitors tangle at the foot of a posteriorgram; a name there hides them."""
+        figure = self._figure()
+        for text in self._label_texts(figure):
+            assert text.get_position()[1] >= 1.0 - TOKEN_BAND_LABEL_STRIP
+
+    def test_a_band_name_carries_a_casing_so_a_curve_cannot_swallow_it(self) -> None:
+        """A curve passes through the head strip wherever that phoneme is the confident one."""
+        for text in self._label_texts(self._figure()):
+            assert text.get_path_effects(), f"{text.get_text()!r} would read only off the background"
+
+    def test_a_lane_with_no_curves_keeps_its_bars_at_row_height(self) -> None:
+        """Only a lane sharing its height with a probability scale can have its bars misread."""
+        figure = plot_aligned_panels(
+            _tone(2.0),
+            [{"type": "tokens", "tokens": [{"text": "one", "start": 0.2, "end": 0.9}], "name": "Words"}],
+        )
+        figure.canvas.draw()
+        bar = cast(Rectangle, figure.axes[0].patches[0])
+        assert bar.get_height() < 1.0
+        assert bar.get_y() > 0.0
 
     def test_the_lane_rules_every_visible_boundary(self) -> None:
         """The boundaries are the measurement; the bars only carry the labels that name them."""
