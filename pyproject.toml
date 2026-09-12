@@ -55,7 +55,9 @@ dependencies = [
   # PyYAML was previously transitive only; the triage workflow's config loader imports `yaml`
   # directly, so it must be declared.
   "pyyaml>=6.0",
-  # Data / utilities
+  # Data / utilities. pyarrow was previously transitive through `datasets`; the triage routing
+  # analysis writes and reads its generated tables as parquet, so it must be declared.
+  "pyarrow>=17",
   "pydantic>=2.11",
   "pycountry>=24.6",
   "iso639>=0.1",

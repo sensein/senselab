@@ -6,7 +6,7 @@ collapses everything past its end into one block no threshold divides, and the s
 detector as measured and weak when its firing side was never measured at all.
 
 The constants are gone. Each grid is now derived at catalogue construction from that detector's own
-distribution over the corpus, shipped as `data/detector_profile/2026-09-12.json`.
+distribution over the corpus, shipped as `data/detector_profile/2026-09-12.parquet`.
 
 ## The defect
 

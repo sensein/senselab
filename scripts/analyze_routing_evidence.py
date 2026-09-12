@@ -21,7 +21,6 @@ import os
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 from typing import Mapping
@@ -34,10 +33,20 @@ from senselab.audio.workflows.triage.routing_analysis.features import (
     extract_features,
     span_label_memberships,
 )
-from senselab.audio.workflows.triage.routing_analysis.report import load_features, write_report
+from senselab.audio.workflows.triage.routing_analysis.report import (
+    SHARD_SUFFIX,
+    dump_features,
+    load_feature_column,
+    load_features,
+    shard_files,
+    write_report,
+)
 
 MANIFEST = "manifest.jsonl"
 SHARD_DIR = "features"
+PART_NAME = "part-{part:05d}" + SHARD_SUFFIX
+PART_ROWS = 4000
+"""How many recordings fill one shard part before it is written and the next one begins."""
 SUMMARY_DEPTHS = ("*.summary.json", "*/*.summary.json", "*/*/*.summary.json")
 """Every depth ``entity_subdir`` can place a summary at: no entity, subject only, subject-session."""
 
@@ -93,28 +102,42 @@ def build_manifest(run_dir: Path, out_dir: Path) -> Path:
     return manifest
 
 
-def _extract_one(row: dict[str, str], memberships: Mapping[str, LabelMembership]) -> dict[str, object] | None:
-    """Extract one recording's features, or record why it could not be read.
+def _extract_one(row: dict[str, str], memberships: Mapping[str, LabelMembership]) -> RecordingFeatures | str | None:
+    """Extract one recording's features, or say why it could not be read.
 
     Args:
         row: One manifest row.
         memberships: Which labels a span carries, per classifier.
 
     Returns:
-        The features as a mapping, or None when the store is missing.
+        The features, the reason the store could not be read, or None when it is missing.
     """
     store = Path(row["store"])
     if not store.is_file():
         return None
     try:
-        features = extract_features(store, row["stem"], row["run_root"], row["task_id"], row["family"], memberships)
+        return extract_features(store, row["stem"], row["run_root"], row["task_id"], row["family"], memberships)
     except (OSError, ValueError) as error:
-        return {"stem": row["stem"], "error": f"{type(error).__name__}: {error}"}
-    return asdict(features)
+        return f"{type(error).__name__}: {error}"
+
+
+def _extracted_stems(shard_dir: Path) -> set[str]:
+    """Which recordings the shard directory already holds, read off the key column alone.
+
+    Args:
+        shard_dir: The shard directory.
+
+    Returns:
+        Every stem already written.
+    """
+    return {str(stem) for shard in shard_files(shard_dir) for stem in load_feature_column(shard, "stem")}
 
 
 def extract_all(manifest: Path, out_dir: Path, workers: int, memberships: Mapping[str, LabelMembership]) -> Path:
     """Extract features for every manifest row, resuming from what is already on disk.
+
+    Each completed part is a shard file of its own, so a killed run loses at most the part it was
+    filling and resumes from the parts that landed.
 
     Args:
         manifest: The manifest.
@@ -123,39 +146,39 @@ def extract_all(manifest: Path, out_dir: Path, workers: int, memberships: Mappin
         memberships: Which labels a span carries, per classifier.
 
     Returns:
-        The features JSONL path.
+        The shard directory.
     """
     shard_dir = out_dir / SHARD_DIR
     shard_dir.mkdir(parents=True, exist_ok=True)
-    features_path = shard_dir / "features.jsonl"
     missing_path = shard_dir / "missing.jsonl"
-    done: set[str] = set()
-    if features_path.exists():
-        with features_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if line.strip():
-                    done.add(str(json.loads(line)["stem"]))
+    done = _extracted_stems(shard_dir)
+    if done:
         print(f"[extract] resuming with {len(done)} already extracted", flush=True)
     rows = [json.loads(line) for line in manifest.open("r", encoding="utf-8") if line.strip()]
     pending = [row for row in rows if row["stem"] not in done]
     print(f"[extract] {len(pending)} of {len(rows)} to read with {workers} workers", flush=True)
     if not pending:
-        return features_path
+        return shard_dir
     started = time.time()
     written = 0
+    part = len(shard_files(shard_dir))
+    buffered: list[RecordingFeatures] = []
     with (
-        features_path.open("a", encoding="utf-8") as sink,
         missing_path.open("a", encoding="utf-8") as misses,
         ProcessPoolExecutor(max_workers=workers) as pool,
     ):
         extract = partial(_extract_one, memberships=memberships)
         for index, (row, result) in enumerate(zip(pending, pool.map(extract, pending, chunksize=8)), start=1):
-            if result is None or "error" in result:
-                reason = "missing" if result is None else str(result["error"])
-                misses.write(json.dumps({"stem": row["stem"], "store": row["store"], "why": reason}) + "\n")
-            else:
-                sink.write(json.dumps(result, sort_keys=True) + "\n")
+            if isinstance(result, RecordingFeatures):
+                buffered.append(result)
                 written += 1
+            else:
+                reason = "missing" if result is None else result
+                misses.write(json.dumps({"stem": row["stem"], "store": row["store"], "why": reason}) + "\n")
+            if len(buffered) >= PART_ROWS:
+                dump_features(buffered, shard_dir / PART_NAME.format(part=part))
+                buffered.clear()
+                part += 1
             if index % 500 == 0:
                 elapsed = time.time() - started
                 rate = index / max(elapsed, 1e-9)
@@ -164,10 +187,11 @@ def extract_all(manifest: Path, out_dir: Path, workers: int, memberships: Mappin
                     f"[extract] {index}/{len(pending)} at {rate:.1f}/s, ~{remaining / 60:.1f} min left",
                     flush=True,
                 )
-                sink.flush()
                 misses.flush()
+        if buffered:
+            dump_features(buffered, shard_dir / PART_NAME.format(part=part))
     print(f"[extract] wrote {written} in {time.time() - started:.0f}s", flush=True)
-    return features_path
+    return shard_dir
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -195,8 +219,8 @@ def main(argv: list[str] | None = None) -> int:
     n_rows = sum(1 for line in manifest.open() if line.strip())
     if arguments.expect is not None and n_rows != arguments.expect:
         raise SystemExit(f"resolved {n_rows} recordings, expected {arguments.expect}")
-    features_path = extract_all(manifest, arguments.out_dir, arguments.workers, memberships)
-    records: list[RecordingFeatures] = load_features(features_path)
+    shard_dir = extract_all(manifest, arguments.out_dir, arguments.workers, memberships)
+    records: list[RecordingFeatures] = load_features(shard_dir)
     print(f"[report] scoring {len(records)} recordings", flush=True)
     index = write_report(records, arguments.out_dir)
     print(json.dumps({key: index[key] for key in ("n_recordings", "n_families")}), flush=True)

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
@@ -21,6 +22,9 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     DETECTORS,
     GATE_CLOSED,
     PINNED_THRESHOLDS,
+    PROFILE_DIR,
+    PROFILE_NAME_COLUMN,
+    PROFILE_SUFFIX,
     QUANTILE_LADDER,
     Detector,
     build_catalogue,
@@ -47,13 +51,18 @@ from senselab.audio.workflows.triage.routing_analysis.report import (
     LIMIT_BUDGET,
     OVER_ROUTING_BUDGETS,
     REFERENCE_STANDARDS,
+    SHARD_SUFFIX,
     Confusion,
     detector_recall_at_budgets,
     disagreements,
+    dump_features,
     label_prevalence,
+    load_feature_column,
+    load_features,
     prevalence,
     recall_at_budgets,
     score_detector,
+    shard_files,
     taxonomy_as_run,
     write_report,
 )
@@ -1370,6 +1379,29 @@ class TestDerivedGrids:
             if detector.unit in COUNT_UNITS:
                 assert all(float(value).is_integer() for value in detector.thresholds), detector.name
 
+    def test_no_ungated_grid_carries_a_threshold_the_feature_never_reaches(self) -> None:
+        """A cut outside the data is a sweep row that fires on nothing, or on everything twice."""
+        declared = {CONSOLIDATION_FLOOR} | {value for values in PINNED_THRESHOLDS.values() for value in values}
+        for detector in DETECTORS:
+            if detector.reader[0] == "gated":
+                continue
+            entry = _profiled(detector.name)
+            outside = [
+                value
+                for value in detector.thresholds
+                if not float(entry["min"]) <= value <= float(entry["max"]) and value not in declared
+            ]
+            assert not outside, f"{detector.name}: {outside}"
+
+    def test_a_count_grid_starts_at_the_smallest_count_the_corpus_holds(self) -> None:
+        """The integer union ran from zero regardless, so a feature reaching 1 swept a dead row."""
+        counts = [detector for detector in DETECTORS if detector.unit in COUNT_UNITS and detector.reader[0] != "gated"]
+        assert counts
+        for detector in counts:
+            entry = _profiled(detector.name)
+            assert min(detector.thresholds) == float(round(float(entry["min"]))), detector.name
+            assert max(detector.thresholds) == float(round(float(entry["max"]))), detector.name
+
     def test_every_grid_is_ascending_and_distinct(self) -> None:
         """A repeated threshold is a duplicated row in the sweep, and a cost with no information."""
         for detector in DETECTORS:
@@ -1384,6 +1416,25 @@ class TestDerivedGrids:
         for detector in scores:
             assert CONSOLIDATION_FLOOR in detector.thresholds, detector.name
 
+    def test_the_profile_ships_as_one_parquet_table(self) -> None:
+        """It is 175 rows of quantiles, and it is read at import to build every grid."""
+        bundled = sorted(PROFILE_DIR.glob(f"*{PROFILE_SUFFIX}"))
+        assert bundled, PROFILE_DIR
+        assert not list(PROFILE_DIR.glob("*.json"))
+        table = pq.read_table(bundled[-1])
+        assert table.num_rows == len(load_detector_profile()["detectors"])
+        assert PROFILE_NAME_COLUMN in table.schema.names
+
+    def test_a_constant_row_carries_no_quantile_ladder(self) -> None:
+        """A null column is an absent quantile, not a quantile of zero, and the reader must agree."""
+        detectors = load_detector_profile()["detectors"]
+        constant = [entry for entry in detectors.values() if entry["state"] == "constant"]
+        assert constant
+        for entry in constant:
+            assert "quantiles" not in entry
+            assert "min" not in entry and "max" not in entry
+            assert entry["value"] is not None
+
     def test_the_profile_records_what_produced_it(self) -> None:
         """A profile whose corpus is unnamed cannot be re-derived, and cannot be superseded."""
         profile = load_detector_profile()
@@ -1392,3 +1443,81 @@ class TestDerivedGrids:
         assert profile["corpus"]["description"]
         assert profile["generated"] == "2026-09-12"
         assert tuple(profile["quantiles"]) == QUANTILE_LADDER
+
+
+class TestFeaturesShard:
+    """The features shard is parquet, and what it reads back is what was written."""
+
+    @staticmethod
+    def _records() -> list[RecordingFeatures]:
+        """Two records covering absence, emptiness, a measured zero and a non-ASCII transcript.
+
+        Returns:
+            The records.
+        """
+        sparse = RecordingFeatures(
+            stem="sub-01_task-a",
+            run_root="/runs/a",
+            task_id="a",
+            family="fam-a",
+            duration_s=None,
+            praat={},
+            peaks={"plain|yamnet|Speech": 0.0},
+            words={"total": 0},
+            transcript="ünïcode — 語 😀 \u200b",
+            classifier_streams=[],
+            kind_state={"speech": "fired"},
+        )
+        dense = RecordingFeatures(
+            stem="sub-02_task-b",
+            run_root="/runs/b",
+            task_id="b",
+            family="fam-b",
+            duration_s=12.5,
+            praat={"local_jitter": 0.01, "mean_f0.hertz": 120.0},
+            peaks={"plain|yamnet|Speech": 0.91, "residual|hear|Cough": 0.4},
+            span_count={"amplitude": 3},
+            classifier_streams=["plain|yamnet", "residual|hear"],
+            verdicts={"preprocess": "ok"},
+            consensus_present=True,
+            n_entities=17,
+        )
+        return [sparse, dense]
+
+    def test_the_shard_round_trips_every_field(self, tmp_path: Path) -> None:
+        """A shard nobody can read back into the same records is not a shard of these records."""
+        records = self._records()
+        path = tmp_path / f"features{SHARD_SUFFIX}"
+        assert dump_features(records, path) == len(records)
+        assert load_features(path) == records
+
+    def test_an_absent_value_reads_back_absent_and_not_as_a_zero(self, tmp_path: Path) -> None:
+        """None excludes a recording from a detector's scoring; 0.0 scores it as a negative."""
+        path = tmp_path / f"features{SHARD_SUFFIX}"
+        dump_features(self._records(), path)
+        sparse, dense = load_features(path)
+        assert sparse.duration_s is None
+        assert dense.duration_s == 12.5
+        assert sparse.praat == {}
+        assert "residual|hear|Cough" not in sparse.peaks
+        assert sparse.peaks["plain|yamnet|Speech"] == 0.0
+        assert sparse.words == {"total": 0}
+        assert load_feature_column(path, "peaks.residual|hear|Cough") == [None, 0.4]
+
+    def test_a_shard_directory_reads_as_one_corpus_in_part_order(self, tmp_path: Path) -> None:
+        """The extractor writes one part per batch so a killed run resumes from what landed."""
+        first, second = self._records()
+        dump_features([first], tmp_path / f"part-00000{SHARD_SUFFIX}")
+        dump_features([second], tmp_path / f"part-00001{SHARD_SUFFIX}")
+        assert [path.name for path in shard_files(tmp_path)] == [
+            f"part-00000{SHARD_SUFFIX}",
+            f"part-00001{SHARD_SUFFIX}",
+        ]
+        assert load_features(tmp_path) == [first, second]
+        assert load_feature_column(tmp_path, "stem") == [first.stem, second.stem]
+
+    def test_an_empty_shard_is_a_readable_shard(self, tmp_path: Path) -> None:
+        """A corpus that resolved no recording still has to write a file the next stage can read."""
+        path = tmp_path / f"features{SHARD_SUFFIX}"
+        assert dump_features([], path) == 0
+        assert load_features(path) == []
