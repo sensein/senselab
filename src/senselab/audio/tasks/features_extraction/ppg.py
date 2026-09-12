@@ -181,6 +181,25 @@ def require_posteriorgram(result: "torch.Tensor | PpgsPosteriorgramUnavailable")
     return result
 
 
+WORKER_STARTUP_S = 300.0
+"""Seconds allowed for the worker before it has any audio to read: interpreter, torch, checkpoint."""
+
+WORKER_SECONDS_PER_AUDIO_SECOND = 2.0
+"""Seconds allowed per second of audio in the batch, over the startup allowance."""
+
+
+def _worker_timeout_s(audio_seconds: float) -> float:
+    """How long the worker may take for a batch of this much audio.
+
+    Args:
+        audio_seconds: Total duration of every audio in the batch.
+
+    Returns:
+        The subprocess timeout, in seconds.
+    """
+    return WORKER_STARTUP_S + WORKER_SECONDS_PER_AUDIO_SECOND * max(0.0, audio_seconds)
+
+
 def extract_ppgs_from_audios(
     audios: List[Audio], device: Optional[DeviceType] = None
 ) -> List["torch.Tensor | PpgsPosteriorgramUnavailable"]:
@@ -214,6 +233,7 @@ def extract_ppgs_from_audios(
         )
 
     python = venv_python(ensure_ppgs_venv())
+    budget = _worker_timeout_s(sum(audio.waveform.shape[-1] / audio.sampling_rate for audio in audios))
 
     with tempfile.TemporaryDirectory(prefix="senselab-ppgs-") as tmpdir:
         tmp = Path(tmpdir)
@@ -241,7 +261,7 @@ def extract_ppgs_from_audios(
             input=input_json,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=budget,
             env=sub_env,
         )
 

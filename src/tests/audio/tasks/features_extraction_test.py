@@ -595,3 +595,25 @@ def test_extract_features_from_audios(resampled_mono_audio_sample: Audio) -> Non
     for feat in features:
         assert isinstance(feat, dict)
         assert feat, "The feature dictionary should not be empty."
+
+
+class TestTheWorkerTimeoutScalesWithTheBatch:
+    """A flat timeout loses a whole batch when one batch happens to hold the long recordings."""
+
+    def test_the_budget_grows_with_the_audio_in_the_batch(self) -> None:
+        """Two batches of the same count but different duration do not get the same budget."""
+        from senselab.audio.tasks.features_extraction.ppg import _worker_timeout_s
+
+        assert _worker_timeout_s(600.0) > _worker_timeout_s(60.0)
+
+    def test_an_empty_batch_still_allows_the_worker_to_start(self) -> None:
+        """The startup allowance stands on its own; a zero-length batch is not a zero budget."""
+        from senselab.audio.tasks.features_extraction.ppg import WORKER_STARTUP_S, _worker_timeout_s
+
+        assert _worker_timeout_s(0.0) == WORKER_STARTUP_S
+
+    def test_the_batch_that_timed_out_on_the_corpus_now_fits(self) -> None:
+        """471 recordings averaging 15 s exceeded the flat 600 s on four of the 128 array tasks."""
+        from senselab.audio.tasks.features_extraction.ppg import _worker_timeout_s
+
+        assert _worker_timeout_s(471 * 15.0) > 600.0
