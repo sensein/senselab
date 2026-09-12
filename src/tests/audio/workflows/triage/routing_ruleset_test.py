@@ -294,9 +294,10 @@ class TestScoringContentAgainstTheDeclaredFamily:
             evaluate_routes(_features("prolonged-vowel"), ruleset),
             evaluate_routes(_features("prolonged-vowel", peaks={"plain|yamnet|Chant": 0.5}), ruleset),
         ]
-        scores = score_branches(evaluations)
+        scores = score_branches(evaluations, ruleset)
         assert list(scores) == list(BRANCHES)
-        for table in scores.values():
+        for score in scores.values():
+            table = score.against_reference
             assert table.tp + table.fp + table.tn + table.fn == 3
 
     def test_sensitivity_and_specificity_read_off_the_raw_counts(self, ruleset: Ruleset) -> None:
@@ -306,14 +307,15 @@ class TestScoringContentAgainstTheDeclaredFamily:
             evaluate_routes(_features("prolonged-vowel"), ruleset),
             evaluate_routes(_features("harvard-sentences-list", words={"agreement": 3, "lexical": 9}), ruleset),
         ]
-        voice = score_branches(evaluations)["VOICE"]
+        voice = score_branches(evaluations, ruleset)["VOICE"].against_reference
         assert (voice.tp, voice.fn, voice.fp, voice.tn) == (1, 1, 0, 1)
         assert voice.sensitivity == 0.5
         assert voice.specificity == 1.0
 
     def test_a_branch_no_recording_declares_has_no_sensitivity(self, ruleset: Ruleset) -> None:
         """No reference positive is not a sensitivity of zero."""
-        ddk = score_branches([evaluate_routes(_features("prolonged-vowel"), ruleset)])["DDK"]
+        evaluations = [evaluate_routes(_features("prolonged-vowel"), ruleset)]
+        ddk = score_branches(evaluations, ruleset)["DDK"].against_reference
         assert ddk.sensitivity is None
         assert ddk.specificity == 1.0
 
