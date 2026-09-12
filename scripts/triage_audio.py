@@ -242,7 +242,9 @@ def main(argv: list[str] | None = None) -> int:
     for name, product in result.summary.items():
         print(f"Summary ({name}): {product}")
     for node, outcome in result.nodes.items():
-        detail = outcome.verdict.outcome.value if outcome.verdict is not None else (outcome.error or "-")
+        detail = (
+            outcome.verdict.outcome.value if outcome.verdict is not None else (outcome.error or outcome.note or "-")
+        )
         print(f"  {node:<11} {outcome.state.value:<10} {detail}")
 
     if result.file_verdict is not None:

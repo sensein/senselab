@@ -43,6 +43,9 @@ from senselab.utils.subprocess_venv import record_venv_use
 
 REPORT_NODE = "REPORT"
 
+NO_NODE = "no node implements this branch"
+"""The note a branch with no implementation carries, selected or not."""
+
 STORE_FILE = "store.jsonl"
 LOG_FILE = "run.json"
 RUN_SUBDIR = "run"
@@ -68,12 +71,15 @@ class NodeOutcome:
         verdict: Its conclusion, or None when it did not conclude.
         error: The exception's type and message when it raised, else None. The runner's own record —
             never a store fact, because a crash is not a finding about the recording.
+        note: Why the state is what it is, where the state alone does not say — a branch recorded
+            ``SKIPPED`` because no node implements it, rather than because routing declined it.
     """
 
     node: str
     state: RunState
     verdict: NodeVerdict | None = None
     error: str | None = None
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -82,7 +88,7 @@ class TriageRunResult:
 
     Attributes:
         file_verdict: The graph's conclusion on both axes, or None when VERDICT itself raised.
-        nodes: Per-node outcome, in graph order.
+        nodes: Per-node outcome, in graph order, with any branch the graph does not name last.
         run_dir: The run directory holding the store and every sidecar.
         artifacts_dir: The release directory REDACT was given; disjoint from ``run_dir``.
         store_path: The persisted store.
@@ -247,7 +253,10 @@ def _drive_branches(
     """Run PREPROCESS, TAXONOMY and routing, then exactly the branches routing selected.
 
     A branch routing declined is recorded ``SKIPPED`` and never called, which is what lets VERDICT
-    tell a branch that found nothing from a branch that never looked. A failed ROUTING call likewise
+    tell a branch that found nothing from a branch that never looked. A branch in
+    :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES` that no node implements is recorded
+    ``SKIPPED`` carrying :data:`NO_NODE`, selected or not, so naming it in an execution set is a
+    record rather than a crash. A failed ROUTING call likewise
     leaves every branch ``SKIPPED``: no branch has an authorised decision to act on. A branch that
     raises is still recorded ``ERRORED`` and its siblings still run: none of them reads another's
     output. REDACT is a step of SPEECH and runs only when SPEECH ran and its scan found PII. QUALITY
@@ -291,8 +300,11 @@ def _drive_branches(
         "VOICE": lambda: voice(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
     }
     for branch in BRANCHES:
-        if branch in selected:
-            _attempt(outcomes, branch, branches[branch])
+        call = branches.get(branch)
+        if call is None:
+            outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED, note=NO_NODE)
+        elif branch in selected:
+            _attempt(outcomes, branch, call)
         else:
             outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED)
     _attempt(outcomes, QUALITY, lambda: quality(store, _SOURCE_STREAM, config, hint, run_dir=run_dir))
@@ -354,6 +366,7 @@ def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRun
         "release": result.file_verdict.release.value if result.file_verdict is not None else None,
         "ran": {node: outcome.state.value for node, outcome in result.nodes.items()},
         "errors": {node: outcome.error for node, outcome in result.nodes.items() if outcome.error is not None},
+        "notes": {node: outcome.note for node, outcome in result.nodes.items() if outcome.note is not None},
         "released": {name: str(released) for name, released in result.released.items()},
         "summary_dir": str(result.summary_dir),
         "summary": {name: str(product) for name, product in result.summary.items()},
@@ -437,7 +450,7 @@ def run_triage(
 
     result = TriageRunResult(
         file_verdict=folded.file_verdict if folded is not None else None,
-        nodes={node: outcomes[node] for node in (*GRAPH_ORDER, REPORT_NODE) if node in outcomes},
+        nodes={node: outcomes[node] for node in (*GRAPH_ORDER, REPORT_NODE, *BRANCHES) if node in outcomes},
         run_dir=layout.run_dir,
         artifacts_dir=layout.artifacts_dir,
         store_path=layout.store_path,

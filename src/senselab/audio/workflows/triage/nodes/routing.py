@@ -5,6 +5,11 @@ hints, and writes one ``branch_decision`` per branch. A hint forces a branch to 
 rewrites the classification, never removes a branch and never relaxes a threshold. Its verdict is
 always a ``pass``: this node reaches no conclusion about the recording, and an empty execution set is
 recorded on the decisions for VERDICT to read rather than flagged here.
+
+It also reads TAXONOMY's ``ruleset_routing`` measurement and carries that selection beside its own,
+on every decision as ``ruleset_will_run`` and on its result as ``ruleset_runs``. That selection
+decides nothing here: ``kind_state`` alone says which branches run. See
+``specs/20260912-ruleset-in-pipeline/design.md``.
 """
 
 from __future__ import annotations
@@ -15,13 +20,26 @@ from typing import Any
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.nodes.common import NodeResult, live_entities, software_agent, write_verdict
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.nodes.common import (
+    NodeResult,
+    find_measurement,
+    live_entities,
+    software_agent,
+    write_verdict,
+)
+from senselab.audio.workflows.triage.vocabulary import BRANCHES, RULESET_ROUTING, Outcome
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "routing"
 
 BRANCH_FOR_KIND = {"airway": "AIRWAY", "speech": "SPEECH", "voice": "VOICE"}
+"""Each kind TAXONOMY writes a ``kind`` line for, and the branch that line decides."""
+
+UNCLASSIFIED_BRANCHES: tuple[str, ...] = tuple(
+    branch for branch in BRANCHES if branch not in set(BRANCH_FOR_KIND.values())
+)
+"""The branches no ``kind`` line decides. The ruleset can route one; this node writes no decision
+for one, and nothing downstream is asked to run it."""
 
 PRESENT = "present"
 ABSENT = "absent"
@@ -43,12 +61,19 @@ class RoutingResult(NodeResult):
         skipped: The branches that will not.
         forced: The branches that run only because a hint named their kind.
         empty_set: Whether no branch runs at all.
+        ruleset_runs: The branches the family taxonomy ruleset routed, in
+            :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES` order, and so possibly
+            carrying a branch :data:`BRANCH_FOR_KIND` has no kind for. Recorded, never executed.
+        ruleset_state: The ruleset's route state — ``routed``, ``empty`` or ``unexplained`` — or
+            None when TAXONOMY wrote no readable evaluation.
     """
 
     runs: tuple[str, ...]
     skipped: tuple[str, ...]
     forced: tuple[str, ...]
     empty_set: bool
+    ruleset_runs: tuple[str, ...] = ()
+    ruleset_state: str | None = None
 
 
 def _classifications(store: ProvStore) -> dict[str, Entity]:
@@ -115,6 +140,24 @@ def _map_tags(tags: list[str], kind_map: dict[str, Any]) -> tuple[dict[str, list
     return by_kind, unmapped, bad_values
 
 
+def _ruleset_selection(store: ProvStore) -> tuple[tuple[str, ...], str | None]:
+    """What the family taxonomy ruleset made of the recording, as TAXONOMY recorded it.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The branches it routed, in :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES`
+        order, and its route state. ``((), None)`` when the measurement is absent or carries no
+        state, which is a reading that was never made rather than one that routed nothing.
+    """
+    measurement = find_measurement(store, RULESET_ROUTING)
+    if measurement is None or measurement.attributes.get("state") is None:
+        return (), None
+    routed = {str(branch) for branch in measurement.attributes.get("routed") or ()}
+    return tuple(branch for branch in BRANCHES if branch in routed), str(measurement.attributes["state"])
+
+
 def _why(state: str, forced_by_hint: bool) -> str:
     """One decision's reason, in controlled vocabulary.
 
@@ -145,8 +188,13 @@ def routing(
     ``kind_state`` and ``why`` are closed vocabularies: a state outside :data:`KIND_STATES` reads
     ``unreadable``, and the string TAXONOMY actually wrote is kept verbatim in ``raw_state``.
 
+    ``kind_state`` is the only thing that decides execution. The ruleset's own selection is read off
+    TAXONOMY's ``ruleset_routing`` measurement and stamped on every decision as ``ruleset_will_run``
+    beside ``will_run``, and returned whole in ``ruleset_runs``; nothing here acts on it.
+
     Args:
-        store: The provenance store, holding TAXONOMY's ``kind`` elements.
+        store: The provenance store, holding TAXONOMY's ``kind`` elements and its ``ruleset_routing``
+            measurement.
         source: The stream the pass is running over; ``None`` means the conditioned stream. Recorded
             on every decision so a second pass over another stream stays tellable apart.
         config: The triage configuration, read for ``routing.hint_kind_map``.
@@ -154,11 +202,13 @@ def routing(
         run_dir: Accepted for the shared node shape; ROUTING writes no sidecars.
 
     Returns:
-        The branches that run, those that do not, those a hint forced, and whether the set is empty.
+        The branches that run, those that do not, those a hint forced, whether the set is empty, and
+        the ruleset's own selection beside them.
     """
     stream = source or _STREAM
     tags_by_kind, unmapped, bad_values = _map_tags(_declared_tags(hint), config.get("routing.hint_kind_map") or {})
     classified = _classifications(store)
+    ruleset_runs, ruleset_state = _ruleset_selection(store)
 
     software = software_agent(store)
     activity = store.activity(node=NODE, step=None, parameters={"config_hash": config.config_hash, "stream": stream})
@@ -201,6 +251,8 @@ def routing(
                 "bad_map_values": bad_values,
                 "why": _why(state, forced_by_hint),
                 "stream": stream,
+                "ruleset_will_run": branch in ruleset_runs,
+                "ruleset_route_state": ruleset_state,
             },
         )
         store.was_generated_by(decision_id, activity)
@@ -242,4 +294,6 @@ def routing(
         skipped=tuple(skipped),
         forced=tuple(forced),
         empty_set=empty_set,
+        ruleset_runs=ruleset_runs,
+        ruleset_state=ruleset_state,
     )

@@ -12,6 +12,7 @@ import importlib.util
 import json
 import sys
 import types
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -286,12 +287,20 @@ class TestHappyPath:
     def test_returns_the_file_verdict_with_every_node_completed(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A graph in which nothing raised reports ``COMPLETED`` for every node, QUALITY included."""
+        """A graph in which nothing raised reports ``COMPLETED`` for every node, QUALITY included.
+
+        DDK is the exception and not a failure: the vocabulary names it a branch and no node
+        implements it, so the runner records it rather than leaving it out of the result.
+        """
         graph()
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
         assert result.file_verdict.triage is Triage.PASS
-        assert result.ran == {**dict.fromkeys(GRAPH, RunState.COMPLETED), "REPORT": RunState.COMPLETED}
+        assert result.ran == {
+            **dict.fromkeys(GRAPH, RunState.COMPLETED),
+            "REPORT": RunState.COMPLETED,
+            "DDK": RunState.SKIPPED,
+        }
         assert result.file_verdict.ran["QUALITY"] is RunState.COMPLETED
 
     def test_the_terminal_node_concludes_over_the_source_recording(
@@ -466,6 +475,38 @@ class TestConditionalExecution:
         assert "AIRWAY" not in calls
         assert result.ran["AIRWAY"] is RunState.SKIPPED
         assert result.ran["SPEECH"] is RunState.COMPLETED
+
+    def test_a_branch_with_no_node_is_recorded_and_never_crashes_the_run(
+        self,
+        graph: Callable[..., list[str]],
+        config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Naming DDK in an execution set is a record, not a KeyError; the graph finishes around it."""
+        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"})
+        real = run_module.routing
+
+        def _routes_ddk(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            result = real(*args, **kwargs)
+            return replace(result, runs=(*result.runs, "DDK"))
+
+        monkeypatch.setattr(run_module, "routing", _routes_ddk)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert "DDK" not in calls
+        assert result.ran["DDK"] is RunState.SKIPPED
+        assert result.nodes["DDK"].note == run_module.NO_NODE
+        assert result.file_verdict is not None
+        log = json.loads((result.run_dir / "run.json").read_text())
+        assert log["notes"]["DDK"] == run_module.NO_NODE
+
+    def test_every_branch_the_vocabulary_names_gets_an_outcome(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A branch dropped from the result is a branch a reader cannot tell was never asked."""
+        graph(kinds={"speech": "present", "airway": "present", "voice": "present"})
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert set(BRANCHES) <= set(result.nodes)
 
     def test_redact_runs_only_when_speech_ran_and_found_pii(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path

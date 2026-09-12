@@ -15,10 +15,10 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes import taxonomy as taxonomy_module
-from senselab.audio.workflows.triage.nodes.common import find_measurements, live_entities
+from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements, live_entities
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
 from senselab.audio.workflows.triage.nodes.taxonomy import SCREENED_KINDS, taxonomy
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import RULESET_ROUTING, Outcome
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import SR, _audio, _seed_admit, _stub_models
 
@@ -47,6 +47,55 @@ def _floors(tmp_path: Path, **extra: str) -> TriageConfig:
     return load_triage_config(path)
 
 
+class TestTheRulesetReading:
+    """The family taxonomy ruleset, evaluated over the store this node is still writing."""
+
+    def test_the_reading_is_made_and_not_recorded_as_a_failure(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """A reading that always failed would pass every test above it and say nothing."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
+        taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        recorded = find_measurement(store, RULESET_ROUTING)
+        assert recorded is not None
+        assert recorded.attributes["error"] is None
+        assert recorded.attributes["state"] in ("routed", "empty", "unexplained")
+
+    def test_the_gates_read_the_summaries_this_node_wrote_itself(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """``plain|yamnet`` comes off this node's own label summary, so the reading runs after it."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
+        taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        recorded = find_measurement(store, RULESET_ROUTING)
+        assert recorded is not None
+        assert recorded.attributes["gate_outcomes"]["voice.chant"] != "unavailable"
+
+    def test_it_decides_nothing(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """``kind_state`` still selects branches; this record is a second column beside it."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        recorded = find_measurement(store, RULESET_ROUTING)
+        assert recorded is not None
+        assert recorded.attributes["authoritative"] is False
+        assert set(result.kinds) == set(SCREENED_KINDS)
+
+    def test_a_reading_that_cannot_be_made_does_not_cost_the_fold(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """A non-authoritative reading must never take the kinds, the routing and the branches with it."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
+        config = _floors(tmp_path, windows="windows:\n  yamnet: {default_threshold: null}\n")
+        result = taxonomy(store, "plain", config, run_dir=tmp_path)
+        recorded = find_measurement(store, RULESET_ROUTING)
+        assert recorded is not None
+        assert recorded.attributes["state"] is None
+        assert recorded.attributes["error"].startswith("ValueError")
+        assert set(result.kinds) == set(SCREENED_KINDS)
+
+
 class TestItRunsNoModels:
     """Every classifier call belongs to PREPROCESS; this node folds what is already there."""
 
@@ -63,7 +112,11 @@ class TestItRunsNoModels:
         taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         # Named rather than counted: a genuinely new step must be reviewed against the class's
         # invariant, and re-reading a stored score distribution is not running a classifier.
-        assert [a.step for a in store.activities("TAXONOMY")] == ["yamnet_label_summary", "fold"]
+        assert [a.step for a in store.activities("TAXONOMY")] == [
+            "yamnet_label_summary",
+            "ruleset_routing",
+            "fold",
+        ]
         assert not [
             agent
             for activity in store.activities("TAXONOMY")

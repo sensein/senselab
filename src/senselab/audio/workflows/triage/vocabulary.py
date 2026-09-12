@@ -31,6 +31,13 @@ QUALITY = "QUALITY"
 BRANCHES = ("AIRWAY", "SPEECH", "VOICE", "DDK")
 """The branches routing selects among; each is the authority on its own kind and no other."""
 
+RULESET_ROUTING = "ruleset_routing"
+"""The measurement TAXONOMY writes the family taxonomy ruleset's reading of a recording into.
+
+Named here rather than beside the reader so ``routing`` can read it back without importing the
+reader's dependencies. ``specs/20260912-ruleset-in-pipeline/design.md`` holds its attributes.
+"""
+
 
 class Outcome(Enum):
     """What a node concluded."""
