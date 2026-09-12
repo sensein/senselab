@@ -419,3 +419,31 @@ synthetic one-hot posteriorgram sidecar written into the run's own `derivatives/
 
 Nothing here runs ppgs or Praat: the sidecar is written by the test and the scalars are store
 attributes.
+
+
+## The silent-fraction cut, fitted against the corpus — 2026-09-12
+
+The gate shipped at 0.90, a placeholder chosen without corpus access and recorded as such. Scored
+against the corpus, 0.90 sits at recall 0.499 and a false-positive rate of 0.042 — well inside a 10%
+over-routing budget, and therefore stricter than a router should be. `recall_at_budgets` picks
+**0.757** at that budget, for recall 0.761.
+
+Taking it, measured over all 62,547 recordings:
+
+| | at 0.90 | at 0.757 |
+| --- | --- | --- |
+| routed | 61,815 | 62,027 |
+| unexplained | 526 | **333** |
+| AIRWAY missed | 474 | 366 |
+| AIRWAY sensitivity | 0.964 | 0.972 |
+| AIRWAY specificity | 0.819 | 0.780 |
+| AIRWAY extra | 8,961 | 10,890 |
+
+193 recordings that reached no branch now reach one, for 1,929 additional branch invocations that
+the branch discards. That is the asymmetry the recall-first criterion exists to price: an
+over-routed recording costs a branch some work, an under-routed one is never seen by anything that
+could interpret it.
+
+The gate's own ceiling is 0.875, not 1.0 — the posteriorgram is absent on the 3.7% of recordings
+with no consensus transcript, so no threshold reaches them. `airway.breath` covers that gap, which
+is why the two are OR'd rather than one replacing the other.
