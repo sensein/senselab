@@ -110,12 +110,13 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.nodes.quality import (
     CLIP_AMPLITUDE_MEASUREMENT,
     CLIP_FAMILY,
-    CLIP_LEVEL,
+    CLIP_LEVELS,
     UNCLIPPED_LOUDER_N,
+    clip_spans,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.data_structures import HFModel
-from senselab.utils.prov_store import Entity, ProvStore
+from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, Entity, ProvStore, file_digest
 
 NODE = "PREPROCESS"
 CRISPERWHISPER_ID = "nyralabs/CrisperWhisper2.0_turbo"
@@ -466,6 +467,64 @@ def clip_amplitudes(audio: Audio, extents: Sequence[tuple[float, float]], *, gua
     )
 
 
+def write_clip_amplitudes(
+    store: ProvStore,
+    activity_id: str,
+    agent_id: str,
+    *,
+    audio: Audio,
+    spans: Sequence[Entity],
+    signal: str,
+    guard_samples: int,
+    derived_from: tuple[str, ...] = (),
+) -> str:
+    """Measure the amplitudes of already-written clip spans and store them as one measurement.
+
+    Every level QUALITY reads lives here, keyed by span id, beside the whole-file values. Nothing is
+    stamped on the spans themselves, so this can be appended to a store whose spans already exist.
+
+    Args:
+        store: The provenance store.
+        activity_id: The activity that measured the amplitudes.
+        agent_id: The agent answerable for them.
+        audio: The signal the spans were detected on.
+        spans: The clip span entities, each carrying the extent to measure over.
+        signal: The stream name the measurement is stated against.
+        guard_samples: How many samples each side of a span are excluded from unclipped evidence.
+        derived_from: Entities the measurement derives from, beside the spans themselves.
+
+    Returns:
+        The measurement entity's id.
+
+    Raises:
+        ValueError: If any span carries no extent, so there is nothing to measure it over.
+    """
+    extents: list[tuple[float, float]] = []
+    for span in spans:
+        if span.extent is None:
+            raise ValueError(f"clip span {span.id} carries no extent; there are no samples to measure")
+        extents.append((float(span.extent[0]), float(span.extent[1])))
+    amplitudes = clip_amplitudes(audio, extents, guard_samples=guard_samples)
+    span_ids = tuple(span.id for span in spans)
+    return _measurement(
+        store,
+        activity_id,
+        agent_id,
+        name=CLIP_AMPLITUDE_MEASUREMENT,
+        signal=signal,
+        attributes={
+            "unclipped_peak": amplitudes.unclipped_peak,
+            "unclipped_peak_time_s": amplitudes.unclipped_peak_time_s,
+            "unclipped_samples_n": amplitudes.unclipped_samples_n,
+            "edge_guard_samples": int(guard_samples),
+            "clip_spans_n": len(span_ids),
+            CLIP_LEVELS: dict(zip(span_ids, amplitudes.levels)),
+            UNCLIPPED_LOUDER_N: dict(zip(span_ids, amplitudes.louder_counts)),
+        },
+        derived_from=(*derived_from, *span_ids),
+    )
+
+
 def write_clip_spans(
     store: ProvStore,
     activity_id: str,
@@ -480,7 +539,8 @@ def write_clip_spans(
     """Write the clip spans and, beside them, the amplitude reading QUALITY checks them against.
 
     The two are written together because the waveform is in hand exactly once: QUALITY reads stored
-    outputs and never decodes audio of its own.
+    outputs and never decodes audio of its own. A span carries what was asserted — its family, its
+    signal and its extent — and no amplitude; :func:`write_clip_amplitudes` holds those.
 
     Args:
         store: The provenance store.
@@ -495,34 +555,29 @@ def write_clip_spans(
     Returns:
         The span ids, in the order the extents were given, and the measurement's id.
     """
-    amplitudes = clip_amplitudes(audio, extents, guard_samples=guard_samples)
-    span_ids: list[str] = []
-    for extent, level, louder in zip(extents, amplitudes.levels, amplitudes.louder_counts):
+    spans: list[Entity] = []
+    for extent in extents:
         span_id = store.entity(
             prov_type="span",
             extent=extent,
-            attributes={"family": CLIP_FAMILY, "signal": signal, CLIP_LEVEL: level, UNCLIPPED_LOUDER_N: louder},
+            attributes={"family": CLIP_FAMILY, "signal": signal},
         )
         store.was_generated_by(span_id, activity_id)
         store.was_attributed_to(span_id, agent_id)
         for source_id in derived_from:
             store.was_derived_from(span_id, source_id)
-        span_ids.append(span_id)
-    measurement_id = _measurement(
+        spans.append(store.get_entity(span_id))
+    measurement_id = write_clip_amplitudes(
         store,
         activity_id,
         agent_id,
-        name=CLIP_AMPLITUDE_MEASUREMENT,
+        audio=audio,
+        spans=spans,
         signal=signal,
-        attributes={
-            "unclipped_peak": amplitudes.unclipped_peak,
-            "unclipped_peak_time_s": amplitudes.unclipped_peak_time_s,
-            "unclipped_samples_n": amplitudes.unclipped_samples_n,
-            "edge_guard_samples": int(guard_samples),
-        },
-        derived_from=(*derived_from, *span_ids),
+        guard_samples=guard_samples,
+        derived_from=derived_from,
     )
-    return span_ids, measurement_id
+    return [span.id for span in spans], measurement_id
 
 
 def ppg_model_agent(store: ProvStore) -> str:
@@ -697,6 +752,82 @@ def praat_features(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
     )
 
 
+def extend_clip_amplitudes(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str | None:
+    """Measure the clip-amplitude measurement a finished run's clip spans have none of.
+
+    The spans are read back rather than re-detected, so nothing else PREPROCESS produced is
+    recomputed and no existing entity is touched. The source audio is the ``recording`` stream's
+    own file, which ADMIT recorded the absolute path and digest of.
+
+    Neither the activity nor the measurement carries a path, a timestamp or any other value that
+    varies between two readings of the same file, so a second call writes records the store already
+    holds and is a set-union no-op. A caller that skips a run already carrying the measurement is
+    saving the decode, not buying the convergence.
+
+    Args:
+        store: The finished run's store, read under the run's own id.
+        config: The triage configuration, read for ``quality.clip_edge_guard_samples``.
+        run_dir: The run directory stream paths are relative to.
+
+    Returns:
+        The measurement entity's id, or None when the store carries no clip span to measure.
+
+    Raises:
+        LookupError: If no live ``recording`` stream is in the store.
+        ValueError: If the recording's bytes no longer digest to what ADMIT recorded, so the
+            amplitudes would not be those of the signal the spans were detected on.
+    """
+    signal = "recording"
+    spans = clip_spans(store, signal)
+    if not spans:
+        return None
+    guard_samples = int(config.require("quality.clip_edge_guard_samples"))
+    stream_id, audio = resolve_stream(store, run_dir, signal)
+    _check_recording_unchanged(store.get_entity(stream_id))
+    parameters: dict[str, Any] = {
+        "signal": signal,
+        "clip_edge_guard_samples": guard_samples,
+        "clip_spans_n": len(spans),
+    }
+    software = software_agent(store)
+    activity = _activity(
+        store, CLIP_AMPLITUDE_MEASUREMENT, parameters, (stream_id, *(span.id for span in spans)), software
+    )
+    return write_clip_amplitudes(
+        store,
+        activity,
+        software,
+        audio=audio,
+        spans=spans,
+        signal=signal,
+        guard_samples=guard_samples,
+        derived_from=(stream_id,),
+    )
+
+
+def _check_recording_unchanged(stream: Entity) -> None:
+    """Refuse a recording whose bytes differ from the ones the clip spans were detected on.
+
+    Args:
+        stream: The ``recording`` stream entity, carrying ADMIT's ``path`` and digest.
+
+    Raises:
+        ValueError: If the file now digests to something else.
+    """
+    recorded = stream.attributes.get(CHECKSUM_KEY)
+    path = stream.attributes.get(PATH_KEY)
+    if not recorded or not path:
+        return
+    current, reason = file_digest(path)
+    if current is None:
+        raise ValueError(f"{path} cannot be digested ({reason}); its clip spans have no signal to be measured against")
+    if current != recorded:
+        raise ValueError(
+            f"{path} now digests to {current}, not the {recorded} ADMIT read; its clip spans were "
+            "detected on other bytes and amplitudes measured here would not belong to them"
+        )
+
+
 def preprocess(  # noqa: C901 — one block per derivative, each independent
     store: ProvStore,
     source: Audio,
@@ -811,10 +942,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _clip_spans() -> None:
         """Clip-event spans over the ORIGINAL recording (ClipDaT), before any normalization runs.
 
-        Each span carries the peak absolute amplitude inside it and how many unclipped samples are
-        louder, and one ``clip_amplitude`` measurement beside them carries the loudest unclipped
-        sample and where it sits. QUALITY's consistency check reads those numbers; measuring them
-        here is what lets it read no audio.
+        One ``clip_amplitude`` measurement beside the spans carries the loudest unclipped sample,
+        where it sits, and each span's own peak keyed by its id. QUALITY's consistency check reads
+        those numbers; measuring them here is what lets it read no audio.
         """
         if not recording_ids:
             raise LookupError("no recording stream in the store")

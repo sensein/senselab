@@ -7,8 +7,9 @@ the call; ``run_test`` pins the position.
 
 **What it may read.** Stored outputs only: entities and their attributes. QUALITY decodes no audio,
 opens no sidecar and re-derives nothing — every amplitude it compares was measured by the node that
-held the signal. The clip-consistency check reads PREPROCESS's ``clip`` spans and the
-:data:`CLIP_AMPLITUDE_MEASUREMENT` measurement written beside them.
+held the signal. The clip-consistency check reads PREPROCESS's ``clip`` spans for their extents and
+the :data:`CLIP_AMPLITUDE_MEASUREMENT` measurement for every amplitude, per-span levels included:
+the spans say what was asserted, the measurement says what the samples were.
 
 **What it refuses.** A dependency that is absent is an operational fact, not a finding: clip spans
 with no clip-amplitude measurement beside them raise, and the runner records the node ``ERRORED``.
@@ -47,13 +48,18 @@ CONTRADICTED_CLIP = "clip_above_unclipped_sample"
 """The vocabulary token for a clip span an unclipped sample is louder than."""
 
 CLIP_AMPLITUDE_MEASUREMENT = "clip_amplitude"
-"""PREPROCESS's whole-file amplitude reading of the signal its clip spans were detected on."""
+"""PREPROCESS's amplitude reading of the signal its clip spans were detected on.
 
-CLIP_LEVEL = "clip_level"
-"""The clip span attribute carrying the peak absolute amplitude inside the span."""
+It carries the whole-file values and, keyed by span id, the per-span ones. A measurement is an
+entity of its own, so it can be appended to a store whose clip spans already exist; a span attribute
+could not be, and the store is append-only.
+"""
+
+CLIP_LEVELS = "clip_levels"
+"""The measurement key mapping each clip span's id to the peak absolute amplitude inside it."""
 
 UNCLIPPED_LOUDER_N = "unclipped_louder_n"
-"""The clip span attribute carrying how many unclipped samples exceed that span's own level."""
+"""The measurement key mapping each clip span's id to how many unclipped samples exceed its level."""
 
 
 @dataclass(frozen=True)
@@ -114,8 +120,11 @@ def _stream_id(store: ProvStore, name: str) -> str:
     return found[-1].id
 
 
-def _clip_spans(store: ProvStore, signal: str) -> list[Entity]:
+def clip_spans(store: ProvStore, signal: str) -> list[Entity]:
     """Every live clip span PREPROCESS proposed over this signal, in time order.
+
+    Public because the extend pass that appends a missing :data:`CLIP_AMPLITUDE_MEASUREMENT` to a
+    finished run must select exactly the spans QUALITY will read it against.
 
     Args:
         store: The provenance store.
@@ -152,7 +161,8 @@ def _clip_amplitudes(store: ProvStore, signal: str) -> Entity:
     if found is None or found.attributes.get("signal") != signal:
         raise LookupError(
             f"no live {CLIP_AMPLITUDE_MEASUREMENT!r} measurement over {signal!r}, but the store carries "
-            "clip spans over it; PREPROCESS writes the two together and QUALITY reads no audio of its own"
+            "clip spans over it; QUALITY reads no audio of its own. A fresh run writes the two together; "
+            "a finished run gains the measurement from scripts/extend_clip_amplitudes.py"
         )
     return found
 
@@ -168,14 +178,15 @@ def quality(
     """Read PREPROCESS's clip spans against its own amplitude reading, and contest the denied ones.
 
     A clip span's level is the peak absolute amplitude of the samples it covers, which PREPROCESS
-    measured while it held the signal and stored on the span. An unclipped sample contradicts that
-    span when its own absolute amplitude exceeds the level by more than
-    ``quality.clip_contradiction_margin`` of the level. What counts as unclipped — the edge guard
-    included — was decided by PREPROCESS, and the guard it used is recorded on the measurement.
+    measured while it held the signal and stored in the clip-amplitude measurement under the span's
+    id. An unclipped sample contradicts that span when its own absolute amplitude exceeds the level
+    by more than ``quality.clip_contradiction_margin`` of the level. What counts as unclipped — the
+    edge guard included — was decided by PREPROCESS, and the guard it used is recorded on the
+    measurement.
 
     Args:
         store: The provenance store, holding ADMIT's recording stream, PREPROCESS's clip spans and
-            the clip-amplitude measurement beside them.
+            the clip-amplitude measurement they are read against.
         source: The store-held stream the clip spans were detected on, ``"recording"``.
         config: The triage configuration.
         hint: Accepted for the shared node shape; not read. No declaration can make a recording
@@ -196,7 +207,7 @@ def quality(
     stream_id = _stream_id(store, source)
     software = software_agent(store)
 
-    spans = _clip_spans(store, source)
+    spans = clip_spans(store, source)
     amplitudes = _clip_amplitudes(store, source).attributes if spans else {}
     guard = int(amplitudes.get("edge_guard_samples", 0))
     peak = amplitudes.get("unclipped_peak")
@@ -218,9 +229,9 @@ def quality(
     for span in spans:
         store.used(activity, span.id)
 
-    measured = [
-        (span, float(span.attributes[CLIP_LEVEL])) for span in spans if span.attributes.get(CLIP_LEVEL) is not None
-    ]
+    levels = amplitudes.get(CLIP_LEVELS) or {}
+    louder_counts = amplitudes.get(UNCLIPPED_LOUDER_N) or {}
+    measured = [(span, float(levels[span.id])) for span in spans if levels.get(span.id) is not None]
     contradictions: list[_Contradiction] = []
     for span, clip_level in measured:
         if peak is None or peak_time_s is None or float(peak) <= clip_level * (1.0 + margin):
@@ -233,7 +244,7 @@ def quality(
                 clip_level=clip_level,
                 louder_amplitude=float(peak),
                 louder_time_s=float(peak_time_s),
-                louder_samples_n=int(span.attributes.get(UNCLIPPED_LOUDER_N, 0)),
+                louder_samples_n=int(louder_counts.get(span.id, 0)),
             )
         )
 
