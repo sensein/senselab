@@ -1393,8 +1393,8 @@ def plot_aligned_panels(
                 for ov in overlays:
                     t_np = ov["times"].cpu().numpy() if torch.is_tensor(ov["times"]) else np.asarray(ov["times"])
                     v_np = ov["values"].cpu().numpy() if torch.is_tensor(ov["values"]) else np.asarray(ov["values"])
-                    visible = (t_np >= x_limits[0]) & (t_np <= x_limits[1])
-                    t_np, v_np = t_np[visible], v_np[visible]
+                    within = (t_np >= x_limits[0]) & (t_np <= x_limits[1])
+                    t_np, v_np = t_np[within], v_np[within]
                     ax.scatter(
                         t_np,
                         v_np,
