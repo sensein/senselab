@@ -9,6 +9,11 @@ A HeAR label is corroborated by its mapped AudioSet node **or any descendant of 
 sets here are subtree closures rather than the single names a hand-written map would list. Every
 name a set contains is an AudioSet ``display_name``, which is what YAMNet and AST both report.
 
+Corroboration and identity are two different reads of the same profile. :func:`corroboration_sets`
+answers "does this AudioSet name fall in that HeAR label's subtree"; :func:`canonical_names` answers
+"which ontology node does this label spelling denote", which is the mapped root alone and never its
+descendants. TAXONOMY's consensus merges on the second.
+
 The airway kind is the same construction from the other end: it is the closure of the ontology roots
 named in ``taxonomy.airway_ontology_roots``, and both the AudioSet evidence labels and the HeAR
 evidence labels are read off that one closure.
@@ -36,7 +41,7 @@ PROFILE_DIR = Path(__file__).parent / "data" / "classifier_ontology"
 AIRWAY_ROOTS_PATH = "taxonomy.airway_ontology_roots"
 """The configuration path naming the ontology roots whose closure is the airway kind."""
 
-PROFILE_PATH_KEY = "airway.corroboration_profile"
+PROFILE_PATH_KEY = "taxonomy.classifier_ontology_profile"
 """The configuration path naming which profile to read; null takes the packaged latest."""
 
 
@@ -68,7 +73,8 @@ def _validate(profile: Mapping[str, Any], source: str) -> None:
 
     Raises:
         ValueError: If the schema version is unknown, if a mapped or corroborating node id is
-            absent from the profile's AudioSet node table, or if a label resolves to nothing.
+            absent from the profile's AudioSet node table, if a label resolves to nothing, or if a
+            label's own spelling is an AudioSet display name that denotes a different node.
     """
     version = str(profile.get("profile_version"))
     if version != PROFILE_VERSION:
@@ -77,6 +83,8 @@ def _validate(profile: Mapping[str, Any], source: str) -> None:
     mapping = profile.get("mapping") or {}
     if not mapping:
         raise ValueError(f"{source}: carries no mapping")
+    names_by_id = {node_id: str(entry["name"]) for node_id, entry in classes.items()}
+    audioset_names = set(names_by_id.values())
     for label, entry in mapping.items():
         referenced = list(entry.get("audioset_ids") or []) + list(entry.get("corroborating_ids") or [])
         unknown = [node_id for node_id in referenced if node_id not in classes]
@@ -84,6 +92,27 @@ def _validate(profile: Mapping[str, Any], source: str) -> None:
             raise ValueError(f"{source}: {label} references AudioSet ids absent from the ontology: {unknown}")
         if not entry.get("corroborating_ids"):
             raise ValueError(f"{source}: {label} resolves to no AudioSet node")
+        denoted = [names_by_id[node_id] for node_id in entry.get("audioset_ids") or []]
+        if str(label) in audioset_names and denoted != [str(label)]:
+            raise ValueError(
+                f"{source}: {label} is itself an AudioSet class name but denotes {denoted}; "
+                "one spelling cannot stand for two ontology nodes"
+            )
+
+
+def resolved_profile_path(path: str | None = None) -> Path:
+    """Which profile file a given configured value reads, with ``None`` resolved to the bundled one.
+
+    Args:
+        path: Profile path, or ``None`` for the newest bundled one.
+
+    Returns:
+        The file that :func:`load_classifier_ontology` would read.
+
+    Raises:
+        FileNotFoundError: If the package ships no profile.
+    """
+    return _bundled_profile_path() if path is None else Path(path)
 
 
 @lru_cache(maxsize=None)
@@ -101,7 +130,7 @@ def load_classifier_ontology(path: str | None = None) -> dict[str, Any]:
             is an operator error, not a reason to fall back to the bundled one.
         ValueError: If the profile fails validation.
     """
-    resolved = _bundled_profile_path() if path is None else Path(path)
+    resolved = resolved_profile_path(path)
     if not resolved.exists():
         raise FileNotFoundError(f"classifier-ontology profile not found: {resolved}")
     profile: dict[str, Any] = json.loads(resolved.read_text())
@@ -132,6 +161,30 @@ def corroboration_sets(path: str | None = None) -> dict[str, frozenset[str]]:
     """
     mapping = load_classifier_ontology(path)["mapping"]
     return {label: frozenset(entry["corroborating_names"]) for label, entry in mapping.items()}
+
+
+def canonical_names(path: str | None = None) -> dict[str, str]:
+    """Every label spelling the classifiers report, mapped onto the ontology node it denotes.
+
+    An AudioSet display name maps to itself. A HeAR label the profile resolves onto a single
+    AudioSet node maps to that node's display name, so ``Throat Clear`` and ``Throat clearing`` come
+    back as one name. A HeAR label resolving onto several nodes is absent from the map, since no one
+    node names it; a caller keeps such a label's own spelling.
+
+    Args:
+        path: Profile path, or ``None`` for the bundled one.
+
+    Returns:
+        ``{label spelling: AudioSet display name}``.
+    """
+    profile = load_classifier_ontology(path)
+    classes: Mapping[str, Any] = profile["audioset"]["classes"]
+    resolved = {str(entry["name"]): str(entry["name"]) for entry in classes.values()}
+    for label, entry in profile["mapping"].items():
+        node_ids = list(entry["audioset_ids"])
+        if len(node_ids) == 1:
+            resolved[str(label)] = str(classes[node_ids[0]]["name"])
+    return resolved
 
 
 def hear_labels_in_group(group: str, path: str | None = None) -> tuple[str, ...]:
