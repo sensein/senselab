@@ -42,8 +42,19 @@ from senselab.utils.prov_store import ProvStore
 REPO_ROOT = Path(__file__).resolve().parents[5]
 CLI = REPO_ROOT / "scripts" / "triage_audio.py"
 
-GRAPH = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
-"""The nodes with an implementation. QUALITY is declared in ``GRAPH_ORDER`` and has none yet."""
+GRAPH = (
+    "ADMIT",
+    "PREPROCESS",
+    "TAXONOMY",
+    "routing",
+    "AIRWAY",
+    "SPEECH",
+    "VOICE",
+    "QUALITY",
+    "REDACT",
+    "VERDICT",
+)
+"""Every node the runner drives. QUALITY and routing run for real here; the rest are faked."""
 
 _MISSING = object()
 
@@ -78,6 +89,7 @@ def _fakes(
     kinds: dict[str, str] | None = None,
     pii: bool = True,
     routing_outcome: str | None = None,
+    clip_span: tuple[float, float] | None = None,
 ) -> dict[str, Callable[..., Any]]:
     """Fake node functions, one per graph node, recording their calls into ``calls``.
 
@@ -94,6 +106,9 @@ def _fakes(
         pii: Whether the fake SPEECH writes a live ``pii`` entity, which is REDACT's whole gate.
         routing_outcome: ``"raise"`` makes the routing entry raise; ``"none"`` makes it return no
             result instead of calling the real node.
+        clip_span: An extent the fake PREPROCESS writes a ``clip`` span over, for the real QUALITY
+            to read. The tone's own extremes sit at its two ends, so a span over its quiet middle is
+            one the recording contradicts.
 
     Returns:
         The fakes, keyed by the attribute name they replace on the runner's module.
@@ -109,13 +124,33 @@ def _fakes(
     ) -> AdmitResult:
         _record("ADMIT")
         entity_id, verdict = _conclude(store, "ADMIT", admit_outcome, None)
-        audio = None if admit_outcome is Outcome.FAIL else _tone()
-        return AdmitResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, audio=audio)
+        if admit_outcome is Outcome.FAIL:
+            return AdmitResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, audio=None)
+        audio = _tone()
+        audio.save_to_file(str(source))
+        stream_id = store.entity(
+            prov_type="stream",
+            extent=(0.0, audio.waveform.shape[-1] / audio.sampling_rate),
+            attributes={
+                "name": "recording",
+                "path": str(Path(source).resolve()),
+                "sampling_rate": int(audio.sampling_rate),
+                "channels": int(audio.waveform.shape[0]),
+            },
+        )
+        store.was_generated_by(stream_id, store.activity(node="ADMIT", step="stream", parameters={}))
+        return AdmitResult(verdict=verdict, view=(stream_id, entity_id), verdict_entity_id=entity_id, audio=audio)
 
     def _preprocess(
         store: ProvStore, source: Audio, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
     ) -> PreprocessResult:
         _record("PREPROCESS")
+        if clip_span is not None:
+            clip_activity = store.activity(node="PREPROCESS", step="clip_spans", parameters={})
+            span_id = store.entity(
+                prov_type="span", extent=clip_span, attributes={"family": "clip", "signal": "recording"}
+            )
+            store.was_generated_by(span_id, clip_activity)
         entity_id, verdict = _conclude(store, "PREPROCESS", Outcome.PASS, None)
         return PreprocessResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, absent=())
 
@@ -214,12 +249,17 @@ def graph(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[str]]:
         calls: list[str] = []
         for name, fake in _fakes(calls, **kwargs).items():
             monkeypatch.setattr(run_module, name, fake)
-        real_verdict = run_module.verdict
+        real_quality, real_verdict = run_module.quality, run_module.verdict
+
+        def _quality(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls.append("QUALITY")
+            return real_quality(*args, **kwargs)
 
         def _verdict(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             calls.append("VERDICT")
             return real_verdict(*args, **kwargs)
 
+        monkeypatch.setattr(run_module, "quality", _quality)
         monkeypatch.setattr(run_module, "verdict", _verdict)
         return calls
 
@@ -229,7 +269,7 @@ def graph(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[str]]:
 class TestHappyPath:
     """Every node runs, in order, and the fold is reported."""
 
-    def test_calls_all_nine_nodes_in_graph_order(
+    def test_calls_every_node_in_graph_order(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """The runner drives the DAG in the graph's declared order, VERDICT last."""
@@ -240,22 +280,43 @@ class TestHappyPath:
     def test_returns_the_file_verdict_with_every_node_completed(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A graph in which nothing raised reports ``COMPLETED`` for every implemented node.
-
-        QUALITY is the exception and is not one: it is declared in ``GRAPH_ORDER`` as the terminal
-        node every recording reaches, no node implements it, and the run says so rather than
-        leaving it out of the record on the paths where nothing skipped it.
-        """
+        """A graph in which nothing raised reports ``COMPLETED`` for every node, QUALITY included."""
         graph()
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
         assert result.file_verdict.triage is Triage.PASS
-        assert result.ran == {
-            **dict.fromkeys(GRAPH, RunState.COMPLETED),
-            "QUALITY": RunState.SKIPPED,
-            "REPORT": RunState.COMPLETED,
-        }
-        assert result.file_verdict.ran["QUALITY"] is RunState.SKIPPED
+        assert result.ran == {**dict.fromkeys(GRAPH, RunState.COMPLETED), "REPORT": RunState.COMPLETED}
+        assert result.file_verdict.ran["QUALITY"] is RunState.COMPLETED
+
+    def test_the_terminal_node_concludes_over_the_source_recording(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """QUALITY runs for real on every path PREPROCESS completed, and writes its own verdict."""
+        graph()
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.ran["QUALITY"] is RunState.COMPLETED
+        store = ProvStore.read_jsonl(result.store_path)
+        concluded = [e for e in store.entities("verdict") if e.attributes["node"] == "QUALITY"]
+        assert len(concluded) == 1
+        assert concluded[0].attributes["outcome"] == Outcome.PASS.value
+        assert concluded[0].attributes["kind"] is None
+        assert concluded[0].attributes["signal"] == "recording"
+        assert concluded[0].attributes["clip_spans_n"] == 0
+
+    def test_a_contradicted_clip_flags_the_file_and_the_report_still_renders(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """QUALITY's finding travels into the fold as a flag, and nothing downstream chokes on it."""
+        graph(clip_span=(0.49, 0.51))
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.ran["QUALITY"] is RunState.COMPLETED
+        assert result.ran["REPORT"] is RunState.COMPLETED
+        assert result.file_verdict is not None
+        assert result.file_verdict.triage is Triage.FLAG
+        assert any(
+            reason.node == "QUALITY" and "clip_above_unclipped_sample" in reason.why
+            for reason in result.file_verdict.reasons
+        )
 
     def test_the_layout_is_written_and_the_release_dir_is_disjoint(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
@@ -363,7 +424,18 @@ class TestHappyPath:
         """The caller's hint is handed to each node rather than dropped at the runner."""
         seen: list[AudioHints | None] = []
         graph()
-        for name in ("admit", "preprocess", "taxonomy", "routing", "airway", "speech", "voice", "redact", "verdict"):
+        for name in (
+            "admit",
+            "preprocess",
+            "taxonomy",
+            "routing",
+            "airway",
+            "speech",
+            "voice",
+            "quality",
+            "redact",
+            "verdict",
+        ):
             original = getattr(run_module, name)
 
             def _spy(*args: Any, _original: Any = original, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -436,10 +508,10 @@ class TestConditionalExecution:
     def test_a_failed_routing_skips_dependent_branches_and_flags_the_file(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path, routing_outcome: str
     ) -> None:
-        """Branches do not run without ROUTING's decisions, and VERDICT records why they did not."""
+        """Branches do not run without ROUTING's decisions; QUALITY, which reads none, still does."""
         calls = graph(routing_outcome=routing_outcome)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
-        assert tuple(calls) == ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "VERDICT")
+        assert tuple(calls) == ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "QUALITY", "VERDICT")
         assert result.ran["routing"] is RunState.ERRORED
         assert all(result.ran[branch] is RunState.SKIPPED for branch in ("AIRWAY", "SPEECH", "VOICE", "REDACT"))
         assert result.file_verdict is not None
@@ -484,7 +556,7 @@ class TestNodeErrorsAreCaptured:
         reread = ProvStore.read_jsonl(result.store_path)
         concluded = {entity.attributes["node"] for entity in reread.entities("verdict")}
         assert "VOICE" not in concluded
-        assert {"ADMIT", "PREPROCESS", "TAXONOMY", "AIRWAY", "SPEECH", "REDACT", "VERDICT"} <= concluded
+        assert {"ADMIT", "PREPROCESS", "TAXONOMY", "AIRWAY", "SPEECH", "QUALITY", "REDACT", "VERDICT"} <= concluded
 
     def test_the_errored_state_reaches_the_folded_verdict(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
@@ -515,7 +587,7 @@ class TestPreprocessFailShortCircuits:
         """None of them has any evidence to act on, so none of them is attempted."""
         calls = graph(raising="PREPROCESS")
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
-        skipped = ("TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT")
+        skipped = ("TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "QUALITY", "REDACT")
         assert set(skipped).isdisjoint(calls)
         assert [result.ran[node] for node in skipped] == [RunState.SKIPPED] * len(skipped)
 

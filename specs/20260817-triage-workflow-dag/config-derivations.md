@@ -751,9 +751,22 @@ here.
 
 ## quality
 
-SQUIM and disruption tolerances. Every key here is currently read by nothing.
+SQUIM and disruption tolerances, plus QUALITY's clip-consistency check. The four SQUIM and
+disruption keys are read by nothing and no derivation was written for them.
 
-No derivation was written for this section.
+quality.clip_contradiction_margin 0.005 and quality.clip_edge_guard_samples 3 --
+specs/20260912-quality-clip-consistency/design.md. Both are QUALITY's clip-consistency check, which
+contests a clip span whose peak an unclipped sample elsewhere in the recording exceeds. Neither is
+fitted; both are restatements of ClipDaT's own two constants on the same signal. The margin is
+1 - clipping.near_threshold: a sample within 0.5% of a clip level is one the detector would have
+counted as part of that run had it been contiguous with it, so it is not evidence against the level
+(the exactly symmetric figure is 1/0.995 - 1 = 0.005025). The guard is clipping.leniency_samples:
+a run closes at the sample where its own leniency was exceeded, so the samples immediately outside
+an edge are that run's decay at the detector's temporal resolution, not independent evidence. The
+margin is relative and int16 quantisation is absolute, so for clip levels below 6.1e-3 the margin is
+narrower than one quantisation step; clipping.minimum_extreme is 1e-4, which leaves that window open
+for near-silent files. It is named in the design rather than closed with a second, unmeasured
+absolute floor.
 
 ## disruptions
 
