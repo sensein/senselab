@@ -249,7 +249,6 @@ class TestTheV2OpenKeys:
         "windows.ast.default_threshold",
         "windows.ast.label_thresholds",
         "windows.hear.label_thresholds",
-        "words.onomatopoeic_tokens",
         "taxonomy.presence_floor.speech.acoustic",
         "taxonomy.presence_floor.speech.lexical",
         "taxonomy.presence_floor.airway.health_acoustic",

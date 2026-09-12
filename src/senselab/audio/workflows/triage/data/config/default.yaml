@@ -117,7 +117,10 @@ phonation_spans:
 
 # Vocabularies read off the consensus transcript.
 words:
-  onomatopoeic_tokens: null            # cough/breath-like renderings a recognizer emits as ordinary words
+  # Cough-like renderings a recognizer emits as ordinary words; PREPROCESS brackets each one. One
+  # flat list, and only the cough set is measured; see the derivation in
+  # `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`.
+  onomatopoeic_tokens: [cough, coughs, coughing, 咳, 呵, ahem, hack, khh, kof, cof]
 
 # Which declared hint tags force which kind's branch.
 routing:
