@@ -4,7 +4,7 @@ import math
 import os
 import textwrap
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union, cast
+from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union, cast
 
 # Use non-interactive backend when not in a notebook (e.g., papermill, CI)
 if not os.environ.get("DISPLAY") and "inline" not in os.environ.get("MPLBACKEND", ""):
@@ -15,7 +15,7 @@ if not os.environ.get("DISPLAY") and "inline" not in os.environ.get("MPLBACKEND"
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from matplotlib import rc_context
+from matplotlib import patheffects, rc_context
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.backend_bases import RendererBase
@@ -44,6 +44,15 @@ REPORT_LANE_GUTTER_MIN_IN = 0.72  # a separate left column for a panel's descrip
 REPORT_LANE_GUTTER_MAX_IN = 1.45  # long names wrap rather than taking time pixels from the report
 REPORT_COLORBAR_GUTTER_IN = 0.72  # a shared right column for score-raster probability scales
 PPG_LANE_NAME = "PPG phonemes"  # the lane title of the phoneme panel, and of the line stating its absence
+PPG_CURVE_AXIS_NAME = "Posterior"  # the right-hand scale the phoneme lane's probability curves are read against
+PPG_CURVE_LIMIT = 6  # the most posterior curves one window is given, ranked by their peak within it
+BOUNDARY_RULE_CORE_COLOR = "white"  # the light half of a boundary rule, read against a dark spectrogram
+BOUNDARY_RULE_CASING_COLOR = "0.10"  # the dark half, read against a light waveform or token lane
+BOUNDARY_RULE_WIDTH_PT = 0.9  # the core's width in points
+BOUNDARY_RULE_CASING_WIDTH_PT = 2.4  # the casing's width in points; half the difference shows on each side
+BOUNDARY_RULE_DASHES = (0.0, (3.5, 2.0))  # a dash pattern, so a reference rule is not read as a drawn signal
+CURVE_WIDTH_PT = 1.3  # the width of an overlaid probability curve
+CURVE_HALO_WIDTH_PT = 2.9  # its white casing, which is what keeps it legible over any tab20 bar
 
 
 def _fitted_token_fontsize(
@@ -526,6 +535,99 @@ def _as_numpy(values: Any) -> np.ndarray:  # noqa: ANN401 — a tensor, a sequen
     return values.cpu().numpy() if torch.is_tensor(values) else np.asarray(values)
 
 
+def _clipped_curve(
+    times: Any,  # noqa: ANN401 — a tensor, a sequence or an array
+    values: Any,  # noqa: ANN401 — a tensor, a sequence or an array
+    time_limits: Tuple[float, float] | None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """One curve's samples, as arrays, restricted to the page's time window.
+
+    Args:
+        times: The curve's sample times, in recording seconds.
+        values: The curve's values, one per sample time.
+        time_limits: The window to keep, or ``None`` to keep every sample.
+
+    Returns:
+        The ``(times, values)`` pair as arrays of equal length.
+    """
+    time_values, value_values = _as_numpy(times), _as_numpy(values)
+    if time_limits is None:
+        return time_values, value_values
+    visible = (time_values >= time_limits[0]) & (time_values <= time_limits[1])
+    return time_values[visible], value_values[visible]
+
+
+def _draw_boundary_rules(ax: Axes, times: Iterable[float], *, time_limits: Tuple[float, float] | None) -> None:
+    """Rule one panel at each of a set of times, in a treatment legible on any background.
+
+    Each rule is a dashed light core inside a dark casing, so the dark half carries it over a pale
+    waveform or token lane and the light half carries it over a ``magma`` spectrogram.
+
+    Args:
+        ax: The panel's axis.
+        times: Recording-time positions to rule, in any order and with repeats.
+        time_limits: The page's window; a time outside it is not ruled.
+    """
+    for time in sorted({float(time) for time in times}):
+        if time_limits is not None and not time_limits[0] <= time <= time_limits[1]:
+            continue
+        ax.axvline(
+            time,
+            color=BOUNDARY_RULE_CORE_COLOR,
+            linewidth=BOUNDARY_RULE_WIDTH_PT,
+            linestyle=BOUNDARY_RULE_DASHES,
+            alpha=0.95,
+            zorder=3.5,
+            path_effects=[
+                patheffects.Stroke(
+                    linewidth=BOUNDARY_RULE_CASING_WIDTH_PT,
+                    foreground=BOUNDARY_RULE_CASING_COLOR,
+                    alpha=0.75,
+                ),
+                patheffects.Normal(),
+            ],
+        )
+
+
+def _draw_curve_axis(ax: Axes, curves: Mapping[str, Any], *, time_limits: Tuple[float, float] | None) -> Axes:
+    """Overlay a panel's curves on a right-hand axis of their own.
+
+    Every curve is drawn over the panel's full window rather than over any region of its own, and
+    each is given a white casing so it stays legible over whatever the panel already drew.
+
+    Args:
+        ax: The panel's own axis, whose left-hand scale the curves do not share.
+        curves: The panel's ``curves`` block, read for ``data``, ``name`` and ``limits``.
+        time_limits: The page's window, applied to each curve's samples.
+
+    Returns:
+        The right-hand axis the curves were drawn against.
+    """
+    curve_axis = ax.twinx()
+    for times, values, label, color in curves.get("data", []):
+        time_values, value_values = _clipped_curve(times, values, time_limits)
+        curve_axis.plot(
+            time_values,
+            value_values,
+            color=color,
+            label=str(label),
+            linewidth=CURVE_WIDTH_PT,
+            alpha=0.95,
+            zorder=4,
+            solid_capstyle="round",
+            path_effects=[
+                patheffects.Stroke(linewidth=CURVE_HALO_WIDTH_PT, foreground="white", alpha=0.9),
+                patheffects.Normal(),
+            ],
+        )
+    low, high = (float(value) for value in curves.get("limits", (0.0, 1.0)))
+    curve_axis.set_ylim(low, high)
+    curve_axis.set_yticks(list(np.linspace(low, high, 3)))
+    curve_axis.set_ylabel(str(curves.get("name") or "Value"), fontsize=8)
+    curve_axis.tick_params(axis="y", labelsize=6)
+    return curve_axis
+
+
 def _draw_waveform_overlays(ax: Axes, panel: Dict[str, Any], *, time_limits: Tuple[float, float] | None = None) -> None:
     """Draw a waveform panel's span overlay and its twin-axis curves.
 
@@ -561,10 +663,7 @@ def _draw_waveform_overlays(ax: Axes, panel: Dict[str, Any], *, time_limits: Tup
         )
     twin = ax.twinx()
     for times, values, label, color in twin_spec.get("data", []):
-        time_values, value_values = _as_numpy(times), _as_numpy(values)
-        if time_limits is not None:
-            visible = (time_values >= time_limits[0]) & (time_values <= time_limits[1])
-            time_values, value_values = time_values[visible], value_values[visible]
+        time_values, value_values = _clipped_curve(times, values, time_limits)
         twin.plot(time_values, value_values, color=color, label=label, linewidth=0.9, alpha=0.9)
     names = [str(name) for name in (twin_spec.get("name"), spans.get("name")) if name]
     twin.set_ylabel(str(twin_spec.get("axis_label")) if twin_spec.get("axis_label") else " · ".join(names) or "Value")
@@ -947,6 +1046,10 @@ def plot_aligned_panels(
       each annotated with its label. The right-hand y-label names whichever of the two are present.
       A row carrying either is drawn twice as tall, since more than one reading shares it.
     - ``{"type": "spectrogram", "mel": True/False}`` -- linear or mel spectrogram.
+    - ``boundaries`` on a ``waveform`` or ``spectrogram`` panel -- a sequence of recording times,
+      each ruled across the panel as a reference line. A time outside the page window is not ruled.
+      The rule is a dashed light core in a dark casing, so one set of times reads the same down a
+      page whose panels have opposite backgrounds.
     - ``{"type": "features", "data": [(times, values, label, color), ...], "name": str}`` --
       scatter/line overlay of feature curves (e.g., pitch, formants). ``name`` becomes the
       panel's y-label.
@@ -968,6 +1071,12 @@ def plot_aligned_panels(
       at ``fontsize`` is shrunk towards ``floor_fontsize`` and dropped if it does not fit there
       either. The bar is never dropped. ``boundaries`` draws a vertical rule across the lane at
       every visible token edge, so a lane of abutting tokens reads as the boundaries between them.
+      ``curves``, a block of ``{"name": str, "limits": (float, float),
+      "data": [(times, values, label, color), ...]}``, overlays continuous curves on a right-hand
+      axis of its own, named by ``name`` and spanning ``limits`` (default ``(0.0, 1.0)``). Each
+      curve is drawn across the whole page window rather than over any span of its own, and carries
+      a white casing that keeps it legible over every bar colour. A lane carrying ``curves`` is
+      drawn twice as tall, since two readings share it.
     - ``{"type": "score_raster", "rows": [str, ...], "windows": [{"start": float,
       "end": float, "scores": {str: float}}], "name": str}`` -- one fixed row per selected
       label, with each native classifier window colored by its score. Missing cells mean the label
@@ -1042,6 +1151,8 @@ def plot_aligned_panels(
             return max(1.0, TEXT_PANEL_INCHES_PER_LINE * len(panel.get("lines", []))) / _INCHES_PER_RATIO
         if ptype == "waveform" and (panel.get("twin") or panel.get("spans")):
             return 2.0
+        if ptype == "tokens" and (panel.get("curves") or {}).get("data"):
+            return 2.0
         if ptype == "score_raster":
             return max(1.0, 0.45 * len(panel.get("rows") or []))
         return float(ratio_map.get(ptype, 1))
@@ -1108,6 +1219,7 @@ def plot_aligned_panels(
                 ax.set_ylabel("Amplitude")
                 ax.grid(True, alpha=0.2)
                 _draw_waveform_overlays(ax, panel, time_limits=x_limits)
+                _draw_boundary_rules(ax, panel.get("boundaries") or (), time_limits=x_limits)
 
             elif ptype == "spectrogram":
                 mel = panel.get("mel", False)
@@ -1120,15 +1232,13 @@ def plot_aligned_panels(
                     cmap="magma",
                 )
                 ax.set_ylabel("Mel bins" if mel else "Frequency (Hz)")
+                _draw_boundary_rules(ax, panel.get("boundaries") or (), time_limits=x_limits)
 
             elif ptype == "features":
                 data = panel.get("data", [])
                 style = panel.get("style", "scatter")
                 for times, values, label, color in data:
-                    t_np = times.cpu().numpy() if torch.is_tensor(times) else np.asarray(times)
-                    v_np = values.cpu().numpy() if torch.is_tensor(values) else np.asarray(values)
-                    visible = (t_np >= x_limits[0]) & (t_np <= x_limits[1])
-                    t_np, v_np = t_np[visible], v_np[visible]
+                    t_np, v_np = _clipped_curve(times, values, x_limits)
                     if style == "line":
                         ax.plot(t_np, v_np, color=color, label=label, linewidth=0.8, alpha=0.8)
                     else:
@@ -1205,8 +1315,7 @@ def plot_aligned_panels(
                     placements.append(_TokenPlacement(block, bars[0], label, start + width / 2.0, width / 2.0))
                     edges.extend((start, end))
                 if panel.get("boundaries"):
-                    for edge in sorted(set(edges)):
-                        ax.axvline(edge, color="0.25", linewidth=0.5, alpha=0.8, zorder=3)
+                    _draw_boundary_rules(ax, edges, time_limits=x_limits)
                 if placements:
                     ax.add_artist(
                         _StaggeredTokenLane(
@@ -1229,6 +1338,9 @@ def plot_aligned_panels(
                     ax.set_yticklabels(blocks, fontsize=7)
                 ax.set_ylabel(panel.get("name") or "Tokens")
                 ax.grid(axis="x", linestyle="--", alpha=0.3)
+                token_curves = panel.get("curves") or {}
+                if token_curves.get("data"):
+                    _draw_curve_axis(ax, token_curves, time_limits=x_limits)
 
             elif ptype == "score_raster":
                 rows = [str(label) for label in panel.get("rows") or []]
@@ -1432,7 +1544,48 @@ def _ppg_absence_panel(reason: str) -> Dict[str, Any]:
     return {"type": "text", "lines": [f"{PPG_LANE_NAME}: absent — {reason}"], "family": "sans-serif", "fontsize": 9}
 
 
-def _ppg_panel(audio: Audio, posteriorgram: "torch.Tensor | Path | str | None") -> Dict[str, Any]:
+def _ppg_curve_data(
+    frame_major: torch.Tensor,
+    segments: List[Dict[str, Any]],
+    seconds_per_frame: float,
+    time_limits: Tuple[float, float],
+) -> List[Tuple[np.ndarray, np.ndarray, str, Any]]:
+    """The posterior columns of the phonemes that win the argmax somewhere in one window.
+
+    Args:
+        frame_major: The posteriorgram in ``(frames, phonemes)`` layout.
+        segments: The argmax segments :func:`extract_ppg_segments` found over the whole recording.
+        seconds_per_frame: The frame period the segments were timed with.
+        time_limits: The window the lane is drawn over.
+
+    Returns:
+        At most :data:`PPG_CURVE_LIMIT` ``(times, values, label, color)`` tuples, ordered by the
+        phoneme's peak posterior inside the window. Each carries the phoneme's whole column, in
+        frame-centre times, so the caller's page window is what bounds the curve.
+    """
+    centres = (np.arange(frame_major.shape[0], dtype=float) + 0.5) * seconds_per_frame
+    inside = (centres >= time_limits[0]) & (centres <= time_limits[1])
+    if not inside.any():
+        inside = np.ones_like(centres, dtype=bool)
+    winners = list(
+        dict.fromkeys(
+            int(segment["phoneme_index"])
+            for segment in segments
+            if float(segment["end_seconds"]) > time_limits[0] and float(segment["start_seconds"]) < time_limits[1]
+        )
+    )
+    columns = frame_major.numpy().astype(float)
+    ranked = sorted(winners, key=lambda index: (-float(columns[inside, index].max()), index))
+    labels = {int(segment["phoneme_index"]): str(segment["phoneme"]) for segment in segments}
+    cmap = plt.get_cmap("tab20")
+    return [(centres, columns[:, index], labels[index], cmap(index % 20)) for index in ranked[:PPG_CURVE_LIMIT]]
+
+
+def _ppg_panel(
+    audio: Audio,
+    posteriorgram: "torch.Tensor | Path | str | None",
+    time_limits: Tuple[float, float],
+) -> Dict[str, Any]:
     """The phoneme panel for one recording: a labelled token lane, or a stated absence.
 
     Args:
@@ -1441,10 +1594,12 @@ def _ppg_panel(audio: Audio, posteriorgram: "torch.Tensor | Path | str | None") 
         posteriorgram: A posteriorgram tensor in any of the layouts
             :func:`~senselab.audio.tasks.features_extraction.ppg.to_frame_major_posteriorgram`
             accepts, the path of a ``ppg_posteriorgram.npz`` sidecar, or ``None``.
+        time_limits: The window the lane is drawn over, which selects the phonemes that get a curve.
 
     Returns:
-        A ``tokens`` panel specification carrying one bar per contiguous argmax-phoneme segment, or
-        the ``text`` panel from :func:`_ppg_absence_panel`.
+        A ``tokens`` panel specification carrying one bar per contiguous argmax-phoneme segment and
+        a ``curves`` block of their posterior columns, or the ``text`` panel from
+        :func:`_ppg_absence_panel`.
     """
     from senselab.audio.tasks.features_extraction.ppg import (
         extract_ppg_segments,
@@ -1468,6 +1623,7 @@ def _ppg_panel(audio: Audio, posteriorgram: "torch.Tensor | Path | str | None") 
     segments = extract_ppg_segments(clock, frame_major)
     if not segments:
         return _ppg_absence_panel("the posteriorgram holds no frame")
+    seconds_per_frame = (clock.waveform.shape[1] / clock.sampling_rate) / frame_major.shape[0]
     cmap = plt.get_cmap("tab20")
     return {
         "type": "tokens",
@@ -1484,6 +1640,11 @@ def _ppg_panel(audio: Audio, posteriorgram: "torch.Tensor | Path | str | None") 
         "boundaries": True,
         "expand_label_slots": True,
         "show_row_labels": False,
+        "curves": {
+            "name": PPG_CURVE_AXIS_NAME,
+            "limits": (0.0, 1.0),
+            "data": _ppg_curve_data(frame_major, segments, seconds_per_frame, time_limits),
+        },
     }
 
 
@@ -1504,8 +1665,19 @@ def plot_range_with_ppg(
     The three panels share one time axis, and that axis is the requested range; its ticks stay in
     absolute recording time. Phoneme segments are the contiguous argmax runs
     :func:`~senselab.audio.tasks.features_extraction.ppg.extract_ppg_segments` finds, each drawn as
-    a labelled bar with a rule at its edges; one straddling the range edge is clipped to the range
-    and still labelled. A recording with no posteriorgram gets a third panel stating that absence.
+    a labelled bar; one straddling the range edge is clipped to the range and still labelled. Every
+    segment edge is ruled across **all three** panels at the same time, so an edge can be read
+    against the closure, burst or voicing onset under it.
+
+    The phoneme lane also carries the posterior curves of the phonemes that win the argmax anywhere
+    in the range, against a right-hand ``0``--``1`` scale. Each curve runs across the whole range
+    rather than stopping at its own segment, which is what makes the crossover at a boundary — one
+    phoneme's posterior falling as the next rises — visible. At most :data:`PPG_CURVE_LIMIT` are
+    drawn, the ones with the highest peak inside the range; each is coloured like the bars of the
+    phoneme it belongs to.
+
+    A recording with no posteriorgram gets a third panel stating that absence, with no rules on the
+    other two panels and no right-hand scale.
 
     Args:
         audio: The mono recording the range is taken from.
@@ -1541,10 +1713,14 @@ def plot_range_with_ppg(
     """
     duration = audio.waveform.shape[-1] / audio.sampling_rate
     time_limits = _resolved_time_range(duration, start_s, end_s, name="(start_s, end_s)")
+    phoneme_panel = _ppg_panel(audio, posteriorgram, time_limits)
+    edges = sorted(
+        {float(edge) for token in phoneme_panel.get("tokens", ()) for edge in (token["start"], token["end"])}
+    )
     panels: List[Dict[str, Any]] = [
-        {"type": "waveform"},
-        {"type": "spectrogram", "mel": mel},
-        _ppg_panel(audio, posteriorgram),
+        {"type": "waveform", "boundaries": edges},
+        {"type": "spectrogram", "mel": mel, "boundaries": edges},
+        phoneme_panel,
     ]
     return plot_aligned_panels(
         audio,

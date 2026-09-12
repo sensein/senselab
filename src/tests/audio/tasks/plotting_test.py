@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import torch
 from matplotlib.artist import Artist
+from matplotlib.axes import Axes
 from matplotlib.backend_bases import RendererBase
 from matplotlib.patches import Rectangle
 from matplotlib.pyplot import Figure
@@ -1229,6 +1230,23 @@ def _ppg_sidecar(directory: Path) -> Path:
     return path
 
 
+def _vertical_rule_positions(axis: Axes) -> list[float]:
+    """The x of every vertical reference line drawn on an axis.
+
+    Args:
+        axis: The panel to read.
+
+    Returns:
+        One x per vertical line, in draw order.
+    """
+    positions = []
+    for line in axis.get_lines():
+        xdata, ydata = line.get_xdata(), line.get_ydata()
+        if len(xdata) == 2 and xdata[0] == xdata[1] and len(ydata) == 2:
+            positions.append(float(xdata[0]))
+    return positions
+
+
 class TestATimeRangeWithItsPhonemes:
     """One requested range of a recording, as waveform, spectrogram and PPG phoneme boundaries."""
 
@@ -1252,11 +1270,51 @@ class TestATimeRangeWithItsPhonemes:
         assert isinstance(self._figure(), Figure)
 
     def test_the_three_panels_share_the_requested_range(self) -> None:
-        """One axis over three panels is what makes a boundary relatable to the sound under it."""
+        """One axis over three panels is what makes a boundary relatable to the sound under it.
+
+        The posterior axis twins the phoneme lane, so it shares the range too and is counted here.
+        """
         figure = self._figure()
-        assert len(figure.axes) == 3
+        assert [axis.get_ylabel() for axis in figure.axes] == [
+            "Amplitude",
+            "Frequency (Hz)",
+            "PPG phonemes",
+            "Posterior",
+        ]
         for axis in figure.axes:
             assert axis.get_xlim() == pytest.approx(_PPG_RANGE)
+
+    def test_the_posterior_axis_is_on_the_right_and_runs_zero_to_one(self) -> None:
+        """A probability read against any other scale is unreadable, so the bound is fixed."""
+        posterior = next(axis for axis in self._figure().axes if axis.get_ylabel() == "Posterior")
+        assert posterior.get_ylim() == pytest.approx((0.0, 1.0))
+        assert posterior.yaxis.get_ticks_position() == "right"
+
+    def test_every_curve_spans_the_whole_window_not_its_own_segment(self) -> None:
+        """The crossover at a boundary is the point; a curve clipped to its segment cannot show it."""
+        posterior = next(axis for axis in self._figure().axes if axis.get_ylabel() == "Posterior")
+        curves = [line for line in posterior.get_lines() if len(line.get_xdata()) > 1]
+        assert curves, "no posterior curves were drawn"
+        for curve in curves:
+            span = (min(curve.get_xdata()), max(curve.get_xdata()))
+            assert span == pytest.approx(_PPG_RANGE, abs=0.05)
+
+    def test_the_boundaries_rule_every_panel_at_the_same_times(self) -> None:
+        """A boundary is only relatable to the signal if it is drawn over the signal.
+
+        The lane additionally rules the two window edges, where the signal panels would only be
+        drawing over their own border, so the interior boundaries are what must agree.
+        """
+        figure = self._figure()
+        waveform, spectrogram, lane = (axis for axis in figure.axes if axis.get_ylabel() != "Posterior")
+        interior = {
+            round(x, 4)
+            for x in _vertical_rule_positions(lane)
+            if round(x, 4) not in {round(edge, 4) for edge in _PPG_RANGE}
+        }
+        assert interior, "the lane carries no interior boundary"
+        assert {round(x, 4) for x in _vertical_rule_positions(waveform)} == interior
+        assert {round(x, 4) for x in _vertical_rule_positions(spectrogram)} == interior
 
     def test_the_axis_is_the_range_and_not_the_whole_file(self) -> None:
         """The waveform keeps recording-time coordinates, so the ticks relate back to the file."""
