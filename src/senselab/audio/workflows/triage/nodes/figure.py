@@ -391,19 +391,23 @@ def _span_code(signal_name: str, measure: str) -> str:
 def _spans(store: ProvStore) -> list[dict[str, Any]]:
     """Every live general span, with what the lane panel needs to draw it.
 
+    ``contains_clip`` is derived here from the live clip extents rather than read from the span's
+    stored attribute, so it names the clip spans that stand at read time.
+
     Args:
         store: The provenance store.
 
     Returns:
         One dict per span.
     """
+    clips = _clip_extents(store)
     return [
         {
             "id": entity.id,
             "extent": entity.extent,
             "signal": entity.attributes.get("signal"),
             "measure": entity.attributes.get("measure"),
-            "contains_clip": bool(entity.attributes.get("contains_clip")),
+            "contains_clip": any(entity.extent[0] < end and entity.extent[1] > start for start, end in clips),
             "corroborated_by": entity.attributes.get("corroborated_by") or [],
         }
         for entity in live_entities(store, "span")
