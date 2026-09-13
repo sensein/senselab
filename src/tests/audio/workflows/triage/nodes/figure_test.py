@@ -413,8 +413,11 @@ class TestTheClipFlagIsReadFromTheLiveClipSpans:
     """The lane's clip edge names the clip spans that stand, not the ones that stood when it ran."""
 
     @staticmethod
-    def _seeded() -> tuple[ProvStore, str]:
-        """A store with one clip span and one general span over it, flagged as the writer flagged it.
+    def _seeded(span_extent: tuple[float, float] = (0.9, 1.5)) -> tuple[ProvStore, str]:
+        """A store with one clip span at ``(1.0, 1.2)`` and one general span flagged as containing it.
+
+        Args:
+            span_extent: The general span's extent.
 
         Returns:
             The store and the clip span's id.
@@ -427,7 +430,7 @@ class TestTheClipFlagIsReadFromTheLiveClipSpans:
         store.was_generated_by(clip_id, activity)
         span_id = store.entity(
             prov_type="span",
-            extent=(0.9, 1.5),
+            extent=span_extent,
             attributes={
                 "signal": "preemphasised",
                 "measure": "amplitude",
@@ -453,6 +456,20 @@ class TestTheClipFlagIsReadFromTheLiveClipSpans:
         [span] = _spans(store)
         assert span["contains_clip"] is False
         assert store.get_entity(span["id"]).attributes["contains_clip"] is True
+
+    @pytest.mark.parametrize("extent", [(1.2, 1.5), (0.5, 1.0)])
+    def test_a_span_merely_touching_a_clip_does_not_contain_it(self, extent: tuple[float, float]) -> None:
+        """The overlap test is strict at both ends, so a shared boundary is not an overlap."""
+        store, _ = self._seeded(extent)
+        [span] = _spans(store)
+        assert span["contains_clip"] is False
+
+    @pytest.mark.parametrize("extent", [(1.19, 1.5), (0.5, 1.01)])
+    def test_a_span_overlapping_by_one_hundredth_of_a_second_does(self, extent: tuple[float, float]) -> None:
+        """The control on the test above: a hair either side of the boundary is an overlap."""
+        store, _ = self._seeded(extent)
+        [span] = _spans(store)
+        assert span["contains_clip"] is True
 
 
 def matplotlib_colour(hex_colour: str) -> tuple[float, float, float]:

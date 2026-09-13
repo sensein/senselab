@@ -54,6 +54,7 @@ from senselab.audio.workflows.triage.nodes.preprocess import WithdrawnClip, writ
 from senselab.audio.workflows.triage.nodes.quality import (
     CLIP_AMPLITUDE_MEASUREMENT,
     CLIP_LEVELS,
+    CONTEST_VERB,
     CONTRADICTED_CLIP,
     UNCLIPPED_LOUDER_N,
     clip_spans,
@@ -76,6 +77,8 @@ REBRACKET = "rebracket"
 WORD_SUPERSEDED = "word_superseded"
 WITHDRAW_CLIPS = "withdraw_contradicted_clips"
 CLIP_SPAN_SUPERSEDED = "clip_span_superseded"
+CLIP_CONTEST_SUPERSEDED = "clip_contest_superseded"
+QUALITY_VERDICT_SUPERSEDED = "quality_verdict_superseded"
 ONOMATOPOEIC_TOKENS_KEY = "words.onomatopoeic_tokens"
 ASR_MEASURE = "asr"
 
@@ -84,6 +87,8 @@ SOURCE_STREAM = "recording"
 
 _CLIP_SPAN_REASON = f"{CONTRADICTED_CLIP}: an unclipped sample is louder than this span's own level"
 _CLIP_AMPLITUDE_REASON = "its per-span levels name clip spans withdrawn as contradicted"
+_CLIP_CONTEST_REASON = "the clip span it contests was withdrawn; there is no span left to contest"
+_QUALITY_VERDICT_REASON = "it counts contests of clip spans that have since been withdrawn"
 _WORD_REASON = "the token is in words.onomatopoeic_tokens; this reading spells it unbracketed"
 _TRANSCRIPT_REASON = "its words were re-flagged against words.onomatopoeic_tokens"
 
@@ -519,6 +524,47 @@ def extend_quality(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
     return quality(store, SOURCE_STREAM, config, run_dir=run_dir)
 
 
+def _retire_quality_findings(store: ProvStore, withdrawn: set[str], *, software: str) -> list[str]:
+    """Retire QUALITY's contests of clip spans a caller has just withdrawn, and the verdict counting them.
+
+    Args:
+        store: The provenance store.
+        withdrawn: The ids of the clip spans withdrawn in this pass.
+        software: The agent answerable for the retirement.
+
+    Returns:
+        The retired contest assertions' ids. Empty when QUALITY contested none of these spans, in
+        which case the verdict is left alone.
+    """
+    contests = [
+        entity
+        for entity in live_entities(store, "assertion")
+        if entity.attributes.get("verb") == CONTEST_VERB
+        and entity.attributes.get("reason") == CONTRADICTED_CLIP
+        and withdrawn.intersection(store.derived_from(entity.id))
+    ]
+    for contest in contests:
+        supersede(
+            store,
+            contest.id,
+            node=QUALITY,
+            step=CLIP_CONTEST_SUPERSEDED,
+            reason=_CLIP_CONTEST_REASON,
+            software=software,
+        )
+    verdict = find_verdict(store, QUALITY)
+    if contests and verdict is not None:
+        supersede(
+            store,
+            verdict.id,
+            node=QUALITY,
+            step=QUALITY_VERDICT_SUPERSEDED,
+            reason=_QUALITY_VERDICT_REASON,
+            software=software,
+        )
+    return [contest.id for contest in contests]
+
+
 def withdraw_contradicted_clips(store: ProvStore, config: TriageConfig, *, signal: str = SOURCE_STREAM) -> str | None:
     """Retire a finished run's clip spans an unclipped sample of the same signal is louder than.
 
@@ -533,6 +579,9 @@ def withdraw_contradicted_clips(store: ProvStore, config: TriageConfig, *, signa
     derived from the span it retires, and the span is superseded. The ``clip_amplitude`` measurement
     is rewritten with ``clip_levels``, ``unclipped_louder_n`` and ``clip_spans_n`` restricted to the
     survivors and every whole-file value carried through, and the old one is superseded.
+
+    QUALITY's ``contest`` assertions over a withdrawn span are superseded with it, as is the QUALITY
+    verdict counting them. No verdict is written in their place.
 
     One round is read, not a fixpoint loop. See ``specs/20260912-quality-clip-consistency/design.md``.
 
@@ -568,15 +617,15 @@ def withdraw_contradicted_clips(store: ProvStore, config: TriageConfig, *, signa
     louder_counts = amplitudes.get(UNCLIPPED_LOUDER_N) or {}
     peak = amplitudes.get("unclipped_peak")
     peak_time_s = amplitudes.get("unclipped_peak_time_s")
-    guard = int(amplitudes.get("edge_guard_samples", 0))
+    guard = int(amplitudes.get("edge_guard_samples") or 0)
 
     contradicted: list[tuple[str, WithdrawnClip]] = []
     if peak is not None and peak_time_s is not None:
         for span in spans:
-            level = levels.get(span.id)
-            if level is None or float(peak) <= float(level) * (1.0 + margin):
+            level, extent = levels.get(span.id), span.extent
+            if level is None or extent is None or float(peak) <= float(level) * (1.0 + margin):
                 continue
-            start_s, end_s = span.extent or (0.0, 0.0)
+            start_s, end_s = extent
             contradicted.append(
                 (
                     span.id,
@@ -629,6 +678,7 @@ def withdraw_contradicted_clips(store: ProvStore, config: TriageConfig, *, signa
         )
 
     retired = {span_id for span_id, _ in contradicted}
+    _retire_quality_findings(store, retired, software=software)
     survivors = [span.id for span in spans if span.id not in retired]
     written = write_measurement(
         store,

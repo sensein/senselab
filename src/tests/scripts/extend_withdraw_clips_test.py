@@ -24,8 +24,15 @@ import soundfile as sf
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.extend import withdraw_contradicted_clips
 from senselab.audio.workflows.triage.nodes.admit import admit
-from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities, software_agent
+from senselab.audio.workflows.triage.nodes.common import (
+    find_measurement,
+    find_verdict,
+    live_entities,
+    software_agent,
+    write_measurement,
+)
 from senselab.audio.workflows.triage.nodes.preprocess import (
+    WITHDRAW_VERB,
     reject_contradicted_clips,
     write_clip_spans,
     write_withdrawn_clips,
@@ -34,10 +41,13 @@ from senselab.audio.workflows.triage.nodes.quality import (
     CLIP_AMPLITUDE_MEASUREMENT,
     CLIP_FAMILY,
     CLIP_LEVELS,
+    CONTEST_VERB,
     CONTRADICTED_CLIP,
     UNCLIPPED_LOUDER_N,
     clip_spans,
+    quality,
 )
+from senselab.audio.workflows.triage.vocabulary import QUALITY, Outcome
 from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -57,6 +67,12 @@ CLIP_RANGE = (8000, 8400)
 CLIP_EXTENT = (CLIP_RANGE[0] / SR, CLIP_RANGE[1] / SR)
 """The clip span's extent, in seconds."""
 
+SECOND_CLIP_RANGE = (12000, 12400)
+"""The samples a second seeded clip span covers, where a fixture asks for one."""
+
+SECOND_CLIP_EXTENT = (SECOND_CLIP_RANGE[0] / SR, SECOND_CLIP_RANGE[1] / SR)
+"""That span's extent, in seconds."""
+
 SPAN_OVER_CLIP = (0.40, 0.60)
 """A general span overlapping the clip, which the figure flags and the per-span models measure."""
 
@@ -67,12 +83,13 @@ DERIVATION = "withdraw_contradicted_clips"
 """The slice log's per-derivation column."""
 
 
-def _samples(*, clip_level: float, louder: float | None) -> np.ndarray:
-    """A quiet bed with one plateau, and optionally one unclipped sample louder than it.
+def _samples(*, clip_level: float, louder: float | None, second_clip_level: float | None = None) -> np.ndarray:
+    """A quiet bed with one or two plateaus, and optionally one unclipped sample louder than one.
 
     Args:
-        clip_level: The level the plateau holds.
+        clip_level: The level the first plateau holds.
         louder: An amplitude to place at sample 24000, or None to leave the bed there.
+        second_clip_level: The level a second plateau holds, or None for a single-plateau recording.
 
     Returns:
         The recording, mono float32.
@@ -80,6 +97,8 @@ def _samples(*, clip_level: float, louder: float | None) -> np.ndarray:
     grid = np.arange(2 * SR) / SR
     out = (0.05 * np.sin(2 * np.pi * 220.0 * grid)).astype(np.float32)
     out[CLIP_RANGE[0] : CLIP_RANGE[1]] = np.float32(clip_level)
+    if second_clip_level is not None:
+        out[SECOND_CLIP_RANGE[0] : SECOND_CLIP_RANGE[1]] = np.float32(second_clip_level)
     if louder is not None:
         out[24000] = np.float32(louder)
     return out
@@ -136,18 +155,23 @@ def _seed_run(
     *,
     clip_level: float = 0.5,
     louder: float | None = 0.9,
+    second_clip_level: float | None = None,
     spans: bool = True,
     amplitudes: bool = True,
+    contested: bool = False,
 ) -> Path:
     """Write one finished run: a source WAV, and the store the clip-amplitude pass left behind.
 
     Args:
         root: The run root, created if absent.
-        clip_level: The plateau's level.
+        clip_level: The first plateau's level.
         louder: An unclipped sample's amplitude, or None for a recording nothing contradicts.
+        second_clip_level: A second plateau's level, for a run whose clip spans do not all fall.
         spans: Whether the store carries a clip span at all.
         amplitudes: Whether the ``clip_amplitude`` measurement is written beside the spans. False is
             the corpus before ``scripts/extend_clip_amplitudes.py``.
+        contested: Whether QUALITY has already run and contested the contradicted spans, which is
+            the state ``scripts/extend_quality.py`` left the corpus in.
 
     Returns:
         The source WAV's path.
@@ -155,8 +179,12 @@ def _seed_run(
     run_dir = root / "run"
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
     source = root.parent / f"{root.name}.wav"
-    sf.write(str(source), _samples(clip_level=clip_level, louder=louder), SR)
-    sf.write(str(run_dir / "streams" / "enhanced.flac"), _samples(clip_level=clip_level, louder=None), SR)
+    sf.write(str(source), _samples(clip_level=clip_level, louder=louder, second_clip_level=second_clip_level), SR)
+    sf.write(
+        str(run_dir / "streams" / "enhanced.flac"),
+        _samples(clip_level=clip_level, louder=None, second_clip_level=second_clip_level),
+        SR,
+    )
 
     store = ProvStore(run_id=root.name)
     config = load_triage_config()
@@ -166,6 +194,8 @@ def _seed_run(
     activity = store.activity(node="PREPROCESS", step="clip_spans", parameters={})
     store.was_associated_with(activity, agent)
     extents = [CLIP_EXTENT] if spans else []
+    if spans and second_clip_level is not None:
+        extents.append(SECOND_CLIP_EXTENT)
     if amplitudes:
         write_clip_spans(
             store,
@@ -184,6 +214,8 @@ def _seed_run(
             store.was_generated_by(span_id, activity)
             store.was_attributed_to(span_id, agent)
     _seed_general_spans(store, activity, agent)
+    if contested:
+        quality(store, "recording", config, run_dir=run_dir)
     store.write_jsonl(run_dir / "store.jsonl")
     return source
 
@@ -242,7 +274,7 @@ def _withdrawals(store: ProvStore) -> list[Any]:
     return [
         entity
         for entity in live_entities(store, "assertion")
-        if entity.attributes.get("reason") == CONTRADICTED_CLIP and entity.attributes.get("verb") == "withdraw"
+        if entity.attributes.get("reason") == CONTRADICTED_CLIP and entity.attributes.get("verb") == WITHDRAW_VERB
     ]
 
 
@@ -256,6 +288,73 @@ def _general_spans(store: ProvStore) -> list[Any]:
         The span entities.
     """
     return [entity for entity in live_entities(store, "span") if entity.attributes.get("family") is None]
+
+
+def _seeded_amplitudes(*, level: float, peak: float) -> ProvStore:
+    """A store holding one clip span and a ``clip_amplitude`` measurement carrying chosen numbers.
+
+    The pass reads stored outputs only, so seeding those outputs directly is the comparison's own
+    interface — and the only way to place ``peak`` exactly on the margin, which no float32 recording
+    can be made to do.
+
+    Args:
+        level: The clip span's own level.
+        peak: The whole-file unclipped peak.
+
+    Returns:
+        The store.
+    """
+    store = ProvStore(run_id="boundary")
+    agent = software_agent(store)
+    activity = store.activity(node="PREPROCESS", step="clip_spans", parameters={})
+    store.was_associated_with(activity, agent)
+    span_id = store.entity(
+        prov_type="span", extent=CLIP_EXTENT, attributes={"family": CLIP_FAMILY, "signal": "recording"}
+    )
+    store.was_generated_by(span_id, activity)
+    store.was_attributed_to(span_id, agent)
+    write_measurement(
+        store,
+        activity,
+        agent,
+        name=CLIP_AMPLITUDE_MEASUREMENT,
+        signal="recording",
+        attributes={
+            "unclipped_peak": peak,
+            "unclipped_peak_time_s": 1.5,
+            "unclipped_samples_n": 100,
+            "edge_guard_samples": 16,
+            "clip_spans_n": 1,
+            CLIP_LEVELS: {span_id: level},
+            UNCLIPPED_LOUDER_N: {span_id: 1},
+        },
+        derived_from=(span_id,),
+    )
+    return store
+
+
+def _margin() -> float:
+    """The configured contradiction margin.
+
+    Returns:
+        ``quality.clip_contradiction_margin``.
+    """
+    return float(load_triage_config().require("quality.clip_contradiction_margin"))
+
+
+def _widened(tmp_path: Path, margin: float) -> Any:  # noqa: ANN401 — TriageConfig, without importing it
+    """The packaged configuration with a wider contradiction margin.
+
+    Args:
+        tmp_path: Where the partial YAML goes.
+        margin: The margin to set.
+
+    Returns:
+        The merged configuration.
+    """
+    override = tmp_path / "margin.yaml"
+    override.write_text(f"quality:\n  clip_contradiction_margin: {margin}\n", encoding="utf-8")
+    return load_triage_config(override)
 
 
 def _run(manifest: Path) -> int:
@@ -453,12 +552,12 @@ class TestAStoreWithNothingToWithdraw:
 
 
 class TestASecondPass:
-    """One round is the fixpoint on stored data, so a rerun must move nothing."""
+    """A rerun must move nothing. Where every span fell it short-circuits; the fixpoint path is below."""
 
     def test_a_rerun_over_the_same_corpus_changes_nothing(
         self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
     ) -> None:
-        """The stores are byte-identical, and no second withdrawal is written."""
+        """The store is byte-identical. With the only span gone, the second pass reads no span at all."""
         manifest, roots = corpus(2)
         _run(manifest)
         after_first = {root: (root / "run" / "store.jsonl").read_bytes() for root in roots}
@@ -468,15 +567,9 @@ class TestASecondPass:
         for root in roots:
             assert (root / "run" / "store.jsonl").read_bytes() == after_first[root]
             assert len(_withdrawals(_store_of(root))) == 1
+            assert clip_spans(_store_of(root), "recording") == []
         assert [record["status"] for record in _log(tmp_path)] == ["skipped", "skipped"]
         assert [record[DERIVATION] for record in _log(tmp_path)] == ["absent", "absent"]
-
-    def test_the_pass_itself_returns_none_the_second_time(self, corpus: Callable[..., tuple[Path, list[Path]]]) -> None:
-        """Read directly: the survivors stand against the peak the rewritten measurement carries."""
-        manifest, roots = corpus(1, clip_level=0.5, louder=0.9)
-        _run(manifest)
-        store = _store_of(roots[0])
-        assert withdraw_contradicted_clips(store, load_triage_config()) is None
 
 
 class TestAStoreThePassCannotRead:
@@ -521,3 +614,146 @@ class TestAStoreThePassCannotRead:
         """A wrong guess would rewrite the wrong recording's store."""
         with pytest.raises(ValueError, match="no run root"):
             cli.run_root_of(Path("/corpus/enhanced.flac"))
+
+
+class TestTheComparisonAtItsBoundary:
+    """The third copy of the rule, pinned where a 0.5 % margin actually decides."""
+
+    def test_a_peak_exactly_at_the_margin_is_not_a_contradiction(self) -> None:
+        """The comparison is ``>``: equality is inside the tolerance, not outside it."""
+        margin = _margin()
+        store = _seeded_amplitudes(level=0.5, peak=0.5 * (1.0 + margin))
+        assert withdraw_contradicted_clips(store, load_triage_config()) is None
+        assert len(clip_spans(store, "recording")) == 1
+
+    def test_one_ulp_above_the_margin_is(self) -> None:
+        """The control on the test above, at the tightest separation a float admits."""
+        margin = _margin()
+        store = _seeded_amplitudes(level=0.5, peak=float(np.nextafter(0.5 * (1.0 + margin), 1.0)))
+        assert withdraw_contradicted_clips(store, load_triage_config()) is not None
+        assert clip_spans(store, "recording") == []
+
+    def test_a_peak_below_the_spans_own_level_is_never_a_contradiction(self) -> None:
+        """0.4995 under a 0.5 clip is the clip standing, whichever side the margin is read on."""
+        store = _seeded_amplitudes(level=0.5, peak=0.4995)
+        assert withdraw_contradicted_clips(store, load_triage_config()) is None
+        assert len(clip_spans(store, "recording")) == 1
+
+    def test_the_margin_is_read_from_the_configuration(self, tmp_path: Path) -> None:
+        """0.504 over a 0.5 clip is 0.8 %: withdrawn at the packaged margin, kept at a wider one."""
+        store = _seeded_amplitudes(level=0.5, peak=0.504)
+        assert withdraw_contradicted_clips(store, _widened(tmp_path, 0.05)) is None
+
+        assert withdraw_contradicted_clips(store, load_triage_config()) is not None
+        assert clip_spans(store, "recording") == []
+
+
+class TestARunWhereOnlySomeClipSpansFall:
+    """The survivors are what the rewritten measurement is about, and what the second pass reads."""
+
+    def test_the_rewritten_maps_hold_exactly_the_surviving_span(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """A level keyed to a retired span would be a level no live span can be read against."""
+        manifest, roots = corpus(1, clip_level=0.10, second_clip_level=0.98, louder=0.5)
+        before = clip_spans(_store_of(roots[0]), "recording")
+        assert len(before) == 2
+
+        assert _run(manifest) == 0
+
+        store = _store_of(roots[0])
+        survivors = clip_spans(store, "recording")
+        assert [span.id for span in survivors] == [before[1].id]
+        assert tuple(survivors[0].extent or ()) == SECOND_CLIP_EXTENT
+        after = find_measurement(store, CLIP_AMPLITUDE_MEASUREMENT)
+        assert after is not None
+        assert list(after.attributes[CLIP_LEVELS]) == [before[1].id]
+        assert list(after.attributes[UNCLIPPED_LOUDER_N]) == [before[1].id]
+        assert after.attributes["clip_spans_n"] == 1
+        assert len(_withdrawals(store)) == 1
+
+    def test_the_second_pass_returns_none_with_a_clip_span_still_standing(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """The fixpoint branch, not the no-clip-span short circuit: a span is read and kept."""
+        manifest, roots = corpus(1, clip_level=0.10, second_clip_level=0.98, louder=0.5)
+        _run(manifest)
+
+        store = _store_of(roots[0])
+        assert len(clip_spans(store, "recording")) == 1
+        assert withdraw_contradicted_clips(store, load_triage_config()) is None
+
+    def test_the_audit_passes_on_what_this_pass_leaves(self, corpus: Callable[..., tuple[Path, list[Path]]]) -> None:
+        """QUALITY reading the same numbers must find nothing left to contest."""
+        manifest, roots = corpus(1, clip_level=0.10, second_clip_level=0.98, louder=0.5)
+        _run(manifest)
+
+        store = _store_of(roots[0])
+        result = quality(store, "recording", load_triage_config(), run_dir=roots[0] / "run")
+        assert result.verdict.outcome is Outcome.PASS
+        assert store.get_entity(result.verdict_entity_id).attributes["checked_n"] == 1
+
+
+class TestQualitysOwnFindingsAboutAWithdrawnSpan:
+    """The corpus already carries QUALITY's contests; a contest must not outlive its span."""
+
+    def test_the_contest_of_a_withdrawn_span_is_retired_with_it(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """Two live assertions over one extent, one contesting and one withdrawing, double-count."""
+        manifest, roots = corpus(1, contested=True)
+        seeded = _store_of(roots[0])
+        contests = [e for e in live_entities(seeded, "assertion") if e.attributes.get("verb") == CONTEST_VERB]
+        assert len(contests) == 1
+
+        assert _run(manifest) == 0
+
+        store = _store_of(roots[0])
+        assert [e for e in live_entities(store, "assertion") if e.attributes.get("verb") == CONTEST_VERB] == []
+        assert store.is_invalidated(contests[0].id)
+        assert len(_withdrawals(store)) == 1
+
+    def test_the_only_live_assertion_pointing_at_a_retired_span_is_its_own_withdrawal(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """Stated over the whole store: a live claim about a span that has gone is the record of its going."""
+        manifest, roots = corpus(1, contested=True)
+        _run(manifest)
+
+        store = _store_of(roots[0])
+        pointing = [
+            entity
+            for entity in live_entities(store, "assertion")
+            if any(store.is_invalidated(source) for source in store.derived_from(entity.id))
+        ]
+        assert pointing, "the withdrawal itself must point at the span it retired"
+        assert {entity.attributes.get("verb") for entity in pointing} == {WITHDRAW_VERB}
+        assert {entity.attributes.get("reason") for entity in pointing} == {CONTRADICTED_CLIP}
+
+    def test_no_quality_verdict_survives_the_withdrawal(self, corpus: Callable[..., tuple[Path, list[Path]]]) -> None:
+        """A verdict counting contests of spans that are gone is a conclusion about nothing."""
+        manifest, roots = corpus(1, contested=True)
+        seeded = find_verdict(_store_of(roots[0]), QUALITY)
+        assert seeded is not None and seeded.attributes["outcome"] == Outcome.FLAG.value
+
+        _run(manifest)
+
+        store = _store_of(roots[0])
+        assert find_verdict(store, QUALITY) is None
+        assert store.is_invalidated(seeded.id)
+
+    def test_the_surviving_span_is_untouched_by_the_retirement(
+        self, corpus: Callable[..., tuple[Path, list[Path]]]
+    ) -> None:
+        """QUALITY contested one of two spans; the retirement follows that span and not the other."""
+        manifest, roots = corpus(1, clip_level=0.10, second_clip_level=0.98, louder=0.5, contested=True)
+        seeded = _store_of(roots[0])
+        assert len([e for e in live_entities(seeded, "assertion") if e.attributes.get("verb") == CONTEST_VERB]) == 1
+        survivor = clip_spans(seeded, "recording")[1].id
+
+        _run(manifest)
+
+        store = _store_of(roots[0])
+        assert [span.id for span in clip_spans(store, "recording")] == [survivor]
+        assert [e for e in live_entities(store, "assertion") if e.attributes.get("verb") == CONTEST_VERB] == []
+        assert find_verdict(store, QUALITY) is None
