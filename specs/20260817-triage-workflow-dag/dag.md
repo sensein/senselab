@@ -15,10 +15,18 @@ Re-verified against the code at **`76fe6293`**, seventeen substantive commits on
 above. Five of those changed what a section here asserts rather than only extending it, and each is
 called out where it lands:
 
-- **The ruleset now runs inside the graph** (`a8b15900`). TAXONOMY evaluates it over the store it is
-  writing and records the result; ROUTING carries that selection beside its own. **It still decides
-  nothing** — see step 3c, and `../20260912-ruleset-in-pipeline/design.md` for the two-stage
-  staging.
+- **The ruleset now runs inside the graph** (`a8b15900`). TAXONOMY evaluated it over the store it
+  was writing and recorded the result; ROUTING carried that selection beside its own, and it decided
+  nothing.
+- **The ruleset now decides, and the path it replaced is deleted** (stage 2). ROUTING owns the
+  evaluation, writes the `ruleset_routing` measurement itself, and selects branches from it.
+  TAXONOMY's kind lines, the `kind` entity type, `taxonomy.presence_floor.*`,
+  `routing.BRANCH_FOR_KIND` and the parallel `ruleset_will_run` column are gone. **The deleted path
+  emitted a constant**: every presence floor was null, so `_line_state` read `unavailable` on every
+  line, `_fold_authoritative_line` mapped that to `uncertain`, voice was a hardcoded retired stub,
+  and `by_classification = state != ABSENT` therefore made `will_run` true for AIRWAY, SPEECH and
+  VOICE on every recording ever measured. Steps 3, 3c, 4 and 7 are rewritten; see
+  `../20260912-ruleset-in-pipeline/design.md` for the two-stage staging.
 - **QUALITY has a node** (`c3011de8`, `15fb5ece`, `29006b8a`, `a89c36af`, `9d5032f3`). The sentence
   "there is no `nodes/quality.py`" was true of every earlier reading of this document and is now
   false; step 5e is rewritten.
@@ -102,21 +110,29 @@ everything selects nothing. It is a graph edge. It has no entry in `branch_gates
 four `quality.*` floors it was declared for are still null and still read by nothing; what it
 implements is a consistency audit over PREPROCESS's own records.
 
-**route state** — `ROUTED`, `EMPTY` or `UNEXPLAINED` (`ruleset.RouteState`), **exactly one per
-recording**, replacing a pair of booleans that could both be false. `ROUTED` is a charge against
-nothing, `EMPTY` is a charge against the recording, and only `UNEXPLAINED` — nothing fired and the
-audio does not say why — is a charge against the ruleset. It is the number to drive the gates from.
-Since `a8b15900` it is also a store fact: TAXONOMY writes it as the `state` of the
-`ruleset_routing` measurement, and a **null** `state` there is a fourth thing again — the reading
-was never made (see **recorded routing** below).
+**file route state** — `ROUTED`, `EMPTY` or `UNEXPLAINED` (`ruleset.RouteState`, mirrored as
+`vocabulary.FILE_ROUTE_STATES` at `vocabulary.py:51`), **exactly one per recording**, replacing a
+pair of booleans that could both be false. `ROUTED` is a charge against nothing, `EMPTY` is a charge
+against the recording, and only `UNEXPLAINED` — nothing fired and the audio does not say why — is a
+charge against the ruleset. It is a store fact: ROUTING writes it as the `state` of the
+`ruleset_routing` measurement, and the fold reads it for the `acoustically_empty` discard and the
+`UNEXPLAINED` flag (step 7). There is no fourth, null reading: a failure to evaluate now raises.
 
-**recorded routing** — the `ruleset_routing` measurement TAXONOMY writes
-(`vocabulary.RULESET_ROUTING`, `live_evidence.route_attributes`): route state, the routed branches
-in `BRANCHES` order, every gate's outcome by name, the per-branch `unavailable` mapping, the flags,
-the feature sources this configuration consumes, and the stem. It carries `authoritative: false`,
-and `nodes/routing.py` stamps `ruleset_will_run` from it beside `will_run` on every
-`branch_decision`. **Nothing reads either to decide anything.** The pair exists so the two
-selections can be compared as one entity's two columns before one of them is deleted.
+**branch route state** — `routed`, `declined` or `unavailable` (`vocabulary.BRANCH_ROUTE_STATES`,
+`vocabulary.py:45`), **exactly one per branch per recording**, derived from the same evaluation by
+`routing._route_states` (`routing.py:117`). `routed` is a gate fired; `declined` is every gate
+evaluated and none fired; `unavailable` is no gate fired **and** at least one of that branch's gates
+could not be read — a branch that was never judged, not one that declined. Do not collapse the last
+two: only `routed` runs the branch, but only `declined` is a reading to disagree with, which is why
+`_agreement` returns `resolved` for `unavailable` (step 7).
+
+**recorded routing** — the `ruleset_routing` measurement ROUTING writes
+(`vocabulary.RULESET_ROUTING`, `live_evidence.route_attributes`): file route state, the routed
+branches in `BRANCHES` order, every gate's outcome by name, the per-branch `unavailable` mapping,
+the flags, the feature sources this configuration consumes, and the stem. **It is what decides
+execution.** Every `branch_decision` is derived from it (`routing.py:241`) and VERDICT reads it back
+for the file route state (`verdict.py:120`). It carries no `authoritative` field and no `error`
+field: both were stage-1 scaffolding for a reading that decided nothing.
 
 **typed absence** vs **failure** — a derivation that *cannot apply* to a recording against one that
 *broke*. The typed absences are the exception classes in `extend.UNAVAILABLE`:
@@ -220,10 +236,14 @@ moved it to **0.757**, for recall 0.761, 193 recordings that reached no branch n
 1,929 additional branch invocations the branches discard. Each `BudgetPoint` records whether the
 budget or availability is what bounds it (`LIMIT_BUDGET` / `LIMIT_AVAILABILITY`).
 
-**kind**, **evidence line** — TAXONOMY's own vocabulary, older than the ruleset's and not the same
-thing. A **kind** (`speech`, `airway`, `voice`) is folded to `present`, `absent` or `uncertain` from
-named **evidence lines**, each counting stored elements against a `taxonomy.presence_floor`. A
-branch has a kind; a gate does not. Nothing in the fold reads `taxonomy.ruleset`.
+**kind** — what a branch concludes *about*: `airway`, `speech`, `voice`. It survives in exactly two
+places, both of them a branch naming its own subject: `NodeVerdict.kind` on a branch's verdict
+entity, and `detectors.Detector.kind` naming the reference standard a detector is scored against. It
+is **no longer a state the graph decides**. The `kind` entity type is gone from `PROV_TYPE`, and
+with it `taxonomy.presence_floor.*` and the **evidence lines** that counted stored elements against
+those floors. Where this document once said "the kind is uncertain", read "the branch has not
+concluded"; where it said "the kind is absent", read "the branch found no subject". The fold is
+keyed by **branch** throughout, not by kind (`vocabulary.fold_file_verdict`, `vocabulary.py:294`).
 
 **node outcome** vs **file verdict** — `Outcome.PASS/FLAG/FAIL` is what one node concluded;
 `Triage.PASS/FLAG/DISCARD` is what should happen to the recording. They are different axes and a
@@ -249,40 +269,44 @@ The graph sorts every file into exactly one of three outcomes: **pass** it throu
 person should look), or **discard** it (unmeasurable, or acoustically empty). Every node below is
 read against that.
 
-**Headline finding, stated up front because everything else is downstream of it.** Today the graph
-**flags every recording it can measure**, whatever that recording contains. `voice` has had no
-evidence source since the phonation-span detector was retired on 2026-09-04, so its line is always
-`unavailable` and its kind always `uncertain` (`_retired_voice_line`, `taxonomy.py:329`, folded at
-`:720-726`). TAXONOMY's `fail` ("every kind is absent") and `pass` ("nothing uncertain") are
-therefore both unreachable (`taxonomy.py:750-757`), TAXONOMY always writes `flag`, and that flag
-reaches the file fold as a reason, so `Triage.PASS` and the acoustically-empty `Triage.DISCARD` are
-unreachable too (`vocabulary.py`, `fold_file_verdict`'s ladder). `Triage.DISCARD` remains reachable
-by one route only: an ADMIT `fail`, which is tested before the flag row. Two tests pin the
-unreachability rather than asserting outcomes that cannot occur (`TestTheOutcome`,
-`taxonomy_test.py:269`, at `:280` and `:309`). This lifts when voice is
-reworked onto `consensus_taxonomy`; it is a consequence of the retirement, not of any recording.
+**Headline finding, stated up front because everything else is downstream of it.** The graph now
+**routes on measured content**, and all three triage outcomes are reachable. Until stage 2 they were
+not, and the reason is worth keeping: the path that decided execution emitted a constant. Every
+`taxonomy.presence_floor.*` was null, so `_line_state` returned `unavailable` on every line;
+`_fold_authoritative_line` mapped that to `uncertain`; `voice` had had no evidence source at all
+since the phonation-span detector was retired on 2026-09-04 and its line was a hardcoded stub. All
+three kinds therefore read `uncertain` on every recording ever measured, `by_classification =
+state != ABSENT` was true for all three, and **every branch ran on every file** — the mechanism had
+never routed anything because it had never declined anything. TAXONOMY's own `fail` and `pass` were
+unreachable with it, so TAXONOMY always wrote `flag`, and that flag reached the fold as a reason,
+making `Triage.PASS` and the acoustically-empty `Triage.DISCARD` unreachable too.
+
+Stage 2 deleted that path outright rather than fitting the floors. TAXONOMY now consolidates and
+concludes only about what it had to consolidate; ROUTING evaluates the ruleset and selects from it;
+and `acoustically_empty` is read off the ruleset's own `EMPTY` state — the emptiness bypass finding
+every tracked stream peak under `emptiness.peak_floor` — which is the **first measured** basis that
+ground has ever had.
 
 **QUALITY is now a second, independent source of the same flag**, and it does not lift the finding
 either — it adds to it. Its verdict enters `fold_file_verdict`'s `reasons` like any other node's
 (`reasons = list(node_verdicts)`, `vocabulary.py:334`), so a clip contradiction flags the file on
 its own. Its expected count is zero on a fresh run; see step 5e.
 
-**The measured replacement now runs beside the path it will replace, and still decides nothing.**
-`taxonomy.ruleset` and `routing_analysis/` carry a content-first ruleset scored over 62,547
-recordings, which routes 99.2% of the corpus to a branch. Since `a8b15900` two nodes read it:
-TAXONOMY evaluates it over the store it is writing and records the result as the `ruleset_routing`
-measurement, and ROUTING stamps `ruleset_will_run` from that beside its own `will_run` on every
-`branch_decision`. **What decides has not moved.** `kind_state` still selects the branches that run;
-every `taxonomy.presence_floor` is still null (`data/config/default.yaml:180-187`, read at
-`nodes/taxonomy.py:683-688`); `routing.BRANCH_FOR_KIND` and `KIND_STATES` are untouched; and
-`vocabulary.BranchDecision` deliberately does not carry the new attributes, so `fold_file_verdict`
-cannot see them.
+**The measured ruleset is now the only mechanism.** `taxonomy.ruleset` and `routing_analysis/`
+carry a content-first ruleset scored over 62,547 recordings, which routes 99.2% of the corpus to a
+branch. ROUTING evaluates it over the store TAXONOMY left, records the reading as the
+`ruleset_routing` measurement under its own node, and writes one `branch_decision` per branch from
+it. **There is no second selection.** `BRANCH_FOR_KIND`, `KIND_STATES`, `UNREADABLE`,
+`UNCLASSIFIED_BRANCHES`, `_classifications`, `_ruleset_selection` and the `ruleset_will_run` /
+`ruleset_route_state` columns are all deleted, and a failure to evaluate the ruleset now raises and
+errors the node, because a failure to route *is* a failure to run the graph.
 
-**The deletion of the old path has not happened.** Both mechanisms are present, both run, and one is
-inert. `../20260912-ruleset-in-pipeline/design.md` is the staging document and names, item by item,
-exactly what stage 2 deletes once corpus agreement between the two selections has been measured.
-Until that lands, the behaviour of the running graph is the one described above: every recording
-flags. See step 3c.
+**The presence-floor path is gone from the code, not merely unused.** The `kind` entity type is out
+of `PROV_TYPE` (`prov_store.py:17-30`), the `taxonomy.presence_floor` subtree,
+`taxonomy.voice_min_duration_s` and `taxonomy.voice_uncertain_duration_s` are out of
+`data/config/default.yaml`, and the twelve helpers that folded them are out of `nodes/taxonomy.py`.
+`taxonomy.speech_labels` stays, with exactly one reader left: `nodes/speech.py:589`.
+`../20260912-ruleset-in-pipeline/design.md` is the staging document. See step 3c.
 
 ## How to read this document
 
@@ -297,12 +321,16 @@ and recorded as an absent derivative (`preprocess.py:2617-2626`) while the node 
 normally; `config.get(...)` returns `None` and the caller carries on **silently**. The second is
 the more dangerous of the two. Its worst instance — a null silently deleting the whole ASR span
 source — was closed on 2026-09-05 by deleting the key (see PREPROCESS below); the pattern survives
-in `taxonomy.speech_labels`, read `get ... or []` by both its readers, where a null empties the
-speech family without a word anywhere.
+in `taxonomy.speech_labels`, read `get ... or []` by its one remaining reader
+(`speech.py:589`), where a null empties the speech family without a word anywhere. It had two
+readers until stage 2 deleted TAXONOMY's.
 
-The config is **313 lines, 166 leaf keys, 39 of them null** — three of the thirty-nine are the
+The config is **304 lines, 160 leaf keys, 33 of them null** — three of the thirty-three are the
 `excluded_by_construction` entries of the branches that hold nothing out, where null is the value
-and not an absence of one. It carries a short `#` description per section and per key and nothing
+and not an absence of one. Stage 2 removed six keys from it: the four
+`taxonomy.presence_floor.*` leaves, `taxonomy.voice_min_duration_s` and
+`taxonomy.voice_uncertain_duration_s`, and renamed `routing.hint_kind_map` to
+`routing.hint_branch_map` (its values are branch names now, not kind names). It carries a short `#` description per section and per key and nothing
 longer. There is no `derivation:` key: it used to hold 50 kB of
 prose, and because the loader hashes the merged mapping that prose sat inside `config_hash`, so
 correcting a word of it made two behaviourally identical runs report different identities. The
@@ -315,12 +343,12 @@ names, and `#` comments are not hashed.
 graph TD
   ADMIT -->|audio| PREPROCESS
   PREPROCESS -->|derivatives| TAXONOMY
-  TAXONOMY ==>|"kind states: DECIDE"| ROUTING
-  TAXONOMY -.->|"ruleset_routing: RECORDED"| ROUTING
-  ROUTING ==>|"will_run"| AIRWAY
+  PREPROCESS -->|"spans, words, ppg, residual"| ROUTING
+  TAXONOMY -->|"label summaries + consensus_taxonomy<br/>(measurements, two gates read them)"| ROUTING
+  ROUTING ==>|"ruleset_routing -> will_run"| AIRWAY
   ROUTING ==> SPEECH
   ROUTING ==> VOICE
-  ROUTING -.->|"ruleset_will_run only"| DDK["DDK: no node"]
+  ROUTING ==> DDK["DDK: routable, no node"]
   SPEECH -->|"pii found"| REDACT
   PREPROCESS -->|"clip spans + clip_amplitude"| QUALITY
   ADMIT --> VERDICT
@@ -335,19 +363,24 @@ graph TD
   VERDICT --> REPORT
   PREPROCESS -.->|"re-read later"| FIGURE
   TAXONOMY -.->|"re-read later"| FIGURE
+  ROUTING -.->|"re-read later"| FIGURE
 ```
 
-**Both of TAXONOMY's edges into ROUTING are real and only the thick one decides.** `kind_state`
-selects what runs; `ruleset_will_run`, read off the `ruleset_routing` measurement, is stamped on the
-same `branch_decision` entity beside it and acted on by nothing. One entity, two columns, so corpus
-agreement is a column pair rather than a join.
+**TAXONOMY's edge into ROUTING carries measurements, not a decision.** It is a real dependency and a
+strict ordering requirement — `voice.glide` and `voice.chant` read `plain|yamnet`, which the feature
+reader populates from the `yamnet_label_summary` TAXONOMY writes — but nothing TAXONOMY writes
+selects a branch. ROUTING's own evaluation of `taxonomy.ruleset` is the single decider, and it is the
+only thing on this diagram that is. The second edge TAXONOMY used to have into ROUTING, the
+non-authoritative `ruleset_routing` reading, is gone because ROUTING now makes that reading itself.
 
-**DDK is still never selected and is now safe to name.** `routing.BRANCH_FOR_KIND` is
-`{airway: AIRWAY, speech: SPEECH, voice: VOICE}`, so no `branch_decision` is written for DDK and
-`will_run` cannot be true for it. The ruleset *does* route it, so `ruleset_runs` can carry it;
-`run._drive_branches` therefore looks a branch up rather than indexing it, and a branch with no node
-is recorded `SKIPPED` with the note `NO_NODE`. Before `a8b15900` that lookup was an index and naming
-DDK in an execution set would have been a `KeyError` that killed the run.
+**DDK is routable and still has no node.** `run._drive_branches` looks a branch up in its dispatch
+table rather than indexing it (`run.py:303-305`), so a branch with no implementation is recorded
+`SKIPPED` with the note `NO_NODE`, selected or not. ROUTING now writes a `branch_decision` for DDK
+like any other branch, and `will_run` is true for it whenever one of its two gates fires. **The
+consequence is a flag, and it is the honest one**: the decision says the branch was asked, no verdict
+comes back, and the fold emits "DDK was asked to run and never ran". That is scoped to recordings
+whose DDK gates actually fire, not to every recording — which is precisely the difference from the
+kind-line route rejected in step 5d — and it is the standing argument for building `nodes/ddk.py`.
 
 **QUALITY's edge comes from PREPROCESS, not from the branches.** It is drawn after them in
 `GRAPH_ORDER` and called after the branch loop, but it reads no branch output as evidence: its
@@ -360,7 +393,7 @@ routing: a ROUTING that raised leaves every branch `SKIPPED` and QUALITY still r
 "QUALITY", "REDACT", "VERDICT")` and `BRANCHES` is `("AIRWAY", "SPEECH", "VOICE", "DDK")`
 (`vocabulary.py:14-33`). **The two lists are not the same list and neither contains the other**:
 `QUALITY` is a graph edge every recording reaches and not a branch, and `DDK` is a branch the graph
-does not yet order — see step 5d. REPORT runs after VERDICT and is not in `GRAPH_ORDER` (`run.py:44`).
+orders nowhere — see step 5d. REPORT runs after VERDICT and is not in `GRAPH_ORDER` (`run.py:44`).
 FIGURE is in neither: the in-tree runner never calls it, though the pipeline as actually run does,
 right after TAXONOMY (see step 3b).
 
@@ -443,8 +476,8 @@ are measurements with no boundary decided.
   Praat could not place.
 
 Neither block decides anything, and **no node reads either directly** — but both now reach a
-decision-shaped reading, because `taxonomy.ruleset` has two posteriorgram gates and TAXONOMY
-evaluates the ruleset (step 3). `RecordingFeatures.ppg` reduces the posteriorgram to
+decision, because `taxonomy.ruleset` has two posteriorgram gates and ROUTING evaluates the ruleset
+(step 4). `RecordingFeatures.ppg` reduces the posteriorgram to
 `PPG_SUMMARY_KEYS` (segment rate, segment duration statistics, distinct phonemes, silent fraction,
 the repetition triple) and `RecordingFeatures.praat` carries the scalars.
 `airway.ppg_silent_fraction` and `ddk.ppg_segment_rate_per_s` are the two gates.
@@ -652,122 +685,69 @@ evidence), 3 (the consensus transcript PII is scanned from). The posteriorgram a
 serve none of the three directly; they are routing evidence, and routing serves all three by
 deciding which branch gets to look.
 
-### 3. TAXONOMY — fold the evidence into speech/airway/voice, and consolidate the labels
+### 3. TAXONOMY — consolidate the classifier labels; decide nothing
 
-Runs no model, reads no hint, and localises nothing (`taxonomy.py:1-27`). Each kind's rule reads
-named **evidence lines**; each line counts stored elements against its own floor; a line whose
-derivative never reached the store is `unavailable`, which makes its kind **uncertain, never
-absent**.
+Runs no model, reads no hint, localises nothing and **decides nothing** (`taxonomy.py:1-10`). It
+writes two kinds of file-scoped measurement, both `extent=None`, and concludes only about whether it
+had anything to consolidate. Stage 2 removed everything else it used to do: the `kind` entities, the
+evidence lines, `SCREENED_KINDS`, the twelve helpers that folded them, and the `ruleset_routing`
+reading it took over in stage 1 and handed to ROUTING here.
 
-| kind | lines | source | floor |
-| --- | --- | --- | --- |
-| `speech` | `acoustic` | whole-file pooled `yamnet_windows` + `ast_windows` | `taxonomy.presence_floor.speech.acoustic` (**null**) |
-| | `lexical` | consensus words | `taxonomy.presence_floor.speech.lexical` (**null**) |
-| `airway` | `health_acoustic` | per-span `span_hear` | `taxonomy.presence_floor.airway.health_acoustic` (**null**) |
-| | `acoustic` | per-span `span_yamnet` | `taxonomy.presence_floor.airway.acoustic` (**null**) |
-| `voice` | `phonation` | **none — retired** | n/a |
-
-Which classifier labels count as speech at all is `taxonomy.speech_labels`, **null**, read as
-`config.get(...) or []` in both readers (`taxonomy.py:680`, `speech.py:589`). So the speech family
-is the empty set and the `acoustic` line has no label that could express its kind — a second,
-independent reason it cannot report, on top of its own null floor. None of that decides the kind,
-though: **speech's state is decided by the lexical line alone**. `_fold_speech_lines`
-(`taxonomy.py:311`) is a thin wrapper over `_fold_authoritative_line(lines, "lexical")`, so the
-acoustic line — and so `taxonomy.speech_labels` — has no effect on the state and is recorded as
-corroboration only.
-
-**Airway's lines read per-span measurements, not the pooled whole-file windows** that speech's
-`acoustic` line uses. A span already carrying a live consensus word is excluded from both, since
-ASR is strictly stronger content evidence and an ASR-explained span is not airway evidence whatever
-HeAR or YAMNet also say about it. The two are **not** folded by equal-weight agreement:
-`health_acoustic` (HeAR, the domain-specific detector) is authoritative and `acoustic` (YAMNet
-alone) only corroborates — `_fold_authoritative_line` (`taxonomy.py:251`), the same
-authoritative/corroboration shape as speech above. Corroboration count is never read as evidence
-strength: a span's `corroborated_by` says other *sources* proposed something overlapping it, not
-that its *content* is more certain.
-
-**Airway's two lines now have something to read, and the fold is unchanged.**
-`windows.{yamnet,hear}.default_threshold` moving off null means `_span_label_evidence` finds a
-`labels` list on a future run's per-span windows where it used to find `labelled: false` and read
-`unavailable`. The four presence floors are still null, so `_line_state` still returns `unavailable`
-on every line and no kind's state changes. The evidence arrived; the floor deciding what it means
-did not.
-
-**Voice's line is a placeholder that says so.** `_retired_voice_line` (`taxonomy.py:329`)
-returns `state: unavailable`, `evidence: 0`, and a `why` naming the retirement — "the phonation-span
-source was retired; voice is pending a rework onto consensus_taxonomy". The `why` exists so a report
-or figure prints a deliberate gap rather than a bare `uncertain` a reader would take for evidence.
-`taxonomy.voice_min_duration_s` and `taxonomy.voice_uncertain_duration_s` are now read by nothing.
-
-Two **file-scoped measurements** are written here, both `extent=None`:
-
-- **`<classifier>_label_summary`** (`_write_label_summaries`, `taxonomy.py:582`) — per label, peak,
+- **`<classifier>_label_summary`** (`_write_label_summaries`, `taxonomy.py:285`) — per label, peak,
   median and window count over the whole file, read from the verbatim scores sidecar so it needs no
-  threshold. A classifier that never ran gets no summary, which keeps "absent" distinct from
-  "measured nothing".
-- **`consensus_taxonomy`** (`_write_consensus_taxonomy`, `taxonomy.py:491`) — the per-span labels of
+  threshold. One per classifier in `SUMMARISED_CLASSIFIERS` = `("yamnet", "ast", "hear")`
+  (`:42`) that produced scores; a classifier that never ran gets no summary, which keeps "absent"
+  distinct from "measured nothing". **Its position is a requirement, not a convenience**: two VOICE
+  gates read `plain|yamnet`, which the feature reader populates from `yamnet_label_summary`, so a
+  ROUTING evaluated before this node would read both `unavailable` and VOICE would never route.
+- **`consensus_taxonomy`** (`_write_consensus_taxonomy`, `taxonomy.py:192`) — the per-span labels of
   every per-span classifier (`PER_SPAN_CLASSIFIERS` = `{yamnet: span_yamnet, hear: span_hear}`,
-  `:398`) consolidated into one file-level taxonomy for downstream to read instead of re-deriving.
+  `:99`) consolidated into one file-level taxonomy for downstream to read instead of re-deriving.
   One row per **ontology node** with `peak`, `peak_by_classifier`, `labels_by_classifier`,
   `classifiers` and `n_classifiers`, ranked by peak. A row is named by the AudioSet display name of
   the node its classifiers' labels denote, so HeAR `Throat Clear` and YAMNet `Throat clearing` are
-  one row; `labels_by_classifier` holds each classifier's own spellings. **Disagreement is recorded, not resolved**: a label only one vocabulary contains is not a
-  vote against it, so `n_classifiers` counts corroboration only. It is a measurement — no floor
-  turning it into present/absent. Empty when no per-span classifier produced scores, so "no
-  consensus" and "a consensus over nothing" stay distinguishable.
+  one row; `labels_by_classifier` holds each classifier's own spellings. **Disagreement is recorded,
+  not resolved**: a label only one vocabulary contains is not a vote against it, so `n_classifiers`
+  counts corroboration only. It is a measurement — no floor turning it into present/absent. Nothing
+  is written at all when no per-span classifier produced scores, so "no consensus" and "a consensus
+  over nothing" stay distinguishable.
 
 `taxonomy.consolidation_floor` (0.2, owner-directed) drops a label scoring under it in
-`_consolidate` (`taxonomy.py:464`), for every classifier — a floor only, with no top-K of its own.
+`_consolidate` (`taxonomy.py:165`), for every classifier — a floor only, with no top-K of its own.
 The per-span top-4 union that turns into a raster's rows is FIGURE's own choice
-(`style.top_labels`, `figure.py:169`, used at `:1857-1858`), not something `_consolidate` does; with
-521 labels, a span where nothing fires still contributes its four highest, and those are near-zero.
+(`style.top_labels`, `figure.py:161`), not something `_consolidate` does; with 521 labels, a span
+where nothing fires still contributes its four highest, and those are near-zero.
 
-**A third file-scoped measurement, new at `a8b15900`: `ruleset_routing`.** `_write_ruleset_routing`
-(`taxonomy.py:619`) evaluates the family taxonomy ruleset of step 3c over the store this node is
-still writing, and records what it made of the recording. Five things about it are load-bearing:
+**TAXONOMY's own outcome** (`taxonomy.py:356-361`) is about the consolidation and about nothing else,
+because that is the only thing this node now knows: `pass` — "consolidated *N* label(s) from
+*classifiers*" — when at least one per-span classifier produced scores, `flag` — "no per-span
+classifier produced scores; there was nothing to consolidate" — when none did. The second is worth a
+flag rather than a silent pass: with no per-span scores, every label gate ROUTING is about to
+evaluate reads `unavailable`, so the file routes on a fraction of the evidence the ruleset was fitted
+on. `TaxonomyResult` carries `classifiers: tuple[str, ...]` and `n_labels: int`; its activity steps
+are `<classifier>_label_summary` per summarised classifier and then `conclude` (`:304`, `:351`).
 
-- **It decides nothing here and nothing downstream.** `authoritative` is `false` on the
-  measurement, the kind fold below does not read it, and no branch is selected by it.
-- **It is written after the label summaries and the consensus taxonomy, and that order is a
-  requirement.** `voice.glide` and `voice.chant` read `plain|yamnet`, which the feature reader
-  populates from the `yamnet_label_summary` this node writes in the step before. Evaluated earlier,
-  both gates would read `unavailable` and VOICE would never route. A test pins the ordering.
-- **It reads the live store through the analysis module's own reader.** `live_evidence` hands the
-  in-memory store to `ProvStore.write_jsonl` and the resulting file to `extract_features`, so both
-  paths reduce the same bytes with the same code and no gate acquires a second definition. The
-  serialisation is a `NamedTemporaryFile` **under `run_dir`** — a measurement naming a sidecar names
-  it relative to the store's own directory, so a temp file in `/tmp` would silently turn both
-  posteriorgram gates `unavailable` and the run would look healthy — and it is unlinked in a
-  `finally`. Measured at 5.6 ms per recording on a 115 kB store, against a PREPROCESS pass that runs
-  two recognizers, three classifiers, an enhancer and a posteriorgram.
-- **It carries no declaration.** TAXONOMY reads no hint, and a BIDS stem's `task-` id *is* a
-  declaration, so `task_id` and `family` are empty and `declared`/`agreed`/`missed`/`extra` are
-  empty with them. `routed`, `state`, `unavailable`, `flags` and `gate_outcomes` are the fields this
-  path fills. The `stem` is filled, off ADMIT's `recording` stream entity — an identifier for
-  joining a row back to a run, not evidence.
-- **A failure to evaluate is recorded, not raised.** TAXONOMY raising would skip routing, every
-  branch and REDACT, and a non-authoritative reading must not have that power. The call is wrapped;
-  a failure yields `state: null` and `error: "<Class>: <message>"` through the same
-  `describe_exception` the runner uses, and the node concludes normally. **`state: null` and
-  `state: "unexplained"` are different facts** — a reading that was never made against a recording
-  nothing routed — and `routing._ruleset_selection` returns `((), None)` for the first rather than
-  an empty routed set. This protection is itself staged: the moment the ruleset becomes
-  authoritative, a failure to route *is* a failure to run the graph and must raise.
+**What is no longer here, and why it was deleted rather than fitted.** `taxonomy.presence_floor.*`
+were four nulls, `_line_state` returned `unavailable` whenever `floor is None`,
+`_fold_authoritative_line` mapped `unavailable` to `uncertain`, and `_retired_voice_line` was a
+hardcoded stub returning `unavailable` with no evidence source at all. So all three kinds read
+`uncertain` on every recording this code has ever processed — **the path emitted a constant**, and
+fitting four floors would have been fitting thresholds for a classifier nobody had shown was the
+right instrument. `taxonomy.speech_labels` survives with one reader, `speech.py:589`;
+`taxonomy.voice_min_duration_s` and `taxonomy.voice_uncertain_duration_s` were already read by
+nothing and are gone with the rest.
 
-**TAXONOMY's own outcome** (`taxonomy.py:750-757`): `fail` when every kind is absent, `flag` when
-any is uncertain, `pass` otherwise. As above, only `flag` is reachable today, and the ruleset
-reading above changes nothing about that.
-
-*Goals served*: 2, by deciding whether the airway/speech content is there at all. The floors that
-would let it decide are all null.
+*Goals served*: 2 and 3 indirectly, by giving ROUTING and the branches a consolidated view of what
+the classifiers said. It decides nothing itself, which is the point of the measure/decide split this
+node sits on the measuring side of.
 
 
 ### 3b. FIGURE — rendering, folded into the preprocessing sequence
 
-`preprocess_figure(store, figure_dir, config, *, run_dir, style=None, stem=None)` (`figure.py:1782`).
-Draws PREPROCESS's and TAXONOMY's output from the store: one multi-page PDF, one
-`taxonomy_summary.json` always written alongside it, and per-page PNGs only when
-`style.also_write_pngs` is set (`figure.py:1994-2003`).
+`preprocess_figure(store, figure_dir, config, *, run_dir, style=None, stem=None)` (`figure.py:1774`).
+Draws PREPROCESS's and TAXONOMY's output from the store — and, since stage 2, ROUTING's decisions
+where the kind states used to be: one multi-page PDF, one `taxonomy_summary.json` always written
+alongside it, and per-page PNGs only when `style.also_write_pngs` is set (`figure.py:1986`).
 
 **Two things are both true, and the pair is what matters here.** The owner's position is that
 figure/PDF generation is part of preprocessing and belongs in the graph as such — every batch driver
@@ -782,7 +762,9 @@ step with the pipeline as it is actually run, not the other way around.**
 
 **That account is no longer only the owner's: the corpus stores now testify to it.** The completed
 62,547-recording pass ran exactly `ADMIT -> PREPROCESS -> TAXONOMY -> FIGURE` — `branch_decision`
-and `QUALITY` appear in **0 of 150 sampled stores**. That is the measurement behind the extend
+and `QUALITY` appear in **0 of 150 sampled stores**. Those stores also now render the cover's route
+block as "routing wrote no branch decision", which is the correct reading of them: ROUTING never
+ran, so there is nothing to print rather than a set of branches nothing declined. That is the measurement behind the extend
 drivers of step 9: every one of them exists because a whole corpus stopped where FIGURE is, and
 because the nodes after it read stored outputs and can therefore be run later.
 
@@ -803,51 +785,43 @@ absent names the missing derivative and prints the reason the producing node rec
 | --- | --- | --- | --- |
 | cover — SOURCE | the recording's path, wrapped | ADMIT's recorded path (`_source_path`) | none |
 | cover — CONSENSUS ALIGNMENT | `consensus_alignment_lines` (`:1576`): algorithm, per-source word counts and timing source, agreement/variant/insertion outcome counts, time-shift fit, word-timing uncertainty | `consensus_transcript` measurement and its word stream | none |
-| cover — WHOLE-FILE CLASSIFICATION SUMMARY | built by `_summary_sections` (`:626`), assembled in `summary_panel_lines` (`:895`): each of YAMNet/AST/HeAR's highest-scoring labels over the whole file | `<classifier>_label_summary` (TAXONOMY's fold of `<classifier>_scores`) | none pipeline; `style.summary_labels` caps rows listed |
-| cover — ENHANCED — SPEECH ISOLATED BY FRCRN, then RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL | `summary_panel_lines` renders both streams in sequence (`_stream_classifier_block`, `figure.py:791`; titles at `:64`): a gain/enhanced-fraction/residual-energy line, a label summary per classifier over **YAMNet, AST and HeAR** (`_SUMMARISED_CLASSIFIERS`, `figure.py:61`), and a compact speech-free line per classifier (`_stream_speech_free_line`, `:831`, `style.speech_free_labels` at `:177`) | the `residual` measurement; `{enhanced,residual}_{yamnet,ast,hear}_summary_all` and their `_summary_speech_free` variants | none — all twelve stream summaries now reach the page |
-| cover — KIND STATES AND EVIDENCE LINES | the last part of `summary_panel_lines`: each kind's folded state, its evidence lines against their floors, and the reason behind any `unavailable` | TAXONOMY's `kind` entities | none read directly here — reflects whatever `taxonomy.presence_floor.*` etc. already decided |
+| cover — WHOLE-FILE CLASSIFICATION SUMMARY | built by `_summary_sections` (`:620`), assembled in `summary_panel_lines` (`:887`): each of YAMNet/AST/HeAR's highest-scoring labels over the whole file | `<classifier>_label_summary` (TAXONOMY's fold of `<classifier>_scores`) | none pipeline; `style.summary_labels` caps rows listed |
+| cover — ENHANCED — SPEECH ISOLATED BY FRCRN, then RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL | `summary_panel_lines` renders both streams in sequence (`_stream_classifier_block`, `figure.py:783`; titles at `:56`): a gain/enhanced-fraction/residual-energy line, a label summary per classifier over **YAMNet, AST and HeAR** (`_SUMMARISED_CLASSIFIERS`, `figure.py:53`), and a compact speech-free line per classifier (`_stream_speech_free_line`, `:823`) | the `residual` measurement; `{enhanced,residual}_{yamnet,ast,hear}_summary_all` and their `_summary_speech_free` variants | none — all twelve stream summaries now reach the page |
+| cover — ROUTE STATES AND GATE OUTCOMES | the last part of `summary_panel_lines` (`:908`), built by `_summary_sections` from `_route_decisions` (`:589`): the file route state, then per branch its route state, whether it runs and whether a hint forced it, its unreadable gates and its fired flags, and finally every gate that fired | ROUTING's `branch_decision` entities and its `ruleset_routing` measurement | none read directly — reflects what `taxonomy.ruleset`'s gates already decided |
 | per-page — wideband spectrogram | the speech-analysis spectrogram | `spectrogram_wideband` | `spectrogram.wideband_window_ms`, `spectrogram.hop_ms` (`:1849-1851`) |
 | per-page — waveform | conditioned waveform, envelope dBFS trace, floor and `k_db` threshold lines, continuity trace and its rank-cut level | `energy_envelope` (`envelope_dbfs`, `floor_dbfs`), `continuity_trace` | `spans.k_db` (`:1939`) — read here, not by the span lane panel below it |
 | per-page — span lane | every live general span (amplitude/continuity/asr/normalization/gap), plus clip-event extents | live `span` entities (`family` absent) and clip-family spans | none read directly — the span algorithm's own keys are already baked into the stored spans |
-| per-page — YAMNet raster | the union of each span's top-K YAMNet labels, scored | `span_yamnet` per-span scores | `taxonomy.consolidation_floor` (`:1855-1856`) sets the row floor; `style.top_labels` (= 4, `:169`) caps labels per span (`_raster_rows`, `:456`, called `:1857-1858`) |
+| per-page — YAMNet raster | the union of each span's top-K YAMNet labels, scored | `span_yamnet` per-span scores | `taxonomy.consolidation_floor` sets the row floor; `style.top_labels` (= 4, `:161`) caps labels per span (`_raster_rows`, `:448`, called `:1849-1850`) |
 | per-page — HeAR raster | the same, for HeAR | `span_hear` per-span scores | same as the YAMNet raster above |
 | per-page — SQUIM | per-span STOI/PESQ/SI-SDR | per-span `squim` assertions | none (`style.squim_ranges` only sets colour scaling) |
 | per-page — consensus ASR / word lane (`_asr_lane_panel`) | each source's own per-word span under the derived extent; agreement words bold, insertions and variants marked | the consensus word stream (from `consensus_transcript`) | none |
 | output — `<stem>.pdf` | the cover plus every per-window page above | all rows above | — |
 | output — `<stem>__page<NN>.png` | one PNG per page, standalone | the same pages as the PDF | `style.also_write_pngs` (a `FigureStyle` field, not a pipeline config key) |
-| output — `taxonomy_summary.json` | the machine-readable form of the whole-file classification summary and kind states — not the cover's SOURCE, CONSENSUS ALIGNMENT or residual lines | the same two blocks as the cover rows above, rebuilt by `taxonomy_summary_lines` (`:711`) | none |
+| output — `taxonomy_summary.json` | the machine-readable form of the whole-file classification summary and the route states — not the cover's SOURCE, CONSENSUS ALIGNMENT or residual lines | the same two blocks as the cover rows above, rebuilt by `taxonomy_summary_lines` (`:703`) | none |
 
 Its own drawing choices live in a `FigureStyle` dataclass, disjoint from anything the pipeline reads.
 
 ---
 
-### 3c. The ruleset — what routes a recording, measured, running, and deciding nothing
+### 3c. The ruleset — what routes a recording, measured, running, and deciding
 
-This subsection used to be a plan headed PROPOSED, then a measurement no node read. It is now data,
-code **and a running reading**: `taxonomy.ruleset` in `data/config/default.yaml`, the evaluator in
-`routing_analysis/ruleset.py`, and — since `a8b15900` — TAXONOMY evaluating it per recording and
-ROUTING carrying the result. What has *not* changed is **what decides**.
+This subsection used to be a plan headed PROPOSED, then a measurement no node read, then — at
+`a8b15900` — a reading recorded beside the path that decided. It is now **the** decision:
+`taxonomy.ruleset` in `data/config/default.yaml`, the evaluator in `routing_analysis/ruleset.py`,
+and ROUTING evaluating it per recording and selecting from it (step 4).
 
-**The staging, stated plainly, because "it runs" and "it decides" are the pair this document exists
-to keep apart.** Two mechanisms are present and both execute on every recording:
+**The path it replaced emitted a constant, which is why it was deleted rather than fitted.**
 
-| | the presence-floor path | the ruleset |
+| | the presence-floor path (deleted) | the ruleset (running, deciding) |
 | --- | --- | --- |
-| what it reads | `taxonomy.presence_floor.*` over TAXONOMY's evidence lines | eleven gates over `RecordingFeatures` |
-| its state today | **every floor is null** (`data/config/default.yaml:180-187`), so every line is `unavailable`, every kind `uncertain`, every branch runs | scored sens 0.97 / 0.95 / 0.96 / 0.94 across the four branches over 62,547 recordings |
-| what it selects | `will_run` on each `branch_decision` — **this is what executes** | `ruleset_will_run` on the same entity, and `ruleset_runs` on the result — **executed by nothing** |
-| still present | `routing.BRANCH_FOR_KIND`, `KIND_STATES`, `_classifications`, `_why`, the whole kind-line machinery in `nodes/taxonomy.py` | — |
+| what it read | `taxonomy.presence_floor.*` over TAXONOMY's evidence lines | eleven gates over `RecordingFeatures` |
+| what it produced | every floor null → every line `unavailable` → every kind `uncertain` → **every branch ran on every recording**, on every file this code has ever processed | sens 0.97 / 0.95 / 0.96 / 0.94 across the four branches over 62,547 recordings; 99.2% routed |
+| what it selects | — | `will_run` on each `branch_decision` — **this is what executes** |
+| what remains of it | nothing: the `kind` entity type, `SCREENED_KINDS`, twelve fold helpers, `BRANCH_FOR_KIND`, `KIND_STATES`, `UNREADABLE`, `UNCLASSIFIED_BRANCHES`, `_classifications`, `_ruleset_selection` and the six config keys are all deleted | — |
 
-**The deletion of the old path has not happened, and nothing here is a half-deleted remnant.**
-Stage 1 was explicitly "nothing is deleted": no new config key, no threshold in code, no corpus run.
-The parallel columns exist so that agreement between the two selections can be counted on the corpus
-before one of them goes.
 [`../20260912-ruleset-in-pipeline/design.md`](../20260912-ruleset-in-pipeline/design.md) is the
-staging document and its "What stage 2 must delete" section is the authoritative list — seven items,
-including both presence-floor subtrees, `BRANCH_FOR_KIND` and `KIND_STATES`, the parallel columns
-themselves, and the `try`/`except` that currently stops a failed evaluation from failing the node.
-Until that lands, the behaviour of the running graph is the one described above: every recording
-flags.
+staging document: stage 1 made the reading run beside the old path, stage 2 made it decide and
+deleted the old path. Its "What stage 2 must delete" section is the item-by-item record of what went.
 
 Everything below is a structural description. The operating points, the firing spreads they were
 chosen against, the per-family tables and the enumerated disagreements are in
@@ -855,6 +829,7 @@ chosen against, the per-family tables and the enumerated disagreements are in
 [`../20260910-taxonomy-routing-evidence/measurements.md`](../20260910-taxonomy-routing-evidence/measurements.md)
 and [`../20260911-praat-ppg-detectors/design.md`](../20260911-praat-ppg-detectors/design.md), and
 they are not restated here.
+
 
 #### Routing is content-first
 
@@ -882,9 +857,9 @@ Three rules follow from it, and they are the ones a reader is most likely to vio
 
 #### The gates, the flag and the bypass
 
-The diagram is the ruleset's own evaluation, end to end. **Nothing in it executes a branch**: its
-output is the `ruleset_routing` measurement of step 3, and the only thing downstream of that is the
-`ruleset_will_run` column beside `will_run`.
+The diagram is the ruleset's own evaluation, end to end, and it is now the path that executes a
+branch: its output is the `ruleset_routing` measurement ROUTING writes, and ROUTING derives every
+`branch_decision` from it.
 
 ```mermaid
 graph LR
@@ -895,17 +870,19 @@ graph LR
   G -->|"ddk.lexical_repetition<br/>ddk.ppg_segment_rate_per_s"| DDK["DDK"]
   G -.->|"evaluated, recorded,<br/>routes nothing"| FL["speech.transcript_agreement<br/>flags SPEECH"]
   G -->|"no gate fired"| E{{"emptiness bypass<br/>consulted only here"}}
-  E -->|fired| EMP["state = EMPTY"]
-  E -->|"silent or unreadable"| UNX["state = UNEXPLAINED"]
-  AIR --> ST["state = ROUTED<br/>+ routed branches"]
+  E -->|fired| EMP["file state = EMPTY"]
+  E -->|"silent or unreadable"| UNX["file state = UNEXPLAINED"]
+  AIR --> ST["file state = ROUTED<br/>+ routed branches"]
   SPE --> ST
   VOI --> ST
   DDK --> ST
-  ST --> M[["ruleset_routing<br/>authoritative: false"]]
+  ST --> M[["ruleset_routing"]]
   EMP --> M
   UNX --> M
   FL -.-> M
-  M -.->|"ruleset_will_run<br/>read by nothing"| RO["ROUTING branch_decision"]
+  M ==>|"per branch: routed /<br/>declined / unavailable"| RO["ROUTING branch_decision<br/>will_run"]
+  M -.->|"file route state"| V["VERDICT: acoustically_empty<br/>or UNEXPLAINED flag"]
+  RO ==> B["the branches that run"]
 ```
 
 **Every gate reports one of three outcomes and all three are recorded**, so `gate_outcomes` on the
@@ -983,10 +960,14 @@ never been swept.
 | `EMPTY` | nothing routed, and the audio explains why | the recording | 187 (0.3%) |
 | `UNEXPLAINED` | nothing routed, and the audio does not | **the ruleset** | 337 (0.5%) |
 
-There is a fourth reading, and it is not a state. A `ruleset_routing` measurement carrying
-`state: null` and a populated `error` is a reading that **was never made** — see step 3. It is a
-count of broken evaluations, not of recordings nothing routed, and a corpus scorer that collapses
-the two would report the ruleset as under-covering when the failure is its own.
+There used to be a fourth reading that was not a state: a `ruleset_routing` measurement carrying
+`state: null` and a populated `error`, a reading that was never made. It is gone with the stage-1
+`try`/`except` — the ruleset decides execution now, so a failure to evaluate it raises, ROUTING
+errors, and `run._drive_branches` leaves every branch `SKIPPED`. **The distinction it protected has
+moved rather than disappeared**: VERDICT still tells a reading that was never made from a recording
+nothing routed, by reading `route_state = None` (no measurement in the store) against
+`route_state = "unexplained"` (`verdict._route_state`, `verdict.py:120`), and a corpus scorer that
+collapses the two still reports the ruleset as under-covering when the failure is its own.
 
 `RouteState` replaced an `empty`/`fell_through` boolean pair that could both be false and then said
 nothing about which of the three had happened. `FamilyTally.states` carries all three keys per family
@@ -1117,8 +1098,8 @@ not an airway input — YAMNet's airway family on `enhanced` reaches Youden 0.35
 #### Background, and the gap spans
 
 Unchanged. PREPROCESS writes the complement of the proposed span set as `measure: "gap"` and
-classifies it like any other span. **Background is neither a kind nor a branch**: the kinds answer
-"is the content the protocol asked for present"; a mains hum is a property of the room. It belongs
+classifies it like any other span. **Background is not a branch**: the branches answer "is the
+content the protocol asked for present"; a mains hum is a property of the room. It belongs
 to QUALITY, which is the node for questions of that shape. QUALITY now has an implementation, and it
 is not this one: what it implements is a clip-consistency audit over PREPROCESS's own records. A
 gap span's background content still reaches no decision.
@@ -1133,64 +1114,85 @@ gap span's background content still reaches no decision.
 | `speech.lexical` | 2 against 3 is a judgement no number here settles; a count-grid sweep with DDK held out of the negatives, reporting max- and median-family firing beside J, is what would inform it. The existing sweep predates re-bracketing, so it must be re-run before its `>= 3` and `>= 4` rows can be compared with the branch figures |
 | `words.onomatopoeic_tokens` | **populated** at `77b247a1` with the measured cough lexicon, so this is no longer a null. Two things remain owed: the lexicon was fitted at `>= 2` tokens (sens 0.361, spec 0.999) and PREPROCESS brackets at **one**, whose firing rate was never measured; and only the cough set was measured — the manoeuvre transcribed as a word still leaks into SPEECH elsewhere, e.g. 145 `'E.'` in `glides-low-to-high` |
 | `cough.words_onomatopoeic` | staged, not swept. It is the sole member of `STAGED_DETECTORS`, outside the catalogue and outside `branch_gates`. The next profile built from the corpus carries its distribution and the import will then demand it be promoted |
-| the presence floors | the four `taxonomy.presence_floor.*` nulls and `taxonomy.speech_labels`. Nothing in TAXONOMY can decide while they stand. Adopting the ruleset retires the question rather than answering it, and stage 2 deletes the subtree outright rather than fitting it |
-| the two selections' agreement | the whole point of stage 1. `will_run` and `ruleset_will_run` now sit on one entity per branch per recording; nobody has counted them against each other on the corpus, and that count is stage 2's precondition |
+| the presence floors | **settled by deletion.** The four `taxonomy.presence_floor.*` nulls are gone from the config and the lines that read them are gone from `nodes/taxonomy.py`; adopting the ruleset retired the question rather than answering it. `taxonomy.speech_labels` is still null and still owed a value, but only by `nodes/speech.py`, which reads it as corroborating evidence inside the branch |
+| the agreement between routing and the branches | stage 1's parallel columns are gone with the second selection; the axis that replaces them is `FileVerdict.agreement`, which compares the **route** against what the branch then found (step 7). Nobody has counted that over the corpus yet, and it is the number that says whether a gate over-routes |
 | the hint layer | designed above, not implemented |
 | a DDK arm | there is no `nodes/ddk.py`; see step 5d |
 | the branch-held detectors | 22 of them sit in `BRANCH_DETECTORS["VOICE"]`, swept and deliberately not gated. `nodes/voice.py` does not read one. What a branch would *conclude* from a pitch trajectory is decided nowhere |
 
-### 4. routing — turn classification (+ hints) into an execution set
+### 4. routing — evaluate the ruleset (+ hints) into an execution set
 
-Measures nothing and classifies nothing: it reads TAXONOMY's `kind` elements and the caller's hints
-and writes one `branch_decision` per branch (`routing.py:1-8`). **A hint forces a branch to run; it
-never rewrites the classification, never removes a branch and never relaxes a threshold.** Its
-verdict is always `pass` — an empty execution set is recorded on the decisions for VERDICT to read,
-not flagged here.
+Measures nothing and classifies nothing. It evaluates the family taxonomy ruleset of step 3c over
+the store TAXONOMY left, records the reading as the `ruleset_routing` measurement, and turns it into
+one `branch_decision` per branch in `BRANCHES` (`routing.py:1-12`). **A hint forces a branch to run;
+it never rewrites the reading, never removes a branch and never relaxes a threshold.** Its verdict
+is always `pass` — an empty execution set is recorded on the decisions for VERDICT to read, not
+flagged here.
 
-The rule: `by_classification = state != absent`; `forced_by_hint` is true only when the hint named
-the kind **and** classification did not already select it; `will_run` is the disjunction. Since no
-kind can be `absent` while voice is uncertain and the floors are null, **every branch this node
-knows about runs on every recording** today.
+**It writes under two activities of its own** (`routing.py:193`, `:205`): step `ruleset_routing`
+carries the measurement, step `None` carries the decisions and the verdict. Every decision is
+`wasDerivedFrom` the measurement (`:241`) and the decision activity `used` it (`:207`), so the join
+from any decision back to the gate outcomes behind it is in the store rather than inferred.
 
-**This node knows about three branches, and `BRANCHES` has four.** It iterates `BRANCH_FOR_KIND`,
-which is `{airway: AIRWAY, speech: SPEECH, voice: VOICE}` — there is no `ddk` kind, so `DDK` can
-never be selected and **no `branch_decision` is written for it at all**. The branch the kind lines
-do not decide is named: `routing.UNCLASSIFIED_BRANCHES` is `BRANCHES` minus the values of
-`BRANCH_FOR_KIND`, which today is exactly `("DDK",)`. See step 5d.
+**The rule.** `by_ruleset = route_state == routed`; `forced_by_hint` is true only when a hint named
+the branch **and** the ruleset did not already route it; `will_run` is the disjunction
+(`routing.py:216-220`). That is the whole selection: there is no second opinion and no state that
+runs a branch for want of evidence. `_route_states` (`:117`) turns the evaluation into one of three
+per branch:
 
-**This node now reads one thing out of the ruleset of step 3c, and acts on none of it.**
-`_ruleset_selection` reads TAXONOMY's `ruleset_routing` measurement and returns the branches it
-routed in `BRANCHES` order together with its route state. Two attributes then go onto **every**
-`branch_decision`, beside `will_run` and `kind_state`:
+| branch route state | when | does it run |
+| --- | --- | --- |
+| `routed` | one of that branch's gates fired | yes |
+| `unavailable` | none fired **and** at least one of its gates could not be read | no |
+| `declined` | none fired and every gate was readable | no |
+
+**`unavailable` does not run the branch, and that is the deliberate reversal.** The deleted path ran
+a branch on anything that was not `absent`, which is how a graph that could never read its floors
+ran everything. An unreadable gate is now recorded as unreadable and the branch is withheld; VERDICT
+tells the two apart in its agreement table (step 7) rather than ROUTING resolving them here.
+
+**Every branch in `BRANCHES` gets a decision, DDK included.** `BRANCH_FOR_KIND` and
+`UNCLASSIFIED_BRANCHES` are gone; the loop is over `BRANCHES` itself (`routing.py:215`), so the
+four-branch vocabulary and the four-branch decision set are the same set by construction. DDK has no
+node, and `run._drive_branches` records it `SKIPPED` with `NO_NODE` when it is selected — see step 5d
+for what that then does to the file verdict.
+
+What each decision entity carries (`routing.py:225-237`):
 
 | attribute | what it is |
 | --- | --- |
-| `ruleset_will_run` | whether the ruleset routed this branch |
-| `ruleset_route_state` | `routed` / `empty` / `unexplained`, or null |
+| `branch` | the branch's name, which is also the name its own verdict is written under |
+| `will_run` | whether it was selected |
+| `route_state` | `routed` / `declined` / `unavailable` |
+| `unavailable_gates` | that branch's gates whose feature could not be read |
+| `flag_gates` | that branch's flag gates that fired — annotation, never routing |
+| `forced_by_hint`, `hint_tags`, `unmapped_tags`, `bad_map_values` | the hint layer's record of itself |
+| `why` | `route_<state>` or `route_<state>_forced_by_hint`, a closed vocabulary |
+| `stream` | the stream this pass ran over |
 
-and `RoutingResult` gains `ruleset_runs` and `ruleset_state` for the runner. Three properties of
-that reading are deliberate:
+`RoutingResult` carries `runs`, `skipped`, `forced`, `empty_set` and `route_state` — the file-level
+`routed` / `empty` / `unexplained`. The stage-1 pair `ruleset_runs` / `ruleset_state` is gone with
+the second selection.
 
-- **`will_run` is untouched.** Nothing consults `ruleset_will_run` to decide execution.
-- **`ruleset_runs` can carry a branch `BRANCH_FOR_KIND` has no kind for** — DDK — because it is the
-  ruleset's selection and not this node's. That is why `run._drive_branches` looks a branch up
-  rather than indexing it.
-- **A reading that was never made is not a reading that routed nothing.** An absent measurement, or
-  one whose `state` is null because the evaluation failed, gives `((), None)`, not an empty routed
-  set with a state.
+**A failure to evaluate now fails the node.** `evaluate_live_routes` and `load_ruleset` are called
+unguarded (`routing.py:197`). Stage 1 wrapped them, because a reading that decided nothing must not
+be able to skip routing, every branch and REDACT; that reasoning inverts the moment the reading
+decides, and the `try`/`except`, `failed_route_attributes`, and the `authoritative` and `error`
+attributes went with it. A ROUTING that raises leaves every branch `SKIPPED` and the file reaches
+VERDICT with a `routing failed` flag — which is the correct outcome for a graph that could not
+decide what to run.
 
-`vocabulary.BranchDecision` deliberately does **not** carry the two new attributes, so
-`fold_file_verdict` cannot see them: the fold's `kinds`, its `agreement` table and its
-`acoustically_empty` discard must not move under a reading that is not yet trusted. Both columns are
-on stage 2's deletion list.
-
-Hints reach it through `routing.hint_kind_map`, read with `config.get` and **null in the packaged
-config** — so every declared tag maps to no kind, forces nothing, and is recorded `unmapped`.
-Extraction exists (`runs/b2ai-v2/make_hints.py`) but the map it checks against lives only in that
-campaign's override. The ruleset's deferred hint layer is a separate, later design (step 3c); this
-one is the hint mechanism that exists, and it is inert.
+Hints reach it through `routing.hint_branch_map` — renamed from `hint_kind_map`, and its values are
+**branch** names now — read with `config.get` and **null in the packaged config**, so every declared
+tag maps to no branch, forces nothing, and is recorded `unmapped`. A map value that is not a branch
+is recorded in `bad_map_values` and the tag still counts as unmapped, so every declared tag lands in
+exactly one of `hint_tags` and `unmapped_tags`. Extraction exists (`runs/b2ai-v2/make_hints.py`) but
+the map it checks against lives only in that campaign's override. **The hint layer is a re-key, not
+a design**: the ruleset's own hint layer (step 3c) is still deferred, and this is the mechanism that
+exists, inert.
 
 *Goals served*: none directly; it selects the branches that serve them.
+
 
 ### 5a. AIRWAY — confirm or contest PREPROCESS's per-span HeAR labels
 
@@ -1283,47 +1285,53 @@ decided nowhere. Until it is, "held for VOICE" means held, not used.
 
 *Goals served*: none of the three; it was never one of them.
 
-### 5d. DDK — declared, unbuilt
+### 5d. DDK — routed, unbuilt
 
 A branch with no node. `DDK` is in `BRANCHES` and in `taxonomy.ruleset` — a reference family set, a
 construction exclusion on SPEECH, two gates and a scored 2x2 — and there is **no `nodes/ddk.py`**,
-no `ddk` kind in `routing.BRANCH_FOR_KIND`, no `DDK` in `GRAPH_ORDER`, and no entry in `run.py`'s
-dispatch table. The branch is consequently never selected and reported nowhere by VERDICT:
-`verdict.py` orders through `GRAPH_ORDER`, which does not name it.
+no `DDK` in `GRAPH_ORDER`, and no entry in `run.py`'s dispatch table.
 
-**It became expressible-but-unrunnable at `a8b15900`, and that was a fix, not a feature.** The
-ruleset routes DDK, so `ruleset_runs` can name it. The runner used to index its dispatch table —
-`branches[branch]` for every branch in `BRANCHES` — which would have been a `KeyError` that killed
-the whole run the moment anything put `DDK` into a selected set. Three changes make naming it safe:
+**Since stage 2 it is selected on content, not never.** ROUTING loops over `BRANCHES` itself, so DDK
+gets a `branch_decision` like any other branch and `will_run` is true for it whenever
+`ddk.lexical_repetition` or `ddk.ppg_segment_rate_per_s` fires. Three things then hold, and the
+third is a real cost this document should not soften:
 
-- `run._drive_branches` **looks the branch up**; a branch with no implementation is recorded
-  `SKIPPED` carrying `note: "no node implements this branch"`, selected or not, and the note reaches
-  `run.json` under a `notes` key.
-- `routing.UNCLASSIFIED_BRANCHES` names the set, derived rather than written down.
-- `TriageRunResult.nodes` is now built over `(*GRAPH_ORDER, REPORT, *BRANCHES)`; it was filtered to
+- `run._drive_branches` **looks the branch up** rather than indexing its dispatch table
+  (`run.py:303-305`); a branch with no implementation is recorded `SKIPPED` carrying
+  `note: "no node implements this branch"`, selected or not, and the note reaches `run.json` under a
+  `notes` key. Before `a8b15900` that lookup was an index and naming DDK in an execution set would
+  have been a `KeyError` that killed the run.
+- `TriageRunResult.nodes` is built over `(*GRAPH_ORDER, REPORT, *BRANCHES)`; it was filtered to
   `GRAPH_ORDER`, so DDK's outcome was computed and then silently dropped.
+- **A recording whose DDK gates fire now flags.** The decision says the branch was asked, no verdict
+  comes back, and `fold_file_verdict` emits `"DDK was asked to run and never ran"` — a `FLAG` reason
+  like any other. VERDICT orders its reasons through `GRAPH_ORDER`, which does not name DDK, so the
+  reason sorts last rather than being dropped.
 
-**Adding `"ddk": "DDK"` to `BRANCH_FOR_KIND` is the obvious move and is wrong.** TAXONOMY writes no
-`ddk` kind line, `routing` reads a missing line as `uncertain`, and `uncertain` runs the branch — so
-DDK would be selected on *every* recording, VERDICT would flag every recording with "DDK was asked
-to run and never ran", and a fourth `branch_decision` would enter the fold carrying a `ddk` kind
-whose state is not `absent`, which alone would stop the `acoustically_empty` discard from ever
-firing again. A branch with no node must not acquire a kind line by default, and must not acquire
-one asserting absence without evidence either.
+**That flag is the honest outcome, and it is scoped.** It fires on recordings that carry
+syllable-repetition content and on no others, which is exactly the property the rejected alternative
+lacked. The alternative, recorded here because it looks obvious: adding `"ddk": "DDK"` to the old
+`BRANCH_FOR_KIND`. TAXONOMY wrote no `ddk` kind line, `routing` read a missing line as `uncertain`,
+and `uncertain` ran the branch — so DDK would have been selected on *every* recording, flagged every
+recording, and entered the fold carrying a `ddk` kind whose state was not `absent`, which alone would
+have stopped the `acoustically_empty` discard from ever firing. A branch with no node must not
+acquire a default that asserts presence, and must not acquire one asserting absence without evidence
+either. Routing it on its own measured gates does neither.
 
 One artifact of the half-state is still visible: `report.py` builds `_EVIDENCE_BRANCHES = (*BRANCHES,
 "REDACT")`, so `_branch_evidence` emits an always-empty `"DDK"` key in the report JSON. Its
 `source_spans` table has no `DDK` entry, which is why that is empty rather than an error.
 
-What an arm would need, none of it done: `nodes/ddk.py` on the shared node shape returning a verdict
-with `kind="ddk"`, entries in `GRAPH_ORDER` and the dispatch table, a `ddk` kind line **or** — the
-direction the staging points — the ruleset becoming authoritative so that `routing` reads routed
-branches and DDK needs no kind line at all, and a subject. The acoustic syllable-repetition evidence
-`ddk.ppg_segment_rate_per_s` reads is a routing feature; what a branch would *conclude* about a rate
-is decided nowhere. The measurement behind it is 855 declared-DDK recordings that route somewhere
-and never to DDK, of which the cut at 10 recovers 351.
+What an arm would need, and what is now left of the list: `nodes/ddk.py` on the shared node shape
+returning a verdict with `kind="ddk"`, entries in `GRAPH_ORDER` and the dispatch table, and a
+subject. **The kind line it used to need is off the list** — that was the direction the staging
+pointed, and stage 2 took it: ROUTING reads routed branches, so DDK needs no kind line at all. The
+acoustic syllable-repetition evidence `ddk.ppg_segment_rate_per_s` reads is a routing feature; what a
+branch would *conclude* about a rate is decided nowhere. The measurement behind it is 855
+declared-DDK recordings that route somewhere and never to DDK, of which the cut at 10 recovers 351.
 
 *Goals served*: none yet.
+
 
 ### 5e. QUALITY — a graph edge every recording reaches, and now a node
 
@@ -1397,35 +1405,68 @@ disruption tolerances.
 Maps store facts onto `vocabulary.fold_file_verdict` and writes the result back (`verdict.py:1-6`).
 Reads **no config key**. Two axes are kept apart: **triage** (pass/flag/discard) and **release**.
 
-**A branch is the authority on its own kind and on nothing else**: its conclusion stands in `kinds`
-whatever TAXONOMY classified, and disagreement is recorded in `agreement` rather than resolved by
-precedence. **A branch `fail` is not a file `discard`.** PREPROCESS and ROUTING are folded from
-`ran` rather than from a verdict entity, because a node that raised wrote none and would otherwise
-be invisible — a silent, evidence-free `pass` would be worse than the flag reported instead.
+**Everything it folds is now keyed by branch.** `FileVerdict.kinds` became `findings` (what each
+branch found), `FileVerdict.screened` became `routes` (what the ruleset made of each branch), and a
+new `FileVerdict.route_state` carries the file-level `routed`/`empty`/`unexplained`, or `None` when
+ROUTING wrote no evaluation. `BranchDecision` lost `kind` and renamed `kind_state` to `route_state`.
+This is a vocabulary change, not a rewiring: the same three questions are asked, of the branch rather
+than of a kind TAXONOMY no longer classifies.
 
-The triage ladder, in order (`fold_file_verdict`):
+It reads three things out of the store: every node's latest live `verdict` entity, every live
+`branch_decision`, and the `ruleset_routing` measurement for the file route state
+(`_route_state`, `verdict.py:120`). A branch's verdict joins to its decision **by node name**, and
+only when that verdict names a `kind` (`vocabulary.py:334-336`) — a branch verdict carrying no kind
+has not concluded about a subject, which is exactly what `_node_verdict_from_entity` synthesises for
+an outcome no reader can parse, so an unreadable branch verdict flags the file without silently
+resolving that branch.
 
-1. **ADMIT `fail` → `discard`**, ground `unmeasurable`. The only reachable discard today.
-2. **any reason is a `flag` → `flag`.** Always true at present.
-3. every resolved kind `absent` → `discard`, ground `acoustically_empty`. **Unreachable.**
-4. otherwise `pass`. **Unreachable.**
+**A branch is the authority on its own subject and on nothing else**: its conclusion stands in
+`findings` whatever the ruleset routed, and disagreement is recorded in `agreement` rather than
+resolved by precedence. **A branch `fail` is not a file `discard`.** PREPROCESS and ROUTING are
+folded from `ran` rather than from a verdict entity, because a node that raised wrote none and would
+otherwise be invisible — a silent, evidence-free `pass` would be worse than the flag reported
+instead.
+
+The agreement table now compares the **route** against what the branch found (`_agreement`,
+`vocabulary.py:256`), which is the quantity that says whether a gate over-routes:
+
+| route | branch found its subject | branch found none | branch did not conclude |
+| --- | --- | --- | --- |
+| `routed` | `agree` | `mismatch` — the ruleset over-routed | `not_run` |
+| `declined` | `mismatch` — the ruleset missed it (the branch ran because a hint forced it) | `agree` | `not_run` |
+| `unavailable` | `resolved` | `resolved` | `not_run` |
+
+The triage ladder, in order (`fold_file_verdict`, `vocabulary.py:417-429`):
+
+1. **ADMIT `fail` → `discard`**, ground `unmeasurable`.
+2. **any reason is a `flag` → `flag`.**
+3. **file route state `EMPTY` → `discard`**, ground `acoustically_empty`. **Reachable, and measured
+   for the first time**: it is the emptiness bypass having read every tracked stream peak under
+   `emptiness.peak_floor`, not an inference from kinds that could never be anything but `uncertain`.
+   The old rule — every resolved kind `absent` — is deleted.
+4. otherwise `pass`.
+
+**`UNEXPLAINED` flags, it does not discard.** Nothing routed and the recording was not measurably
+empty is a charge against the ruleset, so it appends a ROUTING `FLAG` reason carrying
+`vocabulary.UNEXPLAINED_CONTENT` (`vocabulary.py:387`) and the file lands on row 2. Collapsing it
+into row 3 would discard the evidence that the gates missed something.
 
 Reasons accumulate rather than being reduced to the deciding one. The list starts as **every node's
-own verdict** (`reasons = list(node_verdicts)`, `vocabulary.py:334`) and the fold appends to it: a
-PREPROCESS or ROUTING raise, a `bad_map_values` entry, an unread declaration, a
-classification/branch mismatch, a branch asked to run that stayed silent, and a hint claim nothing
-found. `_agreement` returns `resolved`, not `mismatch`, when TAXONOMY classified `uncertain` — so
-today's `FLAG` comes from TAXONOMY's own verdict entity, not from this mismatch reason, which cannot
-currently fire.
+own verdict** (`reasons = list(node_verdicts)`, `vocabulary.py:363`) and the fold appends to it: a
+PREPROCESS or ROUTING raise, a `bad_map_values` entry, an unread declaration, an `UNEXPLAINED`
+recording, a route/branch mismatch (`"mismatch: routing declined SPEECH, it found it"`), a branch
+asked to run that stayed silent, and a hint claim nothing found (`"hint mismatch: AIRWAY was declared
+and did not find it"`).
 
 **QUALITY's verdict is a reason like any other**, because it arrives in `node_verdicts`. It carries
-`kind=None`, so it never enters `by_kind`, never replaces a classification and never appears in the
-`agreement` table — but a clip contradiction is a file-level `FLAG` on its own, independent of
-TAXONOMY. A `PASS` from it contributes nothing, which is the expected case.
+`kind=None` and its node name is not in `BRANCHES`, so it never enters `by_branch`, never replaces a
+route and never appears in the `agreement` table — but a clip contradiction is a file-level `FLAG` on
+its own. A `PASS` from it contributes nothing, which is the expected case.
 
-**`ruleset_will_run` and `ruleset_route_state` are invisible here, deliberately.**
-`vocabulary.BranchDecision` does not carry them, so no part of this fold — `kinds`, `agreement`, the
-`acoustically_empty` discard — can move under a reading that is not yet trusted.
+**There is no second selection to hide from the fold.** Stage 1 kept `ruleset_will_run` and
+`ruleset_route_state` off `BranchDecision` deliberately, so the fold could not move under a reading
+that was not yet trusted. Both columns are gone; the one selection left is the one the fold reads.
+
 
 ### 8. REPORT — render only
 
@@ -1436,6 +1477,21 @@ store does not hold. Both carry element ids, a join key back into the store, so 
 and never under the release tree. Config: `report.format`, `spectrogram.hop_ms`. Its failure is
 recorded beside every other node's and changes no verdict — and a failure carrying artifacts keeps
 them, since REPORT writes its JSON before it draws.
+
+**Its schema is `triage-summary/v4`** (`report.py:42`), bumped by stage 2 because the `screening`
+block changed shape rather than gaining a field. It now carries `{routes, route_state, findings,
+agreement, ruleset}`: the first four come off VERDICT's own entity, and `ruleset` is
+`_ruleset_reading` (`report.py:1049`) reading the `ruleset_routing` measurement for the gate
+outcomes, the per-branch `unavailable` and `flags`, and the feature sources the configuration
+consumed. `screened_kinds`, `resolved_kinds` and `decision_paths` are gone with the evidence lines
+they described. The per-branch `routing` block carries `route_state`, `unavailable_gates` and
+`flag_gates` in place of `kind_state` and `raw_state` (`_branches`, `:793`).
+
+Two rendered sections changed with it: **ROUTES AND FINDINGS** (`:1608`) replaces the TAXONOMY block,
+printing the file route state and then `BRANCH: route=… found=… agreement=… hint=…` per branch; and
+**ROUTING GATES** (`:1719`) replaces TAXONOMY DECISION PATH, printing which gates fired, which were
+unavailable, how many stayed silent, and which branches a flag gate annotated. The header's support
+line reads `routes (<file route state>): BRANCH=state; …` (`:1476`).
 
 ### 9. Extending a finished run — not a graph step, and shaped by the graph anyway
 
@@ -1502,7 +1558,7 @@ absence read as the whole row's failure.
 | goal | measured | decides anything | where it stops |
 | --- | --- | --- | --- |
 | 1. bad quality | yes — SQUIM, level, `disruptions_file`, per-span SQUIM, forty Praat scalars, and now per-span and whole-file clip amplitudes | **one internal-consistency check, and nothing about the recording** | QUALITY exists and runs (step 5e), but what it decides is whether PREPROCESS's own clip spans contradict PREPROCESS's own amplitudes — a store-consistency audit whose expected count is zero. `quality.stoi_floor`, `quality.pesq_floor`, `quality.disruption_clipped_s_max` and `quality.disruption_dropout_s_max` are still null and still read by **nothing in `src/senselab`** |
-| 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | partially | every `taxonomy.presence_floor.*` is null, so no kind can be `present` or `absent`; `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design. The ruleset of step 3c is the measured replacement for the first half of that; two nodes now read it and none acts on it |
+| 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | **yes, for which branch looks** | the ruleset of step 3c now decides which branch is asked, so a recording no longer reaches every branch by default. What it still does not decide is what SPEECH then concludes about a second speaker: `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design |
 | 3. PII | yes — the consensus transcript and each recognizer's own transcript are scanned in one call | **yes** | the one goal fully wired to a decision, and the only one whose acting node cannot run: `redaction.padding_ms` and `redaction.fill` are null and both `require`d, so REDACT raises. SPEECH marks PII; nothing releases a redacted product |
 
 ## What each run records about itself
@@ -1536,10 +1592,11 @@ Seven things it now records that a reader of an older run will not find:
 - **The amplitudes a later node reads instead of the signal.** The `clip_amplitude` measurement:
   whole-file unclipped peak and its position, the unclipped sample count, the guard applied, and
   every surviving span's own peak keyed by span id.
-- **What the ruleset would have routed.** The `ruleset_routing` measurement, `authoritative: false`,
-  and `ruleset_will_run` / `ruleset_route_state` on every `branch_decision`. This is the record a
-  corpus comparison of the two selections is made from, and it is the one thing in this list that is
-  staged for deletion rather than for keeping.
+- **What the ruleset routed, and on which gates.** The `ruleset_routing` measurement ROUTING writes:
+  the file route state, the routed branches, every gate's outcome by name, the per-branch unreadable
+  gates and fired flags, and the feature sources the configuration consumed. Every `branch_decision`
+  is `wasDerivedFrom` it, so the execution set is traceable to the gate readings behind it rather
+  than only asserted.
 
 The store is written once, at the end of a run. A process that dies mid-recording therefore records
 nothing at all, which is why a stalled task leaves no evidence of where it stopped. **A finished
@@ -1550,46 +1607,53 @@ change nothing leaves the file byte-identical.
 
 ## Cross-cutting tensions
 
-**Every recording flags.** Restated because it subsumes the table above: until voice is reworked,
-the verdict carries no discriminating information for any file that ADMIT accepts. Anything reading
-triage verdicts downstream is reading a constant.
+**"Every recording flags" was true and is no longer.** Stated as a tension because it was the
+largest one in this document for as long as the presence-floor path decided: the verdict carried no
+discriminating information for any file ADMIT accepted, and anything reading triage verdicts
+downstream was reading a constant. Stage 2 removed the mechanism, so all three triage outcomes are
+now reachable. **Nobody has re-measured the distribution over the corpus**, and until someone does,
+the honest statement is "reachable", not "observed".
 
-**Two routings now both run and only the weaker one decides.** The ruleset of step 3c routes 99.2%
-of the corpus on content; `nodes/routing.py` routes on kind states that cannot become `absent` and
-runs every branch it knows about on everything. Both are evaluated per recording and both are
-recorded on the same `branch_decision` entity, `ruleset_will_run` beside `will_run`. That is
-strictly more than before — the gap is now *measurable per recording* rather than only in a separate
-sweep — and it is strictly not closed: the selection that executes is unchanged. This remains the
-single largest open item in this document, and it is not a defect in either piece; it is the
-deletion nobody has done yet. `../20260912-ruleset-in-pipeline/design.md` lists it item by item.
+**One routing runs and it decides.** The ruleset of step 3c routes 99.2% of the corpus on content,
+and `nodes/routing.py` selects from it. The second selection is deleted, not merely unused. What the
+deletion moved rather than settled is the *comparison*: `FileVerdict.agreement` now scores the route
+against what the branch found, per branch per recording, and nobody has counted it over the corpus.
+That count is what would say whether `airway.cough`'s unswept 50 dB cut or `speech.lexical`'s 2-vs-3
+judgement is costing anything.
+
+**A branch can be routed with no node behind it.** DDK is the case and the flag it produces is
+deliberate (step 5d), but it is a standing tension rather than a closed question: the graph now
+asserts, per recording, that it found content it has no instrument for.
 
 **`require` and `get` are not interchangeable, and the choice is currently inconsistent.** The
 `windows.<classifier>` triple is read by two loaders on purpose now — `load_label_membership`
 (`require` on all three keys, so the whole-file folds stay absent on a null `label_thresholds`) and
 `optional_label_membership` (a null override is no override, so the per-span passes run). The
 per-span behaviour is the intended one and the whole-file fold has not been brought to it.
-`taxonomy.speech_labels` is `get ... or []` in both its readers (`taxonomy.py`, `speech.py`), so a
-null empties the speech family without a word anywhere. `residual.enabled` is `require`d and true
-by default, so an intentionally-off block reports through the same absent-derivative channel as an
-unmeasured null.
+`taxonomy.speech_labels` is `get ... or []` in its one remaining reader (`speech.py:589`), so a
+null empties the speech family without a word anywhere; it had two until stage 2 deleted TAXONOMY's.
+`residual.enabled` is `require`d and true by default, so an intentionally-off block reports through
+the same absent-derivative channel as an unmeasured null.
 
-**Eight keys are read by nothing**, re-checked by grep over `src/senselab` at `07ee6e90`: the four
-`quality.*` floors, which **implementing** the node did not adopt any more than declaring it did;
-`taxonomy.voice_min_duration_s` and `taxonomy.voice_uncertain_duration_s`, orphaned by the voice
-retirement; and `voice.hint_tags` and `speech.hint_tags`, both self-described "unread as of v2" —
-`routing.py`'s own `hint_tags` is a local built from `hint_kind_map`, not this key. Pre-alpha says
-delete outright; they are the only written record of decisions nobody built. The two keys the
-`quality:` section gained, `clip_contradiction_margin` and `clip_edge_guard_samples`, are **not**
-among them: PREPROCESS reads and applies both.
+**Six keys are read by nothing**: the four `quality.*` floors, which **implementing** the node did
+not adopt any more than declaring it did; and `voice.hint_tags` and `speech.hint_tags`, both
+self-described "unread as of v2" — `routing.py`'s own `hint_tags` is a local built from
+`hint_branch_map`, not this key. It was eight; stage 2 deleted `taxonomy.voice_min_duration_s` and
+`taxonomy.voice_uncertain_duration_s`, orphaned by the voice retirement, which is what pre-alpha
+says to do with the remaining six. They are the only written record of decisions nobody built. The
+two keys the `quality:` section gained, `clip_contradiction_margin` and `clip_edge_guard_samples`,
+are **not** among them: PREPROCESS reads and applies both.
 
-**`taxonomy.ruleset` is no longer in that category, and the change is exactly one step.** It is read
-by `routing_analysis/ruleset.py`, by `scripts/score_taxonomy_ruleset.py` and — since `a8b15900` — by
-`nodes/taxonomy.py` through `live_evidence`. It is read *in the graph* and acted on nowhere in it.
+**`taxonomy.ruleset` is read in the graph and acted on in it.** `routing_analysis/ruleset.py`,
+`scripts/score_taxonomy_ruleset.py` and `nodes/routing.py` through `live_evidence`; the last of
+those turns it into the execution set.
 Note that its mappings are **schema**, not data: `DATA_MAP_PATHS` does not name them, so a campaign
 override may change a gate's threshold but may not add a gate.
 
-**Hints are extractable but inert.** `routing.hint_kind_map` is null in the packaged config, so a
-correctly extracted hint forces nothing. See [`benchmarks/open.md`](benchmarks/open.md), "Hints:
+**Hints are extractable but inert.** `routing.hint_branch_map` is null in the packaged config, so a
+correctly extracted hint forces nothing. Stage 2 re-keyed it from kinds to branches and changed
+nothing else about it, deliberately: the hint layer is a later design, and re-keying was the minimum
+that kept it callable once kinds stopped existing. See [`benchmarks/open.md`](benchmarks/open.md), "Hints:
 mapping, extraction and vocabulary". The ruleset's own hint layer is deferred by design, not by a
 null.
 
@@ -1608,13 +1672,14 @@ nonzero on every array task.
 ## Branch authority, not shown as edges
 
 The mermaid graph shows execution order. It does not show that **each branch is the authority on
-its own kind and no other** — AIRWAY on `airway`, SPEECH on `speech`, VOICE on `voice`, and DDK on
-nothing yet, because it has no node. A branch's conclusion replaces TAXONOMY's classification for
-its own kind in the file verdict, and the disagreement is recorded as a `mismatch` reason rather
-than resolved by precedence. No branch reads another's output, which is why a branch that raises
-does not stop its siblings.
+its own subject and no other** — AIRWAY on `airway`, SPEECH on `speech`, VOICE on `voice`, and DDK
+on nothing yet, because it has no node. A branch's conclusion stands in `FileVerdict.findings` for
+its own branch whatever the ruleset routed, and the disagreement is recorded as a `mismatch` reason
+rather than resolved by precedence. No branch reads another's output, which is why a branch that
+raises does not stop its siblings.
 
-It also does not show that **QUALITY is an edge rather than a branch**. It is the authority on no
-kind — its verdict carries `kind=None` — it is reached by every recording including the ones the
-emptiness bypass explains, and it is in `GRAPH_ORDER` for exactly that reason. Having a node has not
-made it a branch: it enters the file fold as a flag reason and never as a kind.
+It also does not show that **QUALITY is an edge rather than a branch**. It is not in `BRANCHES`, so
+it never enters `by_branch`; its verdict carries `kind=None`; it is reached by every recording
+including the ones the emptiness bypass explains, and it is in `GRAPH_ORDER` for exactly that
+reason. Having a node has not made it a branch: it enters the file fold as a flag reason and never
+as a finding.

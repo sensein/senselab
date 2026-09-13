@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable, Mapping, Sequence
+
+import pytest
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.nodes.common import live_entities, write_measurement
-from senselab.audio.workflows.triage.nodes.routing import BRANCH_FOR_KIND, UNCLASSIFIED_BRANCHES, routing
+from senselab.audio.workflows.triage.nodes import routing as routing_module
+from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities
+from senselab.audio.workflows.triage.nodes.routing import routing
+from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, RULESET_ROUTING, Outcome
 from senselab.utils.prov_store import ProvStore
 
 
 def _config(tmp_path: Path, entries: str) -> TriageConfig:
-    """The packaged config with ``routing.hint_kind_map`` supplied from the given YAML entries."""
+    """The packaged config with ``routing.hint_branch_map`` supplied from the given YAML entries."""
     path = tmp_path / "routing.yaml"
-    path.write_text("routing:\n  hint_kind_map:\n" + entries)
+    path.write_text("routing:\n  hint_branch_map:\n" + entries)
     return load_triage_config(path)
 
 
@@ -23,240 +28,233 @@ def _map(tmp_path: Path) -> TriageConfig:
     """The packaged config with a hint map supplied, covering tags and one speech_type value."""
     return _config(
         tmp_path,
-        "    speech: speech\n"
-        "    read-speech: speech\n"
-        "    cough: airway\n"
-        "    phonation: voice\n"
-        "    prolonged-vowel: voice\n",
+        "    speech: SPEECH\n"
+        "    read-speech: SPEECH\n"
+        "    cough: AIRWAY\n"
+        "    phonation: VOICE\n"
+        "    prolonged-vowel: VOICE\n",
     )
 
 
-def _kinds(store: ProvStore, **states: str) -> None:
-    """Write one kind element per named kind, as TAXONOMY would."""
-    activity = store.activity(node="TAXONOMY", step="fold", parameters={})
-    for kind, state in states.items():
-        entity_id = store.entity(
-            prov_type="kind", extent=None, attributes={"kind": kind, "state": state, "lines": {}, "stream": "plain"}
-        )
-        store.was_generated_by(entity_id, activity)
-
-
-def _ruleset_routing(store: ProvStore, state: str, routed: list[str]) -> None:
-    """Write the ``ruleset_routing`` measurement TAXONOMY would have written."""
-    activity = store.activity(node="TAXONOMY", step="ruleset_routing", parameters={})
-    agent = store.agent(agent_type="software", version="test")
-    write_measurement(
-        store,
-        activity,
-        agent,
-        name=RULESET_ROUTING,
-        signal="plain",
-        attributes={"authoritative": False, "error": None, "state": state, "routed": routed},
+def _evaluation(
+    routed: Sequence[str] = (),
+    *,
+    state: RouteState = RouteState.ROUTED,
+    unavailable: Mapping[str, tuple[str, ...]] | None = None,
+    flags: Mapping[str, tuple[str, ...]] | None = None,
+    gate_outcomes: Mapping[str, GateOutcome] | None = None,
+) -> RouteEvaluation:
+    """One ruleset reading, as ``evaluate_live_routes`` would return it."""
+    return RouteEvaluation(
+        stem="sub-01_task-x",
+        family="",
+        routed=tuple(routed),
+        declared=(),
+        agreed=(),
+        missed=(),
+        extra=(),
+        unavailable=dict(unavailable or {}),
+        flags=dict(flags or {}),
+        state=state,
+        gate_outcomes=dict(gate_outcomes or {"airway.cough": GateOutcome.SILENT}),
     )
 
 
-class TestTheRulesetIsRecordedAndNotObeyed:
-    """The content-routed set is written beside every decision and decides nothing."""
+@pytest.fixture
+def reads(monkeypatch: pytest.MonkeyPatch) -> Callable[[RouteEvaluation], None]:
+    """Make ROUTING's ruleset reading return a constructed evaluation rather than reduce the store."""
 
-    def test_a_branch_the_ruleset_routed_alone_still_does_not_run(self, store: ProvStore, tmp_path: Path) -> None:
-        """``kind_state`` decides execution; the ruleset's selection is a second column, not a vote."""
-        _kinds(store, speech="absent", airway="absent", voice="absent")
-        _ruleset_routing(store, "routed", ["SPEECH", "DDK"])
+    def _install(evaluation: RouteEvaluation) -> None:
+        monkeypatch.setattr(routing_module, "evaluate_live_routes", lambda *a, **k: evaluation)
+
+    return _install
+
+
+class TestTheRulesetDecides:
+    """The routed set is the execution set. Nothing else selects a branch."""
+
+    def test_a_routed_branch_runs(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A gate fired for SPEECH, so SPEECH runs and nothing else does."""
+        reads(_evaluation(["SPEECH"]))
         result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        assert result.runs == ()
-        assert result.ruleset_runs == ("SPEECH", "DDK")
-        assert result.ruleset_state == "routed"
+        assert result.runs == ("SPEECH",)
+        assert set(result.skipped) == {"AIRWAY", "VOICE", "DDK"}
+        assert result.route_state == "routed"
 
-    def test_each_decision_carries_both_selections(self, store: ProvStore, tmp_path: Path) -> None:
-        """One entity carries ``will_run`` and ``ruleset_will_run``, so agreement is a column pair."""
-        _kinds(store, speech="present", airway="absent", voice="absent")
-        _ruleset_routing(store, "routed", ["AIRWAY"])
+    def test_a_branch_nothing_routed_is_declined(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """Every gate was evaluated and none fired, which is a reading and not an absence."""
+        reads(_evaluation(["SPEECH"]))
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
         decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
-        assert decisions["SPEECH"]["will_run"] is True
-        assert decisions["SPEECH"]["ruleset_will_run"] is False
-        assert decisions["AIRWAY"]["will_run"] is False
-        assert decisions["AIRWAY"]["ruleset_will_run"] is True
-        assert decisions["AIRWAY"]["ruleset_route_state"] == "routed"
+        assert decisions["AIRWAY"]["route_state"] == "declined"
+        assert decisions["AIRWAY"]["why"] == "route_declined"
+        assert decisions["SPEECH"]["route_state"] == "routed"
 
-    def test_an_evaluation_that_was_never_made_is_not_a_branch_that_routed_nothing(
-        self, store: ProvStore, tmp_path: Path
+    def test_a_branch_whose_gates_could_not_be_read_is_unavailable_and_still_withheld(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """A null state reads as no reading, so a failed evaluation cannot be counted as agreement."""
-        _kinds(store, speech="present")
-        _ruleset_routing(store, "", [])
-        store.entity(prov_type="measurement", extent=None, attributes={"name": RULESET_ROUTING, "state": None})
+        """A gate that was never measured did not decline; that is recorded, not turned into a run."""
+        reads(_evaluation(["SPEECH"], unavailable={"VOICE": ("voice.glide",)}))
         result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        assert result.ruleset_runs == ()
-        assert result.ruleset_state is None
+        assert "VOICE" not in result.runs
+        voice = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "VOICE")
+        assert voice.attributes["route_state"] == "unavailable"
+        assert voice.attributes["unavailable_gates"] == ["voice.glide"]
 
-    def test_a_missing_measurement_leaves_the_second_column_empty(self, store: ProvStore, tmp_path: Path) -> None:
-        """TAXONOMY never ran, so there is nothing to compare and nothing is invented."""
-        _kinds(store, speech="present")
-        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        assert result.ruleset_runs == ()
-        assert result.ruleset_state is None
-
-
-class TestTheBranchVocabulary:
-    """Every branch the ruleset can name, whether or not a kind line decides it."""
-
-    def test_every_mapped_branch_is_a_branch(self) -> None:
-        """A kind mapping to a branch the vocabulary does not have would route into nothing."""
-        assert set(BRANCH_FOR_KIND.values()) <= set(BRANCHES)
-
-    def test_ddk_is_the_branch_no_kind_line_decides(self) -> None:
-        """It is expressible in a routed set and has no kind, which is why nothing here runs it."""
-        assert UNCLASSIFIED_BRANCHES == ("DDK",)
-
-
-class TestTheRule:
-    """present runs, uncertain runs, absent does not."""
-
-    def test_present_runs(self, store: ProvStore, tmp_path: Path) -> None:
-        """A kind the classification found runs its branch."""
-        _kinds(store, speech="present", airway="absent", voice="absent")
-        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        assert result.runs == ("SPEECH",)
-
-    def test_uncertain_runs(self, store: ProvStore, tmp_path: Path) -> None:
-        """A kind the classification could not settle is exactly what a branch exists to settle."""
-        _kinds(store, speech="uncertain", airway="absent", voice="absent")
-        assert routing(store, None, _map(tmp_path), run_dir=tmp_path).runs == ("SPEECH",)
-
-    def test_absent_does_not_run(self, store: ProvStore, tmp_path: Path) -> None:
-        """With no hint, an absent kind's branch is skipped and the decision says why."""
-        _kinds(store, speech="absent", airway="present", voice="absent")
-        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        assert result.runs == ("AIRWAY",)
-        assert set(result.skipped) == {"SPEECH", "VOICE"}
-
-    def test_a_state_this_node_cannot_read_runs_the_branch(self, store: ProvStore, tmp_path: Path) -> None:
-        """A state nobody can read is not evidence of absence, so only ``absent`` withholds a branch.
-
-        The same rule TAXONOMY applies to a missing derivative. Reading the rule the other way round
-        — run only on the states this node knows — would make an unreadable classification silently
-        skip the instrument that would have settled it.
-
-        The state does not travel verbatim, either: ``kind_state`` and ``why`` are closed
-        vocabularies a downstream reader switches on, so an unrecognised state folds to one token
-        and the string TAXONOMY actually wrote is kept beside it.
-        """
-        _kinds(store, speech="wobbly", airway="absent", voice="absent")
-        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        assert result.runs == ("SPEECH",)
-        decision = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
-        assert decision.attributes["kind_state"] == "unreadable"
-        assert decision.attributes["why"] == "kind_unreadable"
-        assert decision.attributes["raw_state"] == "wobbly"
-
-    def test_a_readable_state_keeps_its_own_word(self, store: ProvStore, tmp_path: Path) -> None:
-        """The control: folding the unreadable case must not flatten the three states that are read."""
-        _kinds(store, speech="present", airway="absent", voice="uncertain")
+    def test_a_fired_flag_is_recorded_on_the_branch_it_annotates(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A flag gate never routes; it must still reach the decision a reader inspects."""
+        reads(_evaluation(["SPEECH"], flags={"SPEECH": ("speech.short",)}))
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        states = {e.attributes["branch"]: e.attributes["kind_state"] for e in live_entities(store, "branch_decision")}
-        assert states == {"SPEECH": "present", "AIRWAY": "absent", "VOICE": "uncertain"}
-        raw = {e.attributes["branch"]: e.attributes["raw_state"] for e in live_entities(store, "branch_decision")}
-        assert raw == states
+        speech = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
+        assert speech.attributes["flag_gates"] == ["speech.short"]
+
+    def test_the_reading_is_recorded_as_a_measurement(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """ROUTING owns the measurement now, under its own node, with no authority flag on it."""
+        reads(_evaluation(["SPEECH"]))
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        recorded = find_measurement(store, RULESET_ROUTING)
+        assert recorded is not None
+        assert recorded.attributes["state"] == "routed"
+        assert "authoritative" not in recorded.attributes
+        assert "error" not in recorded.attributes
+        activity_id = store.generated_by(recorded.id)
+        assert activity_id is not None
+        activity = store.get_activity(activity_id)
+        assert (activity.node, activity.step) == ("routing", "ruleset_routing")
+
+    def test_a_failed_evaluation_fails_the_node(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """The ruleset decides execution, so a reading that cannot be made is a failure of the graph."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
+        path = tmp_path / "unmeasured.yaml"
+        path.write_text("windows:\n  yamnet: {default_threshold: null}\n")
+        with pytest.raises(ValueError):
+            routing(store, None, load_triage_config(path), run_dir=tmp_path)
+
+
+class TestDDKIsRoutableAndHasNoNode:
+    """The ruleset routes a fourth branch; the vocabulary must carry it through routing intact."""
+
+    def test_ddk_can_be_routed(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """No kind line could ever have named it; a gate can."""
+        reads(_evaluation(["DDK"]))
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.runs == ("DDK",)
+
+    def test_every_branch_gets_a_decision(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """One decision per branch in the vocabulary, DDK included, and none for REDACT."""
+        reads(_evaluation(["SPEECH"]))
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        branches = {e.attributes["branch"] for e in live_entities(store, "branch_decision")}
+        assert branches == set(BRANCHES)
 
 
 class TestHintsForceAndNothingElse:
-    """A hint adds a branch. It never rewrites a classification and never removes a branch."""
+    """A hint adds a branch. It never rewrites a reading and never removes a branch."""
 
-    def test_a_hint_forces_an_absent_kinds_branch(self, store: ProvStore, tmp_path: Path) -> None:
-        """The branch runs against an absent classification, which is the mismatch VERDICT detects."""
-        _kinds(store, speech="absent", airway="absent", voice="absent")
+    def test_a_hint_forces_a_declined_branch(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """The branch runs against a declined route, which is the mismatch VERDICT detects."""
+        reads(_evaluation([]))
         result = routing(store, None, _map(tmp_path), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
         assert result.runs == ("AIRWAY",)
         assert result.forced == ("AIRWAY",)
 
-    def test_speech_type_metadata_forces_too(self, store: ProvStore, tmp_path: Path) -> None:
-        """routing.md names both may_contain and the task's speech_type as forcing inputs."""
-        _kinds(store, speech="absent", airway="absent", voice="absent")
+    def test_speech_type_metadata_forces_too(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """Both ``may_contain`` and the task's ``speech_type`` are forcing inputs."""
+        reads(_evaluation([]))
         hint = AudioHints(metadata={"speech_type": "read-speech"})
         assert routing(store, None, _map(tmp_path), hint, run_dir=tmp_path).runs == ("SPEECH",)
 
-    def test_forcing_does_not_rewrite_the_kind_element(self, store: ProvStore, tmp_path: Path) -> None:
-        """The disagreement between decision and classification is the product, not a thing to erase.
-
-        Read the way every store reader reads: the *latest* live kind element per kind wins, so a
-        node that appended a rewritten classification beside the original would be caught here and
-        not by a first-match read. The second assertion closes the same hole from the other side —
-        ROUTING generates no kind element at all, whatever its state.
-        """
-        _kinds(store, speech="absent", airway="absent", voice="absent")
-        routing(store, None, _map(tmp_path), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
-        airway = [e for e in live_entities(store, "kind") if e.attributes["kind"] == "airway"][-1]
-        assert airway.attributes["state"] == "absent"
-        by_routing = {activity.id for activity in store.activities(node="routing")}
-        assert [e for e in live_entities(store, "kind") if store.generated_by(e.id) in by_routing] == []
-        decision = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "AIRWAY")
-        assert decision.attributes["kind_state"] == "absent"
-        assert decision.attributes["forced_by_hint"] is True
-
-    def test_a_hint_naming_a_present_kind_forces_nothing_and_is_still_recorded(
-        self, store: ProvStore, tmp_path: Path
+    def test_forcing_does_not_rewrite_the_route_state(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """Forcing means the hint changed the outcome, not merely that it named the kind.
+        """The disagreement between decision and reading is the product, not a thing to erase."""
+        reads(_evaluation([]))
+        routing(store, None, _map(tmp_path), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
+        airway = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "AIRWAY")
+        assert airway.attributes["route_state"] == "declined"
+        assert airway.attributes["forced_by_hint"] is True
+        assert airway.attributes["why"] == "route_declined_forced_by_hint"
 
-        A branch the classification was already running is not forced, so ``forced_by_hint`` stays
-        equivalent to "this branch runs against an absent classification" — the mismatch verdict.md
-        detects. The tags are recorded against the branch all the same: a hint that agreed with a
-        running branch is a fact about the hint, not silence.
-        """
-        _kinds(store, speech="present", airway="absent", voice="absent")
+    def test_a_hint_naming_a_routed_branch_forces_nothing_and_is_still_recorded(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """Forcing means the hint changed the outcome, not merely that it named the branch."""
+        reads(_evaluation(["SPEECH"]))
         result = routing(store, None, _map(tmp_path), AudioHints(may_contain=["speech"]), run_dir=tmp_path)
         assert result.runs == ("SPEECH",)
         assert result.forced == ()
-        decision = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
-        assert decision.attributes["forced_by_hint"] is False
-        assert decision.attributes["hint_tags"] == ["speech"]
-        assert decision.attributes["why"] == "kind_present"
+        speech = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
+        assert speech.attributes["forced_by_hint"] is False
+        assert speech.attributes["hint_tags"] == ["speech"]
+        assert speech.attributes["why"] == "route_routed"
 
-    def test_forcing_never_removes_a_branch(self, store: ProvStore, tmp_path: Path) -> None:
-        """A hint naming only cough leaves a present speech kind's branch running."""
-        _kinds(store, speech="present", airway="absent", voice="absent")
+    def test_forcing_never_removes_a_branch(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A hint naming only cough leaves a routed SPEECH running."""
+        reads(_evaluation(["SPEECH"]))
         result = routing(store, None, _map(tmp_path), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
         assert set(result.runs) == {"SPEECH", "AIRWAY"}
 
-    def test_an_unmapped_tag_forces_nothing_and_is_recorded(self, store: ProvStore, tmp_path: Path) -> None:
+    def test_an_unmapped_tag_forces_nothing_and_is_recorded(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
         """A tag with no entry is data about the hint, not a silent no-op."""
-        _kinds(store, speech="absent", airway="absent", voice="absent")
+        reads(_evaluation([]))
         result = routing(store, None, _map(tmp_path), AudioHints(may_contain=["birdsong"]), run_dir=tmp_path)
         assert result.runs == ()
-        decision = live_entities(store, "branch_decision")[0]
-        assert decision.attributes["unmapped_tags"] == ["birdsong"]
+        assert live_entities(store, "branch_decision")[0].attributes["unmapped_tags"] == ["birdsong"]
 
-    def test_a_map_value_that_is_not_a_kind_forces_nothing_and_names_the_typo(
-        self, store: ProvStore, tmp_path: Path
+    def test_a_map_value_that_is_not_a_branch_forces_nothing_and_names_the_typo(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """A typo'd map value must not make a declared tag vanish from both records.
+        """A config typo silently under-routing every file in a run is its own thing to chase.
 
-        The tag reached no kind this graph screens, so it is unmapped like any other tag that
-        reached none — that keeps the accounting total, every declared tag landing in exactly one of
-        ``hint_tags`` and ``unmapped_tags``. ``bad_map_values`` then says *why* it reached none,
-        because a config typo silently under-routing every file in a run is a different thing to
-        chase than a tag the vocabulary does not cover.
+        The tag reached no branch, so it is unmapped like any other tag that reached none — which
+        keeps the accounting total, every declared tag landing in exactly one of ``hint_tags`` and
+        ``unmapped_tags``. ``bad_map_values`` then says *why* it reached none.
         """
-        _kinds(store, speech="absent", airway="absent", voice="absent")
-        config = _config(tmp_path, "    cough: airwy\n")
+        reads(_evaluation([]))
+        config = _config(tmp_path, "    cough: AIRWY\n")
         result = routing(store, None, config, AudioHints(may_contain=["cough"]), run_dir=tmp_path)
         assert result.runs == ()
         assert result.forced == ()
         decisions = live_entities(store, "branch_decision")
-        assert [d.attributes["hint_tags"] for d in decisions] == [[], [], []]
+        assert [d.attributes["hint_tags"] for d in decisions] == [[]] * len(BRANCHES)
         assert decisions[0].attributes["unmapped_tags"] == ["cough"]
-        assert decisions[0].attributes["bad_map_values"] == {"cough": "airwy"}
+        assert decisions[0].attributes["bad_map_values"] == {"cough": "AIRWY"}
 
-    def test_a_good_map_records_no_bad_values(self, store: ProvStore, tmp_path: Path) -> None:
+    def test_a_good_map_records_no_bad_values(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
         """The control: the typo record must stay empty when the map is well formed."""
-        _kinds(store, speech="absent", airway="absent", voice="absent")
+        reads(_evaluation([]))
         routing(store, None, _map(tmp_path), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
         assert all(d.attributes["bad_map_values"] == {} for d in live_entities(store, "branch_decision"))
 
-    def test_a_null_map_forces_nothing(self, store: ProvStore, config: TriageConfig, tmp_path: Path) -> None:
+    def test_a_null_map_forces_nothing(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
         """While the vocabulary is unmeasured, every tag is unmapped and nothing is forced."""
-        _kinds(store, speech="absent", airway="absent", voice="absent")
+        reads(_evaluation([]))
         result = routing(store, None, config, AudioHints(may_contain=["cough"]), run_dir=tmp_path)
         assert result.runs == ()
         assert result.empty_set is True
@@ -265,65 +263,79 @@ class TestHintsForceAndNothingElse:
 class TestTheEmptyExecutionSet:
     """A file that enters no branch is recorded, not judged: the fold decides what it means."""
 
-    def test_no_branch_is_recorded_without_a_flag(self, store: ProvStore, tmp_path: Path) -> None:
+    def test_no_branch_is_recorded_without_a_flag(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
         """A flag here preempts VERDICT's acoustically-empty discard, which would be unreachable."""
-        _kinds(store, speech="absent", airway="absent", voice="absent")
+        reads(_evaluation([], state=RouteState.EMPTY))
         result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.PASS
         assert result.empty_set is True
-        assert "absent" in result.verdict.why
+        assert result.route_state == "empty"
+        assert "empty" in result.verdict.why
         assert all(d.attributes["will_run"] is False for d in live_entities(store, "branch_decision"))
 
-    def test_any_branch_running_passes(self, store: ProvStore, tmp_path: Path) -> None:
+    def test_an_unexplained_recording_is_recorded_as_such(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """Nothing routed and the recording was not empty: a charge against the ruleset, kept apart."""
+        reads(_evaluation([], state=RouteState.UNEXPLAINED))
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.route_state == "unexplained"
+        assert result.empty_set is True
+
+    def test_any_branch_running_passes(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
         """A non-empty execution set is a pass; nothing here is a judgement about the recording."""
-        _kinds(store, speech="present", airway="absent", voice="absent")
+        reads(_evaluation(["SPEECH"]))
         assert routing(store, None, _map(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.PASS
 
 
 class TestTheStoreContract:
-    """One decision per branch, before any branch runs, tied to the classification it rests on."""
+    """One decision per branch, before any branch runs, tied to the reading it rests on."""
 
-    def test_three_decisions_and_none_for_redact(self, store: ProvStore, tmp_path: Path) -> None:
-        """REDACT is a step of SPEECH, not a branch beside it."""
-        _kinds(store, speech="present", airway="present", voice="present")
-        routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        branches = {e.attributes["branch"] for e in live_entities(store, "branch_decision")}
-        assert branches == set(BRANCH_FOR_KIND.values()) == {"AIRWAY", "SPEECH", "VOICE"}
-
-    def test_each_decision_names_its_kind_and_the_stream_it_was_taken_over(
-        self, store: ProvStore, tmp_path: Path
+    def test_each_decision_names_the_stream_it_was_taken_over(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """``kind`` is the key T8 joins branch verdicts to decisions on; ``stream`` is V14."""
-        _kinds(store, speech="present", airway="present", voice="present")
+        """A second pass over another stream stays tellable apart."""
+        reads(_evaluation(["SPEECH"]))
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        by_branch = {e.attributes["branch"]: e for e in live_entities(store, "branch_decision")}
-        assert {branch: e.attributes["kind"] for branch, e in by_branch.items()} == {
-            branch: kind for kind, branch in BRANCH_FOR_KIND.items()
-        }
-        assert {e.attributes["stream"] for e in by_branch.values()} == {"plain"}
+        assert {e.attributes["stream"] for e in live_entities(store, "branch_decision")} == {"plain"}
 
     def test_a_second_pass_over_another_stream_records_that_streams_name(
-        self, store: ProvStore, tmp_path: Path
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
         """The unit is encapsulated over one input stream, and the decision says which one."""
-        _kinds(store, speech="present", airway="absent", voice="absent")
+        reads(_evaluation(["SPEECH"]))
         routing(store, "suppressed_foreground", _map(tmp_path), run_dir=tmp_path)
         assert {e.attributes["stream"] for e in live_entities(store, "branch_decision")} == {"suppressed_foreground"}
 
-    def test_each_decision_is_derived_from_its_kind_element(self, store: ProvStore, tmp_path: Path) -> None:
-        """``wasDerivedFrom`` ties the decision to the classification, and used records the read."""
-        _kinds(store, speech="present", airway="absent", voice="absent")
+    def test_each_decision_is_derived_from_the_reading(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """``wasDerivedFrom`` ties the decision to the evaluation, and ``used`` records the read."""
+        reads(_evaluation(["SPEECH"]))
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        speech_kind = next(e for e in live_entities(store, "kind") if e.attributes["kind"] == "speech")
+        recorded = find_measurement(store, RULESET_ROUTING)
+        assert recorded is not None
         decision = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
-        assert speech_kind.id in store.derived_from(decision.id)
-        activity = store.get_activity(store.generated_by(decision.id))
-        assert speech_kind.id in store.uses_of(activity.id)
+        assert recorded.id in store.derived_from(decision.id)
+        activity_id = store.generated_by(decision.id)
+        assert activity_id is not None
+        assert recorded.id in store.uses_of(activity_id)
 
-    def test_a_kind_taxonomy_never_wrote_is_uncertain_and_runs(self, store: ProvStore, tmp_path: Path) -> None:
-        """A classification that is not in the store is not an absence; the branch is asked."""
-        _kinds(store, speech="present")
+
+class TestItReadsTheLiveStore:
+    """The reading runs over the store the graph has written, not over a file on disk."""
+
+    def test_a_seeded_store_routes_without_a_serialised_run(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """A reading that always failed would pass every mocked test above and say nothing."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
         result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        assert set(result.runs) == {"SPEECH", "AIRWAY", "VOICE"}
-        airway = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "AIRWAY")
-        assert airway.attributes["kind_state"] == "uncertain"
+        assert result.route_state in ("routed", "empty", "unexplained")
+        recorded = find_measurement(store, RULESET_ROUTING)
+        assert recorded is not None
+        assert recorded.attributes["gate_outcomes"]

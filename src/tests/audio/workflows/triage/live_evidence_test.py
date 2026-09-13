@@ -19,7 +19,6 @@ from senselab.audio.workflows.triage.live_evidence import (
     EVIDENCE_PREFIX,
     UNDECLARED,
     evaluate_live_routes,
-    failed_route_attributes,
     read_live_features,
     recording_stem,
     required_sources,
@@ -322,7 +321,7 @@ class TestWhatTheReaderReads:
         assert features.words["lexical"] == 3
 
     def test_the_evaluation_carries_no_declaration(self, config: TriageConfig, tmp_path: Path) -> None:
-        """TAXONOMY reads no hint, and a ``task-`` id is a hint; nothing is declared here."""
+        """The evaluation reads no hint, and a ``task-`` id is a hint; nothing is declared here."""
         run_dir = _run_dir(tmp_path)
         evaluation = evaluate_live_routes(_base_store(run_dir), config, run_dir=run_dir)
         assert evaluation.family == UNDECLARED
@@ -350,25 +349,15 @@ class TestWhatTheReaderReads:
 
 
 class TestTheRecordedAttributes:
-    """What TAXONOMY writes, in the one shape a reader handles."""
+    """What ROUTING writes, in the one shape a reader handles."""
 
-    def test_the_two_shapes_carry_the_same_keys(self, config: TriageConfig, ruleset: Ruleset, tmp_path: Path) -> None:
-        """A failed evaluation is discriminated by ``state`` and ``error``, never by a missing key."""
+    def test_the_reading_carries_no_failure_shape(self, config: TriageConfig, ruleset: Ruleset, tmp_path: Path) -> None:
+        """The ruleset decides execution, so a failure raises rather than being recorded as a state."""
         run_dir = _run_dir(tmp_path)
         recorded = route_attributes(evaluate_live_routes(_base_store(run_dir), config, run_dir=run_dir), ruleset)
-        failed = failed_route_attributes("ValueError: no ruleset")
-        assert recorded.keys() == failed.keys()
-        assert recorded["error"] is None
-        assert failed["state"] is None
-
-    def test_nothing_recorded_here_is_authoritative(
-        self, config: TriageConfig, ruleset: Ruleset, tmp_path: Path
-    ) -> None:
-        """The ruleset selects nothing while ``kind_state`` still decides what runs."""
-        run_dir = _run_dir(tmp_path)
-        recorded = route_attributes(evaluate_live_routes(_base_store(run_dir), config, run_dir=run_dir), ruleset)
-        assert recorded["authoritative"] is False
-        assert failed_route_attributes("boom")["authoritative"] is False
+        assert "error" not in recorded
+        assert "authoritative" not in recorded
+        assert recorded["state"] is not None
 
     def test_the_routed_branches_survive_serialisation(
         self, config: TriageConfig, ruleset: Ruleset, tmp_path: Path
