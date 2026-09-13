@@ -8,8 +8,11 @@ preferred here: every one in a detector's grid is scored, and
 No grid is written down. Each is derived at catalogue construction from the detector's own
 distribution over the corpus, read from the dated profile under ``data/detector_profile/``. A
 detector the profile does not cover, or covers as a constant, raises rather than taking a default.
-A candidate declared ahead of the sweep that would profile it is staged in
-:data:`UNPROFILED_DETECTORS`, outside the catalogue, and carries no grid at all.
+Two kinds of candidate sit outside the catalogue and carry no grid at all. One declared ahead of
+the sweep that would profile it is staged in :data:`STAGED_DETECTORS`, and the profile that first
+carries it moves it into the catalogue. One a sweep has already measured and that is held for a
+branch to read is in :data:`BRANCH_DETECTORS`, keyed by the branch that reads it; no profile moves
+it anywhere.
 
 ``specs/20260912-detector-grids/design.md`` says which quantiles, why the extremes are in, how a
 count and a gate are handled, and which cut points are pinned regardless of the corpus.
@@ -31,6 +34,7 @@ import pyarrow.parquet as pq
 from senselab.audio.workflows.triage.routing_analysis.features import SPAN_CLASSIFIERS, RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.labels import FAMILIES, LABEL_SETS, peak_key
 from senselab.audio.workflows.triage.routing_analysis.tables import read_header
+from senselab.audio.workflows.triage.vocabulary import BRANCHES
 
 GATE_CLOSED = -1.0
 """The value a gated detector reads when its corroborator did not fire: below every threshold."""
@@ -410,7 +414,7 @@ def _check_pins(candidates: Iterable[Detector]) -> None:
         raise ValueError(f"PINNED_THRESHOLDS names detectors the catalogue does not declare: {unpinnable}")
 
 
-def _check_unprofiled(candidates: Iterable[Detector], catalogue: Iterable[Detector], path: str | None = None) -> None:
+def _check_staged(candidates: Iterable[Detector], catalogue: Iterable[Detector], path: str | None = None) -> None:
     """Refuse a staged candidate that repeats a catalogue name, or that the profile now covers.
 
     Args:
@@ -431,6 +435,48 @@ def _check_unprofiled(candidates: Iterable[Detector], catalogue: Iterable[Detect
         raise ValueError(
             f"staged detectors are in the detector profile: {profiled}; move them into the catalogue, "
             "where their grids are derived, rather than leaving them unscored"
+        )
+
+
+def _check_branch_detectors(
+    held: Mapping[str, Sequence[Detector]],
+    catalogue: Iterable[Detector],
+    staged: Iterable[Detector],
+) -> None:
+    """Refuse a branch detector that names no branch, repeats another declaration, or carries a grid.
+
+    Args:
+        held: Branch to the detectors that branch reads.
+        catalogue: Every candidate the catalogue builds a grid for.
+        staged: The candidates staged for the sweep that will profile them.
+
+    Raises:
+        ValueError: If a key is not one of
+            :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES`, if a name repeats across
+            branches, is already in the catalogue or is also staged, or if a held detector carries a
+            threshold grid.
+    """
+    unrouted = sorted(set(held) - set(BRANCHES))
+    if unrouted:
+        raise ValueError(f"BRANCH_DETECTORS names branches the graph does not run: {unrouted}")
+    names = [detector.name for detectors in held.values() for detector in detectors]
+    duplicated = sorted({name for name in names if names.count(name) > 1})
+    if duplicated:
+        raise ValueError(f"branch detectors are declared for more than one branch: {duplicated}")
+    repeated = sorted(set(names) & {candidate.name for candidate in catalogue})
+    if repeated:
+        raise ValueError(f"branch detectors are already in the catalogue: {repeated}")
+    both = sorted(set(names) & {candidate.name for candidate in staged})
+    if both:
+        raise ValueError(
+            f"branch detectors are also staged for the catalogue: {both}; a detector is held for a "
+            "branch or staged for the router, never both"
+        )
+    gridded = sorted(detector.name for detectors in held.values() for detector in detectors if detector.thresholds)
+    if gridded:
+        raise ValueError(
+            f"branch detectors carry a threshold grid: {gridded}; a branch reads the number, and a "
+            "grid is what a router sweeps"
         )
 
 
@@ -1501,18 +1547,24 @@ _PITCH_TRAJECTORY: tuple[Detector, ...] = (
     _candidate("voice.phonation_voiced_seconds", "voice", ("phonation", "voiced_seconds"), "seconds"),
     _candidate("voice.phonation_strength_median", "voice", ("phonation", "strength_median"), "strength"),
 )
-"""Candidates reading ``RecordingFeatures.phonation``, which no shipped profile has measured. Each
-``_rising``/``_falling`` pair reads one signed key at both polarities.
-``specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`` says what each key measures and
-what the pairs are there to settle."""
+"""Detectors reading ``RecordingFeatures.phonation``, held for VOICE by
+:data:`BRANCH_DETECTORS`. Each ``_rising``/``_falling`` pair reads one signed key at both
+polarities. ``specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`` says what each key
+measures, what the corpus sweep found, and why none of them gates."""
 
-UNPROFILED_DETECTORS: tuple[Detector, ...] = (
-    _candidate("cough.words_onomatopoeic", "cough", ("onomatopoeic",), "tokens"),
-    *_PITCH_TRAJECTORY,
-)
-"""Candidates whose feature no shipped profile has measured. Each carries an empty ``thresholds``
-and is absent from :data:`DETECTORS`; :func:`detector_value` reads one like any other, which is what
-a corpus sweep needs to profile it. Once a profile carries one, :func:`_check_unprofiled` raises
-until it is moved into the catalogue."""
+BRANCH_DETECTORS: Mapping[str, tuple[Detector, ...]] = {"VOICE": _PITCH_TRAJECTORY}
+"""Detectors a branch reads, keyed by the branch that reads them.
 
-_check_unprofiled(UNPROFILED_DETECTORS, _CANDIDATES)
+A branch detector is read *inside* a branch and is never a gate *into* one, so it is absent from
+:data:`DETECTORS` and from ``taxonomy.ruleset.branch_gates``, and carries an empty ``thresholds``.
+:func:`detector_value` reads one like any other. A profile carrying its distribution moves it
+nowhere, which is what tells it apart from :data:`STAGED_DETECTORS`."""
+
+STAGED_DETECTORS: tuple[Detector, ...] = (_candidate("cough.words_onomatopoeic", "cough", ("onomatopoeic",), "tokens"),)
+"""Candidates awaiting the sweep that will profile them. Each carries an empty ``thresholds`` and is
+absent from :data:`DETECTORS`; :func:`detector_value` reads one like any other, which is what a
+corpus sweep needs to profile it. Once a profile carries one, :func:`_check_staged` raises until it
+is moved into the catalogue."""
+
+_check_staged(STAGED_DETECTORS, _CANDIDATES)
+_check_branch_detectors(BRANCH_DETECTORS, _CANDIDATES, STAGED_DETECTORS)
