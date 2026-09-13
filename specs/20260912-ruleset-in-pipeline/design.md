@@ -1,4 +1,6 @@
-# The measured ruleset runs inside the pipeline — stage 1 of two, 2026-09-12
+# The measured ruleset runs inside the pipeline — stages 1 and 2, 2026-09-12/13
+
+# Stage 1 — the ruleset runs and records, 2026-09-12
 
 ## What this is
 
@@ -305,3 +307,189 @@ exactly that reason.
 - No threshold in code. Every number the reading uses comes from `taxonomy.ruleset`.
 - Nothing deleted. The kind-line path is untouched and still decides.
 - No corpus run. Agreement between the two selections is measured by the owner.
+
+---
+
+# Stage 2 — the ruleset decides, and the fold it replaced is deleted
+
+## What stage 1 measured, and why stage 2 needed no corpus run to justify the deletion
+
+Stage 1 wrote the two selections side by side so agreement could be counted. The count was not
+needed, because the selection being compared against was not a reading of the recording. It was a
+constant, and the constant is reconstructible from four facts in the tree stage 1 left behind:
+
+1. Every `taxonomy.presence_floor.*` in `data/config/default.yaml` was `null`.
+2. `_line_state(available, evidence, floor)` returned `UNAVAILABLE` whenever `floor is None`,
+   before reading `evidence` at all.
+3. `_fold_authoritative_line` mapped `UNAVAILABLE` to `UNCERTAIN`, and `_fold_speech_lines` was a
+   wrapper over it.
+4. `voice` had no evidence source at all: `_retired_voice_line` returned a hardcoded `UNAVAILABLE`
+   line and `UNCERTAIN`.
+
+So all three kinds read `uncertain` on every recording, and `routing`'s
+`by_classification = state != ABSENT` made `will_run` true for AIRWAY, SPEECH and VOICE
+unconditionally. Agreement between the two selections would have measured the ruleset against
+"everything runs", which is a statement about the ruleset's routed set alone. There is nothing to
+count.
+
+## What was deleted
+
+**The fold, entire.** `SCREENED_KINDS`, the `kind` entity type (removed from `PROV_TYPE` in
+`utils/prov_store.py`, not merely stopped being written), and every helper that existed only to
+serve it: `_unavailable_windows`, `_window_evidence`, `_acoustic_line`, `_lexical_line`,
+`_transcribed_span_ids`, `_span_label_evidence`, `_span_line`, `_window_line`, `_line_state`,
+`_fold_authoritative_line`, `_fold_speech_lines`, `_retired_voice_line`, and `taxonomy()`'s `lines`
+/ `states` construction. `_transcribed_span_ids` was checked before deleting: AIRWAY carries its own
+`_is_transcribed` and imports nothing from TAXONOMY.
+
+**The configuration behind it.** The whole `taxonomy.presence_floor` subtree,
+`taxonomy.voice_min_duration_s` and `taxonomy.voice_uncertain_duration_s`.
+`taxonomy.speech_labels` **stays**: `nodes/speech.py` reads it for that branch's own acoustic
+evidence, so it was never only the fold's.
+
+**The staging scaffolding.** `route_attributes`' `authoritative` and `error` keys,
+`failed_route_attributes`, and the `try`/`except` in `_write_ruleset_routing`. The exception existed
+because a reading that decided nothing must not be able to fail its node. It decides now, so it
+raises now.
+
+**The parallel columns.** `ruleset_will_run` and `ruleset_route_state` on `branch_decision`, and
+`ruleset_runs` / `ruleset_state` on `RoutingResult`. With one selection there is nothing to compare
+against, so `will_run` is it.
+
+**`routing`'s kind arm.** `BRANCH_FOR_KIND`, `KIND_STATES`, `UNREADABLE`, `UNCLASSIFIED_BRANCHES`,
+`_classifications`, `_ruleset_selection`.
+
+## What moved, and what did not
+
+`_write_ruleset_routing` is ROUTING's, under ROUTING's node name on step `ruleset_routing`.
+ROUTING then reads its own reading: `will_run` is the branch being in `routed`, or a hint forcing it.
+
+**The two nodes were not merged.** TAXONOMY keeps the per-classifier label summaries and the
+consensus taxonomy and stays a node, because those are measurements about content that FIGURE,
+REPORT and the planned VOICE rework consume. The measure/decide boundary is the point: TAXONOMY
+emits measurements, ROUTING emits decisions.
+
+**The ordering constraint inverted and survived.** Stage 1 required the ruleset reading to run
+*after* TAXONOMY's label summaries, because `voice.glide` and `voice.chant` read `plain|yamnet` off
+`yamnet_label_summary`. That is now an ordering constraint between two nodes rather than between two
+steps of one, which `GRAPH_ORDER` already enforces.
+
+## Three decisions stage 1 left open
+
+### Per-branch route state: a three-member vocabulary, not a boolean
+
+`will_run` alone cannot tell a branch the ruleset declined from a branch whose gates could not be
+read. `RouteEvaluation.unavailable` already carries the distinction per branch, so `routing`
+records it: `routed` (a gate fired), `unavailable` (no gate fired and at least one of the branch's
+gates could not be read), `declined` (every gate was evaluated and none fired). Only `routed` runs
+the branch. This is deliberately *not* the old rule — "uncertain runs it" is what made the fold
+inert — but the distinction is kept because a branch that was never judged is not a branch that
+declined, and the fold's agreement axis needs the difference.
+
+### VERDICT: the fold is keyed by branch
+
+The replacement emits a route state per branch; a branch has no kind to key on, and DDK has no kind
+at all. Inventing a second branch→kind map to keep the fold kind-keyed would be exactly the parallel
+vocabulary this stage exists to remove, so the fold keys on the branch name throughout:
+`FileVerdict.kinds` → `findings`, `FileVerdict.screened` → `routes`, and `agreement` and `hints`
+follow. A branch's own verdict joins to its decision by node name — `NodeVerdict.node` already *is*
+the branch name — and only when it names a `kind`, which is what keeps the reader's synthesised
+"outcome nobody can act on" flag from being folded as a finding.
+
+The agreement table is unchanged in shape and changed in what it compares. It compared TAXONOMY's
+classification against the branch's conclusion; it now compares the *route* against the branch's
+conclusion. That is the quantity the ruleset work actually cares about: `mismatch` on a routed
+branch is over-routing, `mismatch` on a declined branch is a miss, and both are countable per branch
+over a corpus without a join.
+
+`RESOLVED` survives, and it now means something reachable: a branch whose gates were all unreadable
+made no claim for the branch's conclusion to agree or disagree with.
+
+### `acoustically_empty` becomes a measurement
+
+The old ground was "every resolved kind is `absent`", which could never fire while every kind read
+`uncertain` — dag.md recorded it as unreachable. The ruleset already has a measured answer to the
+same question: `RouteState.EMPTY` is the emptiness bypass finding every tracked stream peak under
+`emptiness.peak_floor`. So the discard ground is now that state. `UNEXPLAINED` — nothing routed and
+the recording was *not* empty — is a charge against the ruleset and flags rather than discarding,
+which keeps the two apart in the product rather than in a reader's head.
+
+Precedence is unchanged: ADMIT fail → `unmeasurable` discard; else any flag → flag; else `empty` →
+`acoustically_empty` discard; else pass.
+
+## TAXONOMY's own verdict
+
+It consolidates and decides nothing, so its verdict says whether the consolidation had anything to
+work from: `pass` naming the classifiers and the label count when at least one per-span classifier
+produced scores, `flag` when none did. The flag is not a claim about the recording — it is the node
+saying that every downstream label gate will read `unavailable`, which is worth surfacing and is a
+fact about the run rather than about the audio. No decision was invented for it.
+
+## DDK becomes routable, and flags
+
+`routing` now writes a `branch_decision` for every branch in `BRANCHES`, DDK included, and the
+ruleset routes DDK. `run._drive_branches` already looks the branch up rather than indexing it and
+records `SKIPPED` with `NO_NODE`, so no runner change was needed.
+
+The consequence is that a recording whose DDK gates fire reaches VERDICT with `will_run` true and no
+verdict, and the fold emits "DDK was asked to run and never ran". The file flags. This is the
+outcome stage 1's design note argued against — but the argument there was against flagging *every*
+recording, which is what a kind line missing by default would have done. A content-measured gate
+flags only recordings with DDK content, which is an honest statement that the graph has no
+instrument for what is in them, and is the standing argument for building the branch.
+
+## Not done here
+
+The round trip through `ProvStore.write_jsonl` and `NamedTemporaryFile` is untouched. Splitting
+`extract_features` into `reduce_records` + a thin `extract_features` (stage 1's "What must move in
+`features.py`") is a separable refactor with its own risk — the `json.dumps(default=str)` coercion
+caveat — and nothing in this stage depends on it. The equivalence tests still point at the disk
+path, which is where that caveat would surface.
+
+### The writer's vocabulary may shrink. The reader's may not.
+
+`kind` was first removed from `PROV_TYPE` in `utils/prov_store.py` as well as from the writer, and
+that was a defect, caught in review and reverted. `read_jsonl` validates every entity's `prov_type`
+against that `Literal`, so dropping the member made **every one of the 62,578 existing corpus stores
+unopenable** — `entity ... has unknown prov_type 'kind'` — which breaks all four `scripts/extend_*`
+drivers, the clip-withdrawal pass among them.
+
+**"Pre-alpha: delete outright" governs our own API surface** — fields, aliases, config keys, call
+signatures. It does not govern the ability to read records already on disk. The store is append-only
+and W3C PROV-shaped, and its premise is that history is immutable and set-union mergeable; a reader
+that refuses a record it previously wrote contradicts that premise directly. **Retiring a type from
+the writer is the deletion. Retiring it from the reader is data loss.**
+
+So `kind` stays in `PROV_TYPE`, carrying a docstring that says it is historical — written by
+TAXONOMY's fold until 2026-09-13, readable so finished runs stay openable, emitted by nothing.
+`prov_store_test.py::test_every_readable_entity_type_round_trips` is the regression guard, and it is
+parametrised over the whole literal rather than over a hand-picked list, so the next type retired
+from the writer cannot be dropped from the reader without a failing test.
+
+The inconsistency this removes is one this stage created and then documented: `routing_analysis`
+kept working on those same stores only because `features.py::read_store` streams raw JSONL and
+validates nothing. Two readers of the same bytes disagreeing about whether history is legible is
+exactly the state to avoid.
+
+**What the audit found.** Every other closed vocabulary a reader validates against was checked:
+`AGENT_TYPE`, `ENVIRONMENT_KIND`, `RELATION`, `_RECORD_KEYS` and `_ENVIRONMENT_KINDS` are untouched,
+and no member was removed from `Outcome`, `Triage`, `KindState`, `RunState`, `Release`, `BRANCHES`,
+`GRAPH_ORDER` or the `agree`/`mismatch`/`resolved`/`not_run` and hint-reading constant sets — this
+stage only added to them. `verdict._node_verdict_from_entity` already wraps `Outcome(raw)` in a
+`try`/`except` and reports an unreadable outcome rather than raising, so a verdict entity from any
+era folds.
+
+One near-miss, left as it is and named here rather than hardened: `verdict._branch_decisions` reads
+`attributes["route_state"]`, which a pre-stage-2 `branch_decision` does not carry — it has
+`kind_state`. Nothing re-runs the VERDICT node over a finished store (only `run.py` calls it; no
+`extend_*` driver re-folds), so it is unreachable today. It is deliberately **not** given a default:
+`kind_state` is a different measurement, and mapping a kind classification onto a route state would
+invent a reading. What a re-fold of a pre-stage-2 store should do is a decision nobody has made, and
+a silent default would make it for them.
+
+**`routing_analysis` still reads `kind` entities, and that was left alone.**
+`features.py::_absorb` fills `RecordingFeatures.kind_state` from them and `report.py`'s baseline
+table compares the ruleset against what TAXONOMY would have said, on the scored 62,547-recording
+corpus — the only place that comparison means anything. On a store written after this change every
+kind reads `missing` and the baseline table is empty. It is a corpus-archaeology feature now, and
+deleting it would delete the ability to re-derive the measurement that justified the ruleset.

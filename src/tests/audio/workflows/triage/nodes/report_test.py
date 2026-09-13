@@ -274,21 +274,8 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         detail={"absent": dict(absent or {}), "derivatives": {}},
     )
 
-    fold = store.activity(node="TAXONOMY", step="fold", parameters={})
+    fold = store.activity(node="TAXONOMY", step="conclude", parameters={})
     store.was_associated_with(fold, software)
-    kind_lines = {
-        "speech": {
-            "acoustic": {"state": "present", "evidence": 1, "unit": "windows", "floor": 1},
-            "lexical": {"state": "present", "evidence": len(words), "unit": "words", "floor": 1},
-        },
-        "airway": {
-            "health_acoustic": {"state": "present", "evidence": 1, "unit": "windows", "floor": 1},
-            "acoustic": {"state": "present", "evidence": 1, "unit": "windows", "floor": 1},
-        },
-        "voice": {"phonation": {"state": "present", "evidence": 0.8, "unit": "seconds", "floor": 0.5}},
-    }
-    for kind, state in (("speech", "present"), ("airway", "present"), ("voice", "present")):
-        _entity("kind", None, {"kind": kind, "state": state, "lines": kind_lines[kind], "stream": "plain"})
     write_verdict(
         store,
         fold,
@@ -296,27 +283,42 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         node="TAXONOMY",
         outcome=Outcome.PASS,
         kind=None,
-        why="every kind is present",
-        detail={"kinds": {"speech": "present", "airway": "present", "voice": "present"}},
+        why="consolidated 2 label(s) from hear, yamnet",
+        detail={"classifiers": ["hear", "yamnet"], "n_labels": 2},
     )
 
     route = store.activity(node="routing", step=None, parameters={})
     store.was_associated_with(route, software)
-    for branch, kind in (("AIRWAY", "airway"), ("SPEECH", "speech"), ("VOICE", "voice")):
+    _entity(
+        "measurement",
+        None,
+        {
+            "name": "ruleset_routing",
+            "signal": "plain",
+            "state": "routed",
+            "routed": ["AIRWAY", "SPEECH", "VOICE"],
+            "gate_outcomes": {"airway.cough": "fired", "speech.words": "fired", "voice.glide": "unavailable"},
+            "unavailable": {"VOICE": ["voice.glide"]},
+            "flags": {"SPEECH": ["speech.short"]},
+            "sources": ["words"],
+            "stem": "rec",
+        },
+    )
+    for branch in ("AIRWAY", "SPEECH", "VOICE"):
         _entity(
             "branch_decision",
             None,
             {
                 "branch": branch,
-                "kind": kind,
                 "will_run": True,
-                "kind_state": "present",
-                "raw_state": "present",
+                "route_state": "routed",
+                "unavailable_gates": [],
+                "flag_gates": [],
                 "forced_by_hint": False,
                 "hint_tags": [],
                 "unmapped_tags": [],
                 "bad_map_values": {},
-                "why": "kind_present",
+                "why": "route_routed",
                 "stream": "plain",
             },
         )
@@ -564,7 +566,7 @@ class TestTheStructuredJsonCompanion:
         artifacts = report(store, tmp_path / "summary", pdf_config)
         payload = json.loads(artifacts["json"].read_text())
         assert artifacts["summary"].exists() and artifacts["json"].exists()
-        assert payload["schema_version"] == "triage-summary/v3"
+        assert payload["schema_version"] == "triage-summary/v4"
         assert payload["decisions"]["file_triage"] == payload["verdict"]["triage"]
         assert payload["decisions"]["release"] == payload["verdict"]["release"]
         assert payload["artifacts"]["summary"]["path"] == artifacts["summary"].name
@@ -836,7 +838,7 @@ class TestTheSummaryLayers:
                 "file_triage": "flag",
                 "release": "withheld",
             },
-            "screening": {"screened_kinds": {}, "decision_paths": {}},
+            "screening": {"routes": {}, "route_state": None, "ruleset": {}},
             "routing": {},
         }
         header = _header(document)
@@ -851,31 +853,27 @@ class TestTheSummaryLayers:
         report(store, tmp_path / "summary", _png(tmp_path))
         assert headers[0]["context"].startswith("test-run")
 
-    def test_the_header_reports_every_uncertain_kind_not_only_the_first(self) -> None:
-        """Speech and voice can both be uncertain; the header must not shadow the second."""
+    def test_the_header_support_names_the_route_state_and_every_branch(self) -> None:
+        """A reader must see what the ruleset made of the recording, not only which branches ran."""
         document = {
             "recording": {"task_type": "cough", "declared_hints": {}},
             "decisions": {
-                "reasons": [{"node": "TAXONOMY", "why": "n/a"}],
+                "reasons": [{"node": "routing", "why": "n/a"}],
                 "flags": [],
                 "file_triage": "flag",
                 "release": "withheld",
             },
             "screening": {
-                "screened_kinds": {},
-                "decision_paths": {
-                    "speech": {"state": "uncertain", "lines": {}},
-                    "voice": {
-                        "state": "uncertain",
-                        "lines": {"phonation": {"evidence": 0.4, "floor": 0.5, "uncertain_floor": 0.3}},
-                    },
-                },
+                "routes": {"AIRWAY": "routed", "SPEECH": "declined", "VOICE": "unavailable"},
+                "route_state": "routed",
+                "ruleset": {},
             },
             "routing": {},
         }
         header = _header(document)
-        assert "speech is uncertain" in header["evidence"]
-        assert "voice uncertain: longest phonation span 0.40 s" in header["evidence"]
+        assert "routes (routed):" in header["support"]
+        assert "AIRWAY=routed" in header["support"]
+        assert "VOICE=unavailable" in header["support"]
 
     def test_the_spectrogram_and_the_blocks_are_both_drawn(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1169,20 +1167,20 @@ class TestTheAbsentLanesAreOnThePage:
 class TestTheHintReadingIsOnThePage:
     """``verdict.hints`` reached the JSON and not the page, so a reader saw the flag and not its cause."""
 
-    def test_an_unclaimed_kind_reads_found_unclaimed(
+    def test_an_unclaimed_branch_reads_found_unclaimed(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With nothing declared, every kind the graph found is found and unclaimed, and says so."""
+        """With nothing declared, every subject the graph found is found and unclaimed, and says so."""
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True)
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
-        assert "airway: screened=present resolved=present agreement=agree hint=found_unclaimed" in blocks
+        assert "AIRWAY: route=routed found=present agreement=agree hint=found_unclaimed" in blocks
 
-    def test_a_declared_kind_no_branch_found_reads_claimed_not_found(
+    def test_a_declared_branch_that_found_nothing_reads_claimed_not_found(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The reason line names the mismatch; the kind line must agree with it rather than omit it."""
+        """The reason line names the mismatch; the branch line must agree with it rather than omit it."""
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True)
         software = software_agent(store)
@@ -1193,15 +1191,15 @@ class TestTheHintReadingIsOnThePage:
             extent=None,
             attributes={
                 "branch": "AIRWAY",
-                "kind": "airway",
                 "will_run": True,
-                "kind_state": "present",
-                "raw_state": "present",
+                "route_state": "routed",
+                "unavailable_gates": [],
+                "flag_gates": [],
                 "forced_by_hint": False,
                 "hint_tags": ["cough"],
                 "unmapped_tags": [],
                 "bad_map_values": {},
-                "why": "kind_present",
+                "why": "route_routed",
                 "stream": "plain",
             },
         )
@@ -1222,7 +1220,7 @@ class TestTheHintReadingIsOnThePage:
 
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
-        assert "airway: screened=present resolved=absent agreement=mismatch hint=claimed_not_found" in blocks
+        assert "AIRWAY: route=routed found=absent agreement=mismatch hint=claimed_not_found" in blocks
 
     def test_a_lane_the_page_did_not_draw_is_named_with_its_reason(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1551,7 +1549,7 @@ class TestThePdfPagination:
         report(store, tmp_path / "summary", pdf_config)
         blocks = "\n".join(drawn[-1])
         assert "DECISION SUMMARY" in blocks and "SCREENING AND ROUTING" in blocks and "**hello** **world**" in blocks
-        assert "TAXONOMY DECISION PATH" in blocks and "lexical consensus decides" in blocks
+        assert "ROUTING GATES" in blocks and "fired:" in blocks
         assert "ANALYTIC RECORD" in blocks and "summary.json" in blocks
 
     def test_the_png_stays_one_image_with_the_blocks_on_it(

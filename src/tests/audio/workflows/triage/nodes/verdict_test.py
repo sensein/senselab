@@ -10,9 +10,11 @@ import pytest
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.routing import routing
+from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.run import GRAPH_ORDER
 from senselab.audio.workflows.triage.vocabulary import UNREAD_DECLARATION, Outcome, Release, RunState, Triage
 from senselab.utils.prov_store import Entity, ProvStore
@@ -23,7 +25,7 @@ BASE: tuple[tuple[str, Outcome, str | None], ...] = (
     ("AIRWAY", Outcome.PASS, "airway"),
     ("SPEECH", Outcome.PASS, "speech"),
 )
-KINDS = {"airway": "present", "speech": "present", "voice": "absent"}
+ROUTED_PAIR = ("AIRWAY", "SPEECH")
 
 
 def _hint_config(tmp_path: Path) -> TriageConfig:
@@ -36,34 +38,48 @@ def _hint_config(tmp_path: Path) -> TriageConfig:
         The merged configuration.
     """
     path = tmp_path / "hints.yaml"
-    path.write_text("routing:\n  hint_kind_map:\n    cough: airway\n    read-speech: speech\n")
+    path.write_text("routing:\n  hint_branch_map:\n    cough: AIRWAY\n    read-speech: SPEECH\n")
     return load_triage_config(path)
 
 
+def _evaluation(
+    routed: tuple[str, ...], state: RouteState, unavailable: Mapping[str, tuple[str, ...]]
+) -> RouteEvaluation:
+    """One ruleset reading, standing in for the reduction the real ROUTING would run."""
+    return RouteEvaluation(
+        stem="sub-01",
+        family="",
+        routed=routed,
+        declared=(),
+        agreed=(),
+        missed=(),
+        extra=(),
+        unavailable=dict(unavailable),
+        flags={},
+        state=state,
+        gate_outcomes={"airway.cough": GateOutcome.SILENT},
+    )
+
+
 @pytest.fixture
-def make_verdict_store(tmp_path: Path) -> Callable[..., ProvStore]:
-    """A builder seeding node verdicts and kinds, then letting the real ROUTING decide over them."""
+def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., ProvStore]:
+    """A builder running the real ROUTING over a constructed reading, then seeding node verdicts."""
 
     def _make(
         *,
         node_verdicts: Sequence[tuple[str, Outcome, str | None]] = (),
-        kinds: Mapping[str, str] | None = None,
+        routed: Sequence[str] = (),
+        route_state: RouteState = RouteState.ROUTED,
+        unavailable: Mapping[str, tuple[str, ...]] | None = None,
         route: bool = True,
         config: TriageConfig | None = None,
         hint: AudioHints | None = None,
     ) -> ProvStore:
         store = ProvStore(run_id="verdict-test")
         agent = software_agent(store)
-        taxonomy = store.activity(node="TAXONOMY", step="seed-kinds", parameters={})
-        store.was_associated_with(taxonomy, agent)
-        for kind_name, state in (kinds or {}).items():
-            kind_id = store.entity(
-                prov_type="kind",
-                extent=None,
-                attributes={"kind": kind_name, "state": state, "lines": {}, "stream": "plain"},
-            )
-            store.was_generated_by(kind_id, taxonomy)
         if route:
+            reading = _evaluation(tuple(routed), route_state, unavailable or {})
+            monkeypatch.setattr(routing_module, "evaluate_live_routes", lambda *a, **k: reading)
             routing(store, None, config or load_triage_config(), hint, run_dir=tmp_path)
         for node, outcome, kind in node_verdicts:
             activity = store.activity(node=node, step="seed", parameters={})
@@ -100,34 +116,36 @@ def _file_verdict_entity(store: ProvStore) -> Entity:
 class TestTheTriageAxisIsWired:
     """The three values reach the store, and each carries the ground the fold gave it."""
 
-    def test_a_branch_fail_against_an_absent_kind_is_a_file_pass(
+    def test_a_branch_that_never_ran_leaves_a_file_pass(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A cough recording: airway present and found, speech absent and not looked for."""
+        """A cough recording: AIRWAY routed and found its subject, SPEECH declined and never looked."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
-            kinds={"airway": "present", "speech": "absent", "voice": "absent"},
+            routed=("AIRWAY",),
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.PASS
-        assert result.file_verdict.kinds == {"airway": "present", "speech": "absent", "voice": "absent"}
+        assert result.file_verdict.findings["AIRWAY"] == "present"
+        assert result.file_verdict.findings["SPEECH"] == "uncertain"
 
     def test_an_admit_failure_discards_as_unmeasurable(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """Nothing ran, so nothing is claimed about the recording."""
-        store = make_verdict_store(node_verdicts=[("ADMIT", Outcome.FAIL, None)], kinds={}, route=False)
+        store = make_verdict_store(node_verdicts=[("ADMIT", Outcome.FAIL, None)], route=False)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.DISCARD
         assert result.file_verdict.discard_ground == "unmeasurable"
 
-    def test_every_kind_absent_discards_as_acoustically_empty(
+    def test_an_empty_recording_discards_as_acoustically_empty(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """ROUTING declined every branch and recorded it; the fold reads that off the decisions."""
+        """The emptiness bypass read every tracked stream peak under its floor; the fold reads that."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("TAXONOMY", Outcome.FAIL, None)],
-            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            routed=(),
+            route_state=RouteState.EMPTY,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.DISCARD
@@ -137,7 +155,7 @@ class TestTheTriageAxisIsWired:
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """``discard`` is not an ``Outcome``, and the entity must still record it."""
-        store = make_verdict_store(node_verdicts=[("ADMIT", Outcome.FAIL, None)], kinds={}, route=False)
+        store = make_verdict_store(node_verdicts=[("ADMIT", Outcome.FAIL, None)], route=False)
         verdict_module.verdict(store, None, config, run_dir=tmp_path)
         entity = _file_verdict_entity(store)
         assert entity.attributes["outcome"] == "discard"
@@ -145,59 +163,38 @@ class TestTheTriageAxisIsWired:
         assert entity.attributes["discard_ground"] == "unmeasurable"
 
 
-class TestTheClassificationIsReadVerbatim:
-    """A kind state is a string here; the fold reads it and never coerces it."""
+class TestTheRouteIsReadVerbatim:
+    """A route state is read off ROUTING's own decision and never re-derived here."""
 
-    def test_uncertain_folds_without_raising(
+    def test_an_unreadable_route_is_resolved_by_the_branch(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """TAXONOMY writes ``uncertain`` on a real run, which the vocabulary once had no member for."""
+        """A branch whose gates could not be read made no claim, so its branch settles it alone."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("SPEECH", Outcome.PASS, "speech")],
-            kinds={"airway": "absent", "speech": "uncertain", "voice": "absent"},
+            routed=(),
+            unavailable={"SPEECH": ("speech.words",)},
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.screened["speech"] == "uncertain"
-        assert result.file_verdict.kinds["speech"] == "present"
-        assert result.file_verdict.agreement["speech"] == "resolved"
+        assert result.file_verdict.routes["SPEECH"] == "unavailable"
+        assert result.file_verdict.findings["SPEECH"] == "present"
+        assert result.file_verdict.agreement["SPEECH"] == "resolved"
 
-    def test_a_state_nobody_can_read_is_reported_not_raised(
+    def test_the_route_is_never_rewritten_in_the_store(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """The classification is reported beside the branches; refusing to fold it hides the branch too."""
-        store = make_verdict_store(
-            node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
-            kinds={"airway": "maybe", "speech": "absent", "voice": "absent"},
-        )
-        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.screened["airway"] == "maybe"
-        assert result.file_verdict.kinds["airway"] == "present"
-
-    def test_the_classification_is_never_rewritten_in_the_store(
-        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """A branch resolving its kind leaves TAXONOMY's element exactly as it was."""
+        """A branch resolving its subject leaves ROUTING's decision exactly as it was."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("SPEECH", Outcome.PASS, "speech")],
-            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            routed=(),
+            route_state=RouteState.EMPTY,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.agreement["speech"] == "mismatch"
+        assert result.file_verdict.agreement["SPEECH"] == "mismatch"
         assert result.file_verdict.triage is Triage.FLAG
-        assert [e.attributes["state"] for e in store.entities("kind") if e.attributes["kind"] == "speech"] == ["absent"]
-
-    def test_the_latest_live_classification_wins(
-        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """Two elements for one kind are one assertion, the later; the store's shared rule."""
-        store = make_verdict_store(node_verdicts=[("ADMIT", Outcome.PASS, None)], kinds={"speech": "absent"})
-        taxonomy = store.activity(node="TAXONOMY", step="revise", parameters={})
-        revised = store.entity(
-            prov_type="kind", extent=None, attributes={"kind": "speech", "state": "present", "lines": {}}
-        )
-        store.was_generated_by(revised, taxonomy)
-        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.screened["speech"] == "present"
+        assert [
+            e.attributes["route_state"] for e in store.entities("branch_decision") if e.attributes["branch"] == "SPEECH"
+        ] == ["declined"]
 
 
 class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
@@ -209,7 +206,7 @@ class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
         """The union on ``write_verdict``'s outcome means a node can write a triage value by mistake."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
-            kinds={"airway": "present", "speech": "present", "voice": "absent"},
+            routed=ROUTED_PAIR,
         )
         activity = store.activity(node="SPEECH", step="seed", parameters={})
         agent = software_agent(store)
@@ -227,13 +224,13 @@ class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
             "the offending node and the value it wrote are both named"
         )
 
-    def test_the_unreadable_verdict_resolves_no_kind_and_the_fold_still_completes(
+    def test_the_unreadable_verdict_resolves_nothing_and_the_fold_still_completes(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """Every other node's conclusion survives, and the kind that node screened stays unanswered."""
+        """Every other node's conclusion survives, and the subject that node screened stays unanswered."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
-            kinds={"airway": "present", "speech": "present", "voice": "absent"},
+            routed=ROUTED_PAIR,
         )
         activity = store.activity(node="SPEECH", step="seed", parameters={})
         store.was_associated_with(activity, software_agent(store))
@@ -245,9 +242,9 @@ class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
         store.was_generated_by(alien, activity)
 
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.kinds["airway"] == "present"
-        assert result.file_verdict.kinds["speech"] == "present", "the classification stands where no branch answered"
-        assert result.file_verdict.agreement["speech"] == "not_run"
+        assert result.file_verdict.findings["AIRWAY"] == "present"
+        assert result.file_verdict.findings["SPEECH"] == "uncertain", "no branch answered for it"
+        assert result.file_verdict.agreement["SPEECH"] == "not_run"
         assert _file_verdict_entity(store).attributes["triage"] == "flag"
 
 
@@ -260,10 +257,10 @@ class TestTheBranchDecisionsAreRead:
         """ROUTING declined SPEECH and said why; a missing verdict there is the design working."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
-            kinds={"airway": "present", "speech": "absent", "voice": "absent"},
+            routed=("AIRWAY",),
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.agreement["speech"] == "not_run"
+        assert result.file_verdict.agreement["SPEECH"] == "not_run"
         assert result.file_verdict.triage is Triage.PASS
 
     def test_an_asked_branch_that_left_no_verdict_flags(
@@ -272,7 +269,7 @@ class TestTheBranchDecisionsAreRead:
         """ROUTING selected SPEECH and nothing came back; the reason names which silence it was."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
-            kinds={"airway": "present", "speech": "present", "voice": "absent"},
+            routed=ROUTED_PAIR,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path, ran={"SPEECH": RunState.ERRORED})
         assert result.file_verdict.triage is Triage.FLAG
@@ -284,14 +281,14 @@ class TestTheBranchDecisionsAreRead:
         """A skipped branch carries the reason it was skipped, in the same record as the one that ran."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
-            kinds={"airway": "present", "speech": "absent", "voice": "absent"},
+            routed=("AIRWAY",),
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         branches = result.file_verdict.branches
         assert branches["AIRWAY"] == {
             "will_run": True,
             "forced_by_hint": False,
-            "kind_state": "present",
+            "route_state": "routed",
             "verdict": "pass",
         }
         assert branches["SPEECH"]["will_run"] is False
@@ -303,7 +300,7 @@ class TestTheBranchDecisionsAreRead:
         """ROUTING itself never ran, so no branch was asked and none is owed an answer."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None)],
-            kinds={"airway": "present", "speech": "present", "voice": "absent"},
+            routed=ROUTED_PAIR,
             route=False,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
@@ -316,7 +313,8 @@ class TestTheBranchDecisionsAreRead:
         """An execution failure cannot be mistaken for ROUTING deliberately declining every branch."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("TAXONOMY", Outcome.PASS, None)],
-            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            routed=(),
+            route_state=RouteState.EMPTY,
             route=False,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path, ran={"routing": RunState.ERRORED})
@@ -338,12 +336,13 @@ class TestHintsAreReadThroughRoutingsMap:
         hint_config = _hint_config(tmp_path)
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.FAIL, "airway")],
-            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            routed=(),
+            route_state=RouteState.EMPTY,
             config=hint_config,
             hint=hint,
         )
         result = verdict_module.verdict(store, None, hint_config, hint, run_dir=tmp_path)
-        assert result.file_verdict.hints["airway"] == "claimed_not_found"
+        assert result.file_verdict.hints["AIRWAY"] == "claimed_not_found"
         assert result.file_verdict.triage is Triage.FLAG
 
     def test_a_speech_type_value_is_a_claim_like_any_tag(
@@ -354,12 +353,12 @@ class TestHintsAreReadThroughRoutingsMap:
         hint_config = _hint_config(tmp_path)
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("SPEECH", Outcome.FAIL, "speech")],
-            kinds={"airway": "absent", "speech": "present", "voice": "absent"},
+            routed=("SPEECH",),
             config=hint_config,
             hint=hint,
         )
         result = verdict_module.verdict(store, None, hint_config, hint, run_dir=tmp_path)
-        assert result.file_verdict.hints["speech"] == "claimed_not_found"
+        assert result.file_verdict.hints["SPEECH"] == "claimed_not_found"
 
     def test_a_tag_the_map_does_not_cover_claims_nothing(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -368,11 +367,11 @@ class TestHintsAreReadThroughRoutingsMap:
         hint = AudioHints(may_contain=["cough"])
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
-            kinds={"airway": "present", "speech": "absent", "voice": "absent"},
+            routed=("AIRWAY",),
             hint=hint,
         )
         result = verdict_module.verdict(store, None, config, hint, run_dir=tmp_path)
-        assert result.file_verdict.hints["airway"] == "found_unclaimed"
+        assert result.file_verdict.hints["AIRWAY"] == "found_unclaimed"
         assert result.file_verdict.triage is Triage.PASS
 
     def test_the_claim_is_read_off_the_decision_not_re_derived_from_the_config(
@@ -386,12 +385,13 @@ class TestHintsAreReadThroughRoutingsMap:
         hint = AudioHints(may_contain=["cough"])
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.FAIL, "airway")],
-            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            routed=(),
+            route_state=RouteState.EMPTY,
             config=_hint_config(tmp_path),
             hint=hint,
         )
         result = verdict_module.verdict(store, None, config, hint, run_dir=tmp_path)
-        assert result.file_verdict.hints["airway"] == "claimed_not_found"
+        assert result.file_verdict.hints["AIRWAY"] == "claimed_not_found"
         assert result.file_verdict.triage is Triage.FLAG
 
     def test_a_declaration_no_decision_survived_to_read_is_named_not_dropped(
@@ -401,7 +401,8 @@ class TestHintsAreReadThroughRoutingsMap:
         hint = AudioHints(may_contain=["cough"])
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None)],
-            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            routed=(),
+            route_state=RouteState.EMPTY,
             route=False,
             hint=hint,
         )
@@ -417,11 +418,11 @@ class TestHintsAreReadThroughRoutingsMap:
         """With no hint there is nothing to have lost, so the empty claim map is the honest one."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
-            kinds={"airway": "present", "speech": "absent", "voice": "absent"},
+            routed=("AIRWAY",),
             route=False,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.hints["airway"] == "found_unclaimed"
+        assert result.file_verdict.hints["AIRWAY"] == "found_unclaimed"
         assert result.file_verdict.triage is Triage.PASS
 
     def test_a_map_typo_flags_the_file_it_would_otherwise_have_discarded(
@@ -429,21 +430,22 @@ class TestHintsAreReadThroughRoutingsMap:
     ) -> None:
         """ROUTING recorded the typo on every decision; the fold must not discard over it."""
         path = tmp_path / "typo.yaml"
-        path.write_text("routing:\n  hint_kind_map:\n    cough: airwy\n")
+        path.write_text("routing:\n  hint_branch_map:\n    cough: AIRWY\n")
         typo_config = load_triage_config(path)
         hint = AudioHints(may_contain=["cough"])
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None)],
-            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            routed=(),
+            route_state=RouteState.EMPTY,
             config=typo_config,
             hint=hint,
         )
         result = verdict_module.verdict(store, None, typo_config, hint, run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.FLAG
         assert result.file_verdict.discard_ground is None
-        assert result.file_verdict.bad_map_values == {"cough": "airwy"}
-        assert any("airwy" in reason.why for reason in result.file_verdict.reasons)
-        assert _file_verdict_entity(store).attributes["bad_map_values"] == {"cough": "airwy"}
+        assert result.file_verdict.bad_map_values == {"cough": "AIRWY"}
+        assert any("AIRWY" in reason.why for reason in result.file_verdict.reasons)
+        assert _file_verdict_entity(store).attributes["bad_map_values"] == {"cough": "AIRWY"}
 
     def test_a_declaration_prevents_the_empty_discard(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -453,7 +455,8 @@ class TestHintsAreReadThroughRoutingsMap:
         hint_config = _hint_config(tmp_path)
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None)],
-            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            routed=(),
+            route_state=RouteState.EMPTY,
             config=hint_config,
             hint=hint,
         )
@@ -469,7 +472,7 @@ class TestTheReleaseAxis:
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """A recording with no scan is unexamined, which must not read as cleared."""
-        store = make_verdict_store(node_verdicts=BASE, kinds=KINDS)
+        store = make_verdict_store(node_verdicts=BASE, routed=ROUTED_PAIR)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.release is Release.NOT_ASSESSED
 
@@ -477,8 +480,8 @@ class TestTheReleaseAxis:
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """The two ends of the mapping, and the attribute the store records them in."""
-        withheld = make_verdict_store(node_verdicts=[*BASE, ("REDACT", Outcome.FAIL, None)], kinds=KINDS)
-        released = make_verdict_store(node_verdicts=[*BASE, ("REDACT", Outcome.PASS, None)], kinds=KINDS)
+        withheld = make_verdict_store(node_verdicts=[*BASE, ("REDACT", Outcome.FAIL, None)], routed=ROUTED_PAIR)
+        released = make_verdict_store(node_verdicts=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
         assert verdict_module.verdict(withheld, None, config, run_dir=tmp_path).file_verdict.release is Release.WITHHELD
         result = verdict_module.verdict(released, None, config, run_dir=tmp_path)
         assert result.file_verdict.release is Release.RELEASABLE
@@ -488,7 +491,7 @@ class TestTheReleaseAxis:
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """A release problem is not a measurement problem, and it is in the same record regardless."""
-        store = make_verdict_store(node_verdicts=[*BASE, ("REDACT", Outcome.FAIL, None)], kinds=KINDS)
+        store = make_verdict_store(node_verdicts=[*BASE, ("REDACT", Outcome.FAIL, None)], routed=ROUTED_PAIR)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.PASS
         assert result.file_verdict.release is Release.WITHHELD
@@ -499,7 +502,7 @@ class TestTheReleaseAxis:
     ) -> None:
         """A repaired REDACT run wrote fail then pass; the release axis must read the repair."""
         store = make_verdict_store(
-            node_verdicts=[*BASE, ("REDACT", Outcome.FAIL, None), ("REDACT", Outcome.PASS, None)], kinds=KINDS
+            node_verdicts=[*BASE, ("REDACT", Outcome.FAIL, None), ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.release is Release.RELEASABLE
@@ -513,7 +516,7 @@ class TestWhatTheStoreRecords:
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """T9 reads this entity and nothing else; a missing key there is a re-derivation."""
-        store = make_verdict_store(node_verdicts=BASE, kinds=KINDS)
+        store = make_verdict_store(node_verdicts=BASE, routed=ROUTED_PAIR)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         attributes = _file_verdict_entity(store).attributes
         assert {
@@ -523,14 +526,15 @@ class TestWhatTheStoreRecords:
             "reasons",
             "ran",
             "branches",
-            "kinds",
-            "screened",
+            "findings",
+            "routes",
+            "route_state",
             "agreement",
             "hints",
             "bad_map_values",
         } <= attributes.keys()
-        assert attributes["kinds"] == result.file_verdict.kinds
-        assert attributes["screened"] == result.file_verdict.screened
+        assert attributes["findings"] == result.file_verdict.findings
+        assert attributes["routes"] == result.file_verdict.routes
         assert attributes["agreement"] == result.file_verdict.agreement
         assert attributes["hints"] == result.file_verdict.hints
         assert attributes["branches"] == result.file_verdict.branches
@@ -548,7 +552,7 @@ class TestWhatTheStoreRecords:
                 ("AIRWAY", Outcome.FAIL, "airway"),
                 ("SPEECH", Outcome.PASS, "speech"),
             ],
-            kinds=KINDS,
+            routed=ROUTED_PAIR,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert {"ADMIT", "PREPROCESS", "TAXONOMY", "AIRWAY", "SPEECH"} <= {r.node for r in result.file_verdict.reasons}
@@ -560,11 +564,11 @@ class TestWhatTheStoreRecords:
     def test_every_folded_id_is_used_and_the_view_leads_with_the_file_verdict(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """Used edges to every node verdict, kind and branch decision; view = [file id, *folded ids]."""
-        store = make_verdict_store(node_verdicts=BASE, kinds=KINDS)
+        """Used edges to every node verdict, the reading and every decision; view = [file id, *folded ids]."""
+        store = make_verdict_store(node_verdicts=BASE, routed=ROUTED_PAIR)
         folded_ids = (
             {e.id for e in store.entities("verdict")}
-            | {e.id for e in store.entities("kind")}
+            | {e.id for e in store.entities("measurement")}
             | {e.id for e in store.entities("branch_decision")}
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
@@ -589,7 +593,7 @@ class TestWhatTheStoreRecords:
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """Running twice over one store must not read the first file verdict as a node's."""
-        store = make_verdict_store(node_verdicts=BASE, kinds=KINDS)
+        store = make_verdict_store(node_verdicts=BASE, routed=ROUTED_PAIR)
         first = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         second = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert second.file_verdict == first.file_verdict
@@ -601,7 +605,7 @@ class TestWhatTheStoreRecords:
         """An invalidated verdict is not a verdict; the branch that wrote it is owed an answer again."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("SPEECH", Outcome.PASS, "speech")],
-            kinds={"airway": "absent", "speech": "present", "voice": "absent"},
+            routed=("SPEECH",),
         )
         speech = next(e for e in store.entities("verdict") if e.attributes["node"] == "SPEECH")
         store.was_invalidated_by(speech.id, store.activity(node="SPEECH", step="withdraw", parameters={}))
@@ -620,7 +624,7 @@ class TestWhatTheStoreRecords:
                 ("SPEECH", Outcome.FAIL, "speech"),
                 ("SPEECH", Outcome.PASS, "speech"),
             ],
-            kinds={"airway": "absent", "speech": "present", "voice": "absent"},
+            routed=("SPEECH",),
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         speech_reasons = [
@@ -628,7 +632,7 @@ class TestWhatTheStoreRecords:
         ]
         assert len(speech_reasons) == 1
         assert speech_reasons[0].outcome is Outcome.PASS
-        assert result.file_verdict.kinds["speech"] == "present"
+        assert result.file_verdict.findings["SPEECH"] == "present"
 
 
 class TestGraphOrderAndRan:
@@ -650,7 +654,8 @@ class TestGraphOrderAndRan:
                 ("ADMIT", Outcome.PASS, None),
                 ("TAXONOMY", Outcome.PASS, None),
             ],
-            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            routed=(),
+            route_state=RouteState.EMPTY,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         seeded = [r.node for r in result.file_verdict.reasons if r.node != "VERDICT"]
@@ -660,14 +665,14 @@ class TestGraphOrderAndRan:
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """A verdict is completed, an activity without one is errored, neither is skipped."""
-        store = make_verdict_store(node_verdicts=BASE, kinds=KINDS)
+        store = make_verdict_store(node_verdicts=BASE, routed=ROUTED_PAIR)
         derived = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert derived.file_verdict.ran["ADMIT"] is RunState.COMPLETED
         assert derived.file_verdict.ran["routing"] is RunState.COMPLETED
         assert derived.file_verdict.ran["REDACT"] is RunState.SKIPPED
 
         supplied = verdict_module.verdict(
-            make_verdict_store(node_verdicts=BASE, kinds=KINDS),
+            make_verdict_store(node_verdicts=BASE, routed=ROUTED_PAIR),
             None,
             config,
             run_dir=tmp_path,
@@ -682,7 +687,7 @@ class TestGraphOrderAndRan:
         """An activity with no verdict is the raising node's signature; neither is never having run."""
         store = make_verdict_store(
             node_verdicts=[("ADMIT", Outcome.PASS, None), ("TAXONOMY", Outcome.PASS, None)],
-            kinds={"airway": "absent", "speech": "present", "voice": "absent"},
+            routed=("SPEECH",),
         )
         store.was_associated_with(
             store.activity(node="SPEECH", step="transcript", parameters={}), software_agent(store)

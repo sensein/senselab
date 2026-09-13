@@ -18,7 +18,9 @@ from senselab.audio.workflows.triage.nodes.figure import (
     preprocess_figure,
     taxonomy_summary_lines,
 )
+from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
+from senselab.audio.workflows.triage.vocabulary import BRANCHES
 from senselab.utils.prov_store import ProvStore
 
 
@@ -216,42 +218,44 @@ class TestTheWholeFileTaxonomyPanel:
         assert "ast: absent" in text
         assert "hear: absent" in text
 
-    def test_it_reports_each_kind_state_and_its_lines(
+    def test_it_reports_each_branch_route_and_the_gates_that_fired(
         self,
         store: ProvStore,
         config: TriageConfig,
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """The kind entities are file-scoped, which is what makes them a whole-file summary."""
+        """ROUTING's decisions are file-scoped, which is what makes them a whole-file summary."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
+        routing(store, None, config, run_dir=tmp_path)
         text = "\n".join(taxonomy_summary_lines(store, FigureStyle()))
-        assert "KIND STATES AND EVIDENCE LINES" in text
-        for kind in ("airway", "speech", "voice"):
-            assert f"  {kind}:" in text
+        assert "ROUTE STATES AND GATE OUTCOMES" in text
+        for branch in BRANCHES:
+            assert f"  {branch:<8}" in text
+        assert "gates fired:" in text
 
-    def test_an_unavailable_line_prints_a_null_floor_rather_than_a_number(
+    def test_an_unreadable_gate_is_named_on_the_branch_it_belongs_to(
         self,
         store: ProvStore,
         config: TriageConfig,
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """Under the packaged config the floors are null, and the panel says so."""
+        """A gate that could not be read is a gap this panel names rather than drawing as a decline."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
+        routing(store, None, config, run_dir=tmp_path)
         text = "\n".join(taxonomy_summary_lines(store, FigureStyle()))
-        assert "floor —" in text, "a null floor must read as absent, not as a value"
         assert "unavailable" in text
 
-    def test_it_says_taxonomy_never_ran_when_no_kind_reached_the_store(
+    def test_it_says_routing_never_ran_when_no_decision_reached_the_store(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """A store with no kind element is a different fact from every kind being uncertain."""
+        """A store with no decision is a different fact from every branch being declined."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]])
         text = "\n".join(taxonomy_summary_lines(store, FigureStyle()))
-        assert "TAXONOMY wrote no kind element" in text
+        assert "routing wrote no branch decision" in text
 
     def test_the_summary_is_written_beside_the_pages(
         self,
@@ -279,7 +283,7 @@ class TestItOverridesNoPipelineValue:
             "f0_range_hz",
             "k_db",
             "continuity_cut_percentile",
-            "presence_floor",
+            "hint_branch_map",
         }
         assert not forbidden & set(FigureStyle().__dataclass_fields__)
 

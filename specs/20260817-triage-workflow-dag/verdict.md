@@ -1,8 +1,15 @@
 # The file-level verdict
 
 The last fold. Reads the [element store](store.md) — every node's verdict, the branch decisions
-[`routing.md`](routing.md) wrote, and the kinds [`TAXONOMY`](taxonomy.md) classified — and answers what
+[`routing.md`](routing.md) wrote, and the `ruleset_routing` measurement behind them — and answers what
 the graph concluded about the recording.
+
+**The fold is keyed by branch.** It was keyed by kind until 2026-09-13, when TAXONOMY's kind
+classification was deleted; the replacement emits a route state per branch, DDK has no kind at all,
+and inventing a second branch-to-kind map to keep the old key would be the parallel vocabulary the
+change removed. A branch's own verdict joins to its decision by node name — `NodeVerdict.node` **is**
+the branch name — and only when the verdict names a `kind`, which keeps a synthesised "outcome nobody
+can act on" flag from being folded as a finding.
 
 ## Signature
 
@@ -10,7 +17,7 @@ the graph concluded about the recording.
 verdict(store, hint?) -> file_verdict
 ```
 
-Writes one element. Decides nothing a branch has already decided about its own kind — it
+Writes one element. Decides nothing a branch has already decided about its own subject — it
 **combines**, and where the graph disagrees with itself it says so.
 
 ## Two axes, because they answer different questions
@@ -33,7 +40,13 @@ cough recording has no speech, so SPEECH failing is the expected outcome.
 | ground | condition |
 | --- | --- |
 | **unmeasurable** | ADMIT failed. Nothing ran and nothing is claimed about the recording |
-| **acoustically empty** | every kind resolved `absent` after branch authority — the classification where no branch concluded, the branch's own conclusion where one did — **and no hint claims otherwise** |
+| **acoustically empty** | the ruleset's own file-level state is `empty` — the emptiness bypass read every tracked stream peak under `emptiness.peak_floor` — **and no hint claims otherwise** |
+
+The second ground used to be "every kind resolved `absent`", which could never fire while every kind
+read `uncertain`; dag.md recorded it as unreachable. It is now a measurement. Its sibling state,
+`unexplained` — nothing routed and the recording was *not* empty — adds a ROUTING **flag**, never a
+discard: content no gate could account for is a charge against the ruleset, and the two are kept
+apart in the product rather than in a reader's head.
 
 **A hint that claims otherwise turns the second ground into a `flag`, never a `discard`.** A file the
 graph found nothing in, on which the declaration says there should have been something, is exactly the
@@ -43,40 +56,45 @@ The two grounds carry different reasons — "could not measure" and "measured, a
 interest in it" — and a consumer that cannot distinguish them treats an empty recording as a broken
 one.
 
-## Branch authority is scoped to the branch's own kind
+## Branch authority is scoped to the branch's own subject
 
-**A branch is the authority on its own kind and on nothing else.** It is the more precise instrument
-for the kind it measures; it is not an instrument for the others.
+**A branch is the authority on its own subject and on nothing else.** It is the more precise
+instrument for what it measures; it is not an instrument for the others.
 
 | the branch's conclusion | its reach |
 | --- | --- |
-| SPEECH | the `speech` kind only. It refutes neither `airway` nor `voice` |
-| AIRWAY | the `airway` kind only |
-| VOICE | the `voice` kind only |
+| SPEECH | lexical speech only. It refutes neither AIRWAY's subject nor VOICE's |
+| AIRWAY | airway events only |
+| VOICE | phonation only |
 
-A branch's conclusion about its own kind stands in the resolved `kinds` map, whatever the
-classification said, and whether the branch passed, flagged or failed. The resolution axis is
+A branch's conclusion stands in the `findings` map, whatever the ruleset routed, and whether the
+branch passed, flagged or failed. A branch that reached no conclusion reads `uncertain` there: not
+routed is not a measurement of absence. The resolution axis is
 found/not-found, not the outcome's severity: a branch flags only with a subject in hand, so a flag
-resolves the kind `present` and the flag travels beside the resolution; a `fail` is the branch
+resolves its subject `present` and the flag travels beside the resolution; a `fail` is the branch
 reporting no subject and always resolves `absent`. A branch therefore never raises its own absence
 to a flag over a declaration — that mismatch is the fold's to name, from the `hints` table below.
 
-## TAXONOMY is reported beside the branches, never over them
+## The route is reported beside the branches, never over them
 
-The classification is written into the product next to the branch conclusions, and the fold records
-whether the two **agree** or **mismatch**, per kind:
+The route state is written into the product next to the branch conclusions, and the fold records
+whether the two **agree** or **mismatch**, per branch. The axis changed with the key: it compared
+TAXONOMY's classification against the branch's conclusion, and it now compares the **route** against
+it — which is the quantity the ruleset work cares about, countable per branch over a corpus without a
+join.
 
-| classification | branch conclusion | recorded | triage |
-| --- | --- | --- | --- |
-| present | found | `agree` | — |
-| absent | found | `mismatch` | `flag` |
-| present | not found | `mismatch` | `flag` |
-| uncertain | either | `resolved` | — |
-| any | branch did not run | see the branch-decision rows below | — |
+| route | branch conclusion | recorded | triage | what it means |
+| --- | --- | --- | --- | --- |
+| routed | found | `agree` | — | — |
+| routed | not found | `mismatch` | `flag` | over-routing |
+| declined | found | `mismatch` | `flag` | a miss — the branch ran only because a hint forced it |
+| declined | not found | `agree` | — | — |
+| unavailable | either | `resolved` | — | a branch nothing could judge made no claim to agree with |
+| any | branch did not conclude | `not_run` — see the branch-decision rows below | — | — |
 
-**A mismatch flags; it never overrides.** The classification cannot overturn a branch on the branch's
-own kind, and the branch does not delete the classification: both stay in the store and both appear in
-the product, so the disagreement is visible rather than resolved by precedence.
+**A mismatch flags; it never overrides.** The routing cannot overturn a branch on its own subject,
+and the branch does not rewrite the decision: both stay in the store and both appear in the product,
+so the disagreement is visible rather than resolved by precedence.
 
 ## A branch that never ran is not a branch that failed
 
@@ -84,10 +102,14 @@ the product, so the disagreement is visible rather than resolved by precedence.
 
 | branch decision | branch verdict | reading |
 | --- | --- | --- |
-| `will_run: false`, kind `absent`, not forced | none | **expected.** The graph declined to look, and said why |
+| `will_run: false`, route `declined`, not forced | none | **expected.** The graph declined to look, and said why |
 | `will_run: true` | present | folded as above |
 | `will_run: true` | absent | **flag** — the branch was asked and left no answer; the reason names `errored without a verdict`, `completed without a verdict` or `never ran` |
 | every branch `will_run: false` | none | the empty execution set — see `discard` above |
+
+**DDK falls in the third row by construction.** The ruleset routes it, no node implements it, so a
+recording whose DDK gates fire flags with "DDK was asked to run and never ran". That is honest and
+scoped to recordings with DDK content, and it is the standing argument for building the branch.
 
 ## Hints are read here, for branch mismatch
 
@@ -95,12 +117,16 @@ The hint's `speech_type` and `may_contain` tags are compared against what the br
 
 | case | outcome |
 | --- | --- |
-| a hinted kind's branch ran and **found nothing** | **`flag`**, naming the mismatch: the kind, the hint that claimed it, and the branch's conclusion |
-| a hinted kind's branch found the kind | recorded as agreement |
-| a kind found that no hint claimed | recorded; not a flag on its own |
+| a hinted branch ran and **found nothing** | **`flag`**, naming the mismatch: the branch, and that it was declared and did not find its subject |
+| a hinted branch found its subject | recorded as agreement |
+| a subject found that no hint claimed | recorded; not a flag on its own |
 
-A hint never resolves a kind, never suppresses a branch's conclusion, and never turns a `flag` into a
-`pass`. Its one power on this axis is to prevent a `discard` (above) and to name a mismatch.
+The claims are read off ROUTING's own record of reading the declaration — the `hint_tags` on each
+decision — not re-resolved here against `routing.hint_branch_map`. Two nodes resolving one tag
+independently could disagree whenever the config or the hint handed to them differed.
+
+A hint never resolves a subject, never suppresses a branch's conclusion, and never turns a `flag`
+into a `pass`. Its one power on this axis is to prevent a `discard` (above) and to name a mismatch.
 
 ## The triage fold
 
@@ -109,8 +135,8 @@ Evaluated in order; the first that applies wins.
 | order | condition | `triage` |
 | --- | --- | --- |
 | 1 | ADMIT failed | `discard` — unmeasurable |
-| 2 | any node returned `flag`, any mismatch row above fired, or a branch that was asked to run left no verdict | `flag` |
-| 3 | every kind absent, nothing found, and no hint claims otherwise | `discard` — acoustically empty |
+| 2 | any node returned `flag`, any mismatch row above fired, the ruleset read `unexplained`, or a branch that was asked to run left no verdict | `flag` |
+| 3 | the ruleset read `empty`, and no hint claims otherwise | `discard` — acoustically empty |
 | 4 | otherwise | `pass` |
 
 **The graph's stated goal is to be accurate about `pass` and `discard` and to minimise `flag`.** A
@@ -158,11 +184,12 @@ release:  releasable | withheld | not_assessed
 discard_ground: "unmeasurable" | "acoustically_empty" | null
 reasons:  [ { node, outcome, kind?, why } ]        # every contributing verdict, in order
 ran:      { node: "completed" | "skipped" | "errored" }
-branches: { branch: { will_run, forced_by_hint, kind_state, verdict? } }
-kinds:    { airway: state, speech: state, voice: state }        # after branch resolution
-screened: { airway: state, speech: state, voice: state }        # what TAXONOMY classified
-agreement:{ kind: "agree" | "mismatch" | "resolved" | "not_run" }
-hints:    { kind: "claimed_and_found" | "claimed_not_found" | "found_unclaimed" | "no_claim" }
+branches: { branch: { will_run, forced_by_hint, route_state, verdict? } }
+findings: { branch: "present" | "absent" | "uncertain" }        # what each branch found
+routes:   { branch: "routed" | "declined" | "unavailable" }     # what the ruleset made of it
+route_state: "routed" | "empty" | "unexplained" | null          # what it made of the recording
+agreement:{ branch: "agree" | "mismatch" | "resolved" | "not_run" }
+hints:    { branch: "claimed_and_found" | "claimed_not_found" | "found_unclaimed" | "no_claim" }
 view:     the verdict element id, and the node verdict ids it folded
 ```
 
@@ -172,13 +199,10 @@ view:     the verdict element id, and the node verdict ids it folded
 outcome. It is in the product because the two grounds are the difference between a broken recording
 and an empty one, and a consumer must not have to re-derive that from the reasons.
 
-`kinds` and `screened` are both present, always. `kinds` is the resolved state after branch authority;
-`screened` is what TAXONOMY classified. Keeping both is what makes `agreement` checkable by a reader
-rather than asserted by this node.
-
-**`screened` carries the store's open-vocabulary states verbatim**, including one no reader can parse
-and `uncertain` where TAXONOMY classified nothing; `branches[*].kind_state` is the closed vocabulary
-[`routing.md`](routing.md) folded them into, and is what a consumer should key on.
+`findings` and `routes` are both present, always. `findings` is what each branch concluded; `routes`
+is what the ruleset made of it. Keeping both is what makes `agreement` checkable by a reader rather
+than asserted by this node. `route_state` is null only when ROUTING wrote no evaluation, which is a
+reading never made rather than a recording nothing routed.
 
 `ran` comes from two sources and is **merged, the runner's over the store's**: the store derives
 `completed` for a node that wrote a verdict, `errored` for one that wrote an activity and no live
@@ -188,11 +212,11 @@ reason it was skipped.
 
 Every read of the store here follows the store's shared rule — an invalidated element is never read,
 and of the survivors asserting the same thing the latest write wins, per node for verdicts and per
-kind for classifications.
+branch for decisions.
 
 ## Out of scope
 
-Ranking recordings, choosing what to do about a flag, overriding a branch on its own kind, and any
+Ranking recordings, choosing what to do about a flag, overriding a branch on its own subject, and any
 threshold that would turn a `flag` into a `pass`.
 
 Derivations live in [`benchmarks/`](benchmarks/).

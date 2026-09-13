@@ -17,10 +17,12 @@ import soundfile as sf
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes.airway import airway
 from senselab.audio.workflows.triage.nodes.common import live_entities, write_verdict
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.verdict import verdict
+from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.vocabulary import Outcome, Triage
 from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
@@ -755,51 +757,56 @@ class TestOutcomeAndHint:
 
 
 class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
-    """The end-to-end pin: a declared kind no branch found reaches the file verdict as a mismatch."""
+    """The end-to-end pin: a declared branch that found nothing reaches the file verdict as a mismatch."""
 
-    def _seed_kinds(self, store: ProvStore) -> None:
-        """Write TAXONOMY's classification: every kind absent, which is what an empty file screens as."""
-        seed = store.activity(node="TAXONOMY", step="seed-kinds", parameters={})
-        agent = store.agent(agent_type="software", version="senselab test-seed")
-        store.was_associated_with(seed, agent)
-        for kind_name in ("airway", "speech", "voice"):
-            kind_id = store.entity(
-                prov_type="kind",
-                extent=None,
-                attributes={"kind": kind_name, "state": "absent", "lines": {}, "stream": "plain"},
-            )
-            store.was_generated_by(kind_id, seed)
+    @staticmethod
+    def _empty_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Make the ruleset read the recording as empty: nothing routed, every tracked peak under floor."""
+        reading = RouteEvaluation(
+            stem="rec",
+            family="",
+            routed=(),
+            declared=(),
+            agreed=(),
+            missed=(),
+            extra=(),
+            unavailable={},
+            flags={},
+            state=RouteState.EMPTY,
+            gate_outcomes={"airway.cough": GateOutcome.SILENT},
+        )
+        monkeypatch.setattr(routing_module, "evaluate_live_routes", lambda *a, **k: reading)
 
-    def test_a_declared_kind_the_branch_did_not_find_flags_the_file_and_records_the_kind_absent(
-        self, store: ProvStore, tmp_path: Path
+    def test_a_declared_branch_that_found_nothing_flags_the_file(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AIRWAY fails, ROUTING recorded the claim, and the fold flags without resolving the kind present."""
+        """AIRWAY fails, ROUTING recorded the claim, and the fold flags without resolving it present."""
         hint_config = _override(
             tmp_path,
-            "airway:\n  contest_labels: [Speech]\nrouting:\n  hint_kind_map:\n    cough: airway\n",
+            "airway:\n  contest_labels: [Speech]\nrouting:\n  hint_branch_map:\n    cough: AIRWAY\n",
         )
         hint = AudioHints(may_contain=["cough"])
         _seed_airway_store(store, tmp_path, spans=[], no_contrast=True)
-        self._seed_kinds(store)
+        self._empty_reading(monkeypatch)
         routing(store, "plain", hint_config, hint, run_dir=tmp_path)
         branch = airway(store, "plain", hint_config, hint, run_dir=tmp_path)
         assert branch.verdict.outcome is Outcome.FAIL
 
         folded = verdict(store, None, hint_config, hint, run_dir=tmp_path).file_verdict
         assert folded.triage is Triage.FLAG
-        assert folded.kinds["airway"] == "absent"
-        assert folded.hints["airway"] == "claimed_not_found"
+        assert folded.findings["AIRWAY"] == "absent"
+        assert folded.hints["AIRWAY"] == "claimed_not_found"
         assert folded.discard_ground is None
         assert any(
-            reason.why == "hint mismatch: airway was declared and AIRWAY did not find it" for reason in folded.reasons
+            reason.why == "hint mismatch: AIRWAY was declared and did not find it" for reason in folded.reasons
         ), [reason.why for reason in folded.reasons]
 
     def test_the_same_file_with_no_declaration_discards_as_acoustically_empty(
-        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The control the upgrade made unreachable: nothing found and nothing claimed is an empty file."""
+        """The control: nothing routed, nothing claimed, and the bypass called the recording empty."""
         _seed_airway_store(store, tmp_path, spans=[], no_contrast=True)
-        self._seed_kinds(store)
+        self._empty_reading(monkeypatch)
         routing(store, "plain", airway_config, None, run_dir=tmp_path)
         airway(store, "plain", airway_config, None, run_dir=tmp_path)
 

@@ -331,20 +331,11 @@ class TestProductionModes:
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert _verdict_entity(store, "VOICE").attributes["production"] == {"voiced": 1, "unvoiced": 1, "mixed": 1}
 
-    def test_a_sustained_unvoiced_span_routes_and_reaches_voice_without_marks(
-        self, store: ProvStore, tmp_path: Path
-    ) -> None:
-        """Routing preserves aperiodic phonation; VOICE measures rather than rejects it.
-
-        The voice *kind* is uncertain rather than present because its evidence line was retired
-        with the phonation-span detector, but routing runs a branch on an uncertain kind, so VOICE
-        still reaches a seeded span and still measures it. What the branch does with aperiodic
-        phonation is what this test is for, and that is unchanged.
-        """
+    def test_a_sustained_unvoiced_span_reaches_voice_without_marks(self, store: ProvStore, tmp_path: Path) -> None:
+        """VOICE measures aperiodic phonation rather than rejecting it, once routing has selected it."""
         config = load_triage_config()
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
-        assert taxonomy(store, "plain", config, run_dir=tmp_path).kinds["voice"] == "uncertain"
-        assert "VOICE" in routing(store, None, config, run_dir=tmp_path).runs
+        taxonomy(store, "plain", config, run_dir=tmp_path)
         voice(store, "plain", config, run_dir=tmp_path)
         assert find_measurements(store, "period_marks")[-1].attributes["unmeasured"] == "unvoiced_span"
 

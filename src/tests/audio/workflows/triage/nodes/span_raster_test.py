@@ -186,32 +186,6 @@ class TestTheRasterReadsRawScores:
         assert next(iter(per_span.values()))["Cough"] == pytest.approx(0.9)
 
 
-class TestTheAirwayLineUnderUnlabelledWindows:
-    """A line that counts labels cannot be judged when nothing was labelled."""
-
-    def test_an_unlabelled_pass_reads_unavailable_not_absent(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        seed_preprocess_store: Callable[..., None],
-        tmp_path: Path,
-    ) -> None:
-        """Reading absent here would be a false negative no downstream branch could recover."""
-        seed_preprocess_store(
-            store,
-            spans=[(0.0, 1.0, 20.0)],
-            span_hear_labels=[["Cough"]],
-            span_yamnet_labels=[["Cough"]],
-            span_unlabelled=("hear", "yamnet"),
-        )
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        kinds = [e for e in store.entities() if e.prov_type == "kind" and e.attributes.get("kind") == "airway"]
-        assert kinds, "TAXONOMY wrote no airway kind"
-        lines: dict[str, Any] = kinds[-1].attributes.get("lines") or {}
-        for name in ("health_acoustic", "acoustic"):
-            assert lines[name]["state"] == "unavailable", f"{name} judged an unlabelled pass"
-
-
 class TestTheSummaryFits:
     """The whole-file readout is laid out across the page and cannot overrun it."""
 
@@ -336,7 +310,7 @@ class TestTheSummaryFits:
 class TestTheStreamSummaries:
     """The enhanced and residual streams' own whole-file classification summaries, on the cover page."""
 
-    def test_it_sits_between_the_main_summary_and_the_kind_states(
+    def test_it_sits_between_the_main_summary_and_the_route_states(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -356,7 +330,7 @@ class TestTheStreamSummaries:
 
         lines = summary_panel_lines(store, FigureStyle())
         top = lines.index("WHOLE-FILE CLASSIFICATION SUMMARY")
-        bottom = lines.index("KIND STATES AND EVIDENCE LINES")
+        bottom = lines.index("ROUTE STATES AND GATE OUTCOMES")
         enhanced = next(i for i, line in enumerate(lines) if line.strip().startswith("ENHANCED"))
         residual = next(i for i, line in enumerate(lines) if line.strip().startswith("RESIDUAL"))
         assert top < enhanced < residual < bottom
