@@ -97,12 +97,19 @@ gates fires.
 | AIRWAY | `airway.breath` | `residual.energy_fraction` | >= | 0.10 | 0.66 | 0.98 | 0.16 |
 | AIRWAY | `airway.cough` | `span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"]` | >= | 50.0 dB | **not re-measured** | — | — |
 | AIRWAY | `airway.bracketed_event` | `bracketed_types` over `taxonomy.airway_bracket_tokens` | >= | 1 token | ~0.710 | — | — |
-| AIRWAY | `airway.ppg_silent_fraction` | `ppg.silent_fraction` | >= | 0.90 | recall-first, not J | — | — |
+| AIRWAY | `airway.ppg_silent_fraction` | `ppg.silent_fraction` | >= | 0.757 | recall-first, not J | — | — |
 | DDK | `ddk.lexical_repetition` | max token repetition in `transcript` | >= | 3 | **not measured** | — | — |
 | DDK | `ddk.ppg_segment_rate_per_s` | `ppg.segment_rate_per_s` | >= | 10 /s | recall-first, not J | — | — |
 
 The two posteriorgram gates were chosen by recall at an over-routing budget rather than by J, and
 their measurements are in `specs/20260911-praat-ppg-detectors/design.md` rather than here.
+
+`airway.ppg_silent_fraction`'s **0.757** is the fitted cut and the one the packaged config ships.
+This row read `0.90` until 2026-09-13 — the placeholder written before the corpus was available,
+left behind when `46f73787` fitted it — so any reading of this table taken before that date paired a
+threshold the run does not use with figures the run does. The refit and what it cost is
+`specs/20260911-praat-ppg-detectors/design.md`, "The silent-fraction cut, fitted against the
+corpus".
 
 Beside the gates, and never among them:
 
