@@ -9,6 +9,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
 from senselab.audio.tasks.features_extraction.ppg import (
+    PPGS_SAMPLE_RATE,
     extract_mean_phoneme_durations,
     extract_ppg_segments,
     extract_ppgs_from_audios,
@@ -353,6 +354,16 @@ def test_extract_ppgs_from_audios(resampled_mono_audio_sample: Audio) -> None:
     assert all(isinstance(features, torch.Tensor) for features in result)
 
 
+def test_extract_ppgs_refuses_an_off_rate_audio(mono_audio_sample: Audio) -> None:
+    """The worker reads every waveform at the model's rate, so an off-rate one is refused, not resampled.
+
+    Refused before the venv is touched, which is what lets this run without building one.
+    """
+    assert mono_audio_sample.sampling_rate != PPGS_SAMPLE_RATE
+    with pytest.raises(ValueError, match=str(PPGS_SAMPLE_RATE)):
+        extract_ppgs_from_audios([mono_audio_sample])
+
+
 @pytest.mark.skip(reason="sparc runs in subprocess venv; missing-dep path cannot be tested")
 def test_missing_sparc_dependency() -> None:
     """Test that a ModuleNotFoundError is raised when sparc is not installed."""
@@ -584,3 +595,25 @@ def test_extract_features_from_audios(resampled_mono_audio_sample: Audio) -> Non
     for feat in features:
         assert isinstance(feat, dict)
         assert feat, "The feature dictionary should not be empty."
+
+
+class TestTheWorkerTimeoutScalesWithTheBatch:
+    """A flat timeout loses a whole batch when one batch happens to hold the long recordings."""
+
+    def test_the_budget_grows_with_the_audio_in_the_batch(self) -> None:
+        """Two batches of the same count but different duration do not get the same budget."""
+        from senselab.audio.tasks.features_extraction.ppg import _worker_timeout_s
+
+        assert _worker_timeout_s(600.0) > _worker_timeout_s(60.0)
+
+    def test_an_empty_batch_still_allows_the_worker_to_start(self) -> None:
+        """The startup allowance stands on its own; a zero-length batch is not a zero budget."""
+        from senselab.audio.tasks.features_extraction.ppg import WORKER_STARTUP_S, _worker_timeout_s
+
+        assert _worker_timeout_s(0.0) == WORKER_STARTUP_S
+
+    def test_the_batch_that_timed_out_on_the_corpus_now_fits(self) -> None:
+        """471 recordings averaging 15 s exceeded the flat 600 s on four of the 128 array tasks."""
+        from senselab.audio.tasks.features_extraction.ppg import _worker_timeout_s
+
+        assert _worker_timeout_s(471 * 15.0) > 600.0

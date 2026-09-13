@@ -1,7 +1,7 @@
 {
-    "version": 1,
-    "derivation": "Copied from unasdiff's sound_dataset_process/audio_infos/label.json at commit 5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa. These indices are the sound prior's own conditioning labels; they are NOT AudioSet ids and NOT shared with the speech prior, whose only label is 0. The prior's embedding has 50 slots (num_class=50 in config/atten_unet_fsd/config.toml) of which these 41 are populated -- the remaining nine are unused headroom, not classes.",
-    "num_embedding_slots": 50,
+    "version": 2,
+    "derivation": "Copied from unasdiff's sound_dataset_process/audio_infos/label.json at commit 5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa. These indices are the sound prior's own conditioning labels; they are NOT AudioSet ids and NOT shared with the speech prior, whose only label is 0. The prior config sets num_class=50 (config/atten_unet_fsd/config.toml); models/atten_unet.py's LabelEmbedder allocates num_classes + use_cfg_embedding rows, and dropout_prob=0.1 > 0 makes use_cfg_embedding True, so the embedding actually has 51 rows: these 41 are populated by training, row 50 is the untrained classifier-free-guidance null token (token_drop's fallback), and rows 41-49 are untrained headroom -- not classes. The model holds five independent copies of this table (y_embedder_1..y_embedder_5 in models/atten_unet.py), each initialised independently and none trained on rows past 40.",
+    "num_embedding_slots": 51,
     "classes": {
         "Hi-hat": 0,
         "Saxophone": 1,

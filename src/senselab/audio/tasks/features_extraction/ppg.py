@@ -24,6 +24,7 @@ from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
     parse_subprocess_result,
+    provisioned_venv_dirs,
     venv_python,
 )
 
@@ -31,12 +32,14 @@ from senselab.utils.subprocess_venv import (
 # ppgs runs in a subprocess venv and may not be importable in the main env.
 try:
     from ppgs import PHONEMES as _PPGS_PHONEMES
+    from ppgs import SAMPLE_RATE as _PPGS_SAMPLE_RATE
 
-    _PHONEME_LABELS: Tuple[str, ...] = tuple(str(p) for p in _PPGS_PHONEMES)
+    PHONEME_LABELS: Tuple[str, ...] = tuple(str(p) for p in _PPGS_PHONEMES)
+    PPGS_SAMPLE_RATE: int = int(_PPGS_SAMPLE_RATE)
 except (ImportError, RuntimeError):
     # Fallback: the 40 ARPAbet phonemes used by ppgs 0.0.9.
     # Source: https://github.com/interactiveaudiolab/ppgs/blob/main/ppgs/data/phonemes.py
-    _PHONEME_LABELS = (
+    PHONEME_LABELS = (
         "aa",
         "ae",
         "ah",
@@ -78,6 +81,7 @@ except (ImportError, RuntimeError):
         "zh",
         "<silent>",
     )
+    PPGS_SAMPLE_RATE = 16000
 
 # PPGs venv specification
 _PPGS_VENV = "ppgs"
@@ -110,7 +114,7 @@ import ppgs
 
 gpu = 0 if device == "cuda" else None
 
-output_paths = []
+outputs = []
 for i, audio_path in enumerate(audio_paths):
     data, sr = sf.read(audio_path, dtype="float32")
     waveform = torch.from_numpy(data).unsqueeze(0) if data.ndim == 1 else torch.from_numpy(data.T)
@@ -123,36 +127,113 @@ for i, audio_path in enumerate(audio_paths):
     except RuntimeError as e:
         print(f"RuntimeError extracting PPGs for audio {i}: {e}", file=sys.stderr)
         print(traceback.format_exc(), file=sys.stderr)
-        posteriorgram = torch.tensor(float("nan"))
+        outputs.append({"path": None, "error": f"{type(e).__name__}: {e}"})
+        continue
 
     out_path = str(Path(output_dir) / f"ppg_{i}.npy")
     np.save(out_path, posteriorgram.float().numpy())
-    output_paths.append(out_path)
+    outputs.append({"path": out_path, "error": None})
 
-print(json.dumps({"output_paths": output_paths}))
+print(json.dumps({"outputs": outputs}))
 """
 
 
-def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] = None) -> List[torch.Tensor]:
+class PpgsPosteriorgramUnavailable(ValueError):
+    """The ppgs model produced no posteriorgram for one recording; attribute it as an absence."""
+
+
+def ensure_ppgs_venv() -> Path:
+    """Build the isolated ppgs venv if this host has not built it, and return its directory.
+
+    Call it once, on its own, before fanning a batch job out across an array: a cold build is far
+    longer than the lock's patience window, so every task that races one waits on it.
+
+    Returns:
+        The venv's directory.
+    """
+    return ensure_venv(_PPGS_VENV, _PPGS_REQUIREMENTS, python_version=_PPGS_PYTHON)
+
+
+def ppgs_venv_is_provisioned() -> bool:
+    """Whether a completed ppgs venv already exists on this host.
+
+    Returns:
+        True when at least one ppgs venv carries the completion marker. A half-built tree is not
+        provisioned.
+    """
+    return bool(provisioned_venv_dirs(_PPGS_VENV))
+
+
+def require_posteriorgram(result: "torch.Tensor | PpgsPosteriorgramUnavailable") -> torch.Tensor:
+    """Unwrap one entry of :func:`extract_ppgs_from_audios`, raising the absence it may hold.
+
+    Args:
+        result: One entry of the returned list.
+
+    Returns:
+        The posteriorgram, when the model produced one.
+
+    Raises:
+        PpgsPosteriorgramUnavailable: When the entry is the recorded absence rather than a tensor.
+    """
+    if isinstance(result, PpgsPosteriorgramUnavailable):
+        raise result
+    return result
+
+
+WORKER_STARTUP_S = 300.0
+"""Seconds allowed for the worker before it has any audio to read: interpreter, torch, checkpoint."""
+
+WORKER_SECONDS_PER_AUDIO_SECOND = 2.0
+"""Seconds allowed per second of audio in the batch, over the startup allowance."""
+
+
+def _worker_timeout_s(audio_seconds: float) -> float:
+    """How long the worker may take for a batch of this much audio.
+
+    Args:
+        audio_seconds: Total duration of every audio in the batch.
+
+    Returns:
+        The subprocess timeout, in seconds.
+    """
+    return WORKER_STARTUP_S + WORKER_SECONDS_PER_AUDIO_SECOND * max(0.0, audio_seconds)
+
+
+def extract_ppgs_from_audios(
+    audios: List[Audio], device: Optional[DeviceType] = None
+) -> List["torch.Tensor | PpgsPosteriorgramUnavailable"]:
     """Extracts phonetic posteriorgrams (PPGs) from every audio.
 
     The ppgs model runs in an isolated subprocess venv with its own
     Python and dependencies. Audio is transferred via WAV files.
 
     Args:
-        audios: The audios to extract PPGs from.
+        audios: The audios to extract PPGs from. Every one must be mono and at
+            :data:`PPGS_SAMPLE_RATE`.
         device: Device to use (CUDA or CPU).
 
     Returns:
-        List of PPG tensors, one per input audio.
+        One entry per input audio, in input order: a PPG tensor in ``(1, phonemes, frames)`` layout
+        with the phoneme axis ordered as :data:`PHONEME_LABELS`, or a
+        :class:`PpgsPosteriorgramUnavailable` carrying the model's own message for a recording it
+        raised on. :func:`require_posteriorgram` unwraps one entry.
+
+    Raises:
+        ValueError: If any audio is multi-channel, or is not at :data:`PPGS_SAMPLE_RATE`.
     """
     device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
 
     if any(audio.waveform.shape[0] != 1 for audio in audios):
         raise ValueError("Only mono audio is supported by ppgs model.")
+    off_rate = sorted({audio.sampling_rate for audio in audios if audio.sampling_rate != PPGS_SAMPLE_RATE})
+    if off_rate:
+        raise ValueError(
+            f"ppgs reads every waveform at {PPGS_SAMPLE_RATE} Hz and is given {off_rate}; resample before calling."
+        )
 
-    venv_dir = ensure_venv(_PPGS_VENV, _PPGS_REQUIREMENTS, python_version=_PPGS_PYTHON)
-    python = venv_python(venv_dir)
+    python = venv_python(ensure_ppgs_venv())
+    budget = _worker_timeout_s(sum(audio.waveform.shape[-1] / audio.sampling_rate for audio in audios))
 
     with tempfile.TemporaryDirectory(prefix="senselab-ppgs-") as tmpdir:
         tmp = Path(tmpdir)
@@ -180,17 +261,20 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
             input=input_json,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=budget,
             env=sub_env,
         )
 
         output = parse_subprocess_result(result, "PPGs")
 
         # Load results
-        posteriorgrams = []
-        for out_path in output.get("output_paths", []):
-            tensor = torch.from_numpy(np.load(out_path))
-            posteriorgrams.append(tensor)
+        posteriorgrams: List["torch.Tensor | PpgsPosteriorgramUnavailable"] = []
+        for record in output.get("outputs", []):
+            message = record.get("error")
+            if message:
+                posteriorgrams.append(PpgsPosteriorgramUnavailable(f"ppgs produced no posteriorgram: {message}"))
+                continue
+            posteriorgrams.append(torch.from_numpy(np.load(record["path"])))
 
         return posteriorgrams
 
@@ -224,9 +308,9 @@ def to_frame_major_posteriorgram(posteriorgram: torch.Tensor) -> torch.Tensor:
     if t.ndim < 2:
         raise ValueError(f"Expected at least a 2-D posteriorgram after squeezing, got shape {t.shape}")
     # The ppgs library outputs (phonemes, frames) where the phoneme count
-    # matches len(_PHONEME_LABELS).  Use that knowledge first; fall back to
+    # matches len(PHONEME_LABELS).  Use that knowledge first; fall back to
     # the "smaller dimension = phonemes" heuristic for unknown inventories.
-    n_phonemes = len(_PHONEME_LABELS)
+    n_phonemes = len(PHONEME_LABELS)
     if t.shape[0] == n_phonemes and t.shape[1] != n_phonemes:
         # (phonemes, frames) -> (frames, phonemes)
         t = t.T
@@ -238,6 +322,28 @@ def to_frame_major_posteriorgram(posteriorgram: torch.Tensor) -> torch.Tensor:
         t = t.T
     # else: ambiguous (e.g. square); assume already frame-major
     return t
+
+
+def load_ppg_posteriorgram(path: str | Path) -> Tuple[torch.Tensor, float, int]:
+    """Read a ``ppg_posteriorgram.npz`` sidecar into a frame-major tensor and its clock.
+
+    Args:
+        path: The sidecar ``write_ppg_posteriorgram`` wrote.
+
+    Returns:
+        The posteriorgram as float32 in ``(frames, phonemes)`` layout, the duration in seconds it
+        covers, and the sampling rate it was measured at.
+
+    Raises:
+        OSError: If the sidecar cannot be opened.
+        KeyError: If it carries none of ``posteriorgram``, ``duration_s`` or ``sampling_rate``.
+        ValueError: If the array it carries is not a posteriorgram.
+    """
+    with np.load(Path(path)) as archive:
+        posteriorgram = torch.from_numpy(archive["posteriorgram"].astype(np.float32))
+        duration_s = float(archive["duration_s"])
+        sampling_rate = int(archive["sampling_rate"])
+    return to_frame_major_posteriorgram(posteriorgram), duration_s, sampling_rate
 
 
 def extract_ppg_segments(
@@ -274,7 +380,7 @@ def extract_ppg_segments(
     seconds_per_frame = total_duration / num_frames
 
     argmax_indices = torch.argmax(frame_major_posteriorgram, dim=1)
-    phoneme_labels = _PHONEME_LABELS
+    phoneme_labels = PHONEME_LABELS
     num_labels = len(phoneme_labels)
 
     segments: List[Dict[str, Any]] = []

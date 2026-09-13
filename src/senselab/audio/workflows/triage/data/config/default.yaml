@@ -1,0 +1,313 @@
+# The triage workflow configuration. One file, versioned.
+#
+# No number appears in the code. A value here is either declared -- with its derivation written
+# down -- or `null`, meaning nobody has measured it and reading it raises. There is no third state:
+# a default chosen to make a signature tidy is an unmeasured decision with a public interface.
+#
+# Each section and key below carries a short description of what it governs. The measurements, the
+# failures that drove each choice and the rejected alternatives live in
+# `specs/20260817-triage-workflow-dag/config-derivations.md`, keyed by these same section names.
+# They used to sit here in a `derivation:` key, which was a config *value* rather than a comment:
+# the loader hashes the merged mapping, so 50 kB of English was inside `config_hash` and correcting
+# a word of it made two behaviourally identical runs report different identities. `config_hash` now
+# names the parameters. These `#` comments are not hashed, so they can be corrected freely.
+version: 1
+name: senselab-triage/default
+
+# Sampling rate every downstream model takes natively.
+resample:
+  target_hz: 16000                     # 16 kHz: YAMNet, HeAR, AST and the recognizers are all native here
+
+# First-difference filter applied before the primary amplitude envelope.
+preemphasis:
+  enabled: true                        # whether the primary span pass runs on the pre-emphasised signal
+  coefficient: 0.97                    # the first-difference coefficient; conventional, not fitted
+
+# The amplitude envelope the primary span pass is proposed from.
+envelope:
+  lowpass_hz: 40.0                     # zero-phase lowpass cutoff; the modulation bandwidth, not an onset choice
+  filter_order: 4                      # Butterworth order, applied forward-and-backward
+
+# The single global noise floor every rise is measured against.
+floor:
+  percentile: 5.0                      # percentile of the ENVELOPE (not raw samples), one value per recording
+
+# Span proposal: the gate, the walk, the length filters, and the continuity source's own cut.
+spans:
+  transition_window_ms: 30             # how long it must stay within k_db of the floor; onset and offset alike
+  min_duration_ms: 50                  # discard an amplitude proposal shorter than this
+  min_separation_ms: 30                # merge proposals closer than this; must track transition_window_ms
+  k_db: 6.0                            # rise over floor to open a span, and the level a walk stops at
+  continuity_cut_percentile: 5.0       # lowest N% of continuity-trace samples BY RANK are the change points
+  continuity_min_duration_ms: 300      # continuity events are long; the only length filter on that source
+
+# Clip detection, and how per-period plateaus are coalesced into one event.
+clipping:
+  near_threshold: 0.995                # amplitude at or above this counts as clipped
+  leniency_samples: 3                  # ClipDaT's tolerance within a candidate plateau
+  minimum_extreme: 0.0001              # smallest deviation ClipDaT treats as a real extreme
+  merge_gap_ms: 30                     # coalesce per-period clipping plateaus into one event
+
+# Dynamic-range normalization: the supplementary span source's signal. On by default.
+normalization:
+  macro_smoothing:
+    window_s: 0.5                      # median window for the slow level trend
+  micro_smoothing:
+    window_s: 0.05                     # median window for the fast level detail
+  envelope_smoothing:
+    window_s: 0.025                    # window of the percentile envelope the gain is computed from
+    percentile: 90.0                   # which percentile of that window becomes the envelope
+  target_dr_db: 15.0                   # dynamic range the compressor aims to leave
+  compression_ratio: 2.0               # how hard the range above target is compressed
+  macro_target_dbfs: -6.0              # level the macro trend is driven toward
+  gain_smoothing:
+    window_s: 0.025                    # median window applied to the gain curve itself
+  floor_dbfs: -100.0                   # gain computation treats anything below this as silence
+  ceiling: 0.95                        # output is scaled to keep peaks under this
+
+# The two STFT resolutions. The narrowband array is also spectral continuity's input.
+spectrogram:
+  wideband_window_ms: 5.0              # resolves the glottal pulse train in time; the speech-analysis view
+  narrowband_window_ms: 20.0           # resolves harmonics; what continuity is measured on
+  hop_ms: 5.0                          # shared hop for both
+
+# Auditory filterbank layout.
+gammatone:
+  n_channels: 40                       # ERB-spaced channel count
+  low_hz: 80.0                         # lowest channel centre
+  high_hz: 7800.0                      # highest channel centre
+  hop_s: 0.005                         # frame hop
+
+# YAMNet's whole-file silence and coverage readings, and its label-space size.
+yamnet:
+  silence_threshold: 0.5               # Silence score at or above this marks a window silent
+  coverage_threshold: 0.5              # fraction of the file that must read silent to call it empty
+  top_k: 521                           # full label space; a SIZE, not a threshold
+
+# Per-classifier window grids, and the membership rule that folds raw scores into per-window label
+# sets: a label is carried when it is in the window's top label_top_k AND at or above its floor.
+# A null default_threshold means the fold cannot run and the window carries `labelled: false` -- the
+# raw `<classifier>_scores` derivative is persisted regardless, by its own earlier step.
+windows:
+  yamnet:
+    default_threshold: 0.2             # owner-directed: score a label needs to join a window's set
+    label_thresholds: null             # per-label overrides of that default
+    label_top_k: 4                     # owner-directed: how many labels of a window are eligible at all
+  ast:
+    default_threshold: null            # as above; no ROC over this corpus exists
+    label_thresholds: null             # as above
+    label_top_k: 4                     # as above
+    win_length_s: 10.24                # owner-directed 10 s window (1024-frame input)
+    hop_s: 10.24                       # non-overlapping until a hop is fitted; a null here stopped AST running
+    top_k: 527                         # AudioSet's full label space; a size, not a threshold
+  hear:
+    default_threshold: 0.2             # as yamnet; the same pair governs both
+    label_thresholds: null             # as above
+    label_top_k: 4                     # as above
+    hop_s: 2.0                         # non-overlapping 2 s windows; a null here stopped HeAR running
+
+# Praat's settings for PREPROCESS's F0 and formant tracks. The sustained-phonation and glide
+# detector these were also named for was removed on 2026-09-04; only the track settings remain.
+phonation_spans:
+  hop_s: 0.01                          # analysis hop for the F0/formant tracks
+  formant_max_hz: 5000.0               # Praat's maximum_formant
+  max_formants: 5                      # Praat's max_number_of_formants
+  formant_window_s: 0.025              # Praat's window_length for the formant track
+  formant_preemphasis_hz: 50.0         # Praat's pre-emphasis frequency
+
+# Vocabularies read off the consensus transcript.
+words:
+  # Cough-like renderings a recognizer emits as ordinary words; PREPROCESS brackets each one. One
+  # flat list, and only the cough set is measured; see the derivation in
+  # `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`.
+  onomatopoeic_tokens: [cough, coughs, coughing, 咳, 呵, ahem, hack, khh, kof, cof]
+
+# Which declared hint tags force which kind's branch.
+routing:
+  hint_kind_map: null                  # tag (and metadata.speech_type) -> kind; a tag matching nothing forces nothing
+
+# AIRWAY's labels of interest, and what may confirm or contest them. Corroboration is no longer a
+# hand-written string map: it comes from the classifier-ontology profile in
+# `data/classifier_ontology/`, where every HeAR label resolves to an AudioSet node and is
+# corroborated by that node or any descendant of it. Six of HeAR's eight labels had no entry in the
+# hand map and could never be corroborated; see
+# `specs/20260910-classifier-ontology-mapping/design.md`.
+airway:
+  labels_of_interest: [Cough, Breathe]  # the HeAR labels this branch acts on
+  corroboration_overrides: null         # HeAR label -> AudioSet class names, REPLACING that label's derived set
+  contest_labels: null                  # YAMNet labels that may contest a HeAR label; refused if it intersects the airway evidence set derived from taxonomy.airway_ontology_roots
+
+# Praat's harmonicity and pitch settings for the whole-stream F0/formant tracks.
+phonation:
+  hop_s: 0.01                          # Praat's time_step
+  silence_threshold: 0.1               # Praat's silence threshold
+  periods_per_window: 4.5              # Praat's periods_per_window
+  period_doubling_factor: 2.0          # the definition of period doubling; an identity, not a threshold
+  hnr_floor_interval_db: null          # near-edge HNR interval; Praat calibrates no dB floor, so this needs a measurement
+  rms_floor_interval: null             # near-edge RMS interval, same
+
+# Praat's settings for PREPROCESS's whole-file feature set over the `enhanced` stream. The forty
+# scalars it returns become the `praat_features` measurement's own attributes.
+praat_features:
+  time_step_s: 0.005                   # Praat's frame shift for every frame-based descriptor
+  window_length_s: 0.025               # Praat's analysis window for the spectral moments
+
+# VOICE's F0 ranges and task-duration expectations. f0_search_range_hz is also read by PREPROCESS:
+# it is the wide search each recording's own [floor, ceiling] is narrowed from, not a fixed range.
+voice:
+  hint_tags: [phonation, humming, sustained-vowel, voice]  # unread as of v2; hints route through routing.hint_kind_map alone
+  f0_search_range_hz: [50.0, 600.0]    # wide [min, max] the per-recording range is derived from
+  f0_range_by_population: null         # per declared age and sex, replacing the derived range
+  f0_range_ratio_max: null             # largest F0 ratio a single production may span
+  task_duration_ranges: null           # expected duration per declared task
+
+# SPEECH's enrollment, separation, diarization and non-target settings.
+speech:
+  second_diarizer: null                # which model corroborates pyannote's speaker count
+  target_match_cosine: null            # similarity above which a diarized speaker is the enrolled target
+  speech_test_stoi_floor: null         # STOI floor for a speech span to pass quality
+  speech_test_si_sdr_floor: null       # SI-SDR floor, same
+  hint_tags: [speech, read-speech]     # unread as of v2; hints route through routing.hint_kind_map alone
+  enrollment_model: null               # speaker-embedding model AND revision enrollment is computed with
+  separation_backend: null             # which separator runs on overlapping speech
+  separation_sound_class: null         # the sound class that separator is asked for
+  nontarget:                           # what marks a diarized speaker as not the target
+    level_db: null                     # level difference from the target
+    tilt_db_per_octave: null           # spectral tilt difference
+    d_to_r_db: null                    # direct-to-reverberant ratio difference
+
+# The evidence fold. TAXONOMY runs no models: it folds stored evidence into a state per kind.
+taxonomy:
+  presence_floor:                      # evidence a line needs to read `present`; null makes every line `unavailable`
+    speech:
+      acoustic: null                   # windows of acoustic speech evidence
+      lexical: null                    # consensus words
+    airway:
+      health_acoustic: null            # HeAR-labelled spans
+      acoustic: null                   # YAMNet-labelled spans
+  voice_min_duration_s: null           # UNREAD since the phonation-span source was retired 2026-09-04
+  voice_uncertain_duration_s: null     # UNREAD likewise; both await the voice rework onto consensus_taxonomy
+  speech_labels: null                  # which classifier labels can express the speech kind
+  consolidation_floor: 0.2             # owner-directed: consolidation drops a label under this, every classifier
+  # The one classifier-ontology profile this run reads: AIRWAY's corroboration, the airway
+  # closure below, and the consensus taxonomy's label identity all go through it.
+  classifier_ontology_profile: null   # path to a profile; null takes the packaged latest
+  # AudioSet ontology roots whose subtree IS the airway kind. Both evidence vocabularies come from
+  # this one list through the classifier-ontology profile: the AudioSet labels are the closure minus
+  # the nodes no classifier can emit, the HeAR labels are those whose mapped node falls inside it.
+  # Naming a second root widens both at once.
+  airway_ontology_roots: [Respiratory sounds]
+  # Bracketed consensus tokens that ARE an airway event. [uh] and [um] are fillers, not airway.
+  airway_bracket_tokens: [breath, cough, throatclearing, sniff]
+  # The family taxonomy ruleset: which branches a recording's own content routes it to, and which
+  # family set each branch is scored against. Each operating point and the firing spread it came
+  # from are in `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`, keyed by gate name.
+  ruleset:
+    reference_family_set:               # branch -> the families set it is SCORED against; routes nothing
+      AIRWAY: airway
+      SPEECH: lexical_speech
+      VOICE: voice
+      DDK: syllable_repetition
+    excluded_by_construction:           # branch -> families HELD OUT of its scoring; not negatives, not positives
+      AIRWAY: null
+      SPEECH: syllable_repetition       # DDK is speech, and sits outside lexical_speech only by construction
+      VOICE: null
+      DDK: null
+    branch_gates:                       # branch -> gates, any one of which routes it, on any recording
+      AIRWAY: [airway.breath, airway.cough, airway.bracketed_event, airway.ppg_silent_fraction]
+      SPEECH: [speech.lexical]
+      VOICE: [voice.sustained, voice.glide, voice.chant]
+      DDK: [ddk.lexical_repetition, ddk.ppg_segment_rate_per_s]
+    branch_flags:                       # branch -> gates that ANNOTATE it; a flag never routes anything
+      AIRWAY: []
+      SPEECH: [speech.transcript_agreement]
+      VOICE: []
+      DDK: []
+    emptiness:                          # the bypass, consulted only when no branch gate fired
+      peak_streams: [enhanced|yamnet, residual|yamnet]  # every stream whose top tracked-label score must fall below the floor
+      peak_floor: 0.2                   # score under which a stream carries nothing; one value for both streams
+    gates:                              # gate -> the one number it reads, the comparison, and the cut
+      speech.lexical:
+        feature: [words, lexical]       # live consensus words that are not bracketed, any outcome
+        op: at_least                    # fires at or above the threshold
+        threshold: 2                    # lexical words that route SPEECH; the artifact boundary, unswept in J
+      speech.transcript_agreement:
+        feature: [words, agreement]     # live consensus words carrying the agreement outcome
+        op: at_least
+        threshold: 3                    # agreed words that FLAG doubt about what was said; routes nothing
+      voice.sustained:
+        feature: [span_longest, amplitude]   # longest live amplitude span, in seconds
+        op: at_least
+        threshold: 3.0                  # seconds of held phonation that route VOICE
+      voice.glide:
+        feature: [peak_set, plain, yamnet, singing]   # YAMNet singing-subtree union peak, plain stream
+        op: at_least
+        threshold: 0.05                 # union score that routes VOICE
+      voice.chant:
+        feature: [peak_label, plain, yamnet, Chant]   # YAMNet Chant peak, plain stream
+        op: at_least
+        threshold: 0.02                 # chant score that routes VOICE
+      airway.breath:
+        feature: [residual, energy_fraction]   # residual energy as a fraction of the plain stream
+        op: at_least
+        threshold: 0.10                 # residual fraction that routes AIRWAY
+      airway.cough:
+        feature: [span_label_set_stat, yamnet.cough_labels.peak_over_floor_db_max]  # loudest cough-labelled span
+        op: at_least
+        threshold: 50.0                 # dB over floor that routes AIRWAY; carried over unswept on this population
+      airway.bracketed_event:
+        feature: [bracketed_set, airway]   # typed bracketed consensus tokens in taxonomy.airway_bracket_tokens
+        op: at_least
+        threshold: 1                    # one bracketed airway event routes AIRWAY
+      airway.ppg_silent_fraction:
+        feature: [ppg, silent_fraction]   # posteriorgram frames whose argmax phoneme is <silent>
+        op: at_least
+        threshold: 0.757                # silent frame fraction that routes AIRWAY, beside airway.breath
+      ddk.lexical_repetition:
+        feature: [transcript_repeat]    # largest repeat count of any normalised transcript token
+        op: at_least
+        threshold: 3                    # repeats that route DDK; UNMEASURED, and lexical-only by construction
+      ddk.ppg_segment_rate_per_s:
+        feature: [ppg, segment_rate_per_s]   # contiguous argmax-phoneme segments per second of analysed audio
+        op: at_least
+        threshold: 10                   # segments per second that route DDK, reading no transcript
+
+# SQUIM and disruption tolerances. Every key in this section is currently read by nothing in
+# `src/senselab`: the gate they describe is unimplemented.
+quality:
+  stoi_floor: null                     # STOI below which a span fails on quality
+  pesq_floor: null                     # PESQ below which a span fails on quality
+  disruption_clipped_s_max: null       # clipped seconds a span may carry and still pass
+  disruption_dropout_s_max: null       # dropout seconds a span may carry and still pass
+  clip_contradiction_margin: 0.005     # fraction above a clip's own level an unclipped sample must reach; PREPROCESS withdraws on it, QUALITY audits on it
+  clip_edge_guard_samples: 3           # samples each side of a clip span excluded as that run's own decay; PREPROCESS applies it
+
+# Clip, dropout and discontinuity counting over each span.
+disruptions:
+  clip_headroom: 0.999                 # amplitude at or above this counts toward a clip run
+  min_clip_run: 3                      # consecutive samples needed before a clip run is reported
+  min_dropout_ms: 10.0                 # shortest reported dropout
+  discontinuity_local_factor: 10.0     # a jump this many times its own local variation is a discontinuity
+  discontinuity_window_ms: 20.0        # the short-term frame that local variation is measured over
+
+# The detector set a PII scan is required to have run.
+pii:
+  required_detectors: [gliner, presidio, rules]   # the pii_detection module's own detector set
+
+# What a released transcript replaces, and by how much padding.
+redaction:
+  padding_ms: null                     # outward pad on a redacted extent; must exceed the worst word-edge error
+  fill: null                           # what replaces redacted audio: silence, noise or bleep
+  bleep_hz: 1000.0                     # tone frequency when fill is bleep
+
+# Background residual: FRCRN_SE_16K's enhancement, lag-aligned and gain-fitted, subtracted from
+# `plain`. Both the enhancement and the residual are written and classified; no energy-fraction
+# gate decides whether either is produced.
+residual:
+  enabled: true                        # whether this PREPROCESS block runs at all
+  max_lag_ms: 200.0                    # cross-correlation search half-window against the enhanced output
+  bands_hz: [[0, 200], [200, 1000], [1000, 4000], [4000, 8000]]  # band split the residual is reported over
+
+# The presentation form the summary is written in.
+report:
+  format: pdf                          # pdf or png

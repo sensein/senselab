@@ -22,6 +22,8 @@ Safety features are configurable via ``safe_mode`` to minimize
 overhead for simple single-process workflows.
 """
 
+import contextvars
+import glob
 import hashlib
 import json
 import logging
@@ -33,9 +35,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Iterator, Optional
 
 from senselab.utils.cuda_probe import (
     HostCuda,
@@ -123,6 +126,143 @@ def _cache_dir_path() -> Path:
     return Path(os.environ.get("SENSELAB_VENV_CACHE", str(_DEFAULT_CACHE_DIR)))
 
 
+def provisioned_venv_dirs(name: str) -> list[Path]:
+    """Every completed venv for one backend, across whatever device keys exist.
+
+    A backend whose install depends on the device lives at ``<name>-<tag>``, so a caller asking
+    whether it is provisioned cannot name the directory in advance. Only directories carrying the
+    completion marker count; a half-built tree is not provisioned.
+
+    Args:
+        name: The backend's venv name, as passed to :func:`ensure_venv`.
+
+    Returns:
+        The matching directories, sorted, empty when the backend has never been built here.
+    """
+    cache = _cache_dir_path()
+    if not cache.is_dir():
+        return []
+    candidates = [cache / name, *sorted(cache.glob(f"{name}-*"))]
+    return [directory for directory in candidates if (directory / ".senselab-installed").is_file()]
+
+
+_VENV_USE_RECORDER: "contextvars.ContextVar[Optional[dict[str, Path]]]" = contextvars.ContextVar(
+    "_VENV_USE_RECORDER", default=None
+)
+
+
+@contextmanager
+def record_venv_use() -> Iterator[dict[str, Path]]:
+    """Record which subprocess venvs :func:`ensure_venv` resolves to within this context.
+
+    Nesting is not supported: an inner call replaces the outer recorder for its duration.
+
+    Yields:
+        The dict, updated in place as :func:`ensure_venv` calls occur inside the block.
+    """
+    used: dict[str, Path] = {}
+    token = _VENV_USE_RECORDER.set(used)
+    try:
+        yield used
+    finally:
+        _VENV_USE_RECORDER.reset(token)
+
+
+def _note_venv_use(name: str, venv_dir: Path) -> None:
+    """Record a resolved venv directory, when :func:`record_venv_use` is active."""
+    recorder = _VENV_USE_RECORDER.get()
+    if recorder is not None:
+        recorder[name] = venv_dir
+
+
+_DECLARED_ENV_PACKAGES = frozenset(
+    {
+        "torch",
+        "torchaudio",
+        "torchcodec",
+        "transformers",
+        "tensorflow",
+        "tensorflow-hub",
+        "keras",
+        "numpy",
+        "crisperwhisper",
+        "qwen-asr",
+        "clearvoice",
+    }
+)
+"""The packages a venv's environment record names in full: the ones that decide its numerical
+results, plus each backend's own library."""
+
+
+def _normalize_package_name(name: str) -> str:
+    """A dist-info package name, folded to compare across ``-``/``_`` spelling variants."""
+    return name.lower().replace("_", "-")
+
+
+def _venv_python_version(venv_dir: Path) -> str:
+    """The interpreter version a venv was built with, from ``pyvenv.cfg``.
+
+    Returns:
+        The value of ``pyvenv.cfg``'s ``version_info`` (falling back to ``version``) key, or
+        ``"unknown"`` when neither is present.
+    """
+    cfg = venv_dir / "pyvenv.cfg"
+    try:
+        text = cfg.read_text()
+    except OSError:
+        return "unknown"
+    match = re.search(r"^version(?:_info)?\s*=\s*(\S+)", text, re.MULTILINE)
+    return match.group(1) if match else "unknown"
+
+
+def _venv_dist_info(venv_dir: Path) -> dict[str, str]:
+    """Every installed distribution's name and version, read from ``*.dist-info`` directory names.
+
+    Pure filesystem work: no interpreter start, no ``uv pip freeze``.
+
+    Args:
+        venv_dir: The venv's directory.
+
+    Returns:
+        Package name to version, for every ``*.dist-info`` directory found.
+    """
+    pattern = str(venv_dir / "lib" / "python*" / "site-packages" / "*.dist-info")
+    if sys.platform == "win32":
+        pattern = str(venv_dir / "Lib" / "site-packages" / "*.dist-info")
+    out: dict[str, str] = {}
+    for entry in glob.glob(pattern):
+        base = os.path.basename(entry)[: -len(".dist-info")]
+        name, _, version = base.rpartition("-")
+        if name:
+            out[name] = version
+    return out
+
+
+def venv_environment(name: str, venv_dir: Path) -> dict[str, Any]:
+    """The environment record for one resolved subprocess venv.
+
+    Args:
+        name: The venv's backend name, as passed to :func:`ensure_venv`.
+        venv_dir: Its resolved directory, from :func:`ensure_venv` or :func:`record_venv_use`.
+
+    Returns:
+        Keyword arguments for :meth:`~senselab.utils.prov_store.ProvStore.environment`: ``label``
+        (the resolved directory's own name, which encodes its device key), ``python_version``,
+        ``dependencies`` (the declared subset actually installed — see
+        :data:`_DECLARED_ENV_PACKAGES`) and ``dependencies_digest`` (a SHA-256 over the full
+        listing, so a mismatch against a fresh scan is detectable without storing every package).
+    """
+    full = _venv_dist_info(venv_dir)
+    declared = {pkg: version for pkg, version in full.items() if _normalize_package_name(pkg) in _DECLARED_ENV_PACKAGES}
+    digest = hashlib.sha256(json.dumps(sorted(full.items()), separators=(",", ":")).encode()).hexdigest()
+    return {
+        "label": venv_dir.name,
+        "python_version": _venv_python_version(venv_dir),
+        "dependencies": declared,
+        "dependencies_digest": digest,
+    }
+
+
 def _cache_dir() -> Path:
     """Return the directory for cached subprocess venvs, creating it if missing."""
     cache = _cache_dir_path()
@@ -164,8 +304,77 @@ def _find_uv() -> str:
 
 # ── Venv management ──────────────────────────────────────────────────
 
+# Overrides the build-lock timeout below; see
+# specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md for the
+# derivation of the packaged default from measured cold-build times.
+_VENV_LOCK_TIMEOUT_ENV = "SENSELAB_VENV_LOCK_TIMEOUT"
+_DEFAULT_VENV_LOCK_TIMEOUT = 1200.0
+
+# Bounded retries for the rare case where a completed build finds it no longer owns the lock
+# (see `_VenvLockLost`) -- not a threshold fitted to data, just a small ceiling so a genuine
+# takeover gets a few chances to reuse whoever won before giving up.
+_MAX_LOCK_LOST_RETRIES = 3
+
+
+def _venv_lock_timeout() -> float:
+    """Return the configured venv-build lock timeout, in seconds."""
+    return float(os.environ.get(_VENV_LOCK_TIMEOUT_ENV, str(_DEFAULT_VENV_LOCK_TIMEOUT)))
+
+
+class _VenvLockLost(RuntimeError):
+    """A just-completed build found it no longer owns the lock it built under.
+
+    Raised by :func:`_ensure_venv_once` and retried a bounded number of times by
+    :func:`ensure_venv`. See
+    specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md.
+    """
+
 
 def ensure_venv(
+    name: str,
+    requirements: list[str],
+    python_version: Optional[str] = None,
+    max_cuda_version: Optional[tuple[int, int]] = None,
+) -> Path:
+    """Create or reuse an isolated virtual environment, retrying a lost-lock build a few times.
+
+    Delegates to :func:`_ensure_venv_once` for one attempt. If that attempt's own build
+    completes but then finds another process took over the lock in the meantime
+    (:class:`_VenvLockLost`), the attempt is retried up to ``_MAX_LOCK_LOST_RETRIES`` times: a
+    fresh attempt re-acquires the lock and re-checks the completion marker first, so it reuses
+    whatever the other process finished instead of rebuilding, unless no marker is present yet.
+
+    Args:
+        name: Unique identifier for this venv (e.g., "coqui", "ppgs").
+        requirements: List of pip install specs (e.g., ["coqui-tts~=0.27"]).
+        python_version: Python version (e.g., "3.11"). Defaults to current.
+        max_cuda_version: Optional ceiling on the CUDA wheel index for this venv, forwarded to
+            ``pick_torch_index``. ``None`` applies no cap.
+
+    Returns:
+        Path to the venv directory.
+    """
+    last_error: Optional[_VenvLockLost] = None
+    for attempt in range(1, _MAX_LOCK_LOST_RETRIES + 1):
+        try:
+            venv_dir = _ensure_venv_once(name, requirements, python_version, max_cuda_version)
+            _note_venv_use(name, venv_dir)
+            return venv_dir
+        except _VenvLockLost as exc:
+            last_error = exc
+            logger.warning(
+                "ensure_venv('%s'): lost the lock during build (attempt %d/%d); re-acquiring and "
+                "checking for a completed venv before rebuilding: %s",
+                name,
+                attempt,
+                _MAX_LOCK_LOST_RETRIES,
+                exc,
+            )
+    assert last_error is not None  # the loop above always sets this before falling through
+    raise last_error
+
+
+def _ensure_venv_once(
     name: str,
     requirements: list[str],
     python_version: Optional[str] = None,
@@ -185,6 +394,10 @@ def ensure_venv(
     Stage 2's transitive resolution against PyPI can split them across
     mismatched local-version tags.
 
+    The venv directory name reflects the resolved install: ``name`` unchanged for a
+    torch-free backend, ``f"{name}-{tag}"`` (e.g. ``"crisperwhisper-cu128"``) for a
+    torch-bearing one, where ``tag`` is the resolved ``TorchIndex.tag``.
+
     Args:
         name: Unique identifier for this venv (e.g., "coqui", "ppgs").
         requirements: List of pip install specs (e.g., ["coqui-tts~=0.27"]).
@@ -198,30 +411,33 @@ def ensure_venv(
     Returns:
         Path to the venv directory.
     """
-    venv_dir = _cache_dir() / name
+    # Resolved before the directory is named -- see specs/20260907-venv-dir-keyed-by-index/
+    # for why. A torch-free backend resolves no index and keeps the bare ``name``; a
+    # torch-bearing backend's directory carries the resolved ``TorchIndex.tag``.
+    torch_specs = _torch_install_specs(requirements)
+    host_cuda: Optional[HostCuda] = None
+    torch_index: Optional[TorchIndex] = None
+    if torch_specs:
+        env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
+        probed = detect_host_cuda()
+        host_cuda = probed
+        torch_index = pick_torch_index(probed, env_override=env_override, max_cuda_version=max_cuda_version)
+
+    dir_name = f"{name}-{torch_index.tag}" if torch_index is not None else name
+    venv_dir = _cache_dir() / dir_name
     marker = venv_dir / ".senselab-installed"
 
-    # SharedFileLock derives its own ".lock" / ".heartbeat" paths from venv_dir by
-    # appending (never Path.with_suffix, which would collide two venv names differing
-    # only after a dot -- see file_lock.py's class docstring). timeout=600 matches this
-    # module's original FileLock timeout and is in fact the case SharedFileLock's own
-    # default was derived from: a venv install can legitimately take minutes. Unlike the
-    # plain FileLock this replaces, a holder that dies mid-install is detected on the
-    # next uncontended acquire (stale heartbeat) rather than blocking every waiter for
-    # the full 600s and then raising.
-    #
-    # Reaching `except TimeoutError` below proves the opposite: SharedFileLock's contract
-    # is that a timeout means the flock was held *continuously* for the whole window, which
-    # a crashed process cannot do (its flock is kernel-released the instant it exits) -- so
-    # this is always a live holder, however stale its heartbeat looks. These venvs install
-    # torch + torchaudio (~2.5 GB) from the PyTorch wheel index, which can legitimately
-    # exceed 600s on a congested shared filesystem or a slow mirror. Failing here instead of
-    # retrying would turn "someone else is still installing" into a hard error for every
-    # waiter -- functionally the same failure this task removed, just with a better
-    # diagnostic. SharedFileLock deliberately never retries this internally (see
-    # file_lock.py), so the unbounded wait lives here, mirroring ensure_hf_model's pattern
-    # in dependencies.py: a proven-live holder means wait longer, never take over.
-    lock = SharedFileLock(venv_dir, timeout=600)
+    # SharedFileLock derives its own ".lock" / ".heartbeat" / ".holder" paths from venv_dir by
+    # appending (never Path.with_suffix, which would collide two venv names differing only
+    # after a dot -- see file_lock.py's class docstring). See
+    # specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md for the
+    # timeout's derivation and for why `except TimeoutError` below retries unboundedly rather
+    # than raising: a timeout only proves a live holder (SharedFileLock's contract -- a crashed
+    # process's flock is kernel-released the instant it exits, so it cannot hold continuously
+    # through a whole timeout window), and this mirrors ensure_hf_model's identical pattern in
+    # dependencies.py.
+    lock_timeout = _venv_lock_timeout()
+    lock = SharedFileLock(venv_dir, timeout=lock_timeout)
     while True:
         try:
             lock.__enter__()
@@ -230,28 +446,14 @@ def ensure_venv(
             logger.info(
                 "Still waiting for another process to build venv '%s' (lock held for the last %.0fs)",
                 name,
-                600.0,
+                lock_timeout,
             )
             continue
     try:
-        # Auto-detect whether this venv routes torch through the CUDA
-        # index: any caller-declared torch / torchaudio spec triggers the
-        # probe + Stage-1 install. A backend that pins neither (yamnet,
-        # continuous-ser, or future torch-free venvs) skips the probe
-        # entirely — no ``nvidia-smi`` shellout, no ``torchaudio`` forced
-        # into the install. The probe still runs (when triggered) even
-        # with ``SENSELAB_TORCH_INDEX_URL`` set so its result can be
-        # surfaced in the diagnostic when an install failure wraps into
-        # ``SenselabCudaCompatibilityError``.
-        torch_specs = _torch_install_specs(requirements)
-        host_cuda: Optional[HostCuda] = None
-        torch_index: Optional[TorchIndex] = None
-        if torch_specs:
-            env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
-            probed = detect_host_cuda()
-            host_cuda = probed
-            torch_index = pick_torch_index(probed, env_override=env_override, max_cuda_version=max_cuda_version)
-
+        # Defensive check, not load-bearing: `dir_name` already carries the resolved
+        # `torch_index.tag`, so two different indexes can no longer collide on one
+        # `venv_dir`. A mismatch here means `dir_name` itself is wrong -- see the
+        # `logger.error` below and specs/20260907-venv-dir-keyed-by-index/.
         expected_index_url = torch_index.url if torch_index is not None else None
         if marker.is_file():
             stored = json.loads(marker.read_text())
@@ -259,6 +461,17 @@ def ensure_venv(
             if stored.get("requirements") == sorted(requirements) and stored_index_url == expected_index_url:
                 logger.debug("Reusing existing venv: %s", venv_dir)
                 return venv_dir
+            if stored.get("requirements") == sorted(requirements) and stored_index_url != expected_index_url:
+                logger.error(
+                    "Venv '%s' at %s has a stale torch_index (%r != %r) despite a device-keyed "
+                    "directory name -- this means the directory key ('%s') no longer reflects "
+                    "the resolved index, not that a legitimate device change occurred.",
+                    name,
+                    venv_dir,
+                    stored_index_url,
+                    expected_index_url,
+                    dir_name,
+                )
 
         uv = _find_uv()
         py_ver = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -424,6 +637,20 @@ def ensure_venv(
                 "url": torch_index.url,
                 "source": torch_index.source,
             }
+        # A takeover elsewhere overwrote this lock's identity without contacting this
+        # process, so `venv_dir` may already have a second builder treating it as its own --
+        # certifying completion here would be exactly the "importable-looking venv missing
+        # a shared object" corruption from a concurrent build. Refuse and rebuild instead.
+        if not lock.owns():
+            logger.error(
+                "Lock for venv '%s' was taken over by another process during this build; "
+                "declining to mark %s complete and removing it for a clean rebuild.",
+                name,
+                venv_dir,
+            )
+            shutil.rmtree(venv_dir, ignore_errors=True)
+            raise _VenvLockLost(f"Venv '{name}' lost its lock to a concurrent process during build; retry.")
+
         # Strictly before the marker write: a hard kill (OOM, CI timeout) between chmod and
         # the marker would otherwise leave `.senselab-installed` present with the chmod pass
         # incomplete. Every later ensure_venv call takes the reuse fast path on seeing the

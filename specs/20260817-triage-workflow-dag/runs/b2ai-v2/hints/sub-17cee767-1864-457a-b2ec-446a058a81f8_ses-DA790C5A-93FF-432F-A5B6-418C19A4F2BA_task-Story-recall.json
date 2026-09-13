@@ -1,0 +1,11 @@
+{
+ "may_contain": [
+  "speech"
+ ],
+ "metadata": {
+  "task_token": "Story-recall",
+  "speech_type": "recall",
+  "task_id": "adult.story-recall.v2",
+  "registry": "b2aiprep@ebc2a14e task_registry v1"
+ }
+}

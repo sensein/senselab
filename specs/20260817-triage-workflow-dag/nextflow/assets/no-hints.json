@@ -1,0 +1,14 @@
+{
+  "_comment": "No hints. A hint conditions an outcome only: it never creates a span, relabels one, alters a threshold, or promotes a fail to a pass. Keyed by recording id, or '*' for all.",
+  "_example": {
+    "some-recording-id": {
+      "airway_content": true,
+      "phonation": false,
+      "target_embedding": {
+        "model": "<id>",
+        "revision": "<40-hex>",
+        "vector_ref": "<path>"
+      }
+    }
+  }
+}

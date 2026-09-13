@@ -11,7 +11,13 @@ reading it, and the traps that have cost real time.
 
 Senselab processes and analyses behavioural data — primarily voice and speech, also text and
 video — through reproducible pipelines. uv for dependency management; the interpreter is pinned in
-`.python-version` (3.12, matching CI).
+`.python-version` (3.12.11). The patch level is load-bearing: `_thread.RLock` gained
+`_recursion_count` after 3.12.0, and `multiprocess` (a `datasets` dependency) calls it during
+teardown, so on 3.12.0 the resource tracker's child is never reaped and a finished process hangs —
+18 minutes per task, measured on a cluster array. See
+`specs/20260905-resource-tracker-teardown/`. CI's cpu and gpu matrices already default to 3.12;
+the macOS and pre-commit jobs lagged at 3.11 until 2026-09-05, which is part of why this went
+unseen.
 
 ## Architecture
 
@@ -25,7 +31,7 @@ src/senselab/
 │   └── workflows/        # Composite pipelines (e.g., health_measurements)
 ├── video/           # Video processing
 │   ├── data_structures/  # Video, Pose
-│   └── tasks/            # pose_estimation, input_output
+│   └── tasks/            # pose_estimation, target_speaker_extraction, input_output
 ├── text/            # Text processing
 │   └── tasks/            # embeddings_extraction
 ├── utils/           # Shared utilities
@@ -61,11 +67,20 @@ Key audio processing capabilities in `audio/tasks/`:
 - Google-style docstrings (enforced by ruff, `convention = "google"`)
 - Line length 120; type hints required (mypy with the pydantic plugin)
 - Tests in `src/tests/` mirroring the package, named `*_test.py`
-- **Rationale does not go in code.** Docstrings and comments say what a thing is and how to call it;
-  the measurement behind a choice, the failure that drove it and the rejected alternatives go in
-  `specs/`. This reverses an earlier convention, so much of the tree still carries multi-paragraph
-  rationale inline — move it out when you edit such a file rather than extending it. A `derivation:`
-  block in a `data/` profile is not code and stays where it is.
+- **Rationale does not go in code, and not in config either.** Docstrings and comments say what a
+  thing is and how to call it; the measurement behind a choice, the failure that drove it and the
+  rejected alternatives go in `specs/`. This reverses an earlier convention, so much of the tree
+  still carries multi-paragraph rationale inline — move it out when you edit such a file rather
+  than extending it.
+- **A `derivation:` key in a config is a hashed value, not a comment — do not add one back.** The
+  triage config carried 50 kB of English in a top-level `derivation:` string, 547 of its 779 lines.
+  The loader hashes the merged mapping, so that prose sat inside `config_hash` and correcting a word
+  of it made two behaviourally identical runs report different identities. It now lives in
+  `specs/20260817-triage-workflow-dag/config-derivations.md`, keyed by config section, and the
+  config carries a short `#` description per section and per key. `#` comments are not hashed and
+  can be corrected freely. Two tests enforce this: no config value may carry prose, and `derivation`
+  stays absent. An earlier version of this file said such a block "is not code and stays where it
+  is" — that was reversed by the owner on 2026-09-04.
 
 ## Traps that have cost time
 

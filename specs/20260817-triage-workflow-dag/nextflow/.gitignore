@@ -1,0 +1,7 @@
+# Nextflow run artifacts. The work directory is SENSITIVE: it holds every intermediate, including
+# PREPROCESS's derivatives with the unredacted transcript. Removing it is an operator decision
+# (`nextflow clean`), not something this pipeline does as a side effect.
+.nextflow/
+.nextflow.log*
+work/
+results*/

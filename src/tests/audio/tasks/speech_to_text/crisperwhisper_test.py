@@ -2,8 +2,9 @@
 
 The assembly test is hermetic (worker + venv mocked): it verifies the
 worker-output → ScriptLine mapping, including per-word / line ``score`` and the
-line span derived from word timestamps. The integration test runs the real
-model only when the ``crisperwhisper`` venv is already provisioned (skipped in
+line span derived from word timestamps. The conversion-cache tests are pure
+filesystem tests over ``tmp_path``. The integration test runs the real model
+only when the ``crisperwhisper`` venv is already provisioned (skipped in
 default CI).
 """
 
@@ -18,10 +19,11 @@ import senselab.audio.tasks.speech_to_text.crisperwhisper as cw
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
 from senselab.utils.data_structures import HFModel
+from senselab.utils.subprocess_venv import provisioned_venv_dirs
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 FIXTURE_WAV = REPO_ROOT / "src" / "tests" / "data_for_testing" / "audio_48khz_mono_16bits.wav"
-CRISPER_VENV = Path.home() / ".cache" / "senselab" / "venvs" / "crisperwhisper"
+CRISPER_VENVS = provisioned_venv_dirs("crisperwhisper")
 
 
 def test_worker_output_maps_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,6 +69,85 @@ def test_worker_output_maps_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> N
     assert sl.start == 0.0 and sl.end == 0.9
 
 
+def _stub_out_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the backend at a fake venv + snapshot so no Hub or venv work happens."""
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr(cw, "resolve_model", lambda *a, **k: ("f" * 40, Path("/fake/snapshot")))
+    monkeypatch.setattr(cw, "ensure_venv", lambda *a, **k: "/fake/venv")
+    monkeypatch.setattr(cw, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
+    monkeypatch.setattr(cw.subprocess, "run", lambda *a, **k: None)
+
+
+def test_ct2_position_limit_becomes_a_typed_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CTranslate2's 448-position overrun is re-raised as a ValueError, so it records as an absence."""
+    _stub_out_staging(monkeypatch)
+
+    def _raise(*a: object, **k: object) -> dict:
+        raise RuntimeError("No position encodings are defined for positions >= 448, but got position 448")
+
+    monkeypatch.setattr(cw, "parse_subprocess_result", _raise)
+    audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
+
+    with pytest.raises(cw.CrisperWhisperDecoderPositionsExceeded) as caught:
+        cw.CrisperWhisperASR.transcribe_with_crisperwhisper([audio], model=None)
+    assert isinstance(caught.value, ValueError)
+    assert "448" in str(caught.value)
+
+
+def test_other_worker_failures_stay_hard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unrelated worker RuntimeError is not reclassified as an absence."""
+    _stub_out_staging(monkeypatch)
+
+    def _raise(*a: object, **k: object) -> dict:
+        raise RuntimeError("CrisperWhisper 2.0 venv failed:\nCUDA out of memory")
+
+    monkeypatch.setattr(cw, "parse_subprocess_result", _raise)
+    audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
+
+    with pytest.raises(RuntimeError) as caught:
+        cw.CrisperWhisperASR.transcribe_with_crisperwhisper([audio], model=None)
+    assert not isinstance(caught.value, ValueError)
+
+
+def test_ct2_cache_key_matches_the_library_layout() -> None:
+    """The computed key is the directory name the library's converter writes."""
+    snapshot = (
+        "/orcd/data/satra/002/huggingface/hub/models--nyralabs--CrisperWhisper2.0_turbo"
+        "/snapshots/de0369c8a68025b7f6e86387b6eb5a3b369787c8"
+    )
+    assert cw._ct2_cache_key(snapshot, "float32") == (
+        "--orcd--data--satra--002--huggingface--hub--models--nyralabs--CrisperWhisper2.0_turbo"
+        "--snapshots--de0369c8a68025b7f6e86387b6eb5a3b369787c8_float32_6794fe16e2f2"
+    )
+    assert cw._ct2_cache_key(snapshot, "float16").endswith("_float16_6794fe16e2f2")
+
+
+def test_torn_ct2_entry_is_discarded(tmp_path: Path) -> None:
+    """A cache entry stamped complete without weights is torn, and is deleted."""
+    entry = tmp_path / "model_float32_abc"
+    entry.mkdir()
+    (entry / ".conversion_complete").touch()
+    (entry / "config.json").write_text("{}")
+
+    assert cw._ct2_entry_is_torn(entry) is True
+    assert cw._discard_torn_ct2_entry(entry) is True
+    assert not entry.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_complete_ct2_entry_is_kept(tmp_path: Path) -> None:
+    """A cache entry carrying weights is left alone."""
+    entry = tmp_path / "model_float32_abc"
+    entry.mkdir()
+    (entry / ".conversion_complete").touch()
+    (entry / "model.bin").write_bytes(b"weights")
+
+    assert cw._ct2_entry_is_torn(entry) is False
+    assert cw._discard_torn_ct2_entry(entry) is False
+    assert (entry / "model.bin").read_bytes() == b"weights"
+
+
 def test_backend_selection_is_platform_appropriate() -> None:
     """CT2 on Linux x86_64, transformers elsewhere (both valid crisperwhisper backends)."""
     assert cw._CRISPER_BACKEND in ("ct2", "transformers")
@@ -76,7 +157,7 @@ def test_backend_selection_is_platform_appropriate() -> None:
         assert cw._CRISPER_BACKEND == "transformers"
 
 
-@pytest.mark.skipif(not CRISPER_VENV.exists(), reason=f"crisperwhisper venv not provisioned at {CRISPER_VENV}")
+@pytest.mark.skipif(not CRISPER_VENVS, reason="crisperwhisper venv not provisioned for this host's device key")
 def test_crisperwhisper_transcribes_when_venv_present() -> None:
     """Integration: real model yields verbatim text + word-level chunks (shape only)."""
     audio = Audio(filepath=str(FIXTURE_WAV))

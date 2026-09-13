@@ -87,6 +87,14 @@ def test_a_non_sha_commit_value_is_rejected() -> None:
         SpeakerEmbeddingProvenance(model_id="org/model", model_commit_sha="main")
 
 
+def test_a_newline_suffixed_sha_is_rejected() -> None:
+    """A 40-hex commit with a trailing newline is not a resolved commit."""
+    import pytest
+
+    with pytest.raises(ValueError, match="40"):
+        SpeakerEmbeddingProvenance(model_id="org/model", model_commit_sha="a" * 40 + "\n")
+
+
 def test_a_target_speaker_embedding_carries_its_provenance() -> None:
     """A vector with no provenance cannot be interpreted later, so provenance is required."""
     emb = TargetSpeakerEmbedding(

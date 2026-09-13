@@ -1,0 +1,77 @@
+{
+  "recording": "streaming-audio-2026-07-30T04-21-56-487Z.wav",
+  "sha256": "0f07a37244f491300bd8546dd94a2f999c9934f8d3c29c55fac8228b17647651",
+  "duration_s": 14.0266875,
+  "verified": "2026-08-18",
+  "provenance": "Human-verified labels for the first labelled audio in this project. This file is the authoritative machine-readable copy; ground-truth-2026-08-18.md is its prose companion and carries the corrections it forced. A copy of these numbers also exists as a Python constant in sensein/agentharness scripts/score_against_labels.py, which predates this file and should be read as derived from it, not as a second source.",
+  "scoring": "onset_lo/onset_hi bound where an onset may fall; a claim inside that window scores as a hit. span_lo/span_hi bound the event's extent. status 'unresolved' means the region is neither a hit nor a miss and must not be scored either way.",
+  "labels": [
+    {
+      "name": "mouth non-speech sound",
+      "onset_lo": 0.779,
+      "onset_hi": 0.981,
+      "span_lo": 0.779,
+      "span_hi": 0.981,
+      "status": "scored",
+      "note": "lip/tongue click, ~202 ms; known blind spot -- no instrument here detects it"
+    },
+    {
+      "name": "exhalation 1",
+      "onset_lo": 2.275,
+      "onset_hi": 2.3495,
+      "span_lo": 2.2995,
+      "span_hi": 3.5205,
+      "status": "scored"
+    },
+    {
+      "name": "exhalation 2",
+      "onset_lo": 5.308,
+      "onset_hi": 5.3785,
+      "span_lo": 5.3285,
+      "span_hi": 6.31,
+      "status": "scored"
+    },
+    {
+      "name": "nothing (6.60-7.10)",
+      "onset_lo": 6.6,
+      "onset_hi": 7.1,
+      "span_lo": 6.6,
+      "span_hi": 7.1,
+      "status": "unresolved",
+      "note": "verified empty, then reopened as possibly an inhalation and left unresolved"
+    },
+    {
+      "name": "cough 1",
+      "onset_lo": 7.926,
+      "onset_hi": 7.976,
+      "span_lo": 7.926,
+      "span_hi": 8.494,
+      "status": "scored"
+    },
+    {
+      "name": "cough 2",
+      "onset_lo": 9.61,
+      "onset_hi": 9.66,
+      "span_lo": 9.61,
+      "span_hi": 10.25,
+      "status": "scored"
+    },
+    {
+      "name": "speech",
+      "onset_lo": 11.62,
+      "onset_hi": 11.67,
+      "span_lo": 11.62,
+      "span_hi": 13.2,
+      "status": "scored"
+    },
+    {
+      "name": "unlabelled tail",
+      "onset_lo": 13.79,
+      "onset_hi": 14.04,
+      "span_lo": 13.79,
+      "span_hi": 14.04,
+      "status": "unresolved",
+      "note": "a VAD rises here and a diarizer reads zero; genuinely unknown"
+    }
+  ]
+}

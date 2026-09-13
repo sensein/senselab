@@ -1,0 +1,389 @@
+{
+ "families": {
+  "animal-fluency": {
+   "agreed_asr": 193,
+   "declared_airway": 0,
+   "declared_lexical_speech": 195,
+   "declared_speech": 195,
+   "declared_voice": 0,
+   "n": 195
+  },
+  "breath-sounds": {
+   "agreed_asr": 6,
+   "declared_airway": 326,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 326
+  },
+  "cape-v-sentences": {
+   "agreed_asr": 2342,
+   "declared_airway": 0,
+   "declared_lexical_speech": 2370,
+   "declared_speech": 2370,
+   "declared_voice": 0,
+   "n": 2370
+  },
+  "cape-v-sentences-v2": {
+   "agreed_asr": 1218,
+   "declared_airway": 0,
+   "declared_lexical_speech": 1224,
+   "declared_speech": 1224,
+   "declared_voice": 0,
+   "n": 1224
+  },
+  "caterpillar-passage": {
+   "agreed_asr": 587,
+   "declared_airway": 0,
+   "declared_lexical_speech": 597,
+   "declared_speech": 597,
+   "declared_voice": 0,
+   "n": 597
+  },
+  "cinderella-story": {
+   "agreed_asr": 237,
+   "declared_airway": 0,
+   "declared_lexical_speech": 258,
+   "declared_speech": 258,
+   "declared_voice": 0,
+   "n": 258
+  },
+  "diadochokinesis-buttercup": {
+   "agreed_asr": 649,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 896,
+   "declared_voice": 0,
+   "n": 896
+  },
+  "diadochokinesis-ka": {
+   "agreed_asr": 62,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 896,
+   "declared_voice": 0,
+   "n": 896
+  },
+  "diadochokinesis-pa": {
+   "agreed_asr": 208,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 896,
+   "declared_voice": 0,
+   "n": 896
+  },
+  "diadochokinesis-pataka": {
+   "agreed_asr": 233,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 896,
+   "declared_voice": 0,
+   "n": 896
+  },
+  "diadochokinesis-ta": {
+   "agreed_asr": 279,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 896,
+   "declared_voice": 0,
+   "n": 896
+  },
+  "diadochokinesis-v2-buttercup": {
+   "agreed_asr": 512,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 702,
+   "declared_voice": 0,
+   "n": 702
+  },
+  "diadochokinesis-v2-kuh": {
+   "agreed_asr": 34,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 702,
+   "declared_voice": 0,
+   "n": 702
+  },
+  "diadochokinesis-v2-puh": {
+   "agreed_asr": 60,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 702,
+   "declared_voice": 0,
+   "n": 702
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "agreed_asr": 93,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 701,
+   "declared_voice": 0,
+   "n": 701
+  },
+  "diadochokinesis-v2-tuh": {
+   "agreed_asr": 182,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 702,
+   "declared_voice": 0,
+   "n": 702
+  },
+  "free-speech": {
+   "agreed_asr": 2978,
+   "declared_airway": 0,
+   "declared_lexical_speech": 3074,
+   "declared_speech": 3074,
+   "declared_voice": 0,
+   "n": 3074
+  },
+  "free-speech-v2": {
+   "agreed_asr": 2066,
+   "declared_airway": 0,
+   "declared_lexical_speech": 2120,
+   "declared_speech": 2120,
+   "declared_voice": 0,
+   "n": 2120
+  },
+  "glides-high-to-low": {
+   "agreed_asr": 126,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 1554,
+   "n": 1554
+  },
+  "glides-low-to-high": {
+   "agreed_asr": 269,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 1596,
+   "n": 1596
+  },
+  "harvard-sentences-list": {
+   "agreed_asr": 12701,
+   "declared_airway": 0,
+   "declared_lexical_speech": 13705,
+   "declared_speech": 13705,
+   "declared_voice": 0,
+   "n": 13705
+  },
+  "high-to-low": {
+   "agreed_asr": 2,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 43,
+   "n": 43
+  },
+  "loudness": {
+   "agreed_asr": 868,
+   "declared_airway": 0,
+   "declared_lexical_speech": 897,
+   "declared_speech": 897,
+   "declared_voice": 0,
+   "n": 897
+  },
+  "loudness-v2": {
+   "agreed_asr": 661,
+   "declared_airway": 0,
+   "declared_lexical_speech": 705,
+   "declared_speech": 705,
+   "declared_voice": 0,
+   "n": 705
+  },
+  "maximum-phonation-time": {
+   "agreed_asr": 237,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 2696,
+   "n": 2696
+  },
+  "maximum-phonation-time-v2": {
+   "agreed_asr": 72,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 813,
+   "n": 813
+  },
+  "open-response-questions": {
+   "agreed_asr": 193,
+   "declared_airway": 0,
+   "declared_lexical_speech": 199,
+   "declared_speech": 199,
+   "declared_voice": 0,
+   "n": 199
+  },
+  "picture-description": {
+   "agreed_asr": 884,
+   "declared_airway": 0,
+   "declared_lexical_speech": 889,
+   "declared_speech": 889,
+   "declared_voice": 0,
+   "n": 889
+  },
+  "picture-description-option1": {
+   "agreed_asr": 367,
+   "declared_airway": 0,
+   "declared_lexical_speech": 373,
+   "declared_speech": 373,
+   "declared_voice": 0,
+   "n": 373
+  },
+  "picture-description-option2": {
+   "agreed_asr": 323,
+   "declared_airway": 0,
+   "declared_lexical_speech": 329,
+   "declared_speech": 329,
+   "declared_voice": 0,
+   "n": 329
+  },
+  "productive-vocabulary": {
+   "agreed_asr": 2745,
+   "declared_airway": 0,
+   "declared_lexical_speech": 2910,
+   "declared_speech": 2910,
+   "declared_voice": 0,
+   "n": 2910
+  },
+  "prolonged-vowel": {
+   "agreed_asr": 1258,
+   "declared_airway": 0,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 1604,
+   "n": 1604
+  },
+  "rainbow-passage": {
+   "agreed_asr": 888,
+   "declared_airway": 0,
+   "declared_lexical_speech": 897,
+   "declared_speech": 897,
+   "declared_voice": 0,
+   "n": 897
+  },
+  "random-item-generation": {
+   "agreed_asr": 262,
+   "declared_airway": 0,
+   "declared_lexical_speech": 265,
+   "declared_speech": 265,
+   "declared_voice": 0,
+   "n": 265
+  },
+  "random-item-generation-v2": {
+   "agreed_asr": 202,
+   "declared_airway": 0,
+   "declared_lexical_speech": 207,
+   "declared_speech": 207,
+   "declared_voice": 0,
+   "n": 207
+  },
+  "respiration-and-cough-breath": {
+   "agreed_asr": 73,
+   "declared_airway": 1788,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 1788
+  },
+  "respiration-and-cough-cough": {
+   "agreed_asr": 239,
+   "declared_airway": 1788,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 1788
+  },
+  "respiration-and-cough-fivebreaths": {
+   "agreed_asr": 64,
+   "declared_airway": 3576,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 3576
+  },
+  "respiration-and-cough-threequickbreaths": {
+   "agreed_asr": 30,
+   "declared_airway": 1718,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 1718
+  },
+  "respiration-and-cough-v2-breath": {
+   "agreed_asr": 13,
+   "declared_airway": 699,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 699
+  },
+  "respiration-and-cough-v2-hardcough": {
+   "agreed_asr": 127,
+   "declared_airway": 698,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 698
+  },
+  "respiration-and-cough-v2-threebreaths": {
+   "agreed_asr": 6,
+   "declared_airway": 699,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 699
+  },
+  "respiration-and-cough-v2-threebreathsmouth": {
+   "agreed_asr": 9,
+   "declared_airway": 699,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 699
+  },
+  "respiration-and-cough-v2-threebreathsnose": {
+   "agreed_asr": 9,
+   "declared_airway": 699,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 699
+  },
+  "story-recall": {
+   "agreed_asr": 850,
+   "declared_airway": 0,
+   "declared_lexical_speech": 889,
+   "declared_speech": 889,
+   "declared_voice": 0,
+   "n": 889
+  },
+  "story-recall-v2": {
+   "agreed_asr": 644,
+   "declared_airway": 0,
+   "declared_lexical_speech": 660,
+   "declared_speech": 660,
+   "declared_voice": 0,
+   "n": 660
+  },
+  "voluntary-cough": {
+   "agreed_asr": 44,
+   "declared_airway": 327,
+   "declared_lexical_speech": 0,
+   "declared_speech": 0,
+   "declared_voice": 0,
+   "n": 327
+  },
+  "word-color-stroop": {
+   "agreed_asr": 464,
+   "declared_airway": 0,
+   "declared_lexical_speech": 472,
+   "declared_speech": 472,
+   "declared_voice": 0,
+   "n": 472
+  }
+ },
+ "n_recordings": 62547
+}

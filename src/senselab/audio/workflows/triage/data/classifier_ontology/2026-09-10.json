@@ -1,0 +1,5728 @@
+{
+  "profile_version": "1",
+  "generated": "2026-09-10",
+  "generator": "scripts/build_classifier_ontology_map.py",
+  "spec": "specs/20260910-classifier-ontology-mapping/design.md",
+  "sources": {
+    "audioset_ontology": {
+      "repository": "https://github.com/audioset/ontology",
+      "commit": "d417d32bf59c711abb5910fd2f76a0eb44697991",
+      "path": "ontology.json",
+      "url": "https://raw.githubusercontent.com/audioset/ontology/d417d32bf59c711abb5910fd2f76a0eb44697991/ontology.json",
+      "sha256": "9c685f4403eecc3ca9be37fd7285cf212feaaea6ff7229d3e7ca89e0d1f2d15d",
+      "retrieved": "2026-09-10",
+      "licence": "CC-BY-4.0",
+      "attribution": "AudioSet ontology, Google LLC, licensed CC BY 4.0"
+    },
+    "audioset_class_index": {
+      "repository": "https://github.com/YuanGongND/ast",
+      "commit": "9fc5b67075f6c59a84c7931c4b5a0bf60c1416c6",
+      "path": "egs/audioset/data/class_labels_indices.csv",
+      "url": "https://raw.githubusercontent.com/YuanGongND/ast/9fc5b67075f6c59a84c7931c4b5a0bf60c1416c6/egs/audioset/data/class_labels_indices.csv",
+      "sha256": "cdd1049833c4b86127c2773ac0d14a2754b6a6d0d1798002ed5c66e699708429",
+      "retrieved": "2026-09-10",
+      "licence": "CC-BY-4.0",
+      "attribution": "AudioSet released class index, Google LLC, licensed CC BY 4.0"
+    },
+    "yamnet_class_map": {
+      "repository": "https://github.com/tensorflow/models",
+      "commit": "dfffd623b6be8d1d9744b8e261fbac370d17c46d",
+      "path": "research/audioset/yamnet/yamnet_class_map.csv",
+      "url": "https://raw.githubusercontent.com/tensorflow/models/dfffd623b6be8d1d9744b8e261fbac370d17c46d/research/audioset/yamnet/yamnet_class_map.csv",
+      "sha256": "cdf24d193e196d9e95912a2667051ae203e92a2ba09449218ccb40ef787c6df2",
+      "retrieved": "2026-09-10",
+      "licence": "Apache-2.0",
+      "attribution": "YAMNet class map, TensorFlow Model Garden, licensed Apache 2.0"
+    }
+  },
+  "hear_labels": [
+    "Cough",
+    "Snore",
+    "Baby Cough",
+    "Breathe",
+    "Sneeze",
+    "Throat Clear",
+    "Laugh",
+    "Speech"
+  ],
+  "audioset": {
+    "ontology_class_count": 632,
+    "released_class_count": 527,
+    "yamnet_class_count": 521,
+    "released_not_in_yamnet": [
+      "Battle cry",
+      "Female singing",
+      "Female speech, woman speaking",
+      "Funny music",
+      "Male singing",
+      "Male speech, man speaking"
+    ],
+    "classes": {
+      "/m/0dgw9r": {
+        "name": "Human sounds",
+        "child_ids": [
+          "/m/09l8g",
+          "/m/01w250",
+          "/m/09hlz4",
+          "/m/0bpl036",
+          "/m/0160x5",
+          "/m/0k65p",
+          "/m/01jg02",
+          "/m/04xp5v",
+          "/t/dd00012"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/09l8g": {
+        "name": "Human voice",
+        "child_ids": [
+          "/m/09x0r",
+          "/m/07p6fty",
+          "/m/03qc9zr",
+          "/m/02rtxlg",
+          "/m/01j3sz",
+          "/m/0463cq4",
+          "/m/07qw_06",
+          "/m/07plz5l",
+          "/m/015lz1",
+          "/m/02fxyj",
+          "/m/07s2xch",
+          "/m/07r4k75",
+          "/m/01j423"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/09x0r": {
+        "name": "Speech",
+        "child_ids": [
+          "/m/05zppz",
+          "/m/02zsn",
+          "/m/0ytgt",
+          "/m/01h8n0",
+          "/m/02qldy",
+          "/m/0261r1",
+          "/m/0brhx"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05zppz": {
+        "name": "Male speech, man speaking",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": false
+      },
+      "/m/02zsn": {
+        "name": "Female speech, woman speaking",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": false
+      },
+      "/m/0ytgt": {
+        "name": "Child speech, kid speaking",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01h8n0": {
+        "name": "Conversation",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02qldy": {
+        "name": "Narration, monologue",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0261r1": {
+        "name": "Babbling",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0brhx": {
+        "name": "Speech synthesizer",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07p6fty": {
+        "name": "Shout",
+        "child_ids": [
+          "/m/07q4ntr",
+          "/m/07rwj3x",
+          "/m/07sr1lc",
+          "/m/04gy_2",
+          "/t/dd00135"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07q4ntr": {
+        "name": "Bellow",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rwj3x": {
+        "name": "Whoop",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07sr1lc": {
+        "name": "Yell",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04gy_2": {
+        "name": "Battle cry",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": false
+      },
+      "/t/dd00135": {
+        "name": "Children shouting",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03qc9zr": {
+        "name": "Screaming",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02rtxlg": {
+        "name": "Whispering",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01j3sz": {
+        "name": "Laughter",
+        "child_ids": [
+          "/t/dd00001",
+          "/m/07r660_",
+          "/m/07s04w4",
+          "/m/07sq110",
+          "/m/07rgt08"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00001": {
+        "name": "Baby laughter",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r660_": {
+        "name": "Giggle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07s04w4": {
+        "name": "Snicker",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07sq110": {
+        "name": "Belly laugh",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rgt08": {
+        "name": "Chuckle, chortle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0463cq4": {
+        "name": "Crying, sobbing",
+        "child_ids": [
+          "/t/dd00002",
+          "/m/07qz6j3"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00002": {
+        "name": "Baby cry, infant cry",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qz6j3": {
+        "name": "Whimper",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qw_06": {
+        "name": "Wail, moan",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07plz5l": {
+        "name": "Sigh",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/015lz1": {
+        "name": "Singing",
+        "child_ids": [
+          "/m/0l14jd",
+          "/m/01swy6",
+          "/m/02bk07",
+          "/t/dd00003",
+          "/t/dd00004",
+          "/t/dd00005",
+          "/t/dd00006",
+          "/m/06bxc"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l14jd": {
+        "name": "Choir",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01swy6": {
+        "name": "Yodeling",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02bk07": {
+        "name": "Chant",
+        "child_ids": [
+          "/m/01c194"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01c194": {
+        "name": "Mantra",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00003": {
+        "name": "Male singing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": false
+      },
+      "/t/dd00004": {
+        "name": "Female singing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": false
+      },
+      "/t/dd00005": {
+        "name": "Child singing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00006": {
+        "name": "Synthetic singing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06bxc": {
+        "name": "Rapping",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02fxyj": {
+        "name": "Humming",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07s2xch": {
+        "name": "Groan",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r4k75": {
+        "name": "Grunt",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01j423": {
+        "name": "Yawn",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01w250": {
+        "name": "Whistling",
+        "child_ids": [
+          "/m/079vc8"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/079vc8": {
+        "name": "Wolf-whistling",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/09hlz4": {
+        "name": "Respiratory sounds",
+        "child_ids": [
+          "/m/0lyf6",
+          "/m/01b_21",
+          "/m/01hsr_",
+          "/m/07ppn3j"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0lyf6": {
+        "name": "Breathing",
+        "child_ids": [
+          "/m/07mzm6",
+          "/m/01d3sd",
+          "/m/07s0dtb",
+          "/m/07pyy8b",
+          "/m/07q0yl5"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07mzm6": {
+        "name": "Wheeze",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01d3sd": {
+        "name": "Snoring",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07s0dtb": {
+        "name": "Gasp",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pyy8b": {
+        "name": "Pant",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07q0yl5": {
+        "name": "Snort",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01b_21": {
+        "name": "Cough",
+        "child_ids": [
+          "/m/0dl9sf8"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dl9sf8": {
+        "name": "Throat clearing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01hsr_": {
+        "name": "Sneeze",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07ppn3j": {
+        "name": "Sniff",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0bpl036": {
+        "name": "Human locomotion",
+        "child_ids": [
+          "/m/06h7j",
+          "/m/07qv_x_",
+          "/m/07pbtc8"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/06h7j": {
+        "name": "Run",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qv_x_": {
+        "name": "Shuffle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pbtc8": {
+        "name": "Walk, footsteps",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0160x5": {
+        "name": "Digestive",
+        "child_ids": [
+          "/m/03cczk",
+          "/m/07pdhp0",
+          "/m/0939n_",
+          "/m/01g90h",
+          "/m/03q5_w",
+          "/m/02p3nc",
+          "/m/02_nn"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/03cczk": {
+        "name": "Chewing, mastication",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pdhp0": {
+        "name": "Biting",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0939n_": {
+        "name": "Gargling",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01g90h": {
+        "name": "Stomach rumble",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03q5_w": {
+        "name": "Burping, eructation",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02p3nc": {
+        "name": "Hiccup",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02_nn": {
+        "name": "Fart",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0k65p": {
+        "name": "Hands",
+        "child_ids": [
+          "/m/025_jnm",
+          "/m/0l15bq"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/025_jnm": {
+        "name": "Finger snapping",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l15bq": {
+        "name": "Clapping",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01jg02": {
+        "name": "Heart sounds, heartbeat",
+        "child_ids": [
+          "/m/01jg1z"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01jg1z": {
+        "name": "Heart murmur",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04xp5v": {
+        "name": "Otoacoustic emission",
+        "child_ids": [
+          "/m/0pv6y"
+        ],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0pv6y": {
+        "name": "Tinnitus, ringing in the ears",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00012": {
+        "name": "Human group actions",
+        "child_ids": [
+          "/m/0l15bq",
+          "/m/053hz1",
+          "/m/028ght",
+          "/m/07rkbfh",
+          "/m/03qtwd",
+          "/m/07qfr4h",
+          "/m/04v5dt",
+          "/t/dd00013",
+          "/t/dd00135"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/053hz1": {
+        "name": "Cheering",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/028ght": {
+        "name": "Applause",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rkbfh": {
+        "name": "Chatter",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03qtwd": {
+        "name": "Crowd",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qfr4h": {
+        "name": "Hubbub, speech noise, speech babble",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04v5dt": {
+        "name": "Booing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00013": {
+        "name": "Children playing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0jbk": {
+        "name": "Animal",
+        "child_ids": [
+          "/m/068hy",
+          "/m/0ch8v",
+          "/m/01280g"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/068hy": {
+        "name": "Domestic animals, pets",
+        "child_ids": [
+          "/m/0bt9lr",
+          "/m/01yrx"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0bt9lr": {
+        "name": "Dog",
+        "child_ids": [
+          "/m/05tny_",
+          "/m/07r_k2n",
+          "/m/07qf0zm",
+          "/m/07rc7d9",
+          "/m/0ghcn6",
+          "/t/dd00136",
+          "/m/07srf8z"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05tny_": {
+        "name": "Bark",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r_k2n": {
+        "name": "Yip",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qf0zm": {
+        "name": "Howl",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rc7d9": {
+        "name": "Bow-wow",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0ghcn6": {
+        "name": "Growling",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00136": {
+        "name": "Whimper (dog)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07srf8z": {
+        "name": "Bay",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01yrx": {
+        "name": "Cat",
+        "child_ids": [
+          "/m/02yds9",
+          "/m/07qrkrw",
+          "/m/07rjwbb",
+          "/m/0f25s6",
+          "/m/07r81j2",
+          "/m/0ghcn6"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02yds9": {
+        "name": "Purr",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qrkrw": {
+        "name": "Meow",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rjwbb": {
+        "name": "Hiss",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0f25s6": {
+        "name": "Cat communication",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07r81j2": {
+        "name": "Caterwaul",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0ch8v": {
+        "name": "Livestock, farm animals, working animals",
+        "child_ids": [
+          "/m/03k3r",
+          "/m/0ffhf",
+          "/m/01xq0k1",
+          "/m/068zj",
+          "/m/03fwl",
+          "/m/07bgp",
+          "/m/025rv6n"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03k3r": {
+        "name": "Horse",
+        "child_ids": [
+          "/m/07rv9rh",
+          "/m/07q5rw0",
+          "/t/dd00139",
+          "/t/dd00140"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rv9rh": {
+        "name": "Clip-clop",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07q5rw0": {
+        "name": "Neigh, whinny",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00139": {
+        "name": "Snort (horse)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00140": {
+        "name": "Nicker",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0ffhf": {
+        "name": "Donkey, ass",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01xq0k1": {
+        "name": "Cattle, bovinae",
+        "child_ids": [
+          "/m/07rpkh9",
+          "/m/0239kh",
+          "/m/01hhp3"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rpkh9": {
+        "name": "Moo",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0239kh": {
+        "name": "Cowbell",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01hhp3": {
+        "name": "Yak",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/068zj": {
+        "name": "Pig",
+        "child_ids": [
+          "/t/dd00018"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00018": {
+        "name": "Oink",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03fwl": {
+        "name": "Goat",
+        "child_ids": [
+          "/m/07q0h5t"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07q0h5t": {
+        "name": "Bleat",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07bgp": {
+        "name": "Sheep",
+        "child_ids": [
+          "/m/07q0h5t"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/025rv6n": {
+        "name": "Fowl",
+        "child_ids": [
+          "/m/09b5t",
+          "/m/01rd7k",
+          "/m/09ddx",
+          "/m/0dbvp"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/09b5t": {
+        "name": "Chicken, rooster",
+        "child_ids": [
+          "/m/07st89h",
+          "/m/07qn5dc"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07st89h": {
+        "name": "Cluck",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qn5dc": {
+        "name": "Crowing, cock-a-doodle-doo",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01rd7k": {
+        "name": "Turkey",
+        "child_ids": [
+          "/m/07svc2k"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07svc2k": {
+        "name": "Gobble",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/09ddx": {
+        "name": "Duck",
+        "child_ids": [
+          "/m/07qdb04"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qdb04": {
+        "name": "Quack",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dbvp": {
+        "name": "Goose",
+        "child_ids": [
+          "/m/07qwf61"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qwf61": {
+        "name": "Honk",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01280g": {
+        "name": "Wild animals",
+        "child_ids": [
+          "/m/0cdnk",
+          "/m/015p6",
+          "/m/01z5f",
+          "/m/06hps",
+          "/m/03vt0",
+          "/m/09ld4",
+          "/m/078jl",
+          "/m/032n05"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0cdnk": {
+        "name": "Roaring cats (lions, tigers)",
+        "child_ids": [
+          "/m/04cvmfc",
+          "/m/0ghcn6"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04cvmfc": {
+        "name": "Roar",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/015p6": {
+        "name": "Bird",
+        "child_ids": [
+          "/m/020bb7",
+          "/m/0h0rv",
+          "/m/04s8yn",
+          "/m/09d5_",
+          "/m/01dwxx",
+          "/m/05_wcq"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/020bb7": {
+        "name": "Bird vocalization, bird call, bird song",
+        "child_ids": [
+          "/m/07pggtn",
+          "/m/07sx8x_"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pggtn": {
+        "name": "Chirp, tweet",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07sx8x_": {
+        "name": "Squawk",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0h0rv": {
+        "name": "Pigeon, dove",
+        "child_ids": [
+          "/m/07r_25d"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r_25d": {
+        "name": "Coo",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04s8yn": {
+        "name": "Crow",
+        "child_ids": [
+          "/m/07r5c2p"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r5c2p": {
+        "name": "Caw",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/09d5_": {
+        "name": "Owl",
+        "child_ids": [
+          "/m/07r_80w"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r_80w": {
+        "name": "Hoot",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01dwxx": {
+        "name": "Gull, seagull",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/05_wcq": {
+        "name": "Bird flight, flapping wings",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01z5f": {
+        "name": "Canidae, dogs, wolves",
+        "child_ids": [
+          "/m/07qf0zm",
+          "/m/0ghcn6"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06hps": {
+        "name": "Rodents, rats, mice",
+        "child_ids": [
+          "/m/04rmv",
+          "/m/02021",
+          "/m/07r4gkf"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04rmv": {
+        "name": "Mouse",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02021": {
+        "name": "Chipmunk",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07r4gkf": {
+        "name": "Patter",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03vt0": {
+        "name": "Insect",
+        "child_ids": [
+          "/m/09xqv",
+          "/m/09f96",
+          "/m/0h2mp",
+          "/m/01h3n"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/09xqv": {
+        "name": "Cricket",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/09f96": {
+        "name": "Mosquito",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0h2mp": {
+        "name": "Fly, housefly",
+        "child_ids": [
+          "/m/07pjwq1"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pjwq1": {
+        "name": "Buzz",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01h3n": {
+        "name": "Bee, wasp, etc.",
+        "child_ids": [
+          "/m/07pjwq1"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/09ld4": {
+        "name": "Frog",
+        "child_ids": [
+          "/m/07st88b"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07st88b": {
+        "name": "Croak",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/078jl": {
+        "name": "Snake",
+        "child_ids": [
+          "/m/07rjwbb",
+          "/m/07qn4z3"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qn4z3": {
+        "name": "Rattle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/032n05": {
+        "name": "Whale vocalization",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04rlf": {
+        "name": "Music",
+        "child_ids": [
+          "/m/04szw",
+          "/m/0kpv1t",
+          "/t/dd00027",
+          "/t/dd00028",
+          "/t/dd00030"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04szw": {
+        "name": "Musical instrument",
+        "child_ids": [
+          "/m/0fx80y",
+          "/m/05148p4",
+          "/m/0l14md",
+          "/m/05pd6",
+          "/m/01kcd",
+          "/m/0l14_3",
+          "/m/085jw",
+          "/m/03m5k",
+          "/m/0l14jd",
+          "/m/0395lw",
+          "/m/03qjg",
+          "/m/0mkg",
+          "/m/0192l",
+          "/m/02bxd",
+          "/m/0l14l2",
+          "/m/07kc_",
+          "/m/0l14t7",
+          "/m/05229",
+          "/m/01vj9c",
+          "/m/01hgjl"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0fx80y": {
+        "name": "Plucked string instrument",
+        "child_ids": [
+          "/m/0342h",
+          "/m/018j2",
+          "/m/0jtg0",
+          "/m/04rzd",
+          "/m/01bns_",
+          "/m/07xzm"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0342h": {
+        "name": "Guitar",
+        "child_ids": [
+          "/m/02sgy",
+          "/m/018vs",
+          "/m/042v_gx",
+          "/m/06w87",
+          "/m/01glhc",
+          "/m/07s0s5r"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02sgy": {
+        "name": "Electric guitar",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/018vs": {
+        "name": "Bass guitar",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/042v_gx": {
+        "name": "Acoustic guitar",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06w87": {
+        "name": "Steel guitar, slide guitar",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01glhc": {
+        "name": "Tapping (guitar technique)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07s0s5r": {
+        "name": "Strum",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/018j2": {
+        "name": "Banjo",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0jtg0": {
+        "name": "Sitar",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04rzd": {
+        "name": "Mandolin",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01bns_": {
+        "name": "Zither",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07xzm": {
+        "name": "Ukulele",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05148p4": {
+        "name": "Keyboard (musical)",
+        "child_ids": [
+          "/m/05r5c",
+          "/m/013y1f",
+          "/m/0l14qv",
+          "/m/03q5t"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05r5c": {
+        "name": "Piano",
+        "child_ids": [
+          "/m/01s0ps"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01s0ps": {
+        "name": "Electric piano",
+        "child_ids": [
+          "/m/025cbm",
+          "/m/0bxl5"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/025cbm": {
+        "name": "Clavinet",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0bxl5": {
+        "name": "Rhodes piano",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/013y1f": {
+        "name": "Organ",
+        "child_ids": [
+          "/m/03xq_f",
+          "/m/03gvt"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03xq_f": {
+        "name": "Electronic organ",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03gvt": {
+        "name": "Hammond organ",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l14qv": {
+        "name": "Synthesizer",
+        "child_ids": [
+          "/m/01v1d8",
+          "/m/0gkd1"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01v1d8": {
+        "name": "Sampler",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0gkd1": {
+        "name": "Mellotron",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/03q5t": {
+        "name": "Harpsichord",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l14md": {
+        "name": "Percussion",
+        "child_ids": [
+          "/m/02hnl",
+          "/m/026t6",
+          "/m/01qbl",
+          "/m/0239kh",
+          "/m/01sm1g",
+          "/m/07brj",
+          "/m/05r5wn",
+          "/m/0mbct",
+          "/m/016622",
+          "/m/0j45pbj"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02hnl": {
+        "name": "Drum kit",
+        "child_ids": [
+          "/m/0cfdd"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0cfdd": {
+        "name": "Drum machine",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/026t6": {
+        "name": "Drum",
+        "child_ids": [
+          "/m/06rvn",
+          "/m/0bm02",
+          "/m/011k_j",
+          "/m/01p970"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06rvn": {
+        "name": "Snare drum",
+        "child_ids": [
+          "/m/03t3fj",
+          "/m/02k_mr"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03t3fj": {
+        "name": "Rimshot",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02k_mr": {
+        "name": "Drum roll",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0bm02": {
+        "name": "Bass drum",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/011k_j": {
+        "name": "Timpani",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01p970": {
+        "name": "Tabla",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01qbl": {
+        "name": "Cymbal",
+        "child_ids": [
+          "/m/03qtq",
+          "/m/0bm0k"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03qtq": {
+        "name": "Hi-hat",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0bm0k": {
+        "name": "Crash cymbal",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01sm1g": {
+        "name": "Wood block",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07brj": {
+        "name": "Tambourine",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05r5wn": {
+        "name": "Rattle (instrument)",
+        "child_ids": [
+          "/m/0xzly"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0xzly": {
+        "name": "Maraca",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0mbct": {
+        "name": "Gong",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/016622": {
+        "name": "Tubular bells",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0j45pbj": {
+        "name": "Mallet percussion",
+        "child_ids": [
+          "/m/0dwsp",
+          "/m/0dwtp",
+          "/m/0dwt5",
+          "/m/0l156b"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dwsp": {
+        "name": "Marimba, xylophone",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dwtp": {
+        "name": "Glockenspiel",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dwt5": {
+        "name": "Vibraphone",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l156b": {
+        "name": "Steelpan",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05pd6": {
+        "name": "Orchestra",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01kcd": {
+        "name": "Brass instrument",
+        "child_ids": [
+          "/m/0319l",
+          "/m/07gql",
+          "/m/07c6l",
+          "/m/020w2",
+          "/m/0y64j"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0319l": {
+        "name": "French horn",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07gql": {
+        "name": "Trumpet",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07c6l": {
+        "name": "Trombone",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/020w2": {
+        "name": "Cornet",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0y64j": {
+        "name": "Bugle",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0l14_3": {
+        "name": "Bowed string instrument",
+        "child_ids": [
+          "/m/02qmj0d",
+          "/m/07y_7",
+          "/m/01xqw",
+          "/m/02fsn"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02qmj0d": {
+        "name": "String section",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07y_7": {
+        "name": "Violin, fiddle",
+        "child_ids": [
+          "/m/0d8_n"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0d8_n": {
+        "name": "Pizzicato",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01xqw": {
+        "name": "Cello",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02fsn": {
+        "name": "Double bass",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/085jw": {
+        "name": "Wind instrument, woodwind instrument",
+        "child_ids": [
+          "/m/0l14j_",
+          "/m/06ncr",
+          "/m/01wy6",
+          "/m/05kms",
+          "/m/01c3q"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l14j_": {
+        "name": "Flute",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06ncr": {
+        "name": "Saxophone",
+        "child_ids": [
+          "/m/02pprs",
+          "/m/03t22m"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02pprs": {
+        "name": "Alto saxophone",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/03t22m": {
+        "name": "Soprano saxophone",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01wy6": {
+        "name": "Clarinet",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05kms": {
+        "name": "Oboe",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01c3q": {
+        "name": "Bassoon",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/03m5k": {
+        "name": "Harp",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0395lw": {
+        "name": "Bell",
+        "child_ids": [
+          "/m/03w41f",
+          "/m/0239kh",
+          "/m/027m70_",
+          "/m/0gy1t2s",
+          "/m/07n_g",
+          "/m/0f8s22",
+          "/m/0150b9"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03w41f": {
+        "name": "Church bell",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/027m70_": {
+        "name": "Jingle bell",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0gy1t2s": {
+        "name": "Bicycle bell",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07n_g": {
+        "name": "Tuning fork",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0f8s22": {
+        "name": "Chime",
+        "child_ids": [
+          "/m/026fgl"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/026fgl": {
+        "name": "Wind chime",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0150b9": {
+        "name": "Change ringing (campanology)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03qjg": {
+        "name": "Harmonica",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0mkg": {
+        "name": "Accordion",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0192l": {
+        "name": "Bagpipes",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02bxd": {
+        "name": "Didgeridoo",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l14l2": {
+        "name": "Shofar",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07kc_": {
+        "name": "Theremin",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l14t7": {
+        "name": "Singing bowl",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05229": {
+        "name": "Musical ensemble",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01vj9c": {
+        "name": "Bass (instrument role)",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01hgjl": {
+        "name": "Scratching (performance technique)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0kpv1t": {
+        "name": "Music genre",
+        "child_ids": [
+          "/m/064t9",
+          "/m/0glt670",
+          "/m/06by7",
+          "/m/06j6l",
+          "/m/0gywn",
+          "/m/06cqb",
+          "/m/01lyv",
+          "/m/02x8m",
+          "/m/02w4v",
+          "/m/06j64v",
+          "/m/03_d0",
+          "/m/026z9",
+          "/m/0ggq0m",
+          "/m/02lkt",
+          "/m/0g293",
+          "/m/0155w",
+          "/m/05fw6t",
+          "/m/02v2lh",
+          "/m/0y4f8",
+          "/m/0164x2",
+          "/m/02mscn",
+          "/m/028sqc",
+          "/m/06rqw",
+          "/m/02p0sh1",
+          "/m/05rwpb"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/064t9": {
+        "name": "Pop music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0glt670": {
+        "name": "Hip hop music",
+        "child_ids": [
+          "/m/04j_h4",
+          "/m/0n8zsc8",
+          "/m/02cz_7"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04j_h4": {
+        "name": "Grime music",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0n8zsc8": {
+        "name": "Trap music",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/02cz_7": {
+        "name": "Beatboxing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06by7": {
+        "name": "Rock music",
+        "child_ids": [
+          "/m/03lty",
+          "/m/05r6t",
+          "/m/0dls3",
+          "/m/0dl5d",
+          "/m/07sbbz2",
+          "/m/05w3f"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03lty": {
+        "name": "Heavy metal",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05r6t": {
+        "name": "Punk rock",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dls3": {
+        "name": "Grunge",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dl5d": {
+        "name": "Progressive rock",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07sbbz2": {
+        "name": "Rock and roll",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05w3f": {
+        "name": "Psychedelic rock",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06j6l": {
+        "name": "Rhythm and blues",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0gywn": {
+        "name": "Soul music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06cqb": {
+        "name": "Reggae",
+        "child_ids": [
+          "/m/0190y4"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0190y4": {
+        "name": "Dub",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01lyv": {
+        "name": "Country",
+        "child_ids": [
+          "/m/015y_n",
+          "/m/0gg8l"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/015y_n": {
+        "name": "Swing music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0gg8l": {
+        "name": "Bluegrass",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02x8m": {
+        "name": "Funk",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02w4v": {
+        "name": "Folk music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06j64v": {
+        "name": "Middle Eastern music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03_d0": {
+        "name": "Jazz",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/026z9": {
+        "name": "Disco",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0ggq0m": {
+        "name": "Classical music",
+        "child_ids": [
+          "/m/05lls"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05lls": {
+        "name": "Opera",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02lkt": {
+        "name": "Electronic music",
+        "child_ids": [
+          "/m/03mb9",
+          "/m/07gxw",
+          "/m/07s72n",
+          "/m/029h7y",
+          "/m/0283d",
+          "/m/0m0jc",
+          "/m/08cyft",
+          "/m/0fd3y",
+          "/m/07lnk",
+          "/m/0m0fw",
+          "/m/0bmfpc"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03mb9": {
+        "name": "House music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07gxw": {
+        "name": "Techno",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07s72n": {
+        "name": "Dubstep",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/029h7y": {
+        "name": "Electro",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0283d": {
+        "name": "Drum and bass",
+        "child_ids": [
+          "/m/01f9gb"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01f9gb": {
+        "name": "Oldschool jungle",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0m0jc": {
+        "name": "Electronica",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/08cyft": {
+        "name": "Electronic dance music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0fd3y": {
+        "name": "Ambient music",
+        "child_ids": [
+          "/m/052smk"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/052smk": {
+        "name": "Drone music",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07lnk": {
+        "name": "Trance music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0m0fw": {
+        "name": "Noise music",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0bmfpc": {
+        "name": "UK garage",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0g293": {
+        "name": "Music of Latin America",
+        "child_ids": [
+          "/m/02ccj9",
+          "/m/0ln16",
+          "/m/0kpck",
+          "/m/080nby",
+          "/m/05q7ms",
+          "/m/0326g"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02ccj9": {
+        "name": "Cumbia",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0ln16": {
+        "name": "Salsa music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0kpck": {
+        "name": "Soca music",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/080nby": {
+        "name": "Kuduro",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/05q7ms": {
+        "name": "Funk carioca",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0326g": {
+        "name": "Flamenco",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0155w": {
+        "name": "Blues",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05fw6t": {
+        "name": "Music for children",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02v2lh": {
+        "name": "New-age music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0y4f8": {
+        "name": "Vocal music",
+        "child_ids": [
+          "/m/0z9c",
+          "/m/02bk07",
+          "/m/02cz_7"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0z9c": {
+        "name": "A capella",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0164x2": {
+        "name": "Music of Africa",
+        "child_ids": [
+          "/m/0145m",
+          "/m/022dgg"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0145m": {
+        "name": "Afrobeat",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/022dgg": {
+        "name": "Kwaito",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/02mscn": {
+        "name": "Christian music",
+        "child_ids": [
+          "/m/016cjb"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/016cjb": {
+        "name": "Gospel music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/028sqc": {
+        "name": "Music of Asia",
+        "child_ids": [
+          "/m/015vgc",
+          "/m/0dq0md"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/015vgc": {
+        "name": "Carnatic music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dq0md": {
+        "name": "Music of Bollywood",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06rqw": {
+        "name": "Ska",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02p0sh1": {
+        "name": "Traditional music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05rwpb": {
+        "name": "Independent music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00027": {
+        "name": "Musical concepts",
+        "child_ids": [
+          "/m/074ft",
+          "/m/09dsr",
+          "/m/05jcn",
+          "/m/022c7z",
+          "/m/01gp74",
+          "/m/0b128",
+          "/m/021wwz",
+          "/m/0kc2j",
+          "/m/03w6d1"
+        ],
+        "restrictions": [
+          "abstract",
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/074ft": {
+        "name": "Song",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/09dsr": {
+        "name": "Melody",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/05jcn": {
+        "name": "Musical note",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/022c7z": {
+        "name": "Beat",
+        "child_ids": [
+          "/m/05xp3j"
+        ],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/05xp3j": {
+        "name": "Drum beat",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01gp74": {
+        "name": "Chord",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0b128": {
+        "name": "Harmony",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/021wwz": {
+        "name": "Bassline",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0kc2j": {
+        "name": "Loop",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/03w6d1": {
+        "name": "Drone",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00028": {
+        "name": "Music role",
+        "child_ids": [
+          "/m/025td0t",
+          "/m/02cjck",
+          "/m/03r5q_",
+          "/m/0l14gg",
+          "/m/07pkxdp",
+          "/m/01z7dr",
+          "/m/0140xf",
+          "/m/0ggx5q",
+          "/m/04wptg",
+          "/t/dd00029"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/025td0t": {
+        "name": "Background music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02cjck": {
+        "name": "Theme music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03r5q_": {
+        "name": "Jingle (music)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l14gg": {
+        "name": "Soundtrack music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pkxdp": {
+        "name": "Lullaby",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01z7dr": {
+        "name": "Video game music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0140xf": {
+        "name": "Christmas music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0ggx5q": {
+        "name": "Dance music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04wptg": {
+        "name": "Wedding music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00029": {
+        "name": "Birthday music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00030": {
+        "name": "Music mood",
+        "child_ids": [
+          "/t/dd00031",
+          "/t/dd00032",
+          "/t/dd00033",
+          "/t/dd00034",
+          "/t/dd00035",
+          "/t/dd00036",
+          "/t/dd00037"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00031": {
+        "name": "Happy music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00032": {
+        "name": "Funny music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": false
+      },
+      "/t/dd00033": {
+        "name": "Sad music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00034": {
+        "name": "Tender music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00035": {
+        "name": "Exciting music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00036": {
+        "name": "Angry music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00037": {
+        "name": "Scary music",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/059j3w": {
+        "name": "Natural sounds",
+        "child_ids": [
+          "/m/03m9d0z",
+          "/m/0jb2l",
+          "/m/0838f",
+          "/m/02_41"
+        ],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/03m9d0z": {
+        "name": "Wind",
+        "child_ids": [
+          "/m/07q8f3b",
+          "/m/09t49",
+          "/t/dd00092"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07q8f3b": {
+        "name": "Howl (wind)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/09t49": {
+        "name": "Rustling leaves",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00092": {
+        "name": "Wind noise (microphone)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0jb2l": {
+        "name": "Thunderstorm",
+        "child_ids": [
+          "/m/0ngt1"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0ngt1": {
+        "name": "Thunder",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0838f": {
+        "name": "Water",
+        "child_ids": [
+          "/m/06mb1",
+          "/m/0j6m2",
+          "/m/0j2kx",
+          "/m/05kq4",
+          "/m/06wzb",
+          "/m/07swgks"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06mb1": {
+        "name": "Rain",
+        "child_ids": [
+          "/m/07r10fb",
+          "/t/dd00038"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r10fb": {
+        "name": "Raindrop",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00038": {
+        "name": "Rain on surface",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0j6m2": {
+        "name": "Stream",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0j2kx": {
+        "name": "Waterfall",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05kq4": {
+        "name": "Ocean",
+        "child_ids": [
+          "/m/034srq"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/034srq": {
+        "name": "Waves, surf",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06wzb": {
+        "name": "Steam",
+        "child_ids": [
+          "/m/07rjwbb"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07swgks": {
+        "name": "Gurgling",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02_41": {
+        "name": "Fire",
+        "child_ids": [
+          "/m/07pzfmf",
+          "/m/0fjy1"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pzfmf": {
+        "name": "Crackle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0fjy1": {
+        "name": "Wildfire",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00041": {
+        "name": "Sounds of things",
+        "child_ids": [
+          "/m/07yv9",
+          "/m/02mk9",
+          "/t/dd00071",
+          "/m/0395lw",
+          "/m/07pp_mv",
+          "/t/dd00077",
+          "/m/07k1x",
+          "/m/014zdl",
+          "/m/083vt",
+          "/m/039jq",
+          "/m/04k94",
+          "/t/dd00089",
+          "/t/dd00133"
+        ],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07yv9": {
+        "name": "Vehicle",
+        "child_ids": [
+          "/m/019jd",
+          "/m/012f08",
+          "/m/06d_3",
+          "/m/0k5j",
+          "/t/dd00061"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/019jd": {
+        "name": "Boat, Water vehicle",
+        "child_ids": [
+          "/m/0hsrw",
+          "/m/056ks2",
+          "/m/02rlv9",
+          "/m/06q74"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0hsrw": {
+        "name": "Sailboat, sailing ship",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/056ks2": {
+        "name": "Rowboat, canoe, kayak",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02rlv9": {
+        "name": "Motorboat, speedboat",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06q74": {
+        "name": "Ship",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/012f08": {
+        "name": "Motor vehicle (road)",
+        "child_ids": [
+          "/m/0k4j",
+          "/m/07r04",
+          "/m/01bjv",
+          "/m/03j1ly",
+          "/m/04_sv",
+          "/m/0btp2"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0k4j": {
+        "name": "Car",
+        "child_ids": [
+          "/m/0912c9",
+          "/m/02mfyn",
+          "/m/04gxbd",
+          "/m/07rknqz",
+          "/m/0h9mv",
+          "/t/dd00134",
+          "/m/0ltv"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0912c9": {
+        "name": "Vehicle horn, car horn, honking",
+        "child_ids": [
+          "/m/07qv_d5"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qv_d5": {
+        "name": "Toot",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02mfyn": {
+        "name": "Car alarm",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04gxbd": {
+        "name": "Power windows, electric windows",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rknqz": {
+        "name": "Skidding",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0h9mv": {
+        "name": "Tire squeal",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00134": {
+        "name": "Car passing by",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0ltv": {
+        "name": "Race car, auto racing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r04": {
+        "name": "Truck",
+        "child_ids": [
+          "/m/0gvgw0",
+          "/m/05x_td",
+          "/m/02rhddq",
+          "/m/03cl9h"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0gvgw0": {
+        "name": "Air brake",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05x_td": {
+        "name": "Air horn, truck horn",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02rhddq": {
+        "name": "Reversing beeps",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03cl9h": {
+        "name": "Ice cream truck, ice cream van",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01bjv": {
+        "name": "Bus",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03j1ly": {
+        "name": "Emergency vehicle",
+        "child_ids": [
+          "/m/04qvtq",
+          "/m/012n7d",
+          "/m/012ndj"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04qvtq": {
+        "name": "Police car (siren)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/012n7d": {
+        "name": "Ambulance (siren)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/012ndj": {
+        "name": "Fire engine, fire truck (siren)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04_sv": {
+        "name": "Motorcycle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0btp2": {
+        "name": "Traffic noise, roadway noise",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06d_3": {
+        "name": "Rail transport",
+        "child_ids": [
+          "/m/07jdr",
+          "/m/01g50p",
+          "/t/dd00048",
+          "/m/0195fx"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07jdr": {
+        "name": "Train",
+        "child_ids": [
+          "/m/04zmvq",
+          "/m/0284vy3"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04zmvq": {
+        "name": "Train whistle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0284vy3": {
+        "name": "Train horn",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01g50p": {
+        "name": "Railroad car, train wagon",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00048": {
+        "name": "Train wheels squealing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0195fx": {
+        "name": "Subway, metro, underground",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0k5j": {
+        "name": "Aircraft",
+        "child_ids": [
+          "/m/014yck",
+          "/m/09ct_",
+          "/m/0cmf2"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/014yck": {
+        "name": "Aircraft engine",
+        "child_ids": [
+          "/m/04229",
+          "/m/02l6bg"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04229": {
+        "name": "Jet engine",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02l6bg": {
+        "name": "Propeller, airscrew",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/09ct_": {
+        "name": "Helicopter",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0cmf2": {
+        "name": "Fixed-wing aircraft, airplane",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00061": {
+        "name": "Non-motorized land vehicle",
+        "child_ids": [
+          "/m/0199g",
+          "/m/06_fw"
+        ],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0199g": {
+        "name": "Bicycle",
+        "child_ids": [
+          "/m/0gy1t2s"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06_fw": {
+        "name": "Skateboard",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02mk9": {
+        "name": "Engine",
+        "child_ids": [
+          "/t/dd00065",
+          "/t/dd00066",
+          "/t/dd00067",
+          "/m/04229",
+          "/m/01h82_",
+          "/t/dd00130",
+          "/m/07pb8fc",
+          "/m/07q2z82"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00065": {
+        "name": "Light engine (high frequency)",
+        "child_ids": [
+          "/m/08j51y",
+          "/m/01yg9g",
+          "/m/01j4z9"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/08j51y": {
+        "name": "Dental drill, dentist's drill",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01yg9g": {
+        "name": "Lawn mower",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01j4z9": {
+        "name": "Chainsaw",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00066": {
+        "name": "Medium engine (mid frequency)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00067": {
+        "name": "Heavy engine (low frequency)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01h82_": {
+        "name": "Engine knocking",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00130": {
+        "name": "Engine starting",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pb8fc": {
+        "name": "Idling",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07q2z82": {
+        "name": "Accelerating, revving, vroom",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00071": {
+        "name": "Domestic sounds, home sounds",
+        "child_ids": [
+          "/m/02dgv",
+          "/m/0642b4",
+          "/m/0fqfqc",
+          "/m/04brg2",
+          "/m/023pjk",
+          "/m/07pn_8q",
+          "/m/0dxrf",
+          "/m/0fx9l",
+          "/m/02pjr4",
+          "/g/11b630rrvh",
+          "/m/02jz0l",
+          "/m/0130jx",
+          "/m/03dnzn",
+          "/m/03wvsk",
+          "/m/01jt3m",
+          "/m/012xff",
+          "/m/0d31p",
+          "/m/01s0vc",
+          "/m/0zmy2j9",
+          "/m/03v3yw",
+          "/m/0242l",
+          "/m/05mxj0q",
+          "/m/01lsmm",
+          "/m/02g901",
+          "/m/05rj2",
+          "/m/0316dw",
+          "/m/081rb"
+        ],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/02dgv": {
+        "name": "Door",
+        "child_ids": [
+          "/m/03wwcy",
+          "/m/02y_763",
+          "/m/07rjzl8",
+          "/m/07r4wb8",
+          "/m/07qcpgn",
+          "/m/07q6cd_"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03wwcy": {
+        "name": "Doorbell",
+        "child_ids": [
+          "/m/07r67yg"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r67yg": {
+        "name": "Ding-dong",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02y_763": {
+        "name": "Sliding door",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rjzl8": {
+        "name": "Slam",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r4wb8": {
+        "name": "Knock",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qcpgn": {
+        "name": "Tap",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07q6cd_": {
+        "name": "Squeak",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0642b4": {
+        "name": "Cupboard open or close",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0fqfqc": {
+        "name": "Drawer open or close",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04brg2": {
+        "name": "Dishes, pots, and pans",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/023pjk": {
+        "name": "Cutlery, silverware",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pn_8q": {
+        "name": "Chopping (food)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dxrf": {
+        "name": "Frying (food)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0fx9l": {
+        "name": "Microwave oven",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02pjr4": {
+        "name": "Blender",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/g/11b630rrvh": {
+        "name": "Kettle whistle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/02jz0l": {
+        "name": "Water tap, faucet",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0130jx": {
+        "name": "Sink (filling or washing)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03dnzn": {
+        "name": "Bathtub (filling or washing)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03wvsk": {
+        "name": "Hair dryer",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01jt3m": {
+        "name": "Toilet flush",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/012xff": {
+        "name": "Toothbrush",
+        "child_ids": [
+          "/m/04fgwm"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04fgwm": {
+        "name": "Electric toothbrush",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0d31p": {
+        "name": "Vacuum cleaner",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01s0vc": {
+        "name": "Zipper (clothing)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0zmy2j9": {
+        "name": "Velcro, hook and loop fastener",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/03v3yw": {
+        "name": "Keys jangling",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0242l": {
+        "name": "Coin (dropping)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05mxj0q": {
+        "name": "Packing tape, duct tape",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01lsmm": {
+        "name": "Scissors",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02g901": {
+        "name": "Electric shaver, electric razor",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05rj2": {
+        "name": "Shuffling cards",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0316dw": {
+        "name": "Typing",
+        "child_ids": [
+          "/m/0c2wf",
+          "/m/01m2v"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0c2wf": {
+        "name": "Typewriter",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01m2v": {
+        "name": "Computer keyboard",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/081rb": {
+        "name": "Writing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pp_mv": {
+        "name": "Alarm",
+        "child_ids": [
+          "/m/07cx4",
+          "/m/046dlr",
+          "/m/03kmc9",
+          "/m/03wwcy",
+          "/m/030rvx",
+          "/m/01y3hg",
+          "/m/0c3f7m",
+          "/m/02mfyn",
+          "/m/0912c9",
+          "/m/0gy1t2s",
+          "/m/05x_td",
+          "/m/04fq5q",
+          "/m/0l156k"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07cx4": {
+        "name": "Telephone",
+        "child_ids": [
+          "/m/07pp8cl",
+          "/m/01hnzm",
+          "/m/01sb50",
+          "/m/02c8p",
+          "/m/015jpf",
+          "/m/01z47d"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pp8cl": {
+        "name": "Telephone bell ringing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01hnzm": {
+        "name": "Ringtone",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01sb50": {
+        "name": "Cellphone buzz, vibrating alert",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/02c8p": {
+        "name": "Telephone dialing, DTMF",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/015jpf": {
+        "name": "Dial tone",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01z47d": {
+        "name": "Busy signal",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/046dlr": {
+        "name": "Alarm clock",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03kmc9": {
+        "name": "Siren",
+        "child_ids": [
+          "/m/04qvtq",
+          "/m/012n7d",
+          "/m/012ndj",
+          "/m/0dgbq"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dgbq": {
+        "name": "Civil defense siren",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/030rvx": {
+        "name": "Buzzer",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01y3hg": {
+        "name": "Smoke detector, smoke alarm",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0c3f7m": {
+        "name": "Fire alarm",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04fq5q": {
+        "name": "Foghorn",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l156k": {
+        "name": "Whistle",
+        "child_ids": [
+          "/g/11b630rrvh",
+          "/m/06hck5"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06hck5": {
+        "name": "Steam whistle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00077": {
+        "name": "Mechanisms",
+        "child_ids": [
+          "/m/02bm9n",
+          "/m/01x3z",
+          "/m/0l7xg",
+          "/m/05zc1",
+          "/m/0llzx",
+          "/m/02x984l",
+          "/m/025wky1",
+          "/m/024dl",
+          "/m/01m4t",
+          "/m/0dv5r"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02bm9n": {
+        "name": "Ratchet, pawl",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01x3z": {
+        "name": "Clock",
+        "child_ids": [
+          "/m/07qjznt",
+          "/m/07qjznl"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qjznt": {
+        "name": "Tick",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qjznl": {
+        "name": "Tick-tock",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0l7xg": {
+        "name": "Gears",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05zc1": {
+        "name": "Pulleys",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0llzx": {
+        "name": "Sewing machine",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02x984l": {
+        "name": "Mechanical fan",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/025wky1": {
+        "name": "Air conditioning",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/024dl": {
+        "name": "Cash register",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01m4t": {
+        "name": "Printer",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dv5r": {
+        "name": "Camera",
+        "child_ids": [
+          "/m/07bjf"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07bjf": {
+        "name": "Single-lens reflex camera",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07k1x": {
+        "name": "Tools",
+        "child_ids": [
+          "/m/03l9g",
+          "/m/03p19w",
+          "/m/01b82r",
+          "/m/02p01q",
+          "/m/023vsd",
+          "/m/0_ksk"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03l9g": {
+        "name": "Hammer",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/03p19w": {
+        "name": "Jackhammer",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01b82r": {
+        "name": "Sawing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02p01q": {
+        "name": "Filing (rasp)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/023vsd": {
+        "name": "Sanding",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0_ksk": {
+        "name": "Power tool",
+        "child_ids": [
+          "/m/01d380"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01d380": {
+        "name": "Drill",
+        "child_ids": [
+          "/m/08j51y"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/014zdl": {
+        "name": "Explosion",
+        "child_ids": [
+          "/m/032s66",
+          "/m/0g6b5",
+          "/m/07qsvvw",
+          "/m/07pxg6y",
+          "/m/07qqyl4"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/032s66": {
+        "name": "Gunshot, gunfire",
+        "child_ids": [
+          "/m/04zjc",
+          "/m/02z32qm",
+          "/m/0_1c",
+          "/m/073cg4"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04zjc": {
+        "name": "Machine gun",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/02z32qm": {
+        "name": "Fusillade",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0_1c": {
+        "name": "Artillery fire",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/073cg4": {
+        "name": "Cap gun",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0g6b5": {
+        "name": "Fireworks",
+        "child_ids": [
+          "/g/122z_qxw"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/g/122z_qxw": {
+        "name": "Firecracker",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qsvvw": {
+        "name": "Burst, pop",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pxg6y": {
+        "name": "Eruption",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qqyl4": {
+        "name": "Boom",
+        "child_ids": [
+          "/m/0193bn"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0193bn": {
+        "name": "Sonic boom",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/083vt": {
+        "name": "Wood",
+        "child_ids": [
+          "/m/07pczhz",
+          "/m/07pl1bw",
+          "/m/07qs1cx",
+          "/m/07pc8l3"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pczhz": {
+        "name": "Chop",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pl1bw": {
+        "name": "Splinter",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qs1cx": {
+        "name": "Crack",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pc8l3": {
+        "name": "Snap",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/039jq": {
+        "name": "Glass",
+        "child_ids": [
+          "/m/07q7njn",
+          "/m/07rn7sz"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07q7njn": {
+        "name": "Chink, clink",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rn7sz": {
+        "name": "Shatter",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04k94": {
+        "name": "Liquid",
+        "child_ids": [
+          "/m/07rrlb6",
+          "/m/07qlwh6",
+          "/m/07r5v4s",
+          "/m/07prgkl",
+          "/m/07p7b8y",
+          "/m/07qlf79",
+          "/m/07ptzwd",
+          "/m/07ptfmf",
+          "/m/0dv3j"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rrlb6": {
+        "name": "Splash, splatter",
+        "child_ids": [
+          "/m/07p6mqd"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07p6mqd": {
+        "name": "Slosh",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qlwh6": {
+        "name": "Squish",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r5v4s": {
+        "name": "Drip",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07prgkl": {
+        "name": "Pour",
+        "child_ids": [
+          "/m/07pqc89",
+          "/t/dd00088"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pqc89": {
+        "name": "Trickle, dribble",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00088": {
+        "name": "Gush",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07p7b8y": {
+        "name": "Fill (with liquid)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qlf79": {
+        "name": "Spray",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07ptzwd": {
+        "name": "Pump (liquid)",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07ptfmf": {
+        "name": "Stir",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0dv3j": {
+        "name": "Boiling",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00089": {
+        "name": "Miscellaneous sources",
+        "child_ids": [
+          "/m/0790c",
+          "/m/04179zz",
+          "/m/0dl83",
+          "/t/dd00091"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0790c": {
+        "name": "Sonar",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/04179zz": {
+        "name": "Duck call (hunting tool)",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0dl83": {
+        "name": "Arrow",
+        "child_ids": [
+          "/m/07rqsjt",
+          "/m/07qnq_y",
+          "/m/07pk7mg"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rqsjt": {
+        "name": "Whoosh, swoosh, swish",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qnq_y": {
+        "name": "Thump, thud",
+        "child_ids": [
+          "/m/07rrh0c",
+          "/t/dd00108"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rrh0c": {
+        "name": "Thunk",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00108": {
+        "name": "Clunk",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07pk7mg": {
+        "name": "Wobble",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00091": {
+        "name": "Sound equipment",
+        "child_ids": [
+          "/m/0hg7b",
+          "/m/0b_fwt",
+          "/m/01vfsf",
+          "/m/02rr_"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0hg7b": {
+        "name": "Microphone",
+        "child_ids": [
+          "/t/dd00092"
+        ],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/0b_fwt": {
+        "name": "Electronic tuner",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01vfsf": {
+        "name": "Guitar amplifier",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/02rr_": {
+        "name": "Effects unit",
+        "child_ids": [
+          "/m/07m2kt"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07m2kt": {
+        "name": "Chorus effect",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00133": {
+        "name": "Specific impact sounds",
+        "child_ids": [
+          "/m/018w8"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/018w8": {
+        "name": "Basketball bounce",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00098": {
+        "name": "Source-ambiguous sounds",
+        "child_ids": [
+          "/t/dd00099",
+          "/t/dd00109",
+          "/t/dd00110",
+          "/m/05n1m",
+          "/m/028v0c",
+          "/t/dd00122"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00099": {
+        "name": "Generic impact sounds",
+        "child_ids": [
+          "/m/07pws3f",
+          "/m/07ryjzk",
+          "/m/07rdhzs",
+          "/m/07pjjrj",
+          "/m/07pc8lb",
+          "/m/07pqn27",
+          "/m/07r4wb8",
+          "/m/07qcpgn",
+          "/m/07qnq_y",
+          "/m/07rbp7_",
+          "/m/07pyf11"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07pws3f": {
+        "name": "Bang",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07ryjzk": {
+        "name": "Slap, smack",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rdhzs": {
+        "name": "Whack, thwack",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pjjrj": {
+        "name": "Smash, crash",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pc8lb": {
+        "name": "Breaking",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pqn27": {
+        "name": "Bouncing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rbp7_": {
+        "name": "Whip",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pyf11": {
+        "name": "Flap",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00109": {
+        "name": "Surface contact",
+        "child_ids": [
+          "/m/07qb_dv",
+          "/m/07qv4k0",
+          "/m/07pdjhy",
+          "/m/07s8j8t",
+          "/m/07pt6mm"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07qb_dv": {
+        "name": "Scratch",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qv4k0": {
+        "name": "Scrape",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pdjhy": {
+        "name": "Rub",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07s8j8t": {
+        "name": "Roll",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pt6mm": {
+        "name": "Grind",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00110": {
+        "name": "Deformable shell",
+        "child_ids": [
+          "/m/07plct2",
+          "/t/dd00112",
+          "/m/07qcx4z"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07plct2": {
+        "name": "Crushing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00112": {
+        "name": "Crumpling, crinkling",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qcx4z": {
+        "name": "Tearing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/05n1m": {
+        "name": "Onomatopoeia",
+        "child_ids": [
+          "/t/dd000138",
+          "/m/07rjwbb",
+          "/m/07qh7jl",
+          "/m/07qn4z3",
+          "/m/07rqsjt",
+          "/m/07qwyj0",
+          "/m/07s34ls",
+          "/m/07qmpdm",
+          "/m/07p9k1k",
+          "/m/07qc9xj",
+          "/m/07phhsh",
+          "/m/07r_r9m",
+          "/m/07qyrcz",
+          "/m/07qfgpx",
+          "/t/dd00118",
+          "/m/07q34h3",
+          "/m/07rcgpl",
+          "/m/07qlwh6",
+          "/m/07p78v5",
+          "/t/dd00121",
+          "/m/07pzfmf",
+          "/m/07s12q4",
+          "/m/07qs1cx",
+          "/m/07pc8l3"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd000138": {
+        "name": "Brief tone",
+        "child_ids": [
+          "/m/02fs_r",
+          "/m/07qwdck",
+          "/m/07phxs1",
+          "/m/07rv4dm",
+          "/m/07rpk1c",
+          "/m/07pggtn",
+          "/m/07pjwq1",
+          "/m/07q6cd_",
+          "/m/07s02z0",
+          "/m/07q8k13"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/02fs_r": {
+        "name": "Beep, bleep",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qwdck": {
+        "name": "Ping",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07phxs1": {
+        "name": "Ding",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rv4dm": {
+        "name": "Clang",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rpk1c": {
+        "name": "Twang",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07s02z0": {
+        "name": "Squeal",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07q8k13": {
+        "name": "Screech",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07qh7jl": {
+        "name": "Creak",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qwyj0": {
+        "name": "Rustle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07s34ls": {
+        "name": "Whir",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qmpdm": {
+        "name": "Clatter",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07p9k1k": {
+        "name": "Sizzle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qc9xj": {
+        "name": "Clicking",
+        "child_ids": [
+          "/m/07qjznt",
+          "/m/07rv9rh",
+          "/m/07rwm0c"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07rwm0c": {
+        "name": "Clickety-clack",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07phhsh": {
+        "name": "Rumble",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07r_r9m": {
+        "name": "Blare",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07qyrcz": {
+        "name": "Plop",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07qfgpx": {
+        "name": "Jingle, tinkle",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00118": {
+        "name": "Fizz",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07q34h3": {
+        "name": "Puff",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07rcgpl": {
+        "name": "Hum",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07p78v5": {
+        "name": "Zing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00121": {
+        "name": "Boing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07s12q4": {
+        "name": "Crunch",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/028v0c": {
+        "name": "Silence",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00122": {
+        "name": "Other sourceless",
+        "child_ids": [
+          "/m/01v_m0",
+          "/m/0c1dj",
+          "/m/07pt_g0",
+          "/m/01fhw5",
+          "/m/017gp",
+          "/m/05szwhw"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01v_m0": {
+        "name": "Sine wave",
+        "child_ids": [
+          "/m/0b9m1",
+          "/m/0hdsk"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0b9m1": {
+        "name": "Harmonic",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0hdsk": {
+        "name": "Chirp tone",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0c1dj": {
+        "name": "Sound effect",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07pt_g0": {
+        "name": "Pulse",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01fhw5": {
+        "name": "Infrasound",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/017gp": {
+        "name": "Bass (frequency range)",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/05szwhw": {
+        "name": "Ringing (of resonator)",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00123": {
+        "name": "Channel, environment and background",
+        "child_ids": [
+          "/t/dd00093",
+          "/m/096m7z",
+          "/m/07bm98"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00093": {
+        "name": "Acoustic environment",
+        "child_ids": [
+          "/t/dd00125",
+          "/t/dd00126",
+          "/t/dd00127",
+          "/t/dd00128",
+          "/t/dd00129",
+          "/m/01b9nn",
+          "/m/01jnbd"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/t/dd00125": {
+        "name": "Inside, small room",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00126": {
+        "name": "Inside, large room or hall",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00127": {
+        "name": "Inside, public space",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00128": {
+        "name": "Outside, urban or manmade",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/t/dd00129": {
+        "name": "Outside, rural or natural",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01b9nn": {
+        "name": "Reverberation",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01jnbd": {
+        "name": "Echo",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/096m7z": {
+        "name": "Noise",
+        "child_ids": [
+          "/m/093_4n",
+          "/m/07qfr4h",
+          "/m/07szfh9",
+          "/m/0chx_",
+          "/m/0cj0r",
+          "/m/07p_0gm",
+          "/m/01jwx6"
+        ],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/093_4n": {
+        "name": "Background noise",
+        "child_ids": [
+          "/m/06_y0by",
+          "/m/09d1b1",
+          "/m/07rgkc5",
+          "/m/06xkwv",
+          "/m/0g12c5",
+          "/m/08p9q4"
+        ],
+        "restrictions": [],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/06_y0by": {
+        "name": "Environmental noise",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/09d1b1": {
+        "name": "Tape hiss",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07rgkc5": {
+        "name": "Static",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06xkwv": {
+        "name": "Mains hum",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0g12c5": {
+        "name": "Distortion",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/08p9q4": {
+        "name": "Sidetone",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07szfh9": {
+        "name": "Cacophony",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0chx_": {
+        "name": "White noise",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0cj0r": {
+        "name": "Pink noise",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07p_0gm": {
+        "name": "Throbbing",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/01jwx6": {
+        "name": "Vibration",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/07bm98": {
+        "name": "Sound reproduction",
+        "child_ids": [
+          "/m/07c52",
+          "/m/06bz3",
+          "/m/0cfpc",
+          "/m/01b7fy",
+          "/m/025l19",
+          "/m/0174nj",
+          "/m/01www",
+          "/m/04zc0"
+        ],
+        "restrictions": [
+          "abstract"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07c52": {
+        "name": "Television",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/06bz3": {
+        "name": "Radio",
+        "child_ids": [],
+        "restrictions": [],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0cfpc": {
+        "name": "Loudspeaker",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01b7fy": {
+        "name": "Headphones",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/025l19": {
+        "name": "Recording",
+        "child_ids": [
+          "/m/07hvw1"
+        ],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/07hvw1": {
+        "name": "Field recording",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": true,
+        "in_yamnet_521": true
+      },
+      "/m/0174nj": {
+        "name": "Gramophone record",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/01www": {
+        "name": "Compact disc",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      },
+      "/m/04zc0": {
+        "name": "MP3",
+        "child_ids": [],
+        "restrictions": [
+          "blacklist"
+        ],
+        "in_audioset_527": false,
+        "in_yamnet_521": false
+      }
+    }
+  },
+  "mapping": {
+    "Cough": {
+      "group": "cough",
+      "family": "airway",
+      "audioset_ids": [
+        "/m/01b_21"
+      ],
+      "audioset_names": [
+        "Cough"
+      ],
+      "corroborating_ids": [
+        "/m/01b_21",
+        "/m/0dl9sf8"
+      ],
+      "corroborating_names": [
+        "Cough",
+        "Throat clearing"
+      ],
+      "unreleased": [],
+      "not_emittable_by_yamnet": [],
+      "note": ""
+    },
+    "Snore": {
+      "group": "breath",
+      "family": "airway",
+      "audioset_ids": [
+        "/m/01d3sd"
+      ],
+      "audioset_names": [
+        "Snoring"
+      ],
+      "corroborating_ids": [
+        "/m/01d3sd"
+      ],
+      "corroborating_names": [
+        "Snoring"
+      ],
+      "unreleased": [],
+      "not_emittable_by_yamnet": [],
+      "note": ""
+    },
+    "Baby Cough": {
+      "group": "cough",
+      "family": "airway",
+      "audioset_ids": [
+        "/m/01b_21"
+      ],
+      "audioset_names": [
+        "Cough"
+      ],
+      "corroborating_ids": [
+        "/m/01b_21",
+        "/m/0dl9sf8"
+      ],
+      "corroborating_names": [
+        "Cough",
+        "Throat clearing"
+      ],
+      "unreleased": [],
+      "not_emittable_by_yamnet": [],
+      "note": "AudioSet has no infant-specific cough class -- its only infant classes are 'Baby cry, infant cry' and 'Baby laughter' -- so this maps onto the adult 'Cough' node rather than being dropped."
+    },
+    "Breathe": {
+      "group": "breath",
+      "family": "airway",
+      "audioset_ids": [
+        "/m/0lyf6"
+      ],
+      "audioset_names": [
+        "Breathing"
+      ],
+      "corroborating_ids": [
+        "/m/0lyf6",
+        "/m/07mzm6",
+        "/m/01d3sd",
+        "/m/07s0dtb",
+        "/m/07pyy8b",
+        "/m/07q0yl5"
+      ],
+      "corroborating_names": [
+        "Breathing",
+        "Wheeze",
+        "Snoring",
+        "Gasp",
+        "Pant",
+        "Snort"
+      ],
+      "unreleased": [],
+      "not_emittable_by_yamnet": [],
+      "note": ""
+    },
+    "Sneeze": {
+      "group": "cough",
+      "family": "airway",
+      "audioset_ids": [
+        "/m/01hsr_"
+      ],
+      "audioset_names": [
+        "Sneeze"
+      ],
+      "corroborating_ids": [
+        "/m/01hsr_"
+      ],
+      "corroborating_names": [
+        "Sneeze"
+      ],
+      "unreleased": [],
+      "not_emittable_by_yamnet": [],
+      "note": ""
+    },
+    "Throat Clear": {
+      "group": "cough",
+      "family": "airway",
+      "audioset_ids": [
+        "/m/0dl9sf8"
+      ],
+      "audioset_names": [
+        "Throat clearing"
+      ],
+      "corroborating_ids": [
+        "/m/0dl9sf8"
+      ],
+      "corroborating_names": [
+        "Throat clearing"
+      ],
+      "unreleased": [],
+      "not_emittable_by_yamnet": [],
+      "note": ""
+    },
+    "Laugh": {
+      "group": "laugh",
+      "family": "voice",
+      "audioset_ids": [
+        "/m/01j3sz"
+      ],
+      "audioset_names": [
+        "Laughter"
+      ],
+      "corroborating_ids": [
+        "/m/01j3sz",
+        "/t/dd00001",
+        "/m/07r660_",
+        "/m/07s04w4",
+        "/m/07sq110",
+        "/m/07rgt08"
+      ],
+      "corroborating_names": [
+        "Laughter",
+        "Baby laughter",
+        "Giggle",
+        "Snicker",
+        "Belly laugh",
+        "Chuckle, chortle"
+      ],
+      "unreleased": [],
+      "not_emittable_by_yamnet": [],
+      "note": ""
+    },
+    "Speech": {
+      "group": "speech",
+      "family": "speech",
+      "audioset_ids": [
+        "/m/09x0r"
+      ],
+      "audioset_names": [
+        "Speech"
+      ],
+      "corroborating_ids": [
+        "/m/09x0r",
+        "/m/05zppz",
+        "/m/02zsn",
+        "/m/0ytgt",
+        "/m/01h8n0",
+        "/m/02qldy",
+        "/m/0261r1",
+        "/m/0brhx"
+      ],
+      "corroborating_names": [
+        "Speech",
+        "Male speech, man speaking",
+        "Female speech, woman speaking",
+        "Child speech, kid speaking",
+        "Conversation",
+        "Narration, monologue",
+        "Babbling",
+        "Speech synthesizer"
+      ],
+      "unreleased": [],
+      "not_emittable_by_yamnet": [
+        "Male speech, man speaking",
+        "Female speech, woman speaking"
+      ],
+      "note": ""
+    }
+  },
+  "overlaps": [
+    {
+      "labels": [
+        "Cough",
+        "Baby Cough"
+      ],
+      "shared_names": [
+        "Cough",
+        "Throat clearing"
+      ]
+    },
+    {
+      "labels": [
+        "Cough",
+        "Throat Clear"
+      ],
+      "shared_names": [
+        "Throat clearing"
+      ]
+    },
+    {
+      "labels": [
+        "Snore",
+        "Breathe"
+      ],
+      "shared_names": [
+        "Snoring"
+      ]
+    },
+    {
+      "labels": [
+        "Baby Cough",
+        "Throat Clear"
+      ],
+      "shared_names": [
+        "Throat clearing"
+      ]
+    }
+  ]
+}
