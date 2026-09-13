@@ -9,8 +9,9 @@ above the floor, both read from ``windows.<classifier>`` through
 several labels and counts toward each. A label outside ``TRACKED_LABELS`` is dropped.
 
 The ``praat_features`` scalars are carried as the store keys them. The ``ppg_posteriorgram``
-sidecar the store references is opened, reduced to the summary in :data:`PPG_SUMMARY_KEYS` and
-closed; the array itself never enters a record.
+sidecar the store references and the ``phonation_tracks`` sidecar PREPROCESS writes beside it are
+each opened, reduced to the summaries in :data:`PPG_SUMMARY_KEYS` and
+:data:`PHONATION_SUMMARY_KEYS`, and closed; neither array ever enters a record.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import json
 import math
 import re
 import statistics
+from bisect import bisect_right
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -94,6 +96,46 @@ PPG_SUMMARY_KEYS: tuple[str, ...] = (
 
 SILENT_PHONEME = "<silent>"
 """The ppgs inventory's silence label, as its own ``PHONEME_LABELS`` spells it."""
+
+PHONATION_TRACKS_SIDECAR = "derivatives/phonation_tracks.npz"
+"""Where PREPROCESS writes the per-frame F0 track, relative to the run directory the store sits in.
+The measurement names no path of its own, so the reader spells the one PREPROCESS writes."""
+
+PHONATION_ENTITY_KEYS: tuple[str, ...] = ("hop_s", "f0_min_hz", "f0_max_hz")
+"""The ``phonation_tracks`` scalars the measurement itself carries, readable without the sidecar."""
+
+PHONATION_SUMMARY_KEYS: tuple[str, ...] = (
+    *PHONATION_ENTITY_KEYS,
+    "frames",
+    "track_seconds",
+    "voiced_frames",
+    "voiced_fraction",
+    "voiced_seconds",
+    "voiced_extent_s",
+    "voiced_extent_fraction",
+    "f0_median_hz",
+    "strength_median",
+    "semitone_range",
+    "semitone_iqr",
+    "semitone_net",
+    "net_over_variation",
+    "rank_correlation",
+    "monotonicity",
+    "rising_fraction",
+    "falling_fraction",
+    "monotone_fraction",
+    "direction_bias",
+    "sweep_seconds",
+    "sweep_fraction",
+    "sweep_semitones",
+    "sweep_semitones_abs",
+    "sweep_rate_semitones_per_s",
+    "sweep_rate_abs_semitones_per_s",
+)
+"""Every key an F0 track is reduced to. The keys past the entity ones need the sidecar."""
+
+SEMITONES_PER_OCTAVE = 12.0
+"""The semitone's definition, and the unit every F0 excursion in the summary is stated in."""
 
 _ENTITY_PREFIX = '{"attributes"'
 _RELATION_MARKER = '"relation"'
@@ -179,6 +221,10 @@ class RecordingFeatures:
         ppg: The ``ppg_posteriorgram`` sidecar reduced to :data:`PPG_SUMMARY_KEYS`. The keys in
             :data:`PPG_ENTITY_KEYS` come off the measurement; the rest need the sidecar and are
             absent when it cannot be read.
+        phonation: The ``phonation_tracks`` sidecar's F0 series reduced to
+            :data:`PHONATION_SUMMARY_KEYS`. The keys in :data:`PHONATION_ENTITY_KEYS` come off the
+            measurement; the rest need the sidecar and are absent when it cannot be read. An
+            unvoiced recording carries its frame counts and no trajectory.
         peaks: ``{peak_key: score}`` for every tracked label on every stream and classifier.
         classifier_streams: Which ``<stream>|<classifier>`` summaries were present at all.
         kind_state: TAXONOMY's own state per kind, so its current behaviour can be measured too.
@@ -209,6 +255,7 @@ class RecordingFeatures:
     silence: dict[str, float] = field(default_factory=dict)
     praat: dict[str, float] = field(default_factory=dict)
     ppg: dict[str, float] = field(default_factory=dict)
+    phonation: dict[str, float] = field(default_factory=dict)
     peaks: dict[str, float] = field(default_factory=dict)
     classifier_streams: list[str] = field(default_factory=list)
     kind_state: dict[str, str] = field(default_factory=dict)
@@ -441,6 +488,200 @@ def _ppg_summary(attributes: Mapping[str, Any], run_dir: Path) -> dict[str, floa
     return summary
 
 
+def _average_ranks(values: np.ndarray) -> np.ndarray:
+    """The sample's ranks, ties sharing the mean of the ranks they span.
+
+    Args:
+        values: The sample.
+
+    Returns:
+        One rank per value, in the sample's own order.
+    """
+    order = np.argsort(values, kind="stable")
+    ordered = values[order]
+    ranks = np.empty(values.size, dtype=np.float64)
+    start = 0
+    for index in range(1, values.size + 1):
+        if index == values.size or ordered[index] != ordered[start]:
+            ranks[order[start:index]] = (start + index - 1) / 2.0
+            start = index
+    return ranks
+
+
+def _rank_correlation(values: np.ndarray) -> float | None:
+    """How strongly the sample rises or falls with its own position, as Spearman's coefficient.
+
+    The positions carry no ties, so their ranks are the positions themselves and only the values
+    need :func:`_average_ranks`.
+
+    Args:
+        values: The sample, in the order it was observed.
+
+    Returns:
+        The coefficient in ``[-1, 1]``: ``+1`` when the sample never falls, ``-1`` when it never
+        rises. None when the sample is shorter than two values or carries one value throughout,
+        where the coefficient is undefined rather than zero.
+    """
+    if values.size < 2:
+        return None
+    ranks = _average_ranks(values)
+    positions = np.arange(values.size, dtype=np.float64)
+    left = positions - positions.mean()
+    right = ranks - ranks.mean()
+    spread = math.sqrt(float((left * left).sum()) * float((right * right).sum()))
+    if spread == 0.0:
+        return None
+    return float((left * right).sum()) / spread
+
+
+def _longest_ascent(values: Sequence[float]) -> tuple[int, int, int]:
+    """The longest non-decreasing subsequence, by patience sorting with its chain retained.
+
+    Args:
+        values: The sample, in the order it was observed.
+
+    Returns:
+        The subsequence's length and the positions of its first and last members. An empty sample
+        reports ``(0, 0, 0)``.
+    """
+    if not values:
+        return 0, 0, 0
+    tails: list[float] = []
+    tail_position: list[int] = []
+    previous = [-1] * len(values)
+    for position, value in enumerate(values):
+        pile = bisect_right(tails, value)
+        previous[position] = tail_position[pile - 1] if pile else -1
+        if pile == len(tails):
+            tails.append(value)
+            tail_position.append(position)
+        else:
+            tails[pile] = value
+            tail_position[pile] = position
+    last = tail_position[-1]
+    first = last
+    while previous[first] >= 0:
+        first = previous[first]
+    return len(tails), first, last
+
+
+def _sweep(voiced_times: np.ndarray, semitones: np.ndarray, track_seconds: float) -> dict[str, float]:
+    """The voiced F0 path's extent, its directedness, and the longest one-way excursion in it.
+
+    The excursion is the longer of the longest non-decreasing and the longest non-increasing
+    subsequence over the voiced frames, ties broken by the wider semitone span. Its own endpoints,
+    not the track's, give the swept extent, its duration and the rate between them, each signed by
+    the direction it went.
+
+    Args:
+        voiced_times: The voiced frames' times, ascending.
+        semitones: The same frames' F0 in semitones, on an arbitrary reference that every quantity
+            here differences away.
+        track_seconds: The whole track's extent, for the fractions.
+
+    Returns:
+        The trajectory keys of :data:`PHONATION_SUMMARY_KEYS`.
+    """
+    summary: dict[str, float] = {
+        "semitone_range": float(semitones.max() - semitones.min()),
+        "semitone_iqr": float(np.percentile(semitones, 75) - np.percentile(semitones, 25)),
+        "semitone_net": float(semitones[-1] - semitones[0]),
+    }
+    variation = float(np.abs(np.diff(semitones)).sum())
+    if variation > 0.0:
+        summary["net_over_variation"] = summary["semitone_net"] / variation
+    correlation = _rank_correlation(semitones)
+    if correlation is not None:
+        summary["rank_correlation"] = correlation
+        summary["monotonicity"] = abs(correlation)
+    ascending = _longest_ascent([float(value) for value in semitones])
+    descending = _longest_ascent([float(-value) for value in semitones])
+    voiced_frames = int(semitones.size)
+    summary["rising_fraction"] = ascending[0] / voiced_frames
+    summary["falling_fraction"] = descending[0] / voiced_frames
+    summary["monotone_fraction"] = max(summary["rising_fraction"], summary["falling_fraction"])
+    summary["direction_bias"] = summary["rising_fraction"] - summary["falling_fraction"]
+    longest = sorted(
+        (ascending, descending),
+        key=lambda run: (run[0], abs(float(semitones[run[2]] - semitones[run[1]]))),
+    )[-1]
+    first, last = longest[1], longest[2]
+    summary["sweep_seconds"] = float(voiced_times[last] - voiced_times[first])
+    summary["sweep_semitones"] = float(semitones[last] - semitones[first])
+    summary["sweep_semitones_abs"] = abs(summary["sweep_semitones"])
+    if track_seconds > 0.0:
+        summary["sweep_fraction"] = summary["sweep_seconds"] / track_seconds
+    if summary["sweep_seconds"] > 0.0:
+        summary["sweep_rate_semitones_per_s"] = summary["sweep_semitones"] / summary["sweep_seconds"]
+        summary["sweep_rate_abs_semitones_per_s"] = abs(summary["sweep_rate_semitones_per_s"])
+    return summary
+
+
+def _f0_trajectory(times: np.ndarray, f0_hz: np.ndarray, strength: np.ndarray) -> dict[str, float]:
+    """One F0 track reduced to the statistics of the path it takes, never the path itself.
+
+    Args:
+        times: Frame times, in seconds.
+        f0_hz: F0 per frame, NaN where the tracker placed none.
+        strength: The periodicity that placed each F0.
+
+    Returns:
+        The keys of :data:`PHONATION_SUMMARY_KEYS` the track supports. A quantity the track is too
+        short or too unvoiced to carry is absent rather than zero, so an unvoiced recording reports
+        its frame counts and no trajectory at all.
+    """
+    frames = int(min(times.size, f0_hz.size, strength.size))
+    if frames == 0:
+        return {}
+    times, f0_hz, strength = times[:frames], f0_hz[:frames], strength[:frames]
+    summary: dict[str, float] = {"frames": float(frames)}
+    track_seconds = float(times[-1] - times[0]) if frames > 1 else 0.0
+    if track_seconds > 0.0:
+        summary["track_seconds"] = track_seconds
+    voiced = np.isfinite(f0_hz) & (f0_hz > 0.0)
+    voiced_frames = int(np.count_nonzero(voiced))
+    summary["voiced_frames"] = float(voiced_frames)
+    summary["voiced_fraction"] = voiced_frames / frames
+    if voiced_frames == 0:
+        return summary
+    voiced_times, voiced_f0, voiced_strength = times[voiced], f0_hz[voiced], strength[voiced]
+    summary["f0_median_hz"] = float(np.median(voiced_f0))
+    finite_strength = voiced_strength[np.isfinite(voiced_strength)]
+    if finite_strength.size:
+        summary["strength_median"] = float(np.median(finite_strength))
+    if frames > 1:
+        summary["voiced_seconds"] = voiced_frames * float(np.median(np.diff(times)))
+    summary["voiced_extent_s"] = float(voiced_times[-1] - voiced_times[0])
+    if track_seconds > 0.0:
+        summary["voiced_extent_fraction"] = summary["voiced_extent_s"] / track_seconds
+    if voiced_frames < 2:
+        return summary
+    summary.update(_sweep(voiced_times, SEMITONES_PER_OCTAVE * np.log2(voiced_f0), track_seconds))
+    return summary
+
+
+def _phonation_summary(attributes: Mapping[str, Any], run_dir: Path) -> dict[str, float]:
+    """One ``phonation_tracks`` measurement reduced to :data:`PHONATION_SUMMARY_KEYS`.
+
+    Args:
+        attributes: The measurement's attributes, carrying the tracker's own parameters.
+        run_dir: The run directory :data:`PHONATION_TRACKS_SIDECAR` is relative to.
+
+    Returns:
+        The summary. Only the :data:`PHONATION_ENTITY_KEYS` are keyed when the sidecar cannot be
+        opened or holds no F0 array.
+    """
+    summary = _finite_scalars({key: attributes.get(key) for key in PHONATION_ENTITY_KEYS})
+    try:
+        with np.load(run_dir / PHONATION_TRACKS_SIDECAR) as sidecar:
+            times = np.asarray(sidecar["times_s"], dtype=np.float64)
+            f0_hz = np.asarray(sidecar["f0_hz"], dtype=np.float64)
+            strength = np.asarray(sidecar["strength"], dtype=np.float64)
+    except (OSError, KeyError, ValueError):
+        return summary
+    return {**summary, **_f0_trajectory(times, f0_hz, strength)}
+
+
 def _absorb_measurement(
     features: RecordingFeatures,
     attributes: dict[str, Any],
@@ -486,6 +727,9 @@ def _absorb_measurement(
         return
     if name == "ppg_posteriorgram":
         features.ppg = _ppg_summary(attributes, run_dir)
+        return
+    if name == "phonation_tracks":
+        features.phonation = _phonation_summary(attributes, run_dir)
         return
     if name == "silence":
         windows = attributes.get("windows") or []
