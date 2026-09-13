@@ -358,7 +358,7 @@ def rewrite_consensus_taxonomy(store: ProvStore, config: TriageConfig) -> str | 
     if before is None:
         return None
     software = software_agent(store)
-    written = _write_consensus_taxonomy(store, config, software)
+    written, _, _ = _write_consensus_taxonomy(store, config, software)
     if not written:
         return None
     [after] = written

@@ -2,19 +2,19 @@
 
 ``routing_analysis`` reduces a finished ``store.jsonl`` to a
 :class:`~senselab.audio.workflows.triage.routing_analysis.features.RecordingFeatures` and evaluates
-:mod:`~senselab.audio.workflows.triage.routing_analysis.ruleset` over it. TAXONOMY holds the same
+:mod:`~senselab.audio.workflows.triage.routing_analysis.ruleset` over it. ROUTING holds the same
 store in memory, mid-run, with no file yet. This module is the one place the two meet: it hands the
 live store to the store's own writer and the result to the analysis reader, so both paths reduce the
 same bytes with the same code and no feature path has two definitions.
 
-The evaluation carries no declaration. TAXONOMY reads no hint, and a BIDS stem's ``task-`` id is a
-declaration, so ``task_id`` and ``family`` are empty here and
+The evaluation carries no declaration. A BIDS stem's ``task-`` id is a declaration, so ``task_id``
+and ``family`` are empty here and
 :attr:`~senselab.audio.workflows.triage.routing_analysis.ruleset.RouteEvaluation.declared` with
 them: ``routed``, ``state``, ``unavailable``, ``flags`` and ``gate_outcomes`` are the fields this
 path fills.
 
 ``specs/20260912-ruleset-in-pipeline/design.md`` holds the reasoning: why the serialisation rather
-than a second reader, what it costs, and what stage 2 replaces it with.
+than a second reader, and what it costs.
 """
 
 from __future__ import annotations
@@ -146,8 +146,8 @@ def evaluate_live_routes(store: ProvStore, config: TriageConfig, *, run_dir: Pat
 
     Args:
         store: The provenance store, holding PREPROCESS's derivatives and TAXONOMY's own summaries.
-            Every gate's evidence is written by one of those two, so this is callable from the end
-            of TAXONOMY and not before it.
+            Every gate's evidence is written by one of those two, so this is callable once TAXONOMY
+            has concluded and not before it.
         config: The resolved triage configuration, read for ``taxonomy.ruleset`` and for the
             ``windows.<classifier>`` membership rule.
         run_dir: The run directory the store's sidecar paths are relative to.
@@ -177,13 +177,9 @@ def route_attributes(evaluation: RouteEvaluation, ruleset: Ruleset) -> dict[str,
         ruleset: The ruleset it was evaluated under, for the sources it reads.
 
     Returns:
-        The attributes. ``authoritative`` is False for as long as ``kind_state`` decides what runs;
-        ``error`` is None, and the failed shape :func:`failed_route_attributes` returns carries the
-        same keys so one reader handles both.
+        The attributes.
     """
     return {
-        "authoritative": False,
-        "error": None,
         "state": evaluation.state.value,
         "routed": list(evaluation.routed),
         "gate_outcomes": {name: outcome.value for name, outcome in evaluation.gate_outcomes.items()},
@@ -191,28 +187,4 @@ def route_attributes(evaluation: RouteEvaluation, ruleset: Ruleset) -> dict[str,
         "flags": {branch: list(names) for branch, names in evaluation.flags.items()},
         "sources": list(required_sources(ruleset)),
         "stem": evaluation.stem,
-    }
-
-
-def failed_route_attributes(error: str) -> dict[str, Any]:
-    """The same attributes for an evaluation that could not be made.
-
-    Args:
-        error: The failure, as :func:`~senselab.audio.workflows.triage.nodes.common.describe_exception`
-            renders it.
-
-    Returns:
-        The attributes, with ``state`` None and ``error`` set. Those two are the discriminator: a
-        reader that finds a null ``state`` has no routing to compare, not a recording nothing routed.
-    """
-    return {
-        "authoritative": False,
-        "error": error,
-        "state": None,
-        "routed": [],
-        "gate_outcomes": {},
-        "unavailable": {},
-        "flags": {},
-        "sources": [],
-        "stem": "",
     }

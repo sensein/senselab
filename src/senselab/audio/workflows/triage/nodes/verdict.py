@@ -13,9 +13,15 @@ from typing import Callable, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
+from senselab.audio.workflows.triage.nodes.common import (
+    NodeResult,
+    find_measurement,
+    software_agent,
+    write_verdict,
+)
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
+    RULESET_ROUTING,
     BranchDecision,
     FileVerdict,
     NodeVerdict,
@@ -111,22 +117,20 @@ def _node_verdicts_in_graph_order(store: ProvStore) -> list[tuple[Entity, NodeVe
     )
 
 
-def _screened(store: ProvStore) -> tuple[dict[str, str], list[str]]:
-    """TAXONOMY's classification per kind, verbatim.
+def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:
+    """What the ruleset made of the whole recording, as ROUTING recorded it.
 
     Args:
         store: The provenance store.
 
     Returns:
-        The state per kind as the string TAXONOMY wrote, one per kind under the store's shared rule,
-        and the ids of the entities they came from.
+        The file-level route state and the id it came from, or ``(None, [])`` when ROUTING wrote no
+        evaluation — which is a reading never made, not a recording nothing routed.
     """
-    screened: dict[str, str] = {}
-    ids: list[str] = []
-    for entity in _live_latest(store, "kind", lambda e: str(e.attributes["kind"])):
-        screened[str(entity.attributes["kind"])] = str(entity.attributes["state"])
-        ids.append(entity.id)
-    return screened, ids
+    measurement = find_measurement(store, RULESET_ROUTING)
+    if measurement is None or measurement.attributes.get("state") is None:
+        return None, []
+    return str(measurement.attributes["state"]), [measurement.id]
 
 
 def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list[str]]:
@@ -146,9 +150,8 @@ def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list
         branch = str(entity.attributes["branch"])
         decisions[branch] = BranchDecision(
             branch=branch,
-            kind=str(entity.attributes["kind"]),
             will_run=bool(entity.attributes["will_run"]),
-            kind_state=str(entity.attributes["kind_state"]),
+            route_state=str(entity.attributes["route_state"]),
             forced_by_hint=bool(entity.attributes["forced_by_hint"]),
             hint_tags=tuple(str(tag) for tag in entity.attributes.get("hint_tags") or ()),
             bad_map_values={
@@ -160,10 +163,10 @@ def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list
 
 
 def _hint_claims(decisions: Mapping[str, BranchDecision], hint: AudioHints | None) -> dict[str, bool] | None:
-    """Which kinds the caller's declaration claimed, read off ROUTING's own record of reading it.
+    """Which branches the caller's declaration claimed, read off ROUTING's own record of reading it.
 
-    ROUTING resolved the declaration against ``routing.hint_kind_map`` and wrote the tags naming each
-    branch's kind onto that branch's decision. Reading them back is what makes the tag that forced a
+    ROUTING resolved the declaration against ``routing.hint_branch_map`` and wrote the tags naming
+    each branch onto that branch's decision. Reading them back is what makes the tag that forced a
     branch the same tag that names a mismatch: a second resolution here could disagree with the first
     whenever the config or the hint handed to the two nodes differ.
 
@@ -172,13 +175,13 @@ def _hint_claims(decisions: Mapping[str, BranchDecision], hint: AudioHints | Non
         hint: What the recording was declared to contain, if anything.
 
     Returns:
-        True per claimed kind; a kind no declared tag reached is simply absent. None when a
+        True per claimed branch; a branch no declared tag reached is simply absent. None when a
         declaration was supplied and no decision survived to say what ROUTING made of it — the claims
         are then unknown, which is not the same as no claim.
     """
     if hint is not None and not decisions:
         return None
-    return {decision.kind: True for decision in decisions.values() if decision.hint_tags}
+    return {decision.branch: True for decision in decisions.values() if decision.hint_tags}
 
 
 def _derived_ran(store: ProvStore, verdicts: Sequence[NodeVerdict]) -> dict[str, RunState]:
@@ -209,18 +212,18 @@ def verdict(
     run_dir: Path,
     ran: Mapping[str, RunState] | None = None,
 ) -> VerdictResult:
-    """Fold every node's verdict, ROUTING's decisions and TAXONOMY's classification into one file verdict.
+    """Fold every node's verdict and ROUTING's decisions into one file verdict.
 
     Args:
         store: The provenance store, holding every node's ``verdict`` entity, ROUTING's
-            ``branch_decision`` entities and TAXONOMY's ``kind`` entities. This node reads nothing
-            else.
+            ``branch_decision`` entities and its ``ruleset_routing`` measurement. This node reads
+            nothing else.
         source: Accepted for the shared node shape; not read.
         config: The triage configuration, named in the activity by its hash. VERDICT has no
             thresholds and reads no key: the hint was already resolved by ROUTING, and this node
             reads that resolution rather than repeating it.
         hint: What the recording was declared to contain. Read for branch mismatch only: a hint never
-            resolves a kind and never turns a flag into a pass.
+            resolves a finding and never turns a flag into a pass.
         run_dir: Accepted for the shared node shape; VERDICT writes no sidecars.
         ran: Whether each node ran, from the runner, merged over what the store derives so that a
             partial mapping overrides per node without erasing the rest. The derivation reads a
@@ -234,21 +237,21 @@ def verdict(
     """
     pairs = _node_verdicts_in_graph_order(store)
     node_verdicts = [node_verdict for _, node_verdict in pairs]
-    screened, kind_ids = _screened(store)
+    route_state, route_ids = _route_state(store)
     decisions, decision_ids = _branch_decisions(store)
     resolved_ran = {**_derived_ran(store, node_verdicts), **(ran or {})}
     file_verdict = fold_file_verdict(
         node_verdicts,
-        screened=screened,
         branch_decisions=decisions,
         ran=resolved_ran,
         hint_claims=_hint_claims(decisions, hint),
+        route_state=route_state,
     )
 
     software = software_agent(store)
     activity = store.activity(node=NODE, step=None, parameters={"config_hash": config.config_hash})
     store.was_associated_with(activity, software)
-    folded_ids = [entity.id for entity, _ in pairs] + kind_ids + decision_ids
+    folded_ids = [entity.id for entity, _ in pairs] + route_ids + decision_ids
     for folded_id in folded_ids:
         store.used(activity, folded_id)
 
@@ -259,13 +262,14 @@ def verdict(
         node=NODE,
         outcome=file_verdict.triage,
         kind=None,
-        why=f"folded {len(node_verdicts)} node verdicts over {len(screened)} screened kinds",
+        why=f"folded {len(node_verdicts)} node verdicts over {len(file_verdict.routes)} routed branches",
         detail={
             "triage": file_verdict.triage.value,
             "release": file_verdict.release.value,
             "discard_ground": file_verdict.discard_ground,
-            "kinds": dict(file_verdict.kinds),
-            "screened": dict(file_verdict.screened),
+            "findings": dict(file_verdict.findings),
+            "routes": dict(file_verdict.routes),
+            "route_state": file_verdict.route_state,
             "agreement": dict(file_verdict.agreement),
             "hints": dict(file_verdict.hints),
             "branches": dict(file_verdict.branches),

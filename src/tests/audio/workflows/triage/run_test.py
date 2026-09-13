@@ -22,6 +22,7 @@ import torch
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage import run as run_module
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes.admit import AdmitResult
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.preprocess import PreprocessResult, write_clip_spans
@@ -29,6 +30,7 @@ from senselab.audio.workflows.triage.nodes.redact import RedactResult
 from senselab.audio.workflows.triage.nodes.report import ReportRenderError
 from senselab.audio.workflows.triage.nodes.routing import routing as real_routing
 from senselab.audio.workflows.triage.nodes.taxonomy import TaxonomyResult
+from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.run import entity_subdir, prepare_run_layout, run_triage
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
@@ -82,13 +84,29 @@ def _tone() -> Audio:
     return Audio(waveform=torch.linspace(-0.5, 0.5, 16000).unsqueeze(0), sampling_rate=16000)
 
 
+def _evaluation(routed: tuple[str, ...], state: RouteState) -> RouteEvaluation:
+    """One ruleset reading, standing in for the reduction the real ROUTING would run."""
+    return RouteEvaluation(
+        stem="recording",
+        family="",
+        routed=routed,
+        declared=(),
+        agreed=(),
+        missed=(),
+        extra=(),
+        unavailable={},
+        flags={},
+        state=state,
+        gate_outcomes={"airway.cough": GateOutcome.SILENT},
+    )
+
+
 def _fakes(
     calls: list[str],
     *,
     admit_outcome: Outcome = Outcome.PASS,
     raising: str | None = None,
     released: dict[str, Path] | None = None,
-    kinds: dict[str, str] | None = None,
     pii: bool = True,
     routing_outcome: str | None = None,
     clip_span: tuple[float, float] | None = None,
@@ -103,8 +121,6 @@ def _fakes(
         admit_outcome: What the fake ADMIT concludes; ``FAIL`` returns no audio.
         raising: The node whose fake raises ``RuntimeError`` instead of concluding.
         released: What the fake REDACT reports as its released pair.
-        kinds: The classification the fake TAXONOMY writes as ``kind`` entities. None writes none,
-            which is what a run where TAXONOMY never concluded leaves behind.
         pii: Whether the fake SPEECH writes a live ``pii`` entity, which is REDACT's whole gate.
         routing_outcome: ``"raise"`` makes the routing entry raise; ``"none"`` makes it return no
             result instead of calling the real node.
@@ -165,16 +181,10 @@ def _fakes(
         store: ProvStore, source: str, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
     ) -> TaxonomyResult:
         _record("TAXONOMY")
-        fold = store.activity(node="TAXONOMY", step="fold", parameters={})
-        for kind, state in (kinds or {}).items():
-            kind_id = store.entity(
-                prov_type="kind",
-                extent=None,
-                attributes={"kind": kind, "state": state, "lines": {}, "stream": "plain"},
-            )
-            store.was_generated_by(kind_id, fold)
         entity_id, verdict = _conclude(store, "TAXONOMY", Outcome.PASS, None)
-        return TaxonomyResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, kinds=dict(kinds or {}))
+        return TaxonomyResult(
+            verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, classifiers=("hear",), n_labels=1
+        )
 
     def _routing(
         store: ProvStore, source: str | None, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
@@ -252,8 +262,13 @@ def _fakes(
 def graph(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[str]]:
     """Install the fake graph on the runner's module and return the list recording call order."""
 
-    def _install(**kwargs: Any) -> list[str]:  # noqa: ANN401
+    def _install(
+        routed: tuple[str, ...] = ("AIRWAY", "SPEECH", "VOICE"),
+        route_state: RouteState = RouteState.ROUTED,
+        **kwargs: Any,  # noqa: ANN401
+    ) -> list[str]:
         calls: list[str] = []
+        monkeypatch.setattr(routing_module, "evaluate_live_routes", lambda *a, **k: _evaluation(routed, route_state))
         for name, fake in _fakes(calls, **kwargs).items():
             monkeypatch.setattr(run_module, name, fake)
         real_quality, real_verdict = run_module.quality, run_module.verdict
@@ -470,7 +485,7 @@ class TestConditionalExecution:
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """A branch with will_run false never runs, and RunState.SKIPPED says so."""
-        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"})
+        calls = graph(routed=("SPEECH",))
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert "AIRWAY" not in calls
         assert result.ran["AIRWAY"] is RunState.SKIPPED
@@ -484,7 +499,7 @@ class TestConditionalExecution:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Naming DDK in an execution set is a record, not a KeyError; the graph finishes around it."""
-        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"})
+        calls = graph(routed=("SPEECH",))
         real = run_module.routing
 
         def _routes_ddk(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -504,7 +519,7 @@ class TestConditionalExecution:
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """A branch dropped from the result is a branch a reader cannot tell was never asked."""
-        graph(kinds={"speech": "present", "airway": "present", "voice": "present"})
+        graph(routed=("AIRWAY", "SPEECH", "VOICE"))
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert set(BRANCHES) <= set(result.nodes)
 
@@ -512,7 +527,7 @@ class TestConditionalExecution:
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """REDACT is a step of SPEECH; no speech branch means no REDACT verdict at all."""
-        calls = graph(kinds={"speech": "absent", "airway": "present", "voice": "absent"})
+        calls = graph(routed=("AIRWAY",))
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert "REDACT" not in calls
         assert result.ran["REDACT"] is RunState.SKIPPED
@@ -521,7 +536,7 @@ class TestConditionalExecution:
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """redact.md: SPEECH ran and found no PII, so the release axis reads not_assessed."""
-        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"}, pii=False)
+        calls = graph(routed=("SPEECH",), pii=False)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert "SPEECH" in calls and "REDACT" not in calls
         assert result.file_verdict is not None
@@ -531,7 +546,7 @@ class TestConditionalExecution:
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """One live pii entity is the whole gate."""
-        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"}, pii=True)
+        calls = graph(routed=("SPEECH",), pii=True)
         run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert "REDACT" in calls
 
@@ -543,7 +558,7 @@ class TestConditionalExecution:
         End to end over the real ROUTING and the real VERDICT: this is the whole point of routing
         recording the empty set rather than flagging it, and only the runner exercises both nodes.
         """
-        calls = graph(kinds={"speech": "absent", "airway": "absent", "voice": "absent"})
+        calls = graph(routed=(), route_state=RouteState.EMPTY)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.ran["VERDICT"] is RunState.COMPLETED
         assert {"AIRWAY", "SPEECH", "VOICE"}.isdisjoint(calls)

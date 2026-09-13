@@ -106,7 +106,7 @@ class TestUnsetValues:
             "redaction.padding_ms",
             "speech.second_diarizer",
             "quality.stoi_floor",
-            "taxonomy.voice_min_duration_s",
+            "taxonomy.speech_labels",
         ):
             node: object = cfg.values
             for part in path.split("."):
@@ -179,8 +179,8 @@ class TestOverridesMayExtendADataMap:
     def test_a_null_data_map_still_takes_a_whole_mapping(self, tmp_path: Path) -> None:
         """The control: the paths that ship null must keep accepting the mapping that fills them."""
         override = tmp_path / "o.yaml"
-        override.write_text("routing:\n  hint_kind_map:\n    cough: airway\n")
-        assert load_triage_config(override).require("routing.hint_kind_map") == {"cough": "airway"}
+        override.write_text("routing:\n  hint_branch_map:\n    cough: AIRWAY\n")
+        assert load_triage_config(override).require("routing.hint_branch_map") == {"cough": "AIRWAY"}
 
     def test_a_schema_key_is_still_refused(self, tmp_path: Path) -> None:
         """The whole point of the refusal: a section the code reads by name cannot grow a key."""
@@ -249,14 +249,8 @@ class TestTheV2OpenKeys:
         "windows.ast.default_threshold",
         "windows.ast.label_thresholds",
         "windows.hear.label_thresholds",
-        "taxonomy.presence_floor.speech.acoustic",
-        "taxonomy.presence_floor.speech.lexical",
-        "taxonomy.presence_floor.airway.health_acoustic",
-        "taxonomy.presence_floor.airway.acoustic",
-        "taxonomy.voice_min_duration_s",
-        "taxonomy.voice_uncertain_duration_s",
         "taxonomy.speech_labels",
-        "routing.hint_kind_map",
+        "routing.hint_branch_map",
         "airway.contest_labels",
         "speech.enrollment_model",
         "speech.separation_backend",
@@ -294,6 +288,10 @@ class TestTheV2OpenKeys:
             "taxonomy.ast_frame_s",
             "taxonomy.lexical_airway_tokens",
             "taxonomy.presence_floor.yamnet",
+            "taxonomy.presence_floor.speech.lexical",
+            "taxonomy.voice_min_duration_s",
+            "taxonomy.voice_uncertain_duration_s",
+            "routing.hint_kind_map",
             "hear.label_floor",
         ):
             with pytest.raises(ValueError, match="unknown configuration key"):
