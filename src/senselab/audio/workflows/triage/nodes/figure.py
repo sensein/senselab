@@ -38,6 +38,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     live_entities,
     resolve_stream,
 )
+from senselab.audio.workflows.triage.vocabulary import BRANCHES, RULESET_ROUTING
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "FIGURE"
@@ -48,15 +49,6 @@ _SOURCE_STREAM = "recording"
 
 #: Characters per line of the cover title, at its 11 pt proportional face on an 11-inch page.
 _TITLE_COLUMNS = 95
-
-#: The derivative each TAXONOMY evidence line reads, so an unavailable line can name what is missing.
-_LINE_SOURCE: dict[tuple[str, str], tuple[str, ...]] = {
-    ("speech", "acoustic"): ("yamnet_windows", "ast_windows"),
-    ("speech", "lexical"): ("consensus_transcript",),
-    ("airway", "health_acoustic"): ("span_hear",),
-    ("airway", "acoustic"): ("span_yamnet",),
-    ("voice", "phonation"): ("phonation_tracks",),
-}
 
 _SUMMARISED_CLASSIFIERS = ("yamnet", "ast", "hear")
 
@@ -594,16 +586,18 @@ def _squim_by_span(store: ProvStore) -> dict[str, dict[str, float | None]]:
     return by_span
 
 
-def _kind_entities(store: ProvStore) -> list[Entity]:
-    """TAXONOMY's whole-file kind elements.
+def _route_decisions(store: ProvStore) -> list[Entity]:
+    """ROUTING's decision per branch, in branch order.
 
     Args:
         store: The provenance store.
 
     Returns:
-        The live kind entities.
+        The live ``branch_decision`` entities, ordered by
+        :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES`.
     """
-    return [entity for entity in live_entities(store, "kind")]
+    decisions = {str(entity.attributes.get("branch")): entity for entity in live_entities(store, "branch_decision")}
+    return [decisions[branch] for branch in BRANCHES if branch in decisions]
 
 
 def _label_summaries(store: ProvStore) -> dict[str, Entity]:
@@ -624,14 +618,14 @@ def _label_summaries(store: ProvStore) -> dict[str, Entity]:
 
 
 def _summary_sections(store: ProvStore, style: FigureStyle) -> tuple[list[list[str]], list[str]]:
-    """The whole-file readout as its parts: one block per classifier, then the kind block.
+    """The whole-file readout as its parts: one block per classifier, then the routing block.
 
     Args:
         store: The provenance store.
         style: The drawing configuration, for how many labels to list.
 
     Returns:
-        ``(classifier_blocks, kind_lines)``. Each classifier block leads with its own name, so a
+        ``(classifier_blocks, route_lines)``. Each classifier block leads with its own name, so a
         block stands alone in a column.
     """
     absent = _absent_reasons(store)
@@ -664,29 +658,27 @@ def _summary_sections(store: ProvStore, style: FigureStyle) -> tuple[list[list[s
             )
         blocks.append(block)
 
-    kind_lines: list[str] = []
-    kinds = _kind_entities(store)
-    if not kinds:
-        return blocks, ["  TAXONOMY wrote no kind element"]
-    for entity in sorted(kinds, key=lambda item: str(item.attributes.get("kind"))):
-        kind = str(entity.attributes.get("kind"))
-        kind_lines.append(f"  {kind}: {entity.attributes.get('state')}")
-        for name, line in (entity.attributes.get("lines") or {}).items():
-            floor = line.get("floor")
-            floor_text = "floor —" if floor is None else f"floor {floor}"
-            unit = line.get("unit")
-            evidence = f"{line.get('evidence')}" + (f" {unit}" if unit else "")
-            kind_lines.append(f"      {name:<18} {str(line.get('state')):<12} {evidence}  ({floor_text})")
-            if line.get("state") != "unavailable":
-                continue
-            why = line.get("why")
-            if why:
-                kind_lines.append(f"          {why}")
-            for source in _LINE_SOURCE.get((kind, name), ()):
-                reason = absent.get(source)
-                if reason:
-                    kind_lines.append(f"          {source} absent: {reason}")
-    return blocks, kind_lines
+    route_lines: list[str] = []
+    reading = find_measurement(store, RULESET_ROUTING)
+    decisions = _route_decisions(store)
+    if not decisions:
+        return blocks, ["  routing wrote no branch decision"]
+    if reading is not None:
+        route_lines.append(f"  recording: {reading.attributes.get('state')}")
+    gate_outcomes: dict[str, str] = {} if reading is None else dict(reading.attributes.get("gate_outcomes") or {})
+    for entity in decisions:
+        branch = str(entity.attributes.get("branch"))
+        state = str(entity.attributes.get("route_state"))
+        run = "runs" if entity.attributes.get("will_run") else "withheld"
+        forced = " (forced by hint)" if entity.attributes.get("forced_by_hint") else ""
+        route_lines.append(f"  {branch:<8} {state:<12} {run}{forced}")
+        for name in sorted(entity.attributes.get("unavailable_gates") or ()):
+            route_lines.append(f"      {name:<28} unavailable")
+        for name in sorted(entity.attributes.get("flag_gates") or ()):
+            route_lines.append(f"      {name:<28} flagged")
+    fired = sorted(name for name, outcome in gate_outcomes.items() if outcome == "fired")
+    route_lines.append("  gates fired: " + (", ".join(fired) or "none"))
+    return blocks, route_lines
 
 
 def _source_path(store: ProvStore) -> str | None:
@@ -712,7 +704,7 @@ def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     """The whole-file taxonomy readout, one line under another, as the sidecar JSON records it.
 
     Two aggregations, both file-scoped: each classifier's label-score distribution over every window
-    it produced, and each kind's folded state with its evidence lines. A line whose derivative is
+    it produced, and what the routing ruleset made of each branch. A classifier whose derivative is
     absent prints the reason PREPROCESS recorded, so a null configuration key is named instead of
     being filled in with a value this figure invented.
 
@@ -723,7 +715,7 @@ def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     Returns:
         The lines, in print order.
     """
-    blocks, kind_lines = _summary_sections(store, style)
+    blocks, route_lines = _summary_sections(store, style)
     lines: list[str] = ["WHOLE-FILE CLASSIFICATION SUMMARY"]
     if not _label_summaries(store):
         lines.append("  no classifier produced a label-score summary")
@@ -731,8 +723,8 @@ def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
         lines.append(f"  {block[0]}")
         lines.extend(f"    {line.strip()}" for line in block[1:])
     lines.append("")
-    lines.append("KIND STATES AND EVIDENCE LINES")
-    lines.extend(kind_lines)
+    lines.append("ROUTE STATES AND GATE OUTCOMES")
+    lines.extend(route_lines)
     return lines
 
 
@@ -905,7 +897,7 @@ def summary_panel_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     Returns:
         The lines, in print order.
     """
-    blocks, kind_lines = _summary_sections(store, style)
+    blocks, route_lines = _summary_sections(store, style)
     lines: list[str] = ["WHOLE-FILE CLASSIFICATION SUMMARY"]
     lines.extend(_columns(blocks))
     lines.append("")
@@ -913,8 +905,8 @@ def summary_panel_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     lines.append("")
     lines.extend(_stream_summary_lines(store, "residual", style))
     lines.append("")
-    lines.append("KIND STATES AND EVIDENCE LINES")
-    lines.extend(kind_lines)
+    lines.append("ROUTE STATES AND GATE OUTCOMES")
+    lines.extend(route_lines)
     return lines
 
 

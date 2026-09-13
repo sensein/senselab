@@ -267,7 +267,7 @@ def _drive_branches(
     finished too. It decodes no audio, so the position is the only thing that decides what it sees.
 
     PREPROCESS is the one dependency every later node in this function shares — TAXONOMY reads its
-    stored derivatives, routing and the branches read TAXONOMY's fold, and none of that evidence
+    stored derivatives, routing reads both, and none of that evidence
     exists when PREPROCESS itself raised. So a failed PREPROCESS call skips everything else here
     (TAXONOMY, routing, every branch, REDACT) rather than attempting nodes with nothing to read; the
     file still reaches VERDICT, which folds "no evidence" from the all-``SKIPPED`` record the same

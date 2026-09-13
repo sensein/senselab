@@ -33,13 +33,13 @@ from senselab.audio.workflows.triage.nodes.common import (
     live_entities,
     resolve_stream,
 )
-from senselab.audio.workflows.triage.vocabulary import BRANCHES, GRAPH_ORDER
+from senselab.audio.workflows.triage.vocabulary import BRANCHES, GRAPH_ORDER, RULESET_ROUTING
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "REPORT"
 SUMMARY_STEM = "summary"
 FORMATS = ("png", "pdf")
-REPORT_SCHEMA_VERSION = "triage-summary/v3"
+REPORT_SCHEMA_VERSION = "triage-summary/v4"
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
@@ -797,8 +797,8 @@ def _branches(store: ProvStore) -> dict[str, dict[str, Any]]:
         store: The provenance store.
 
     Returns:
-        ``{branch: {will_run, forced_by_hint, kind_state, why, verdict, flags}}``. Empty when ROUTING
-        never ran, which is a graph in which no branch was ever asked.
+        ``{branch: {will_run, forced_by_hint, route_state, why, verdict, flags}}``. Empty when
+        ROUTING never ran, which is a graph in which no branch was ever asked.
     """
     decisions: dict[str, Entity] = {}
     for entity in store.entities("branch_decision"):
@@ -811,8 +811,9 @@ def _branches(store: ProvStore) -> dict[str, dict[str, Any]]:
         branches[branch] = {
             "will_run": bool(decision.attributes.get("will_run")),
             "forced_by_hint": bool(decision.attributes.get("forced_by_hint")),
-            "kind_state": decision.attributes.get("kind_state"),
-            "raw_state": decision.attributes.get("raw_state"),
+            "route_state": decision.attributes.get("route_state"),
+            "unavailable_gates": list(decision.attributes.get("unavailable_gates") or []),
+            "flag_gates": list(decision.attributes.get("flag_gates") or []),
             "why": decision.attributes.get("why"),
             "verdict": None if verdict_entity is None else verdict_entity.attributes.get("outcome"),
             "flags": [] if verdict_entity is None else list(verdict_entity.attributes.get("flags") or []),
@@ -1018,8 +1019,9 @@ def _verdict(store: ProvStore) -> dict[str, Any]:
             "release": None,
             "discard_ground": None,
             "reasons": [],
-            "kinds": {},
-            "screened": {},
+            "findings": {},
+            "routes": {},
+            "route_state": None,
             "agreement": {},
             "hints": {},
             "ran": {},
@@ -1044,42 +1046,37 @@ def _categories(store: ProvStore) -> dict[str, dict[str, int]]:
     return {classifier: counts for classifier, counts in found.items() if counts}
 
 
-def _taxonomy_decision_paths(store: ProvStore) -> dict[str, dict[str, Any]]:
-    """The evidence lines TAXONOMY used for each kind, in report-friendly form.
-
-    The kind entities retain the full provenance ids. The report adds a small rendering and analysis
-    view so a classifier label that did not decide a state is visibly distinct from the decisive
-    evidence line.
+def _ruleset_reading(store: ProvStore) -> dict[str, Any]:
+    """What the ruleset made of the recording, as ROUTING recorded it.
 
     Args:
-        store: The provenance store holding TAXONOMY's live kind entities.
+        store: The provenance store holding ROUTING's ``ruleset_routing`` measurement.
 
     Returns:
-        ``{kind: {state, lines}}`` in the taxonomy's stable kind order.
+        ``{state, routed, gate_outcomes, unavailable, flags, sources, element_id}``, or the same keys
+        emptied when ROUTING wrote no evaluation.
     """
-    by_kind = {str(entity.attributes.get("kind")): entity for entity in live_entities(store, "kind")}
-    paths: dict[str, dict[str, Any]] = {}
-    for kind in ("speech", "airway", "voice"):
-        entity = by_kind.get(kind)
-        if entity is None:
-            continue
-        lines = entity.attributes.get("lines") or {}
-        paths[kind] = {
-            "state": entity.attributes.get("state"),
-            "lines": {
-                str(name): {
-                    "state": values.get("state"),
-                    "evidence": values.get("evidence"),
-                    "unit": values.get("unit"),
-                    "floor": values.get("floor"),
-                    "uncertain_floor": values.get("uncertain_floor"),
-                    "why": values.get("why"),
-                }
-                for name, values in lines.items()
-                if isinstance(values, dict)
-            },
+    measurement = find_measurement(store, RULESET_ROUTING)
+    if measurement is None:
+        return {
+            "state": None,
+            "routed": [],
+            "gate_outcomes": {},
+            "unavailable": {},
+            "flags": {},
+            "sources": [],
+            "element_id": None,
         }
-    return paths
+    attributes = measurement.attributes
+    return {
+        "state": attributes.get("state"),
+        "routed": list(attributes.get("routed") or []),
+        "gate_outcomes": dict(attributes.get("gate_outcomes") or {}),
+        "unavailable": {str(branch): list(names) for branch, names in (attributes.get("unavailable") or {}).items()},
+        "flags": {str(branch): list(names) for branch, names in (attributes.get("flags") or {}).items()},
+        "sources": list(attributes.get("sources") or []),
+        "element_id": measurement.id,
+    }
 
 
 def _task_context(run_id: str, verdict: dict[str, Any]) -> dict[str, Any]:
@@ -1250,10 +1247,11 @@ def _report_document(
             "reasons": reasons,
         },
         "screening": {
-            "screened_kinds": verdict.get("screened") or (steps.get("TAXONOMY", {}).get("kinds") or {}),
-            "resolved_kinds": verdict.get("kinds") or {},
+            "routes": verdict.get("routes") or {},
+            "route_state": verdict.get("route_state"),
+            "findings": verdict.get("findings") or {},
             "agreement": verdict.get("agreement") or {},
-            "decision_paths": _taxonomy_decision_paths(store),
+            "ruleset": _ruleset_reading(store),
         },
         "routing": branches,
         "evidence": {
@@ -1430,37 +1428,10 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
     reasons = decisions.get("reasons") or []
     redact_reasons = [reason for reason in reasons if reason.get("node") == "REDACT"]
     evidence = decisions.get("flags") or redact_reasons or reasons[-1:]
-    decision_paths = screening.get("decision_paths") or {}
-
-    def _taxonomy_reason() -> str | None:
-        messages: list[str] = []
-        for kind, path in decision_paths.items():
-            if path.get("state") != "uncertain":
-                continue
-            if kind == "voice":
-                phonation = (path.get("lines") or {}).get("phonation") or {}
-                evidence_s = phonation.get("evidence")
-                floor_s = phonation.get("floor")
-                uncertain_s = phonation.get("uncertain_floor")
-                if (
-                    isinstance(evidence_s, (int, float))
-                    and isinstance(floor_s, (int, float))
-                    and isinstance(uncertain_s, (int, float))
-                ):
-                    messages.append(
-                        "TAXONOMY: voice uncertain: longest phonation span "
-                        f"{float(evidence_s):.2f} s (present >= {float(floor_s):.2f} s; "
-                        f"uncertain >= {float(uncertain_s):.2f} s)"
-                    )
-                    continue
-            messages.append(f"TAXONOMY: {kind} is uncertain; see taxonomy decision path")
-        return "; ".join(messages) if messages else None
 
     def _header_reason(reason: dict[str, Any]) -> str:
         node = str(reason.get("node") or "decision")
         why = str(reason.get("why") or "no detail retained")
-        if node == "TAXONOMY" and taxonomy_reason is not None:
-            return taxonomy_reason
         clauses = [clause for clause in why.split("; ") if clause]
         span_matches = [_SPAN_FLAG_REASON.fullmatch(clause) for clause in clauses]
         if clauses and all(match is not None for match in span_matches):
@@ -1470,11 +1441,8 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
             return f"{node}: {clauses[0]}; +{len(clauses) - 1} additional detail(s) in summary.json"
         return f"{node}: {why}"
 
-    taxonomy_reason = _taxonomy_reason()
     evidence_text = "; ".join(_header_reason(reason) for reason in evidence[:2]) or "no contributing reason"
-    screened = (
-        "; ".join(f"{kind}={state}" for kind, state in sorted(screening["screened_kinds"].items())) or "not screened"
-    )
+    routes = "; ".join(f"{branch}={state}" for branch, state in sorted(screening["routes"].items())) or "nothing routed"
     route = (
         "; ".join(
             f"{branch} {'run' if decision['will_run'] else 'skipped'} ({decision['why']})"
@@ -1504,7 +1472,9 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
         "evidence_label": "LEADING DECISION EVIDENCE",
         "evidence": evidence_text,
         "support_label": "SCREENING / ROUTING (report-only summary)",
-        "support": f"screened: {screened}\nrouting: {route}  |  outcomes: {outcomes}",
+        "support": (
+            f"routes ({_shown(screening.get('route_state'))}): {routes}\nrouting: {route}  |  outcomes: {outcomes}"
+        ),
     }
 
 
@@ -1609,7 +1579,7 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
         decision, detail = branches[branch], steps.get(branch, {})
         lines.append(
             f"  {branch}: will_run={decision['will_run']} forced_by_hint={decision['forced_by_hint']} "
-            f"kind_state={decision['kind_state']} why={decision['why']}"
+            f"route_state={decision['route_state']} why={decision['why']}"
         )
         lines.append(f"    outcome: {_shown(decision['verdict'])}")
         measured = [f"{key}={_shown(detail[key])}" for key in _BRANCH_MEASURES.get(branch, ()) if key in detail]
@@ -1635,15 +1605,16 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
         extent = "no time extent" if not timing else f"{_shown(timing.get('start_s'))}-{_shown(timing.get('end_s'))} s"
         lines.append(f"    evidence: {item['description']} [{extent}; {item['entity_id']}]")
 
-    lines += ["", "TAXONOMY"]
+    lines += ["", "ROUTES AND FINDINGS"]
     hints = verdict.get("hints") or {}
-    if not screening["screened_kinds"]:
-        lines.append("  TAXONOMY did not classify this recording")
-    for kind in sorted(screening["screened_kinds"]):
+    lines.append(f"  recording: {_shown(screening.get('route_state'))}")
+    if not screening["routes"]:
+        lines.append("  routing wrote no decision for this recording")
+    for branch in sorted(screening["routes"]):
         lines.append(
-            f"  {kind}: screened={screening['screened_kinds'][kind]} "
-            f"resolved={_shown(screening['resolved_kinds'].get(kind))} "
-            f"agreement={_shown(screening['agreement'].get(kind))} hint={_shown(hints.get(kind))}"
+            f"  {branch}: route={screening['routes'][branch]} "
+            f"found={_shown(screening['findings'].get(branch))} "
+            f"agreement={_shown(screening['agreement'].get(branch))} hint={_shown(hints.get(branch))}"
         )
 
     lines += ["", "SUPPORTING EVIDENCE"]
@@ -1731,8 +1702,9 @@ def _decision_blocks(document: dict[str, Any]) -> list[str]:
         lines.append("  no node contributed a decision reason")
 
     lines += ["", "SCREENING AND ROUTING"]
-    screened = "; ".join(f"{kind}={state}" for kind, state in sorted(screening["screened_kinds"].items()))
-    lines.append("  screened: " + (screened or "not screened"))
+    routes = "; ".join(f"{branch}={state}" for branch, state in sorted(screening["routes"].items()))
+    lines.append(f"  recording: {_shown(screening.get('route_state'))}")
+    lines.append("  routes: " + (routes or "nothing routed"))
     for branch in sorted(routing, key=lambda name: BRANCHES.index(name) if name in BRANCHES else len(BRANCHES)):
         decision = routing[branch]
         outcome = _shown(decision.get("verdict")) if decision["will_run"] else "not run"
@@ -1741,23 +1713,18 @@ def _decision_blocks(document: dict[str, Any]) -> list[str]:
             + ("; forced by task hint" if decision["forced_by_hint"] else "")
         )
 
-    decision_paths = screening.get("decision_paths") or {}
-    if decision_paths:
-        lines += ["", "TAXONOMY DECISION PATH"]
-        for kind, path in decision_paths.items():
-            evidence_lines = path.get("lines") or {}
-            rendered = "; ".join(
-                f"{name}={_shown(line.get('evidence'))} {_shown(line.get('unit'))} "
-                f"(floor={_shown(line.get('floor'))}, {line.get('state')})"
-                for name, line in evidence_lines.items()
-            )
-            if kind == "speech" and "lexical" in evidence_lines:
-                rendered += "; lexical consensus decides; acoustic is corroboration"
-            lines.append(f"  {kind}: {rendered} -> {_shown(path.get('state'))}")
-            for name, line in evidence_lines.items():
-                why = line.get("why")
-                if why:
-                    lines.append(f"      {name}: {why}")
+    ruleset = screening.get("ruleset") or {}
+    gate_outcomes = ruleset.get("gate_outcomes") or {}
+    if gate_outcomes:
+        lines += ["", "ROUTING GATES"]
+        fired = sorted(name for name, outcome in gate_outcomes.items() if outcome == "fired")
+        unreadable = sorted(name for name, outcome in gate_outcomes.items() if outcome == "unavailable")
+        lines.append("  fired: " + (", ".join(fired) or "none"))
+        lines.append("  unavailable: " + (", ".join(unreadable) or "none"))
+        lines.append(f"  silent: {len(gate_outcomes) - len(fired) - len(unreadable)} of {len(gate_outcomes)}")
+        for branch, names in sorted((ruleset.get("flags") or {}).items()):
+            if names:
+                lines.append(f"  {branch} flagged by: {', '.join(sorted(names))}")
 
     lines += ["", "MEASURED BRANCH FINDINGS"]
     findings_start = len(lines)

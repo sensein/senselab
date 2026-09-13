@@ -18,7 +18,7 @@ from tests.audio.workflows.triage.nodes.conftest import window
 
 
 def _floors(tmp_path: Path) -> TriageConfig:
-    """The packaged config with the TAXONOMY floors supplied, so the fold itself does not blank.
+    """The packaged config with the speech family named.
 
     Args:
         tmp_path: Where the override YAML is written.
@@ -27,15 +27,7 @@ def _floors(tmp_path: Path) -> TriageConfig:
         The resolved configuration.
     """
     path = tmp_path / "summary-floors.yaml"
-    path.write_text(
-        "taxonomy:\n"
-        "  presence_floor:\n"
-        "    speech: {acoustic: 1, lexical: 1}\n"
-        "    airway: {health_acoustic: 1, acoustic: 1}\n"
-        "  voice_min_duration_s: 1.0\n"
-        "  voice_uncertain_duration_s: 0.3\n"
-        "  speech_labels: [Speech]\n"
-    )
+    path.write_text("taxonomy:\n  speech_labels: [Speech]\n")
     return load_triage_config(path)
 
 

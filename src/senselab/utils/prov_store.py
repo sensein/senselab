@@ -20,7 +20,6 @@ PROV_TYPE = Literal[
     "speaker",
     "interval",
     "measurement",
-    "kind",
     "stream",
     "pii",
     "verdict",
