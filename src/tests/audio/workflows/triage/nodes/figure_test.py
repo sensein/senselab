@@ -12,6 +12,7 @@ from senselab.audio.workflows.triage.nodes.common import live_entities
 from senselab.audio.workflows.triage.nodes.figure import (
     FigureStyle,
     _asr_lane_panel,
+    _spans,
     _words,
     pages,
     preprocess_figure,
@@ -406,6 +407,69 @@ class TestTheWordLaneDrawsEachSourceInItsOwnBand:
         assert [w["index"] for w in words] == [0, 1, 2]
         assert sources == ["asr_crisperwhisper", "asr_qwen"]
         assert words[1]["sources"] == ["asr_crisperwhisper"] and words[1]["bracketed"]
+
+
+class TestTheClipFlagIsReadFromTheLiveClipSpans:
+    """The lane's clip edge names the clip spans that stand, not the ones that stood when it ran."""
+
+    @staticmethod
+    def _seeded(span_extent: tuple[float, float] = (0.9, 1.5)) -> tuple[ProvStore, str]:
+        """A store with one clip span at ``(1.0, 1.2)`` and one general span flagged as containing it.
+
+        Args:
+            span_extent: The general span's extent.
+
+        Returns:
+            The store and the clip span's id.
+        """
+        store = ProvStore(run_id="figure-clip")
+        activity = store.activity(node="PREPROCESS", step="spans", parameters={})
+        clip_id = store.entity(
+            prov_type="span", extent=(1.0, 1.2), attributes={"family": "clip", "signal": "recording"}
+        )
+        store.was_generated_by(clip_id, activity)
+        span_id = store.entity(
+            prov_type="span",
+            extent=span_extent,
+            attributes={
+                "signal": "preemphasised",
+                "measure": "amplitude",
+                "merged_proposals": 1,
+                "contains_clip": True,
+            },
+        )
+        store.was_generated_by(span_id, activity)
+        return store, clip_id
+
+    def test_a_span_over_a_live_clip_is_flagged(self) -> None:
+        """The overlap is the test, and it agrees with the stored attribute while the clip stands."""
+        store, _ = self._seeded()
+        [span] = _spans(store)
+        assert span["contains_clip"] is True
+
+    def test_a_span_over_a_withdrawn_clip_is_not_flagged_though_its_attribute_says_it_is(self) -> None:
+        """The extend pass retires the clip span and re-mints no general span; the read follows."""
+        store, clip_id = self._seeded()
+        withdrawal = store.activity(node="PREPROCESS", step="clip_span_superseded", parameters={})
+        store.was_invalidated_by(clip_id, withdrawal)
+
+        [span] = _spans(store)
+        assert span["contains_clip"] is False
+        assert store.get_entity(span["id"]).attributes["contains_clip"] is True
+
+    @pytest.mark.parametrize("extent", [(1.2, 1.5), (0.5, 1.0)])
+    def test_a_span_merely_touching_a_clip_does_not_contain_it(self, extent: tuple[float, float]) -> None:
+        """The overlap test is strict at both ends, so a shared boundary is not an overlap."""
+        store, _ = self._seeded(extent)
+        [span] = _spans(store)
+        assert span["contains_clip"] is False
+
+    @pytest.mark.parametrize("extent", [(1.19, 1.5), (0.5, 1.01)])
+    def test_a_span_overlapping_by_one_hundredth_of_a_second_does(self, extent: tuple[float, float]) -> None:
+        """The control on the test above: a hair either side of the boundary is an overlap."""
+        store, _ = self._seeded(extent)
+        [span] = _spans(store)
+        assert span["contains_clip"] is True
 
 
 def matplotlib_colour(hex_colour: str) -> tuple[float, float, float]:
