@@ -9,8 +9,9 @@ The reference standards, their weakness and the measurements taken with this mod
 """
 
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
+    BRANCH_DETECTORS,
     DETECTORS,
-    UNPROFILED_DETECTORS,
+    STAGED_DETECTORS,
     Detector,
     detector_value,
     sweep_points,
@@ -65,11 +66,12 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
 
 __all__ = [
     "BASELINE_RULES",
+    "BRANCH_DETECTORS",
     "DETECTORS",
     "FAMILY_SETS",
     "REFERENCE_STANDARDS",
     "ROUTE_STATES",
-    "UNPROFILED_DETECTORS",
+    "STAGED_DETECTORS",
     "Confusion",
     "Detector",
     "Emptiness",

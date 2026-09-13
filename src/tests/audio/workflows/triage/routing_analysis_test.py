@@ -16,6 +16,7 @@ from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
+    BRANCH_DETECTORS,
     CONSENSUS_CLASSIFIERS,
     CONSOLIDATION_FLOOR,
     COUNT_UNITS,
@@ -27,9 +28,10 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     PROFILE_NAME_COLUMN,
     PROFILE_SUFFIX,
     QUANTILE_LADDER,
-    UNPROFILED_DETECTORS,
+    STAGED_DETECTORS,
     Detector,
-    _check_unprofiled,
+    _check_branch_detectors,
+    _check_staged,
     build_catalogue,
     detector_value,
     load_detector_profile,
@@ -74,6 +76,8 @@ from senselab.audio.workflows.triage.routing_analysis.report import (
     taxonomy_as_run,
     write_report,
 )
+from senselab.audio.workflows.triage.routing_analysis.ruleset import load_ruleset
+from senselab.audio.workflows.triage.vocabulary import BRANCHES
 
 
 def _entity(prov_type: str, entity_id: str, attributes: dict[str, Any], extent: list[float] | None = None) -> str:
@@ -394,7 +398,7 @@ def _spoken(tmp_path: Path, texts: Sequence[str], *, name: str = "w", consensus:
 class TestOnomatopoeicRenderings:
     """A cough the recognizer spelled as a word is counted where it was spelled, and only once."""
 
-    DETECTOR = next(candidate for candidate in UNPROFILED_DETECTORS if candidate.name == "cough.words_onomatopoeic")
+    DETECTOR = next(candidate for candidate in STAGED_DETECTORS if candidate.name == "cough.words_onomatopoeic")
     FIRES_AT = 2
     """The two-token point the lexicon was measured at; see the spec section named in the module."""
 
@@ -1177,8 +1181,8 @@ def _phonation(tmp_path: Path, kind: str, *, sidecar: bool = True) -> RecordingF
     )
 
 
-def _staged(name: str) -> Detector:
-    """One staged candidate by name.
+def _held(name: str) -> Detector:
+    """One VOICE-held branch detector by name.
 
     Args:
         name: The detector's id.
@@ -1186,7 +1190,7 @@ def _staged(name: str) -> Detector:
     Returns:
         The detector.
     """
-    return next(candidate for candidate in UNPROFILED_DETECTORS if candidate.name == name)
+    return next(detector for detector in BRANCH_DETECTORS["VOICE"] if detector.name == name)
 
 
 class TestPitchTrajectory:
@@ -1214,8 +1218,8 @@ class TestPitchTrajectory:
             assert falling.phonation[key] == pytest.approx(rising.phonation[key])
         for key in ("rank_correlation", "semitone_net", "sweep_semitones", "direction_bias"):
             assert falling.phonation[key] == pytest.approx(-rising.phonation[key])
-        assert detector_value(rising, _staged("glide.phonation_rank_correlation_rising")) == pytest.approx(1.0)
-        assert detector_value(falling, _staged("glide.phonation_rank_correlation_falling")) == pytest.approx(-1.0)
+        assert detector_value(rising, _held("glide.phonation_rank_correlation_rising")) == pytest.approx(1.0)
+        assert detector_value(falling, _held("glide.phonation_rank_correlation_falling")) == pytest.approx(-1.0)
 
     def test_a_held_vowel_is_voiced_throughout_and_sweeps_nothing(self, tmp_path: Path) -> None:
         """Held phonation wanders; it does not go one way, and it covers no interval."""
@@ -1248,7 +1252,7 @@ class TestPitchTrajectory:
         assert record.phonation["sweep_semitones"] == pytest.approx(0.0)
         assert "rank_correlation" not in record.phonation
         assert "monotonicity" not in record.phonation
-        assert detector_value(record, _staged("glide.phonation_monotonicity")) is None
+        assert detector_value(record, _held("glide.phonation_monotonicity")) is None
 
     def test_an_unvoiced_recording_carries_its_frame_counts_and_no_trajectory(self, tmp_path: Path) -> None:
         """A track with no voiced frame measured no pitch; a detector reads None, never 0.0."""
@@ -1258,8 +1262,8 @@ class TestPitchTrajectory:
         assert record.phonation["voiced_fraction"] == pytest.approx(0.0)
         assert "semitone_range" not in record.phonation
         assert "sweep_semitones" not in record.phonation
-        assert detector_value(record, _staged("glide.phonation_sweep_semitones_abs")) is None
-        assert detector_value(record, _staged("voice.phonation_voiced_fraction")) == 0.0
+        assert detector_value(record, _held("glide.phonation_sweep_semitones_abs")) is None
+        assert detector_value(record, _held("voice.phonation_voiced_fraction")) == 0.0
 
     def test_a_few_voiced_frames_among_many_unvoiced_still_carry_their_trajectory(self, tmp_path: Path) -> None:
         """Four rising frames in four hundred: a sweep of its own extent, not of the recording's."""
@@ -1276,22 +1280,23 @@ class TestPitchTrajectory:
         record = _phonation(tmp_path, "rising", sidecar=False)
         assert set(record.phonation) == set(PHONATION_ENTITY_KEYS)
         assert record.phonation["hop_s"] == pytest.approx(PHONATION_HOP_S)
-        assert detector_value(record, _staged("glide.phonation_monotonicity")) is None
+        assert detector_value(record, _held("glide.phonation_monotonicity")) is None
 
     def test_the_phonation_mapping_is_empty_when_the_measurement_is_absent(self, tmp_path: Path) -> None:
         """A run that tracked no F0 excludes every trajectory detector rather than scoring zero."""
         _, silent = _features(tmp_path)
         assert silent.phonation == {}
-        assert detector_value(silent, _staged("glide.phonation_sweep_semitones_abs")) is None
+        assert detector_value(silent, _held("glide.phonation_sweep_semitones_abs")) is None
 
-    def test_every_staged_trajectory_detector_reads_the_sweep_and_is_scored_nowhere(self, tmp_path: Path) -> None:
+    def test_every_held_trajectory_detector_reads_the_sweep_and_is_scored_nowhere(self, tmp_path: Path) -> None:
         """Each reads a key the rising glide carries, and none carries a grid to be swept over."""
         record = _phonation(tmp_path, "rising")
-        staged = [candidate for candidate in UNPROFILED_DETECTORS if ".phonation_" in candidate.name]
-        assert len(staged) == 22
-        for candidate in staged:
-            assert candidate.thresholds == ()
-            assert detector_value(record, candidate) is not None, candidate.name
+        held = BRANCH_DETECTORS["VOICE"]
+        assert len(held) == 22
+        assert all(".phonation_" in detector.name for detector in held)
+        for detector in held:
+            assert detector.thresholds == ()
+            assert detector_value(record, detector) is not None, detector.name
 
     def test_the_trajectory_survives_the_features_shard(self, tmp_path: Path) -> None:
         """The summary is columns of floats; the per-frame series it came from is not written."""
@@ -1300,6 +1305,73 @@ class TestPitchTrajectory:
         dump_features([record], shard)
         restored = load_features(shard)[0]
         assert restored.phonation == pytest.approx(record.phonation)
+
+
+class TestBranchHeldAndStagedAreDifferentStates:
+    """A detector held for a branch and one awaiting a profile are both gridless, and not the same.
+
+    ``specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`` holds the corpus measurements
+    that put the trajectory detectors in one state and `cough.words_onomatopoeic` in the other.
+    """
+
+    def test_the_two_states_name_disjoint_detectors(self) -> None:
+        """One id is held for a branch or staged for the router, never both and never neither."""
+        held = {detector.name for detectors in BRANCH_DETECTORS.values() for detector in detectors}
+        staged = {detector.name for detector in STAGED_DETECTORS}
+        assert held & staged == set()
+        assert staged == {"cough.words_onomatopoeic"}
+        assert held == {detector.name for detector in BRANCH_DETECTORS["VOICE"]}
+        assert len(held) == 22
+
+    def test_no_held_detector_is_in_the_catalogue_or_gates_a_branch(self) -> None:
+        """A branch detector is read inside a branch; it is not a gate into one."""
+        ruleset = load_ruleset(load_triage_config())
+        gating = {name for names in ruleset.branch_gates.values() for name in names}
+        catalogue = {detector.name for detector in DETECTORS}
+        for detector in BRANCH_DETECTORS["VOICE"]:
+            assert detector.name not in catalogue
+            assert detector.name not in gating
+            assert detector.name not in ruleset.gates
+            assert detector.thresholds == ()
+
+    def test_a_profile_that_covers_a_held_detector_moves_it_nowhere(self) -> None:
+        """The one rule that tells the states apart: promotion is the staged detector's, not this one's."""
+        profiled = next(iter(load_detector_profile()["detectors"]))
+        held = Detector(profiled, "glide", ("phonation", "monotonicity"), "correlation", ())
+        _check_branch_detectors({"VOICE": (held,)}, (), STAGED_DETECTORS)
+        with pytest.raises(ValueError, match="are in the detector profile"):
+            _check_staged([held], ())
+
+    def test_a_held_detector_may_not_repeat_a_catalogue_name(self) -> None:
+        """One id, one meaning: a name that both gates and is held would be read two ways."""
+        held = Detector(DETECTORS[0].name, "glide", ("phonation", "monotonicity"), "correlation", ())
+        with pytest.raises(ValueError, match="already in the catalogue"):
+            _check_branch_detectors({"VOICE": (held,)}, DETECTORS, STAGED_DETECTORS)
+
+    def test_a_held_detector_may_not_also_be_staged(self) -> None:
+        """A detector awaiting a profile is not yet anything; it cannot be held at the same time."""
+        held = Detector(STAGED_DETECTORS[0].name, "cough", ("onomatopoeic",), "tokens", ())
+        with pytest.raises(ValueError, match="also staged for the catalogue"):
+            _check_branch_detectors({"VOICE": (held,)}, DETECTORS, STAGED_DETECTORS)
+
+    def test_a_held_detector_may_not_carry_a_grid(self) -> None:
+        """A grid is what a router sweeps; a branch reads the number the detector returns."""
+        held = Detector("glide.invented", "glide", ("phonation", "monotonicity"), "correlation", (0.5,))
+        with pytest.raises(ValueError, match="carry a threshold grid"):
+            _check_branch_detectors({"VOICE": (held,)}, DETECTORS, STAGED_DETECTORS)
+
+    def test_a_held_detector_must_name_a_branch_the_graph_runs(self) -> None:
+        """Held for a branch means held for one of the four; anything else has no reader."""
+        held = Detector("glide.invented", "glide", ("phonation", "monotonicity"), "correlation", ())
+        assert "GLIDE" not in BRANCHES
+        with pytest.raises(ValueError, match="branches the graph does not run"):
+            _check_branch_detectors({"GLIDE": (held,)}, DETECTORS, STAGED_DETECTORS)
+
+    def test_one_detector_may_not_be_held_for_two_branches(self) -> None:
+        """Two readers of one id is two branches disagreeing about what it measured."""
+        held = Detector("glide.invented", "glide", ("phonation", "monotonicity"), "correlation", ())
+        with pytest.raises(ValueError, match="more than one branch"):
+            _check_branch_detectors({"VOICE": (held,), "AIRWAY": (held,)}, DETECTORS, STAGED_DETECTORS)
 
 
 NEW_DETECTOR_NAMES: tuple[str, ...] = (
@@ -1688,9 +1760,9 @@ class TestDerivedGrids:
 
     def test_a_staged_detector_is_declared_without_a_grid_and_stays_out_of_the_catalogue(self) -> None:
         """No profile has measured it, so it has no grid and is scored at no threshold."""
-        assert UNPROFILED_DETECTORS
+        assert STAGED_DETECTORS
         catalogue = {detector.name for detector in DETECTORS}
-        for detector in UNPROFILED_DETECTORS:
+        for detector in STAGED_DETECTORS:
             assert detector.name not in catalogue
             assert detector.thresholds == ()
             with pytest.raises(ValueError, match="absent from the detector profile"):
@@ -1701,13 +1773,13 @@ class TestDerivedGrids:
         profiled = next(iter(load_detector_profile()["detectors"]))
         staged = Detector(profiled, "speech", ("onomatopoeic",), "tokens", ())
         with pytest.raises(ValueError, match="are in the detector profile"):
-            _check_unprofiled([staged], [])
+            _check_staged([staged], [])
 
     def test_a_staged_detector_may_not_repeat_a_catalogue_name(self) -> None:
         """One id, one grid: a name in both places would be scored twice and differently."""
         staged = Detector(DETECTORS[0].name, "speech", ("onomatopoeic",), "tokens", ())
         with pytest.raises(ValueError, match="already in the catalogue"):
-            _check_unprofiled([staged], DETECTORS)
+            _check_staged([staged], DETECTORS)
 
     def test_a_constant_detector_raises_at_construction(self) -> None:
         """The consensus AST peaks were constant at zero; nothing may read one and score it."""

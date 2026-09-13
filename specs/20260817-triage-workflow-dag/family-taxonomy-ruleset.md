@@ -849,7 +849,7 @@ own distribution in `data/detector_profile/`, and a detector the profile does no
 deadlock for a detector that has never been swept, because the sweep that would profile it cannot
 run until it is declared, and declaring it in the catalogue breaks the import.
 
-It is resolved by declaring it **outside** the catalogue. `UNPROFILED_DETECTORS` holds candidates
+It is resolved by declaring it **outside** the catalogue. `STAGED_DETECTORS` holds candidates
 with no grid at all: `detector_value` reads one exactly like a catalogue detector, which is all a
 profiling sweep needs, and `sweep_points` returns nothing, so no threshold is ever scored. Nothing
 is defaulted, interpolated or borrowed from a sibling.
@@ -868,6 +868,12 @@ gets its integer grid and is scored at every count from 0 upward, including the 
 A staged detector that quietly stayed staged after its profile arrived would be a detector reported
 as unmeasured while its measurement sat in the file, which is the same failure as a silent grid
 fallback.
+
+Staging is not the only gridless state, and the "now profiled" rule belongs to it alone. A detector
+a sweep has already measured and that is held for a branch to read is in `BRANCH_DETECTORS`, where
+no profile promotes it anywhere; "The catalogue had two states and needed three" below says why the
+two are kept apart and what each check is for. `cough.words_onomatopoeic` is the staged one, and is
+the only detector in `STAGED_DETECTORS`.
 
 Rejected, and why:
 
@@ -1020,19 +1026,167 @@ over 62,547 rows of simulated glide, speech and vowel summaries: **9.9 MB, 158 B
 compressed**, against 224 B raw. On the current 184 MB shard that is **+5.4%**, to roughly 194 MB.
 The per-frame series that produced it is 2×`frames` float64 and is never written.
 
-### Twenty-two candidates, all staged, none a gate
+### Twenty-two detectors, swept, and held for VOICE
 
-No profile has measured any of these features, so every one of them goes in
-`UNPROFILED_DETECTORS` under the rule in "A detector the profile has never seen" above: declared
-outside the catalogue, readable by `detector_value`, scored at no threshold, and raising at import
-once a profile carries it. **None is in `branch_gates`.** The candidates are scored on the corpus
-first; a gate's cut comes off a sweep, which is this document's rule and the reason the refuted
-spread hypothesis was caught rather than shipped.
+The twenty-two have been swept over the full **62,547**-recording corpus. The owner's decision on
+that sweep: **hold them for the VOICE branch; do not gate the router on them.** They are in
+`BRANCH_DETECTORS["VOICE"]`, not in `DETECTORS`, and **none is in `branch_gates`**. What follows is
+the three measurements the decision rests on.
 
-| group | candidates |
+| group | detectors |
 | --- | --- |
 | is it a sweep | `glide.phonation_monotonicity`, `…_monotone_fraction`, `…_semitone_range`, `…_semitone_iqr`, `…_sweep_semitones_abs`, `…_sweep_over_range` |
 | how fast, how much of the recording | `glide.phonation_sweep_seconds`, `…_sweep_fraction`, `…_sweep_rate_abs_semitones_per_s` |
 | which way | `glide.phonation_rank_correlation_rising` / `_falling`, `…_sweep_semitones_rising` / `_falling`, `…_direction_bias_rising` / `_falling`, `…_net_over_variation_rising` / `_falling` |
 | gated on a wordless recording, as the existing glide candidates are | `glide.phonation_monotonicity+no_agreed_word`, `glide.phonation_sweep_semitones_abs+no_agreed_word` |
 | phonation amount, for the floor `voice.sustained` reads through span duration | `voice.phonation_voiced_fraction`, `voice.phonation_voiced_seconds`, `voice.phonation_strength_median` |
+
+#### Direction separates, and nothing else in the catalogue does
+
+`glides-high-to-low` against `glides-low-to-high`, recall at a 10% over-routing budget within the
+voice families:
+
+| detector | high-to-low | low-to-high |
+| --- | --- | --- |
+| `phonation_direction_bias_falling` | 0.860 | 0.003 |
+| `phonation_direction_bias_rising` | 0.006 | 0.828 |
+| `phonation_rank_correlation_falling` | 0.640 | 0.004 |
+| `phonation_rank_correlation_rising` | 0.010 | 0.638 |
+| `phonation_sweep_semitones_falling` | 0.530 | 0.016 |
+| `phonation_sweep_semitones_rising` | 0.009 | 0.667 |
+| `phonation_net_over_variation_falling` | 0.509 | 0.033 |
+| `phonation_net_over_variation_rising` | 0.037 | 0.518 |
+
+All four sign pairs separate by roughly **100x** in the correct direction. This is the check
+"Direction is the check that the trajectory is being read" above asked for, and it passed: the
+rising member selects `glides-low-to-high` and the falling member `glides-high-to-low`, so the
+feature is reading the trajectory rather than something duration-shaped. **No detector in the
+catalogue distinguishes the two glide families at all.**
+
+#### As router gates they lose
+
+Detecting the glide families against the whole corpus, same 10% budget:
+
+| detector | recall | absent on |
+| --- | --- | --- |
+| `glide.yamnet_singing_union.plain` (incumbent) | **0.749** | 29 |
+| best of the twenty-two | 0.624 | 7,157 |
+
+The absence column is most of it. A trajectory detector reads nothing on unvoiced material, because
+unvoiced material has no F0 — 7,157 recordings leave its scoring rather than scoring zero, which is
+the correct reading of an unwritten measurement and a disqualifying one for a router that has to
+return an answer on every recording. The incumbent reads 0.724 in "Spread is refuted" above; both
+figures are recall at the same budget, taken on successive passes.
+
+#### Rescuing the fall-through is a poor trade
+
+70 glide recordings reach no branch on this sweep, against the 69 counted on the pass before it.
+`phonation_monotone_fraction` rescues **47** of them, at roughly **6,200** additional routings:
+
+| gate | recovered | additional routings | ratio |
+| --- | --- | --- | --- |
+| `phonation_monotone_fraction` as a VOICE gate | 47 | ~6,200 | 1:132 |
+| the landed DDK gate | 351 | 2,580 | 1:7 |
+
+1:132 against a landed 1:7 is not a near miss at a badly chosen operating point; it is the same
+absence problem read from the other side. Buying 47 recordings with 6,200 routings is the
+over-routing this document's budget criterion exists to refuse.
+
+#### Why VOICE and not the router
+
+The router only needs *does this contain voice*, and `glide.yamnet_singing_union.plain` already
+answers that at 0.749 on every recording, including the unvoiced ones. **Which** glide it is, and
+whether the sweep went the direction the task asked for, is a refinement of a recording already in
+the branch — and this project's split is that rulesets route and branches refine. The direction
+table is a strong measurement of a question the router does not ask.
+
+### The catalogue had two states and needed three
+
+Before this sweep a candidate was in one of two places:
+
+- `_CANDIDATES` → `DETECTORS`: profiled, its grid derived from its own distribution, scored at every
+  threshold of it, eligible to become a gate.
+- `UNPROFILED_DETECTORS`: declared, gridless, awaiting the sweep that would profile it. A
+  **staging** state, and the "now profiled" check exists so that nothing stays in it.
+
+The twenty-two fit neither. They are not awaiting a sweep — they have had one. They are not going
+into the catalogue, because the catalogue is the router's candidate pool and the measurements above
+are the decision that they do not gate. Left where they were they are indistinguishable from
+`cough.words_onomatopoeic`, which genuinely is awaiting its sweep; and worse, the check that serves
+that detector works against them. The next profile generated from this corpus carries their
+distributions, "now profiled" fires, and the import demands they be moved into the router the sweep
+rejected them from. A staging area that cannot tell *nobody has got to this* from *this was measured
+and held* turns a recorded decision into an import error.
+
+So the catalogue names three states, and a detector is in exactly one:
+
+| state | where | grid | what a profile carrying it means |
+| --- | --- | --- | --- |
+| catalogue | `DETECTORS`, built from `_CANDIDATES` | derived from its own distribution | its grid; a detector the profile drops raises at `build_catalogue` |
+| staged | `STAGED_DETECTORS` | none | promote it — `_check_staged` raises until it is moved into `_CANDIDATES` |
+| held for a branch | `BRANCH_DETECTORS[branch]` | none | nothing; the branch reads the number, and a distribution is not a reason to gate |
+
+`UNPROFILED_DETECTORS` is gone rather than kept as an alias. The name described the mechanism the
+two gridless states share — no profile entry — not the state either of them is in, and both are
+unprofiled.
+
+`BRANCH_DETECTORS` is a mapping from branch to the detectors that branch reads, not a flat tuple,
+because the branch is the part that was missing and `Detector.kind` does not supply it: 19 of the
+twenty-two are kind `glide` and 3 are kind `voice`, and all 22 are read by **VOICE**. `kind` says
+which family a detector evidences; the mapping's key says which node consumes it.
+
+`_check_branch_detectors` runs at import beside `_check_staged` and `_check_pins`:
+
+| check | raises when |
+| --- | --- |
+| unknown branch | a key is not one of `BRANCHES` — held for a branch means held for one the graph runs |
+| two readers | one id is declared under two branches |
+| name collision | a held id is already in the catalogue — one id, one meaning |
+| both states | a held id is also staged |
+| carries a grid | a held detector has a non-empty `thresholds`; a grid is what a router sweeps |
+
+There is deliberately **no "now profiled" rule**. That absence *is* the distinction: it is the one
+rule `cough.words_onomatopoeic` needs and the one the twenty-two must not be subject to.
+
+Rejected, and why:
+
+| candidate | why not |
+| --- | --- |
+| leave them staged and record the decision in this document alone | the next profile fires "now profiled" and the import demands the promotion the sweep refused; a decision a check overrules is not recorded |
+| a `held_for` field on `Detector` | 172 catalogue detectors would carry a field that is empty on every one of them, and each guard would have to walk the catalogue to recover a partition three containers already give |
+| a `branch_detectors` block in `data/config/default.yaml`, beside `branch_gates` | the config is what a run reads to route; declaring them there puts them one edit away from being a gate, which is exactly what the measurements say they must not become |
+| gate VOICE on the best of them at a swept operating point | `glide.yamnet_singing_union.plain` beats it by 0.125 recall at the same budget and is absent on 29 recordings against 7,157 |
+| collapse each `_rising`/`_falling` pair into one signed detector, now that direction is settled | the pair is what the direction table is made of — both polarities scored separately is what makes it readable — and a branch reading the signed key gets the same number from either member |
+
+### What VOICE would need in order to read them
+
+`nodes/voice.py` is the eventual consumer and consumes nothing today. Reading what this section
+holds needs four things, none of them done in this pass:
+
+1. **The reduction as a task primitive, not the detectors.** `detector_value` takes a
+   `RecordingFeatures`, which `routing_analysis.extract_features` builds by reading a **completed**
+   run's store — a post-hoc reader, while VOICE runs inside the run. What VOICE actually needs is
+   `_f0_trajectory` / `_sweep` in `routing_analysis/features.py`, which reduce `(times_s, f0_hz,
+   strength)` to `PHONATION_SUMMARY_KEYS`. VOICE already holds those three arrays: it loads
+   `derivatives/phonation_tracks.npz` and slices all three per span. The reduction would move beside
+   `hnr_track` and `period_marks` in `senselab.audio.tasks.phonation`, with `_f0_trajectory` calling
+   it, so the corpus sweep and the branch cannot drift onto two definitions of a sweep.
+2. **A per-span reduction, not one per recording.** `RecordingFeatures.phonation` is one summary
+   over the whole file; VOICE's subject is the phonation span. Every one of the twenty-two reads a
+   recording-level key, and on a recording holding two glides the per-span number is a different
+   number. Which VOICE should report — per span, per recording, or both — nothing measured here
+   settles.
+3. **Something to read the number against.** The twenty-two carry no grid and, by the decision
+   above, no cut. VOICE's existing shape for that is `_task_range`: read the number, read the
+   declared expectation out of config keyed by the hint's `task`, emit the four-field row
+   `{task, range, value, within}` and flag it when it falls outside. A glide's direction is the same
+   shape — a `glides-high-to-low` task declares a falling sweep and the branch flags a rising one —
+   and that expectation is a config key with a written derivation, which does not exist yet;
+   `voice.task_duration_ranges` is itself still `null`.
+4. **A place in the verdict.** The summary keys would sit in `detail` the way `f0_median_hz` does,
+   and any contradiction of the declared task in `flags` the way `task_duration_outside_range` does.
+   VOICE measures and does not classify, and a trajectory summary is a measurement.
+
+What this pass does give the branch is a name: the twenty-two are addressable as
+`BRANCH_DETECTORS["VOICE"]`, a declared set with a reader and a unit each, rather than a substring
+match for `.phonation_` over a tuple of things nobody had got to yet.
