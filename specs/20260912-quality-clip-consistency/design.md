@@ -572,6 +572,179 @@ byte-identical, a second pass is a fingerprint no-op reporting `present`, `prov/
 carrying the verdict, the host environment is recorded, and a missing store is one recording's error
 with its neighbour still reaching a verdict.
 
+## Withdrawing the finished corpus's contradicted clips
+
+`_clip_spans` applies the rejection rule at detection, so a fresh run never writes a contradicted
+clip span. The ~266 recordings of the completed corpus were written before that rule existed and
+still carry one. `scripts/extend_withdraw_clips.py` is the pass that takes them back, driving
+`extend.withdraw_contradicted_clips(store, config)`.
+
+It reads no audio at all. `scripts/extend_clip_amplitudes.py` already appended the `clip_amplitude`
+measurement to those stores, and that measurement carries every number the comparison needs: each
+span's own level under `clip_levels`, the whole-file `unclipped_peak` and its time, the per-span
+`unclipped_louder_n`, and the `edge_guard_samples` the unclipped set was taken under. The pass is
+therefore a store read and a store write, with no decode, no model and no venv — which is why it is
+its own driver in `extend_quality.py`'s shape rather than a mode of the clip-amplitude one.
+
+### Why an extend and not a re-run
+
+A re-run would be the conservative-looking choice and is the wrong one, because it would change
+things the withdrawal does not.
+
+**Span extents are invariant under clip withdrawal.** `_spans` builds its `combined` list from the
+primary, supplement, continuity and ASR proposers, and `_novel`'s coverage bases are those same
+four. `state["clip_span_extents"]` is read at exactly two places in that function, both of them only
+to compute a span's `contains_clip` boolean. No clip extent enters proposal, merging, gating or
+coverage. Withdrawing a clip therefore cannot move any span's start or end, and there is nothing for
+a re-run to recompute.
+
+**Per-span measurements key by span id, so no non-clip span may be re-minted.** `span_hear` and
+`span_yamnet` carry `span_id` in their attributes and are `wasDerivedFrom` the span; `squim` writes
+one assertion per span, derived from it. A span entity's id is a digest over its attributes, so
+re-minting a span with a corrected `contains_clip` would give it a new id and orphan every one of
+those records — the store would hold measurements of a span nothing live points at. The pass
+therefore retires the clip spans and nothing else: the general spans keep their ids, their stored
+attributes and their per-span records, untouched.
+
+What the store gains per withdrawal is one `assertion` in exactly the vocabulary
+`write_withdrawn_clips` writes on the fresh path — same `verb`, `claim`, `reason`, `signal`, `margin`
+and the same four measured numbers — so a reader keying on that vocabulary cannot tell an extended
+store from a fresh one. The driver calls `write_withdrawn_clips` itself rather than restating the
+attributes, and the test asserts the entity *id* matches the one the fresh path mints for the same
+withdrawal, which is the strongest available form of that claim since an id digests the attributes.
+One difference is deliberate: here the assertion is `wasDerivedFrom` the span it retires. The fresh
+path derives from the recording stream because no span was ever written, and that absence was the
+point; here a span was written, and pointing at it is what makes the retirement legible.
+
+The clip span is then superseded — `wasInvalidatedBy`, the store's own retirement relation, not a
+deletion — and the `clip_amplitude` measurement is rewritten with `clip_levels`,
+`unclipped_louder_n` and `clip_spans_n` restricted to the survivors, every whole-file value carried
+through verbatim, and the old measurement superseded. The whole-file values are carried rather than
+recomputed because recomputing them needs the samples, and the direction of the error from not
+recomputing is the subject of the next section.
+
+### One round is the fixpoint, and errs towards withdrawing
+
+`reject_contradicted_clips` loops to a fixpoint because withdrawing a candidate returns its samples,
+and its guard band's samples, to the unclipped evidence, which can expose a sample that contradicts a
+candidate the previous round left standing. **This pass does not loop, and does not need to.**
+
+Every withdrawn candidate satisfies `level < peak/(1 + margin) < peak`, where `peak` is the unclipped
+peak measured with that candidate *excluded*. Returning that candidate's own samples to the unclipped
+set can only contribute samples at or below its level, every one of which is below `peak`. The
+unclipped peak therefore cannot rise on account of the candidate's own samples, and one round is the
+exact fixpoint over the stored numbers.
+
+The one thing a round carries that the stored numbers do not is the withdrawn candidate's **guard
+band** — the `edge_guard_samples` each side of it, which the measurement excluded along with the
+candidate and which a real second round would return. Those samples are unconstrained: a guard-band
+sample could be louder than the candidate's level. Returning them can only *raise* the unclipped
+peak, and a higher peak can only withdraw more spans, never fewer. So the divergence runs in exactly
+one direction: this pass may leave standing a span that the in-run rule would have withdrawn, and can
+never withdraw one the in-run rule would have kept. It is conservative against the corpus, which is
+the right side to err on for a pass that retires other nodes' records.
+
+Reading the guard band would mean opening the audio, which would make this pass a decode over the
+whole corpus to recover, at most, a second-order withdrawal of a span the surviving `clip_amplitude`
+measurement still names honestly. QUALITY remains the audit: a store this pass leaves with a
+contradicted span is a store QUALITY flags, and that is the signal to look at, not a silent gap.
+
+The comparison itself is a third copy of the rule — `preprocess.reject_contradicted_clips` and
+`quality.quality` hold the other two — and it is pinned at its boundary rather than only on fixtures
+where peak and level are orders of magnitude apart. Two mutations survived the first test suite: `<=`
+weakened to `<`, and the margin moved to the other side of the comparison
+(`peak × (1 + margin) <= level`). Both are killed by `TestTheComparisonAtItsBoundary`, which seeds the
+`clip_amplitude` measurement directly — the only way to put `peak` *exactly* on `level × (1 + margin)`,
+which no float32 recording can be made to do — and checks: equality is kept, one ULP above it is
+withdrawn, a peak of 0.4995 under a 0.5 level is kept (the case where the two sides of the margin
+disagree), and 0.504 over a 0.5 level is withdrawn at the packaged margin and kept at 0.05. Each
+mutation was applied and the suite re-run to confirm the tests fail under it.
+
+### What QUALITY's earlier findings become
+
+`scripts/extend_quality.py` has already run over the corpus, and the ~266 stores this pass touches are
+exactly the ones carrying a `flag` verdict — so the stale-finding case is the guaranteed state, not an
+unlucky ordering. Left alone, such a store would end the pass holding a live `contest` assertion
+`wasDerivedFrom` an invalidated span, a live verdict counting it, and two live assertions over the same
+extent both carrying `reason: clip_above_unclipped_sample` — one `contest`, one `withdraw` — which
+double-counts for any reader keying on `reason` alone.
+
+So the pass supersedes, alongside each withdrawn span, every live QUALITY `contest` assertion derived
+from it, and the live QUALITY verdict when any contest was retired. The retiring activities carry
+`node: QUALITY`, because it is QUALITY's own reading being retired; the reason names the withdrawal,
+because the reading was correct when it was made and it is the span underneath that has gone.
+
+**No verdict is written in its place.** QUALITY as a node is not designed yet — its verdicts on the
+current corpus are provisional and will be regenerated when that branch exists — so a freshly minted
+verdict from an undeveloped node would be no better than the stale one. A store that leaves this pass
+with no QUALITY verdict is the honest outcome, and the retired verdict stays in the store behind its
+invalidation edge for anyone who needs to see what was concluded before.
+
+The one live assertion that legitimately points at an invalidated span is the withdrawal itself; that
+edge is the record of the retirement and is what the test asserts, rather than the blanket "no live
+assertion derives from an invalidated entity", which the design deliberately violates.
+
+### Where the tests do and do not exercise the fixpoint
+
+A fixture with a single clip span that falls leaves no clip span at all, so a second pass returns
+through `if not spans` and never reaches the comparison — the restriction of `clip_levels` and
+`unclipped_louder_n` to survivors is never exercised with a survivor present either. A two-plateau
+fixture (levels 0.10 and 0.98, one unclipped sample at 0.5) covers the rest: the 0.10 span is
+withdrawn, the 0.98 span stands, the rewritten maps hold exactly the survivor with `clip_spans_n: 1`,
+a second pass reads that span and returns None through the *comparison*, and QUALITY over the result
+passes with `checked_n: 1`.
+
+### `contains_clip` became a derived read, not a rewritten attribute
+
+The flag has exactly one consumer in the tree: a span cell's edge colour in `figure.py`. No detector,
+gate or ruleset reads it.
+
+Rewriting the attribute is impossible without re-minting the span, which the per-span-id argument
+above rules out. Leaving it stale would make the figure draw a clip edge around a span whose clip has
+been withdrawn. So `figure._spans` now derives the flag from the live clip extents — `_clip_extents`
+already returns exactly those from `live_entities` — using the same overlap test `_spans` in
+`preprocess.py` applies (`span.start < end and span.end > start`). The dict key keeps its name, so
+the drawing code is unchanged.
+
+This makes the figure agree with the live clip set on a fresh run and an extended one alike, and it
+is what allows the pass to re-mint nothing. The stored attribute stays on the span as the reading
+PREPROCESS made when it wrote it; it is simply no longer what the figure trusts.
+
+### Convergence
+
+Nothing is written when nothing is contradicted, so a store whose clips stand is left byte-identical
+and reported `skipped`; only a store something was withdrawn from has `store.jsonl` replaced and
+`prov/` re-exported. The driver's fingerprint check is the same one the other extend drivers use.
+
+A second pass over an extended store is a no-op by the fixpoint argument rather than by a skip,
+wherever a clip span survived: the rewritten measurement carries the same `unclipped_peak`, and every
+surviving span already satisfies `peak <= level × (1 + margin)` against it, so the pass finds nothing
+and returns None before minting an activity. Where every span fell, the second pass short-circuits on
+`if not spans` instead and never reaches the comparison; both routes return None without writing.
+Clip spans with no `clip_amplitude` beside them are a refusal, which is that recording's error — the
+same prerequisite `extend_quality.py` has, and for the same reason.
+
+### Verification
+
+`src/tests/scripts/extend_withdraw_clips_test.py`, over synthetic finished runs in the shape
+`scripts/extend_clip_amplitudes.py` leaves: the contradicted span is retired and its withdrawal is
+derived from it, that withdrawal is the *same entity id* the fresh path mints for the same
+withdrawal, the `clip_amplitude` measurement is rewritten over the survivors with every whole-file
+value carried through and the old one retired, `prov/` is re-exported carrying the withdrawal, every
+`span_hear` / `span_yamnet` / `squim` record still resolves to a live span, a run whose clips stand
+is left byte-identical and reported `skipped`/`current`, a run with no clip span is `skipped`/`absent`
+and never raises, a second pass moves nothing, clip spans with no amplitudes raise a `LookupError`
+naming the driver that supplies them and leave the store byte-identical, and a missing store is one
+recording's error with its neighbour still read. Then `TestTheComparisonAtItsBoundary`,
+`TestARunWhereOnlySomeClipSpansFall` and `TestQualitysOwnFindingsAboutAWithdrawnSpan` for the three
+sections above.
+
+`src/tests/audio/workflows/triage/nodes/figure_test.py`,
+`TestTheClipFlagIsReadFromTheLiveClipSpans`: a span over a live clip reads flagged, the same span over
+a withdrawn one reads unflagged while its own stored attribute still says True, and the overlap test's
+strictness is pinned at both ends — a span merely touching the clip's boundary does not contain it,
+while one overlapping by a hundredth of a second does.
+
 ## What this check does and does not tell you
 
 It measures **internal inconsistency of the detector's output**, not clip ground truth. A contested
