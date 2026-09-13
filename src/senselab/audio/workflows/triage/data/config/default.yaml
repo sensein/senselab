@@ -279,7 +279,7 @@ quality:
   pesq_floor: null                     # PESQ below which a span fails on quality
   disruption_clipped_s_max: null       # clipped seconds a span may carry and still pass
   disruption_dropout_s_max: null       # dropout seconds a span may carry and still pass
-  clip_contradiction_margin: 0.005     # fraction above a clip's own level an unclipped sample must reach
+  clip_contradiction_margin: 0.005     # fraction above a clip's own level an unclipped sample must reach; PREPROCESS withdraws on it, QUALITY audits on it
   clip_edge_guard_samples: 3           # samples each side of a clip span excluded as that run's own decay; PREPROCESS applies it
 
 # Clip, dropout and discontinuity counting over each span.

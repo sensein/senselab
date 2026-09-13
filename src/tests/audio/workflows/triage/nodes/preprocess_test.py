@@ -29,6 +29,8 @@ from senselab.audio.workflows.triage.nodes.preprocess import (
     QWEN_ID,
     preprocess,
 )
+from senselab.audio.workflows.triage.nodes.quality import quality
+from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import (
@@ -363,6 +365,42 @@ def _burst_that_also_clips() -> np.ndarray:
     return samples
 
 
+def _plateau_under_a_louder_sample(scale: float = 1.0) -> np.ndarray:
+    """A held plateau at the file's own positive extreme, with a far louder sample outside it.
+
+    The corpus's false positive, reproduced: nothing saturates anywhere, and the plateau is a
+    "ceiling" only because the detector reads its band against this file's own positive extreme.
+    """
+    rng = np.random.default_rng(0)
+    samples = (rng.standard_normal(int(2.0 * SR)) * 3e-3).astype(np.float32)
+    first = int(0.5 * SR)
+    samples[first : first + 4] = 0.05
+    samples[int(1.5 * SR)] = -0.4
+    return (scale * samples).astype(np.float32)
+
+
+def _clipped_burst(scale: float = 1.0) -> np.ndarray:
+    """A quiet bed, one hard-clipped burst and one clean burst, the whole file scaled by ``scale``.
+
+    ``scale`` below 1 is a genuinely clipped recording that was later turned down: the plateau sits
+    well under full scale and is still the loudest thing in the file.
+    """
+    rng = np.random.default_rng(0)
+    samples = (rng.standard_normal(int(3.0 * SR)) * 1e-3).astype(np.float32)
+    grid = np.arange(int(0.15 * SR)) / SR
+    tone = np.sin(2 * np.pi * 440.0 * grid)
+    first = int(1.0 * SR)
+    samples[first : first + len(grid)] = np.clip(3.0 * tone, -1.0, 1.0).astype(np.float32)
+    second = int(2.0 * SR)
+    samples[second : second + len(grid)] = (0.3 * tone).astype(np.float32)
+    return (scale * samples).astype(np.float32)
+
+
+def _in_memory(samples: np.ndarray) -> Audio:
+    """The samples as an ``Audio``, with no file round-trip to quantise them."""
+    return Audio(waveform=samples.astype(np.float64)[None, :], sampling_rate=SR)
+
+
 def _quiet_sustained_tone() -> np.ndarray:
     """A 500 ms tone too soft to clear the amplitude gate, in an otherwise quiet noise bed.
 
@@ -489,6 +527,143 @@ class TestAsrSpans:
         assert spans
         assert all(e.attributes["measure"] != "asr" for e in spans)
         assert any(e.attributes["measure"] == "amplitude" for e in spans)
+
+
+class TestClipCandidateRejection:
+    """A merged candidate a louder unclipped sample contradicts never becomes a clip span.
+
+    The test of the rule is scale, not level: the same waveform turned down must reach the same
+    decision, which is why every case here is asserted at several uniform scales.
+    """
+
+    GUARD = 3
+    """``quality.clip_edge_guard_samples``, the packaged value the node reads."""
+
+    MARGIN = 0.005
+    """``quality.clip_contradiction_margin``, the packaged value the node reads."""
+
+    SCALES = (1.0, 0.25, 4.0, 1e-3)
+    """Uniform gains the split must be identical under; 4.0 exceeds full scale, which a file cannot."""
+
+    def test_a_plateau_a_louder_sample_contradicts_is_withdrawn_at_every_scale(self) -> None:
+        """0.05 is this file's positive extreme and 0.4 sits outside the span — so 0.05 is no ceiling."""
+        samples = _plateau_under_a_louder_sample()
+        first = int(0.5 * SR)
+        extents = [(first / SR, (first + 4) / SR)]
+        for scale in self.SCALES:
+            kept, withdrawn = preprocess_module.reject_contradicted_clips(
+                _in_memory(scale * samples), extents, guard_samples=self.GUARD, margin=self.MARGIN
+            )
+            assert kept == [], f"the plateau survived at scale {scale}"
+            assert [found.extent for found in withdrawn] == extents
+            assert withdrawn[0].clip_level == pytest.approx(0.05 * scale)
+            assert withdrawn[0].louder_amplitude == pytest.approx(0.4 * scale)
+            assert withdrawn[0].louder_samples_n == 1
+
+    def test_a_genuine_clip_is_kept_at_every_scale(self) -> None:
+        """The plateau is the loudest thing in the file at 1.0 and at 0.001, because scaling is uniform."""
+        samples = _clipped_burst()
+        first, stop = int(1.0 * SR), int(1.0 * SR) + int(0.15 * SR)
+        extents = [(first / SR, stop / SR)]
+        for scale in self.SCALES:
+            kept, withdrawn = preprocess_module.reject_contradicted_clips(
+                _in_memory(scale * samples), extents, guard_samples=self.GUARD, margin=self.MARGIN
+            )
+            assert kept == extents, f"the clip was withdrawn at scale {scale}"
+            assert withdrawn == []
+
+    def test_a_bogus_candidate_is_withdrawn_without_taking_a_genuine_one_with_it(self) -> None:
+        """Two candidates, one contradicted: the split is per candidate, not per recording."""
+        samples = _clipped_burst()
+        plateau_first = int(2.5 * SR)
+        samples[plateau_first : plateau_first + 4] = 0.02
+        genuine = (1.0, 1.0 + 0.15)
+        bogus = (plateau_first / SR, (plateau_first + 4) / SR)
+        kept, withdrawn = preprocess_module.reject_contradicted_clips(
+            _in_memory(samples), [genuine, bogus], guard_samples=self.GUARD, margin=self.MARGIN
+        )
+        assert kept == [genuine]
+        assert [found.extent for found in withdrawn] == [bogus]
+
+    def test_a_recording_whose_only_candidate_is_contradicted_gets_no_clip_span(
+        self,
+        store: ProvStore,
+        spans_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The whole point: the store is left with no clip claim the recording itself denies."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_plateau_under_a_louder_sample())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), spans_config, run_dir=tmp_path)
+        assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "clip"]
+
+    def test_the_withdrawal_is_recorded_rather_than_passed_over_in_silence(
+        self,
+        store: ProvStore,
+        spans_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The detector proposed it and took it back; both halves of that are store facts."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_plateau_under_a_louder_sample())
+        _stub_models(monkeypatch)
+        result = preprocess(store, _audio(tmp_path), spans_config, run_dir=tmp_path)
+        withdrawn = [
+            e for e in live_entities(store, "assertion") if e.attributes.get("verb") == preprocess_module.WITHDRAW_VERB
+        ]
+        assert len(withdrawn) == 1
+        attributes = withdrawn[0].attributes
+        assert attributes["claim"] == "clip"
+        assert attributes["reason"] == "clip_above_unclipped_sample"
+        assert attributes["signal"] == "recording"
+        assert attributes["margin"] == self.MARGIN
+        assert attributes["clip_level"] == pytest.approx(0.05, abs=1e-3)
+        assert attributes["louder_amplitude"] == pytest.approx(0.4, abs=1e-3)
+        assert withdrawn[0].extent is not None and withdrawn[0].extent[0] == pytest.approx(0.5, abs=1e-3)
+        recording = [e for e in live_entities(store, "stream") if e.attributes.get("name") == "recording"][-1]
+        assert store.derived_from(withdrawn[0].id) == [recording.id]
+        derivatives = store.get_entity(result.verdict_entity_id).attributes["derivatives"]
+        assert derivatives[preprocess_module.WITHDRAWN_CLIPS] == [withdrawn[0].id]
+        assert derivatives["clip_spans"] == []
+
+    def test_the_audit_that_found_the_contradiction_now_finds_nothing(
+        self,
+        store: ProvStore,
+        spans_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """QUALITY is kept and unchanged; on a store the detector cleaned it has nothing to contest."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_plateau_under_a_louder_sample())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), spans_config, run_dir=tmp_path)
+        assert quality(store, "recording", spans_config, run_dir=tmp_path).verdict.outcome is Outcome.PASS
+
+    @pytest.mark.parametrize("scale", [1.0, 0.25])
+    def test_a_genuine_clip_is_written_however_far_the_recording_was_turned_down(
+        self,
+        scale: float,
+        store: ProvStore,
+        spans_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A clipped recording scaled to a quarter still carries its clip span, and withdraws nothing."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_clipped_burst(scale))
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), spans_config, run_dir=tmp_path)
+        clips = [e for e in live_entities(store, "span") if e.attributes.get("family") == "clip"]
+        assert len(clips) == 1
+        start, end = clips[0].extent or (0.0, 0.0)
+        assert start <= 1.07 <= end, "the span must cover the clipped burst"
+        assert not [
+            e for e in live_entities(store, "assertion") if e.attributes.get("verb") == preprocess_module.WITHDRAW_VERB
+        ]
 
 
 class TestClipAndSpans:

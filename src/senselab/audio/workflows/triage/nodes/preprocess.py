@@ -112,6 +112,7 @@ from senselab.audio.workflows.triage.nodes.quality import (
     CLIP_AMPLITUDE_MEASUREMENT,
     CLIP_FAMILY,
     CLIP_LEVELS,
+    CONTRADICTED_CLIP,
     UNCLIPPED_LOUDER_N,
     clip_spans,
 )
@@ -130,6 +131,10 @@ PPGS_MODEL_ID = "interactiveaudiolab/ppgs"
 PPG_MEASUREMENT = "ppg_posteriorgram"
 PRAAT_MEASUREMENT = "praat_features"
 PHONATION_TRACKS_MEASUREMENT = "phonation_tracks"
+WITHDRAW_VERB = "withdraw"
+"""The assertion verb for a candidate the detector proposed in this activity and then took back."""
+WITHDRAWN_CLIPS = "clip_withdrawn"
+"""The derivative name the withdrawn clip candidates are listed under in PREPROCESS's verdict."""
 
 
 def _crisperwhisper_model() -> HFModel:
@@ -467,6 +472,142 @@ def clip_amplitudes(audio: Audio, extents: Sequence[tuple[float, float]], *, gua
         ),
         unclipped_samples_n=int(unclipped.size),
     )
+
+
+@dataclass(frozen=True)
+class WithdrawnClip:
+    """A clip candidate the detector proposed and an unclipped sample contradicted.
+
+    Attributes:
+        extent: The candidate's ``(start, end)``, in seconds.
+        clip_level: The peak absolute amplitude inside it — the level it called the ceiling.
+        louder_amplitude: The loudest unclipped sample's absolute amplitude.
+        louder_time_s: Where that sample sits, in seconds.
+        louder_samples_n: How many unclipped samples exceed ``clip_level``.
+    """
+
+    extent: tuple[float, float]
+    clip_level: float
+    louder_amplitude: float
+    louder_time_s: float
+    louder_samples_n: int
+
+    def as_detail(self) -> dict[str, Any]:
+        """The fields this withdrawal contributes to its assertion.
+
+        Returns:
+            The measured numbers, without the extent, which the assertion carries as its own.
+        """
+        return {
+            "clip_level": self.clip_level,
+            "louder_amplitude": self.louder_amplitude,
+            "louder_time_s": self.louder_time_s,
+            "louder_samples_n": self.louder_samples_n,
+        }
+
+
+def reject_contradicted_clips(
+    audio: Audio,
+    extents: Sequence[tuple[float, float]],
+    *,
+    guard_samples: int,
+    margin: float,
+) -> tuple[list[tuple[float, float]], list[WithdrawnClip]]:
+    """Split clip candidates into the ones no unclipped sample is louder than, and the rest.
+
+    A candidate is withdrawn when the loudest sample outside every surviving candidate exceeds the
+    candidate's own peak by more than ``margin`` of that peak. Withdrawal only enlarges the
+    unclipped set, so the split is re-read until it stops moving; each round removes at least one
+    candidate, so it terminates within ``len(extents)`` rounds. See
+    ``specs/20260912-quality-clip-consistency/design.md``.
+
+    Args:
+        audio: The signal the candidates were detected on.
+        extents: Each candidate's ``(start, end)``, in seconds, in time order.
+        guard_samples: How many samples each side of a candidate are excluded from unclipped
+            evidence.
+        margin: Fraction of a candidate's own level an unclipped sample must clear to contradict it.
+
+    Returns:
+        The surviving extents, in the order they were given, and the withdrawn candidates in time
+        order.
+    """
+    kept = list(extents)
+    withdrawn: list[WithdrawnClip] = []
+    while kept:
+        amplitudes = clip_amplitudes(audio, kept, guard_samples=guard_samples)
+        peak, peak_time_s = amplitudes.unclipped_peak, amplitudes.unclipped_peak_time_s
+        if peak is None or peak_time_s is None:
+            break
+        contradicted: set[int] = set()
+        for index, level in enumerate(amplitudes.levels):
+            if level is None or peak <= level * (1.0 + margin):
+                continue
+            contradicted.add(index)
+            withdrawn.append(
+                WithdrawnClip(
+                    extent=kept[index],
+                    clip_level=float(level),
+                    louder_amplitude=float(peak),
+                    louder_time_s=float(peak_time_s),
+                    louder_samples_n=int(amplitudes.louder_counts[index]),
+                )
+            )
+        if not contradicted:
+            break
+        kept = [extent for index, extent in enumerate(kept) if index not in contradicted]
+    return kept, sorted(withdrawn, key=lambda found: found.extent)
+
+
+def write_withdrawn_clips(
+    store: ProvStore,
+    activity_id: str,
+    agent_id: str,
+    *,
+    withdrawn: Sequence[WithdrawnClip],
+    signal: str,
+    margin: float,
+    derived_from: tuple[str, ...] = (),
+) -> list[str]:
+    """Record each withdrawn clip candidate as an assertion, so the proposal is a fact, not a silence.
+
+    An assertion rather than an invalidated span: the candidate never stood, and a span written and
+    invalidated in the same activity would put a ``clip`` entity over that extent into the store for
+    any reader that keys by extent rather than by liveness.
+
+    Args:
+        store: The provenance store.
+        activity_id: The activity that proposed the candidates and withdrew these.
+        agent_id: The agent answerable for the withdrawal.
+        withdrawn: The candidates taken back, in time order.
+        signal: The stream name the candidates were proposed over.
+        margin: The fraction of a candidate's own level the contradiction was read at.
+        derived_from: Entities the withdrawals derive from — the signal, not a span, since none was
+            written.
+
+    Returns:
+        The assertion ids, in the order the withdrawals were given.
+    """
+    assertion_ids: list[str] = []
+    for found in withdrawn:
+        assertion_id = store.entity(
+            prov_type="assertion",
+            extent=found.extent,
+            attributes={
+                "verb": WITHDRAW_VERB,
+                "claim": CLIP_FAMILY,
+                "reason": CONTRADICTED_CLIP,
+                "signal": signal,
+                "margin": margin,
+                **found.as_detail(),
+            },
+        )
+        store.was_generated_by(assertion_id, activity_id)
+        store.was_attributed_to(assertion_id, agent_id)
+        for source_id in derived_from:
+            store.was_derived_from(assertion_id, source_id)
+        assertion_ids.append(assertion_id)
+    return assertion_ids
 
 
 def write_clip_amplitudes(
@@ -1041,9 +1182,13 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _clip_spans() -> None:
         """Clip-event spans over the ORIGINAL recording (ClipDaT), before any normalization runs.
 
-        One ``clip_amplitude`` measurement beside the spans carries the loudest unclipped sample,
-        where it sits, and each span's own peak keyed by its id. QUALITY's consistency check reads
-        those numbers; measuring them here is what lets it read no audio.
+        A merged candidate a louder unclipped sample contradicts is withdrawn rather than written:
+        a real ceiling truncated everything above it, so nothing outside it can be louder, at any
+        scale. Each withdrawal is recorded as an assertion over the extent it was proposed at.
+
+        One ``clip_amplitude`` measurement beside the surviving spans carries the loudest unclipped
+        sample, where it sits, and each span's own peak keyed by its id. QUALITY's consistency check
+        reads those numbers; measuring them here is what lets it read no audio.
         """
         if not recording_ids:
             raise LookupError("no recording stream in the store")
@@ -1053,6 +1198,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "minimum_extreme": float(config.require("clipping.minimum_extreme")),
             "merge_gap_ms": float(config.require("clipping.merge_gap_ms")),
             "clip_edge_guard_samples": int(config.require("quality.clip_edge_guard_samples")),
+            "clip_contradiction_margin": float(config.require("quality.clip_contradiction_margin")),
         }
         activity = _step("clip_spans", parameters, (recording_ids[-1],), software)
         sr = int(source.sampling_rate)
@@ -1070,7 +1216,13 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 merged[-1][1] = max(merged[-1][1], event.end_sample)
             else:
                 merged.append([event.start_sample, event.end_sample])
-        extents = [(start_sample / sr, (end_sample + 1) / sr) for start_sample, end_sample in merged]
+        candidates = [(start_sample / sr, (end_sample + 1) / sr) for start_sample, end_sample in merged]
+        extents, withdrawn = reject_contradicted_clips(
+            source,
+            candidates,
+            guard_samples=parameters["clip_edge_guard_samples"],
+            margin=parameters["clip_contradiction_margin"],
+        )
         span_ids, amplitude_id = write_clip_spans(
             store,
             activity,
@@ -1081,9 +1233,20 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             guard_samples=parameters["clip_edge_guard_samples"],
             derived_from=(recording_ids[-1],),
         )
+        withdrawn_ids = write_withdrawn_clips(
+            store,
+            activity,
+            software,
+            withdrawn=withdrawn,
+            signal="recording",
+            margin=parameters["clip_contradiction_margin"],
+            derived_from=(recording_ids[-1],),
+        )
         derivatives["clip_spans"] = span_ids
+        derivatives[WITHDRAWN_CLIPS] = withdrawn_ids
         derivatives[CLIP_AMPLITUDE_MEASUREMENT] = amplitude_id
         view.extend(span_ids)
+        view.extend(withdrawn_ids)
         view.append(amplitude_id)
         state["clip_span_extents"] = extents
 
