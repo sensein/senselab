@@ -19,7 +19,7 @@ structure rather than a field bolted onto one. Nothing here invents vocabulary t
 
 | PROV term | here |
 | --- | --- |
-| **Entity** | something the graph believes exists — a span, a word, a speaker, a measurement, a stream, a kind, a verdict. **An assertion is also an Entity**, which is why it has an id |
+| **Entity** | something the graph believes exists — a span, a word, a speaker, a measurement, a stream, a branch decision, a verdict. **An assertion is also an Entity**, which is why it has an id |
 | **Activity** | one node's execution, or one step of one — `PREPROCESS`, `AIRWAY.classify`. Carries the parameters it ran with |
 | **Agent** | what acted: a model, with its id and resolved commit, or the software itself |
 
@@ -39,6 +39,23 @@ agent:    { id, agent_type: "model" | "software", model_id?, commit_sha?, unreso
 | `wasAttributedTo(entity, agent)` | — | who is answerable for the entity |
 | `wasDerivedFrom(entity, entity)` | the old `refine` verb | a narrower extent or a better value, with the coarse one retained |
 | `wasInvalidatedBy(entity, activity)` | the old `withdraw` verb | this should no longer be read as what it was — and PROV keeps the entity |
+
+### The writer's vocabulary may shrink. The reader's may not.
+
+`PROV_TYPE` in `utils/prov_store.py` is the **reader's** vocabulary: `read_jsonl` validates every
+entity's `prov_type` against it, so a member dropped from that literal makes every store that
+carries one unopenable. The store is append-only and its premise is that history is immutable and
+set-union mergeable — a reader that refuses a record it previously wrote contradicts that premise.
+
+So retiring an entity type means retiring it from the **writer**. The member stays in `PROV_TYPE`,
+marked historical, and finished runs stay openable. `kind` is the standing case: TAXONOMY's evidence
+fold wrote it until 2026-09-13 and nothing writes it now.
+`prov_store_test.py::test_every_readable_entity_type_round_trips` is parametrised over the whole
+literal, so the next type retired from the writer cannot be dropped from the reader without a
+failing test.
+
+"Pre-alpha: delete outright" governs our own API surface — fields, aliases, config keys, call
+signatures. It does not govern the ability to read records already on disk.
 
 **`label`, `confirm`, `contest` and `measure` remain**, as Entities of `prov_type` `assertion`, each
 `wasGeneratedBy` the activity that made it and `wasDerivedFrom` the entity it is about. A `confirm` or

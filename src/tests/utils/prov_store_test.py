@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast, get_args
 
 import pytest
 
-from senselab.utils.prov_store import Activity, Agent, Entity, ProvStore
+from senselab.utils.prov_store import PROV_TYPE, Activity, Agent, Entity, ProvStore
 
 
 def _store() -> ProvStore:
@@ -358,6 +359,24 @@ class TestRoundTrip:
         path.write_text('{"record": "banana"}\n')
         with pytest.raises(ValueError, match="banana"):
             ProvStore.read_jsonl(path)
+
+    @pytest.mark.parametrize("prov_type", sorted(get_args(PROV_TYPE)))
+    def test_every_readable_entity_type_round_trips(self, prov_type: str, tmp_path: Path) -> None:
+        """The reader's vocabulary is what makes a finished run openable, so none of it may be dropped.
+
+        Parametrised over the whole :data:`PROV_TYPE` literal rather than over a hand-picked list:
+        a type retired from the writer must stay retired from the writer alone. ``kind`` is the case
+        this guards — TAXONOMY's evidence fold wrote it into every store of the 62,578-recording
+        corpus until 2026-09-13, nothing writes it now, and dropping it from the literal made
+        ``read_jsonl`` refuse every one of those stores.
+        """
+        s = _store()
+        entity = s.entity(prov_type=cast(PROV_TYPE, prov_type), extent=None, attributes={"state": "uncertain"})
+        path = tmp_path / "prov.jsonl"
+        s.write_jsonl(path)
+        back = ProvStore.read_jsonl(path)
+        assert back.get_entity(entity).prov_type == prov_type
+        assert back._entities == s._entities
 
 
 class TestReadBackValidation:

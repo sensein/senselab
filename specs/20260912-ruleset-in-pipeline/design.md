@@ -446,20 +446,50 @@ The round trip through `ProvStore.write_jsonl` and `NamedTemporaryFile` is untou
 caveat — and nothing in this stage depends on it. The equivalence tests still point at the disk
 path, which is where that caveat would surface.
 
-Two consequences of removing `kind` from `PROV_TYPE` rather than merely stopping writing it, both
-deliberate and both worth stating out loud:
+### The writer's vocabulary may shrink. The reader's may not.
 
-- **`ProvStore.read_jsonl` now refuses a pre-stage-2 store.** It validates every entity's
-  `prov_type` against the `Literal`, so a run directory written before 2026-09-13 raises
-  `entity ... has unknown prov_type 'kind'` when `extend.py` or any `scripts/extend_*` tool opens
-  it. Pre-alpha says delete rather than carry a shim, and a store whose routing was a constant is
-  not one worth extending — but the failure is a hard raise, not a warning, and whoever hits it
-  should know why.
-- **`routing_analysis` still reads `kind` entities, and that was left alone.**
-  `features.py::_absorb` fills `RecordingFeatures.kind_state` from them and
-  `report.py`'s baseline table compares the ruleset against what TAXONOMY would have said. That
-  module streams raw JSONL through its own `read_store` rather than through `ProvStore`, so it keeps
-  working on the scored 62,547-recording corpus, which is the only place the comparison is
-  meaningful. On a store written *after* this change every kind reads `missing` and the baseline
-  table is empty. It is a corpus-archaeology feature now, and deleting it would delete the ability to
-  re-derive the measurement that justified the ruleset.
+`kind` was first removed from `PROV_TYPE` in `utils/prov_store.py` as well as from the writer, and
+that was a defect, caught in review and reverted. `read_jsonl` validates every entity's `prov_type`
+against that `Literal`, so dropping the member made **every one of the 62,578 existing corpus stores
+unopenable** — `entity ... has unknown prov_type 'kind'` — which breaks all four `scripts/extend_*`
+drivers, the clip-withdrawal pass among them.
+
+**"Pre-alpha: delete outright" governs our own API surface** — fields, aliases, config keys, call
+signatures. It does not govern the ability to read records already on disk. The store is append-only
+and W3C PROV-shaped, and its premise is that history is immutable and set-union mergeable; a reader
+that refuses a record it previously wrote contradicts that premise directly. **Retiring a type from
+the writer is the deletion. Retiring it from the reader is data loss.**
+
+So `kind` stays in `PROV_TYPE`, carrying a docstring that says it is historical — written by
+TAXONOMY's fold until 2026-09-13, readable so finished runs stay openable, emitted by nothing.
+`prov_store_test.py::test_every_readable_entity_type_round_trips` is the regression guard, and it is
+parametrised over the whole literal rather than over a hand-picked list, so the next type retired
+from the writer cannot be dropped from the reader without a failing test.
+
+The inconsistency this removes is one this stage created and then documented: `routing_analysis`
+kept working on those same stores only because `features.py::read_store` streams raw JSONL and
+validates nothing. Two readers of the same bytes disagreeing about whether history is legible is
+exactly the state to avoid.
+
+**What the audit found.** Every other closed vocabulary a reader validates against was checked:
+`AGENT_TYPE`, `ENVIRONMENT_KIND`, `RELATION`, `_RECORD_KEYS` and `_ENVIRONMENT_KINDS` are untouched,
+and no member was removed from `Outcome`, `Triage`, `KindState`, `RunState`, `Release`, `BRANCHES`,
+`GRAPH_ORDER` or the `agree`/`mismatch`/`resolved`/`not_run` and hint-reading constant sets — this
+stage only added to them. `verdict._node_verdict_from_entity` already wraps `Outcome(raw)` in a
+`try`/`except` and reports an unreadable outcome rather than raising, so a verdict entity from any
+era folds.
+
+One near-miss, left as it is and named here rather than hardened: `verdict._branch_decisions` reads
+`attributes["route_state"]`, which a pre-stage-2 `branch_decision` does not carry — it has
+`kind_state`. Nothing re-runs the VERDICT node over a finished store (only `run.py` calls it; no
+`extend_*` driver re-folds), so it is unreachable today. It is deliberately **not** given a default:
+`kind_state` is a different measurement, and mapping a kind classification onto a route state would
+invent a reading. What a re-fold of a pre-stage-2 store should do is a decision nobody has made, and
+a silent default would make it for them.
+
+**`routing_analysis` still reads `kind` entities, and that was left alone.**
+`features.py::_absorb` fills `RecordingFeatures.kind_state` from them and `report.py`'s baseline
+table compares the ruleset against what TAXONOMY would have said, on the scored 62,547-recording
+corpus — the only place that comparison means anything. On a store written after this change every
+kind reads `missing` and the baseline table is empty. It is a corpus-archaeology feature now, and
+deleting it would delete the ability to re-derive the measurement that justified the ruleset.

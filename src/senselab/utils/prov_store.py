@@ -20,6 +20,7 @@ PROV_TYPE = Literal[
     "speaker",
     "interval",
     "measurement",
+    "kind",
     "stream",
     "pii",
     "verdict",
@@ -28,6 +29,13 @@ PROV_TYPE = Literal[
     "branch_decision",
     "enrollment",
 ]
+"""Every entity type the store understands.
+
+``kind`` is **historical**: TAXONOMY's evidence fold wrote it until 2026-09-13 and nothing writes it
+now. It stays here because this vocabulary is the *reader's*, and the store is append-only: a reader
+that refuses a record it previously wrote makes finished runs unopenable. The writer's vocabulary may
+shrink; this one may not. See ``specs/20260912-ruleset-in-pipeline/design.md``.
+"""
 AGENT_TYPE = Literal["model", "software"]
 ENVIRONMENT_KIND = Literal["host", "venv"]
 RELATION = Literal[

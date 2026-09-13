@@ -239,9 +239,10 @@ budget or availability is what bounds it (`LIMIT_BUDGET` / `LIMIT_AVAILABILITY`)
 **kind** — what a branch concludes *about*: `airway`, `speech`, `voice`. It survives in exactly two
 places, both of them a branch naming its own subject: `NodeVerdict.kind` on a branch's verdict
 entity, and `detectors.Detector.kind` naming the reference standard a detector is scored against. It
-is **no longer a state the graph decides**. The `kind` entity type is gone from `PROV_TYPE`, and
-with it `taxonomy.presence_floor.*` and the **evidence lines** that counted stored elements against
-those floors. Where this document once said "the kind is uncertain", read "the branch has not
+is **no longer a state the graph decides**. Nothing writes the `kind` entity type any more, and
+`taxonomy.presence_floor.*` and the **evidence lines** that counted stored elements against those
+floors are gone with it. The type itself stays in `PROV_TYPE` as historical, so the 62,578 stores
+that carry one remain openable — see "the reader's vocabulary" below. Where this document once said "the kind is uncertain", read "the branch has not
 concluded"; where it said "the kind is absent", read "the branch found no subject". The fold is
 keyed by **branch** throughout, not by kind (`vocabulary.fold_file_verdict`, `vocabulary.py:294`).
 
@@ -301,12 +302,22 @@ it. **There is no second selection.** `BRANCH_FOR_KIND`, `KIND_STATES`, `UNREADA
 `ruleset_route_state` columns are all deleted, and a failure to evaluate the ruleset now raises and
 errors the node, because a failure to route *is* a failure to run the graph.
 
-**The presence-floor path is gone from the code, not merely unused.** The `kind` entity type is out
-of `PROV_TYPE` (`prov_store.py:17-30`), the `taxonomy.presence_floor` subtree,
-`taxonomy.voice_min_duration_s` and `taxonomy.voice_uncertain_duration_s` are out of
+**The presence-floor path is gone from the code, not merely unused.** The `taxonomy.presence_floor`
+subtree, `taxonomy.voice_min_duration_s` and `taxonomy.voice_uncertain_duration_s` are out of
 `data/config/default.yaml`, and the twelve helpers that folded them are out of `nodes/taxonomy.py`.
-`taxonomy.speech_labels` stays, with exactly one reader left: `nodes/speech.py:589`.
-`../20260912-ruleset-in-pipeline/design.md` is the staging document. See step 3c.
+No node writes a `kind` entity. `taxonomy.speech_labels` stays, with exactly one reader left:
+`nodes/speech.py:589`. `../20260912-ruleset-in-pipeline/design.md` is the staging document. See
+step 3c.
+
+**The `kind` entity type stays in `PROV_TYPE` (`prov_store.py:17-38`), and that is deliberate.**
+`read_jsonl` validates every entity's `prov_type` against that literal, so removing the member makes
+every store written before 2026-09-13 unopenable — all 62,578 of them, and with them all four
+`scripts/extend_*` drivers. **"Pre-alpha: delete outright" governs our own API surface, not the
+ability to read records already on disk.** The store is append-only and W3C PROV-shaped: a reader
+that refuses a record it previously wrote contradicts that premise. Retiring a type from the writer
+is the deletion; retiring it from the reader is data loss. The member carries a docstring saying it
+is historical, and `prov_store_test.py::test_every_readable_entity_type_round_trips` — parametrised
+over the whole literal — is the guard.
 
 ## How to read this document
 
