@@ -27,6 +27,12 @@ QUALITY records each contradiction as an ``assertion`` derived from the span it 
 the count in its verdict. PREPROCESS's spans are never invalidated here: the store is append-only
 and the span is PREPROCESS's reading, not QUALITY's to withdraw. The design is in
 ``specs/20260912-quality-clip-consistency/design.md``.
+
+``_clip_spans`` now applies the same comparison at detection and never writes a candidate it
+contradicts, so this check is the audit of that rule and its expected count is zero. It reads
+nothing about whether the rule ran: a store from the completed corpus, or one whose spans came from
+anywhere but ``_clip_spans``, carries spans nothing filtered, and an audit that assumed compliance
+would measure nothing on a fresh store either.
 """
 
 from __future__ import annotations

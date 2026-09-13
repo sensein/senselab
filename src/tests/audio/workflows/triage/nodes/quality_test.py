@@ -1,7 +1,10 @@
 """QUALITY — clip spans read against the amplitudes PREPROCESS measured beside them.
 
 The spans are seeded rather than detected: this module's subject is what QUALITY does with a clip
-span it was handed, and ``src/tests/audio/tasks/clipping`` owns where ClipDaT opens an event.
+span it was handed, and ``src/tests/audio/tasks/clipping`` owns where ClipDaT opens an event. The
+seeding also keeps the audit testable as an audit — ``_clip_spans`` withdraws a contradicted
+candidate before it becomes a span, so a fixture that went through it could never hand QUALITY the
+span it exists to contest.
 
 There are two seedings, because there are two ways a store gets its inputs. :func:`_seed` goes
 through PREPROCESS's own ``write_clip_spans``, which is a fresh run. :func:`_seed_bare` writes the

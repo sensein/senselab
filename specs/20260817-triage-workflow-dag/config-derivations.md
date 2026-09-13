@@ -755,9 +755,11 @@ SQUIM and disruption tolerances, plus QUALITY's clip-consistency check. The four
 disruption keys are read by nothing and no derivation was written for them.
 
 quality.clip_contradiction_margin 0.005 and quality.clip_edge_guard_samples 3 --
-specs/20260912-quality-clip-consistency/design.md. Both are QUALITY's clip-consistency check, which
-contests a clip span whose peak an unclipped sample elsewhere in the recording exceeds. Neither is
-fitted; both are restatements of ClipDaT's own two constants on the same signal. The margin is
+specs/20260912-quality-clip-consistency/design.md. Both belong to the clip-contradiction rule, which
+is read twice on the same numbers: PREPROCESS's `_clip_spans` withdraws a candidate whose peak an
+unclipped sample elsewhere in the recording exceeds, and QUALITY contests any written span that
+still does. One key each, read by both, so the audit's count stays a statement about the detector.
+Neither is fitted; both are restatements of ClipDaT's own two constants on the same signal. The margin is
 1 - clipping.near_threshold: a sample within 0.5% of a clip level is one the detector would have
 counted as part of that run had it been contiguous with it, so it is not evidence against the level
 (the exactly symmetric figure is 1/0.995 - 1 = 0.005025). The guard is clipping.leniency_samples:

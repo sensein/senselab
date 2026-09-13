@@ -15,7 +15,9 @@ rest of this document is written against it.
 `preprocess.py` (`_clip_spans`) runs `detect_clip_events`
 (`src/senselab/audio/tasks/clipping/api.py`) over the **original** recording at
 `clipping.near_threshold` 0.995, merges events within `clipping.merge_gap_ms` 30 ms, and writes each
-merged range as a `span` with `family: "clip"`, `signal: "recording"`.
+surviving merged range as a `span` with `family: "clip"`, `signal: "recording"`. Which merged ranges
+survive is "The rule the audit implies" below; that rule came out of this check and is stated after
+it, because the check is what measured the mechanism.
 
 The detector's threshold is the file's own global max and min, not full scale, and each extreme is
 guarded on its own magnitude:
@@ -50,6 +52,176 @@ produce a span whose level is not the recording's ceiling:
 Both leave the same internal inconsistency: the recording is said to have reached its ceiling at
 amplitude *A*, and some sample nothing called clipped sits above *A*. The lower claim is very
 likely a false positive, which is what this check exists to reduce.
+
+## What the corpus said
+
+The check ran over the corpus as an audit. **60,202 recordings scored, 266 flagged**; 9,686 carry a
+clip span at all, so 2.7 % of those hold a clip a louder unclipped sample contradicts.
+
+The contradicted clips were then looked at, and they are not marginal. Measured clip level against
+the louder unclipped sample, one recording per task:
+
+```
+respiration-and-cough-cough        clip 0.0005   louder unclipped 0.0026
+productive-vocabulary              clip 0.0422   louder 0.0503
+respiration-and-cough-fivebreaths  clip 0.0516   louder 0.0644
+harvard-sentences-list             clip 0.2182   louder 0.3683
+free-speech                        clip 0.3105   louder 0.4184
+```
+
+The rendered waveform of the harvard case settles it: the whole recording sits inside ±0.2 and
+nothing saturates anywhere. The span is a plateau in ordinary speech.
+
+The level distribution over the 2,518 spans is cleanly bimodal, which is what says the 266 are a
+population and not a tail:
+
+```
+1.00 (full scale)   2420   96.1%
+0.95-0.999             1
+0.80-0.95              1
+0.50-0.80              6
+0.20-0.50             14
+< 0.20                76    3.0%
+```
+
+The histogram is a description, **not a threshold**. A genuinely clipped recording that was later
+scaled down carries its plateau wherever the gain put it, which is somewhere in that lower mode, so
+a floor drawn across it would discard exactly the files where clipping matters. The rule below uses
+no absolute amplitude at all.
+
+## The rule the audit implies
+
+The contradiction is scale-invariant by construction, and that is the whole of the argument. A real
+ceiling truncated everything above it, so the clipped plateau **is** the file's extreme; a uniform
+gain multiplies every sample by the same constant, so "is any unclipped sample louder than this
+plateau" survives it exactly. Both sides of `unclipped_peak > clip_level × (1 + margin)` are
+homogeneous of degree one in the gain, so the comparison is unchanged by it. The 0.0005 plateau
+above fails the test at every scale; a genuine full-scale clip turned down to 0.25 passes it at
+every scale.
+
+So the same question the audit asks after the fact can be asked at detection, where the answer is
+still actionable: a candidate an unclipped sample is louder than is not a clip, and is not written
+as one.
+
+### Where the rejection belongs
+
+**In `_clip_spans`, PREPROCESS's node step — not in `detect_clip_events`.**
+
+`reject_contradicted_clips` in `nodes/preprocess.py` takes the merged candidate extents and the
+signal and returns the survivors and the withdrawals; `_clip_spans` calls it between merging and
+writing. Three reasons, in order of weight:
+
+1. **The rule is about spans, and the task does not have any.** `detect_clip_events` returns
+   per-event ranges with polarities. What the store asserts is the *merged* span, and what counts as
+   unclipped is "outside every merged span, less the guard". Rejecting per event inside the task
+   would compare each event against a different unclipped set from the one the store records —
+   including, for the merge finding below, comparing a bogus event against a set that excludes the
+   genuine extreme it was merged with. Merging happens in `_clip_spans` and nowhere else.
+2. **The two constants are triage's.** The margin and the guard are `quality.*` keys with
+   derivations written against this graph's signals. Passing them into a general task would put two
+   triage-derived decisions into a published-algorithm API that every other caller then has to take
+   a position on.
+3. **`detect_clip_events` is ClipDaT as published.** Hansen, Stauffer & Xia's algorithm is the
+   file's own extreme with a near-band and a leniency window, and it is tested as that in
+   `src/tests/audio/tasks/clipping_test.py`. The contradiction rule is not in the paper. Keeping the
+   task the paper's algorithm and the rejection the caller's policy is what lets the task's tests
+   stay a statement about the paper.
+
+The task is therefore unchanged by this work.
+
+### The margin is the audit's margin, read from the same key
+
+`quality.clip_contradiction_margin`, 0.005, read by `_clip_spans` and by QUALITY, from one key.
+
+The derivation was already a *detector* fact wearing the check's name: 0.005 is
+`1 - clipping.near_threshold`, the detector's own band, and the argument for it — a sample within
+0.5 % of a clip level is one the detector would have folded into that run had it been contiguous
+with it — is an argument about what the detector would have done. It was first needed by the audit,
+which is why it is spelled under `quality:`; it is not the audit's alone.
+
+Two margins would be worse than either one. If detection were stricter than the audit, the audit
+would keep firing on spans detection deliberately kept, and its count would stop meaning anything.
+If detection were looser, it would write spans the audit then contests — the present state, with an
+extra constant. The confirmation that the rule worked is **QUALITY finding ~0**, and that reading
+only exists while the two ask the identical question of the identical numbers. No second constant is
+introduced.
+
+`quality.clip_edge_guard_samples` already had exactly this shape before this change — a key named
+for the check, applied by the node that holds the samples — so the arrangement is the one already in
+force here, not a new one.
+
+### Withdrawal is read to a fixpoint
+
+Withdrawing a candidate returns its samples, and its guard band's samples, to the unclipped
+evidence. That can only enlarge the unclipped set, so a candidate already contradicted stays
+contradicted and the whole contradicted set can be withdrawn in one round. It can also expose a
+sample that contradicts a candidate the previous round left standing, which is why the split is
+re-read until a round withdraws nothing. Each round removes at least one candidate, so it terminates
+within `len(extents)` rounds, over a handful of spans.
+
+In the common case the loop runs twice and withdraws on the first pass only: the unclipped peak
+already exceeded the withdrawn candidate's level, so returning that candidate's samples usually does
+not move it.
+
+A candidate whose extent names no sample of the signal has no level and is never withdrawn, which is
+the same `None` case QUALITY skips.
+
+### What the store says about a withdrawn candidate
+
+One `assertion` per withdrawal, written by the same `clip_spans` activity that proposed it:
+`verb: "withdraw"`, `claim: "clip"`, `reason: "clip_above_unclipped_sample"` — QUALITY's own
+vocabulary token, because it is the same finding made earlier — `signal`, the `margin` it was read
+at, and the four measured numbers: `clip_level`, `louder_amplitude`, `louder_time_s`,
+`louder_samples_n`. Its extent is the extent the candidate was proposed at. It is `wasDerivedFrom`
+the recording stream, because there is no span to derive from; that absence is the point. The ids
+are listed in PREPROCESS's verdict under `clip_withdrawn`.
+
+Writing nothing was the alternative, and it loses a reading the detector actually made: a recording
+with no clip span would be indistinguishable from one whose candidate was taken back, and the 266
+would vanish rather than be accounted for. This graph already refuses that trade — `_mark_unmeasured`
+writes an assertion for a span the model could not measure precisely "so its absence is a fact, not
+a silence", and AIRWAY writes an `abstain` where it can neither confirm nor contest.
+
+**Not a span invalidated by `wasInvalidatedBy`.** The store has invalidation, and it is the wrong
+relation here twice over. It states that an entity existed and then ceased to, and this candidate
+never stood — it was withdrawn inside the one activity that proposed it, before anything downstream
+could read it. And a `clip` span entity written and invalidated in the same breath still puts a span
+over that extent into the store, where any reader keying by extent rather than by liveness picks it
+up. An assertion says what happened and mints no clip span.
+
+The surviving spans are written exactly as before, and the `clip_amplitude` measurement beside them
+is measured over the survivors — so its `unclipped_peak` is the peak against the spans that stand,
+which is the number QUALITY audits and the number a reader should compare a span against.
+
+### QUALITY keeps the check
+
+Unchanged, and it does not learn that the detector now applies the rule. It is the audit, and an
+audit that assumes its subject already complied measures nothing. Three things still reach it:
+
+* A store from the completed corpus, whose spans were written before this rule existed. Those are
+  what `scripts/extend_quality.py` reads, and they must still be contested.
+* A store whose spans were seeded by something other than `_clip_spans` — which is what
+  `quality_test`'s own fixtures do, deliberately, so that the node's behaviour is testable without
+  the detector.
+* A future `_clip_spans` bug. The check finding ~0 on fresh runs is the confirmation that the
+  detection rule holds; a check deleted because it is expected to find nothing confirms nothing.
+
+### Verification
+
+`src/tests/audio/workflows/triage/nodes/preprocess_test.py`, `TestClipCandidateRejection`. Over
+`reject_contradicted_clips` directly, at four uniform gains spanning three orders of magnitude and
+including one above full scale, so the property is asserted rather than inferred: the contradicted
+plateau is withdrawn at every one of them, a genuine clip is kept at every one of them, and the
+split is per candidate — a bogus plateau beside a genuine clip takes only itself. Then through
+`preprocess` end to end: the contradicted recording gets no clip span, its withdrawal lands as an
+assertion carrying the extent, the level, the louder sample and the margin and derived from the
+recording stream, PREPROCESS's verdict lists it under `clip_withdrawn`, QUALITY passes on the store
+that results, and a clipped recording uniformly scaled to a quarter still gets its span and
+withdraws nothing.
+
+QUALITY's own contest behaviour is pinned by `quality_test`, whose fixtures seed spans through
+`write_clip_spans` rather than `_clip_spans` and so never meet the rejection — which is what keeps
+the audit testable as an audit.
 
 ## Who measures what
 
@@ -407,6 +579,13 @@ clip is very likely a false positive; the store says it is contradicted, not tha
 gaps run the other way: an uncontested clip is not thereby correct (the merging limitation above),
 and a recording clipped throughout has no unclipped evidence to contradict anything —
 `unclipped_samples_n` in the verdict is what names that case.
+
+On a store written by a `_clip_spans` that applies the rejection rule, the expected count is zero,
+and the check's reading changes accordingly: a contest on such a store is a statement about the
+*detector*, not about the recording. It is no longer a prevalence to report. It stays because zero
+is a measurement and because the two stores the check was built for — the completed corpus's, and
+any store whose spans came from somewhere other than `_clip_spans` — still carry spans nothing
+filtered.
 
 A third gap follows from reading stored outputs rather than samples. QUALITY can still compare any
 span's level against the whole-file unclipped peak, which is the comparison the check is made of,
