@@ -649,6 +649,51 @@ whole corpus to recover, at most, a second-order withdrawal of a span the surviv
 measurement still names honestly. QUALITY remains the audit: a store this pass leaves with a
 contradicted span is a store QUALITY flags, and that is the signal to look at, not a silent gap.
 
+The comparison itself is a third copy of the rule — `preprocess.reject_contradicted_clips` and
+`quality.quality` hold the other two — and it is pinned at its boundary rather than only on fixtures
+where peak and level are orders of magnitude apart. Two mutations survived the first test suite: `<=`
+weakened to `<`, and the margin moved to the other side of the comparison
+(`peak × (1 + margin) <= level`). Both are killed by `TestTheComparisonAtItsBoundary`, which seeds the
+`clip_amplitude` measurement directly — the only way to put `peak` *exactly* on `level × (1 + margin)`,
+which no float32 recording can be made to do — and checks: equality is kept, one ULP above it is
+withdrawn, a peak of 0.4995 under a 0.5 level is kept (the case where the two sides of the margin
+disagree), and 0.504 over a 0.5 level is withdrawn at the packaged margin and kept at 0.05. Each
+mutation was applied and the suite re-run to confirm the tests fail under it.
+
+### What QUALITY's earlier findings become
+
+`scripts/extend_quality.py` has already run over the corpus, and the ~266 stores this pass touches are
+exactly the ones carrying a `flag` verdict — so the stale-finding case is the guaranteed state, not an
+unlucky ordering. Left alone, such a store would end the pass holding a live `contest` assertion
+`wasDerivedFrom` an invalidated span, a live verdict counting it, and two live assertions over the same
+extent both carrying `reason: clip_above_unclipped_sample` — one `contest`, one `withdraw` — which
+double-counts for any reader keying on `reason` alone.
+
+So the pass supersedes, alongside each withdrawn span, every live QUALITY `contest` assertion derived
+from it, and the live QUALITY verdict when any contest was retired. The retiring activities carry
+`node: QUALITY`, because it is QUALITY's own reading being retired; the reason names the withdrawal,
+because the reading was correct when it was made and it is the span underneath that has gone.
+
+**No verdict is written in its place.** QUALITY as a node is not designed yet — its verdicts on the
+current corpus are provisional and will be regenerated when that branch exists — so a freshly minted
+verdict from an undeveloped node would be no better than the stale one. A store that leaves this pass
+with no QUALITY verdict is the honest outcome, and the retired verdict stays in the store behind its
+invalidation edge for anyone who needs to see what was concluded before.
+
+The one live assertion that legitimately points at an invalidated span is the withdrawal itself; that
+edge is the record of the retirement and is what the test asserts, rather than the blanket "no live
+assertion derives from an invalidated entity", which the design deliberately violates.
+
+### Where the tests do and do not exercise the fixpoint
+
+A fixture with a single clip span that falls leaves no clip span at all, so a second pass returns
+through `if not spans` and never reaches the comparison — the restriction of `clip_levels` and
+`unclipped_louder_n` to survivors is never exercised with a survivor present either. A two-plateau
+fixture (levels 0.10 and 0.98, one unclipped sample at 0.5) covers the rest: the 0.10 span is
+withdrawn, the 0.98 span stands, the rewritten maps hold exactly the survivor with `clip_spans_n: 1`,
+a second pass reads that span and returns None through the *comparison*, and QUALITY over the result
+passes with `checked_n: 1`.
+
 ### `contains_clip` became a derived read, not a rewritten attribute
 
 The flag has exactly one consumer in the tree: a span cell's edge colour in `figure.py`. No detector,
@@ -671,11 +716,13 @@ Nothing is written when nothing is contradicted, so a store whose clips stand is
 and reported `skipped`; only a store something was withdrawn from has `store.jsonl` replaced and
 `prov/` re-exported. The driver's fingerprint check is the same one the other extend drivers use.
 
-A second pass over an extended store is a no-op by the fixpoint argument rather than by a skip: the
-rewritten measurement carries the same `unclipped_peak`, and every surviving span already satisfies
-`peak <= level × (1 + margin)` against it, so the pass finds nothing and returns None before minting
-an activity. Clip spans with no `clip_amplitude` beside them are a refusal, which is that recording's
-error — the same prerequisite `extend_quality.py` has, and for the same reason.
+A second pass over an extended store is a no-op by the fixpoint argument rather than by a skip,
+wherever a clip span survived: the rewritten measurement carries the same `unclipped_peak`, and every
+surviving span already satisfies `peak <= level × (1 + margin)` against it, so the pass finds nothing
+and returns None before minting an activity. Where every span fell, the second pass short-circuits on
+`if not spans` instead and never reaches the comparison; both routes return None without writing.
+Clip spans with no `clip_amplitude` beside them are a refusal, which is that recording's error — the
+same prerequisite `extend_quality.py` has, and for the same reason.
 
 ### Verification
 
@@ -688,11 +735,15 @@ value carried through and the old one retired, `prov/` is re-exported carrying t
 is left byte-identical and reported `skipped`/`current`, a run with no clip span is `skipped`/`absent`
 and never raises, a second pass moves nothing, clip spans with no amplitudes raise a `LookupError`
 naming the driver that supplies them and leave the store byte-identical, and a missing store is one
-recording's error with its neighbour still read.
+recording's error with its neighbour still read. Then `TestTheComparisonAtItsBoundary`,
+`TestARunWhereOnlySomeClipSpansFall` and `TestQualitysOwnFindingsAboutAWithdrawnSpan` for the three
+sections above.
 
 `src/tests/audio/workflows/triage/nodes/figure_test.py`,
-`TestTheClipFlagIsReadFromTheLiveClipSpans`: a span over a live clip reads flagged, and the same span
-over a withdrawn one reads unflagged while its own stored attribute still says True.
+`TestTheClipFlagIsReadFromTheLiveClipSpans`: a span over a live clip reads flagged, the same span over
+a withdrawn one reads unflagged while its own stored attribute still says True, and the overlap test's
+strictness is pinned at both ends — a span merely touching the clip's boundary does not contain it,
+while one overlapping by a hundredth of a second does.
 
 ## What this check does and does not tell you
 

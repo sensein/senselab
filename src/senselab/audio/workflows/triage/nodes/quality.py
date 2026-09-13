@@ -59,6 +59,9 @@ CLIP_FAMILY = "clip"
 CONTRADICTED_CLIP = "clip_above_unclipped_sample"
 """The vocabulary token for a clip span an unclipped sample is louder than."""
 
+CONTEST_VERB = "contest"
+"""The assertion verb for a clip span this node answers but does not withdraw."""
+
 CLIP_AMPLITUDE_MEASUREMENT = "clip_amplitude"
 """PREPROCESS's amplitude reading of the signal its clip spans were detected on.
 
@@ -285,7 +288,7 @@ def quality(
             prov_type="assertion",
             extent=contradiction.extent,
             attributes={
-                "verb": "contest",
+                "verb": CONTEST_VERB,
                 "claim": CLIP_FAMILY,
                 "reason": CONTRADICTED_CLIP,
                 "signal": source,
