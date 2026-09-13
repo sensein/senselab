@@ -877,3 +877,162 @@ Rejected, and why:
 | let `build_catalogue` skip a detector the profile lacks | a silent skip is how three detectors scored 0.000 everywhere for three sweeps |
 | derive the grid from a sibling reading `words.lexical` | the siblings rule is for a *gated* detector reading the same primary feature; a different feature's distribution is not this one's |
 | a second onomatopoeia key, so `words.onomatopoeic_tokens` could stay null | pre-alpha: one lexicon, not two that drift |
+
+## A glide is a trajectory, and nothing could read one
+
+`specs/20260911-praat-ppg-detectors/design.md` states the failure and the two gates that miss it:
+117 glide-family recordings reach no branch, `voice.sustained` catches 0 of them because their
+`span_longest.amplitude` p95 is 2.92 s against a 3.0 s floor, and `voice.glide` reads the YAMNet
+singing union at **0.009** on them against **0.540** on the routed ones. That is not restated here.
+What is new is why the repair proposed there did not work, and what replaces it.
+
+The lost set is **69** on the latest pass — 46 `glides-high-to-low`, 23 `glides-low-to-high` — with
+**zero** empties among them. Every one carries signal; none reaches a branch. They are *half-length*
+glides: median 3.69 s against 6.59 s for the routed ones, which is why a duration floor cannot find
+them and why lowering it does not help. 2.0 s recovers 64 of the original 117 and takes non-voice
+firing from 21.0% to 45.3%.
+
+### Spread is refuted, and it is not a near miss
+
+`glide.praat_std_f0_hertz` scored **0.479** recall at a 10% over-routing budget against the
+incumbent singing union's **0.724**, and was worse at every budget, not only that one. The reason is
+structural rather than a matter of the operating point: `praat_features` measures its F0 spread over
+the **whole recording**, so drift across a held vowel and register variation within ordinary speech
+both enter it, and a sustained vowel with a wandering pitch is indistinguishable from a sweep. A
+**trajectory is not a spread**, and no rescaling of a spread recovers one. `glide.praat_std_f0_hertz`
+and `glide.praat_f0_relative_spread` stay in the catalogue as the measured negative controls they
+now are; nothing further is proposed on that feature.
+
+### The corpus had no F0 at all until this pass
+
+`voice.f0_search_range_hz` was `null`, and `phonation_tracks` raises rather than choosing a search
+range, so the whole-corpus run wrote no phonation track anywhere. The key is now `[50.0, 600.0]`
+and an extend pass has written `phonation_tracks` into all **62,547** stores — present in 200 of
+200 sampled. The sidecar carries `times_s`, `f0_hz` (NaN where Praat placed no pitch) and
+`strength`, one value per frame on `phonation_spans.hop_s`.
+
+`RecordingFeatures` had no field that read any of it. Its only F0 evidence was
+`praat.mean_f0_hertz` and `praat.std_f0_hertz`, two scalars over the whole file — which is exactly
+the evidence the paragraph above refutes.
+
+### `RecordingFeatures.phonation`, a summary and never the series
+
+The rule is `_ppg_summary`'s: the shard is size-constrained, so a per-frame array is opened, reduced
+and closed, and the array never enters a record. `PHONATION_SUMMARY_KEYS` is what an F0 track is
+reduced to. Three keys come off the measurement and are readable with no sidecar at all —
+`hop_s`, `f0_min_hz`, `f0_max_hz`, the range `derive_f0_range` settled on for *this* recording. The
+rest need the sidecar:
+
+| group | keys | what a detector reads them for |
+| --- | --- | --- |
+| availability | `frames`, `track_seconds`, `voiced_frames`, `voiced_fraction`, `voiced_seconds`, `voiced_extent_s`, `voiced_extent_fraction` | how much pitch there was to have a trajectory at all; `voiced_seconds` is the phonation amount the 3.0 s span floor was trying and failing to measure |
+| pitch | `f0_median_hz`, `strength_median`, `semitone_range`, `semitone_iqr` | where the voice sat and how widely it moved — `semitone_iqr` is the semitone-scaled control for the refuted Hz spread |
+| directedness | `semitone_net`, `net_over_variation`, `rank_correlation`, `monotonicity`, `rising_fraction`, `falling_fraction`, `monotone_fraction`, `direction_bias` | whether the voiced frames went *one way* |
+| the excursion | `sweep_seconds`, `sweep_fraction`, `sweep_semitones`, `sweep_semitones_abs`, `sweep_rate_semitones_per_s`, `sweep_rate_abs_semitones_per_s` | how far the longest one-way excursion went, how long it took, and how much of the recording it occupied |
+
+Absence is absence everywhere, as with every other summary: a quantity the track is too short or too
+unvoiced to carry is **not keyed**, so a detector reading it returns `None` and the recording leaves
+that detector's scoring rather than counting as a zero. An unvoiced recording carries its frame
+counts and nothing else. A track of one constant pitch carries `semitone_range` 0.0 — a measured
+zero — and no `rank_correlation`, because a constant ranks against nothing.
+
+### Semitones, because a sweep is a ratio
+
+100 Hz is an octave at 120 Hz and four semitones at 400 Hz. Every extent, net and rate above is in
+semitones, `12 * log2(f0)` on an arbitrary reference that each of them differences away. This is
+part of why the raw-Hz spread failed and it is not the whole of it — a semitone-scaled spread is
+still a spread, which is why `semitone_iqr` is offered as a control rather than as the answer.
+
+### The excursion is the longest monotone subsequence, and it needs no tolerance
+
+A glide's F0 track is not monotone frame by frame; the tracker places the odd frame off the path.
+Three ways to allow for that were available:
+
+| candidate | why not |
+| --- | --- |
+| the longest *contiguous* run of same-signed steps | one misplaced frame cuts a clean sweep in half, and the fix for that is a tolerance |
+| a tolerance on the step, so small reversals do not break the run | a tolerance is a threshold, and an unfitted threshold in code is what this repository does not ship |
+| a straight-line fit and its residual | a fit's slope is a spread's cousin: a wandering vowel with a trend fits as well as a sweep |
+
+The longest non-decreasing subsequence needs none of them. It is the largest set of voiced frames,
+in time order, that never goes down; a frame off the path is skipped rather than breaking anything,
+and there is nothing to tune. `_longest_ascent` computes it by patience sorting in O(n log n) with
+its chain retained, so the subsequence's own first and last frames are known — and those endpoints,
+not the track's, give `sweep_seconds`, `sweep_semitones` and the rate between them. The same
+function over the negated series gives the falling one; whichever is longer is the sweep, ties
+broken by the wider semitone span.
+
+`rank_correlation` (Spearman, over the voiced frames against their own order) and
+`net_over_variation` (net excursion over total absolute variation) are carried beside it because
+both are free of the subsequence's one bias: a longest-monotone endpoint pair can span nearly the
+whole track even when the subsequence is sparse.
+
+### Measured on four synthetic contours
+
+Four seconds at a 0.01 s hop, F0 in Hz, all voiced. The sweeps are two octaves; `held` is 150 Hz
+with 1% frame-to-frame wobble; `speech` oscillates ±3 semitones at 6 Hz.
+
+| key | rising | falling | held | speech |
+| --- | --- | --- | --- | --- |
+| `semitone_range` | 24.000 | 24.000 | 1.189 | 6.000 |
+| `semitone_iqr` | 12.000 | 12.000 | 0.233 | 4.218 |
+| `rank_correlation` | 1.000 | −1.000 | −0.060 | −0.124 |
+| `monotonicity` | 1.000 | 1.000 | 0.060 | 0.124 |
+| `net_over_variation` | 1.000 | −1.000 | 0.001 | 0.000 |
+| `monotone_fraction` | 1.000 | 1.000 | 0.085 | 0.100 |
+| `direction_bias` | 0.998 | −0.998 | −0.010 | 0.010 |
+| `sweep_fraction` | 1.000 | 1.000 | 0.877 | 0.752 |
+| `sweep_semitones` | 24.000 | −24.000 | −0.527 | 5.990 |
+| `sweep_rate_semitones_per_s` | 6.015 | −6.015 | −0.151 | 1.997 |
+
+Two readings matter beyond the obvious separation:
+
+- **`speech` spreads more than `held` and sweeps no more than it.** 6.000 semitones of range and
+  4.218 of IQR against the vowel's 1.189 and 0.233, while `monotone_fraction` and
+  `net_over_variation` stay with the vowel. This is the refuted spread hypothesis reproduced on a
+  synthetic pair: a spread ranks oscillating speech *above* a held vowel, and a trajectory does not.
+- **`sweep_fraction` alone is weak.** The vowel reads 0.877 because a sparse monotone subsequence's
+  endpoints can sit near both ends of the track. Occupancy is only informative next to
+  `monotone_fraction` (0.085 against 1.000) or through the rate, which divides the extent by that
+  duration (−0.151 against 6.015). It is emitted as its own key so a sweep can measure that, not
+  because it separates on its own.
+
+A track with four voiced frames among 396 unvoiced ones reports its 0.03 s excursion and a
+`sweep_fraction` under 0.01 — the sweep is measured over its own extent, not the recording's.
+
+### Direction is the check that the trajectory is being read
+
+`glides-high-to-low` and `glides-low-to-high` are one gesture in opposite directions. Every
+directed key is signed, and on the synthetic pair the falling contour reproduces the rising one
+with `semitone_range`, `monotonicity`, `monotone_fraction` and `sweep_semitones_abs` identical and
+`rank_correlation`, `semitone_net`, `sweep_semitones` and `direction_bias` exactly negated. The
+staged detectors therefore come in polarity pairs over one feature —
+`glide.phonation_rank_correlation_rising` / `_falling`, `…_sweep_semitones_rising` / `_falling`,
+`…_direction_bias_rising` / `_falling`, `…_net_over_variation_rising` / `_falling`. If the corpus
+sweep finds the rising member selecting `glides-low-to-high` and the falling member
+`glides-high-to-low`, the feature is reading the trajectory; if both members fire on both families,
+it is reading something duration-shaped and the recovery is a coincidence.
+
+### Size
+
+28 float64 columns per recording. Written as `dump_features` writes — zstd, 8,192-row groups —
+over 62,547 rows of simulated glide, speech and vowel summaries: **9.9 MB, 158 B per recording
+compressed**, against 224 B raw. On the current 184 MB shard that is **+5.4%**, to roughly 194 MB.
+The per-frame series that produced it is 2×`frames` float64 and is never written.
+
+### Twenty-two candidates, all staged, none a gate
+
+No profile has measured any of these features, so every one of them goes in
+`UNPROFILED_DETECTORS` under the rule in "A detector the profile has never seen" above: declared
+outside the catalogue, readable by `detector_value`, scored at no threshold, and raising at import
+once a profile carries it. **None is in `branch_gates`.** The candidates are scored on the corpus
+first; a gate's cut comes off a sweep, which is this document's rule and the reason the refuted
+spread hypothesis was caught rather than shipped.
+
+| group | candidates |
+| --- | --- |
+| is it a sweep | `glide.phonation_monotonicity`, `…_monotone_fraction`, `…_semitone_range`, `…_semitone_iqr`, `…_sweep_semitones_abs`, `…_sweep_over_range` |
+| how fast, how much of the recording | `glide.phonation_sweep_seconds`, `…_sweep_fraction`, `…_sweep_rate_abs_semitones_per_s` |
+| which way | `glide.phonation_rank_correlation_rising` / `_falling`, `…_sweep_semitones_rising` / `_falling`, `…_direction_bias_rising` / `_falling`, `…_net_over_variation_rising` / `_falling` |
+| gated on a wordless recording, as the existing glide candidates are | `glide.phonation_monotonicity+no_agreed_word`, `glide.phonation_sweep_semitones_abs+no_agreed_word` |
+| phonation amount, for the floor `voice.sustained` reads through span duration | `voice.phonation_voiced_fraction`, `voice.phonation_voiced_seconds`, `voice.phonation_strength_median` |

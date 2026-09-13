@@ -41,6 +41,9 @@ from senselab.audio.workflows.triage.routing_analysis.families import (
     task_id_of,
 )
 from senselab.audio.workflows.triage.routing_analysis.features import (
+    PHONATION_ENTITY_KEYS,
+    PHONATION_SUMMARY_KEYS,
+    PHONATION_TRACKS_SIDECAR,
     PPG_SUMMARY_KEYS,
     SILENT_PHONEME,
     RecordingFeatures,
@@ -1069,6 +1072,234 @@ def test_an_unreadable_sidecar_keeps_the_entity_keys_and_no_summary(tmp_path: Pa
     assert record.ppg["seconds_per_frame"] == pytest.approx(SECONDS_PER_FRAME)
     assert "segment_count" not in record.ppg
     assert detector_value(record, Detector("d", "ddk", ("ppg", "segment_rate_per_s"), "segments/s", (1.0,))) is None
+
+
+PHONATION_HOP_S = 0.01
+"""The hop the synthetic F0 tracks are written on."""
+
+PHONATION_FRAMES = 400
+"""How many frames each synthetic track carries, so four seconds fit on the hop."""
+
+PHONATION_ATTRIBUTES: dict[str, Any] = {
+    "name": "phonation_tracks",
+    "signal": "preemphasised",
+    "hop_s": PHONATION_HOP_S,
+    "f0_min_hz": 62.0,
+    "f0_max_hz": 431.0,
+    "f0_signal": "preemphasised",
+    "formant_signal": "plain",
+}
+"""The attributes PREPROCESS stamps the measurement with, none of which names the sidecar."""
+
+
+def _contour(kind: str, frames: int = PHONATION_FRAMES) -> np.ndarray:
+    """One synthetic F0 series, in Hz, with NaN wherever the tracker would have placed nothing.
+
+    Args:
+        kind: ``rising`` and ``falling`` sweep two octaves one way; ``held`` is one pitch with the
+            wobble a real vowel carries; ``speech`` oscillates around one pitch six times a second;
+            ``flat`` is one value exactly; ``unvoiced`` is NaN throughout; ``sparse`` is four voiced
+            frames in an otherwise unvoiced track.
+        frames: How many frames the track carries.
+
+    Returns:
+        The series.
+    """
+    position = np.linspace(0.0, 1.0, frames)
+    wobble = 1.0 + 0.01 * np.random.default_rng(0).standard_normal(frames)
+    if kind == "rising":
+        return 120.0 * 2.0 ** (2.0 * position)
+    if kind == "falling":
+        return 480.0 * 2.0 ** (-2.0 * position)
+    if kind == "held":
+        return 150.0 * wobble
+    if kind == "speech":
+        return 150.0 * 2.0 ** (0.25 * np.sin(2.0 * np.pi * 6.0 * position)) * wobble
+    if kind == "flat":
+        return np.full(frames, 200.0)
+    series = np.full(frames, np.nan)
+    if kind == "sparse":
+        series[10:14] = [180.0, 200.0, 230.0, 260.0]
+    return series
+
+
+def _phonation_store(path: Path, kind: str, *, sidecar: bool = True) -> Path:
+    """A store carrying the ``phonation_tracks`` measurement and the sidecar it does not name.
+
+    Args:
+        path: Where the store goes.
+        kind: Which :func:`_contour` to write.
+        sidecar: Whether the npz the reader resolves by its fixed name is actually written.
+
+    Returns:
+        The store path.
+    """
+    run_dir = path.parent
+    f0_hz = _contour(kind)
+    seconds = f0_hz.size * PHONATION_HOP_S
+    if sidecar:
+        (run_dir / PHONATION_TRACKS_SIDECAR).parent.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            run_dir / PHONATION_TRACKS_SIDECAR,
+            times_s=np.arange(f0_hz.size) * PHONATION_HOP_S,
+            f0_hz=f0_hz,
+            strength=np.full(f0_hz.size, 0.9),
+            f1_hz=np.full(f0_hz.size, 700.0),
+        )
+    return _write_store(
+        path,
+        [
+            _entity("stream", "stream-1", {"name": "recording"}, [0.0, seconds]),
+            _entity("measurement", "phonation-1", dict(PHONATION_ATTRIBUTES), [0.0, seconds]),
+        ],
+    )
+
+
+def _phonation(tmp_path: Path, kind: str, *, sidecar: bool = True) -> RecordingFeatures:
+    """The phonation fixture, extracted.
+
+    Args:
+        tmp_path: The test's temporary directory.
+        kind: Which :func:`_contour` to write.
+        sidecar: Whether the npz is actually written.
+
+    Returns:
+        The record.
+    """
+    return extract_features(
+        _phonation_store(tmp_path / kind / "run" / "store.jsonl", kind, sidecar=sidecar),
+        "sub-7_ses-1_task-glides-low-to-high",
+        str(tmp_path / kind),
+        "glides-low-to-high",
+        "glides-low-to-high",
+        PACKAGED_MEMBERSHIPS,
+        onomatopoeic=PACKAGED_ONOMATOPOEIA,
+    )
+
+
+def _staged(name: str) -> Detector:
+    """One staged candidate by name.
+
+    Args:
+        name: The detector's id.
+
+    Returns:
+        The detector.
+    """
+    return next(candidate for candidate in UNPROFILED_DETECTORS if candidate.name == name)
+
+
+class TestPitchTrajectory:
+    """A glide is a monotonic F0 sweep, and the summary separates one from a vowel and from speech."""
+
+    def test_a_rising_glide_reads_as_one_upward_sweep_over_two_octaves(self, tmp_path: Path) -> None:
+        """Twenty-four semitones in four seconds, every frame of it on the way up."""
+        record = _phonation(tmp_path, "rising")
+        assert set(record.phonation) <= set(PHONATION_SUMMARY_KEYS)
+        assert record.phonation["voiced_fraction"] == pytest.approx(1.0)
+        assert record.phonation["semitone_range"] == pytest.approx(24.0)
+        assert record.phonation["rank_correlation"] == pytest.approx(1.0)
+        assert record.phonation["monotonicity"] == pytest.approx(1.0)
+        assert record.phonation["monotone_fraction"] == pytest.approx(1.0)
+        assert record.phonation["sweep_semitones"] == pytest.approx(24.0)
+        assert record.phonation["sweep_rate_semitones_per_s"] == pytest.approx(24.0 / 3.99)
+        assert record.phonation["sweep_fraction"] == pytest.approx(1.0)
+        assert record.phonation["direction_bias"] > 0.0
+
+    def test_a_falling_glide_is_the_same_gesture_with_every_sign_reversed(self, tmp_path: Path) -> None:
+        """The two glide families differ in direction alone, and the signed keys say which."""
+        rising = _phonation(tmp_path, "rising")
+        falling = _phonation(tmp_path, "falling")
+        for key in ("semitone_range", "monotonicity", "monotone_fraction", "sweep_semitones_abs"):
+            assert falling.phonation[key] == pytest.approx(rising.phonation[key])
+        for key in ("rank_correlation", "semitone_net", "sweep_semitones", "direction_bias"):
+            assert falling.phonation[key] == pytest.approx(-rising.phonation[key])
+        assert detector_value(rising, _staged("glide.phonation_rank_correlation_rising")) == pytest.approx(1.0)
+        assert detector_value(falling, _staged("glide.phonation_rank_correlation_falling")) == pytest.approx(-1.0)
+
+    def test_a_held_vowel_is_voiced_throughout_and_sweeps_nothing(self, tmp_path: Path) -> None:
+        """Held phonation wanders; it does not go one way, and it covers no interval."""
+        record = _phonation(tmp_path, "held")
+        rising = _phonation(tmp_path, "rising")
+        assert record.phonation["voiced_fraction"] == pytest.approx(1.0)
+        assert record.phonation["semitone_range"] < 2.0
+        assert record.phonation["monotonicity"] < 0.2
+        assert record.phonation["monotone_fraction"] < 0.2
+        assert abs(record.phonation["sweep_rate_semitones_per_s"]) < 1.0
+        assert abs(record.phonation["net_over_variation"]) < 0.1
+        assert record.phonation["monotone_fraction"] < rising.phonation["monotone_fraction"]
+
+    def test_an_oscillating_contour_spreads_widely_and_still_sweeps_nothing(self, tmp_path: Path) -> None:
+        """Spread is not trajectory: this one is five semitones wider than the vowel and no sweep."""
+        speech = _phonation(tmp_path, "speech")
+        held = _phonation(tmp_path, "held")
+        rising = _phonation(tmp_path, "rising")
+        assert speech.phonation["semitone_range"] > held.phonation["semitone_range"]
+        assert speech.phonation["semitone_iqr"] > held.phonation["semitone_iqr"]
+        assert speech.phonation["monotonicity"] < 0.2
+        assert speech.phonation["monotone_fraction"] < 0.2
+        assert abs(speech.phonation["net_over_variation"]) < 0.1
+        assert speech.phonation["monotone_fraction"] < rising.phonation["monotone_fraction"]
+
+    def test_a_flat_track_has_a_zero_range_and_no_defined_monotonicity(self, tmp_path: Path) -> None:
+        """One value throughout ranks against nothing, so the coefficient is absent, not zero."""
+        record = _phonation(tmp_path, "flat")
+        assert record.phonation["semitone_range"] == pytest.approx(0.0)
+        assert record.phonation["sweep_semitones"] == pytest.approx(0.0)
+        assert "rank_correlation" not in record.phonation
+        assert "monotonicity" not in record.phonation
+        assert detector_value(record, _staged("glide.phonation_monotonicity")) is None
+
+    def test_an_unvoiced_recording_carries_its_frame_counts_and_no_trajectory(self, tmp_path: Path) -> None:
+        """A track with no voiced frame measured no pitch; a detector reads None, never 0.0."""
+        record = _phonation(tmp_path, "unvoiced")
+        assert record.phonation["frames"] == pytest.approx(PHONATION_FRAMES)
+        assert record.phonation["voiced_frames"] == pytest.approx(0.0)
+        assert record.phonation["voiced_fraction"] == pytest.approx(0.0)
+        assert "semitone_range" not in record.phonation
+        assert "sweep_semitones" not in record.phonation
+        assert detector_value(record, _staged("glide.phonation_sweep_semitones_abs")) is None
+        assert detector_value(record, _staged("voice.phonation_voiced_fraction")) == 0.0
+
+    def test_a_few_voiced_frames_among_many_unvoiced_still_carry_their_trajectory(self, tmp_path: Path) -> None:
+        """Four rising frames in four hundred: a sweep of its own extent, not of the recording's."""
+        record = _phonation(tmp_path, "sparse")
+        assert record.phonation["voiced_frames"] == pytest.approx(4.0)
+        assert record.phonation["voiced_fraction"] == pytest.approx(0.01)
+        assert record.phonation["rank_correlation"] == pytest.approx(1.0)
+        assert record.phonation["sweep_semitones"] > 0.0
+        assert record.phonation["sweep_seconds"] == pytest.approx(0.03)
+        assert record.phonation["sweep_fraction"] < 0.01
+
+    def test_the_measurement_scalars_survive_a_sidecar_that_is_not_there(self, tmp_path: Path) -> None:
+        """The measurement is still evidence that an F0 track was taken; its statistics are not."""
+        record = _phonation(tmp_path, "rising", sidecar=False)
+        assert set(record.phonation) == set(PHONATION_ENTITY_KEYS)
+        assert record.phonation["hop_s"] == pytest.approx(PHONATION_HOP_S)
+        assert detector_value(record, _staged("glide.phonation_monotonicity")) is None
+
+    def test_the_phonation_mapping_is_empty_when_the_measurement_is_absent(self, tmp_path: Path) -> None:
+        """A run that tracked no F0 excludes every trajectory detector rather than scoring zero."""
+        _, silent = _features(tmp_path)
+        assert silent.phonation == {}
+        assert detector_value(silent, _staged("glide.phonation_sweep_semitones_abs")) is None
+
+    def test_every_staged_trajectory_detector_reads_the_sweep_and_is_scored_nowhere(self, tmp_path: Path) -> None:
+        """Each reads a key the rising glide carries, and none carries a grid to be swept over."""
+        record = _phonation(tmp_path, "rising")
+        staged = [candidate for candidate in UNPROFILED_DETECTORS if ".phonation_" in candidate.name]
+        assert len(staged) == 22
+        for candidate in staged:
+            assert candidate.thresholds == ()
+            assert detector_value(record, candidate) is not None, candidate.name
+
+    def test_the_trajectory_survives_the_features_shard(self, tmp_path: Path) -> None:
+        """The summary is columns of floats; the per-frame series it came from is not written."""
+        record = _phonation(tmp_path, "rising")
+        shard = tmp_path / "shard" / f"features{SHARD_SUFFIX}"
+        dump_features([record], shard)
+        restored = load_features(shard)[0]
+        assert restored.phonation == pytest.approx(record.phonation)
 
 
 NEW_DETECTOR_NAMES: tuple[str, ...] = (

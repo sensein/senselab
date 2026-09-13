@@ -538,6 +538,8 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         return _optional(features.praat, arguments[0])
     if source == "ppg":
         return _optional(features.ppg, arguments[0])
+    if source == "phonation":
+        return _optional(features.phonation, arguments[0])
     if source == "ratio":
         numerator = detector_value(features, Detector(detector.name, detector.kind, arguments[0], detector.unit, ()))
         denominator = detector_value(features, Detector(detector.name, detector.kind, arguments[1], detector.unit, ()))
@@ -1426,8 +1428,87 @@ _check_pins(_CANDIDATES)
 DETECTORS: tuple[Detector, ...] = build_catalogue(_CANDIDATES)
 """Every candidate detector, scored at every threshold of its corpus-derived grid."""
 
+_PITCH_TRAJECTORY: tuple[Detector, ...] = (
+    _candidate("glide.phonation_monotonicity", "glide", ("phonation", "monotonicity"), "correlation"),
+    _candidate("glide.phonation_monotone_fraction", "glide", ("phonation", "monotone_fraction"), "fraction"),
+    _candidate("glide.phonation_semitone_range", "glide", ("phonation", "semitone_range"), "semitones"),
+    _candidate("glide.phonation_semitone_iqr", "glide", ("phonation", "semitone_iqr"), "semitones"),
+    _candidate("glide.phonation_sweep_semitones_abs", "glide", ("phonation", "sweep_semitones_abs"), "semitones"),
+    _candidate("glide.phonation_sweep_seconds", "glide", ("phonation", "sweep_seconds"), "seconds"),
+    _candidate("glide.phonation_sweep_fraction", "glide", ("phonation", "sweep_fraction"), "fraction"),
+    _candidate(
+        "glide.phonation_sweep_rate_abs_semitones_per_s",
+        "glide",
+        ("phonation", "sweep_rate_abs_semitones_per_s"),
+        "semitones/s",
+    ),
+    _candidate(
+        "glide.phonation_sweep_over_range",
+        "glide",
+        ("ratio", ("phonation", "sweep_semitones_abs"), ("phonation", "semitone_range")),
+        "ratio",
+    ),
+    _candidate(
+        "glide.phonation_net_over_variation_rising",
+        "glide",
+        ("phonation", "net_over_variation"),
+        "ratio",
+    ),
+    _candidate(
+        "glide.phonation_net_over_variation_falling",
+        "glide",
+        ("phonation", "net_over_variation"),
+        "ratio",
+        "below",
+    ),
+    _candidate(
+        "glide.phonation_monotonicity+no_agreed_word",
+        "glide",
+        ("gated", ("phonation", "monotonicity"), ("words", "agreement"), 1, "below"),
+        "correlation",
+    ),
+    _candidate(
+        "glide.phonation_sweep_semitones_abs+no_agreed_word",
+        "glide",
+        ("gated", ("phonation", "sweep_semitones_abs"), ("words", "agreement"), 1, "below"),
+        "semitones",
+    ),
+    _candidate("glide.phonation_rank_correlation_rising", "glide", ("phonation", "rank_correlation"), "correlation"),
+    _candidate(
+        "glide.phonation_rank_correlation_falling",
+        "glide",
+        ("phonation", "rank_correlation"),
+        "correlation",
+        "below",
+    ),
+    _candidate("glide.phonation_sweep_semitones_rising", "glide", ("phonation", "sweep_semitones"), "semitones"),
+    _candidate(
+        "glide.phonation_sweep_semitones_falling",
+        "glide",
+        ("phonation", "sweep_semitones"),
+        "semitones",
+        "below",
+    ),
+    _candidate("glide.phonation_direction_bias_rising", "glide", ("phonation", "direction_bias"), "fraction"),
+    _candidate(
+        "glide.phonation_direction_bias_falling",
+        "glide",
+        ("phonation", "direction_bias"),
+        "fraction",
+        "below",
+    ),
+    _candidate("voice.phonation_voiced_fraction", "voice", ("phonation", "voiced_fraction"), "fraction"),
+    _candidate("voice.phonation_voiced_seconds", "voice", ("phonation", "voiced_seconds"), "seconds"),
+    _candidate("voice.phonation_strength_median", "voice", ("phonation", "strength_median"), "strength"),
+)
+"""Candidates reading ``RecordingFeatures.phonation``, which no shipped profile has measured. Each
+``_rising``/``_falling`` pair reads one signed key at both polarities.
+``specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`` says what each key measures and
+what the pairs are there to settle."""
+
 UNPROFILED_DETECTORS: tuple[Detector, ...] = (
     _candidate("cough.words_onomatopoeic", "cough", ("onomatopoeic",), "tokens"),
+    *_PITCH_TRAJECTORY,
 )
 """Candidates whose feature no shipped profile has measured. Each carries an empty ``thresholds``
 and is absent from :data:`DETECTORS`; :func:`detector_value` reads one like any other, which is what
