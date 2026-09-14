@@ -15,7 +15,7 @@ Nor are the null keys undocumented: `config-derivations.md` carries an **"UNSET,
 (`:915` onward) giving each one a stated reason. A null in this config is a recorded decision, not an
 oversight.
 
-## Six kinds of owed, and they are not equivalent
+## Seven kinds of owed, and they are not equivalent
 
 ### Derived and in force — listening would *validate*, not supply
 
@@ -150,6 +150,42 @@ of known value and measuring what comes back.**
 Cheap, decisive, and nobody has done either.
 [`praat-instrument-audit.md`](praat-instrument-audit.md) states the same kind at its tail.
 
+### Owed a purpose-collected study — one member, and it is future research
+
+**The impact of speech enhancement on disordered voices.** Added 2026-09-14, when the owner withdrew
+[`praat-instrument-audit.md`](praat-instrument-audit.md)'s **step 1** — the proposal to move the
+Praat scalars off the FRCRN-`enhanced` stream onto `plain`.
+
+**What is known.** `praat_features` measures all forty scalars on `enhanced`
+(`../../src/senselab/audio/workflows/triage/nodes/preprocess.py:883`, recorded as `signal="enhanced"`
+at `:904`). The argument that was raised against that — *FRCRN removes the aperiodic energy that is
+the measurement* — is false: sibilants are broadband aperiodic energy and FRCRN preserves them, and
+the narrower fallback, that the low-level noise component inside voiced phonation is stripped even
+though sibilants survive, is false too — FRCRN preserves vocal texture very well. So the mechanism
+that would have made `enhanced` the wrong stream does not exist.
+
+**What is not known, and this is the item.** Whether `enhanced` or `plain` is the better stream for
+these scalars **on disordered voices** has never been measured. The prior now runs the other way:
+background noise depresses HNR and CPPS and perturbs period detection, so on `plain` a healthy voice
+can read as dysphonic, and many recordings in this corpus carry background noise. That makes
+`enhanced` the defensible default — it does **not** make it measured.
+
+**Why it is a study and not a pass.** Settling it needs **selected voices with disorders, with hand
+labels**, measured both ways. Nothing cheaper reaches it:
+
+- **A corpus pass cannot answer it.** This corpus's only labels are declared task names, so a
+  paired `enhanced`-vs-`plain` re-derivation over all 62,547 stores yields two distributions with
+  nothing to say which is *closer to the voice*. A difference is not a direction.
+- **A quick paired measurement cannot answer it either.** Showing that CPPS shifts by *n* dB between
+  the two streams measures the enhancer, not the instrument's validity. The question is which reading
+  agrees with a perceptual judgement of the disorder, which requires the judgement to exist.
+- **A bench measurement cannot answer it.** Synthesised signals carry no pathology, so the sixth kind
+  does not reach here.
+
+**Scope, so nobody plans it as part of something else.** This is a **future research direction**, not
+a blocker: no repair in the audit waits on it, and the withdrawal of step 1 removed the only thing
+that did. The goal of the triage work is much simpler than answering it.
+
 ## Why the corpus cannot supply any of it
 
 A declared family is what the protocol *asked for*, not what the participant *did*. Fitting against
@@ -256,3 +292,7 @@ Nor discourse-content scoring keys for story recall and picture description.
 **Not commissioned.** Recorded here as the prerequisite behind the owed items, so a reader
 encountering "owed" in any branch document finds one explanation — and finds, first, the check that
 the item is genuinely owed rather than already derived.
+
+**The seventh kind is not one of the three samples and must not be folded into them.** Samples A, B
+and C annotate *this* corpus. The enhancement-on-disordered-voices question needs selected disordered
+voices that are not in it, so commissioning A–C would not advance it by a step.
