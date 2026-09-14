@@ -132,18 +132,32 @@ quasi-periodic pulse train carrying energy at 3×. The peak structure says *ther
 structure*; it does not say which harmonic is the syllable rate.
 
 **D2's nucleus count over the train extent supplies the unit** — syllables ÷ duration is unambiguous.
-That does not reconcile the two rates into one number, which stays forbidden; it uses the
-unambiguous one to label the precise one.
+That does not reconcile the two rates into one number, which stays forbidden; it uses the unambiguous
+one to label the precise one.
+
+**But the unit then inherits a detector D2 itself declares compromised, and the bias runs toward the
+error this is preventing.** D2's minimum sounding interval of 0.1 s "sits on the measurand" at
+6–7 syll/s and merges syllables — which biases the nucleus rate **downward, toward the cycle rate**.
+That is precisely the 3× confusion the disambiguation exists to resolve, so a merged-syllable
+recording can have its unit assigned in the wrong direction. D3 makes this argument about CV; it
+applies to the unit as well.
 
 **For a sequential train the 2f component is more informative than 3f**, since the strongest
 within-cycle asymmetry is usually between one syllable and the other two rather than evenly across
 three.
 
-**Not parameter-free.** An earlier version claimed it was. The method needs an envelope extraction
-method, a lowpass cutoff, an analysis window, and — decisively — **a search band**, since the peak
-must be sought somewhere. All four are declared as conventions per
-[`branch-conventions.md`](branch-conventions.md); the search band in particular determines which
-harmonic can be found at all.
+**Not parameter-free, and only one of the four has a value.** An earlier version claimed the method
+was parameter-free and then listed four conventions without supplying three of them:
+
+| convention | status |
+| --- | --- |
+| lowpass cutoff | **in force** — `envelope.lowpass_hz: 40.0`, derived at `config-derivations.md:43-47`; inherited by name |
+| envelope extraction method | **owed** — linear-amplitude or power, per the argument above, but the method is unspecified |
+| analysis window | **owed** — and per [`branch-conventions.md`](branch-conventions.md) a measurement with no stated window is comparable to nothing |
+| **search band** | **owed, and decisive** — it determines which harmonic is findable at all, which is this capability's whole unit problem |
+
+D3 marks its analogous parameters owed; this does the same rather than listing conventions as though
+declaring them were the same as having them.
 
 **Peak sharpness is not a regularity measure.** Spectral resolution scales as 1/T, so a short train
 gives a broad peak however regular the production was, and the measure would report brevity as

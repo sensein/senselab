@@ -105,14 +105,16 @@ each HeAR label's mapped AudioSet node and its descendants, from the classifier-
 
 **Emits.** A corroboration assertion when an overlapping YAMNet label is in the closure, a `contest`
 when it is in `airway.contest_labels`, and an `abstain` carrying `colocated_windows_n` when neither
-fired (`airway.py:305-338`).
+fired (`airway.py:303-341`).
 
 **The corroboration verb changes from `confirm` to `label`.** The contract's verb set is `label`,
 `contest`, `refine`, `trim`, `propose`, plus `abstain` and `flag` keeping their meanings.
 `confirm` is on neither list, and the contract's piece 7 widens REPORT's assertion read **by verb** —
 so AIRWAY's corroborations would go invisible in the very change designed to make branch assertions
-visible. The migration is a one-line change at `airway.py:305`, and the resulting assertion is
-distinguished from A1's by its `yamnet_labels` and `yamnet_window_ids` attributes.
+visible. The migration is a one-line change at `airway.py:303` — **but only because `confirm` and `contest`
+share the tuple on that line**, `(("confirm", confirms), ("contest", contests))`, so a naive edit
+touches both verbs. The resulting assertion is distinguished from A1's by its `yamnet_labels` and
+`yamnet_window_ids` attributes.
 
 ### A3 — Contest a label (**gated behind null config; structurally dead**)
 

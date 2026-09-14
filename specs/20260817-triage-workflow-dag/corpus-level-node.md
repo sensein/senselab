@@ -120,10 +120,27 @@ that file at all. At session level the second condition comes from the session.
 **Level: session.** It shares the grouping mechanism with C2 and with
 [`branch-quality.md`](branch-quality.md) Q2's bandwidth-from-another-recording.
 
-**One caution specific to this pair.** `derive_f0_range` selects its bin from the recording's own
-trimmed mean, and shouting raises F0 by 3–8 semitones — so the effort recording and the reference
-recording can land in **different bins** for the same speaker (`branch-voice.md` V6). Any
-cross-recording F0 comparison must record which bin each side used, or it compares two instruments.
+**Three cautions specific to this pair.**
+
+**The bin.** `derive_f0_range` selects from the recording's own trimmed mean, and shouting raises F0
+by 3–8 semitones — so the effort recording and the reference can land in **different bins** for the
+same speaker (`branch-voice.md` V6). Any cross-recording F0 comparison records which bin each side
+used, or it compares two instruments.
+
+**The vowel, which V8 does not solve here.** `loudness` is "hey" — /heɪ/, a **diphthong**;
+`prolonged-vowel` is a sustained monophthong. Tilt, CPP and F0 are vowel-dependent by the same order
+as the effort effect being measured, so the comparison confounds effort with vowel. V8 is named a
+precondition for C2; it is one for C3 too — **and for C3 identifying the vowels does not make them
+comparable.**
+
+**Only `prolonged-vowel` is an admissible reference.** `maximum-phonation-time` is **not** a
+comfortable-effort condition: "as long as possible" produces declining intensity and downward F0
+drift across the attempt, which `branch-voice.md` V2 knows and requires covariates for. Using it as
+the baseline would compare maximal effort against a decaying maximal effort.
+
+**And distance moves with the condition.** Participants pull the phone away when asked to be loud,
+which moves tilt and depresses CPP — the same correlates being compared. C3 previously carried the
+bin caution and not this one.
 
 ## Candidates, not yet specified
 
@@ -158,6 +175,16 @@ beyond this node:
    `run.json`, figure and report. So taking a name in `GRAPH_ORDER`, or writing a verdict entity, or
    carrying a `node:` attribute, are three different decisions with three different reader
    consequences. `GRAPH_ORDER` has ten entries and every reader iterating it would see a new one.
+
+## Everything here is deferred, not scheduled
+
+Worth recording plainly: **nothing "moved to this node" has a date, an owner or a dependency in any
+plan** — C1, C2, C3, and [`branch-quality.md`](branch-quality.md) Q2's session-level bandwidth. Moving
+a capability here resolved *where it belongs*; it did not schedule it.
+
+**And C1 — the one nearly-free capability — is blocked on the three open questions below**: what this
+node writes, where the finding lives, and whether it takes a node name. A digest comparison needs
+none of the domain work the others do, and it is gated on the same unresolved plumbing.
 
 ## What it does not do
 

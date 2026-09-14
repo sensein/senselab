@@ -15,7 +15,7 @@ Nor are the null keys undocumented: `config-derivations.md` carries an **"UNSET,
 (`:915` onward) giving each one a stated reason. A null in this config is a recorded decision, not an
 oversight.
 
-## Four kinds of owed, and they are not equivalent
+## Five kinds of owed, and they are not equivalent
 
 ### Derived and in force — listening would *validate*, not supply
 
@@ -80,6 +80,13 @@ formant parameters the wrapper does not forward.
 **These are not owed a listening sample. They are owed a code change**, and no amount of annotation
 would validate them.
 
+**The support-count gap belongs here too, and it has a specific worst case.**
+`extract_speech_rate` computes `numpeaks` (`praat_parselmouth.py:245`) and `number_syllables`
+(`:310`) and **returns only rates** — so the support count for S4's and D2's speaking and
+articulation rates, over roughly 25,000 and 7,989 recordings, is computed and discarded. That is what
+makes [`branch-conventions.md`](branch-conventions.md)'s mandatory support count specifically
+unsatisfiable for the two largest rate populations in the corpus.
+
 The audit also found that **`config-derivations.md:571-578` is factually wrong** about
 `phonation.periods_per_window: 4.5` — it cites "Praat's own documented defaults for the cc method"
 where Parselmouth and the Praat form both say 1.0. The value may still be right; the justification is
@@ -131,7 +138,31 @@ CAPE-V or GRBAS, rated by speech-language pathologists, **multiple raters**, wit
 intra-rater consistency. Perceptual voice ratings have notoriously moderate inter-rater agreement, so
 a single rater produces a number with no known reliability.
 
-**Merging A and B gets the staffing and the power wrong for both.**
+### Sample C — signal typing
+
+**Titze type 1 / 2 / 3 is in neither sample above, and it is the ground truth
+[`branch-voice.md`](branch-voice.md) V4's whole qualification scheme rests on.** Sample A is
+event and content annotation; Sample B is CAPE-V or GRBAS severity. Neither produces a signal type,
+which is a **visual** judgement from narrowband spectrograms — a third annotation kind, with a third
+kind of annotator.
+
+**And there is a constructive substitute available today, better than what V4 currently proposes.**
+Run `f0_track` **twice with floors an octave apart and compare the returned `strength` arrays**: a
+period-doubled voice locks with higher strength at the lower floor. That detects type 2 directly,
+where V4's period-length modality test provably fails in the case it exists to catch (the tracker
+locks to the subharmonic and the distribution is unimodal at 2T).
+
+**Merging A, B and C gets the staffing and the power wrong for all three.**
+
+### Two constraints on Sample B
+
+**Its unit is the session, not the recording.** CAPE-V requires sustained vowels, sentences *and*
+running speech, which in this corpus are separate recordings of one sitting — the same grouping
+[`corpus-level-node.md`](corpus-level-node.md) needs for C2 and C3.
+
+**Raters must hear the stream the measurement is computed on** — 16 kHz mono `plain` — not the
+original file. A rating made on 48 kHz audio does not validate a measurement made on a resampled,
+band-limited one.
 
 ## Sizing: the positives set the power
 

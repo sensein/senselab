@@ -96,7 +96,17 @@ and V4 would compute perturbation and CPPS over segments containing consonants, 
 vowels — the classic invalid-perturbation error, which none of V4's type-2 or type-3 qualifiers
 detects.
 
-`formant_track` is already in `phonation_tracks`, so formant stationarity costs nothing new.
+**The inputs exist; the statistics do not, and they are owed.** `formant_track` is already in
+`phonation_tracks`, so formant stationarity costs no new extraction — but that is true of the
+**input** and false of the **statistic**. Nothing named `spectral_flux` or `stationarity` exists
+anywhere in `src/senselab`, and none of the three has a named statistic (standard deviation? a trend
+test? a windowed variance ratio? frame-to-frame spectral distance under which metric?), a window, or
+a config key.
+
+[`branch-conventions.md`](branch-conventions.md) rules that a measurement with no stated window is
+comparable to nothing, so **all three are owed a statistic and a window, declared as conventions.**
+This is the branch's foundational capability and it separates a sustained vowel from connected speech
+across 22,277 routed recordings, so the gap is load-bearing rather than a detail.
 
 **Steadiness is a covariate, not a gate.** V4 carries it on every perturbation and CPPS value rather
 than V1 refusing to propose — the same discipline as the rest of the inversion.
@@ -315,8 +325,7 @@ right words — "promoted as a method and not currently trustworthy as implement
 
 **A value cut cannot be qualified away.** The `> 4` cut is selection on the dependent variable: no
 covariate recovers an estimate from a filtered sample, and with support counts unavailable a reader
-cannot see how much was deleted. And 4 dB sits *inside* the published normal/dysphonic decision
-region, not below it.
+cannot see how much was deleted.
 
 **What replaces it is step 4 of [`praat-instrument-audit.md`](praat-instrument-audit.md)'s
 remediation path** — a direct CPPS implementation of roughly thirty lines, with no value cut, no
@@ -387,9 +396,14 @@ validity judgement itself**, not merely into the measurement.
 **Two covariates specific to this block**, beyond the shared set in
 [`branch-conventions.md`](branch-conventions.md):
 
-- **sample rate.** Period-mark precision is quantised by the sample period, so jitter has a floor
-  set by the sample rate, and this corpus has mixed rates. *Effective bandwidth does not substitute*
-  — it is about the frequency content, this is about time resolution.
+- **sample rate — and the correction here is worse than the original claim.** An earlier version
+  said "this corpus has mixed rates", which is true of the *files* and false at the point of
+  measurement: `resample.target_hz: 16000` means **every stream any of these measurements sees is
+  16 kHz mono**. So the time-resolution floor on jitter is **uniform across the corpus and
+  unquantified** — not a between-recording covariate but a constant nobody has measured. Whether
+  interpolated pulse placement puts that floor below the ~0.2–1% normal jitter range at 16 kHz is
+  **unmeasured, and should be measured before jitter is published at all**. *Effective bandwidth does
+  not substitute* — that is frequency content, this is time resolution.
 - **segment SNR.** Additive noise inflates both measures.
 
 **Name the variant.** `local` jitter and shimmer are sensitive to slow drift; `ppq5` and `rap` much
@@ -423,10 +437,17 @@ Vocal tremor is central in essential tremor, Parkinson's disease and spasmodic d
 machinery [`branch-ddk.md`](branch-ddk.md) D1 specifies, run at a different search band (4–8 Hz
 rather than the syllable rate) over the F0 contour and the amplitude envelope of a V1 attempt.
 
-**It also explains a V4 observation.** A 4–8 Hz modulation is exactly what makes `local` jitter and
-shimmer diverge from `ppq5` and `apq11`: the short-window variants track the modulation, the
-longer-window ones average across it. Reporting tremor turns that divergence from an anomaly into a
-measurement.
+**It also explains a V4 observation — for some variants, and the exception matters.** A 4–8 Hz
+modulation makes `local` diverge from the smoothed variants because the short-window measure tracks
+the modulation while the longer-window one averages across it.
+
+**That holds for `ppq5` and `rap`, and inverts for `apq11` at low F0.** For a sinusoidal perturbation
+of period *P* cycles the local response is 2·sin(π/P) while the APQ11 residual is |1 − D₁₁(1/P)|;
+the two **cross at P ≈ 30 cycles**, which is a 5 Hz tremor at F0 150 Hz. Below that — **most adult
+male voices in this corpus** — `apq11` responds *more* to the tremor than `local` does.
+
+So the divergence cannot be read as a tremor signature **without stating F0**, and the direction of
+the expected divergence flips across a boundary that falls inside this population.
 
 **Emits.** A per-span measurement: modulation frequency, modulation depth for F0 and for amplitude,
 and the search band as a declared convention.
@@ -505,6 +526,9 @@ instrument as [`branch-airway.md`](branch-airway.md) A5 — with the **expected 
 2). That makes a `counts` entry with a real `declared` half, which no other VOICE capability has.
 
 Then, per recording: the **count**, the **timing**, and **within-file dispersion** across attempts.
+
+**Dispersion on v1 is n = 3**, with a warm-up or fatigue trend that three points cannot separate from
+random variation.
 
 **Report the measured level separation as the result, never as the segmentation criterion.** A
 previous version proposed clustering on level, which was the same error V1 and D1 were inverted to
@@ -627,9 +651,17 @@ unrecoverable. So **V8 fails systematically on high vowels and high-F0 speakers*
 limitation lands on **V1's formant-stationarity qualifier**, which will read "unsteady" for high-F0
 speakers for tracker reasons rather than production ones.
 
+**V8 has no decision rule, and that is an owed operating point.** F1 and F2 are the *correlate* of
+vowel identity, not the label. Mapping a formant pair to a category needs a boundary in a space that
+**scales with vocal tract length**, and there are no norms here to place one.
+
+**A session-level formant normalisation would work** — the participant's own connected speech
+supplies the scaling — and it uses the grouping [`corpus-level-node.md`](corpus-level-node.md)
+already needs for C2, C3 and [`branch-quality.md`](branch-quality.md) Q2.
+
 **V8 is a precondition for the composite indices**, not an optional covariate: AVQI's protocol
-requires the sustained vowel to be /a/, so without vowel identity the pair cannot even be assembled.
-See [`corpus-level-node.md`](corpus-level-node.md) C2.
+requires the sustained vowel to be /a/, so without vowel identity the pair cannot be assembled. It is
+a precondition for **C3** as well — see there, where it does not by itself suffice.
 
 ## Deviations
 
