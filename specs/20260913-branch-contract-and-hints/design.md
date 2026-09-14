@@ -103,9 +103,8 @@ nothing to consolidate"; `vocabulary.py:423` folds on `outcome` and reads no `de
 stage's last.
 
 **Note the compounding with rule (a).** Excluding covering-window scores makes "no per-span
-classifier produced scores" *more* common, so one piece of this design grows the population that
-triggers this flag while another piece would have removed the flag. Both pieces must name the
-interaction.
+classifier produced scores" *more* common, so rule (a) grows the population this flag fires on. Both
+pieces must name the interaction.
 
 **Four documents assert the split and must be updated**, not only the one cited above:
 `taxonomy.md:27-29` ("a node that both measures content and decides what runs on it cannot be checked
@@ -323,6 +322,11 @@ are knowable only at the recording grain. So:
 - `data/task_expectations/<version>.yaml`, two top-level maps: `by_acoustic_task` keyed by
   `acoustic_task_name`, and `by_task` keyed by `task_name`, the latter taking precedence where both
   match. Each entry quotes the sidecar's `instructions` verbatim as its derivation.
+- **An entry's keys are**: `expected_content` (which branch's subject the task asks for),
+  `expected_event_class` and `expected_event_count` (what `expected_event_count`'s `declared` half
+  reads, absent for tasks with no countable event), `targeted_speaker_count` (what `speaker_count`'s
+  `declared` half reads, and the "single target" claim a branch conditions on), and `instructions`.
+  Nothing else in this spec reads a field of an entry.
 - **Versioned by filename**, as the detector profile is, and named in the `declaration` measurement
   so a run says which table it read.
 - **Absent key is VERDICT-visible**: the declaration records `expectations: null` with the key it
@@ -441,10 +445,12 @@ That is exactly the traversal the annotating verbs need, already in production.
 corrected extent is a claim beside the original — attributable, reversible, and never in competition
 with it for a reader keying on `span_id`.
 
-**But SPEECH's, VOICE's and DDK's assertions currently reach no reader.** `report.py:1127` drops
+**But SPEECH's, VOICE's and DDK's *assertions* currently reach no reader.** `report.py:1127` drops
 every assertion whose branch is not AIRWAY, and `figure.py:577-578` reads assertions only where
-`name == "squim"`. Widening REPORT's assertion read is therefore a piece of work in its own right,
-listed below, and not something the existing readers absorb for free.
+`name == "squim"`. Their **spans** are read — `report.py:1130-1139` has explicit arms for them, and
+`propose` mints spans — so it is precisely the four annotating verbs whose output is invisible.
+Widening REPORT's assertion read is a piece of work in its own right, listed below, and not something
+the existing readers absorb for free.
 
 **This is the store's own idiom, not an invention.** `corroborated_by` already records rival
 proposals as an attribute without minting entities, and `withdraw_contradicted_clips` with
@@ -477,13 +483,31 @@ its own spans, and writes them with `family: "speech"` (`speech.py:879-883`). It
 instance of the contract.
 
 **VOICE was designed to and cannot.** Its subject is every live span whose `family` is `phonation`
-(`voice.py:232`, `_PHONATION_FAMILY` at `:39`). Nothing in the tree proposes one — the detector
-was retired 2026-09-04 — so the branch takes its no-span path and returns `Outcome.FAIL` on every
-recording.
+(`voice.py:232`, `_PHONATION_FAMILY` at `:39`). **Nothing reachable proposes one.** The detector that
+did was retired 2026-09-04; VOICE itself writes the family at `voice.py:339`, but that code sits
+downstream of the no-span path it always takes, so it never runs. The branch returns `Outcome.FAIL`
+on every recording.
 
 Under this contract **the branch is the proposer**, and that is the whole fix — **with the selector
-changed to the branch family.** `propose` writes `family: "voice"`; `phonation` was the retired
-proposer's name and nothing justifies keeping a second family for the same subject.
+changed to the branch family.** `propose` writes `family: "voice"`, so VOICE's input filter and its
+output family coincide, which is what the contract wants.
+
+**That rename is not costless, and an earlier revision wrongly called it so.** `phonation` is the
+family VOICE **writes today** (`voice.py:339`), and REPORT reads it: `_spans_of_family(store,
+"phonation", voice=False)` at `report.py:673`, the `voice=True` reads at `:715` and `:1154`, the
+descriptions at `:1134` and `:1173`, and VOICE's summary keyed on `phonation_s` at `:104`.
+`_spans_of_family` (`report.py:291-308`) exists precisely to separate the detector-proposed
+population from VOICE's own, by `onset_kind`. So this is a **writer-vocabulary change on a family
+REPORT reads** — the same rule the merge invokes for node names, and it applies here too: VOICE
+writes `voice`, REPORT keeps reading `phonation` for finished stores, and the `onset_kind` split that
+`_spans_of_family` performs is what the contract replaces, since a proposed span and an annotated one
+are now different entity kinds rather than two populations of one family.
+
+**VOICE is the worked example of the contract, and of what it forbids.** `voice.py:334-348` mints a
+second, period-aligned span from an input span, carrying `onset_kind` and `offset_kind` — **that is
+exactly the re-mint the annotating verbs replace.** Under this contract that minting becomes a
+`refine` assertion carrying `corrected_extent`, the original span keeps its id and its measurements,
+and `_spans_of_family`'s two-population problem dissolves with it.
 
 **AIRWAY has half the verbs already**, writing `label`, `confirm`, `contest`, `abstain` and `flag`
 assertions across its first three steps (`airway.py:230` through `:373`).
@@ -492,12 +516,18 @@ Two of those are the contract's own verbs already, which is why the contract ado
 rather than renaming them. `confirm` becomes a `label` carrying its corroborating window ids;
 `abstain` and `flag` keep their current meanings.
 
-**`contest` needs a threshold-free definition, and gets one — with the same budget rule (a) gets.**
+**`contest`'s contract meaning is already settled; what AIRWAY needs is a criterion for applying
+it.** The contract's definition is the one in the verb table — *the span does not carry what was
+proposed* — and QUALITY's clip contradiction (`quality.py:285-295`) is an instance of it under a
+completely different criterion. The two must not be conflated.
+
+**AIRWAY's criterion needs to be threshold-free, and gets one — with the same budget rule (a) gets.**
 `airway.contest_labels` is `null` (`default.yaml:138`), so `_contest_labels` returns the empty set
 (`airway.py:150`) and `contested_n` is structurally zero; the ground-truth rule forbids fitting the
-list. So `contest` is defined without one: **a branch contests a span when it finds no evidence of any
-kind within that span's extent.** That needs no fitted label list, and leaves the fitted list as a
-later refinement letting a branch contest on *contrary* evidence rather than only on absent evidence.
+list. So AIRWAY contests without one: **it contests a span when it finds no evidence of any kind
+within that span's extent.** That is AIRWAY's particular test, not the contract's, and it leaves the
+fitted list as a later refinement letting AIRWAY contest on *contrary* evidence rather than only on
+absent evidence.
 
 **That definition interacts badly with rule (a) and must be counted before it ships.** Rule (a) makes
 covering-window labels ineligible as evidence, and coughs are usually sub-0.96 s, so "no evidence of
@@ -505,11 +535,15 @@ any kind" would contest most short spans. `contested_n` would go from structural
 near-total. **The same before-and-after count rule (a) requires is required here**, and for the same
 reason: the two changes compound.
 
-The chain that makes this urgent is not the mismatch flag — `vocabulary.py:393` is driven by
-`_agreement` over `findings`, and `_resolved` (`:209-220`) maps every non-FAIL outcome to `present`,
-so a contest never moves it. It is shorter and stronger: contests → AIRWAY's `flags` → AIRWAY
-`Outcome.FLAG` (`airway.py:379-380`) → the any-FLAG fold at `vocabulary.py:423` → `Triage.FLAG`.
-**Every contest flags the file directly.**
+**Every contest flags the file**, by one of two chains. The usual one is short: contests → AIRWAY's
+`flags` → AIRWAY `Outcome.FLAG` (`airway.py:379-380`) → the any-FLAG fold at `vocabulary.py:423` →
+`Triage.FLAG`. The mismatch ground at `vocabulary.py:393` plays no part in it, because `_agreement`
+runs over `findings` and `_resolved` (`:209-220`) maps every non-FAIL outcome to `present`.
+
+But a recording whose spans are *all* contested on absence takes `not labels_by_span`
+(`airway.py:376-378`) and returns **FAIL**, which resolves `absent` and therefore does reach the
+mismatch ground — and that is exactly the population a contest-on-absence targets. Both chains end in
+a flagged file; the budget is required either way.
 
 `contested_n` also needs redefining before it can be counted: it increments inside the per-label loop
 (`airway.py:289`, `:323-324`), and a span with no members never enters that loop (`:260-261`) — which
@@ -518,7 +552,8 @@ is exactly the population a contest-on-absence targets.
 **Background-typed gap spans are not contestable, and the reason is the verb's object, not the
 evidence.** A gap span carries real branch-readable evidence — gaps are appended to `span_ids`
 (`preprocess.py:1583`) and the per-span classifiers run over them, which is why 143 of 384 consensus
-rows traced to gaps. So "no evidence within the extent" is not automatically true of a gap. What is
+rows traced to gaps in the 2026-09-07 measurement — a figure that predates its own fix, per
+Corrections below, and is cited here only for the mechanism it demonstrates. So "no evidence within the extent" is not automatically true of a gap. What is
 true is that `contest` carries *that a span does not carry what was proposed*, and **a gap proposes
 nothing**, so a contest over one has no object.
 
@@ -552,10 +587,18 @@ A deviation is an observation **with an extent**. Three qualify:
 | `off_task_extent` | a region of the recording that does not serve the declared task |
 
 **`speaker_count` and `expected_event_count` are not deviations** — they are file-level counts with
-no extent, and the section's own definition excludes them. They are written **beside the
-declaration**, as two numbers each: what was found, and what was declared. Earlier drafts called them
-`extra_speaker` and `missing_expected_event` and put them in this table; both the names and the
-placement encoded a comparison the branch is not entitled to make.
+no extent, and the section's own definition excludes them.
+
+They are written as a **per-branch `counts` measurement**, each entry carrying `found` and
+`declared`, the latter copied from the declaration. Not "beside the declaration", which an earlier
+draft said and which **cannot be built**: the declaration is SCREEN's, written at stage 2, while
+`expected_event_count`'s `found` half can only come from a branch at stage 3. (`speaker_count` would
+fit there, since its `found` half comes from PREPROCESS's diarization at stage 1 — but splitting the
+two placements is worse than one rule.) A measurement rather than verdict `detail` because these are
+facts, not conclusions.
+
+Earlier drafts called them `extra_speaker` and `missing_expected_event` and put them in the deviation
+table; both the names and the placement encoded a comparison the branch is not entitled to make.
 
 ### The line the ground-truth rule draws through this table
 
@@ -569,8 +612,8 @@ located, with the declaration only saying where to look.
 **The two counts are what forced the line to be drawn.** As `missing_expected_event` and
 `extra_speaker` they scored the recording against a count the declaration asserts and nobody verified
 — and "expected five breaths, found three" is as likely to mean the table is wrong as that the
-participant under-performed. Recorded instead as **two numbers beside the declaration, found and
-declared, with no discrepancy asserted**, they stay observations. Whoever reads them may compare; the
+participant under-performed. Recorded instead as **`found` and `declared` on the per-branch `counts`
+measurement, with no discrepancy asserted**, they stay observations. Whoever reads them may compare; the
 branch does not, and both **owe ground truth** before any consumer treats the difference as a
 finding.
 
@@ -649,11 +692,11 @@ not widen.** The description is assembled by REPORT, and VERDICT's `detail` carr
 reader follows.
 
 **REPORT does not read the whole store either, and an earlier revision claimed it did.** It reads
-spans and measurements across branches, but `report.py:1127` drops every assertion whose branch is not
-AIRWAY, and `figure.py:577-578` reads assertions only where `name == "squim"`. Under the annotating
-contract that means **SPEECH's, VOICE's and DDK's entire output reaches no reader at all.** Widening
-REPORT's assertion read is a prerequisite for the description job, and is listed as its own piece
-below. Whether the durable description should
+spans and measurements across branches — including SPEECH's and VOICE's spans, which have their own
+arms at `report.py:1130-1139` — but `report.py:1127` drops every assertion whose branch is not AIRWAY,
+and `figure.py:577-578` reads assertions only where `name == "squim"`. Under the annotating contract
+that means **the four annotating verbs' output reaches no reader** outside AIRWAY. Widening REPORT's
+assertion read is a prerequisite for the description job, and is listed as its own piece below. Whether the durable description should
 instead be its own entity written by VERDICT is **unresolved**.
 
 **A deviation does not drive a reject**, and for now does not drive a flag either. Whether a
@@ -681,10 +724,13 @@ Dependency order, with the pieces that are genuinely independent marked:
 6. **Whole-file diarization** — the raw-vs-enhanced pilot first, then the extend driver, then SPEECH's
    diarize step becoming a read. **Not independent of 5**: `speaker_count` needs the declaration's
    single-target claim.
-7. **Widen REPORT's assertion read** — `report.py:1127` drops every non-AIRWAY assertion and
-   `figure.py:577-578` reads only SQUIM, so under the annotating contract three branches' output
-   reaches no reader. **Independent of the branch work and a prerequisite for it**; without it a
-   branch can be built and its findings be invisible.
+7. **Widen REPORT's assertion read — by verb, not by branch.** `report.py:1123` already filters to
+   `_EVIDENCE_BRANCHES`, so `:1127` is purely the AIRWAY-on-assertions restriction, and lifting it
+   branch-wise would admit SPEECH's `verb: "attribute"` assertions — **one per word**
+   (`speech.py:790-793`). Admit the contract's five verbs plus `abstain` and `flag`; leave
+   `attribute`, `measure` (`preprocess.py:1817`, `:1824`, `:1842`) and `withdraw` (`:597`) out.
+   **Independent of the branch work and a prerequisite for it**; without it a branch can be built and
+   its annotations be invisible.
 8. **The branch contract, per branch** — SPEECH first (closest to it), then AIRWAY (which also closes
    the `_windows_covering` gap), then VOICE (which needs a proposer before it has a subject), then
    DDK (which needs a node). Depends on 5, on 6 for `speaker_count`, and on 7 to be visible.
