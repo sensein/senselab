@@ -72,27 +72,44 @@ both read the same key, so an override changed between a PREPROCESS run and a la
 **Parameter-free?** No, but `quality.clip_contradiction_margin` is a tolerance on a physical
 comparison rather than a classification cut, and it is derived and recorded in `data/`.
 
-### Q2 — Effective bandwidth (**not built; the highest-value addition here**)
+### Q2 — Effective bandwidth (**not built; highest-value addition, and it must not measure the vowel**)
 
-**Question.** What frequency band does this recording actually carry?
+**Question.** What frequency band does the *capture chain* carry?
 
-**Effective bandwidth is not the declared sample rate.** A 16 kHz file may carry nothing above
-4 kHz — because of the codec, the microphone, or the capture chain. And CPP, spectral slope and
-tilt, spectral moments, HNR and F3/F4 are **all bandwidth-dependent**, so an undeclared band limit
-turns device class into a pseudo-finding: a population difference that is really a phone difference.
+**Effective bandwidth is not the declared sample rate.** A 16 kHz file may carry nothing above 4 kHz
+— codec, microphone, or noise suppression. CPP, spectral slope and tilt, spectral moments, HNR and
+F3/F4 are **all bandwidth-dependent**, so an undeclared band limit turns device class into a
+pseudo-finding.
 
-**Measurable from the long-term average spectrum**, which needs no threshold to report — the
-roll-off point is a description of the spectrum, not a classification of the device.
+**Measuring it as an LTAS roll-off measures the content, not the device.** A sustained /a/ has little
+energy above 5 kHz **because vowels do not** — and this covariate would be computed on
+`prolonged-vowel` and `maximum-phonation-time`, 5,113 recordings, precisely those whose CPP and HNR
+it exists to qualify. A wrong covariate is worse than none: it does not merely mislead, it **explains
+away real findings** as device artefacts.
 
-**This is why Q5's sample-rate equality check is a weak substitute**: it compares two declarations of
-what the file *should* be, and says nothing about what it carries.
+**Detect the cliff, not the roll-off.** A codec or anti-alias filter produces a spectral edge —
+tens of dB over a fraction of an octave, above which the level sits at the noise floor with near-zero
+variance. A vowel's natural spectral decay has neither the slope nor the variance collapse. The
+discriminating feature is the **abruptness and the flatness above it**, not the level at any
+frequency.
 
-**Emits.** A file-level measurement. It is the covariate
-[`branch-conventions.md`](branch-conventions.md) requires every acoustic branch measurement to carry,
-so QUALITY computing it once is what makes that rule affordable.
+**Prefer broadband content.** Fricatives, coughs and background segments excite the band that matters;
+sustained vowels do not. Where a recording has no broadband content, the measurement is
+**unavailable** rather than estimated from a vowel.
 
-**Where it runs.** The long-term average spectrum needs the waveform, so **PREPROCESS computes it and
-QUALITY reads it** — the same division that keeps Q1 audio-free.
+**Not threshold-free.** An earlier version said it "needs no threshold to report". A roll-off or a
+cliff is defined relative to something — a reference level, a slope in dB/octave, a variance
+criterion. All are declared as conventions per
+[`branch-conventions.md`](branch-conventions.md).
+
+**It is file-level, and that is consistent.** Bandwidth is a property of the capture chain, not of a
+span, so it is computed once and referenced by every extent. An earlier version of
+`branch-conventions.md` required all covariates per-extent, which contradicted this; that document now
+distinguishes per-extent covariates (clipping, SNR, support count) from file-level ones (bandwidth,
+AGC and noise-suppression signatures). **An AGC signature is not definable on a 400 ms span at all.**
+
+**Where it runs.** The spectrum needs the waveform, so **PREPROCESS computes it and QUALITY reads
+it** — the division that keeps Q1 audio-free.
 
 ### Q3 — Background content (**not built; depends on gap spans becoming background**)
 
@@ -133,6 +150,11 @@ comparisons the corpus is scored against.
 
 **Emits.** A file-level assertion naming the other recording. **Free**: the digest exists, and the
 comparison is equality.
+
+**It is a lower bound.** A checksum catches byte-identical duplicates only; a re-encode on upload —
+different container, different bitrate, a resample — defeats it entirely. So a zero count means "no
+*exact* duplicates found", not "no duplicates". Near-duplicate detection needs an audio fingerprint,
+which is not in the inventory.
 
 **Where it runs.** Cross-recording comparison is outside the single-recording store, so this belongs
 to a corpus-level pass rather than to a per-recording QUALITY invocation. Recorded here because it is
