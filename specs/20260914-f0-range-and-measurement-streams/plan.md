@@ -53,7 +53,7 @@
 
 ### What does not need changing, and why
 
-`routing_analysis/features.py` finds the PPG measurement **by name** and resolves its sidecar from the measurement's `path` attribute — it applies no `signal` filter. So Task 5 changes the DDK gate feature's **value**, not its availability. This also means `live_evidence_test.py:216` and `routing_analysis_test.py:949`/`:959`, which hardcode `"signal": "enhanced"` in PPG fixtures, will **keep passing**. Update them for accuracy, but do not expect a failure to prompt you.
+`routing_analysis/features.py` finds the PPG measurement **by name** and resolves its sidecar from the measurement's `path` attribute — it applies no `signal` filter. So Task 5 changes the DDK gate feature's **value**, not its availability. This also means `live_evidence_test.py:216` and `routing_analysis_test.py:949`/`:959`, which hardcode `"signal": "enhanced"` — `:949` in the **`praat_features`** fixture, `:959` in the **`ppg_posteriorgram`** one, not two PPG fixtures — will **keep passing**. Update them for accuracy, but do not expect a failure to prompt you.
 
 ---
 
@@ -76,35 +76,44 @@
 **The rule that works is asymmetric, and two of its three parts are measured rather than cited.**
 
 1. **Floor: `max(search_floor, p5 / 1.5)`** — senselab's convention.
-2. **Ceiling: `min(search_ceiling, 2.5 × q3)`** — **Hirst 2011's coefficient**, and the one cited part. Hirst diagnoses this exact failure — *"if the Pitch Floor is too low then we are likely to get octave errors […] Setting the Pitch Ceiling too high does not, however, seem to lead to any systematic errors"* — and fixes it by widening the ceiling coefficient for **every** recording rather than detecting a failure. That asymmetry is his empirical finding, and it is why the ceiling may be generous while the floor may not.
+2. **Ceiling: `min(search_ceiling, max(2.5 × q3, 1.5 × p95))`** — the `2.5 × q3` term is **Hirst 2011's coefficient** and the one cited part; the `max` with `1.5 × p95` is senselab's own. Hirst diagnoses this exact failure — *"if the Pitch Floor is too low then we are likely to get octave errors […] Setting the Pitch Ceiling too high does not, however, seem to lead to any systematic errors"* — and fixes it by widening the ceiling coefficient for **every** recording rather than detecting a failure. That asymmetry is his empirical finding, and it is why the ceiling may be generous while the floor may not.
+
+   **Why the `max`, measured.** Hirst pairs `2.5` with a **quartile** floor. Pairing his coefficient with a p5 floor puts it on the less tail-sensitive statistic, so brief high excursions fall outside q3's reach — measured, `2.5 × q3` clips a **0.4 s dysphonic register break (110→440 Hz) at 275 Hz** and a 0.35 s emphatic peak at 287 Hz, both of which `1.5 × p95` keeps. Those excursions are exactly what this corpus is full of. Over 14 adversarial cases: `2.5 × q3` alone **13/14**, `1.5 × p95` alone **12/14**, `max(2.5 × q3, 1.5 × p95)` **14/14**.
 3. **A pinned-contour fallback**: if **p95 falls below twice the search floor** the whole contour sits within an octave of the bottom of the search range, the narrowing is untrustworthy, and the **wide search range is used instead**. This is **senselab's own** — see A1 below.
 
 **Why all three, measured.** Neither of the first two alone is sufficient, and the failures are on different material:
 
-| source | true F0 | Hirst quartiles alone | fallback alone | all three |
-| --- | --- | --- | --- | --- |
-| 330 Hz + strong 55 Hz capture | 330 | `[50.0, 137.5]` **miss** | fires → wide | **OK** |
-| 440 Hz + strong 60 Hz capture | 440 | `[50.0, 157.1]` **miss** | fires → wide | **OK** |
-| 220 Hz + 120 Hz hum (2nd harmonic) | 220 | `[82.6, 275.2]` OK | does not fire → `[73.4, 165.1]` **miss** | **OK** |
-| glide 100→400, low end | 100 | `[107.2, 600]` **miss** | — | **OK** at `[72.8, 600]` |
+| source | true F0 | `2.5 × q3` only | `1.5 × p95` only | fallback only | full rule |
+| --- | --- | --- | --- | --- | --- |
+| 330 Hz + strong 55 Hz | 330 | `[50, 137]` miss | miss | fires → wide | **OK** |
+| 220 Hz + 120 Hz hum | 220 | `[83, 275]` OK | OK | no fire → `[73, 165]` miss | **OK** |
+| glide 100→400, low end | 100 | `[107, 600]` miss | `[73, 600]` OK | — | **OK** |
+| register break 110→440 (0.4 s) | 440 | clipped at 275 | `[73, 600]` OK | — | **OK** |
+| emphatic peak 150→330 (0.35 s) | 330 | clipped at 287 | OK | — | **OK** |
+| | | **13/14** | **12/14** | — | **14/14** |
 
-Hirst's quartile **floor** (`0.75 × q1`) is what misses the glide's 100 Hz start, which is why part 1 keeps the p5 base. The full rule is **11 of 11** on the adversarial set:
+Hirst's quartile **floor** (`0.75 × q1`) is what misses the glide's 100 Hz start, which is why part 1 keeps the p5 base.
 
 With the wide pass at `to_pitch_ac(0.005, 50.0, pitch_ceiling=600.0)`:
 
-| source | median | fell back? | range | contains F0 |
-| --- | --- | --- | --- | --- |
-| 330 Hz + strong 55 Hz | 55.0 | yes | `[50.0, 600.0]` | ✓ |
-| 440 Hz + strong 60 Hz | 62.9 | yes | `[50.0, 600.0]` | ✓ |
-| 120 Hz + 60 Hz hum −22 dB | 60.0 | yes | `[50.0, 600.0]` | ✓ |
-| 220 Hz + 120 Hz hum | 110.1 | no | `[73.4, 275.2]` | ✓ |
-| male 120 Hz clean | 120.0 | no | `[80.0, 300.0]` | ✓ |
-| female 220 Hz clean | 220.0 | no | `[146.7, 550.0]` | ✓ |
-| child 420 Hz clean | 420.0 | no | `[280.0, 600.0]` | ✓ |
-| 55 Hz fry | 55.0 | yes | `[50.0, 600.0]` | ✓ |
-| glide 100→400 | 200.0 | no | `[72.8, 600.0]` | ✓ both ends |
-| 120 Hz at 0 dB SNR | 120.1 | no | `[78.6, 302.9]` | ✓ |
-| 45 Hz fry | — | 0 frames | absence | unchanged |
+| source | fell back? | range | contains F0 |
+| --- | --- | --- | --- |
+| 330 Hz + strong 55 Hz | yes | `[50.0, 600.0]` | ✓ |
+| 440 Hz + strong 60 Hz | yes | `[50.0, 600.0]` | ✓ |
+| 120 Hz + 60 Hz hum −22 dB | yes | `[50.0, 600.0]` | ✓ |
+| 220 Hz + 120 Hz hum | no | `[73.4, 275.2]` | ✓ |
+| **90 Hz clean (low male)** | **yes** | `[50.0, 600.0]` | ✓ |
+| male 120 Hz clean | no | `[80.0, 300.0]` | ✓ |
+| female 220 Hz clean | no | `[146.7, 550.0]` | ✓ |
+| child 420 Hz clean | no | `[280.0, 600.0]` | ✓ |
+| 55 Hz fry | yes | `[50.0, 600.0]` | ✓ |
+| glide 100→400 | no | `[72.8, 600.0]` | ✓ both ends |
+| register break 110→440 | no | `[73.3, 600.0]` | ✓ |
+| emphatic peak 150→330 | no | `[100.0, 375.0]` | ✓ |
+| 120 Hz at 0 dB SNR | no | `[78.6, 302.9]` | ✓ |
+| 45 Hz fry | 0 frames | absence | unchanged |
+
+**The fallback fires on a clean 90 Hz buzz, and that must be stated rather than discovered.** p95 = 90 sits under 2 × 50, so an ordinary low male voice takes the wide range. The behaviour is **floor-dependent by construction**: at the shipped 50 Hz floor every voice whose p95 is below 100 Hz falls back, which covers a real slice of adult male phonation and not only pathology. That is safe — a wide range never excludes the voice — but it means the fallback captures a larger population than the hum case it was designed for, and it costs those recordings the octave-error robustness narrowing buys. Record it, and note it is one of the things a raised search floor would change (see Step 8).
 
 The 55 Hz fry falling back to the wide range is the right outcome: contamination pushing the range **wider** is the safe direction, and a wide range for a fry voice costs octave-error robustness, not the voice. Verified separately that `extract_jitter` and `extract_shimmer` return finite values at floor 50, so the 55 Hz test in Step 3 still passes.
 
@@ -124,7 +133,11 @@ collection error, not as a failing assertion, and wastes a cycle.
 
 ```python
 class TestPitchRangeNarrowing:
-    """The range is this recording's own, narrowed off a wide search — not one of two presets."""
+    """The range is this recording's own, narrowed off a wide search — never one of two sex-typed presets.
+
+    One case returns the search range unnarrowed: the pinned-contour fallback. That is the wide bracket
+    the narrowing starts from, not a preset, and ``pitch_range_fell_back`` says when it was taken.
+    """
 
     def test_no_discontinuity_at_the_retired_170_hz_boundary(self) -> None:
         """The retired rule stepped floor/ceiling from 60/250 to 100/500 across mean F0 = 170 Hz."""
@@ -145,13 +158,19 @@ Expected: FAIL. 165 Hz returns ceiling 250.0 and 175 Hz returns 500.0 — a fact
 
 ```python
     def test_the_derived_range_rises_monotonically_with_source_f0(self) -> None:
-        """A preset bin is a step function of F0; a narrowing is monotone in it."""
+        """A preset bin is a step function of F0; a narrowing is monotone in it.
+
+        The F0 set avoids two traps: below 100 Hz the pinned-contour fallback fires and every ceiling is
+        the search ceiling, and above about 240 Hz the 2.5x q3 term clamps at 600 — either would make a
+        monotonicity assertion pass on a constant.
+        """
         ceilings = [
             extract_pitch_values(_buzz(f0), search_floor_hz=50.0, search_ceiling_hz=600.0)["pitch_ceiling"]
-            for f0 in (90.0, 130.0, 180.0, 260.0, 380.0)
+            for f0 in (110.0, 130.0, 150.0, 180.0, 220.0)
         ]
-        assert ceilings == sorted(ceilings), f"ceiling must not decrease as F0 rises: {ceilings}"
-        assert len(set(ceilings)) == len(ceilings), f"each voice gets its own ceiling, not a bin's: {ceilings}"
+        assert ceilings == pytest.approx([275.0, 325.0, 375.0, 450.0, 550.0], rel=0.02), (
+            f"measured ceilings for (110, 130, 150, 180, 220) Hz; a bin would give two values: {ceilings}"
+        )
 
     def test_a_55_hz_source_yields_finite_perturbation(self) -> None:
         """The retired 60 Hz floor placed zero pulses here, so jitter and shimmer were NaN.
@@ -175,14 +194,26 @@ Expected: FAIL. 165 Hz returns ceiling 250.0 and 175 Hz returns 500.0 — a fact
         assert derived["pitch_frames"] == 0.0
         assert derived["pitch_failed"] == 0.0, "an out-of-search-range voice is an absence, not a crash"
 
-    def test_a_420_hz_source_reaches_the_search_ceiling_rather_than_the_retired_250(self) -> None:
-        """Fixed to about 400 Hz and then saturating: 380 Hz gives 570, 420 Hz gives the 600 clamp."""
-        assert extract_pitch_values(_buzz(380.0), search_floor_hz=50.0, search_ceiling_hz=600.0)[
-            "pitch_ceiling"
-        ] == pytest.approx(570.0, rel=0.05)
-        assert extract_pitch_values(_buzz(420.0), search_floor_hz=50.0, search_ceiling_hz=600.0)[
-            "pitch_ceiling"
-        ] == pytest.approx(600.0), "the search ceiling binds above ~400 Hz, not the retired 250"
+    def test_a_420_hz_source_is_not_clipped_at_the_retired_250(self) -> None:
+        """Measured: 420 Hz gives [280.0, 600.0]; the retired bin gave a 250 Hz ceiling for this voice.
+
+        Above roughly 240 Hz the 2.5x q3 term reaches the search ceiling, so 600 is the clamp and not a
+        narrowing — which is why the monotonicity test above stops at 220.
+        """
+        derived = extract_pitch_values(_buzz(420.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_floor"] == pytest.approx(280.0, rel=0.02)
+        assert derived["pitch_ceiling"] == pytest.approx(600.0)
+
+    def test_a_clean_90_hz_voice_takes_the_fallback_and_that_is_expected(self) -> None:
+        """Measured: p95 = 90 is under 2 x 50, so an ordinary low male voice gets the wide range.
+
+        Recorded because it is a larger population than the hum case the fallback was designed for. It is
+        safe -- a wide range never excludes the voice -- but those recordings lose narrowing's
+        octave-error robustness, and the behaviour moves if the search floor moves.
+        """
+        derived = extract_pitch_values(_buzz(90.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_range_fell_back"] == 1.0
+        assert (derived["pitch_floor"], derived["pitch_ceiling"]) == (50.0, 600.0)
 
     def test_a_hum_does_not_capture_the_range_away_from_the_voice(self) -> None:
         """A one-pass narrowing returned [50, 90] for this source — a range the voice never enters.
@@ -203,7 +234,7 @@ Expected: FAIL. 165 Hz returns ceiling 250.0 and 175 Hz returns 500.0 — a fact
         assert derived["pitch_range_fell_back"] == 1.0, "the pinned-contour fallback is what caught it"
 
     def test_a_noisy_source_does_not_capture_the_range(self) -> None:
-        """Measured at 0 dB broadband SNR: 389 frames, median 120.06, range [78.6, 183.3]."""
+        """Measured at 0 dB broadband SNR: 389 frames, median 120.06, range [78.6, 302.9]."""
         voice = _buzz(120.0, seconds=2.0).waveform.numpy()[0]
         rng = np.random.default_rng(0)
         noisy = voice + rng.standard_normal(voice.size).astype(np.float32) * float(np.sqrt((voice**2).mean()))
@@ -215,7 +246,7 @@ Expected: FAIL. 165 Hz returns ceiling 250.0 and 175 Hz returns 500.0 — a fact
         assert derived["pitch_range_fell_back"] == 0.0, "p95 = 122 clears twice the floor, so no fallback"
 
     def test_a_glide_is_bracketed_rather_than_clipped(self) -> None:
-        """An exponential 100 to 400 Hz sweep measured [72.8, 549.5] against produced extremes 102/392."""
+        """An exponential 100 to 400 Hz sweep measured [72.8, 600.0] against produced extremes 102/392."""
         t = np.arange(2 * 16000) / 16000
         f0 = 100.0 * (4.0 ** (t / t[-1]))
         wave = np.sin(2 * np.pi * np.cumsum(f0) / 16000).astype(np.float32)
@@ -254,10 +285,15 @@ Expected: FAIL. 165 Hz returns ceiling 250.0 and 175 Hz returns 500.0 — a fact
 
 The last test patches the parselmouth call the function makes, not the function itself — so it exercises the real `except` path. Check the exact call at `:414-418` and patch whichever method it uses.
 
-- [ ] **Step 4: Run all six and record which fail and why**
+- [ ] **Step 4: Run all twelve and record which fail and why**
 
 Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py::TestPitchRangeNarrowing -v`
-Expected: the discontinuity, monotonicity-uniqueness, 55 Hz and 420 Hz cases FAIL on the bin; the two `pitch_frames`/`pitch_failed` cases FAIL with `KeyError`.
+Expected: **all twelve FAIL**, in two groups. Seven read a key today's two-key return does not have and fail
+with `KeyError` — the 45 Hz, 90 Hz-fallback, hum, noisy, frames, silence and crash cases. Five assert range
+values and fail against the bin's fixed pair: the discontinuity (250 against 500 across the boundary),
+monotonicity (the bin yields two values, not five), 55 Hz (the 60 Hz floor places no pulses, so jitter is NaN),
+420 Hz (the bin clips at 250) and the glide (the bin's floor is not below 100). Record the actual output of each
+rather than assuming this list; a test that passes here is testing nothing.
 
 - [ ] **Step 5: Replace the body**
 
@@ -275,7 +311,10 @@ Replace **from `pitch_values = pitch_values[pitch_values != 0]` (`:420`) through
             floor, ceiling, fell_back = float(search_floor_hz), float(search_ceiling_hz), 1.0
         else:
             floor = max(float(search_floor_hz), float(low) / PITCH_FLOOR_DIVISOR)
-            ceiling = min(float(search_ceiling_hz), float(upper_quartile) * PITCH_CEILING_MULTIPLIER)
+            ceiling = min(
+                float(search_ceiling_hz),
+                max(float(upper_quartile) * PITCH_CEILING_MULTIPLIER, float(high) * PITCH_EXCURSION_MULTIPLIER),
+            )
             fell_back = 0.0
 
         return {
@@ -289,7 +328,7 @@ Replace **from `pitch_values = pitch_values[pitch_values != 0]` (`:420`) through
 
 **There is no second pitch pass, and the earlier draft's one was a hard bug as well as an unreachable one.** It called `get_sound(snd)`, but by that point `snd` is already a `parselmouth.Sound` and `get_sound` accepts only `Path` or `Audio` (`:50`, isinstance chain `:70-77`) — so its local is never bound and it raises `RuntimeError: cannot access local variable`, which the outer `except Exception` swallows into `_no_pitch_range(failed=1.0)`. Every recording would then return a NaN range and `derive_f0_range` would raise `F0RangeFailed` **corpus-wide**. mypy cannot catch it — `import parselmouth  # type: ignore` makes the object `Any` — and `features_extraction_test.py:234-242` cannot either, since it asserts only `isinstance(..., float)` and `np.nan` satisfies that. The fallback rule needs no second pass at all, which removes the whole class of error.
 
-Add a module-level helper so all four absence and failure paths stay identical:
+Add a module-level helper so both the absence and the failure path stay identical:
 
 ```python
 def _no_pitch_range(*, failed: float = 0.0) -> Dict[str, float]:
@@ -312,7 +351,8 @@ PITCH_FLOOR_PERCENTILE = 5.0
 PITCH_FLOOR_DIVISOR = 1.5          # a ratio, not an octave span
 PITCH_CEILING_QUARTILE = 75.0
 PITCH_CEILING_MULTIPLIER = 2.5     # a ratio, not an octave span
-PITCH_PINNED_PERCENTILE = 95.0
+PITCH_PINNED_PERCENTILE = 95.0     # also the excursion percentile
+PITCH_EXCURSION_MULTIPLIER = 1.5   # a ratio, not an octave span
 PITCH_PINNED_OCTAVE_RATIO = 2.0    # one octave above the search floor
 ```
 
@@ -321,28 +361,33 @@ PITCH_PINNED_OCTAVE_RATIO = 2.0    # one octave above the search floor
 uses `1.5` as a **q3 multiplier**. Two different quantities, one literal. The names above say which each
 is, and no bare `1.5` or `2.0` should appear in the body.
 
-**There is no trim, and that is deliberate.** An earlier draft kept a log-Hz MAD trim before the percentiles. Two reasons it is gone. It does not do the job it was added for — an octave is 1.0 in log₂ and a bimodal contour widens the MAD, so a 2-MAD window keeps *both* modes and the 95th percentile still lands in the doubled one; the refinement above is what actually catches that. And it corrupts `pitch_frames`: measured on a clean 110 Hz buzz, the trim discarded **36 of 188** voiced frames, so the percentiles were of the post-trim set (about p7/p93) and `pitch_frames` was not the voiced-frame count its consumers would read it as. The 5th/95th percentiles already trim 10%.
+**There is no trim, and that is deliberate.** An earlier draft kept a log-Hz MAD trim before the percentiles. Two reasons it is gone. It does not do the job it was added for — an octave is 1.0 in log₂ and a bimodal contour widens the MAD, so a 2-MAD window keeps *both* modes and the 95th percentile still lands in the doubled one — the pinned-contour fallback is what catches the one case that matters, and the residual is marked owed in Step 8. And it corrupts `pitch_frames`: measured on a clean 110 Hz buzz, the trim discarded **36 of 188** voiced frames, so the percentiles were of the post-trim set (about p7/p93) and `pitch_frames` was not the voiced-frame count its consumers would read it as. The 5th/95th percentiles already trim 10%.
 
-Check the exact first-pass call at `:414-418` and mirror its argument style in the refinement call — if the first pass passes a time step, the second must too, or the two medians are not comparable.
 
-- [ ] **Step 6: Run and confirm all six pass**
+- [ ] **Step 6: Run and confirm all twelve pass**
 
 Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py::TestPitchRangeNarrowing -v`
-Expected: PASS, all six.
+Expected: PASS, all twelve.
 
 - [ ] **Step 7: Update the docstrings this changes**
 
-`extract_pitch_values`' `Returns:` block (`:373-380`) documents two keys and must document four. Its `Examples:` (`:402`) prints the old pair. And `src/senselab/audio/tasks/features_extraction/api.py:375-376` shows the same pair. Fix all three — each is a doctest-shaped example that now misdescribes the return.
+`extract_pitch_values`' `Returns:` block (`:373-380`) documents two keys and must document five. Its `Examples:` (`:402`) prints the old pair. And `src/senselab/audio/tasks/features_extraction/api.py:375-376` shows the same pair. Fix all three — each is a doctest-shaped example that now misdescribes the return. Also `:388` and `:418`.
+
+**And `:383`'s DOI must go, because after this task it contradicts the code it annotates.** `doi:10.3758/BRM.41.2.318` is **Vogel, Maruff, Snyder & Mundt (2009), "Standardization of pitch range settings in voice acoustic analysis", *Behavior Research Methods* 41(2):318–324** — not Hirst, not De Looze. Vogel recommends **sex-specific fixed settings** (male 70/250, female 100/250–300) and explicitly rejects the per-recording approach: *"managing speaker specific analysis settings individually requires extensive expertise and time and is impractical for large volumes of data."* So the retired bin's *kind* of rule is what its cited source recommends; what it misattributes are the **values** — 60 Hz appears nowhere in Vogel, and **100–500 is one of the candidates Vogel tested and found significantly worse than gold standard (d = 2.14)**. Leaving that DOI on a per-recording narrowing would be a citation contradicting its own code. Replace it with Hirst 2011 for the two-pass structure and the ceiling coefficient.
 
 - [ ] **Step 8: Record the convention in the spec, without a false citation**
 
 Add to `praat-instrument-audit.md` under step 2:
 
+- **Correct a live misattribution in the document that justified this whole approach.** `specs/20260911-ppg-praat-batch/design.md:322` reads, verbatim: *"That is the pitch-range standardization method it cites (doi:10.3758/BRM.41.2.318). No fixed corpus-wide range is needed, because the range is derivable per recording."* **Vogel supports none of that** — he recommends fixed sex-specific settings and rejects per-recording derivation as impractical at scale. The approach is still right on the merits: Vogel's own caveat that *"caution should be exercised when applying suggested settings to pathological voice populations"*, on 20 speakers over an office-telephone channel, is an argument *for* per-recording derivation. It is just not Vogel's argument, and his authority must not be borrowed for it. Rewrite that sentence and `config-derivations.md:641-648` to cite Hirst 2011 for the structure and to state the rest as senselab's own.
+
+- **Footnote that Hirst's script and his paper do not agree, and say which this follows.** Hirst 2011 §2.1 gives the two-pass as `floor = 0.75 × q1`, `ceiling = 2.5 × q3` off a 50–700 Hz first pass. His shipped `detect_f0.praat` instead sets `ceilFac = 1.5` with the inline comment `;1.5 (normal) or 2.5 (expressive)` and a 60–750 Hz first pass. So `2.5` is the paper's unconditional recommendation and the script's *expressive* setting, and the script's default is `1.5`. This plan follows the **paper**, and the `max(2.5 × q3, 1.5 × p95)` rule is why that is safe here: on a level contour the two coefficients agree to within the clamp, and on an excursion the second term carries it. State the divergence rather than citing `2.5` as though the lineage were unanimous.
+
 - **Cite Hirst 2011 for two things and nothing else: the two-pass structure, and the `2.5 × q3` ceiling coefficient.** His rule is a first pass at **50–700 Hz**, then `floor = 0.75 × q1` and `ceiling = 2.5 × q3` — quartiles, with a deliberate asymmetry, and the asymmetry is an empirical finding worth quoting: *"if the Pitch Floor is too low then we are likely to get octave errors […] Setting the Pitch Ceiling too high does not, however, seem to lead to any systematic errors."* That is why the ceiling coefficient is adopted verbatim and the floor is not.
 
-- **The `p5 / 1.5` floor and the pinned-contour fallback are senselab's own. Cite nobody for them.** Checked across De Looze & Hirst 2008, De Looze & Rauzy 2009, De Looze & Hirst 2010, De Looze 2010 (thesis), De Looze & Hirst 2014/2014b, Hirst 2007, Hirst 2011, Hirst & De Looze 2021, and four shipped implementations including Hirst's own Momel-INTSINT plugin: **no rule of the form "compare the second-pass median against the first and widen back" exists in any of them.** Both words of the earlier attribution were wrong — the authors' own term is **"two-pass"**, not "iterative" (Hirst 2011 §2.1; Hirst & De Looze 2021 §13.3.4), and none of the four implementations has a loop in the estimation path. Octave errors appear in their papers only as *motivation* for narrowing (DL&H 2008 §2.2, DL&H 2010 §3.1), never as a test applied to the result; Hirst's `detect_f0.praat` computes the second-pass median, writes it to a `.median_f0` file, and never compares it to anything. Record the eleven-case table as the evidence for both.
+- **The `p5 / 1.5` floor and the pinned-contour fallback are senselab's own. Cite nobody for them.** Checked across De Looze & Hirst 2008, De Looze & Rauzy 2009, De Looze & Hirst 2010, De Looze 2010 (thesis), De Looze & Hirst 2014/2014b, Hirst 2007, Hirst 2011, Hirst & De Looze 2021, and four shipped implementations including Hirst's own Momel-INTSINT plugin: **no rule of the form "compare the second-pass median against the first and widen back" exists in any of them.** Both words of the earlier attribution were wrong — the authors' own term is **"two-pass"**, not "iterative" (Hirst 2011 §2.1; Hirst & De Looze 2021 §13.3.4), and none of the four implementations has a loop in the estimation path. Octave errors appear in their papers only as *motivation* for narrowing (DL&H 2008 §2.2, DL&H 2010 §3.1), never as a test applied to the result; Hirst's `detect_f0.praat` computes the second-pass median, writes it to a `.median_f0` file, and never compares it to anything. Record the fourteen-case table above as the evidence for both.
 
-- **The only "revert to wide" in the lineage is a degenerate-input guard**, not an octave test: Praat Vocal Toolkit's `minmaxf0.praat` reverts to 40/600 `if voicedframes = 0` — which `_no_pitch_range()` already does on the same trigger.
+- **The only "revert to wide" in the lineage is a degenerate-input guard**, not an octave test: Praat Vocal Toolkit's `minmaxf0.praat` (version 4.1, the current release) reverts to 40/600 `if voicedframes = 0` — which `_no_pitch_range()` already does on the same trigger.
 
 - **Record the alternative not taken.** Hirst's remedy is the ceiling coefficient *alone*, applied unconditionally with no detector. Measured here it is **not sufficient**: it misses deep fundamental capture (330 Hz under a strong 55 Hz component gives `[50.0, 137.5]`; 440 Hz under 60 Hz gives `[50.0, 157.1]`), which is what the fallback exists for. And his quartile **floor** misses a glide's 100 Hz start at `0.75 × q1 = 107.2`, which is why the floor keeps a p5 base. Both measurements are in the table; state them so the choice reads as measured rather than preferred.
 
@@ -350,9 +395,11 @@ Add to `praat-instrument-audit.md` under step 2:
 
 - **The q15/q65 pair needs its coefficients and the right year.** It is real but never bare: `q15 × 0.83` and `q65 × 1.92`, fitted in De Looze's **2010** thesis against hand-annotated extrema over 28 speakers and stated in De Looze & Hirst **2010** §3.1. The **2008** paper concluded q25/q75 — q15 appears there only as a *rejected* floor candidate at coefficient 0.78, and q65 not at all. Do not write "q15/q65 (2008)".
 
-- **Residual capture is owed, and that is the state of the art rather than a gap in this work.** The fallback catches capture landing within an octave of the search floor. It does **not** catch second-harmonic capture against a higher voice: measured, a 220 Hz voice under a 120 Hz-dominant hum gives p95 ≈ 110 against 2 × 50 = 100, so the fallback does not fire — Hirst's ceiling coefficient rescues that case here, but a deeper version of it would not be caught by either part. Two citations make the residual a positive finding: **Edlund & Heldner 2006** (`/nailon/`), whose pitch-range "reality checks" section reads *"Correction for octave errors is planned to go here as well, but not currently implemented"*; and **Portnova et al. 2025**, *JSLHR* 68:3568–3582, which states this exact failure mode — *"F0 values are halved (i.e., the tracking of subharmonic frequencies) […] an analysis of F0 range would be based solely on these errors"* — reviews the two-pass as the available automatic option, and resolves it by **manual** labelling, proposing no automatic detector. **No published F0-range estimator corrects first-pass low-octave capture.** Mark it owed a measurement on real recordings.
+- **Residual capture is owed, and that is the state of the art rather than a gap in this work.** The fallback catches capture landing within an octave of the search floor. It does **not** catch second-harmonic capture against a higher voice: measured, a 220 Hz voice under a 120 Hz-dominant hum gives p95 ≈ 110 against 2 × 50 = 100, so the fallback does not fire — Hirst's ceiling coefficient rescues that case here, but a deeper version of it would not be caught by either part. Two citations make the residual a positive finding: **Edlund & Heldner 2006** (`/nailon/`), whose in-text "reality checks" passage in §4.4 — a phrase, not a section title — reads *"Correction for octave errors is planned to go here as well, but not currently implemented"*; and **Portnova et al. 2025**, *JSLHR* 68:3568–3582, which states this exact failure mode, reviews five strategies for it including the two-pass — never calling that one automatic, and itself using fixed sex-specific ranges — and then resolves the problem by **manual** labelling, proposing no automatic detector. Quote Portnova with the internal ellipsis intact, because the two fragments sit at opposite ends of the paper with `(i.e., maximum F0–minimum F0)` between them: *"F0 values are halved (i.e., the tracking of subharmonic frequencies) […] an analysis of F0 range would be based solely on these errors"*.
 
-- **Record the search-floor question rather than deciding it silently.** senselab uses 50 Hz. Published first passes: Hirst 2007 → 75; De Looze & Hirst 2008 and Hirst's shipped code → 60; De Looze 2010 and DL&H 2010 → 60; Hirst 2011 → 50; Hirst & De Looze 2021 → "e.g. 60"; **Prosogram (Mertens 2004, verified in `prosomain.praat` 3.05) → 65**, which excludes both mains fundamentals incidentally, with a second pass of median −12/+18 semitones — a 30-semitone window wide enough to survive a one-octave-low median, i.e. structural tolerance rather than correction. Measured here, raising the floor to 60 makes the 220 Hz-plus-120 Hz-hum case fire the fallback and land at `[60, 600]`. Two caveats to write down rather than act on: raising the floor **trades away the 45–60 Hz creak cases** the plan already documents as bounded by the declared search range, and per the residual above it is **only partial**, since the second harmonic survives any floor.
+  **State the residual at the width it actually has.** "No published F0-range estimator corrects first-pass low-octave capture" is overstated: **Mertens 2014 (*Polytonia*) §5.5 is a published range estimator with designed octave handling**, discarding syllables ≥18 ST from the median, and Liberman 2018 mode-anchors and then re-tracks. What no published method does is **test whether its own first-pass distribution was octave-halved and raise the floor accordingly** — that is the citable claim, and it is the one to write. Mark the residual owed a measurement on real recordings.
+
+- **Record the search-floor question rather than deciding it silently.** senselab uses 50 Hz. Published first passes: Hirst 2007 → 75; De Looze & Hirst 2008 and Hirst's shipped code → 60; De Looze 2010 (thesis) → 60 — **not stated in DL&H 2010**, so cite the thesis; Hirst 2011 → 50; Hirst & De Looze 2021 → "e.g. 60"; **Prosogram (Mertens 2004, verified in `prosomain.praat` 3.05) → 65**, which excludes both mains fundamentals incidentally, with a second pass of median −12/+18 semitones — a 30-semitone window wide enough to survive a one-octave-low median, i.e. structural tolerance rather than correction. Measured here, raising the floor to 60 makes the 220 Hz-plus-120 Hz-hum case fire the fallback and land at `[60, 600]`. Two caveats to write down rather than act on: raising the floor **trades away the 45–60 Hz creak cases** the plan already documents as bounded by the declared search range, and per the residual above it is **only partial**, since the second harmonic survives any floor.
 
 - The range ratio widens: the bin always gave 4.17 or 5.0, and the measured ranges here reach 12 (`[50, 600]`). `voice.f0_range_ratio_max` is null so nothing fires, but `voice.py:77-80` **raises** rather than flags once it is set. Record it.
 
@@ -380,7 +427,7 @@ git add -A && git commit -m "fix(praat): derive the F0 range per recording, and 
 **`F0RangeFailed` subclasses `ValueError`, and that choice is load-bearing at both consumers.** Verified:
 
 - `extend.py:120-126` lists `F0RangeUnavailable` in `UNAVAILABLE`; `attempt_derivation:160-165` then catches `UNAVAILABLE` as a non-failure and `(OSError, ValueError, LookupError)` as a **failed row**. A `ValueError` subclass therefore records the failure and lets the array task continue. A `RuntimeError` subclass would escape both handlers and **kill the task** — which is the defect `extend_reprocessed_outputs_test.py:504-519` exists to prevent, after 613 rows of the last corpus pass did exactly that.
-- `preprocess.py:2619-2626`: `except (ValueError, LookupError)` records a cascading absence; `except Exception` appends to `hard_failures` and the node then **raises** at `:2631`. A `ValueError` subclass keeps one crashed recording from aborting a node whose other blocks still need to run.
+- `preprocess.py:2619-2627`: `except (ValueError, LookupError)` records a cascading absence; `except Exception` appends to `hard_failures` and the node then **raises** at `:2631`. A `ValueError` subclass keeps one crashed recording from aborting a node whose other blocks still need to run.
 
 So `F0RangeFailed` must **not** be added to `UNAVAILABLE` — it is a failure, not an absence, and `attempt_derivation`'s `ValueError` branch is where it belongs.
 
@@ -529,7 +576,7 @@ Match the module's existing import and helper style before writing these — rea
 
 ```
 
-Confirm the block's registered name against the `blocks` list at `preprocess.py:2596-2616` — use whatever name that list gives the phonation-tracks block, not a guess. And follow `preprocess_test.py:1090`, which already templates the monkeypatch-a-block-into-raising pattern; do not invent a second shape for it.
+Confirm the block's registered name against the `blocks` list at `preprocess.py:2576-2616` — use whatever name that list gives the phonation-tracks block, not a guess. And follow `preprocess_test.py:1090`, which already templates the monkeypatch-a-block-into-raising pattern; do not invent a second shape for it.
 
 - [ ] **Step 3: Run both and confirm they pass**
 
@@ -587,7 +634,7 @@ In `preprocess.py`, in `_praat_features`: `:880` → `plain_id, audio = resolve_
 
 `ppg_input` (`:742-763`): `:758` → `resolve_stream(store, run_dir, "plain")`, rename the local, and fix the docstring at `:743`, `:749` and `:756`.
 
-`write_ppg_posteriorgram` (`:766-822`): rename the **keyword parameter** `enhanced_id` (`:770`) to `stream_id`, its docstring (`:783`), and its two uses at `:794` and `:821`. Fix the docstring at `:822`.
+`write_ppg_posteriorgram` (`:766-826`): rename the **keyword parameter** `enhanced_id` (`:770`) to `stream_id`, its docstring (`:783`), and its two uses at `:794` and `:821`. Fix the docstrings at `:826` and `:836`.
 
 Then both call sites, which pass it **by name**: `preprocess.py:844` and **`scripts/extend_ppg_praat.py:219`**. Missing the second leaves a `TypeError` the triage suite will not catch. Pre-alpha says rename outright — no alias.
 
@@ -666,11 +713,16 @@ In the class whose docstring is at `:2172`:
         assert PRAAT_MEASUREMENT in result.absent
 ```
 
+**`enhance=` is not optional.** `conftest.py:138-141` patches `_frcrn_model` and `enhance_audios` **only if
+`enhance` is passed** — a bare `_stub_models(monkeypatch)` leaves both real, so the test downloads FRCRN and
+runs it. Use `_fake_enhance(0.5)`, as `preprocess_test.py:1707` and `:1945` do. The same applies to Step 2's
+snippet.
+
 Patching `resolve_stream` is blunt and will make other blocks absent too — assert only the two this test is about. If the module's fixtures offer a way to seed a run without a `plain` stream, prefer that and drop the monkeypatch.
 
 - [ ] **Step 3: Replace the false regression guard with a true one**
 
-Do **not** write `test_no_measurement_reads_the_enhanced_stream`. It would be false: `enhanced_yamnet_scores`, `enhanced_ast_scores` and `enhanced_hear_scores` **are** measurements written with `signal="enhanced"` — `_stream_classifier_scores` writes `name = f"{prefix}_{classifier}_scores"` (`:2528`, `:2503`), so the *block* is `enhanced_yamnet` (`:2604`) but the *measurement* carries the `_scores` suffix. `find_measurement(store, f"enhanced_{classifier}")` is `None` for all three. They pass a string guard only because they read `state["enhanced_audio"]` instead of calling `resolve_stream` with a literal. A guard whose name asserts something untrue is worse than none.
+Do **not** write `test_no_measurement_reads_the_enhanced_stream`. It would be false: `enhanced_yamnet_scores`, `enhanced_ast_scores` and `enhanced_hear_scores` **are** measurements written with `signal="enhanced"` — `_stream_classifier_scores` takes the measurement name as a **parameter** (`:2445-2452`) and each caller passes a literal — `f"{prefix}_yamnet_scores"` at `:2528`, with the AST and HeAR calls at `:2545` and `:2565` — so the *block* is `enhanced_yamnet` (`:2604`) but the *measurement* carries the `_scores` suffix. (`:2503` builds `f"{prefix}_{classifier}_summary_{suffix}"`, a different family; do not cite it here.) `find_measurement(store, f"enhanced_{classifier}")` is `None` for all three. They pass a string guard only because they read `state["enhanced_audio"]` instead of calling `resolve_stream` with a literal. A guard whose name asserts something untrue is worse than none.
 
 Scope it to the audit's actual claim — that these two measurements no longer read the denoised stream:
 
@@ -681,7 +733,7 @@ Scope it to the audit's actual claim — that these two measurements no longer r
     ) -> None:
         """The audit's bound is about these two measurements, not about the stream having no readers."""
         _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch)
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5))
         preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
         for name in (PPG_MEASUREMENT, PRAAT_MEASUREMENT):
             measurement = find_measurement(store, name)
@@ -702,7 +754,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Update the two PPG fixtures for accuracy**
 
-`live_evidence_test.py:216` and `routing_analysis_test.py:949`/`:959` hardcode `"signal": "enhanced"` on constructed PPG measurements. Nothing filters on `signal`, so **they pass either way** — change them to `"plain"` because they now describe a measurement the node never writes that way, not because a test fails.
+`live_evidence_test.py:216` and `routing_analysis_test.py:949`/`:959` hardcode `"signal": "enhanced"` on constructed measurements — `:949` is the `praat_features` fixture and `:959` the `ppg_posteriorgram` fixture, so both of this plan's streams are represented, not the PPG twice. Nothing filters on `signal`, so **they pass either way** — change them to `"plain"` because they now describe a measurement the node never writes that way, not because a test fails.
 
 - [ ] **Step 6: Lint and commit**
 
@@ -769,7 +821,7 @@ class TestForceReDerives:
             assert len(live) == 1, f"{name}: {len(live)} live measurements after --force"
 ```
 
-Use `senselab.audio.workflows.triage.nodes.common.live_entities` rather than reinventing the liveness filter — `extend_withdraw_clips_test.py` is the model for both this and the `supersede` call in Step 6.
+Use `senselab.audio.workflows.triage.nodes.common.live_entities` rather than reinventing the liveness filter. For the `supersede` call itself, `extend.py:447` and `:671-678` are the models.
 
 - [ ] **Step 4: Run and watch both fail**
 
@@ -805,9 +857,10 @@ Thread `ppg_held` / `praat_held` alongside the pending flags. Apply the same cap
 
 **And decide what happens when the replacement write fails.** If supersession runs first and the write then
 raises at the driver's `except` (`:223`), the store carries an invalidated old measurement and no live
-replacement — worse than either end state. Either supersede only after the new bytes and the new entity
-both exist, or record the half-state as an accepted outcome with its reason. The plan does not choose for
-you, but it must be chosen before this ships. Correct the docstring at `:26-27` — the skip is the default and `--force` overrides it — and the comment at `:197`, which becomes false.
+replacement — worse than either end state. **Supersede only after the new bytes and the new entity both exist** — Step 6's ordering is the branch this
+step calls worse than either end state, so it is decided here rather than left open. The window where two
+live measurements coexist is shorter and more recoverable than one where the old is invalidated and no
+replacement exists. Correct the docstring at `:26-27` — the skip is the default and `--force` overrides it — and the comment at `:197`, which becomes false.
 
 - [ ] **Step 6: Supersede the old measurement before writing the new one**
 
@@ -824,7 +877,7 @@ and a reason string in the same idiom:
 _STREAM_SWITCH_REASON = "it was measured on the enhanced stream; the measurement now reads plain"
 ```
 
-Then, in the forced path, for each measurement the store already holds, call `extend.supersede` **before** the replacement is written — the sidecar is overwritten in place, so once the new bytes exist the old entity's checksum is already wrong and the store is briefly inconsistent. Read `extend_withdraw_clips.py`'s use of `supersede` and follow its argument shape exactly (`node=`, `step=`, `reason=`, `software=`).
+Then, in the forced path, for each measurement the store already held (`ppg_held` / `praat_held` from Step 5), call `extend.supersede` **after** the replacement entity exists, per Step 5's decision. The sidecar is overwritten in place, so the old entity's checksum is wrong from the moment the new bytes land; superseding immediately after closes that window without ever leaving the store with no live measurement. **`scripts/extend_withdraw_clips.py` contains no `supersede` call — do not look there.** The models are `src/senselab/audio/workflows/triage/extend.py:447` and `:671-678`; follow their argument shape exactly (`node=`, `step=`, `reason=`, `software=`).
 
 - [ ] **Step 7: Run and confirm both pass**
 
@@ -927,13 +980,13 @@ Three statements, none currently in the audit:
 
 - [ ] **Step 4: Correct the glide entry, which is owed for a different reason than stated**
 
-Measured: an exponential 100→400 Hz glide yields **`[72.8, 549.5]`** against produced extremes of 102 and 392 Hz. The ±7-semitone margin brackets the sweep with room to spare, so **narrowing does not clip a glide** — and it is strictly better than the bin, which capped a low-binned upward glide at 250 Hz. What degenerates is **V3's conformance flag**: after narrowing it can only fire when the margin pushes past the 50/600 clamps, so it becomes near-**vacuous** rather than circular. Record that, and drop the "actively wrong on a glide" framing — it overstates the cost and would justify a task-conditioned range the measurement does not support.
+Measured: an exponential 100→400 Hz glide yields **`[72.8, 600.0]`** against produced extremes of 102 and 392 Hz. The ±7-semitone margin brackets the sweep with room to spare, so **narrowing does not clip a glide** — and it is strictly better than the bin, which capped a low-binned upward glide at 250 Hz. What degenerates is **V3's conformance flag**: after narrowing it can only fire when the margin pushes past the 50/600 clamps, so it becomes near-**vacuous** rather than circular. Record that, and drop the "actively wrong on a glide" framing — it overstates the cost and would justify a task-conditioned range the measurement does not support.
 
 - [ ] **Step 5: Record the three consequences this plan creates and does not close**
 
 - **Within-participant contrasts are improved, not restored.** A participant's shouted and comfortable productions still get *different* instruments — continuously now rather than in a 1.67× step. The right instrument for a within-participant contrast is one range shared across the productions compared. Out of scope here; record it as owed so it does not read as closed.
-- **Coverage now shifts F0-dependently.** The window formulas `3/floor` (period marks), `3.2/floor` (intensity) and `4.5/floor` (harmonicity) vary per recording: a 420 Hz speaker gets an 11 ms intensity window and a 55 Hz speaker gets 64 ms — **worse than the bin's 53 ms**. So the audit's step 5 coverage figure becomes conditioned on a per-recording window and is *harder* to interpret, not easier — unless the floor is recorded, which Task 8 is what fixes.
-- **`voice.f0_range_ratio_max` intuition changes.** The bin always gave 4.17 or 5.0; the narrowing measured **7.5** on a glide and can exceed 11. Whoever populates that key should know that bin-era intuition will refuse glides, and that `_f0_range` **raises** rather than flags.
+- **Coverage now shifts F0-dependently.** Two window formulas are in this file and vary per recording: intensity smoothing at `3.2/floor` (`:556`, documented in the comment at `:171`) and harmonicity at `periods_per_window=4.5` (`:621`). A third, `3/floor`, is **not in the code** — it is Praat's own analysis window inside `To Pitch (cc)`, reached only through the floor the file passes, and period marks come from `To PointProcess (cc)` (`:750`, `:894`), which takes the pitch object rather than a window. Cite the two that are here and attribute the third to Praat. These vary per recording: a 420 Hz speaker gets an 11 ms intensity window and a 55 Hz speaker gets 64 ms — **worse than the bin's 53 ms**. So the audit's step 5 coverage figure becomes conditioned on a per-recording window and is *harder* to interpret, not easier — unless the floor is recorded, which Task 8 is what fixes.
+- **`voice.f0_range_ratio_max` intuition changes.** The bin always gave 4.17 or 5.0; the narrowing measured **8.2** on a glide (`[72.8, 600.0]`) and reaches 12 on a fallback (`[50, 600]`). Whoever populates that key should know that bin-era intuition will refuse glides, and that `_f0_range` **raises** rather than flags.
 
 - [ ] **Step 6: Record the two corpus passes this plan creates but does not run**
 
