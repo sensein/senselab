@@ -869,3 +869,15 @@ Attribution of a short MPT to respiratory or laryngeal cause. Any refit against 
 - Whether V6's effort correlates are built at all, given they are session-level and v1 supplies only one condition.
 - **`Outcome.FAIL`'s wording is itself a hazard** — `no_content_found` would carry the meaning — but
   `Outcome` is a closed vocabulary with readers, so this is recorded rather than changed.
+- **A second, independent F0 estimate is a candidate for the type-2 deadlock — and is owed a
+  measurement.** SPARC returns per-frame `pitch` and `periodicity` from a neural tracker family
+  (`features_extraction/sparc.py:40-41` pins `torchcrepe` and `penn`), not from Praat's
+  autocorrelation, so **two independent trackers disagreeing by an octave is evidence a single
+  tracker cannot produce** — which is what makes it worth recording against V4's finding that no
+  type-2 instrument works today. It is not a solution: disagreement localises without typing,
+  SPARC's own octave-error rate is unmeasured here, `periodicity` is not a subharmonic-to-harmonic
+  ratio, and any disagreement criterion is an operating point this corpus may not be used to fit.
+  Triage calls SPARC nowhere today. The full proposal, its cost and everything it owes are in
+  [`branch-ddk.md`](branch-ddk.md) under *SPARC as a shared PREPROCESS derivative*, where DDK rhythm
+  is the motivating case; this branch is a second consumer, and its raw-versus-enhanced question is
+  its own — sustained phonation, not a DDK train.
