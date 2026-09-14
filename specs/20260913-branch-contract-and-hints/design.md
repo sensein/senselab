@@ -498,10 +498,26 @@ family VOICE **writes today** (`voice.py:339`), and REPORT reads it: `_spans_of_
 descriptions at `:1134` and `:1173`, and VOICE's summary keyed on `phonation_s` at `:104`.
 `_spans_of_family` (`report.py:291-308`) exists precisely to separate the detector-proposed
 population from VOICE's own, by `onset_kind`. So this is a **writer-vocabulary change on a family
-REPORT reads** — the same rule the merge invokes for node names, and it applies here too: VOICE
-writes `voice`, REPORT keeps reading `phonation` for finished stores, and the `onset_kind` split that
-`_spans_of_family` performs is what the contract replaces, since a proposed span and an annotated one
-are now different entity kinds rather than two populations of one family.
+REPORT reads**, and it is settled by the rule this spec already invokes twice: **the writer's
+vocabulary may shrink, the reader's may not.**
+
+`phonation` becomes a **historical family** — VOICE writes `voice`, and REPORT keeps reading
+`phonation` forever, because finished stores carry those spans forever. This is the same shape as the
+`kind` entity type in `PROV_TYPE` (`prov_store.py`, retired 2026-09-13 and kept readable for exactly
+this reason), and the `kind` fix is the precedent to follow rather than re-derive.
+
+Concretely: `report.py:104`'s `phonation_s` **stays**. It names seconds of phonation, not a family,
+and it sums spans of both — `phonation` from stores written before the change, `voice` after.
+`_spans_of_family` (`report.py:291-308`) grows to read both families; it currently takes a single
+`family: str`, so it needs either a sequence parameter or two calls merged.
+
+**One consequence to record rather than paper over.** `_spans_of_family`'s `voice` parameter splits on
+`("onset_kind" in span.attributes)`, and `onset_kind` is written only by the second minting at
+`voice.py:334-348` — the very minting this contract replaces with a `refine` assertion. So for stores
+written under the contract **nothing carries `onset_kind`, and the `voice=True` reads at
+`report.py:715` and `:1154` return empty.** The split remains correct for historical stores and
+becomes vacuous for new ones; what replaces it is the distinction between a span and a `refine`
+assertion over it. REPORT's VOICE arms need that substitution, not just the family widening.
 
 **VOICE is the worked example of the contract, and of what it forbids.** `voice.py:334-348` mints a
 second, period-aligned span from an input span, carrying `onset_kind` and `offset_kind` — **that is
@@ -750,6 +766,13 @@ quality floors, the deviation thresholds. The corpus is labelled by declaration,
 verification. Nothing is refit until something has been listened to.
 
 **The boundary reconciliation rule** (c) — no parameter-free definition yet.
+
+**The writer/reader vocabulary rule deserves stating once.** This design retires three
+writer-vocabulary values with live readers: the `kind` entity type (done 2026-09-13), the node names
+`TAXONOMY` and `routing` (the merge), and the `phonation` span family (VOICE). Three instances of one
+rule, currently written as three special cases. **Recommendation: state it once in `store.md` as a
+general contract** — a writer may stop emitting a value, a reader may never stop accepting one — with
+the three instances as its examples. Not edited here; `store.md` is out of this spec's scope.
 
 **Whether a branch may run a classifier pass at branch time.** Nothing does today, and
 `airway.py:171-173` makes not re-running HeAR an explicit design point, so a proposed span carries no
