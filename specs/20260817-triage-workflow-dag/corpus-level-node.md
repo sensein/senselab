@@ -1,11 +1,24 @@
-# The corpus-level node
+# The cross-recording node
 
 Some capabilities cannot be computed from one recording. They belong to **a node that runs last, over
-the finished per-recording stores**, after the per-recording graph has completed for every recording
-in a corpus.
+the finished per-recording stores**, after the per-recording graph has completed.
 
-This is a **placement decision, not a subsystem design.** What follows says where these capabilities
-live and what the node reads; it does not specify the node's internals beyond that.
+This is a **placement decision, not a subsystem design.**
+
+## Name the grouping level per capability
+
+"Corpus-level" was doing double duty in an earlier version. The capabilities here group at
+**different levels**, and the level determines what may be pooled:
+
+| level | what it groups | capability |
+| --- | --- | --- |
+| **session** | recordings from one participant in one sitting | C2 composite indices; [`branch-quality.md`](branch-quality.md) Q2's bandwidth for vowel-only recordings |
+| **participant** | all sessions for one person | cross-session consistency (candidate) |
+| **device** | recordings sharing a capture chain | device-class grouping (candidate) |
+| **corpus** | everything | C1 duplicate detection; the listening sample's draw (candidate) |
+
+A capability states its level. Two capabilities at different levels are not interchangeable and
+their outputs are not poolable across each other.
 
 ## Why the class exists
 
@@ -41,35 +54,55 @@ ids with the same checksum are the same audio. Re-submission of a previous recor
 id is a known failure mode of app-based collection at this scale, and it corrupts exactly the
 declared-family comparisons the corpus is scored against.
 
-**A lower bound.** A checksum catches byte-identical duplicates only; a re-encode on upload — a
-different container, bitrate or sample rate — defeats it. A zero count means "no *exact* duplicates",
-not "no duplicates". Near-duplicate detection needs an audio fingerprint, which is not in the
-inventory.
+**Report the grouping, not just the match.** A duplicate means very different things depending on
+where it falls, and the node knows which:
+
+| grouping | what it means |
+| --- | --- |
+| same session | a re-submission — the mildest case, and the expected one |
+| same participant, different session | a re-submission across sittings |
+| **different participants** | **an identity or upload failure** — far more serious, and it corrupts any participant-level analysis |
+
+**A lower bound, with an available extension.** A checksum catches byte-identical duplicates only; a
+re-encode on upload defeats it, so a zero count means "no *exact* duplicates", not "no duplicates".
+
+But the node's no-audio discipline does **not** block a content fingerprint: stored duration, the F0
+track, the energy envelope and the HeAR embeddings already sit in the finished stores. **Near-duplicate
+detection that survives re-encoding is partly available from records alone.** Keep the byte digest as
+the lower bound it is, and note the record-based fingerprint as the extension.
 
 **Free**: the digest exists and the comparison is equality.
 
-### C2 — Composite voice-quality indices
+**Level: corpus.**
 
-Moved from [`branch-voice.md`](branch-voice.md) V5.
+### C2 — Composite voice-quality indices — **session-level, and the protocol is unsatisfiable**
 
-The Acoustic Voice Quality Index (Maryn et al. 2010) combines CPPS, HNR, shimmer local, shimmer dB
-and LTAS slope and tilt. **Its protocol requires a sustained vowel *and* continuous speech,
-concatenated** — and in this corpus those are different recordings of the same session
-(`prolonged-vowel` or `maximum-phonation-time`, and one of the passage or free-speech families). So
-assembling its input is a same-session operation, which is why it has no per-recording home.
+Moved from [`branch-voice.md`](branch-voice.md) V5, which carries the full argument.
 
-**Whether this project emits any composite severity index at all is undecided and is the owner's
-call.** [`branch-voice.md`](branch-voice.md) V5 sets out the argument: published coefficients
-discharge the no-refits rule, but a 0–10 severity scale with a published cut-off engages the
-*non-diagnostic* constraint instead, and every other capability in these documents declines to map an
-acoustic value to normal or disordered. It also ingests shimmer with the largest positive
-coefficient and has no validity gate, while `branch-voice.md` V4 gates shimmer everywhere else.
+**Level: session** — not corpus. AVQI needs a *specific pair* from one participant in one sitting,
+not any two recordings.
 
-**This document places the capability; it does not decide whether to build it.**
+**It requires explicit audio access, which is this node's stated exception.** Concatenation is both a
+waveform read and a fresh derivation, not a read of stored records — so C2 does not fit the no-audio
+discipline the rest of the node keeps. The cleanest resolution is that **C2 is a separately declared
+session-level capability with declared audio access**, rather than an exception carved inside a
+no-audio node. Note also that **REDACT runs before this node**, so the audio C2 would read may
+already have been altered.
 
-If it is built: the concatenation protocol it was validated on must be followed rather than
-approximated, its published recording-chain sensitivity — including smartphone offsets — travels with
-every value, and the shimmer component inherits V4's validity gate rather than bypassing it.
+**The protocol cannot be followed here, so the real choice is between an AVQI-shaped number that is
+not AVQI and emitting nothing.** `branch-voice.md` V5 sets out why: the continuous-speech material
+must be the short standardized sentence set in a prescribed proportion, which none of Rainbow,
+Caterpillar or Harvard is and free speech disqualifies; only `prolonged-vowel` can supply the vowel
+and only when it is /a/, making V8 a precondition; independent AGC states, gain and mic distance put
+a level and spectral discontinuity at the join, directly into the LTAS terms; bandwidth and sample
+rate must match across the pair and do not; and `extract_slope_tilt`'s bands are not AVQI's, so
+following the protocol means reimplementing the index rather than composing helpers.
+
+**A value assembled this way has no known relationship to the published 0–10 scale or its ~2.95
+cut-off**, and the published smartphone recording-chain sensitivity applies on top of that.
+
+**This document places the capability and states the conclusion; the owner decides whether to build
+something that is not AVQI.**
 
 ## Candidates, not yet specified
 
@@ -89,10 +122,26 @@ Flagged rather than designed, since each needs its own argument:
 Anything else that cannot be computed from one recording belongs here. **Candidates are flagged, not
 invented.**
 
+## What it writes, and where
+
+**Three things are owed here and this document does not decide them**, because each has consequences
+beyond this node:
+
+1. **What it writes.** The old Q4 emitted "a file-level assertion naming the other recording"; that
+   was dropped in the move and nothing replaced it. A cross-recording finding names two or more
+   recordings, so it does not fit an assertion scoped to one store — the shape is undecided.
+2. **Where the finding lives.** Per-recording stores are finished when this node reads them. Writing
+   back into them contradicts that; writing somewhere else means a new artifact with its own
+   location and reader.
+3. **Whether it takes a node name.** The contract makes node name a **join key** — for verdicts,
+   `run.json`, figure and report. So taking a name in `GRAPH_ORDER`, or writing a verdict entity, or
+   carrying a `node:` attribute, are three different decisions with three different reader
+   consequences. `GRAPH_ORDER` has ten entries and every reader iterating it would see a new one.
+
 ## What it does not do
 
 It does not re-run per-recording nodes, re-derive per-recording measurements, or change a
-per-recording verdict. Those stores are finished when it reads them.
+per-recording verdict.
 
 It writes no deviation: a deviation is a departure from what a *task* asked for, and this node holds
-no task declaration — it holds a corpus.
+no task declaration.

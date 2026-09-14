@@ -93,14 +93,30 @@ variance. A vowel's natural spectral decay has neither the slope nor the varianc
 discriminating feature is the **abruptness and the flatness above it**, not the level at any
 frequency.
 
-**Prefer broadband content.** Fricatives, coughs and background segments excite the band that matters;
-sustained vowels do not. Where a recording has no broadband content, the measurement is
-**unavailable** rather than estimated from a vowel.
+**Prefer broadband content.** Fricatives, coughs and background segments excite the band that
+matters; sustained vowels do not.
+
+**But that makes it unavailable exactly where it is needed.** A vowel-only recording has no broadband
+content — and those are the 5,113 `prolonged-vowel` and `maximum-phonation-time` recordings whose CPP
+and HNR the covariate exists to qualify. Marking it unavailable there would leave the covariate
+missing on its most important population.
+
+**Bandwidth is a property of the session and the device, not of the recording.** So estimate it from
+**another recording in the same session** that does carry broadband content, and attach it to the
+vowel recording with its source named. That is a session-level read, the same move
+[`corpus-level-node.md`](corpus-level-node.md) C2 needs — **specify the two together**, since they
+share the grouping mechanism and neither works without it.
 
 **Not threshold-free.** An earlier version said it "needs no threshold to report". A roll-off or a
 cliff is defined relative to something — a reference level, a slope in dB/octave, a variance
 criterion. All are declared as conventions per
 [`branch-conventions.md`](branch-conventions.md).
+
+**And the existing spectral measures are already band-limited in a way that hides this.**
+`praat_parselmouth.py:999` builds its spectrogram with Praat's default `maximum_frequency` of 5 kHz,
+never named in the source — so the spectral moments this covariate exists to qualify are themselves
+computed on a band that excludes the high-frequency energy carrying breathiness and turbulent noise.
+[`praat-instrument-audit.md`](praat-instrument-audit.md) finding 7.
 
 **It is file-level, and that is consistent.** Bandwidth is a property of the capture chain, not of a
 span, so it is computed once and referenced by every extent. An earlier version of
@@ -223,22 +239,47 @@ performance to its instruction.
 | capability | status |
 | --- | --- |
 | Q1 clip consistency | **built**; expected count zero |
-| Q2 effective bandwidth | **not built**; highest-value addition; LTAS in PREPROCESS, read here |
+| Q2 effective bandwidth | **not built**; highest-value addition; spectral-cliff detection in PREPROCESS, read here; session-level for vowel-only recordings |
 | Q3 background content | **not built**; blocked on gap spans being typed background |
 | Q4 duplicate detection | **moved** to [`corpus-level-node.md`](corpus-level-node.md) C1 |
 | Q5 acquisition consistency | **not built**; needs the declaration |
 | Q6 cross-branch contradiction | **not built**; in remit, not yet specifiable |
 | Q7 SQUIM description | **not built**; must stratify and must not conclude |
+| Q8 capture-chain signature | **not built, and unowned** — see below |
+
+### Q8 — AGC and noise-suppression signature (**not built; currently owned by nobody**)
+
+[`branch-conventions.md`](branch-conventions.md) requires an AGC / noise-suppression covariate on
+every acoustic measurement and delegates the computation here. **This document had no row for it** —
+Q2 specifies bandwidth only — so the covariate was required of every branch and computed by nothing.
+
+It belongs here in kind: a property of the capture chain, file-level, describing the recording rather
+than the performance. Like Q2 it needs the waveform, so **PREPROCESS computes and QUALITY reads**.
+
+**It is not parameter-free.** The signatures are comparative — the pause noise floor against the
+speech level, the pause noise spectrum against the in-speech one, level steps at speech boundaries —
+which reduces the number of parameters without removing them. "Very low variance" and "a level step"
+are cuts, and whatever implements this declares them. **Owed.**
 
 ## What the node emits
 
 ```
-assertions   contest, one per contradicted clip span
+assertions   contest, one per contradicted clip span (Q1)
+             label over a background span, once gaps are typed background (Q3)
+             contest across branches, if Q6 is ever specified
+measurements effective bandwidth, file-level, with its declared conventions (Q2)
+             capture-chain signature, file-level (Q8)
+             acquisition comparison as counts {declared, found} (Q5)
+             SQUIM distribution, stratified by span family (Q7)
 verdict      { signal, preceded_by, clip_spans_n, checked_n, unmeasurable_n,
                contradicted_n, unclipped_samples_n, unclipped_peak,
                unclipped_peak_time_s, clip_contradiction_margin,
                clip_edge_guard_samples, contradictions, flags }
 ```
+
+Only the `contest` assertions and the verdict exist today; the rest is what the capabilities above
+would add. An earlier version listed only what exists, which made this the one document whose emit
+block was not forward-looking.
 
 **The verdict's basis, exactly** (`quality.py:312-317`):
 

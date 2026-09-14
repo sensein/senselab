@@ -92,10 +92,25 @@ train with weak or absent modulation structure is a finding about the production
 never proposed is an absence of data, and would concentrate `DDK: FAIL` on the most impaired
 speakers.
 
-**Reads.** The energy envelope PREPROCESS computes.
+**Reads.** The audio. **Not PREPROCESS's stored `energy_envelope`** — see below.
 
 **Computes.** The amplitude-envelope modulation spectrum over the proposed train. A syllable train is
 an amplitude modulation at the repetition frequency; the spectral peak gives the **rate** directly.
+
+**The stored envelope is the wrong input, for three reasons.** `energy_envelope` is
+`hilbert_envelope_dbfs` over the **pre-emphasised** stream, Butterworth-lowpassed, stored in
+**dBFS** (`preprocess.py:1269-1273`):
+
+1. **A logarithmic envelope generates harmonics of the modulation fundamental through the
+   nonlinearity alone.** The f-versus-3f peak ratio is this capability's entire unit-disambiguation
+   mechanism, and on a dB envelope part of that structure is an artefact of the conversion rather
+   than of production unevenness. **D1 needs a linear-amplitude or power envelope** and says so.
+2. **Pre-emphasis (+6 dB/octave) reweights burst against vowel energy** — which is exactly the
+   asymmetry that creates f/3f structure on `/pa-ta-ka/`. So the harmonic ratio would depend on
+   `preemphasis.coefficient`, a key derived for cough and mouth-sound contrast rather than for this.
+3. The lowpass is `envelope.lowpass_hz: 40.0`, derived at `config-derivations.md:43-47`. D1 listed
+   "a lowpass cutoff" among the conventions it must declare; **one exists and is in force**, so D1
+   inherits it by name rather than declaring a second.
 
 **The unit is ambiguous by a factor of three on the sequential families, and this must be resolved
 in the output.** For `/pa-ta-ka/`, `/puh-tuh-kuh/` and `/buttercup/` — **3,195 declarations** —
@@ -104,9 +119,21 @@ syllables within a cycle differ in amplitude, so the envelope carries energy at 
 the production is. Reporting whichever peak is larger as "the rate" would put a normal speaker at 5
 syllables/s into the severe-dysarthria range at 1.7, or the reverse.
 
-**So report the harmonic peak structure — f and 3f — and state which unit the number is in.** For the
-alternating families the ambiguity does not arise, but the output should be explicit there too rather
-than implicitly different.
+**So report the harmonic peak structure and state which unit the number is in.** For the alternating
+families the ambiguity does not arise, but the output is explicit there too rather than implicitly
+different.
+
+**f and 3f do not by themselves resolve the unit**, because an alternating train is also a
+quasi-periodic pulse train carrying energy at 3×. The peak structure says *there is harmonic
+structure*; it does not say which harmonic is the syllable rate.
+
+**D2's nucleus count over the train extent supplies the unit** — syllables ÷ duration is unambiguous.
+That does not reconcile the two rates into one number, which stays forbidden; it uses the
+unambiguous one to label the precise one.
+
+**For a sequential train the 2f component is more informative than 3f**, since the strongest
+within-cycle asymmetry is usually between one syllable and the other two rather than evenly across
+three.
 
 **Not parameter-free.** An earlier version claimed it was. The method needs an envelope extraction
 method, a lowpass cutoff, an analysis window, and — decisively — **a search band**, since the peak
@@ -135,22 +162,33 @@ inter-onset interval keeps it scale-free, but the factor is owed.
 **Report rate over the train extent as primary, articulation rate as secondary.** Articulation rate
 excludes intra-train pauses — and in DDK those pauses are part of the deficit the task probes.
 
-**Three undeclared operating points, one of them data-dependent.** They are literals inside the
+**Four undeclared operating points, one of them data-dependent.** They are literals inside the
 helper, in no config:
 
 | what | where | value |
 | --- | --- | --- |
 | silence threshold | `praat_parselmouth.py:142` | `silence_db = -25` |
 | minimum dip between peaks | `:149` | `min_dip = 4` |
-| **…dropped to 2 when mean HNR < 60** | `:155-156` | data-dependent |
+| **…dropped to 2 when mean HNR < 60** | `:154-155` | data-dependent |
 | minimum pause duration | `:159` | `min_pause = 0.3` |
 
 **The HNR switch is the serious one.** It changes syllable-detection behaviour based on a
 voice-quality measurement of the recording itself, on a corpus of dysphonic speakers — so the
 detector's sensitivity is conditioned on the thing being measured. In practice mean HNR is far below
-60 dB for any real recording, so the `min_dip = 2` branch is effectively always taken and the
-documented "clean signal" setting is close to dead — but it is undeclared either way, and a reader
-cannot see it from any config. **All four are owed.**
+60 dB for any real recording, so the `min_dip = 2` branch is effectively always taken.
+
+**And it fails in the wrong direction on the degenerate case.** If Praat returns undefined for the
+mean, `NaN < 60` evaluates `False`, so `min_dip` stays at **4** — the stricter setting — on exactly
+the recordings where pitch could not be measured at all. The one population where the branch flips is
+the one least able to bear it, and it flips silently.
+
+**Two further deviations from Praat** in the same helper: `min_pause` **0.3 s against Praat's 0.1 s**
+and minimum sounding interval **0.1 s against 0.05 s** — both of which change what counts as a
+syllable in a rapid train, which is this branch's entire measurement. And its `to_pitch_ac` differs
+from Praat on six parameters, with the code's own comments recording that no reason was found.
+
+**All of it is owed**, and the measurements are in
+[`praat-instrument-audit.md`](praat-instrument-audit.md).
 
 **Demote the PPG segment rate.** `ddk.ppg_segment_rate_per_s` is a fine *gate* — it routes without a
 transcript — but as a measurement an argmax-change rate has no interpretable units: one syllable with
@@ -164,7 +202,18 @@ rate.
 
 **Question.** How does the interval between productions behave across the train?
 
-**Computes.** From D1's modulation phase or D2's nuclei: the sequence of inter-onset intervals, then
+**Onsets come from the time domain, never from D1's modulation phase.** Narrowband phase tracking
+around a spectral peak **imposes near-constant intervals by construction**, so an interval CV derived
+from it is biased toward zero — and biased *most* where the production is most irregular, which is
+the presentation the task exists to detect. Since D3 now carries regularity (D1's peak sharpness
+having been demoted), taking intervals from the phase would re-create, inside the replacement, the
+exact bias structure the envelope inversion removed.
+
+**Pick onsets in the time domain from the linear envelope.** D2's nuclei are an acceptable source;
+D1's phase is not. **The time-domain peak-picking parameters are owed** and were not previously
+listed.
+
+**Computes.** From those onsets: the sequence of inter-onset intervals, then
 
 - its **dispersion** — the coefficient of variation, dimensionless and so comparable across speakers
   at different rates, and **duration-robust** in a way D1's peak sharpness is not;
@@ -277,7 +326,7 @@ with dispersion and trend, and a PPG-phoneme-to-syllable mapping.
 ## What the branch would emit
 
 ```
-spans        family: "ddk", one per syllable train (D4)
+spans        family: "ddk", one per syllable train (D1)
 assertions   refine (corrected_extent) where a PREPROCESS span's extent is wrong;
              deviate (syllable_sequence_mismatch, truncation)
 measurements harmonic peak structure f and 3f with its stated unit (D1),
