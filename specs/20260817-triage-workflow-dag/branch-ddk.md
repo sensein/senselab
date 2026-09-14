@@ -15,9 +15,12 @@ shared rules are in [`branch-conventions.md`](branch-conventions.md); owed groun
 records it `SKIPPED` with `NO_NODE` (`run.py:302-305`).
 
 **Since ruleset stage 2 it is routable for the first time.** No `kind` ever mapped to DDK, so under
-the old fold it could not be selected at all. The consequence is live: a recording whose DDK gates
-fire now flags the file, because VERDICT records "was asked to run and never ran". That flag fires
-only on recordings with DDK content, and it is the standing argument for building the node.
+the old fold it could not be selected at all. The consequence is live and large: a recording whose
+DDK gates fire now flags the file, because VERDICT records "was asked to run and never ran" — and
+that is **all 22,363 recordings DDK routes, of which 14,878 declare no DDK family**. An earlier
+version of this document implied it fires only on recordings with DDK content, understating it by
+roughly threefold against numbers the same document carries below. Since this flag is the standing
+argument for building the node, the number matters.
 
 Everything below is **not built** unless it says otherwise.
 
@@ -56,9 +59,10 @@ speech — a stutter, a false start, a repeated word. The branch measures what i
 it is; it does not assert that a Harvard sentence failed to be a DDK task.
 
 **DDK's gate evidence is `unavailable` on 2,345 recordings** (`ruleset_score.json`,
-`totals.unavailable`). An earlier version of this document called that "the highest of the four
-branches"; it is the second-lowest — AIRWAY's is 56,505, twenty-four times larger. The design
-conclusion stands unchanged: an unavailable posteriorgram is an absence, never a negative.
+`totals.unavailable`). Ascending, the four are SPEECH 0, VOICE 29, **DDK 2,345**, AIRWAY 56,505 — so
+DDK is second-*highest*. An earlier version called it the highest, and the first correction called it
+the second-lowest; both were wrong. The design conclusion is unchanged either way: an unavailable
+posteriorgram is an absence, never a negative.
 
 ## How DDK is routed today
 
@@ -77,85 +81,115 @@ recordings the protocol labelled rather than which carry a syllable train.
 
 ## Capabilities
 
-### D1 — Rate and regularity from the amplitude-envelope modulation spectrum (**not built; primary**)
+### D1 — Locate the train and measure its modulation (**not built; primary**)
 
-**Question.** How fast is the repetition and how regular?
+**Question.** Where is the repeated production, how fast is it, and how regular?
 
-**Reads.** The energy envelope PREPROCESS already computes.
+**Propose the train from the envelope, then qualify it by repetition structure** — the same
+inversion VOICE V1 applies. A train defined *by* detected repetition cannot be found when the
+repetition is irregular, which is the presentation the task exists to detect. An envelope-proposed
+train with weak or absent modulation structure is a finding about the production; a train that was
+never proposed is an absence of data, and would concentrate `DDK: FAIL` on the most impaired
+speakers.
 
-**Computes.** The modulation spectrum of the amplitude envelope. A syllable train is an amplitude
-modulation at the repetition frequency; the spectral peak gives the **rate** directly in Hz, and the
-peak's sharpness gives the **regularity** directly. Both fall out of one transform.
+**Reads.** The energy envelope PREPROCESS computes.
 
-**This is primary because it dissolves two problems at once.** It does not require locating
-individual syllable nuclei, so it does not depend on nucleus-detection operating points; and it does
-not require first segmenting the train, so it removes the circularity of needing a train extent in
-order to measure the rate that defines the train.
+**Computes.** The amplitude-envelope modulation spectrum over the proposed train. A syllable train is
+an amplitude modulation at the repetition frequency; the spectral peak gives the **rate** directly.
 
-**Emits.** A per-span measurement carrying peak modulation frequency and peak sharpness.
+**The unit is ambiguous by a factor of three on the sequential families, and this must be resolved
+in the output.** For `/pa-ta-ka/`, `/puh-tuh-kuh/` and `/buttercup/` — **3,195 declarations** —
+syllables within a cycle differ in amplitude, so the envelope carries energy at the **cycle** rate
+(syllable rate ÷ 3) as well as at the syllable rate. Which is the global peak depends on how uneven
+the production is. Reporting whichever peak is larger as "the rate" would put a normal speaker at 5
+syllables/s into the severe-dysarthria range at 1.7, or the reverse.
 
-**Serves.** All ten families.
+**So report the harmonic peak structure — f and 3f — and state which unit the number is in.** For the
+alternating families the ambiguity does not arise, but the output should be explicit there too rather
+than implicitly different.
+
+**Not parameter-free.** An earlier version claimed it was. The method needs an envelope extraction
+method, a lowpass cutoff, an analysis window, and — decisively — **a search band**, since the peak
+must be sought somewhere. All four are declared as conventions per
+[`branch-conventions.md`](branch-conventions.md); the search band in particular determines which
+harmonic can be found at all.
+
+**Peak sharpness is not a regularity measure.** Spectral resolution scales as 1/T, so a short train
+gives a broad peak however regular the production was, and the measure would report brevity as
+irregularity. Either normalise sharpness by analysis duration or do not report it as regularity —
+**D3's interval coefficient of variation is duration-robust and carries regularity instead**.
+
+**Emits.** A `propose` span, `family: "ddk"`, subject to the `propose`/`refine` rule; a per-span
+measurement carrying the harmonic peak structure with its stated unit and the declared conventions.
+
+**Owed.** A gap criterion for where the train breaks. Stating it relative to the train's own
+inter-onset interval keeps it scale-free, but the factor is owed.
 
 ### D2 — Syllable-nucleus rate (**not built; cross-check**)
 
 **Question.** What rate does nucleus counting give, and does it agree with D1?
 
-`extract_speech_rate` (`praat_parselmouth.py:91`) returns `speaking_rate` (syllables ÷ duration),
-`articulation_rate` (syllables ÷ phonation time), `phonation_ratio`, `pause_rate` and
-`mean_pause_dur`.
+`extract_speech_rate` (`praat_parselmouth.py:91`) returns `speaking_rate`, `articulation_rate`,
+`phonation_ratio`, `pause_rate` and `mean_pause_dur`.
 
 **Report rate over the train extent as primary, articulation rate as secondary.** Articulation rate
-excludes intra-train pauses — and in DDK those pauses are part of the deficit the task probes, so
-excluding them removes the signal.
+excludes intra-train pauses — and in DDK those pauses are part of the deficit the task probes.
 
-**Its operating points are inherited and must be named.** Praat's syllable-nuclei method carries a
-silence threshold, a minimum dip between peaks, and a minimum pause duration. All three move
-`articulation_rate` directly and none is declared here. SPEECH discharges the analogous question for
-its aligner explicitly; this does the same. **Owed.**
+**Three undeclared operating points, one of them data-dependent.** They are literals inside the
+helper, in no config:
+
+| what | where | value |
+| --- | --- | --- |
+| silence threshold | `praat_parselmouth.py:142` | `silence_db = -25` |
+| minimum dip between peaks | `:149` | `min_dip = 4` |
+| **…dropped to 2 when mean HNR < 60** | `:155-156` | data-dependent |
+| minimum pause duration | `:159` | `min_pause = 0.3` |
+
+**The HNR switch is the serious one.** It changes syllable-detection behaviour based on a
+voice-quality measurement of the recording itself, on a corpus of dysphonic speakers — so the
+detector's sensitivity is conditioned on the thing being measured. In practice mean HNR is far below
+60 dB for any real recording, so the `min_dip = 2` branch is effectively always taken and the
+documented "clean signal" setting is close to dead — but it is undeclared either way, and a reader
+cannot see it from any config. **All four are owed.**
 
 **Demote the PPG segment rate.** `ddk.ppg_segment_rate_per_s` is a fine *gate* — it routes without a
-transcript — but as a measurement an argmax-change rate has no interpretable units: a single syllable
-with an onset consonant and a vowel yields two or more segments, and the count depends on the
+transcript — but as a measurement an argmax-change rate has no interpretable units: one syllable with
+an onset consonant and a vowel yields two or more segments, and the count depends on the
 posteriorgram's inventory rather than on articulation. Keep it for routing; do not report it as a
 rate.
 
-**Do not reconcile D1 and D2 into one number.** They measure different things and reconciling them
-needs a calibration nobody has.
+**Do not reconcile D1 and D2 into one number.**
 
-### D3 — Inter-onset interval structure (**not built**)
+### D3 — Inter-onset interval structure (**not built; carries regularity**)
 
 **Question.** How does the interval between productions behave across the train?
 
-**Computes.** From D1's modulation phase or D2's nuclei: the sequence of inter-onset intervals, and
-then
+**Computes.** From D1's modulation phase or D2's nuclei: the sequence of inter-onset intervals, then
 
-- its **dispersion** — standard deviation and the coefficient of variation, which is dimensionless
-  and so comparable across speakers at different rates;
-- its **trend across the train** — festination (accelerating), slowing, or irregular-without-trend.
-  These are among the most discriminative DDK features and are currently absent entirely;
-- **amplitude regularity** across productions, the intensity analogue of interval regularity.
+- its **dispersion** — the coefficient of variation, dimensionless and so comparable across speakers
+  at different rates, and **duration-robust** in a way D1's peak sharpness is not;
+- its **trend across the train** — festination, slowing, or irregular-without-trend. Among the most
+  discriminative DDK features and currently absent entirely;
+- **amplitude regularity** across productions, the intensity analogue.
 
-**Parameter-free as measurements.** Dispersion and trend of a sequence need no threshold; only
-interpreting them would.
+**Parameter-free as measurements.** Dispersion and trend of a sequence need no threshold.
 
-**Emits.** A per-span measurement. **No verdict** — mapping a coefficient of variation to normal or
-disordered needs norms this project does not have.
+**Emits.** A per-span measurement, with its support count per
+[`branch-conventions.md`](branch-conventions.md). **No verdict.**
 
-### D4 — Locate the train (**not built**)
+### D4 — Segment inventory over the train (**not built**)
 
-**Question.** Where is the repeated production?
+**Question.** What phonetic segments make up the train?
 
-**Reads.** The D1 modulation analysis and `extract_ppg_segments`
+**Reads.** `extract_ppg_segments`
 (`tasks/features_extraction/ppg.py:349`), which returns contiguous argmax-phoneme segments carrying
 `phoneme_index`, `phoneme`, `start_frame`, `end_frame`, `frame_count`, `start_seconds`,
 `end_seconds` and `duration_seconds` — eight keys.
 
-**Emits.** A `propose` span, `family: "ddk"`, subject to the `propose`/`refine` rule in
-[`branch-conventions.md`](branch-conventions.md).
+**Emits.** A per-span measurement over the D1 train. The train span itself is D1's; this adds the
+segment inventory to it.
 
-**Owed.** A gap criterion for where the train breaks. Stating it relative to the train's own
-inter-onset interval rather than absolutely keeps it scale-free across speakers, but the factor is
-still owed.
+**Owed.** Whether the posteriorgram is usable here at all — see D6.
 
 ### D5 — Train duration as a fraction of recording duration (**not built**)
 
@@ -191,6 +225,10 @@ rapid nonsense repetition.
 | `syllable_sequence_mismatch` | a produced syllable that is not the one the sequence expected (D6) |
 | `truncation` | the train runs to the recording boundary |
 
+**A deviation is not evidence of a bad recording.** See
+[`branch-conventions.md`](branch-conventions.md): `syllable_sequence_mismatch` is produced by apraxia
+of speech and by dysarthria — it is the finding, not a fault of the recording.
+
 **`off_task_extent` is withdrawn from this branch.** It previously covered *"lexical speech, or
 silence, where the task expected sustained repetition"* — which makes every breath pause in a DDK
 train a deviation and needs an undeclared minimum duration to avoid firing constantly. **Pause
@@ -207,14 +245,23 @@ therefore directly sensitive to AGC, which is the default in consumer capture. E
 carries the quality covariates of its extent, per
 [`branch-conventions.md`](branch-conventions.md).
 
+## A branch `FAIL` is an absence of detected content
+
+`DDK: FAIL` means **this branch's detector found no train**, never that the speaker produced none.
+A detector keyed on regular repetition fails most often on irregular trains — the presentation the
+task exists to detect — so without care `FAIL` would concentrate on the most impaired speakers.
+**D1's envelope-first proposal removes most of that cause**: a train with weak modulation structure
+is still a train, reported with weak structure. See [`branch-conventions.md`](branch-conventions.md)
+and Unresolved on `Outcome.FAIL`'s wording.
+
 ## What exists today
 
 | capability | status |
 | --- | --- |
-| D1 modulation spectrum | **not built**; no module computes it |
-| D2 nucleus rate | **not built**; `extract_speech_rate` exists, no branch consumes it; operating points owed |
-| D3 interval structure | **not built**; nothing computes an inter-onset sequence or its trend |
-| D4 locate the train | **not built**; `extract_ppg_segments` exists and no branch calls it |
+| D1 propose and measure the train | **not built**; no module computes an envelope modulation spectrum; unit ambiguity must be resolved in the output |
+| D2 nucleus rate | **not built**; `extract_speech_rate` exists, no branch consumes it; four undeclared operating points |
+| D3 interval structure | **not built**; nothing computes an inter-onset sequence, its dispersion or its trend |
+| D4 segment inventory | **not built**; `extract_ppg_segments` exists but no *branch* calls it — `features.py:421` does, to compute the `ddk.ppg_segment_rate_per_s` gate feature |
 | D5 train fraction | **not built** |
 | D6 sequence conformance | **not built**; PPG-to-syllable mapping owed |
 
@@ -233,11 +280,13 @@ with dispersion and trend, and a PPG-phoneme-to-syllable mapping.
 spans        family: "ddk", one per syllable train (D4)
 assertions   refine (corrected_extent) where a PREPROCESS span's extent is wrong;
              deviate (syllable_sequence_mismatch, truncation)
-measurements modulation rate and sharpness (D1), nucleus rates (D2),
-             interval dispersion and trend, amplitude regularity (D3)
+measurements harmonic peak structure f and 3f with its stated unit (D1),
+             nucleus rates with their four declared operating points (D2),
+             interval dispersion and trend, amplitude regularity (D3),
+             segment inventory (D4) — each with its support count
 counts       train duration and fraction of recording {found}
-verdict      { trains_n, train_s, train_fraction, modulation_rate_hz,
-               modulation_sharpness, articulation_rate, interval_cv,
+verdict      { trains_n, train_s, train_fraction, modulation_peak_hz,
+               modulation_unit, articulation_rate, interval_cv,
                interval_trend, flags }
 ```
 
@@ -257,6 +306,8 @@ Normative interpretation of rate or regularity. Reconciling D1 and D2 into one n
 
 ## Unresolved
 
+- **`Outcome.FAIL`'s wording is a hazard** — `no_content_found` would carry the meaning — but
+  `Outcome` is a closed vocabulary with readers, so this is recorded rather than changed.
 - **D6 reads an expected syllable sequence the contract's declaration does not define.** The
   contract says `instructions` is prose and must not be parsed, and it froze the entry keys.
   `data/task_expectations/` does not exist yet, so the extension is free — but it must be asked for

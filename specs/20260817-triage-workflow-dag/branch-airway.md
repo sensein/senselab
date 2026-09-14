@@ -71,9 +71,17 @@ with no derivation. An earlier version of this document claimed the no-refits ru
 because it is a label set rather than a threshold; that is not one of the rule's three outs, and A3
 correctly marks the same kind of object owed. **It is owed a derivation.**
 
-**And the two-label vocabulary erases clinically distinct events.** Under `[Cough, Breathe]` a wheeze
-surfaces as `Breathe` and a throat clear as `Cough`. `Wheeze`, `Gasp` and `Throat clearing` should
-be labels in their own right — a vocabulary decision, not a threshold, and therefore available now.
+**And the two-label vocabulary erases clinically distinct events.** Under `[Cough, Breathe]` a
+musical breath noise surfaces as `Breathe` and a throat clear as `Cough`. Tonal breath noise, gasp
+and throat clearing should be labels in their own right — a vocabulary decision, not a threshold, and
+therefore available now.
+
+**Do not carry the classifier's label `Wheeze` through to output.** *Wheeze* is a term of art in
+auscultation: a continuous musical **lung** sound of at least ~100 ms, heard with a stethoscope on
+the chest. What a phone microphone at mouth level catches during forced breathing, and what a
+general-purpose audio classifier calls "Wheeze", is overwhelmingly upper-airway turbulence. A
+clinician reading "wheeze detected" imports a respiratory finding nobody made. Emit an acoustic name
+— *musical/tonal breath noise* — or state the definitional gap in the same field as the value.
 
 ### A2 — Corroborate against AudioSet (**built**)
 
@@ -133,10 +141,16 @@ block and the verdict disagreeing.
 off-task content that has its own extent. The versions previously in SPEECH, VOICE and DDK keyed on
 the *absence* of the target and were withdrawn.
 
-**And the lexical channel is the wrong instrument on its own.** Voiced exhalation, humming, laughter
-and throat clearing are off-task content that produces no lexical word, and on a noisy breath
-recording an ASR transcribes little. Voicing detection from the F0 track
-(`phonation_tracks`, `preprocess.py:919`) catches them and is available now.
+**And the lexical channel is the wrong instrument on its own.** Humming, laughter and speech-like
+voicing are off-task content that produces no lexical word, and on a noisy breath recording an ASR
+transcribes little. Voicing detection from the F0 track (`phonation_tracks`, `preprocess.py:919`)
+catches them and is available now.
+
+**The voicing channel needs the same exclusion the lexical one has.** A cough has a voiced phase —
+which A6 measures as an ordinary cough descriptor — and voiced exhalation is normal in several breath
+families. A bare voicing detector would flag both as off-task. **An extent already carrying an airway
+label is not off-task**, exactly as a span overlapping only bracketed words is not transcribed
+content.
 
 ### A5 — Respiratory cycle count (**not built**)
 
@@ -151,14 +165,33 @@ counts *spans carrying a label*, not breaths: PREPROCESS merges adjacent proposa
 from the energy envelope and use the classifiers to *type* them, rather than reading counts off
 labels. A5 is where that inversion starts, and it should be the general principle for this branch.
 
-**Count exhalations as primary.** Quiet nasal inhalation is frequently below the noise floor on
-consumer capture, so an inhale-based count biases downward — worst on `v2-threebreathsnose`, exactly
-the family where the route is the point.
+**Which phase is the primary event is task-dependent.** Quiet nasal inhalation is frequently below
+the noise floor on consumer capture, so an inhale-based count biases downward — but
+exhalation-primary is not the universal answer either:
 
-**Emits.** `propose` spans for cycles PREPROCESS did not find, `family: "airway"`, subject to the
+- on `v2-threebreathsnose` **both** phases are near-silent, so exhalation-primary rescues nothing;
+- on `fivebreaths` and `threequickbreaths` a deep mouth inhalation is often the **louder** event, so
+  exhalation-primary biases downward there instead.
+
+The primary-event choice is therefore per-family, driven by the declaration, and stated per family
+rather than fixed once.
+
+**Name the outputs acoustically, not spirometrically.** An acoustic breath event is not a respiratory
+cycle. "Cycle duration" and "I:E ratio" import meaning from spirometry onto what are breath-event
+durations and the intervals between them — measured at a phone microphone, with no airflow
+measurement anywhere. Emit **breath-event duration** and **inter-event interval**.
+
+**And the I:E ratio cannot be computed by the detector this capability specifies.** The justification
+for exhalation-primary counting is that inhalation is frequently undetectable — in which case I is
+not measurable, and a ratio requires both. **Condition any inspiratory-to-expiratory measure on
+inhalation actually being detected, and mark it `unavailable` otherwise**, per the branch's own
+absence rule.
+
+**Emits.** `propose` spans for events PREPROCESS did not find, `family: "airway"`, subject to the
 `propose`/`refine` rule in [`branch-conventions.md`](branch-conventions.md); a per-span measurement
-carrying cycle durations and the I:E ratio; and a `counts` measurement entry
-`expected_event_count` carrying `found` and `declared`.
+carrying breath-event durations and inter-event intervals, with the I:E measure present only where
+both phases were detected; and a `counts` entry `expected_event_count` carrying `found` and
+`declared`.
 
 **Owed ground truth — the operating points, not only the validation.** Envelope smoothing window,
 peak/trough criterion, and minimum cycle duration are all required for the capability to execute and
@@ -187,7 +220,10 @@ fit the declaration.
 
 | type | evidence |
 | --- | --- |
-| `off_task_extent` | positively-identified off-task content inside an airway task — a lexical word, or voiced production from the F0 track — each with its own extent (A4) |
+| `off_task_extent` | positively-identified off-task content inside an airway task — a lexical word, or voiced production from the F0 track outside any airway-labelled extent — each with its own extent (A4) |
+
+**A deviation is not evidence of a bad recording.** See
+[`branch-conventions.md`](branch-conventions.md).
 
 `expected_event_count` is a `counts` entry, not a deviation (A5). AIRWAY emits no
 `stimulus_mismatch` and no `filler`: no airway task carries a stimulus text.
@@ -229,6 +265,13 @@ of this branch's evidence set, and `labelled_n` separates `pass` from `fail`
 (`dag.md`). [`branch-quality.md`](branch-quality.md) says what concludes on them if the contract's
 part (b) types them background.
 
+## A branch `FAIL` is an absence of detected content
+
+`AIRWAY: FAIL` means **no span carried a label of interest**, never that the recording lacks airway
+content. With gate evidence `unavailable` on 56,505 of 62,547 recordings, that distinction carries
+more weight here than anywhere else in the graph. See
+[`branch-conventions.md`](branch-conventions.md).
+
 ## What the branch emits
 
 ```
@@ -236,7 +279,9 @@ spans        A5 would propose family: "airway" cycle spans
 assertions   label (A1), label with yamnet_* attributes (A2 corroboration),
              contest (A3, once replaced), abstain, deviate/off_task_extent (A4)
 interval     airway_labelled_interval, the hull of the labelled spans
-measurements A5 cycle durations and I:E ratio; A6 cough descriptors
+measurements A5 breath-event durations and inter-event intervals, with the
+             I:E measure only where both phases were detected; A6 cough
+             descriptors — each with its extent's covariates and support count
 counts       expected_event_count {found, declared} (A5)
 verdict      { labelled_n, by_label, contested_n, merged_n, flags }
 ```

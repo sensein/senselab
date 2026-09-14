@@ -97,10 +97,24 @@ decision is made here.
 **`align_transcriptions` is in the inventory** (`tasks/forced_alignment/__init__.py:5`, implemented
 at `forced_alignment.py:691`), including an MMS aligner path (`mms_fa.py`).
 
-**What forced alignment gives that a text diff cannot:** per-word acoustic scores, robust omission
-detection, word and phoneme durations, and pause locations — and therefore speaking rate,
-articulation rate and phrasing, over the ~19,265 read recordings. It is the same instrument S4 and
-S5 need.
+**Both instruments are needed, and they answer different questions.** A text-level diff of the
+transcript against the stimulus says **what** differed — substitutions, omissions and insertions,
+enumerated. Forced alignment says **where** and **how** — per-word intervals, acoustic scores,
+phoneme durations and pause locations, and therefore rate and phrasing over the ~19,265 read
+recordings.
+
+**Alignment alone cannot enumerate the differences.** A forced aligner without skip arcs assigns
+*every* stimulus word an interval whether or not it was spoken, so an omission surfaces only as a low
+acoustic score — detected by a **score cut**, which is an operating point. An earlier version of this
+document claimed "robust omission detection" and simultaneously claimed the capability needed no
+threshold; both cannot be true. **The omission score cut is owed.** Substitutions and insertions
+cannot be recovered from alignment at all, since the aligner is constrained to the stimulus.
+
+**A forced-alignment per-word score is a typicality score, not a pronunciation score.** It measures
+how well the audio matches the model's expectation for that word under a model trained on typical
+speech — so it is low for impaired-but-entirely-correct productions. **It must never be presented as
+pronunciation accuracy**, and on this corpus it will correlate with impairment rather than with
+error.
 
 **Emits.** One `deviate` assertion per departure, carrying the word's extent and its acoustic score.
 
@@ -136,9 +150,23 @@ phrasing — and both are transcribed and then dropped.
 
 - **speech rate and articulation rate**, and **phonation-time ratio** — `extract_speech_rate`
   (`praat_parselmouth.py:91`) returns all three, plus `pause_rate` and `mean_pause_dur`;
-- **pause count, duration and location**, and the **breath-group structure** they imply;
+
+  **This helper hides three operating points, one data-dependent, and none in any config** —
+  `silence_db = -25` (`praat_parselmouth.py:142`), `min_dip = 4` (`:149`) **dropped to 2 when the
+  recording's own mean HNR is below 60** (`:155-156`), and `min_pause = 0.3` (`:159`). The HNR switch
+  means syllable-detection sensitivity is conditioned on a voice-quality measurement of the recording
+  being measured, across ~25,000 recordings of frequently dysphonic speakers. In practice mean HNR is
+  far below 60 dB for any real recording, so the `min_dip = 2` branch is effectively always taken —
+  but it is undeclared either way. **All four are owed**, and DDK D2 documents the same helper.
+- **pause count, duration and location**, and the **breath-group structure** they imply — but
+  **breath groups must not be inferred from ASR bracketing**, which is not a breath detector and
+  misses most audible inspirations in read speech. The instrument that would do it is AIRWAY's
+  envelope-based breath-event detection (A5); connect them rather than substituting the bracket
+  channel;
 - **speaking F0 and F0 standard deviation** — `extract_pitch_descriptors` (`:448`);
-- **intensity variability** — `extract_intensity_descriptors` (`:515`);
+- **intensity variability** within connected speech — `extract_intensity_descriptors` (`:515`).
+  **VOICE V6 owns intensity across instructed loudness conditions**; this owns it within connected
+  speech. On `loudness` and `loudness-v2` both apply, over different extents;
 - **connected-speech CPP** — `extract_cpp_descriptors` (`:706`).
 
 For the spontaneous tasks additionally **disfluency rate** (from the bracketed channel) and
@@ -152,6 +180,20 @@ of times per recording.
 
 **Discourse-content scoring keys are not in the inventory.** Story recall and picture description
 have established content-scoring instruments; this document does not invent them.
+
+### Two task families have standard norm-free measures and currently get nothing
+
+**`productive-vocabulary` (2,910) is a verbal fluency task.** Its standard measures need no scoring
+key: total valid items, unique valid items, and — the informative one — the **inter-response
+interval series** with its first-half versus second-half slope, which is how retrieval slowing shows
+itself. All computable from a time-aligned transcript.
+
+**`word-color-stroop` (472) is a response-latency task.** Its measures are response latency and error
+rate, congruent versus incongruent. Transcribing it and stopping produces nothing interpretable —
+the transcript is not the dependent variable, the timing is.
+
+Both are distinguishable from story recall and picture description, where declining to score is the
+right call because the instruments require content keys. These two do not.
 
 ### S5 — Speaker count (**built, scoped wrong**, step 4)
 
@@ -229,6 +271,11 @@ Repeat readings of the same stimulus likewise.
 | `language_mismatch` | the transcript language differs from the declaration (S11) |
 | `repeat_reading` | the stimulus was read more than once (S11) |
 
+**A deviation is not evidence of a bad recording.** `filler`, `stimulus_mismatch` and
+`repeat_reading` are produced **because of** stuttering, aphasia, apraxia of speech and Parkinson's
+disease — they are the finding, not a fault of the recording. A consumer that filters on them is
+filtering on impairment. See [`branch-conventions.md`](branch-conventions.md).
+
 **An omitted word has no extent.** The contract requires every deviation to have one, so an omission
 is recorded as a **zero-width extent at the alignment point** — the position in the signal where the
 expected word should have been. That keeps it a deviation rather than requiring a separate shape.
@@ -257,6 +304,13 @@ Every acoustic measurement S4 and S8 emit carries the quality covariates of its 
 | S9 non-target | gated behind null config |
 | S10 separation | gated behind null config |
 | S11 language and truncation | not built |
+
+## A branch `FAIL` is an absence of detected content
+
+`SPEECH: FAIL` fires only when the consensus produced no lexical word (`speech.py:544-565`). Since
+recognisers fail most often on the most impaired speech, that absence is itself impairment-correlated
+— the transcript's silence is not the speaker's. See
+[`branch-conventions.md`](branch-conventions.md).
 
 ## What the branch emits
 
