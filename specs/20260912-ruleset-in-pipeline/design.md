@@ -365,9 +365,18 @@ against, so `will_run` is it.
 ROUTING then reads its own reading: `will_run` is the branch being in `routed`, or a hint forcing it.
 
 **The two nodes were not merged.** TAXONOMY keeps the per-classifier label summaries and the
-consensus taxonomy and stays a node, because those are measurements about content that FIGURE,
-REPORT and the planned VOICE rework consume. The measure/decide boundary is the point: TAXONOMY
-emits measurements, ROUTING emits decisions.
+consensus taxonomy and stays a node. The measure/decide boundary is the point: TAXONOMY emits
+measurements, ROUTING emits decisions.
+
+**Correction, 2026-09-13: the reader list above is wrong, and it was the argument's load-bearing
+half.** FIGURE reads `<classifier>_label_summary` (`figure.py:614`) and no `consensus_taxonomy`;
+REPORT reads neither, taking PREPROCESS's `<classifier>_windows` instead (`report.py:425`, `:443`;
+written at `preprocess.py:1662`). `consensus_taxonomy` has exactly one production reader,
+`routing_analysis/features.py:755` — which is ROUTING's own feature reduction. The VOICE rework that
+would consume it is unbuilt (`voice.py:240`). The owner has since reversed this decision on that
+ground: [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+merges TAXONOMY and ROUTING into one SCREEN stage, on the argument that a node whose output only its
+successor reads is a seam and not a layer. That design is not implemented; the two nodes still stand.
 
 **The ordering constraint inverted and survived.** Stage 1 required the ruleset reading to run
 *after* TAXONOMY's label summaries, because `voice.glide` and `voice.chant` read `plain|yamnet` off

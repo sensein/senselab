@@ -58,12 +58,24 @@ Two file-scoped measurements, both with `extent=None`:
 | `<classifier>_label_summary` | per label, peak, median and window count over the whole file, off the verbatim scores sidecar, so it needs no threshold. A classifier that never ran gets no summary — a missing summary and an all-zero one stay distinguishable |
 | `consensus_taxonomy` | the per-span labels of `span_yamnet` and `span_hear` consolidated into one file-level taxonomy, **one row per AudioSet ontology node** rather than per label string, each classifier's own spellings kept in `labels_by_classifier`. Disagreement is recorded, not resolved: a label only one vocabulary contains is not a vote against it |
 
-Both are read downstream. `voice.glide` and `voice.chant` — two of the ruleset's eleven gates — read
-`plain|yamnet`, which the feature reader populates from `yamnet_label_summary`. **That is why
-TAXONOMY runs before ROUTING and not beside it**: evaluated earlier, both gates would read
-`unavailable` and VOICE would never route. `GRAPH_ORDER` enforces the order and a test pins it.
-FIGURE prints both on its cover, REPORT carries both into `summary.json`, and the planned voice
-rework is onto `consensus_taxonomy`.
+`voice.glide` and `voice.chant` — two of the ruleset's eleven gates — read `plain|yamnet`, which the
+feature reader populates from `yamnet_label_summary`. **That is why TAXONOMY runs before ROUTING and
+not beside it**: evaluated earlier, both gates would read `unavailable` and VOICE would never route.
+`GRAPH_ORDER` enforces the order and a test pins it.
+
+**The two measurements do not have the readership this file used to claim for them.** FIGURE prints
+the label summaries on its cover (`figure.py:614`) and reads no `consensus_taxonomy` at all. REPORT
+reads neither: its classifier panels come from PREPROCESS's `<classifier>_windows`
+(`report.py:425`, `:443`), written at `preprocess.py:1662`, not from anything TAXONOMY writes.
+`consensus_taxonomy` has **one** production reader, `routing_analysis/features.py:755` — ROUTING's
+own feature reduction — plus the `rewrite_consensus_taxonomy` extend driver that recomputes it
+(`extend.py:330`). The voice rework that would consume it is unbuilt (`voice.py:240`).
+`taxonomy.py:6`'s module docstring still says "ROUTING, FIGURE and REPORT read them". That is code,
+and correcting it is a code change, not a change to this file.
+
+That readership is the argument
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+uses to merge this node into SCREEN. Nothing of that design is implemented.
 
 ## Its activities
 
