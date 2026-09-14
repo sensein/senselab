@@ -66,7 +66,7 @@ posteriorgram is an absence, never a negative.
 
 ## How DDK is routed today
 
-Two gates, either of which routes (`default.yaml:211`, `:257-264`):
+Two gates, either of which routes (`default.yaml:218`, `:264-271`):
 
 | gate | feature | threshold |
 | --- | --- | --- |
@@ -94,9 +94,11 @@ speakers.
 
 **Reads.** The audio, from **`plain`** — not `enhanced`, and not PREPROCESS's stored
 `energy_envelope`. Both exclusions matter: the stored envelope is wrong for the reasons below, and
-the `enhanced` stream is FRCRN output, which is out of domain on a DDK train and already feeds the
-PPG and therefore this branch's own routing gate
-([`praat-instrument-audit.md`](praat-instrument-audit.md) finding 0).
+the `enhanced` stream is FRCRN output, which is out of domain on a DDK train. It also feeds the PPG
+and therefore this branch's own routing gate — **which is a permanent state, not a pending repair**:
+audit step 1b is withdrawn and the posteriorgram reads `enhanced` by decision
+([`praat-instrument-audit.md`](praat-instrument-audit.md) finding 0 and step 1b). D1's exclusion is
+D1's own, and stands on the envelope's own grounds.
 
 **Computes.** The amplitude-envelope modulation spectrum over the proposed train. A syllable train is
 an amplitude modulation at the repetition frequency; the spectral peak gives the **rate** directly.
@@ -540,26 +542,37 @@ free — a closure sequence still has to be segmented — but a labial-alveolar-
 trajectories is an unambiguous cycle marker in a way an envelope peak is not, because the three
 closures are distinguishable by channel and not only by amplitude.
 
-#### 2. The stream question is the PPG's question again, and it is open
+#### 2. The stream question is the PPG's question again — and the PPG's answer is `enhanced`
 
-Plan 1's Task 5 (`specs/20260914-f0-range-and-measurement-streams/plan.md:685-710`) moves the
-posteriorgram and the Praat scalars **off `enhanced` onto `plain`**, on D1's reasoning: FRCRN is out
-of domain on a DDK train, and it already feeds this branch's own routing gate
-([`praat-instrument-audit.md`](praat-instrument-audit.md) finding 0, bounded at `:43-51` to exactly
-those two blocks). SPARC used for rhythm has identical exposure: the transients whose *timing* is the
-measurement are the ones an enhancer can smear.
+**This entry previously said the opposite, and the framing it carried was withdrawn by the owner on
+2026-09-14.** It read that plan 1 moves the posteriorgram **off `enhanced` onto `plain`** on D1's
+reasoning, and that SPARC used for rhythm has identical exposure because *the transients whose timing
+is the measurement are the ones an enhancer can smear*. Both halves were wrong.
 
-**But SPARC is a trained model, so the trade is two-sided in the way diarization's is.** Noisy `plain`
-moves it away from its training domain where FRCRN moved it toward — the same shape as the whole-file
-diarization derivative, whose contract states plainly that **raw or enhanced is undecided and must be
-piloted first**, that the pilot precedes the corpus pass, and that it stays open pending that pilot
-(`../20260913-branch-contract-and-hints/design.md:664-667`, `:740`, `:798`).
+**The posteriorgram does not move.** Audit step 1b is withdrawn
+([`praat-instrument-audit.md`](praat-instrument-audit.md), step 1b); plan 1's Task 5 moves the Praat
+scalars alone. The reason is the one that matters here: **a trained model reading the stream closest
+to its training domain is the defensible default**, and many recordings in this corpus carry
+background noise a phoneme classifier would handle worse on `plain`. FRCRN's out-of-domain risk on a
+DDK train is real, but nothing in this tree has measured transient smearing — that borrowed argument
+belongs to **D1's amplitude envelope**, where peak timing genuinely *is* the measurement, and D1
+already reads `plain` for its own reasons (`:95-101`).
 
-The owner's proposal says `enhanced`. **Record that as undecided, not as chosen**: a SPARC derivative
-owes the same raw-versus-enhanced pilot on the structurally identical decision, read against the
-benchmarks already in this tree, and must not default either way. A pilot run on DDK material does
-not transfer to the VOICE use in (4), which is sustained phonation — two populations, so two pilots,
-or one pilot whose scope is stated.
+**The consequence for SPARC runs the other way from what this entry used to claim.** SPARC is
+likewise a trained model, so **the same argument makes `enhanced` its defensible default too** — which
+*weakens* the case for a raw-versus-enhanced pilot rather than strengthening it. The owner's proposal
+already says `enhanced`; that is now the reasoned default, not an unexamined one.
+
+**The pilot stays owed, narrowed to the DDK-rhythm use.** The training-domain argument settles what
+the default is; it does not establish that a denoiser preserves inter-onset *timing*, which is the
+one thing a rhythm derivative reads and the one thing no benchmark here measures — the four FRCRN
+benchmarks measure which non-speech events survive, not when they occur. That is a narrow,
+answerable question and it is what the pilot is for. The structurally identical whole-file
+diarization decision has the same contract requirement
+(`../20260913-branch-contract-and-hints/design.md:664-667`, `:740`, `:798`), but **the default there
+is undecided and here it is not.** A pilot run on DDK material does not transfer to the VOICE use in
+(4), which is sustained phonation — two populations, so two pilots, or one pilot whose scope is
+stated.
 
 #### 3. Place-class grouping refines D6 — and does not need SPARC
 
@@ -629,7 +642,9 @@ for a SPARC pass exists in this tree, and none is invented here.
 
 **Owed before any of it is built:**
 
-1. **The stream decision** (2) — a raw-versus-enhanced pilot, its population stated, not a default.
+1. **The stream decision** (2) — `enhanced` is the reasoned default on the training-domain argument, so
+   what is owed is narrower than a stream choice: a pilot on the DDK-rhythm population asking whether
+   the denoiser preserves inter-onset **timing**, which nothing in this tree measures.
 2. **Whether EMA resolves the measurand.** The only statement of SPARC's frame rate anywhere in the
    tree is a comment in a tutorial cell (`speech_representations_lab.ipynb`, *"SPARC runs at 50 Hz"*);
    nothing in `src/` asserts it and no test pins it. If it holds, a 20 ms frame against the 140–170 ms
