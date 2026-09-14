@@ -66,7 +66,7 @@
 ## Task 1: The narrowing replaces the bin, and a failed analysis says so
 
 **Files:**
-- Modify: `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py:358-446`
+- Modify: `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py` — landed; the region is now `_no_pitch_range` and `extract_pitch_values` at `:370-504`
 - Modify: `src/senselab/audio/tasks/features_extraction/api.py` — its example dict listed `pitch_floor`/`pitch_ceiling` keys the batch extractor does not return at all (verified: 40 keys, none matching `pitch*`). Deleted rather than renumbered.
 - Modify: `src/senselab/audio/tasks/phonation/api.py` — `derive_f0_range` gains the five coefficients as **required** keyword arguments. This is Task 2's declared file, but not its declared change; **Task 2's Interfaces line saying `derive_f0_range`'s signature is unchanged is therefore stale and has been corrected there.**
 - Modify: `src/senselab/audio/workflows/triage/nodes/common.py`, `nodes/preprocess.py`, `nodes/voice.py`, `data/config/default.yaml` — see the config note below.
@@ -513,7 +513,7 @@ git add -A && git commit -m "fix(praat): derive the F0 range per recording, and 
 **`F0RangeFailed` subclasses `ValueError`, and that choice is load-bearing at both consumers.** Verified:
 
 - `extend.py:120-126` lists `F0RangeUnavailable` in `UNAVAILABLE`; `attempt_derivation:160-165` then catches `UNAVAILABLE` as a non-failure and `(OSError, ValueError, LookupError)` as a **failed row**. A `ValueError` subclass therefore records the failure and lets the array task continue. A `RuntimeError` subclass would escape both handlers and **kill the task** — which is the defect `extend_reprocessed_outputs_test.py:504-519` exists to prevent, after 613 rows of the last corpus pass did exactly that.
-- `preprocess.py:2631-2640`: `except (ValueError, LookupError)` records a cascading absence; `except Exception` appends to `hard_failures` and the node then **raises** at `:2631`. A `ValueError` subclass keeps one crashed recording from aborting a node whose other blocks still need to run.
+- `preprocess.py:2631-2640`: `except (ValueError, LookupError)` records a cascading absence; `except Exception` appends to `hard_failures` and the node then **raises** at `:2644`. A `ValueError` subclass keeps one crashed recording from aborting a node whose other blocks still need to run.
 
 So `F0RangeFailed` must **not** be added to `UNAVAILABLE` — it is a failure, not an absence, and `attempt_derivation`'s `ValueError` branch is where it belongs.
 
@@ -581,6 +581,8 @@ existing code does rather than retyping the two shown here:
 ```
 
 Add `F0RangeFailed` to the `Raises:` block, and export it from `__init__.py` in both the import and `__all__`.
+
+**Recorded against this snippet, not against the implementation that followed it: `values.get("pitch_failed", 0.0)` defaults a missing key to "did not fail".** It landed verbatim, at `phonation/api.py:98`. All three `extract_pitch_values` return paths carry the key — `:473` and `:504` through `_no_pitch_range`, `:495` in the success dict — so today the default is never reached and `values["pitch_failed"]` would read identically. The difference is what a *fourth* return path added later would do if it forgot the key: subscripting raises `KeyError` and the omission is found, while `.get` reports the crashed analysis as an absence, which is the exact misattribution this task exists to remove. The snippet is where the choice was made, so the correction is owed here rather than logged as an implementation slip. **Owed a code change**, and nothing is measured behind it.
 
 **Step 4 moved to Task 1, as Step 6b.** It rewrote `test_a_low_voice_and_a_high_voice_get_different_ranges`, which **Task 1 alone invalidates** — nothing in the replacement mentions `F0RangeFailed` or anything else this task adds. Leaving it here made Task 1's commit land with a red test across all of `phonation_test.py`, which is a bisect landmine.
 

@@ -49,6 +49,16 @@ Deciding measurability requires a variance check, not a level track.
 
 Everything else is admitted. There is no fourth row, and in particular no "too quiet" row.
 
+**There is also no minimum-duration row, and that one is an open question rather than a settled
+decision.** A duration floor is not a threshold of degree — it is arithmetic an instrument states
+about itself, and at least one instrument downstream states it: Praat's pitch analysis needs three
+periods inside the sound, so it refuses any recording shorter than `3 / pitch_floor`, 60 ms at the
+packaged 50 Hz floor. Today such a file is admitted and the refusal surfaces as a crash further down
+([`praat-instrument-audit.md`](praat-instrument-audit.md) finding 14). Whether ADMIT should hold a
+floor of its own, or whether each instrument should state and report its own precondition, is
+**unresolved**; the audit's finding argues for the second, and this node is recorded here so the
+question is not lost if it does not.
+
 ## Why threshold-free
 
 A margin separating "no signal" from "quiet signal" is an unfitted number, and this project has been
