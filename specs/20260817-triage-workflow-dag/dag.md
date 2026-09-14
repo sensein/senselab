@@ -554,7 +554,7 @@ The pair exists to separate the enhancer's speech-shaped artefact from real back
 resampled signal; the envelope, spans, spectrograms, gammatone and the phonation tracks read the
 pre-emphasised one; `disruptions_file` reads the original recording (`preprocess.py:3-7`); and
 `enhanced` and `residual` are each read by their own three classifier blocks
-(`preprocess.py:2457-2460`). Streams persist as FLAC through one shared writer —
+(`preprocess.py:2470-2473`). Streams persist as FLAC through one shared writer —
 `STREAM_SUFFIX = ".flac"` (`common.py:18`), `write_stream` with `out_of_range="normalize"`
 (`common.py:301-323`) — whose returned gain every caller records as the stream entity's
 `write_gain` (`preprocess.py:1154`, `:2377`, `:2397`). `plain` additionally records `peak_scale`
@@ -1332,8 +1332,30 @@ sliced per span. **Its F0 range is no longer a null that would stop it.** It rea
 `_f0_range`, which prefers a declared population's range from `voice.f0_range_by_population` when
 the hint names one and derives the range off the stream otherwise. `voice.f0_range_ratio_max` and
 `voice.task_duration_ranges` are read with `config.get` and null, so the period-doubling check and
-the task-duration comparison are both skipped rather than raising. **Nothing but the missing span
-source stops this branch now.**
+the task-duration comparison are both skipped rather than raising.
+
+**One other thing stops this branch, and the runner renders it as an operational fault.** The
+population range is `null` in the shipped config (`default.yaml:167`), so `config.get(...) or {}` at
+`voice.py:68` is always empty and the deriving path at `:71` always runs, unguarded — there is no
+`try` there, `_required` is called unguarded at `:193`, and `voice()` installs no handler, so an
+`F0RangeUnavailable` from a recording carrying no derivable pitch leaves the node. It leaves it at
+`:193`, **before** the first store write at `:207-219` and before the no-span `FAIL` at `:235-264`,
+so nothing at all is recorded: no HNR track, no period marks, no phonation-span measurements, no
+`voice_tracks.npz`. The runner catches it in `_attempt` (`run.py:207-227`) and records the node
+`ERRORED` (`:223-224`) — the same record a crashed model produces — and VERDICT's fold renders that
+as *"errored without a verdict"* (`vocabulary.py:232`), the same phrase a missing model produces.
+REPORT cannot separate them either: `_ABSENCE_BY_CLASS` is keyed on the literal strings `ValueError`
+and `LookupError` (`report.py:66-69`), so both `F0RangeUnavailable` and `F0RangeFailed` fall through
+to `_ABSENCE_ERRORED` (`:70`, applied at `:971`).
+
+**The node's refusal is deliberate and right**, and `voice_test.py:295-311` pins it — *"An
+underivable range is an absence; the branch stops rather than inventing a population."* What is
+unexamined is what the **runner** does with it. The population that produces an underivable range is
+severe dysphonia, whisper and aphonia — the clinical population this triage exists to find — and for
+them the most informative absence in the pipeline currently reads as an operational fault. A branch
+raising a typed absence and a branch whose model crashed are not the same event, and the runner has
+one state for both. **Owed a code change** at the runner, not at the node; no shipped configuration
+avoids it, because there is no populated `f0_range_by_population` to take the other path.
 
 **Twenty-two detectors are held for this branch and it reads none of them.**
 `BRANCH_DETECTORS["VOICE"]` (glossary: *the three detector states*) carries the pitch-trajectory

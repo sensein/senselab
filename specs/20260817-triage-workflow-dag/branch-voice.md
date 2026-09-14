@@ -561,8 +561,8 @@ the modulation while the longer-window one averages across it.
 sinusoidal perturbation of period *P* cycles the local response is 2·sin(π/P) while the 11-point
 residual is |1 − D₁₁(1/P)|; the two **cross at P ≈ 30 cycles**. That is a property of the **11-point
 smoother**, and the code exposes `local / localDB / apq3 / apq5 / apq11 / dda` for shimmer and
-`local / localabsolute / rap / ppq5 / ddp` for jitter (`praat_parselmouth.py:1205-1209`,
-`:1202-1207`) — **there is no
+`local / localabsolute / rap / ppq5 / ddp` for jitter (shimmer at `praat_parselmouth.py:1261-1266`,
+jitter at `:1205-1209`) — **there is no
 `ppq11`**, so the claim as an earlier version wrote it crossed the two families, and **within jitter
 no available variant ever crosses `local`.**
 
@@ -898,7 +898,7 @@ and said nothing about either.
 
 **The verdict's basis, exactly.** Today: `FAIL` at `voice.py:240` when no phonation span exists —
 every recording. On the unreached path: `FLAG` when flags accumulated, `PASS` when spans were
-measured and nothing contested (`voice.py:396-397`).
+measured and nothing contested (`voice.py:394-397`).
 
 Under the contract: `FAIL` when no attempt was found; `FLAG` when one measurement contradicts
 another; `PASS` otherwise — every number a measurement, no normative judgement in the verdict.
@@ -926,6 +926,13 @@ Attribution of a short MPT to respiratory or laryngeal cause. Any refit against 
 - Whether V6's effort correlates are built at all, given they are session-level and v1 supplies only one condition.
 - **`Outcome.FAIL`'s wording is itself a hazard** — `no_content_found` would carry the meaning — but
   `Outcome` is a closed vocabulary with readers, so this is recorded rather than changed.
+- **A genuine F0 absence errors this branch, and the runner cannot tell that apart from a crash.**
+  `_f0_range` raises `F0RangeUnavailable` at `voice.py:71` with no handler anywhere up to `voice()`,
+  so the branch leaves at `:193` — before its first store write at `:207-219`, and before the no-span
+  `FAIL` at `:235-264` — and `_attempt` records it `ERRORED` like any other failure. The refusal
+  itself is correct and pinned by `voice_test.py:295-311`; what is owed is at the runner. The
+  mechanism, the affected population and why no shipped config avoids it are in
+  [`dag.md`](dag.md) § *5c. VOICE*. **Owed a code change.**
 - **A second, independent F0 estimate is a candidate for the type-2 deadlock — and is owed a
   measurement.** SPARC returns per-frame `pitch` and `periodicity` from a neural tracker family
   (`features_extraction/sparc.py:40-41` pins `torchcrepe` and `penn`), not from Praat's

@@ -199,9 +199,9 @@ helper, in no config:
 | what | where | value |
 | --- | --- | --- |
 | silence threshold | `praat_parselmouth.py:154` | `silence_db = -25` |
-| minimum dip between peaks | `:149` | `min_dip = 4` |
-| **…dropped to 2 when mean HNR < 60** | `:154-155` | data-dependent |
-| minimum pause duration | `:159` | `min_pause = 0.3` |
+| minimum dip between peaks | `:161` | `min_dip = 4` |
+| **…dropped to 2 when mean HNR < 60** | `:166-167` | data-dependent |
+| minimum pause duration | `:171` | `min_pause = 0.3` |
 
 **The HNR switch is the serious one.** It changes syllable-detection behaviour based on a
 voice-quality measurement of the recording itself, on a corpus of dysphonic speakers — so the
