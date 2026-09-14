@@ -197,11 +197,21 @@ parameters it omitted are the ones that set the value:
 
 | parameter | value | why it is not optional |
 | --- | --- | --- |
-| time-averaging window | **0.01 s** | the first smoothing; without it the measure is CPP |
-| quefrency-averaging window | **0.001 s** | the second smoothing; likewise |
-| cepstrogram band | **declare it** | the per-measure band rule in [`branch-conventions.md`](branch-conventions.md) obliges it, and Praat's own default here is 5 kHz |
+| time-averaging window | **0.01 s** — the incumbent's literal (`:776`), **not** Praat's form default of 0.02 | the first smoothing; without it the measure is CPP |
+| quefrency-averaging window | **0.001 s** — the incumbent's literal (`:777`), **not** Praat's 0.0005 | the second smoothing; likewise |
+| cepstrogram band | **5000 Hz** — the incumbent (`:767`), and this *is* finding 7's defect | declared rather than left open; changing it is a separate decision |
+| subtract tilt before smoothing | **`"no"`** (`:775`) | value-setting and previously unmentioned |
+| tilt line type | **`"Straight"`** (`:784`) — Praat's CPPS convention is exponential decay | value-setting and previously unmentioned |
+| tolerance | **0.05** (`:780`) | value-setting and previously unmentioned |
 | trend-line fit range | **distinct from the peak search** | Praat fits from 1 ms to the end of the quefrency axis |
 | peak search band | **60–700 Hz** | see below |
+
+**Two of these are inherited, not derived, and the table previously presented them as though they
+were.** The 0.01 and 0.001 windows are this wrapper's own literals and depart from both Praat's form
+defaults and Hillenbrand's. **Carrying them forward is defensible continuity** — it keeps the new
+implementation comparable to the old — but it must be stated, because most published CPPS was
+collected under different ones. That is the trap finding 11 names: a derivation is evidence a
+decision was recorded, not that it was correct.
 
 **The trend range and the peak-search band are different things**, and an earlier version conflated
 them: "declare 60–500 Hz" read as the regression range. Fitting the trend over 2–16.7 ms instead of
@@ -210,6 +220,18 @@ Praat's 1 ms-to-end **changes every value**.
 **And 500 Hz is too low for the peak search.** Untrained falsetto routinely exceeds 700 Hz, so an
 upward glide's endpoint sits above it — the same truncation finding 4 identifies at 330 Hz, moved
 rather than removed. **Declare 60–700 Hz.**
+
+**Which raises a tension nothing in this set reconciles: `voice.f0_search_range_hz` is `[50, 600]`.**
+That is the derived wide search every pitch-based measure inherits. **If falsetto above 700 Hz is
+real enough to move the CPPS band, then finding 4's truncation logic applies at 600 Hz too** — and
+step 2, which replaces `derive_f0_range`, narrows *within* that ceiling and cannot exceed it. So
+either the F0 search ceiling is owed the same widening, or the two bands differ for a stated reason.
+**Leaving it silent invites an implementer to pick one arbitrarily.** Recorded as owed.
+
+**And a CPPS at F0 700 is not comparable to one at F0 120.** At 700 Hz the peak quefrency is 1.43 ms,
+only ~0.4 ms above the trend-fit origin at 1 ms, where source and filter quefrencies are not
+separable. Widening is still right — falsetto truncation is worse — but by this set's own
+per-measure-band logic the non-comparability belongs in the name or beside the value.
 
 This is a replacement for a *suppressed primary descriptor*, in a document set whose own rule is that
 a measurement with no stated window is comparable to nothing. It cannot ship under-determined in
@@ -226,11 +248,10 @@ ways:
 - on a type-3 voice `derive_f0_range` **raises** (`phonation/api.py:60-70`), so a band derived from it
   is **unavailable on exactly the population the reimplementation exists to serve**;
 - CPPS is a peak prominence measured against a regression over a quefrency range, so **changing the
-  range changes the value** — a per-recording band destroys cross-recording comparability and
-  contradicts the common-band rule in this same document set;
+  range changes the value** — a per-recording band destroys cross-recording comparability, which
+  is what [`branch-conventions.md`](branch-conventions.md) requires of a per-measure band — fixed
+  *across recordings*, whatever it is;
 - it is not what the method does: the published convention uses a fixed wide search.
-
-
 
 ### Step 2b — track F0 on the signal the range was derived on
 
@@ -559,7 +580,6 @@ convention where child is 8000.
 | 9, and the `extract_speech_rate` deviations | [`branch-speech.md`](branch-speech.md) S4; [`branch-ddk.md`](branch-ddk.md) D2 |
 | 10 | `branch-voice.md` V1, V4 |
 | 5, 11 | [`branch-listening-sample.md`](branch-listening-sample.md) |
-| 10 | `branch-voice.md` V1 and V4 — unmasked HNR sentinels in `voice_tracks.npz` |
 | 12 | nobody today (dormant: triage passes no `cache_dir`); any future batch over the corpus |
 | 13 | [`branch-conventions.md`](branch-conventions.md)'s per-measure bands, and `branch-voice.md` V4's sample-rate item |
 

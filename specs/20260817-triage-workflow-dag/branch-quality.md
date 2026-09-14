@@ -102,6 +102,19 @@ band as the device's.
 adaptive processing is present determines whether a measured cliff is the capture chain or the
 processing.
 
+**And `plain` is itself the 16 kHz stream**, resampled at `preprocess.py:1106` from
+`resample.target_hz` — so **every recording captured at 44.1 or 48 kHz carries an abrupt edge with
+near-zero variance above it at ~7.7–8 kHz.** That is exactly Q2's discriminating signature, on the
+majority of the corpus. **As specified, Q2 would report the pipeline as the capture chain** — the
+worst failure mode Q2 itself names.
+
+**So the cliff search is bounded below the resample cutoff, and the bound is declared.** Two
+consequences follow and both must be stated: **any capture-chain limit above 8 kHz is unmeasurable
+from `plain`**, and that matters directly because
+[`branch-conventions.md`](branch-conventions.md) declares **HNR's band as 0–8000 Hz** — the same
+ceiling, which [`praat-instrument-audit.md`](praat-instrument-audit.md) finding 13 records as chosen
+for model inputs rather than for measurement.
+
 **Prefer broadband content.** Fricatives, coughs and background segments excite the band that
 matters; sustained vowels do not.
 

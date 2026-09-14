@@ -212,8 +212,9 @@ phrasing — and both are transcribed and then dropped.
 For the spontaneous tasks additionally:
 
 **Lexical diversity — but not a bare type-token ratio.** TTR is **length-dependent**: over 30 s and
-over 3 minutes it is not the same measure. Use **MATTR or MTLD**, or report TTR only with its token
-count. In a document set that mandates support counts, this is the measure whose support count *is*
+over 3 minutes it is not the same measure. Use **MATTR or MTLD**, or report TTR only with its token count. **MATTR carries a window length,
+which is owed** — naming the measure without it repeats the length-dependence the paragraph exists to
+point out. In a document set that mandates support counts, this is the measure whose support count *is*
 the confound.
 
 **Disfluency rate — with the caveat that it under-counts where disfluency is greatest.** The

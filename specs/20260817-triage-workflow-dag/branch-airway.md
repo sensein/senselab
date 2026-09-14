@@ -167,7 +167,9 @@ the instrument would be absent on precisely the population A4 must serve.
 empty one; AIRWAY inherits neither the caveat nor a fallback.
 
 **A4's voicing channel must therefore be frame-wise over a fixed wide range**, not gated on a
-whole-file derived one.
+whole-file derived one — and the range already exists: **`voice.f0_search_range_hz` `[50, 600]`**
+(`default.yaml:159`), which is derived and serves exactly this purpose. Name it rather than leaving
+an implementer to invent one. **Owed: nothing here**, which is the point of naming it.
 
 **The voicing channel needs the same exclusion the lexical one has.** A cough has a voiced phase —
 which A6 measures as an ordinary cough descriptor — and voiced exhalation is normal in several breath
@@ -294,7 +296,7 @@ airway.
 | A1 label | built; `labels_of_interest` **is derived** (`config-derivations.md:555-557`, *"Vocabulary, not thresholds"*); vocabulary too narrow |
 | A2 corroborate | built; `confirm` → `label` migration owed |
 | A3 contest | gated behind null config, structurally dead; replace rather than fit |
-| A4 off-task content | built as an unconditional file-level flag; two fixes owed |
+| A4 off-task content | built as an unconditional file-level flag; **three changes owed** — condition on the declaration, migrate to a deviation, and add the voicing channel with its label exclusion |
 | A5 cycle count | not built; detection operating points owed |
 | A6 cough descriptors | not built |
 | A7 route | not built; separability unmeasured |

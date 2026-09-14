@@ -15,7 +15,7 @@ Nor are the null keys undocumented: `config-derivations.md` carries an **"UNSET,
 (`:915` onward) giving each one a stated reason. A null in this config is a recorded decision, not an
 oversight.
 
-## Five kinds of owed, and they are not equivalent
+## Six kinds of owed, and they are not equivalent
 
 ### Derived and in force — listening would *validate*, not supply
 
@@ -113,6 +113,22 @@ key: AIRWAY A5's breath-event detection parameters, DDK D1's modulation search b
 criterion, SPEECH S3's omission score cut, VOICE V1's envelope threshold and minimum attempt
 duration. Each is named in its own document.
 
+### Owed a bench measurement — two members
+
+Not a listening sample, not a code change, not a config literal: answered by **synthesising signals
+of known value and measuring what comes back.**
+
+- **The jitter floor at 16 kHz.** With uniform pulse-placement error Δ = 62.5 µs the induced
+  local-jitter floor is ≈ 0.57 Δ/T — about **0.42% at F0 120 Hz and 0.88% at 250 Hz**, inside the
+  0.2–1% normal range. Whether Praat's sub-sample interpolation recovers it is unmeasured, and
+  [`branch-voice.md`](branch-voice.md) V4 withholds jitter until it is.
+- **Shimmer's own floor**, which the timing argument does not give. Shimmer is an amplitude measure;
+  its floor comes through uninterpolated peak-amplitude picking at roughly four samples per cycle of
+  a 4 kHz component. It needs its own synthesised bound.
+
+Cheap, decisive, and nobody has done either.
+[`praat-instrument-audit.md`](praat-instrument-audit.md) states the same kind at its tail.
+
 ## Why the corpus cannot supply any of it
 
 A declared family is what the protocol *asked for*, not what the participant *did*. Fitting against
@@ -154,8 +170,22 @@ locks to the subharmonic and the distribution is unimodal at 2T).
 
 **It is not parameter-free, and owes its cut.** For a periodic signal the autocorrelation peak at 2T
 is nearly equal to the one at T, so the discriminator is "strength at the lower floor exceeds the
-higher **by some margin**" — and the margin is an operating point. It remains the best available
-proxy for the absent subharmonic-to-harmonic ratio; it just owes that number.
+higher **by some margin**" — and the margin is an operating point.
+
+**And it is confounded, because Praat's analysis window is set *by* the floor.** Halving the floor
+doubles the window — the same coupling [`praat-instrument-audit.md`](praat-instrument-audit.md)
+finding 1 measures as the 1.67× step. Over a longer window a non-stationary voice yields a lower
+normalised autocorrelation **for any signal, doubled or not**, so the two `strength` arrays differ by
+window length before any subharmonic exists. The bias is conservative, but it **scales with how
+steady the voice is** — which is the thing being measured.
+
+**It cannot be controlled away.** `f0_track` (`phonation/api.py:156-168`) exposes only `f0_min_hz`,
+`f0_max_hz` and `hop_s`, and `to_pitch_cc` derives the window from the floor. The clean form —
+comparing autocorrelation functions directly at a **fixed** window — needs **a pitch-tracker window
+control independent of the floor, which is not in the inventory.**
+
+It remains the best available proxy for the absent subharmonic-to-harmonic ratio. It owes the margin,
+and it carries the confound.
 
 **Merging A, B and C gets the staffing and the power wrong for all three.**
 

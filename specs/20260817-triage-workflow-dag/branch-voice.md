@@ -149,7 +149,27 @@ the old definition and is still false under the new one:
    both derived and both do exactly this job, so **V1 reuses the values and introduces no second
    pair.**
 
-   **But V1 must read a linear envelope on `plain`, not the stored pre-emphasised dB one** — and an
+   **And `spans.k_db` is owed a re-derivation on the envelope V1 actually reads.** An earlier
+   version of this item said the values transfer and "the derivation's reasoning survives the move";
+   **it does not.** `config-derivations.md:106-120` derives 6 dB for the **pre-emphasised** primary
+   pass, and the floor derivation immediately above it records a **measured** instance of exactly
+   this substitution failing: reading the rise statistic off a different signal definition shifted
+   it by ~19.8 dB, which "put ordinary background noise above both `spans.k_db` values with no real
+   event present at all".
+
+   The physics runs the way that warning describes. `config-derivations.md:35-38` measures
+   pre-emphasis raising event-to-floor contrast by **+7.36 to +10.95 dB** on the hardest events.
+   Removing it does the reverse for low-frequency energy — so on `plain` a 6 dB-over-floor test
+   becomes more sensitive to quiet low-F0 phonation, **which V1 wants**, and simultaneously to HVAC
+   rumble, handling noise, breath puffs and DC drift, **which the +6 dB/octave tilt was
+   suppressing.** Over-proposed attempts on room rumble flow straight into V4's perturbation and
+   CPPS across 22,277 routed recordings.
+
+   [`branch-ddk.md`](branch-ddk.md) D1 makes the identical move for `envelope.lowpass_hz` and files
+   it honestly as a value derived under one condition applied under another. This does the same.
+   **`spans.min_duration_ms: 50` is conventional (`:234`) and does transfer.**
+
+   **V1 must read a linear envelope on `plain`, not the stored pre-emphasised dB one** — and an
    earlier version justified the reuse precisely by saying both "operate on the same pre-emphasised
    envelope V1 reads". Two of [`branch-ddk.md`](branch-ddk.md) D1's three reasons for refusing that
    envelope transfer verbatim: **+6 dB/octave attenuates the F0 region** where quiet, low-pitched or
@@ -389,6 +409,13 @@ Two partial instruments, and neither is sufficient:
 - **the period-length distribution's modality** from `period_marks`
   (`tasks/phonation/__init__.py:3-12`).
 
+**State it as plainly as CPPS's state is stated: no type-2 instrument works today.** Modality
+provably fails in the case it exists to catch (below); the octave-jump count cannot separate period
+doubling from the tracker's own octave error on the same material; the subharmonic-to-harmonic ratio
+is absent from the inventory; and Sample C's two-floor substitute is confounded (see
+[`branch-listening-sample.md`](branch-listening-sample.md)). **So perturbation's type-2 gate has no
+working instrument, which is a second reason jitter and shimmer are withheld.**
+
 **The modality test fails in the case it is meant to catch.** If the tracker locks to the
 subharmonic, every mark is a doubled period and the distribution is **unimodal at 2T**. So
 bimodality is evidence *of* type 2; its absence is not evidence against it. The direct instrument is
@@ -434,13 +461,19 @@ validity judgement itself**, not merely into the measurement.
   16 kHz mono**. So the time-resolution floor on jitter is **uniform across the corpus** — not a
   between-recording covariate but a constant.
 
-  **And the arithmetic is worse than "unquantified".** At 16 kHz the sample period is **62.5 µs**,
-  which is **0.75% of the period at F0 120 Hz and 1.6% at F0 250 Hz** — both at or above the
-  0.2–1% range of normal jitter. **Without sub-sample interpolation of pulse placement, jitter at
-  this rate is not noisy, it is destroyed**, and the error grows with F0. Whether Praat's pulse
-  placement interpolates enough to recover it is **unmeasured and must be measured before jitter is
-  published at all**. *Effective bandwidth does not substitute* — that is frequency content, this is
-  time resolution.
+  **The arithmetic, corrected.** The step-to-period ratio is the wrong quantity. With independent
+  uniform pulse-placement error Δ = 62.5 µs, the induced **local-jitter floor** is
+  Δ·√(6/12)·√(2/π)/T ≈ **0.57 Δ/T — about 0.42% at F0 120 Hz and 0.88% at 250 Hz.** An earlier
+  version gave 0.75% and 1.6% and said both were "at or above" the 0.2–1% normal range; they sit
+  **inside** it. That does not weaken the conclusion — **a floor comparable to the measurand is
+  fatal** — but it is the number the bench measurement is specified against.
+
+  **Shimmer needs its own bound, and the timing argument does not give it one.** Shimmer is an
+  *amplitude* measure; its sample-rate floor comes through uninterpolated peak-amplitude picking at
+  roughly four samples per cycle of a 4 kHz component. **The bench measurement must synthesise known
+  shimmer as well as known jitter.**
+
+  *Effective bandwidth does not substitute* — that is frequency content, this is time resolution.
 - **segment SNR.** Additive noise inflates both measures.
 
 **Name the variant.** `local` jitter and shimmer are sensitive to slow drift; `ppq5` and `rap` much
@@ -450,9 +483,19 @@ Emit the variant name with the value, never a bare "jitter".
 **Declare an analysis-window convention** excluding attack and decay, per
 [`branch-conventions.md`](branch-conventions.md).
 
-**It qualifies; it does not suppress.** The word "gated" was used loosely in an earlier version while
-the operative instruction was "report alongside" — those are different designs. **This section
-qualifies**: every perturbation value is emitted with the evidence a reader needs to discount it.
+**Qualification is the rule; jitter and shimmer are the exception, and are suppressed.** The word
+"gated" was used loosely in an earlier version while the operative instruction was "report
+alongside" — those are different designs. The rule here is **qualification**: a value is emitted with
+the evidence a reader needs to discount it.
+
+**But jitter and shimmer are withheld pending the bench measurement above**, and an earlier version
+said "must be measured before jitter is published at all" and then emitted it three paragraphs later.
+**That is exactly the incompatibility this section diagnoses for CPPS one page earlier** — saying the
+right words and shipping the thing anyway — reproduced for a different measure. A floor that may be
+comparable to the measurand is not something a covariate discounts.
+
+So: **CPPS withheld pending audit step 4; jitter and shimmer withheld pending the bench measurement;
+everything else qualified.**
 Suppression would require a cut on the octave-jump count and a named statistic for modality — a dip
 test, a bimodality coefficient — and neither is named nor owed here, because neither is wanted.
 
@@ -481,8 +524,9 @@ the modulation while the longer-window one averages across it.
 **The inversion is a shimmer statement, and it is broader than a previous version said.** For a
 sinusoidal perturbation of period *P* cycles the local response is 2·sin(π/P) while the 11-point
 residual is |1 − D₁₁(1/P)|; the two **cross at P ≈ 30 cycles**. That is a property of the **11-point
-smoother**, and the code exposes `local / apq3 / apq5 / apq11 / dda` for shimmer and
-`local / rap / ppq5 / ddp` for jitter (`praat_parselmouth.py:1146-1150`, `:1202-1207`) — **there is no
+smoother**, and the code exposes `local / localDB / apq3 / apq5 / apq11 / dda` for shimmer and
+`local / localabsolute / rap / ppq5 / ddp` for jitter (`praat_parselmouth.py:1146-1150`,
+`:1202-1207`) — **there is no
 `ppq11`**, so the claim as an earlier version wrote it crossed the two families, and **within jitter
 no available variant ever crosses `local`.**
 
@@ -499,10 +543,15 @@ and the search band as a declared convention.
 
 ### V5 — Composite severity indices: **moved, and the conclusion is stronger than "the owner decides"**
 
-AVQI and its relatives are **not per-recording capabilities here** — their protocol requires a
+**The Acoustic Voice Quality Index** (Maryn, Corthals, Van Cauwenberge, Roy & De Bodt, 2010) is a
+weighted combination of six measures — **CPPS, HNR, shimmer local, shimmer local dB, LTAS slope and
+LTAS tilt** — reported on a 0–10 severity scale with a published cut-off near 2.95. This document is
+its home in the set, so the components and the citation live here;
+[`corpus-level-node.md`](corpus-level-node.md) C2 defers to it.
+
+AVQI and its relatives are **not per-recording capabilities here** — the protocol requires a
 sustained vowel *and* continuous speech concatenated, which in this corpus are different recordings.
-The capability sits in [`corpus-level-node.md`](corpus-level-node.md) C2, as a **session-level**
-capability.
+The capability sits in C2, as a **session-level** capability.
 
 **But the placement is not the interesting conclusion.** An earlier version left the question open
 for the owner. It should not be open, because this document's own condition — *the concatenation
@@ -602,7 +651,8 @@ either; both are task-specific and belong here.
 #### Shouting moves F0 across the 170 Hz bin, which destroys the comparison
 
 Maximal effort raises F0 by roughly 3–8 semitones, and `derive_f0_range` selects its bin from the
-recording's **own trimmed mean** (V3). So a male speaker at a comfortable 120 Hz shouts at 200–250 Hz:
+recording's **own trimmed mean** (V3). Crossing 170 Hz from a comfortable 120 Hz needs about 6
+semitones, which is inside that range — so a male speaker at 120 Hz shouting at 170–190 Hz:
 his `loudness` recording lands in the **100/500** bin while his `prolonged-vowel` lands in
 **60/250**.
 
@@ -775,11 +825,12 @@ spans        family: "voice" phonation attempts, each carrying voiced fraction,
 assertions   refine (corrected_extent) where a PREPROCESS span's extent is wrong;
              label naming vowel identity (V8);
              deviate (sweep_direction_mismatch, truncation, repeat_attempt)
-measurements per-span trajectory with the selected F0 bin (V3), qualified
-             perturbation with its validity evidence and variant names (V4;
-             CPPS withheld until reimplemented), vocal tremor (V4a), effort-event
-             level and dispersion with clipping state (V6) — each with its
-             extent's covariates, steadiness qualifiers and support count
+measurements per-span trajectory with the selected F0 bin (V3), vocal tremor
+             (V4a), effort-event level and dispersion with clipping state (V6)
+             — each with its extent's covariates, steadiness qualifiers and
+             support count.
+             WITHHELD: CPPS (pending audit step 4); jitter and shimmer
+             (pending the bench measurement); HNR (unmasked sentinels)
 counts       attempt count {found}; the MPT extent under an explicitly qualified
              name, or no scalar at all
 verdict      { spans_n, phonation_s, production, ambiguous_spans_n,

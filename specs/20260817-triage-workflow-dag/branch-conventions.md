@@ -95,7 +95,9 @@ elsewhere. Suppressing one scalar does not scale: it applies verbatim to DDK syl
 dB, jitter and shimmer in percent, F0 SD in semitones, and maximum phonation time in seconds.
 
 **So the name carries the convention** — `ddk_syllable_rate_from_envelope_peak_hz`, not `rate`;
-`cpps_db_voiced_intervals_60_330hz`, not `cpps`.
+`cpps_db_voiced_intervals_60_330hz`, not `cpps` — though note that scalar is one
+[`branch-voice.md`](branch-voice.md) V4 currently forbids emitting, and after audit step 4 its name
+must also carry the two smoothing windows and the trend range.
 
 **The two largest norm-bearing populations were omitted from this rule and are its clearest case.**
 `speaking_rate`, `articulation_rate` and `phonation_ratio` — [`branch-speech.md`](branch-speech.md)
@@ -145,7 +147,7 @@ It appears in three places with three interpretations, and a reader needs the ru
 | --- | --- |
 | any F0 track | **tracker instability** — the estimator jumped, no claim about the voice |
 | a glide, mid-sweep | **a normal register break** — modal to falsetto in an untrained voice |
-| a sustained vowel | **type-2 evidence** — period doubling or subharmonics |
+| a sustained vowel | **candidate type-2 evidence, not separable from tracker error** — an octave-scale jump here is equally period doubling and the tracker's own octave error, and this set argues octave-error risk is *elevated* on exactly this material. Partial discriminator: a jump to exactly ½ or 2× that **persists** across frames, against an isolated one |
 
 The count alone distinguishes none of them; the **task and the position within the production** do.
 A count used as type-2 evidence is restricted to sustained material, never to glides.

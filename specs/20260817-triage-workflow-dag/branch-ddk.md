@@ -142,12 +142,19 @@ That is precisely the 3× confusion the disambiguation exists to resolve, so a m
 recording can have its unit assigned in the wrong direction. D3 makes this argument about CV; it
 applies to the unit as well.
 
-**And the harmonic pattern itself resolves the unit, more sharply than "2f is more informative".**
-For a three-syllable cycle with one odd syllable — pattern (A, B, B), which is the usual case when
-one place of articulation is weaker — the cycle-rate and 2×cycle-rate components have **equal
-pre-shaping magnitude**. So **`|X1| ≈ |X2| < |X3|` is itself the signature** that the fundamental is
-the cycle rate and 3f is the syllable rate. That is a testable pattern rather than a heuristic about
-which component to prefer.
+**The harmonic pattern can resolve the unit, under a condition that must be stated.** For a
+three-syllable cycle with **one odd syllable** — pattern (A, B, B) — the 3-point DFT gives
+|X₁| = |X₂| = |A − B| and |X₃| = A + 2B, so **`|X1| ≈ |X2| < |X3|` is a signature** that the
+fundamental is the cycle rate and 3f the syllable rate.
+
+**But `/pa-ta-ka/` generally has three *distinct* amplitudes** — labial, alveolar and velar releases
+differ — where |X₁| ≠ |X₂| and the signature does not apply. And after pulse-shape weighting the
+`< |X₃|` half can vanish while the `≈` half survives, so **the robust part is the equality of the
+first two harmonics**, not the full three-term pattern.
+
+This is therefore **conditional on the (A, B, B) pattern, not the usual case** — and 3,195
+recordings' unit assignment rests on it. **The tolerance for `≈` is an owed operating point**, filed
+in the table above.
 
 **Not parameter-free, and only one of the four has a value.** An earlier version claimed the method
 was parameter-free and then listed four conventions without supplying three of them:
@@ -158,6 +165,7 @@ was parameter-free and then listed four conventions without supplying three of t
 | envelope extraction method | **owed** — linear-amplitude or power, per the argument above, but the method is unspecified |
 | analysis window | **owed** — and per [`branch-conventions.md`](branch-conventions.md) a measurement with no stated window is comparable to nothing |
 | **search band** | **owed, and decisive** — it determines which harmonic is findable at all, which is this capability's whole unit problem |
+| harmonic-equality tolerance | **owed** — how close `|X1|` and `|X2|` must be to read as equal, which is what the (A, B, B) unit signature below turns on |
 
 D3 marks its analogous parameters owed; this does the same rather than listing conventions as though
 declaring them were the same as having them.
@@ -369,7 +377,7 @@ measurements harmonic peak structure f and 3f with its stated unit (D1),
              segment inventory (D4) — each with its support count
 counts       train duration and fraction of recording {found}
 verdict      { trains_n, train_s, train_fraction, modulation_peak_hz,
-               modulation_unit, articulation_rate, interval_cv,
+               modulation_unit, articulation_rate_praat_nuclei_per_s, interval_cv,
                interval_trend, flags }
 ```
 
