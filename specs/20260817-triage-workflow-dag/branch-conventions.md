@@ -17,17 +17,37 @@ lowercase-keyed. VOICE's entire repair is that its selector and its proposals me
 proposal written `"VOICE"` against a selector reading `"voice"` reproduces the bug being fixed, and
 reproduces it silently.
 
-## `propose` versus `refine`
+## `propose` versus `refine` — **scoped by family**
 
-**A proposed region that overlaps any live span mints nothing. It is a `refine` on the span it most
-overlaps. Only a region over ground no live span covers is a `propose`.**
+**A branch proposing in its own family mints when no live span *of that family* covers the ground.
+It `refine`s only a span of the family it is proposing into.**
 
 Overlap is the strict interval test `a.start < b.end and a.end > b.start`, used at six sites in the
 tree: `_novel` (`preprocess.py:1465`), the `contains_clip` computations (`preprocess.py:1539`,
 `:1569`), `figure.py:402`, and the `_overlaps` helper duplicated at `speech.py:137` and
-`redact.py:212`. Ties — equal overlap with two spans — go to the earlier span by extent.
+`redact.py:212`. Ties go to the earlier span by extent.
 
-Parameter-free, and it matches how PREPROCESS already decides novelty.
+**The family scoping is not a detail — without it the rule undoes the V1/D1 inversion.** An earlier
+version said a region overlapping *any* live span mints nothing. PREPROCESS proposes on a 6 dB rise
+over the 5th-percentile floor with a 50 ms minimum, so an eighteen-second sustained vowel or a
+ten-second DDK train always sits under live spans. VOICE V1's attempt would therefore land as a
+`refine`, never as a `family: "voice"` span; the selector V1 changed to read the branch family would
+be empty; and the branch would `FAIL` on a recording full of phonation — reintroducing precisely the
+bias the inversion removed.
+
+**The rule's purpose is untouched.** It exists to stop a branch re-minting the general span set and
+orphaning its per-span measurements. A `family: "voice"` span collides with no `family is None`
+reader, so scoping by family preserves the protection and removes the collision.
+
+Three consequences worth stating rather than leaving implied:
+
+1. **A branch measures over its own family span**, so a per-span measurement keys to that span's id
+   and the measured extent is that span's own extent.
+2. **Covariates and support counts therefore describe the same extent** as the span they hang on —
+   there is no mismatch between what was measured and what the covariate qualifies.
+3. **Nothing is left unreconciled.** A phonation broken by two 400 ms gaps is three PREPROCESS spans
+   under `spans.min_separation_ms: 30`; the branch's single attempt span simply covers all three. The
+   branch is not refining them, so they neither need merging nor conflict with it.
 
 ## Deviations and counts are stored, and need no new `PROV_TYPE`
 
@@ -41,10 +61,63 @@ Nothing is added to the `PROV_TYPE` literal at `prov_store.py:17-31`.
 **`verb: "deviate"` will need admitting when contract piece 7 widens REPORT's assertion read by
 verb.** That is a forward statement, not a description: **REPORT reads no verb set today.**
 `report.py:1123-1128` filters by branch and `prov_type` and drops every assertion whose branch is not
-AIRWAY; the only verb tests in the file are hard-coded `== "label"` at `:196` and `:327`.
+AIRWAY; the only verb tests in the file are hard-coded literals — `== "label"` at `:196` and
+`!= "label"` at `:327`.
 
 **A count asserts no discrepancy.** `found` and `declared` sit side by side; whether a difference
 disqualifies the recording is not the branch's call.
+
+### The deviation-type vocabulary
+
+**This is the authoritative list.** The contract's table carries three rows and reads as exhaustive;
+the branch documents mint more. Neither is wrong — the contract established the shape, the branches
+supply the types — but the list has to live somewhere, and it lives here.
+
+| type | branch | what it says |
+| --- | --- | --- |
+| `off_task_extent` | AIRWAY | positively-identified off-task content inside an airway task |
+| `stimulus_mismatch` | SPEECH | an aligned word that is not the word the stimulus expected |
+| `filler` | SPEECH | a bracketed disfluency where a **read** task expected lexical content |
+| `truncation` | SPEECH, VOICE, DDK | the production begins or ends at the recording boundary |
+| `language_mismatch` | SPEECH | the transcript language differs from the declaration |
+| `repeat_reading` | SPEECH | the stimulus was read more than once |
+| `sweep_direction_mismatch` | VOICE | the dominant monotone segment ran opposite to the declared direction |
+| `repeat_attempt` | VOICE | more than one attempt where the task asked for one |
+| `syllable_sequence_mismatch` | DDK | a produced syllable that is not the one the sequence expected |
+
+A branch adding a type adds a row here. `truncation` is shared deliberately — it means the same
+thing in all three.
+
+### Norm-bearing scalars carry their measurement convention in the name
+
+Any scalar with circulating published norms **will be read against them**, whatever a document says
+elsewhere. Suppressing one scalar does not scale: it applies verbatim to DDK syllable rate, CPPS in
+dB, jitter and shimmer in percent, F0 SD in semitones, and maximum phonation time in seconds.
+
+**So the name carries the convention** — `ddk_syllable_rate_from_envelope_peak_hz`, not `rate`;
+`cpps_db_voiced_intervals_60_330hz`, not `cpps`. And every such value carries a standing statement
+that it is not comparable to published norms collected under a different measurement convention, on
+different equipment.
+
+### One spectral analysis band, declared
+
+Every spectral measure — CPP, slope and tilt, moments, HNR, formants — is computed over a **declared
+common band**, and any value whose recording does not support that band is marked **non-comparable**
+rather than reported. A bandwidth covariate lets a reader *notice* mixed bandwidths; it does not make
+the numbers poolable.
+
+### The octave-jump count means three different things
+
+It appears in three places with three interpretations, and a reader needs the rule:
+
+| context | interpretation |
+| --- | --- |
+| any F0 track | **tracker instability** — the estimator jumped, no claim about the voice |
+| a glide, mid-sweep | **a normal register break** — modal to falsetto in an untrained voice |
+| a sustained vowel | **type-2 evidence** — period doubling or subharmonics |
+
+The count alone distinguishes none of them; the **task and the position within the production** do.
+A count used as type-2 evidence is restricted to sustained material, never to glides.
 
 ## A deviation is not evidence of a bad recording
 
@@ -85,10 +158,21 @@ cancellation. Both are detectable without a threshold:
 when they move oppositely. The noise floor rising as gain is pushed while speech level falls is the
 signature.
 
-**Noise suppression is the greater hazard and has the easier signature.** Spectral gating
-manufactures HNR and CPP values outright. It shows as: the pause noise floor collapsing toward
-digital silence with near-zero variance; abrupt level steps at speech boundaries; and a pause noise
-spectrum unlike the in-speech one. All three are comparisons, not cuts.
+**Noise suppression is the greater hazard.** Spectral gating manufactures HNR and CPP values
+outright. It shows as: the pause noise floor collapsing toward digital silence with very low
+variance; level steps at speech boundaries; and a pause noise spectrum unlike the in-speech one.
+
+**This capability has no owner, and that is a gap.** This document requires the covariate of every
+measurement; it previously delegated the computation to
+[`branch-quality.md`](branch-quality.md) Q2, which specifies **bandwidth only** and has no AGC row —
+and QUALITY's own rule sends anything needing the waveform to PREPROCESS. So the covariate is
+required of everyone and computed by nobody. **It needs a named capability, an owner and a computing
+node before any measurement can claim to carry it.** Recorded in
+[`branch-quality.md`](branch-quality.md) as owed.
+
+**And it is not parameter-free either.** "Very low variance" and "a level step" are cuts, however
+they are phrased. Comparative framing reduces the number of parameters; it does not remove them.
+Whatever owns this declares them.
 
 ### Mouth-to-mic distance and reverberation
 

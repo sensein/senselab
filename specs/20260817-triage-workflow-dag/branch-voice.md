@@ -11,10 +11,10 @@ shared rules are in [`branch-conventions.md`](branch-conventions.md); owed groun
 
 **VOICE fails on every recording.** Its subject is every live span whose `family` is `phonation`
 (`voice.py:232`, `_PHONATION_FAMILY` at `:39`). Nothing reachable proposes one: the detector that
-did was retired on 2026-09-04, and the module's only `prov_type="span"` write (`voice.py:336-348`)
+did was retired on 2026-09-04, and the module's only `prov_type="span"` write (`voice.py:335-348`)
 sits downstream of the no-span return at `:237-266`, which every recording takes.
 
-**And VOICE is the worked example of what the contract forbids.** `voice.py:336-348` mints a
+**And VOICE is the worked example of what the contract forbids.** `voice.py:335-348` mints a
 *second* span from an input span, re-keyed by period-aligned onset and carrying `onset_kind`. That is
 the re-minting the contract replaces with a `refine` assertion, and it is why `report.py:291-308`
 needs `_spans_of_family` to split one family into two populations on `("onset_kind" in attributes)`.
@@ -80,19 +80,53 @@ of* that extent rather than conditions on it:
 
 - **voiced fraction** — how much of the attempt the tracker found F0 for;
 - **interruption structure** — the number, location and duration of unvoiced intervals within it;
-- **F0 availability** — whether the tracker produced a usable contour at all.
+- **F0 availability** — whether the tracker produced a usable contour at all;
+- **F0 stationarity, formant stationarity and spectral flux** — whether the production held still.
 
 A type-3 voice yields an attempt with a low voiced fraction and no usable F0 contour. That is a
-*finding about the voice*, and it is exactly what a reader needs. Defined the other way it was an
-absence of data.
+*finding about the voice*, and exactly what a reader needs. Defined the other way it was an absence
+of data.
+
+**The stationarity qualifiers are not optional, because the first three do not separate a sustained
+vowel from connected speech.** Connected speech has a high voiced fraction, a usable F0 contour and
+few interruptions — it passes all three. VOICE routes 22,277 recordings against 8,306 declaring a
+voice family, so **connected speech reaching this branch is the common case, not the edge case**.
+Without a steadiness qualifier V1 would propose "phonation attempts" over runs of connected speech,
+and V4 would compute perturbation and CPPS over segments containing consonants, pauses and changing
+vowels — the classic invalid-perturbation error, which none of V4's type-2 or type-3 qualifiers
+detects.
+
+`formant_track` is already in `phonation_tracks`, so formant stationarity costs nothing new.
+
+**Steadiness is a covariate, not a gate.** V4 carries it on every perturbation and CPPS value rather
+than V1 refusing to propose — the same discipline as the rest of the inversion.
+
+**And `voice_tracks.npz` carries unmasked sentinels.** `voice.py:305` and `:374` write `hnr_db` with
+Praat's −200 dB undefined-frame markers unmasked — measured **389 sentinel frames** in a padded 2 s
+signal — while `phonation.hnr_floor_interval_db` is null so nothing masks them downstream. Any mean
+or percentile over that array is destroyed. [`praat-instrument-audit.md`](praat-instrument-audit.md)
+finding 10, which also records the useful negative result that
+`extract_harmonicity_descriptors`' own `Get mean` *excludes* them.
+
+**An absent `phonation_tracks` is not an empty one.** `derive_f0_range` **raises**
+`F0RangeUnavailable` when the wide search places no pitch (`tasks/phonation/api.py:45-66`), so on a
+frankly aperiodic recording the whole measurement is *absent* rather than present-and-null. The "F0
+availability" qualifier must handle an absent measurement, which is the case it most needs to
+describe.
 
 **Emits.** `propose` spans, `family: "voice"`, subject to the `propose`/`refine` rule in
 [`branch-conventions.md`](branch-conventions.md), each carrying the three qualifiers above.
 
-**Parameters, all owed.** The claim that this is "parameter-free in its core" is withdrawn — it was
-false under the old definition and is still false under the new one:
+**Parameters.** The claim that this is "parameter-free in its core" is withdrawn — it was false under
+the old definition and is still false under the new one:
 
-1. the envelope threshold separating attempt from background, and a minimum attempt duration;
+1. **The envelope threshold and minimum attempt duration are already derived — reuse them.**
+   `spans.k_db: 6.0` (`config-derivations.md:74`, `:133`, `:238`) and `spans.min_duration_ms: 50`
+   are both derived, both operate on the same pre-emphasised envelope V1 reads, and both do exactly
+   this job. **V1 reuses them and introduces no second pair.** An earlier version marked them owed
+   without checking — the same asserting-an-absence this document corrected elsewhere. What V1 may
+   still need beyond them is a *minimum sustained* duration distinguishing an attempt from an
+   ordinary span, which is a different quantity and is owed;
 2. Praat's own undeclared internal voicing threshold, inside `to_pitch_cc`. The *range* handed to it
    is not a free parameter — `derive_f0_range` narrows `voice.f0_search_range_hz` per recording
    (`preprocess.py:941`, `voice.py:71`), derived at `config-derivations.md:641-648` — but the
@@ -162,35 +196,52 @@ correlation with time, direction bias. `BRANCH_DETECTORS = {"VOICE": _PITCH_TRAJ
 `glide` kind and 3 under `voice` — each carrying an empty `thresholds` and absent from `DETECTORS`,
 because they are branch measurements rather than gates.
 
-**Per-recording narrowing is already what the code does.** `voice.f0_search_range_hz`
-`[50.0, 600.0]` (`default.yaml:159`) is **not a fixed operating range**: it is the wide *search*
-bound of the pitch-range standardization method, from which that method narrows each recording's own
-floor and ceiling. `derive_f0_range` is called at `preprocess.py:941` and at `voice.py:71`, both off
-`plain`, so PREPROCESS and VOICE cannot hold ranges that drift. `config-derivations.md:641-648`
-records the reasoning, including why the key it replaced had to be null — *no single range serves
-both a low adult male fundamental and an infant voice, and no fixed range is needed because the range
-is derivable per recording*.
+**`derive_f0_range` does not narrow per recording. It is a binary sex-typed bin, and this is a
+defect of the function against its own documentation** — [`praat-instrument-audit.md`](praat-instrument-audit.md)
+finding 1, which measures the downstream step and notes that `capability-map.md:117` and `:314`
+already flag this bin as the exact mistake not to repeat.
 
-An earlier version of this document recommended "use `derive_f0_range` for per-recording limits
-rather than one fixed window" as though it were a change. It is the existing behaviour, and the
-recommendation was written by assuming an absence rather than checking.
+`extract_pitch_values` (`praat_parselmouth.py:428-436`) takes the recording's trimmed mean pitch and
+selects one of **two hardcoded pairs**:
 
-**The narrower question that survives** is whether the 600 Hz **outer search bound** truncates the
-endpoint of an upward glide. Female falsetto reaches 700–900 Hz, and the per-recording narrowing can
-only narrow *within* the search bound — it cannot find a ceiling above it. Symmetrically, the 50 Hz
-floor sits above the fry where downward glides end. That is a bounded question about the outer limit,
-not a claim that the range is fixed.
+```
+mean_pitch < 170  ->  floor 60,  ceiling 250    # commented 'male' settings
+otherwise         ->  floor 100, ceiling 500    # commented 'female' and 'child' settings
+```
 
-Two parameter-free responses to it, both available now:
+The `derive_f0_range` wrapper's own docstring (`tasks/phonation/api.py:46`) says *"This recording's
+own F0 search range, narrowed from a wide search by the standardization method"*, and
+`config-derivations.md:641-648` inherits that description. **Neither matches the code.** A previous
+revision of this document repeated the description as fact; it was wrong, and the error came from
+reading the derivation rather than the implementation.
 
-- add a **conformance flag**: the F0 extremum coincided with the derived limit *or* with the outer
-  search bound — which says the range was clipped, and at which of the two, without asserting what
-  the true extremum was;
-- report a **robust percentile range** beside the extrema, and a **count of octave-scale
-  frame-to-frame jumps**, the tracker's own instability made visible.
+**What follows from the bin, all of it structural:**
 
-**Widening the outer bound is a trade, not a free win**: it increases octave errors across the whole
-track. The conformance flag is what makes the current bound honest, and is the cheaper fix.
+- **The binding ceiling is 250 or 500 Hz, never 600.** The `voice.f0_search_range_hz` upper bound is
+  not what limits anything. For a speaker binned below 170 Hz the ceiling truncates **an ordinary
+  male upward glide**, not merely falsetto.
+- **The floor is 60 or 100 Hz, never 50**, so downward glides are clipped into fry well above the
+  stated bound.
+- **Every F0-derived measure across 62,547 recordings carries a discontinuity at 170 Hz**, along a
+  sex-typed boundary, in a corpus that deliberately enrols gender-diverse participants. Two speakers
+  either side of that mean are analysed under different floors *and* different ceilings — a measured
+  **1.67× step** in the intensity window, harmonicity window and minimum analysable segment.
+- **The range is derived twice, independently** — `preprocess.py:941` and `voice.py:71` — so the two
+  can land in different bins for the same recording.
+- **On a glide the sweep decides its own analysis ceiling**, since the bin is chosen from the mean
+  over the whole recording — and the ±2 SD trim, applied in linear Hz, preferentially trims the high
+  end of an upward sweep.
+
+**The conformance flag therefore needs three levels**, not two: the F0 extremum coincided with the
+**derived limit**, with the **outer search bound**, or — the one that matters most here — **which bin
+was selected**. Report the bin.
+
+Report also a **robust percentile range** beside the extrema and a **count of octave-scale
+frame-to-frame jumps** (interpreted per [`branch-conventions.md`](branch-conventions.md)).
+
+**Report the glide span as a produced range, not a physiological one.** Participants under-produce
+without coaching, the tracker clips, and octave errors are asymmetric. "Produced range" is what was
+measured; "range" invites a reader to treat it as capacity.
 
 **Add the direction deviation, keyed on the dominant monotone segment.** The sweep ran opposite to
 the requested direction — a sign, an observable rather than a classification — over the 3,150 glide
@@ -222,10 +273,31 @@ definition.
 (`:1168`), `extract_pitch_descriptors` (`:448`), `extract_slope_tilt` (`:638`),
 `measure_f1f2_formants_bandwidths` (`:824`), `extract_spectral_moments` (`:945`).
 
-**CPPS is the primary descriptor.** It requires no period extraction, so it survives exactly the
-type-2 and type-3 signals where perturbation measures die; it is far more robust to additive noise
-and to compression than jitter or shimmer; and it carries the dominant weight in the composite
-instruments that combine these measures. Perturbation is secondary and gated.
+**CPPS is the primary descriptor as a method — but this implementation is voiced-interval-gated,
+which removes the property that motivated promoting it.** `extract_cpp_descriptors` builds a
+voiced/unvoiced TextGrid from `to_pitch_ac(..., voicing_threshold=0.3)` and computes CPPS only over
+intervals labelled `V` (`praat_parselmouth.py:748-762`). So CPPS is **unavailable on exactly the
+aperiodic voices V1's inversion exists to rescue** — the claim that it needs no period extraction is
+true of the method and false of this code path.
+
+**And its cepstral peak search is hard-capped at 60–330 Hz** (`praat_parselmouth.py:778-779`), so
+CPPS is quietly invalid above 330 Hz: high-F0 women, children, and the upper half of every upward
+glide.
+
+Both are properties of the wrapper rather than of the measure, and the audit measured two more that
+compound them: the vuv segmentation inflates voiced duration by **70%** on fragmented productions,
+carrying silence into the cepstrogram and depressing CPPS; and a **`> 4` dB cut discards every
+dysphonic interval**, returning NaN when all of them are — indistinguishable from a crash.
+
+**The four findings multiply**: the vuv inflation depresses CPPS toward the cut, the 330 Hz cap
+depresses it by a measured 3.8 dB at F0 420, and what survives is a mean over only the intervals that
+already scored well. **[`praat-instrument-audit.md`](praat-instrument-audit.md) findings 2–4** carry
+the measurements.
+
+**So CPPS is promoted as a method and is not currently trustworthy as implemented.** V4 states both,
+and the fix is a code change rather than a threshold.
+
+Perturbation is secondary, and qualified rather than suppressed — see below.
 
 **Perturbation is invalid on much of the material it will run on.** Cycle-to-cycle perturbation is
 interpretable only on nearly-periodic signals — Titze (1995) signal typing, where type 1 is
@@ -236,16 +308,43 @@ HNR and F0 SD catch type 3, which was already obvious from listening or from a s
 passes all three** — the tracker happily marks doubled cycles, recovery is high, HNR is moderate and
 F0 SD is small. Type 2 is the class the gate exists for.
 
-Two instruments detect it, and one is already in this document:
+Two partial instruments, and neither is sufficient:
 
-- **the octave-scale frame-to-frame jump count** from V3, which is sitting in the glide capability
-  and was not wired into the perturbation block;
-- **direct subharmonic evidence** — a bimodal period-length distribution from `period_marks`
-  (`tasks/phonation/__init__.py:3-12`), which is what period doubling *is*.
+- **the octave-scale frame-to-frame jump count** from V3 — restricted to sustained material, never
+  glides, per [`branch-conventions.md`](branch-conventions.md)'s interpretive rule;
+- **the period-length distribution's modality** from `period_marks`
+  (`tasks/phonation/__init__.py:3-12`).
 
-**Report alongside every perturbation value:** the period-mark recovery fraction, HNR, F0 SD, the
-octave-jump count, and the period-length distribution's modality. The first three say the signal was
-not type 3; the last two say it was not type 2.
+**The modality test fails in the case it is meant to catch.** If the tracker locks to the
+subharmonic, every mark is a doubled period and the distribution is **unimodal at 2T**. So
+bimodality is evidence *of* type 2; its absence is not evidence against it. The direct instrument is
+a subharmonic-to-harmonic ratio, and **it is not in the inventory** — stated rather than assumed
+away.
+
+**Type 2 does not reach the perturbation measurement at all, and the audit corrects how.** It is not
+the 1.3 maximum-period factor: measured, `To PointProcess (periodic, cc)` places **0 pulses** on an
+alternating-period signal and **1** on a period-doubled one, so the factor never gets to act. And
+with floor 60 from the sex bin, a 45 or 55 Hz source yields **zero pulses** — vocal fry, low male
+voices and Parkinsonian creak are excluded **upstream by the bin**.
+
+**So a diplophonic voice reads as `unmeasurable`, not as `severely disordered`** — while
+`default.yaml:145` names `phonation.period_doubling_factor: 2.0` as a phenomenon of interest. See
+[`praat-instrument-audit.md`](praat-instrument-audit.md) finding 8, which also records that the
+`0.0001 / 0.02 / 1.3 / 1.6` literals are Praat's own form defaults, mismatched against the derived
+range in a way Praat's documentation warns about.
+
+**The validity qualifier and the value come from different point processes.** `period_marks` admits
+`[1/f0_max, 1/f0_min]`; the jitter and shimmer calls admit `[0.0001, 0.02]` with the 1.3 constraint.
+So a recovery fraction computed from `period_marks` **certifies cycles the computation may have
+discarded**. Compute the qualifier from the same point process the value came from.
+
+**Report alongside every perturbation value:** the period-mark recovery fraction *from the same point
+process*, HNR, F0 SD, the octave-jump count where the material is sustained, the period-length
+modality, and V1's steadiness qualifiers.
+
+**HNR is not independent of the noise covariate.** Additive room noise lowers HNR for a perfectly
+type-1 voice, so the type-3 qualifier and the SNR covariate are two readings of overlapping
+evidence, not corroboration. **Period-mark evidence outweighs HNR** for the signal-typing question.
 
 **Two covariates specific to this block**, beyond the shared set in
 [`branch-conventions.md`](branch-conventions.md):
@@ -262,90 +361,179 @@ Emit the variant name with the value, never a bare "jitter".
 **Declare an analysis-window convention** excluding attack and decay, per
 [`branch-conventions.md`](branch-conventions.md).
 
-**Emits.** A per-span measurement. **No verdict** — mapping these to normal or disordered needs norms
-this project does not have, and Praat's default jitter, shimmer and HNR settings (1.04%, 3.81%,
-20 dB) are widely mistaken for norms and are not norms. No published perturbation norm was collected
-on AGC'd, band-limited phone audio.
+**It qualifies; it does not suppress.** The word "gated" was used loosely in an earlier version while
+the operative instruction was "report alongside" — those are different designs. **This section
+qualifies**: every perturbation value is emitted with the evidence a reader needs to discount it.
+Suppression would require a cut on the octave-jump count and a named statistic for modality — a dip
+test, a bimodality coefficient — and neither is named nor owed here, because neither is wanted.
 
-### V5 — Composite severity indices: **moved to the corpus-level node**
+**Emits.** A per-span measurement, every value named per
+[`branch-conventions.md`](branch-conventions.md)'s convention-in-the-name rule. **No verdict** —
+mapping these to normal or disordered needs norms this project does not have. Praat's default
+jitter, shimmer and HNR settings (1.04%, 3.81%, 20 dB) are widely mistaken for norms and are not
+norms, and no published perturbation norm was collected on AGC'd, band-limited phone audio.
 
-AVQI and its relatives are **not per-recording capabilities here**, and this branch no longer claims
-them. Their protocol requires a sustained vowel *and* continuous speech concatenated, which in this
-corpus are different recordings of the same session — so assembling the input is a same-session
-operation. See [`corpus-level-node.md`](corpus-level-node.md) C2.
+### V4a — Vocal tremor (**not built; the largest missing capability in this branch**)
 
-Two things stay recorded here, because they are VOICE's arguments even though the capability is not
-VOICE's:
+**Question.** Is there a 4–8 Hz modulation of F0 or amplitude?
 
-**The rule I first invoked was the wrong one.** An earlier version proposed emitting AVQI on the
-grounds that its coefficients are **published rather than fitted here**, so it discharges the
-no-refits rule. True, and beside the point: AVQI is calibrated against perceptual overall grade and
-reported on a 0–10 severity scale with a published cut-off around 2.95. Emitting it is emitting a
-**severity estimate**, which engages the *non-diagnostic* constraint instead — and every other
-capability in this document declines to map an acoustic value to normal or disordered.
+Vocal tremor is central in essential tremor, Parkinson's disease and spasmodic dysphonia, and the
+**sustained vowel is its standard instrument** — 5,113 recordings here (`prolonged-vowel` plus both
+`maximum-phonation-time` families). It is absent from this branch entirely.
 
-**Whether this project emits any severity estimate is the owner's decision**, not one these documents
-resolve. Recorded as owed.
+**It is nearly free once DDK D1 exists.** Tremor is a modulation-spectrum measurement — the same
+machinery [`branch-ddk.md`](branch-ddk.md) D1 specifies, run at a different search band (4–8 Hz
+rather than the syllable rate) over the F0 contour and the amplitude envelope of a V1 attempt.
 
-**What VOICE keeps from it**: CPPS is V4's primary descriptor on its own merits — it carries the
-dominant weight in these composites anyway, and reported alone it is a description rather than a
-severity estimate.
+**It also explains a V4 observation.** A 4–8 Hz modulation is exactly what makes `local` jitter and
+shimmer diverge from `ppq5` and `apq11`: the short-window variants track the modulation, the
+longer-window ones average across it. Reporting tremor turns that divergence from an anomaly into a
+measurement.
 
-### V6 — Loudness-task conditions and effort correlates (**not built**)
+**Emits.** A per-span measurement: modulation frequency, modulation depth for F0 and for amplitude,
+and the search band as a declared convention.
 
-**Question.** How did the voice change across the instructed loudness conditions?
+### V5 — Composite severity indices: **moved, and the conclusion is stronger than "the owner decides"**
 
-**The prior version of this section had no subject.** `loudness` (897) and `loudness-v2` (705) are
-connected speech produced at instructed levels. Under V1's old definition a phonation span was a run
-of voiced frames, so a loudness recording is **dozens of short runs, not one phonation** — and
-nothing in any of these documents segmented it into its soft, comfortable and loud conditions.
-Without that segmentation there is no loudness measurement at all, only an intensity contour over an
-undifferentiated recording.
+AVQI and its relatives are **not per-recording capabilities here** — their protocol requires a
+sustained vowel *and* continuous speech concatenated, which in this corpus are different recordings.
+The capability sits in [`corpus-level-node.md`](corpus-level-node.md) C2, as a **session-level**
+capability.
 
-**Condition segmentation comes first, and it is close to parameter-free.** The conditions are
-instructed, ordered, pause-separated, and multimodal in level by construction — three clusters in
-level, in a known order, separated by pauses. Segmenting on that structure needs no fitted cut.
+**But the placement is not the interesting conclusion.** An earlier version left the question open
+for the owner. It should not be open, because this document's own condition — *the concatenation
+protocol must be followed rather than approximated* — **is unsatisfiable in this corpus**:
 
-**Then measure the level-invariant effort correlates as primary**, not the dB range:
+- the continuous-speech material must be the short standardized sentence set the index was
+  calibrated on, in a prescribed vowel:speech proportion. Rainbow, Caterpillar and Harvard are none
+  of these, and free speech is disqualifying;
+- only `prolonged-vowel` (1,604) can supply the vowel, and only when it is /a/ — which makes **V8 a
+  precondition**, not a nicety;
+- the two takes are different recordings, so independent AGC states, gain and mic distance put a
+  level and spectral discontinuity **at the join, directly into the LTAS terms** the index reads;
+  bandwidth and sample rate must match across the pair and do not;
+- **`extract_slope_tilt`'s band definitions are not AVQI's**, so following the protocol means
+  reimplementing the index's own measurements rather than composing the existing helpers;
+- the two takes are different voice states, recorded minutes apart.
+
+**So the choice is not "emit AVQI or not". It is between emitting an AVQI-shaped number that is not
+AVQI, and emitting nothing.** A value assembled this way has **no known relationship to the published
+0–10 scale or to its ~2.95 cut-off**, and the published smartphone recording-chain sensitivity
+applies on top.
+
+The non-diagnostic argument stands beside this one: emitting a 0–10 severity estimate is mapping an
+acoustic value to normal-or-disordered, which every other capability here declines to do. It also
+ingests shimmer with the largest positive coefficient and no validity gate, while V4 qualifies
+shimmer everywhere else.
+
+**What VOICE keeps**: CPPS as V4's primary descriptor on its own merits — it carries the dominant
+weight in these composites anyway, and reported alone it is a description rather than a severity
+estimate.
+
+### V6 — Maximum vocal intensity and the intensity contrast (**not built**)
+
+**The premise of the previous version was wrong, and reading the sidecar settled it.** That version
+described `loudness` as connected speech at three instructed levels — soft, comfortable, loud — and
+proposed segmenting it by clustering on level. **Neither task is that**, and the two are not even the
+same task. From the protocol's own `_acoustictask-metadata.json`:
+
+> **`loudness`** (897) — *"This helps us to determine the loudness of the voice. When you are ready,
+> press on the record button and shout "hey" as loud as possible 3 times in a single recording."*
+
+> **`loudness-v2`** (705) — *"…say "hey" in your normal voice. Then, shout "hey" as loud as you can.
+> Try to reach the target line on the screen."*
+
+Both carry `speech_type: "non-lexical"` and an empty `stimulus_text`.
+
+So: **a single syllable, not connected speech. A declared number of events — three for v1, two for
+v2. And two different measurements**, not one task with a version bump:
+
+| task | what it is | measure |
+| --- | --- | --- |
+| `loudness` | three maximal shouts | **maximum vocal intensity**, and consistency across the three attempts |
+| `loudness-v2` | one normal, one shouted | **intensity contrast** — the difference between the two |
+
+**This makes segmentation easy and the previous proposal unnecessary.** These are isolated
+single-syllable events separated by silence, so finding them is envelope event detection — the same
+instrument as [`branch-airway.md`](branch-airway.md) A5 — with the **expected count declared** (3 or
+2). It becomes a `counts` entry with a real `declared` half, which no other VOICE capability has.
+
+**Do not segment by clustering on level.** The previous version proposed exactly that, and it was the
+same error V1 and D1 were inverted to remove — the event defined by the property being measured — one
+section later in the same document. Reduced dynamic range **is** the deficit in hypophonia, so
+clustering on level assumes away the finding; and it fails silently, since k-means with k=3 always
+returns three clusters, partitioning noise and reporting it as condition effects.
+
+**Report the level separation as the measurement, not as the segmentation criterion.** With events
+found by pause structure and ordered as instructed, the measured separation between normal and
+shouted — or across the three shouts — is the result. A collapsed separation then reads as a finding
+about the voice rather than as an absence of conditions.
+
+**Report the segmentation's own evidence as first-class**: events recovered against events declared,
+the measured separation between adjacent events, and whether the recovered order matches the declared
+one. **Mark the derived measures `unavailable` when the declared count is not recovered** rather than
+computing them over whatever was found.
+
+**Level is the least trustworthy channel available, and this project has measured that.**
+`config-derivations.md:128-140` records a real recording whose rise-over-floor fell **from 23 dB to
+9 dB** — the pipeline's own normalization pass, not a phone's AGC, but a direct measurement of what
+gain-control processing does to dynamic range on this material. Distance change compounds it, and is
+task-correlated: participants pull the phone away when asked to shout. `loudness-v2`'s on-screen
+target line adds a third confound — the participant is targeting a displayed level, so the shout may
+stop at the target rather than at their maximum.
+
+**So report the level-invariant effort correlates beside the level difference**, and give them equal
+standing:
 
 - **spectral tilt / alpha-ratio change per dB** — `extract_slope_tilt` (`praat_parselmouth.py:638`);
-- **F0 shift across conditions** — `extract_pitch_descriptors` (`:448`);
-- **CPP change across conditions** — `extract_cpp_descriptors` (`:706`).
+- **F0 shift between conditions** — `extract_pitch_descriptors` (`:448`);
+- **CPP change between conditions** — `extract_cpp_descriptors` (`:706`), subject to V4's caveats.
 
-**dB range is secondary and heavily qualified.** It is precisely what AGC destroys, and it is
-corrupted by distance change — participants pull the phone away when asked to be loud, which is
-task-correlated rather than random. The level-invariant correlates survive both. An earlier version
-of this document made dB range the measurement and the qualifiers a caveat; that inverted the
-reliability ordering.
+**Absolute SPL is not recoverable** from a file of unknown gain, so every level figure is relative
+within the recording.
 
-**Absolute SPL is not recoverable** from a file of unknown gain, and `recording_input_gain` does not
-recover it.
+**Do not build any of this on `range_ratio_intensity_db`.** `praat_parselmouth.py:566` computes it as
+`max_dB / min_dB`, a ratio of two logarithmic quantities: measured, it is **1.000** on a buzz with no
+silence and **−0.244** once 0.5 s of silence is added at each end. It tracks silent fraction, not
+dynamic range, and it goes negative on any recording with a quiet passage.
+[`praat-instrument-audit.md`](praat-instrument-audit.md) finding 6 — the meaningful quantity is
+`min_dB − max_dB`.
 
-**Intensity ownership.** SPEECH S4 computes "intensity variability" on these same recordings over
-different extents. **V6 owns intensity across instructed conditions; S4 owns it within connected
-speech.** Both cite the other so a reader finds one answer.
+**Owed.** A pause criterion for separating the events. It is a number, and it is not `spans.k_db`'s
+job.
+
+**A consequence for SPEECH.** Both families carry `speech_type: "non-lexical"` while `families.py`
+places them in `LEXICAL_SPEECH` — see [`branch-speech.md`](branch-speech.md), whose table described
+them as "read, varying intensity" on the same wrong premise.
 
 ### V7 — Population-conditioned F0 range (**gated behind null config; and it should stay that way**)
 
 `_f0_range` (`voice.py:48-83`) reads `hint.metadata["population"]` against
 `voice.f0_range_by_population`, which is null (`default.yaml:160`), falling back to `derive_f0_range`
-(`voice.py:71`) — which narrows the wide search bound to this recording's own floor and ceiling.
-**The fallback is the better path**, and `config-derivations.md:650` records the key as replacing the
-derived range rather than supplying something it lacks.
+(`voice.py:71`).
 
-**Conditioning an F0 search range on population silences the population most likely to be studied.**
-A male-registered speaker with unusually high F0 — puberphonia, a trans-feminine voice — falls
-outside a population prior built from typical ranges, and the tracker then clips exactly the voice
-the measurement was wanted for. This protocol deliberately enrols gender-diverse participants, so
-this is not a hypothetical.
+**The argument in the previous version is defeated on its own premise.** It said a population prior
+should stay unpopulated because the derived per-recording range is the better path. But V3 above
+establishes that **the fallback *is* a population prior** — implicit, undeclared, binary, sex-typed,
+and cruder than any published norm: two hardcoded pairs selected at a 170 Hz boundary.
 
-**The alternative needs no norm at all**: a wide search range, plus V3's octave-jump diagnostics,
-plus the range-clipping conformance flag. That combination reports when the range was inadequate
-instead of assuming a range from a demographic label.
+So the choice is not "population prior versus per-recording derivation". It is **between an implicit
+two-bin prior and an explicit declared one**, and the implicit one is worse in every respect except
+that nobody had to write it down.
 
-So `voice.f0_range_by_population` being null is not a gap to close. If it is ever populated, the
-per-population values are published clinical norms and belong in `data/` with a cited source — but
-the case for using them at all has not been made.
+**The hazard the previous version named is real and now applies to the code as it stands.**
+Conditioning an F0 analysis range on population clips a speaker whose F0 sits outside their
+population's typical range — puberphonia, a trans-feminine voice — and this protocol deliberately
+enrols gender-diverse participants. That is exactly what the 170 Hz bin does today, without
+declaring it.
+
+**The alternative that needs no norm**: a genuinely wide analysis range, plus V3's octave-jump
+diagnostics, plus the three-level conformance flag. That reports when the range was inadequate rather
+than assuming one from an inferred demographic.
+
+**So the defect is in the function, not in the null key.** `voice.f0_range_by_population` being null
+is not the problem; `derive_f0_range` silently supplying a sex-typed prior is. Fixing the config
+would not fix it.
 
 **`population` is not a field the contract's declaration defines** — see Unresolved.
 
@@ -354,11 +542,20 @@ the case for using them at all has not been made.
 Both a covariate — formant and perturbation measures differ by vowel — and a conformance check on
 tasks that specify one.
 
-**Use formants, not the PPG.** An earlier version of this document proposed reading vowel identity
-from the PPG posteriorgram. By DDK's own argument the posteriorgram is out of domain on sustained
-productions, and `measure_f1f2_formants_bandwidths` (`praat_parselmouth.py:824`) is the direct
-instrument for exactly this: F1 and F2 are what vowel identity *is*, and they are already needed as
-covariates.
+**Use formants, not the PPG.** An earlier version proposed reading vowel identity from the PPG
+posteriorgram; by DDK's own argument the posteriorgram is out of domain on sustained productions, and
+`measure_f1f2_formants_bandwidths` (`praat_parselmouth.py:824`) is the direct instrument — F1 and F2
+are what vowel identity *is*.
+
+**The formant configuration is adult-male and will bias this.** `phonation_spans.formant_max_hz` is
+`5000.0` with `max_formants: 5`; Praat's own guidance is roughly 5500 Hz for an adult female voice
+and higher for children. So formant estimates — and therefore V8's vowel identity **and** V4's
+formant-derived covariates — carry a sex- and age-structured error. Owed, and it is a configuration
+question rather than a code defect.
+
+**V8 is a precondition for the composite indices**, not an optional covariate: AVQI's protocol
+requires the sustained vowel to be /a/, so without vowel identity the pair cannot even be assembled.
+See [`corpus-level-node.md`](corpus-level-node.md) C2.
 
 ## Deviations
 
@@ -397,14 +594,15 @@ The residue: a phonation too quiet to clear the envelope threshold still yields 
 
 | capability | status |
 | --- | --- |
-| V1 propose the attempt | **not built** — the branch has no subject; envelope parameters owed |
+| V1 propose the attempt | **not built** — the branch has no subject; reuses `spans.k_db` and `spans.min_duration_ms`; stationarity qualifiers required |
 | V2 maximum phonation time | not built; previously specified as a longest voiced run |
-| V3 F0 trajectory | 22 detectors held; branch consumption not built; search range clips both glide endpoints |
-| V4 voice quality | Praat machinery complete; CPPS primary, perturbation gated; type-2 detection not built |
-| V5 composite severity | **moved** to [`corpus-level-node.md`](corpus-level-node.md) C2; whether to emit one at all is the owner's call |
-| V6 loudness conditions | not built; condition segmentation missing entirely |
-| V7 population F0 range | gated behind null config, and the case for it is not made |
-| V8 vowel identity | not built; use formants |
+| V3 F0 trajectory | 22 detectors held; branch consumption not built; **`derive_f0_range` is a binary sex-typed bin, ceiling 250 or 500 Hz** |
+| V4 voice quality | Praat machinery present but instrumentally compromised — see [`praat-instrument-audit.md`](praat-instrument-audit.md) findings 1–5, 8; perturbation qualified, not suppressed |
+| V4a vocal tremor | **not built**; largest missing capability; nearly free once DDK D1 exists |
+| V5 composite severity | **moved** to [`corpus-level-node.md`](corpus-level-node.md) C2, session-level; the protocol is unsatisfiable here |
+| V6 maximum intensity / contrast | not built; the previous premise was wrong — see the sidecar quotes |
+| V7 population F0 range | null key, but an implicit two-bin prior is already in force in `derive_f0_range` |
+| V8 vowel identity | not built; use formants; configuration is adult-male; precondition for C2 |
 
 Reachable today: `_f0_range` resolution, `resolve_stream`, the activity write, and the
 `gate_interval` tri-state (`voice.py:196-203`). Everything from `:268` on is unreachable because the
@@ -418,18 +616,26 @@ spans        family: "voice" phonation attempts, each carrying voiced fraction,
 assertions   refine (corrected_extent) where a PREPROCESS span's extent is wrong;
              label naming vowel identity (V8);
              deviate (sweep_direction_mismatch, truncation, repeat_attempt)
-measurements per-span trajectory (V3), CPPS and gated perturbation with its
-             validity qualifiers and variant names (V4), loudness-condition
-             correlates (V6) — each with its extent's covariates and support count
+measurements per-span trajectory with the selected F0 bin (V3), CPPS and
+             qualified perturbation with its validity evidence and variant
+             names (V4), vocal tremor (V4a), maximum intensity or intensity
+             contrast with the segmentation's own evidence (V6) — each with its
+             extent's covariates, steadiness qualifiers and support count
 counts       attempt count {found}; the MPT extent under an explicitly qualified
              name, or no scalar at all
 verdict      { spans_n, phonation_s, production, ambiguous_spans_n,
                marks_skipped_short_n, task_range, gate_interval, flags }
 ```
 
-**`longest_span_s` is removed from the verdict.** It is the retired longest-voiced-run measure
-surviving in the payload, and it will be read as MPT against published norms whatever V2 says
-elsewhere.
+**`longest_span_s` is removed from the verdict — and that is a writer-vocabulary retirement with
+live readers.** `report.py:104` keys VOICE's summary on it and `voice_test.py:344-352` asserts it is
+a first-class product. Removing it is right: it is the retired longest-voiced-run measure surviving
+in the payload, and it will be read as MPT against published norms whatever V2 says elsewhere.
+
+But the same rule this document applies to the `phonation` → `voice` family rename applies here —
+**the writer's vocabulary may shrink, the reader's may not.** The migration owes: what
+`report.py:104` reads instead, and what the test asserts instead. An earlier version removed the key
+and said nothing about either.
 
 **The verdict's basis, exactly.** Today: `FAIL` at `voice.py:242` when no phonation span exists —
 every recording. On the unreached path: `FLAG` when flags accumulated, `PASS` when spans were
@@ -450,10 +656,13 @@ Attribution of a short MPT to respiratory or laryngeal cause. Any refit against 
 
 ## Unresolved
 
-- **Whether this project emits a severity estimate at all** (V5). A decision for the owner.
+- **Whether to emit an AVQI-shaped number that is not AVQI** (V5). The protocol is unsatisfiable in this corpus, so this is the actual question; the owner decides it, but not as an open choice between AVQI and nothing.
 - **Three declaration fields this branch reads are not in the contract's `metadata` contract**:
   V2's expected duration, V7's `population`, V8's expected vowel. The contract froze the entry keys;
   `data/task_expectations/` does not exist yet, so extending it is free but must be asked for.
 - Whether the MPT extent is reported as an upper bound or intersected with voicing evidence.
+- What `report.py:104` and `voice_test.py:344-352` read once `longest_span_s` is retired.
+- `phonation_spans.formant_max_hz: 5000.0` is adult-male; affects V4 and V8.
+- **The Praat wrapper audit is complete** — [`praat-instrument-audit.md`](praat-instrument-audit.md). Its findings 1–8 and 10 land on this branch, and several are owed a code change rather than a measurement.
 - **`Outcome.FAIL`'s wording is itself a hazard** — `no_content_found` would carry the meaning — but
   `Outcome` is a closed vocabulary with readers, so this is recorded rather than changed.

@@ -86,12 +86,15 @@ musical breath noise surfaces as `Breathe` and a throat clear as `Cough`. Tonal 
 and throat clearing should be labels in their own right — a vocabulary decision, not a threshold, and
 therefore available now.
 
-**Do not carry the classifier's label `Wheeze` through to output.** *Wheeze* is a term of art in
-auscultation: a continuous musical **lung** sound of at least ~100 ms, heard with a stethoscope on
-the chest. What a phone microphone at mouth level catches during forced breathing, and what a
-general-purpose audio classifier calls "Wheeze", is overwhelmingly upper-airway turbulence. A
-clinician reading "wheeze detected" imports a respiratory finding nobody made. Emit an acoustic name
-— *musical/tonal breath noise* — or state the definitional gap in the same field as the value.
+**Do not carry the classifier's label `Wheeze` through to output without naming the recording
+site.** *Wheeze* is a term of art in auscultation: a continuous musical **lung** sound of at least
+~100 ms, conventionally heard with a stethoscope on the chest. Mouth- and trachea-recorded
+forced-expiratory wheeze detection is an established method, so a phone microphone at mouth level is
+not simply the wrong instrument — but it is a **different one**, and what a general-purpose audio
+classifier labels "Wheeze" on this material may equally be upper-airway turbulence. A clinician
+reading "wheeze detected" with no site named imports a chest finding nobody made. **The term must
+never appear without its recording site**, or use an acoustic name — *musical/tonal breath noise* —
+instead.
 
 ### A2 — Corroborate against AudioSet (**built**)
 
@@ -219,6 +222,12 @@ event. All are available from the envelope and from Praat's spectral machinery
 (`extract_spectral_moments`, `praat_parselmouth.py:945`), all are non-normative descriptions, and
 none is currently computed. Serves `respiration-and-cough-cough` (1,788) and `v2-hardcough` (698).
 
+**Cough counting is undefined, and the choice changes the count two- to threefold.** A bout of three
+coughs on one expiration is one cough epoch or three cough events, and nothing here says which.
+Across the 2,486 cough-declaring recordings that is the difference between two incompatible measures
+sharing a name. **Report both** — epochs and events, each named for what it counts — or declare one
+convention explicitly. Do not emit an unqualified "cough count".
+
 **Effort stays out of scope** — `hardcough` asks for it and nothing here measures it.
 
 ### A7 — Nasal versus oral route (**not built; may not be measurable**)
@@ -242,10 +251,14 @@ fit the declaration.
 
 ## Quality covariates
 
-Every acoustic measurement this branch emits must carry the quality covariates of its own extent —
-clipping, SNR, effective bandwidth, AGC signature. See
-[`branch-conventions.md`](branch-conventions.md). A spectral descriptor computed over a clipped or
-noise-suppressed span is not a measurement of the airway.
+Every acoustic measurement this branch emits carries the covariates of its own extent — clipping,
+SNR, support count — plus the **file-level** ones referenced rather than recomputed per span:
+effective bandwidth, and any AGC or noise-suppression signature. See
+[`branch-conventions.md`](branch-conventions.md), which draws that split; an earlier version of this
+section required all four per extent and was the one document not updated when the split was made.
+
+A spectral descriptor computed over a clipped or noise-suppressed span is not a measurement of the
+airway.
 
 ## What exists today
 
@@ -292,8 +305,9 @@ assertions   label (A1), label with yamnet_* attributes (A2 corroboration),
              contest (A3, once replaced), abstain, deviate/off_task_extent (A4)
 interval     airway_labelled_interval, the hull of the labelled spans
 measurements A5 breath-event durations and inter-event intervals, with the
-             I:E measure only where both phases were detected; A6 cough
-             descriptors — each with its extent's covariates and support count
+             inspiratory:expiratory duration measure present only where both
+             phases were detected; A6 cough descriptors — each with its
+             extent's covariates and support count
 counts       expected_event_count {found, declared} (A5)
 verdict      { labelled_n, by_label, contested_n, merged_n, flags }
 ```

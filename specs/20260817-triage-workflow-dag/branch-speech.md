@@ -43,10 +43,10 @@ carrying counts in the corpus profile:
 | `free-speech-v2` | 2,120 | spontaneous |
 | `cape-v-sentences-v2` | 1,224 | read, known stimulus |
 | `rainbow-passage` | 897 | read passage |
-| `loudness` | 897 | read, varying intensity |
+| `loudness` | 897 | **non-lexical** — three maximal shouts of "hey"; see [`branch-voice.md`](branch-voice.md) V6 |
 | `picture-description` | 889 (+373 option1, +329 option2) | spontaneous, prompted |
 | `story-recall` | 889 (+660 v2) | spontaneous, prompted |
-| `loudness-v2` | 705 | read, varying intensity |
+| `loudness-v2` | 705 | **non-lexical** — "hey" normal then shouted; see [`branch-voice.md`](branch-voice.md) V6 |
 | `caterpillar-passage` | 597 | read passage |
 | `word-color-stroop` | 472 | read, timed |
 
@@ -58,8 +58,17 @@ These sum to 32,111 against 33,235 declared SPEECH; the table is truncated — t
 `speech_type`. Roughly 19,265 declarations are read tasks with a known stimulus — the largest
 measurable population in the corpus, and today nothing compares a transcript to it.
 
-**`loudness` is SPEECH-declared but wants VOICE's measurement** — intensity dynamics. Same shape as
-CAPE-V, whose sentence conformance is S3's and whose voice quality is VOICE's V4.
+**`loudness` and `loudness-v2` are in `LEXICAL_SPEECH` (`families.py:41-42`) but the protocol calls
+them `speech_type: "non-lexical"`.** Reading the sidecars settles what they are: a single syllable
+— "hey" — shouted three times in v1, or spoken then shouted in v2. Neither is connected speech and
+neither carries a stimulus text. An earlier version of this table described both as "read, varying
+intensity", which was wrong on both counts.
+
+The measurement they want is [`branch-voice.md`](branch-voice.md) V6's. **The family-set membership
+and the protocol's own `speech_type` disagree**, and that discrepancy is worth resolving in
+`families.py` rather than in either branch document.
+
+CAPE-V remains the ordinary split: sentence conformance is S3's, voice quality is VOICE's V4.
 
 ### A recording routed here whose declared task is not speech
 
@@ -153,11 +162,20 @@ phrasing — and both are transcribed and then dropped.
 
   **This helper hides three operating points, one data-dependent, and none in any config** —
   `silence_db = -25` (`praat_parselmouth.py:142`), `min_dip = 4` (`:149`) **dropped to 2 when the
-  recording's own mean HNR is below 60** (`:155-156`), and `min_pause = 0.3` (`:159`). The HNR switch
+  recording's own mean HNR is below 60** (`:154-155`), and `min_pause = 0.3` (`:159`). The HNR switch
   means syllable-detection sensitivity is conditioned on a voice-quality measurement of the recording
   being measured, across ~25,000 recordings of frequently dysphonic speakers. In practice mean HNR is
-  far below 60 dB for any real recording, so the `min_dip = 2` branch is effectively always taken —
-  but it is undeclared either way. **All four are owed**, and DDK D2 documents the same helper.
+  far below 60 dB for any real recording, so the `min_dip = 2` branch is **measurably always taken**
+  — probe means: buzz 50.75 dB, buzz with noise 16.90 dB, pure sine 105.60 dB — and the documented
+  "clean signal" setting of 4 is dead code.
+
+  **Two further deviations from Praat**, both raising the same question: `min_pause` **0.3 s against
+  Praat's 0.1 s**, so hesitation pauses at 0.3–0.4 s sit on the edge and `pause_rate` under-reads for
+  halting speech; and minimum sounding interval **0.1 s against 0.05 s**, dropping short voiced
+  fragments. And the helper's `to_pitch_ac` differs from Praat on six parameters, with the code's own
+  comments saying *"can't find a reason for this value being different"* across five consecutive
+  lines. **All of it owed** — see [`praat-instrument-audit.md`](praat-instrument-audit.md), and DDK D2
+  reads the same helper.
 - **pause count, duration and location**, and the **breath-group structure** they imply — but
   **breath groups must not be inferred from ASR bracketing**, which is not a breath detector and
   misses most audible inspirations in read speech. The instrument that would do it is AIRWAY's
@@ -183,14 +201,24 @@ have established content-scoring instruments; this document does not invent them
 
 ### Two task families have standard norm-free measures and currently get nothing
 
-**`productive-vocabulary` (2,910) is a verbal fluency task.** Its standard measures need no scoring
-key: total valid items, unique valid items, and — the informative one — the **inter-response
-interval series** with its first-half versus second-half slope, which is how retrieval slowing shows
-itself. All computable from a time-aligned transcript.
+**`productive-vocabulary` (2,910) is a verbal fluency task.** What is genuinely key-free is **total
+items, unique items, and the inter-response-interval series** with its first-half versus second-half
+slope — the last being how retrieval slowing shows itself, and the informative one. All computable
+from a time-aligned transcript.
 
-**`word-color-stroop` (472) is a response-latency task.** Its measures are response latency and error
-rate, congruent versus incongruent. Transcribing it and stopping produces nothing interpretable —
-the transcript is not the dependent variable, the timing is.
+**But *valid* items are not key-free**: scoring an item as belonging to the category needs a category
+lexicon, which is not in the inventory. An earlier version listed "total and unique **valid** items"
+as needing no key; only total and unique are.
+
+**`word-color-stroop` (472) is a response-latency task, and two of its three measures need data the
+audio does not carry.** Latency is measured **from stimulus onset**, which is the app's per-item
+presentation timestamp — not in the inventory, and not recoverable from the recording. Error rate
+needs the item list, likewise absent. What the audio alone supports is the **inter-response
+interval** series, which is not the same measure.
+
+**Both inherit the ASR bias.** A recogniser drops items on impaired speakers, so an item count is
+itself impairment-correlated. **Attach recogniser agreement per item**, exactly as S3 does for
+`stimulus_mismatch`.
 
 Both are distinguishable from story recall and picture description, where declining to score is the
 right call because the instruments require content keys. These two do not.

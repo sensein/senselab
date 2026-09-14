@@ -60,11 +60,32 @@ and Praat self-calibrates neither. And `voice.f0_range_by_population` is not a g
 [`branch-voice.md`](branch-voice.md) V7 argues the derived per-recording range is the better path and
 a population prior would clip the voices most likely to be studied.
 
-### Not in any config — the genuinely undocumented ones
+### Not reachable at all — owed a code change, not a listening sample
+
+**[`praat-instrument-audit.md`](praat-instrument-audit.md) adds a fifth kind of owed**: parameters
+that are neither configurable nor reachable from any caller, whose values deviate from Praat's own
+documented guidance, and whose effect has now been measured. The 170 Hz sex bin, the CPPS `> 4` cut,
+the vuv mean period, the 330 Hz peak-search cap, `range_db_ratio`, the 5 kHz moments band, the
+formant parameters the wrapper does not forward.
+
+**These are not owed a listening sample. They are owed a code change**, and no amount of annotation
+would validate them.
+
+The audit also found that **`config-derivations.md:571-578` is factually wrong** about
+`phonation.periods_per_window: 4.5` — it cites "Praat's own documented defaults for the cc method"
+where Parselmouth and the Praat form both say 1.0. The value may still be right; the justification is
+not. **That is the first derivation found to be incorrect rather than merely thin**, and it bounds how
+much weight this document's "check the derivations first" rule can carry unchecked.
+
+And **the mandatory support count is currently unsatisfiable on the Praat path** — zero of thirteen
+functions expose one, four of them computing a count and discarding it, while `phonation/api.py`
+exposes support in five of five.
+
+### Not in any config — the genuinely undocumented literals
 
 **This is the sharpest category, and it is small.** `praat_parselmouth.py`'s syllable-nuclei
 operating points: `silence_db = -25` (`:142`), `min_dip = 4` (`:149`) dropped to `2` when the
-recording's own mean HNR is below 60 (`:155-156`), `min_pause = 0.3` (`:159`).
+recording's own mean HNR is below 60 (`:154-155`), `min_pause = 0.3` (`:159`).
 
 They are literals inside a helper, in no config and in no derivations file, and they reach every rate
 measure [`branch-speech.md`](branch-speech.md) S4 and [`branch-ddk.md`](branch-ddk.md) D2 would
@@ -118,6 +139,12 @@ Sampling uniformly spends most of the budget where the answer is obvious. **Samp
 candidate operating point** — recordings whose measured value sits close to the threshold being
 validated — and sparsely far from it. That is how a small budget pins an operating characteristic,
 and it means the sample is drawn **per operating point**, with recordings shared between draws.
+
+**Record the inclusion weight of every sampled recording.** Enriched sampling makes the sample
+unrepresentative of the corpus by design — that is the point — so a sensitivity measured on it cannot
+be converted into a corpus-level error rate without the probability each recording had of being
+drawn. Without the weights the sample validates a threshold and says nothing about how often it
+fires.
 
 ## What it does not supply
 
