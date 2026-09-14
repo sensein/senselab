@@ -66,10 +66,20 @@ only by bracketed words stays eligible.
 
 **Emits.** One `label` assertion per member, `wasDerivedFrom` the span (`airway.py:265-277`).
 
-**Owed ground truth.** `airway.labels_of_interest` ships `[Cough, Breathe]` (`default.yaml:136`)
-with no derivation. An earlier version of this document claimed the no-refits rule did not reach it
-because it is a label set rather than a threshold; that is not one of the rule's three outs, and A3
-correctly marks the same kind of object owed. **It is owed a derivation.**
+**Derived, and the exemption holds.** `airway.labels_of_interest` ships `[Cough, Breathe]`
+(`default.yaml:136`) with a written derivation at `config-derivations.md:555-557`: the two are drawn
+from HeAR's eight labels, the confirmation map `Cough -> {Cough}`, `Breathe -> {Breathing, Sigh,
+Gasp}` is recorded beside them, and the entry states in as many words — **"Vocabulary, not
+thresholds."**
+
+A round of review had me withdraw that exemption and mark the key owed, on the grounds that "a label
+set, not a threshold" is not one of the no-refits rule's three outs. It is: a value with a recorded
+derivation is the second out, and this one has had it all along. The withdrawal was made by asserting
+an absence without checking `config-derivations.md`, and it is restored here.
+
+**A3's contest set is a different case** and stays owed — not because it is the same kind of object,
+but because `config-derivations.md:566` records it as declared-but-underived while this one records
+the derivation.
 
 **And the two-label vocabulary erases clinically distinct events.** Under `[Cough, Breathe]` a
 musical breath noise surfaces as `Breathe` and a throat clear as `Cough`. Tonal breath noise, gasp
@@ -193,10 +203,12 @@ carrying breath-event durations and inter-event intervals, with the I:E measure 
 both phases were detected; and a `counts` entry `expected_event_count` carrying `found` and
 `declared`.
 
-**Owed ground truth — the operating points, not only the validation.** Envelope smoothing window,
-peak/trough criterion, and minimum cycle duration are all required for the capability to execute and
-none exists. An earlier version of this document marked only the validation owed; that was
-insufficient, since without the detection parameters the capability cannot run at all.
+**Owed — the operating points, not only the validation.** Envelope smoothing window, peak/trough
+criterion, and minimum breath-event duration are all required for the capability to execute and none
+exists. These have no config key and no entry in `config-derivations.md` because **the capability
+itself does not exist yet** — unlike `spans.k_db`, which is derived at `config-derivations.md:74`,
+`:133` and `:238` for a proposer that does. An earlier version marked only the validation owed, which
+was insufficient: without the detection parameters the capability cannot run at all.
 
 ### A6 — Cough event descriptors (**not built**)
 

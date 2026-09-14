@@ -136,29 +136,15 @@ recording: a hum, a keyboard, a passing vehicle is an observation about the room
 **Unmeasured.** How often a gap span currently decides an AIRWAY verdict (`dag.md`). That is a count
 over the corpus rather than a fit against it, so the no-refits rule permits it.
 
-### Q4 — Exact-duplicate detection (**not built; free**)
+### Q4 — Exact-duplicate detection: **moved to the corpus-level node**
 
-**Question.** Has this audio been submitted before?
+Duplicate detection compares one recording against every other, so it has no per-recording home. An
+earlier version of this document placed it here and noted the placement problem rather than resolving
+it; it is resolved now. See [`corpus-level-node.md`](corpus-level-node.md) C1.
 
-ADMIT already records `checksum_sha256` on the `recording` stream entity. Two recordings under
-different task ids with the same checksum are the same audio.
-
-**Re-submission of a previous recording under a new task id is a known failure mode of app-based
-collection at this scale**, and it invalidates any analysis that misses it — a duplicate inflates
-whatever it is counted in and, if it crosses task families, corrupts exactly the declared-family
-comparisons the corpus is scored against.
-
-**Emits.** A file-level assertion naming the other recording. **Free**: the digest exists, and the
-comparison is equality.
-
-**It is a lower bound.** A checksum catches byte-identical duplicates only; a re-encode on upload —
-different container, different bitrate, a resample — defeats it entirely. So a zero count means "no
-*exact* duplicates found", not "no duplicates". Near-duplicate detection needs an audio fingerprint,
-which is not in the inventory.
-
-**Where it runs.** Cross-recording comparison is outside the single-recording store, so this belongs
-to a corpus-level pass rather than to a per-recording QUALITY invocation. Recorded here because it is
-QUALITY-shaped, with the placement named rather than assumed.
+It remains QUALITY-shaped in kind — it reads stored records, concludes nothing normative, and answers
+a question about the recording rather than about the performance. That is why the corpus-level node
+inherits QUALITY's reading discipline rather than inventing one.
 
 ### Q5 — Acquisition consistency (**not built; depends on the declaration**)
 
@@ -239,7 +225,7 @@ performance to its instruction.
 | Q1 clip consistency | **built**; expected count zero |
 | Q2 effective bandwidth | **not built**; highest-value addition; LTAS in PREPROCESS, read here |
 | Q3 background content | **not built**; blocked on gap spans being typed background |
-| Q4 duplicate detection | **not built**; free, but corpus-level rather than per-recording |
+| Q4 duplicate detection | **moved** to [`corpus-level-node.md`](corpus-level-node.md) C1 |
 | Q5 acquisition consistency | **not built**; needs the declaration |
 | Q6 cross-branch contradiction | **not built**; in remit, not yet specifiable |
 | Q7 SQUIM description | **not built**; must stratify and must not conclude |
@@ -274,6 +260,5 @@ Withdrawing another node's reading. Any threshold fitted against declared famili
 
 ## Unresolved
 
-- Q4's placement: a corpus-level pass rather than per-recording QUALITY.
 - Q6's contradiction pairs.
 - `vocabulary.py:29`'s docstring still calls QUALITY terminal — a code follow-up.
