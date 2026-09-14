@@ -112,11 +112,15 @@ cliff is defined relative to something — a reference level, a slope in dB/octa
 criterion. All are declared as conventions per
 [`branch-conventions.md`](branch-conventions.md).
 
-**And the existing spectral measures are already band-limited in a way that hides this.**
-`praat_parselmouth.py:999` builds its spectrogram with Praat's default `maximum_frequency` of 5 kHz,
-never named in the source — so the spectral moments this covariate exists to qualify are themselves
-computed on a band that excludes the high-frequency energy carrying breathiness and turbulent noise.
-[`praat-instrument-audit.md`](praat-instrument-audit.md) finding 7.
+**And the existing spectral measures are already band-limited in a way that changes what this
+covariate is for.** `praat_parselmouth.py:999` builds its spectrogram with Praat's default
+`maximum_frequency` of 5 kHz, never named in the source
+([`praat-instrument-audit.md`](praat-instrument-audit.md) finding 7).
+
+So for those measures the **analysis** band is binding, not the capture band.
+[`branch-conventions.md`](branch-conventions.md) now declares 5 kHz as the common analysis band —
+which makes Q2 **a validity check on whether the recording supports that band**, rather than a
+covariate against an undeclared one. That is a sharper job than the previous framing gave it.
 
 **It is file-level, and that is consistent.** Bandwidth is a property of the capture chain, not of a
 span, so it is computed once and referenced by every extent. An earlier version of

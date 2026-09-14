@@ -220,7 +220,14 @@ was insufficient: without the detection parameters the capability cannot run at 
 Duration, rise time, presence of a voiced phase, and spectral distribution over a cough-labelled
 event. All are available from the envelope and from Praat's spectral machinery
 (`extract_spectral_moments`, `praat_parselmouth.py:945`), all are non-normative descriptions, and
-none is currently computed. Serves `respiration-and-cough-cough` (1,788) and `v2-hardcough` (698).
+none is currently computed.
+
+**Two instrument problems land here, both from
+[`praat-instrument-audit.md`](praat-instrument-audit.md).** The spectral moments are silently
+band-limited to **5 kHz** (finding 7) — and a cough is the most broadband event in this corpus, so
+the band excludes much of what distinguishes one cough from another. And the scalars are computed on
+the **FRCRN-enhanced** stream (finding 0), which is out of domain on a cough: a denoiser trained to
+reconstruct speech from noise has no defined behaviour on a forced expulsive event. Serves `respiration-and-cough-cough` (1,788) and `v2-hardcough` (698).
 
 **Cough counting is undefined, and the choice changes the count two- to threefold.** A bout of three
 coughs on one expiration is one cough epoch or three cough events, and nothing here says which.

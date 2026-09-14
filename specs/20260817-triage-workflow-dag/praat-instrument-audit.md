@@ -7,15 +7,136 @@ cross-reference it rather than restating it.
 Findings below were **measured with probes**, not read off the source. Where a number appears it is a
 probe result.
 
-## The clean contrast
+---
 
-Two modules measure the same quantities to opposite standards, and triage reads both.
+## Finding 0 — every Praat scalar is computed on FRCRN-enhanced audio
+
+**This reorders everything else in this document.**
+
+`preprocess.py:880` resolves the **`enhanced`** stream and hands it to
+`extract_praat_parselmouth_features_from_audios`. `preprocess.py:2338` shows what `enhanced` is:
+`enhance_audios([plain], model=model)` — ClearVoice/**FRCRN**, a deep speech-enhancement network.
+
+So all 40 scalars — CPPS, HNR, jitter, shimmer, LTAS, slope and tilt, spectral moments, formants,
+speech rate — feeding [`branch-voice.md`](branch-voice.md) V4 and V6,
+[`branch-speech.md`](branch-speech.md) S4, [`branch-ddk.md`](branch-ddk.md) D2 and
+[`branch-airway.md`](branch-airway.md) A6 are measured on the output of a generative denoiser.
+
+**Three things make this worse than anything below.**
+
+**The project already warns about exactly this, about a weaker version of it.**
+[`branch-conventions.md`](branch-conventions.md) states that *"spectral gating manufactures HNR and
+CPP values outright"* — written about **consumer** noise suppression arriving in the recording. The
+pipeline then applies a more aggressive one deliberately, and until now no document connected the two
+sentences.
+
+**The distortion is correlated with the variable of interest.** FRCRN is trained to reconstruct
+typical speech from noise. Aperiodic energy is what it removes — and **breathiness is aperiodic
+energy**. It therefore normalises dysphonic voices more than typical ones. That does not add noise to
+V4; it **inverts its sensitivity**: the measurement is most altered exactly where the finding would
+be.
+
+**It is out of domain on most of this corpus.** Sustained vowels, coughs, DDK trains and maximal
+shouts are none of them speech-in-noise. And the same `enhanced` stream feeds the PPG, hence
+`ddk.ppg_segment_rate_per_s`, hence **DDK routing**.
+
+**Consequence for the rest of this document.** Findings 1–12 are real, measured, and worth fixing —
+but they are repairs to an instrument pointed at the wrong signal. Read them as *what remains once the
+stream is correct*, not as the primary problem.
+
+---
+
+## The remediation path
+
+In this order. Steps 0 and 1 are the ones that matter; the rest are wasted before them.
+
+### Step 0 — no code, largest single gain: stop publishing the compromised scalars
+
+**62,547 stores already carry 40 Praat scalars** computed on FRCRN output through a sex-binned range.
+Four — `mean_cpp`, `std_dev_cpp`, jitter, shimmer — carry names that will be read against published
+norms, and `range_ratio_intensity_db` is dimensionally invalid (finding 6) and already exported.
+
+**Nothing anywhere in these documents said what happens to values already in stores.** They must be
+either withdrawn or flagged where they sit; leaving them addressable under norm-bearing names, with
+no marker, is the one action here that requires no code and prevents the most misreading.
+
+### Step 1 — switch the stream to `plain`
+
+One argument at `preprocess.py:880`. **Nothing downstream is defensible until it happens**, and every
+wrapper repair below is wasted work before it.
+
+### Step 2 — replace `derive_f0_range`, not the wrapper
+
+Highest leverage in the codebase: it is the shared root of the sex bin (finding 1) and the pulse
+exclusions (finding 8), it contaminates **both** modules (see the corrected contrast below), and it is
+roughly fifteen lines.
+
+Narrow per recording from the wide search — robust percentiles of the wide-search contour **in
+log-Hz**, with declared margins. Keep the typed absence. And **distinguish the crash return from
+genuine absence**, which it currently conflates (below).
+
+### Step 3 — build V4 on `phonation/api.py`
+
+**Compute jitter and shimmer directly from the `PeriodMark` sequence.** Successive period differences
+and successive peak-amplitude differences *are* jitter and shimmer.
+
+That yields the variant name, the support count, and — decisively — **the same point process for the
+value and for its validity qualifier**, which V4 requires and which the current split cannot deliver
+(finding 8).
+
+### Step 4 — implement CPPS directly, roughly thirty lines
+
+Log-power spectrum → cepstrum → robust regression over the quefrency range → peak prominence,
+frame-wise, returning the frame count.
+
+This removes the interval gating, so it works on the aperiodic voices that motivated promoting CPPS
+in the first place; sets the quefrency band from the recording's **own derived F0** rather than a
+fixed 330 Hz cap (finding 4); has **no value cut** (finding 2); is **duration-weighted** rather than
+unweighted; and carries a support count (finding 5). Its remaining parameters are declared
+conventions, which [`branch-conventions.md`](branch-conventions.md) permits.
+
+### Step 5 — report the unmeasurable fraction as a first-class measurement
+
+Jitter, shimmer and CPPS all return NaN at the disordered end. So a corpus-level distribution of any
+of them reads **conspicuously healthy** — and the reason is that **the disordered cases are missing,
+not extreme.**
+
+**"Proportion of recordings on which the point process placed no pulses", per group**, is
+parameter-free, needs no norm and no listening sample, and is arguably a better dysphonia indicator
+than the values that survive. It converts the instrument's failure mode into the measurement.
+
+---
+
+## The contrast, and its limit
+
+Two modules measure the same quantities to different standards, and triage reads both.
 
 | | `tasks/phonation/api.py` | `tasks/features_extraction/praat_parselmouth.py` |
 | --- | --- | --- |
-| undeclared literals | **zero** | roughly sixty |
+| undeclared literals **in the body** | **zero** | roughly sixty |
 | config-reachable parameters | every Praat parameter, as a required keyword wired to a config key with a written derivation | **three** |
 | support counts exposed | **five of five functions** | **zero of thirteen** |
+
+**But `phonation/api.py` is not clean at its input, and an earlier version of this table implied it
+was.** `phonation/api.py:62` calls `extract_pitch_values` and returns its two hardcoded pairs — so
+**`derive_f0_range` *is* the 170 Hz bin**, and `hnr_track`, `period_marks` and `formant_track` all
+document their `f0_min_hz` as *"read it from `derive_f0_range`"*.
+
+The module therefore **imports the bin wholesale**, along with everything that follows from it: the
+1.67× window discontinuity in `hnr_track`, the sub-60 Hz pulse exclusion in `period_marks`, and the
+ceiling truncation in `f0_track`. The contrast is true of the module's **body** and false of its
+**input**.
+
+**Two more defects at that entry point**, both in the module credited with typed absence:
+
+- `extract_pitch_values` returns `{nan, nan}` from a **bare `except Exception`**, so
+  `F0RangeUnavailable` fires on a parselmouth *crash* as readily as on genuinely unvoiced audio —
+  **the identical crash/absence conflation this audit calls out for CPPS at finding 2.**
+- The ±2 SD trim is computed **in linear Hz over the wide 50–600 search**, so octave errors
+  contaminate the very mean that selects the bin.
+
+**This is why step 2 replaces `derive_f0_range` rather than the wrapper**: it is the shared root, and
+fixing only `praat_parselmouth.py` would leave the clean path carrying the same bin.
 
 ## The route into triage
 
@@ -59,7 +180,19 @@ Two consequences:
   crash return at `:821`**. A severely dysphonic recording and a crashed one are indistinguishable in
   the corpus.
 - For partially dysphonic recordings the reported mean is over **only the intervals that exceeded
-  4** — selection on the outcome variable.
+  4** — selection on the dependent variable. **No covariate recovers an estimate from that**, and with
+  support counts unavailable (finding 5) a reader cannot even see how much was deleted. Note that
+  4 dB sits *inside* the published normal/dysphonic decision region, not below it.
+
+**Three further defects in the same function:**
+
+- **CPPS is averaged unweighted across intervals**, so a 3 s interval and a 60 ms interval count
+  equally — and finding 3's vuv inflation manufactures many short padded intervals on fragmented
+  speech, so a dysarthric recording's mean is dominated by short, badly-estimated segments.
+- **`std_dev_cpp` is a between-interval standard deviation**, not the within-recording CPPS SD that
+  published work reports — carrying a name that will be read as the published quantity.
+- **`voicing_threshold=0.3` against Praat's 0.45** is *lower*, labelling more marginal frames voiced.
+  It **compounds** finding 3's inflation rather than being independent of it.
 
 ### 3. The vuv mean period is 10× Praat's default and violates Praat's own constraint
 
@@ -85,8 +218,13 @@ and disappear entirely.
 
 ### 5. Support counts: zero of thirteen
 
-Not one function in `praat_parselmouth.py` returns a frame, cycle or interval count. `:759`, `:804`,
-`:896` and `:1036-1039` each **compute one and discard it**.
+Not one function in `praat_parselmouth.py` returns a frame, cycle or interval count. Three
+**compute one and discard it**: `:759` (`n_intervals = ... "Get number of rows"`), `:896`
+(`n = ... "Get number of points"`) and `:1005` (`num_steps = spectrogram.nx`).
+
+An earlier version of this finding also cited `:804` and `:1036-1039`; neither computes a count —
+`:804` is `if cpp_list:`, a truthiness test, and `len(cpp_list)` is **never computed anywhere**, while
+`:1036-1039` are four `np.mean` calls. The finding stands: **no function returns a support count.**
 
 **So [`branch-conventions.md`](branch-conventions.md)'s mandatory support count is satisfiable on the
 `phonation/api.py` path and impossible on the Praat path** — and findings 1–4 are unauditable after
@@ -161,9 +299,16 @@ own `Get mean` **excludes** the sentinels, so it is *not* confounded with pause 
 `config-derivations.md:571-578` documents `phonation.periods_per_window: 4.5` as *"Praat's own
 documented defaults for the cc method"*. **Parselmouth 0.4.7 and the Praat form both say 1.0.**
 
-The value may still be the right choice; the justification for it is not correct. **This is the first
-derivation found to be factually wrong rather than merely thin**, which matters for how much weight
-`config-derivations.md` can carry unchecked.
+The value may still be the right choice; the justification for it is not correct.
+
+**And it is not the only one.** `config-derivations.md:74` says *"both `spans.k_db` values"* —
+**plural**, stale phrasing from when two `k_db` keys existed, which now contradicts *"one shared
+value"* in the live derivation at `:106-120`. That is a second instance of the same class.
+
+**So the derivations file carries factually wrong and stale entries as well as thin ones**, which
+bounds how much weight it can take unchecked — including from
+[`branch-listening-sample.md`](branch-listening-sample.md), whose whole function is "check what is
+documented before calling something owed".
 
 ### 12. joblib caches a closure
 
@@ -182,7 +327,7 @@ voiced fragments.
 
 **Its `to_pitch_ac` call at `:290` differs from Praat on six parameters** — floor 30 vs 75,
 candidates 4 vs 15, voicing_threshold 0.25 vs 0.45, voiced_unvoiced_cost 0.25 vs 0.14, ceiling 450 vs
-600 — and **the code says so itself**, across five consecutive comment lines at `:294-304`:
+600 — and **the code says so itself**, in five comment admissions at `:294`, `:297`, `:300`, `:303` and `:304`:
 
 > `# Key Hyperparamter are different to praat recommended - can't find a reason for this`
 > `# max_number_of_candidates: Positive[int] = 15 (can't find a reason for this value being lower)`
@@ -200,10 +345,11 @@ convention where child is 8000.
 
 | finding | affects |
 | --- | --- |
+| **0 — the enhanced stream** | **every Praat-derived measurement in the graph**: `branch-voice.md` V4 and V6, `branch-speech.md` S4, `branch-ddk.md` D2 and its routing gate, `branch-airway.md` A6 |
 | 1, 8 | [`branch-voice.md`](branch-voice.md) V3, V4, V7 |
 | 2, 3, 4, 5 | `branch-voice.md` V4 — CPPS and its support |
 | 6 | `branch-voice.md` V6 |
-| 7 | `branch-voice.md` V4; [`branch-quality.md`](branch-quality.md) Q2 |
+| 7 | `branch-voice.md` V4; [`branch-quality.md`](branch-quality.md) Q2; **[`branch-airway.md`](branch-airway.md) A6**, which reads `extract_spectral_moments` for cough descriptors — and coughs are the most broadband events in the corpus |
 | 9, and the `extract_speech_rate` deviations | [`branch-speech.md`](branch-speech.md) S4; [`branch-ddk.md`](branch-ddk.md) D2 |
 | 10 | `branch-voice.md` V1, V4 |
 | 5, 11 | [`branch-listening-sample.md`](branch-listening-sample.md) |

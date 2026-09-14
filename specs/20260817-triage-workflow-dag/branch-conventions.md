@@ -99,12 +99,22 @@ dB, jitter and shimmer in percent, F0 SD in semitones, and maximum phonation tim
 that it is not comparable to published norms collected under a different measurement convention, on
 different equipment.
 
-### One spectral analysis band, declared
+### One spectral analysis band, declared — and it is 5 kHz
 
 Every spectral measure — CPP, slope and tilt, moments, HNR, formants — is computed over a **declared
 common band**, and any value whose recording does not support that band is marked **non-comparable**
 rather than reported. A bandwidth covariate lets a reader *notice* mixed bandwidths; it does not make
 the numbers poolable.
+
+**The band is 5 kHz, because that is already what is in force.** An earlier version mandated a common
+band and declared none — while `praat_parselmouth.py:999` silently limits the spectral moments to
+Praat's 5 kHz default and the cepstrogram is likewise bounded. So for those measures the **analysis**
+band, not the capture band, is binding, and [`branch-quality.md`](branch-quality.md) Q2's covariate
+was qualifying nothing.
+
+Declaring 5 kHz satisfies the rule and turns Q2's effective bandwidth into what it should be: **a
+validity check on whether the recording supports the analysis band**, rather than a covariate against
+an undeclared one.
 
 ### The octave-jump count means three different things
 
@@ -205,6 +215,32 @@ offline recompute over finished stores (`scripts/analyze_routing_evidence.py:158
 branch-proposed spans into `all.duration_*`, `all.rate_per_s` and `all.duty_fraction`.
 
 SPEECH already mints `family: "speech"` spans today, so the exposure predates the contract.
+
+### Non-comparable beats a covariate, and steadiness is the harder case
+
+This document marks a value **non-comparable** rather than reporting it when the spectral band is
+unsupported. **Perturbation over non-steady material is the more severe invalidity and currently gets
+only a covariate.**
+
+VOICE routes 22,277 recordings against 8,306 declaring a voice family, so perturbation over connected
+speech is the common case, not the edge case. Either **steadiness belongs in the value's name** — so
+the number cannot be read without it — or unsteady-extent perturbation is marked **non-comparable**,
+as an unsupported band would be. A covariate a reader may ignore is not equivalent to a value they
+cannot misread.
+
+### An aggregate must distinguish absent from normal
+
+The individual capabilities handle absence correctly: an unavailable measurement is an absence, never
+a negative. **Nothing in the report or verdict design requires an aggregate to preserve that.**
+
+It matters most where absence is not random. Jitter, shimmer and CPPS all return NaN at the disordered
+end, so **a corpus distribution reads conspicuously healthy because the disordered cases are missing,
+not because they are absent from the population** — see
+[`praat-instrument-audit.md`](praat-instrument-audit.md) step 5, which turns that failure mode into a
+measurement.
+
+**So any aggregate — a mean, a distribution, a rate, a figure — reports the count it was computed
+over and the count that was unavailable**, and a consumer that cannot show both should show neither.
 
 ## Some capabilities are not per-recording
 
