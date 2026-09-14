@@ -71,22 +71,40 @@
 
 **The bin was accidentally robust here**: a 60 Hz trimmed mean selects `(60, 250)`, which still contains 120 Hz. So a one-pass narrowing would be a **regression** on this configuration — and 60 Hz mains against a ~120 Hz male voice, or 50 Hz against ~100 Hz, is a common clinical recording. It interacts adversely with Task 5: FRCRN suppresses stationary low-frequency noise and `plain` does not, so moving to `plain` makes the hum case *more* frequent in the same pass that introduces the vulnerability.
 
-**An earlier draft of this plan proposed a second-pass median comparison, and it cannot fire.** Re-running at the narrowed range and widening back when the two medians differ by an octave is unreachable by construction: the narrowed range is `[p5/1.5, p95·1.5]` with the first median near its centre, so **the second median can deviate by at most a factor of 1.5, which is 0.585 octave.** A `>= 1.0` octave test never triggers. Measured, with Task 1 implemented: the hum case returns `pitch_range_fell_back = 0.0` and the range `[50.0, 90.0]` unchanged, and bimodal 120/240 gives `[80, 360]` with m₂ = 120.6, bimodal 90/400 gives `[60, 600]` with m₂ = 399.7. Any threshold small enough to catch the hum case would be a fitted operating point, so "introduces no fitted value" and "closes the regression" cannot both hold with that mechanism.
+**An earlier draft of this plan proposed a second-pass median comparison, and it cannot fire.** Re-running at the narrowed range and widening back when the two medians differ by an octave is unreachable by construction: the narrowed range is `[p5/1.5, p95·1.5]` with the first median near its centre, so **the second median can deviate by at most a factor of 1.5, which is 0.585 octave.** Measured with Task 1 implemented, it **fired in 0 of 120 conditions**, and it cannot fire at all when `p95 < 2·search_floor/1.5` — **66.7 Hz at the current floor, which both mains frequencies sit below.** Any threshold small enough to catch the hum case would be a fitted operating point, so "introduces no fitted value" and "closes the regression" cannot both hold with that mechanism. It is recorded here so it is not re-proposed.
 
-**The rule that works applies the octave to the right comparison.** The hum signature is not that a median moved — it is that **the whole contour is pinned within an octave of the search floor**. So: after the wide pass, if **p95 is below twice the search floor**, the contour is pinned at the bottom of the search range, the narrowing is not trustworthy, and the **wide search range is used instead**. One octave above the search floor is a natural unit applied where it can actually fire.
+**The rule that works is asymmetric, and two of its three parts are measured rather than cited.**
 
-Measured on every case, with the wide pass at `to_pitch_ac(0.005, 50.0, pitch_ceiling=600.0)`:
+1. **Floor: `max(search_floor, p5 / 1.5)`** — senselab's convention.
+2. **Ceiling: `min(search_ceiling, 2.5 × q3)`** — **Hirst 2011's coefficient**, and the one cited part. Hirst diagnoses this exact failure — *"if the Pitch Floor is too low then we are likely to get octave errors […] Setting the Pitch Ceiling too high does not, however, seem to lead to any systematic errors"* — and fixes it by widening the ceiling coefficient for **every** recording rather than detecting a failure. That asymmetry is his empirical finding, and it is why the ceiling may be generous while the floor may not.
+3. **A pinned-contour fallback**: if **p95 falls below twice the search floor** the whole contour sits within an octave of the bottom of the search range, the narrowing is untrustworthy, and the **wide search range is used instead**. This is **senselab's own** — see A1 below.
 
-| source | p95 | fires? | resulting range |
-| --- | --- | --- | --- |
-| normal 120 Hz buzz | 120.00 | no | `[80.0, 180.0]` |
-| **120 Hz + 60 Hz hum at −22 dB** | **60.00** | **yes** | **`[50.0, 600.0]` — contains 120** |
-| 120 Hz at 0 dB broadband SNR | 122.22 | no | `[78.6, 183.3]` — contains 120 |
-| 55 Hz fry | 55.01 | yes | `[50.0, 600.0]` — wide, and safe |
-| 45 Hz fry | — | 0 frames | absence, unchanged |
-| glide 100→400 | 366.33 | no | `[72.8, 549.5]` |
-| child 300 Hz | 300.00 | no | `[200.0, 450.0]` |
-| 420 Hz | 420.00 | no | `[280.0, 600.0]` |
+**Why all three, measured.** Neither of the first two alone is sufficient, and the failures are on different material:
+
+| source | true F0 | Hirst quartiles alone | fallback alone | all three |
+| --- | --- | --- | --- | --- |
+| 330 Hz + strong 55 Hz capture | 330 | `[50.0, 137.5]` **miss** | fires → wide | **OK** |
+| 440 Hz + strong 60 Hz capture | 440 | `[50.0, 157.1]` **miss** | fires → wide | **OK** |
+| 220 Hz + 120 Hz hum (2nd harmonic) | 220 | `[82.6, 275.2]` OK | does not fire → `[73.4, 165.1]` **miss** | **OK** |
+| glide 100→400, low end | 100 | `[107.2, 600]` **miss** | — | **OK** at `[72.8, 600]` |
+
+Hirst's quartile **floor** (`0.75 × q1`) is what misses the glide's 100 Hz start, which is why part 1 keeps the p5 base. The full rule is **11 of 11** on the adversarial set:
+
+With the wide pass at `to_pitch_ac(0.005, 50.0, pitch_ceiling=600.0)`:
+
+| source | median | fell back? | range | contains F0 |
+| --- | --- | --- | --- | --- |
+| 330 Hz + strong 55 Hz | 55.0 | yes | `[50.0, 600.0]` | ✓ |
+| 440 Hz + strong 60 Hz | 62.9 | yes | `[50.0, 600.0]` | ✓ |
+| 120 Hz + 60 Hz hum −22 dB | 60.0 | yes | `[50.0, 600.0]` | ✓ |
+| 220 Hz + 120 Hz hum | 110.1 | no | `[73.4, 275.2]` | ✓ |
+| male 120 Hz clean | 120.0 | no | `[80.0, 300.0]` | ✓ |
+| female 220 Hz clean | 220.0 | no | `[146.7, 550.0]` | ✓ |
+| child 420 Hz clean | 420.0 | no | `[280.0, 600.0]` | ✓ |
+| 55 Hz fry | 55.0 | yes | `[50.0, 600.0]` | ✓ |
+| glide 100→400 | 200.0 | no | `[72.8, 600.0]` | ✓ both ends |
+| 120 Hz at 0 dB SNR | 120.1 | no | `[78.6, 302.9]` | ✓ |
+| 45 Hz fry | — | 0 frames | absence | unchanged |
 
 The 55 Hz fry falling back to the wide range is the right outcome: contamination pushing the range **wider** is the safe direction, and a wide range for a fry voice costs octave-error robustness, not the voice. Verified separately that `extract_jitter` and `extract_shimmer` return finite values at floor 50, so the 55 Hz test in Step 3 still passes.
 
@@ -250,12 +268,14 @@ Replace **from `pitch_values = pitch_values[pitch_values != 0]` (`:420`) through
         if pitch_values.size == 0:
             return _no_pitch_range()
 
-        low, high = np.percentile(pitch_values, [PITCH_RANGE_LOW_PERCENTILE, PITCH_RANGE_HIGH_PERCENTILE])
-        if float(high) < PITCH_PINNED_OCTAVES * float(search_floor_hz):
+        low, upper_quartile, high = np.percentile(
+            pitch_values, [PITCH_FLOOR_PERCENTILE, PITCH_CEILING_QUARTILE, PITCH_PINNED_PERCENTILE]
+        )
+        if float(high) < PITCH_PINNED_OCTAVE_RATIO * float(search_floor_hz):
             floor, ceiling, fell_back = float(search_floor_hz), float(search_ceiling_hz), 1.0
         else:
-            floor = max(float(search_floor_hz), float(low) / PITCH_RANGE_MARGIN)
-            ceiling = min(float(search_ceiling_hz), float(high) * PITCH_RANGE_MARGIN)
+            floor = max(float(search_floor_hz), float(low) / PITCH_FLOOR_DIVISOR)
+            ceiling = min(float(search_ceiling_hz), float(upper_quartile) * PITCH_CEILING_MULTIPLIER)
             fell_back = 0.0
 
         return {
@@ -288,11 +308,18 @@ The `except` block's return at `:445` becomes `return _no_pitch_range(failed=1.0
 Add beside the module's other constants:
 
 ```python
-PITCH_RANGE_LOW_PERCENTILE = 5.0
-PITCH_RANGE_HIGH_PERCENTILE = 95.0
-PITCH_RANGE_MARGIN = 1.5
-PITCH_PINNED_OCTAVES = 2.0
+PITCH_FLOOR_PERCENTILE = 5.0
+PITCH_FLOOR_DIVISOR = 1.5          # a ratio, not an octave span
+PITCH_CEILING_QUARTILE = 75.0
+PITCH_CEILING_MULTIPLIER = 2.5     # a ratio, not an octave span
+PITCH_PINNED_PERCENTILE = 95.0
+PITCH_PINNED_OCTAVE_RATIO = 2.0    # one octave above the search floor
 ```
+
+**Name these carefully — Praat's own ecosystem conflates exactly this.** Hirst's `detect_f0.praat` uses
+`maximum_pitch_span = 1.5` meaning **1.5 octaves above the floor**, while his `automatic_min_max_f0.praat`
+uses `1.5` as a **q3 multiplier**. Two different quantities, one literal. The names above say which each
+is, and no bare `1.5` or `2.0` should appear in the body.
 
 **There is no trim, and that is deliberate.** An earlier draft kept a log-Hz MAD trim before the percentiles. Two reasons it is gone. It does not do the job it was added for — an octave is 1.0 in log₂ and a bimodal contour widens the MAD, so a 2-MAD window keeps *both* modes and the 95th percentile still lands in the doubled one; the refinement above is what actually catches that. And it corrupts `pitch_frames`: measured on a clean 110 Hz buzz, the trim discarded **36 of 188** voiced frames, so the percentiles were of the post-trim set (about p7/p93) and `pitch_frames` was not the voiced-frame count its consumers would read it as. The 5th/95th percentiles already trim 10%.
 
@@ -311,11 +338,23 @@ Expected: PASS, all six.
 
 Add to `praat-instrument-audit.md` under step 2:
 
-- **Cite Hirst for the two-pass structure, and nothing else.** Hirst's rule is a first pass at **50–700 Hz**, then `floor = 0.75 × q1` and `ceiling = 1.5 × q3` — **the quartiles, with a deliberately asymmetric pair**. De Looze & Hirst's variant uses q15/q65. This plan's 5th/95th with a symmetric ±1.5 is none of those, and its first pass is 50–600. Write that the **structure** is Hirst's two-pass and the **parameterisation is a senselab convention**. A claim of "Hirst as conventionally parameterised" is checkable in five minutes and would be the second wrong derivation in this document family.
-- **Say why the numbers are deliberately wider.** ±1.5 on p5/p95 is ±7.02 semitones and yields a range strictly *wider* than Hirst's at both ends. That is the right direction for a corpus enriched for pathological voices, where a narrow range is the failure that matters. Record the reason, not just the values.
-- **The pinned-contour fallback is this project's own, and must be cited as such.** De Looze & Hirst's variant iterates the quantile narrowing to convergence; **it has no widen-back or fallback step**, so citing them for this would be the second wrong derivation in this family — which this plan twice warns against. Record the rule, the measured table above, and that one octave above the search floor is a natural unit rather than a fitted cut. An earlier draft proposed a second-pass median test and it is provably unreachable (max deviation 0.585 octave against a 1.0 test); record that too, so nobody re-proposes it.
-- **There is no trim, and say so.** An earlier draft carried a log-Hz MAD trim; it is removed because it does not remove an octave-split mode (an octave is 1.0 in log₂ and a bimodal contour widens the MAD, so both modes survive) and because it corrupted `pitch_frames` — measured, 36 of 188 voiced frames discarded on a clean 110 Hz buzz, making the percentiles p7/p93 of the original set. Octave robustness comes from the refinement, not from a trim.
-- The range ratio widens: the bin always gave 4.17 or 5.0, the narrowing measured **7.5** on a glide and can exceed 11. `voice.f0_range_ratio_max` is null so nothing fires, but `voice.py:77-80` **raises** rather than flags once it is set. Record it.
+- **Cite Hirst 2011 for two things and nothing else: the two-pass structure, and the `2.5 × q3` ceiling coefficient.** His rule is a first pass at **50–700 Hz**, then `floor = 0.75 × q1` and `ceiling = 2.5 × q3` — quartiles, with a deliberate asymmetry, and the asymmetry is an empirical finding worth quoting: *"if the Pitch Floor is too low then we are likely to get octave errors […] Setting the Pitch Ceiling too high does not, however, seem to lead to any systematic errors."* That is why the ceiling coefficient is adopted verbatim and the floor is not.
+
+- **The `p5 / 1.5` floor and the pinned-contour fallback are senselab's own. Cite nobody for them.** Checked across De Looze & Hirst 2008, De Looze & Rauzy 2009, De Looze & Hirst 2010, De Looze 2010 (thesis), De Looze & Hirst 2014/2014b, Hirst 2007, Hirst 2011, Hirst & De Looze 2021, and four shipped implementations including Hirst's own Momel-INTSINT plugin: **no rule of the form "compare the second-pass median against the first and widen back" exists in any of them.** Both words of the earlier attribution were wrong — the authors' own term is **"two-pass"**, not "iterative" (Hirst 2011 §2.1; Hirst & De Looze 2021 §13.3.4), and none of the four implementations has a loop in the estimation path. Octave errors appear in their papers only as *motivation* for narrowing (DL&H 2008 §2.2, DL&H 2010 §3.1), never as a test applied to the result; Hirst's `detect_f0.praat` computes the second-pass median, writes it to a `.median_f0` file, and never compares it to anything. Record the eleven-case table as the evidence for both.
+
+- **The only "revert to wide" in the lineage is a degenerate-input guard**, not an octave test: Praat Vocal Toolkit's `minmaxf0.praat` reverts to 40/600 `if voicedframes = 0` — which `_no_pitch_range()` already does on the same trigger.
+
+- **Record the alternative not taken.** Hirst's remedy is the ceiling coefficient *alone*, applied unconditionally with no detector. Measured here it is **not sufficient**: it misses deep fundamental capture (330 Hz under a strong 55 Hz component gives `[50.0, 137.5]`; 440 Hz under 60 Hz gives `[50.0, 157.1]`), which is what the fallback exists for. And his quartile **floor** misses a glide's 100 Hz start at `0.75 × q1 = 107.2`, which is why the floor keeps a p5 base. Both measurements are in the table; state them so the choice reads as measured rather than preferred.
+
+- **Say why the numbers are deliberately wider than Hirst's at the floor.** `p5 / 1.5` is −7.02 semitones off the 5th percentile and yields a floor below `0.75 × q1` on every source measured. Wider is the right direction for a corpus enriched for pathological voices, where a range that excludes the voice is the failure that matters.
+
+- **The q15/q65 pair needs its coefficients and the right year.** It is real but never bare: `q15 × 0.83` and `q65 × 1.92`, fitted in De Looze's **2010** thesis against hand-annotated extrema over 28 speakers and stated in De Looze & Hirst **2010** §3.1. The **2008** paper concluded q25/q75 — q15 appears there only as a *rejected* floor candidate at coefficient 0.78, and q65 not at all. Do not write "q15/q65 (2008)".
+
+- **Residual capture is owed, and that is the state of the art rather than a gap in this work.** The fallback catches capture landing within an octave of the search floor. It does **not** catch second-harmonic capture against a higher voice: measured, a 220 Hz voice under a 120 Hz-dominant hum gives p95 ≈ 110 against 2 × 50 = 100, so the fallback does not fire — Hirst's ceiling coefficient rescues that case here, but a deeper version of it would not be caught by either part. Two citations make the residual a positive finding: **Edlund & Heldner 2006** (`/nailon/`), whose pitch-range "reality checks" section reads *"Correction for octave errors is planned to go here as well, but not currently implemented"*; and **Portnova et al. 2025**, *JSLHR* 68:3568–3582, which states this exact failure mode — *"F0 values are halved (i.e., the tracking of subharmonic frequencies) […] an analysis of F0 range would be based solely on these errors"* — reviews the two-pass as the available automatic option, and resolves it by **manual** labelling, proposing no automatic detector. **No published F0-range estimator corrects first-pass low-octave capture.** Mark it owed a measurement on real recordings.
+
+- **Record the search-floor question rather than deciding it silently.** senselab uses 50 Hz. Published first passes: Hirst 2007 → 75; De Looze & Hirst 2008 and Hirst's shipped code → 60; De Looze 2010 and DL&H 2010 → 60; Hirst 2011 → 50; Hirst & De Looze 2021 → "e.g. 60"; **Prosogram (Mertens 2004, verified in `prosomain.praat` 3.05) → 65**, which excludes both mains fundamentals incidentally, with a second pass of median −12/+18 semitones — a 30-semitone window wide enough to survive a one-octave-low median, i.e. structural tolerance rather than correction. Measured here, raising the floor to 60 makes the 220 Hz-plus-120 Hz-hum case fire the fallback and land at `[60, 600]`. Two caveats to write down rather than act on: raising the floor **trades away the 45–60 Hz creak cases** the plan already documents as bounded by the declared search range, and per the residual above it is **only partial**, since the second harmonic survives any floor.
+
+- The range ratio widens: the bin always gave 4.17 or 5.0, and the measured ranges here reach 12 (`[50, 600]`). `voice.f0_range_ratio_max` is null so nothing fires, but `voice.py:77-80` **raises** rather than flags once it is set. Record it.
 
 - [ ] **Step 9: Lint and commit**
 
@@ -928,13 +967,19 @@ git add -A && git commit -m "docs(audit): steps 1, 1b and 2 landed; the corpus r
 returns `[50, 90]` for a 120 Hz voice under a 60 Hz hum — a range excluding the speaker — where the bin
 returned `(60, 250)`, which contains it. **The pinned-contour fallback in Task 1 Step 5 closes it**: if p95
 falls below twice the search floor the contour is at the bottom of the search range and the wide range is
-used instead. Measured on eight sources, it fires on the hum and the 55 Hz fry and on nothing else.
+used instead. Measured **11 of 11** on an adversarial set: a p5-based floor, Hirst 2011's `2.5 × q3` ceiling coefficient,
+and a pinned-contour fallback when p95 falls below twice the search floor. Neither of the first two alone
+suffices, and their failures are on different material — Hirst's quartiles alone miss deep fundamental
+capture, the fallback alone misses second-harmonic capture, and Hirst's quartile *floor* misses a glide's
+100 Hz start. Only the ceiling coefficient carries a citation; the other two parts are senselab's own and
+say so.
 
-Two earlier attempts at this are recorded in the plan so they are not re-proposed. A second-pass median
-comparison **cannot fire** — the narrowed range is `[p5/1.5, p95·1.5]`, so the second median moves at most
-0.585 octave against a 1.0 test — and its snippet also called `get_sound` on an object that function does not
-accept, which the outer `except` would have swallowed into a corpus-wide `F0RangeFailed`. Both were found by
-implementing Task 1 and running its tests rather than by reading it.
+Two earlier attempts are recorded so they are not re-proposed. A second-pass median comparison **cannot
+fire** — it fired in 0 of 120 conditions, and cannot fire at all below 66.7 Hz, which both mains
+frequencies sit under — and its snippet also called `get_sound` on an object that function does not accept,
+which the outer `except` would have swallowed into a corpus-wide `F0RangeFailed`. Both were found by
+implementing Task 1 and running its tests, not by reading it. The residual — deep second-harmonic capture —
+is owed, and **no published F0-range estimator corrects it**, which two citations in Task 1 Step 8 establish.
 
 **Every test the changes break is named.** `phonation_test.py:112-119`; `preprocess_test.py:2172`, `:2193`, `:2194`, `:2204-2206`, `:2226`, `:2235-2236`, `:2238`, `:2289-2305`; `extend_ppg_praat_test.py:61-97` (the fixture, which breaks the whole module). The two `signal: enhanced` fixtures in `live_evidence_test.py` and `routing_analysis_test.py` are named as **not** breaking, with the reason.
 
