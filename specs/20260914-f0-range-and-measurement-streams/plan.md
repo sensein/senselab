@@ -2,19 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Measure the right signal with a range derived from it — replace the binary sex-typed F0 range with a per-recording narrowing, and move the Praat scalars and the phonetic posteriorgram off the speech-enhanced stream onto the unprocessed one.
+**Goal:** Measure the right signal with a range derived from it — replace the binary sex-typed F0 range with a per-recording narrowing, and move the Praat scalars off the speech-enhanced stream onto the unprocessed one.
 
-**Architecture:** Three independent defects share one consequence. `extract_pitch_values` picks one of two hardcoded (floor, ceiling) pairs from a threshold on trimmed mean F0, so every measure downstream of `derive_f0_range` carries a step discontinuity at a sex-typed boundary. Separately, `preprocess.py` hands the FRCRN-enhanced stream to both the Praat extractor and the PPG worker, so forty acoustic scalars and one routing gate are computed on a denoiser's output. The fix is one function replacement and two stream changes, plus a re-run path in the extend driver that currently skips every store already holding the measurements.
+**Architecture:** Two independent defects share one consequence. `extract_pitch_values` picks one of two hardcoded (floor, ceiling) pairs from a threshold on trimmed mean F0, so every measure downstream of `derive_f0_range` carries a step discontinuity at a sex-typed boundary. Separately, `preprocess.py` hands the FRCRN-enhanced stream to the Praat extractor, so forty acoustic scalars are computed on a denoiser's output. The fix is one function replacement and one stream change, plus a re-run path in the extend driver that currently skips every store already holding the measurements.
+
+**The posteriorgram does not move.** Audit step 1b was **withdrawn by the owner on 2026-09-14**: the PPG is a trained phoneme classifier, so `enhanced` is the stream closest to its training domain and is its defensible default. The reasoning is in the audit at step 1b. Everything this plan said about `ppg_input`, `write_ppg_posteriorgram` and DDK routing is removed accordingly, and **the forced corpus pass is no longer GPU-bearing and changes no routing**.
 
 **Tech Stack:** Python 3.12, `uv`, pytest, numpy, parselmouth (Praat bindings), `ProvStore` (append-only W3C PROV-shaped provenance), Slurm array jobs on ORCD for corpus passes.
 
-**Spec:** `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` — findings 0, 1 and 8, and remediation steps 1, 1b and 2. Branch consumers: `specs/20260817-triage-workflow-dag/branch-voice.md` (V1, V4), `branch-ddk.md` (D1, D2), `branch-quality.md` (Q2). The contract is `specs/20260913-branch-contract-and-hints/design.md`.
+**Spec:** `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` — findings 0, 1 and 8, and remediation steps 1 and 2 (**step 1b is withdrawn**). Branch consumers: `specs/20260817-triage-workflow-dag/branch-voice.md` (V1, V4), `branch-ddk.md` (D1, D2), `branch-quality.md` (Q2). The contract is `specs/20260913-branch-contract-and-hints/design.md`.
 
 ## Global Constraints
 
 - **No threshold may be fitted against this corpus.** Its only labels are declared task names, so fitting against them fits the declaration. Every new value must be parameter-free, or a declared convention with its reasoning recorded in `specs/`, or marked owed. The six kinds of owed are in `specs/20260817-triage-workflow-dag/branch-listening-sample.md`.
 - Every stream is resampled to **16 kHz mono** before any measurement (`resample.target_hz: 16000`, `src/senselab/audio/workflows/triage/data/config/default.yaml:19`).
-- **Pre-alpha: rename and replace outright.** No parallel fields, no aliases, no deprecation shims. This governs Task 5's `enhanced_id` parameter rename.
+- **Pre-alpha: rename and replace outright.** No parallel fields, no aliases, no deprecation shims. Nothing in this plan renames a public parameter any more — the `enhanced_id` rename went with the withdrawn step 1b.
 - **Rationale goes in `specs/`, never in code comments or docstrings.**
 - Google-style docstrings, line length 120, full type hints, `from __future__ import annotations`.
 - All Python through `uv run`. **Never `pytest -n auto`** — run the directory you changed.
@@ -23,7 +25,9 @@
 
 ## Scope
 
-**In scope:** audit step 2 (replace `derive_f0_range`, and make a crash distinguishable from an absence), step 1 (Praat scalars onto `plain`), step 1b (PPG onto `plain`), and the extend driver's re-run path.
+**In scope:** audit step 2 (replace `derive_f0_range`, and make a crash distinguishable from an absence), step 1 (Praat scalars onto `plain`), and the extend driver's re-run path.
+
+**Withdrawn, not deferred:** step 1b. It is not owed a later plan.
 
 **Explicitly out of scope, each getting its own plan:** the CPPS reimplementation (step 4); jitter and shimmer from the `PeriodMark` sequence (step 3); withholding the scalars already written into 62,547 stores (step 0); instrument coverage per instrument (step 5); **step 2b — tracking F0 on the same signal the range was derived on** (`preprocess.py:941` derives on `plain`, `:951` tracks on `sharp`); the owed widening of `voice.f0_search_range_hz`'s 600 Hz ceiling against the CPPS band's 700 Hz; every branch capability; the SCREEN merge; and the contract's nine pieces.
 
@@ -37,23 +41,25 @@
 | --- | --- |
 | `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py` | `extract_pitch_values` narrows per recording from robust **linear-Hz** percentiles (`np.percentile` on the raw contour; nothing takes a log), and **reports a failed analysis as data** rather than as an indistinguishable NaN. Modify `:358-446`. |
 | `src/senselab/audio/tasks/phonation/api.py` | `derive_f0_range` raises `F0RangeFailed` on a reported failure and `F0RangeUnavailable` on a genuine absence. Modify `:41-69`. |
-| `src/senselab/audio/workflows/triage/nodes/preprocess.py` | `ppg_input`, `write_ppg_posteriorgram` and the Praat block read `plain`. Modify `:742-763`, `:766-826`, `:839-844`, `:859-895`. |
+| `src/senselab/audio/workflows/triage/nodes/preprocess.py` | the Praat block reads `plain`. Modify `:859-907` only — `ppg_input` (`:743-765`) and `write_ppg_posteriorgram` (`:767-823`) are **unchanged**, `enhanced_id` keeps its name, and no call site moves. |
 | `src/tests/audio/tasks/features_extraction_test.py` | the narrowing's behaviour and the failure signal. |
 | `src/tests/audio/tasks/phonation_test.py` | `derive_f0_range`'s two typed outcomes. **Rewrite `TestDeriveF0Range` `:109-131`.** |
-| `src/tests/audio/workflows/triage/nodes/preprocess_test.py` | both measurements record `signal="plain"`. **Six stale assertions plus one whole test — enumerated in Task 6.** |
+| `src/tests/audio/workflows/triage/nodes/preprocess_test.py` | the Praat measurement records `signal="plain"`; the posteriorgram still records `"enhanced"`. **Three stale assertions, three stale names and one test whose premise splits — enumerated in Task 6.** |
 | `src/tests/scripts/extend_reprocessed_outputs_test.py` | a reported failure is a failed row, not an escaped exception. |
-| `scripts/extend_ppg_praat.py` | gains `--force`, which supersedes rather than appends. Modify `:26-27`, `:94-115`, `:187-190`, `:197`, `:219`, `:235-238`. |
-| `src/tests/scripts/extend_ppg_praat_test.py` | `_seed_run` seeds `plain`; `--force` re-derives and leaves exactly one live measurement. |
-| `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` | steps 1, 1b and 2 landed; the corpus passes and the noise-robustness statement recorded as owed. |
+| `scripts/extend_ppg_praat.py` | gains `--force`, which re-derives **the Praat block only** and supersedes rather than appends; and stops cascading a missing `enhanced` stream onto Praat. Modify `:26-27`, `:94-115`, `:187-190`, `:195-199`, `:235-238`. `:219`'s `enhanced_id=` keyword is **unchanged**. |
+| `src/tests/scripts/extend_ppg_praat_test.py` | `_seed_run` seeds `plain` **beside** `enhanced`, which the PPG still needs; `--force` re-derives Praat and leaves exactly one live Praat measurement. |
+| `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` | steps 1 and 2 landed; the corpus pass and the noise-robustness statement recorded as owed. Step 1b already reads as withdrawn and stays that way. |
 
 ### Two existing tests pin the defects
 
 - `phonation_test.py:112-119` asserts `low == (60.0, 250.0)` and `high == (100.0, 500.0)` under the docstring *"The narrowing is what the standardization method does; a fixed corpus range cannot."* It asserts the bin while describing what the bin is not.
-- `preprocess_test.py:2238` is named `test_both_read_the_enhanced_stream_back_out_of_the_store`, and its class docstring at `:2172` opens *"Both run on ``enhanced``"*.
+- `preprocess_test.py:2213` is named `test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one`, and the class docstring at `:2174` opens *"Both run on ``enhanced``"* — true today and half true afterwards.
 
 ### What does not need changing, and why
 
-`routing_analysis/features.py` finds the PPG measurement **by name** and resolves its sidecar from the measurement's `path` attribute — it applies no `signal` filter. So Task 5 changes the DDK gate feature's **value**, not its availability. This also means `live_evidence_test.py:216` and `routing_analysis_test.py:949`/`:959`, which hardcode `"signal": "enhanced"` — `:949` in the **`praat_features`** fixture, `:959` in the **`ppg_posteriorgram`** one, not two PPG fixtures — will **keep passing**. Update them for accuracy, but do not expect a failure to prompt you.
+**No routing changes.** No configured gate reads a Praat scalar: `routing_analysis/features.py:725-726` carries the forty scalars into the feature record, and no `gates:` entry in `data/config/default.yaml:227-271` names one. The four gates that read the posteriorgram — `airway.ppg_silent_fraction`, `ddk.ppg_segment_rate_per_s` and their features — are untouched, because the posteriorgram is untouched. So this plan changes forty numbers and **not which branch runs on any recording**.
+
+`routing_analysis_test.py:949` hardcodes `"signal": "enhanced"` in the **`praat_features`** fixture. Nothing filters on `signal`, so it **keeps passing**; update it for accuracy, not because a failure will prompt you. `live_evidence_test.py:216` and `routing_analysis_test.py:959` are **`ppg_posteriorgram`** fixtures and are now correct as written — leave them alone.
 
 ---
 
@@ -682,32 +688,38 @@ git add -A && git commit -m "test(triage): window lengths follow the derived ran
 
 ---
 
-## Task 5: Both measurements move to `plain`
+## Task 5: The Praat scalars move to `plain`
 
 **Files:**
-- Modify: `src/senselab/audio/workflows/triage/nodes/preprocess.py:742-763`, `:766-826`, `:839-844`, `:859-895`
-- Modify: `scripts/extend_ppg_praat.py:219`
+- Modify: `src/senselab/audio/workflows/triage/nodes/preprocess.py:859-907`
+- Modify: `scripts/extend_ppg_praat.py:195-199`
 - Test: `src/tests/audio/workflows/triage/nodes/preprocess_test.py`
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: both measurements recording `signal="plain"` and `derived_from=(plain_id,)`. `write_ppg_posteriorgram`'s `enhanced_id` keyword becomes **`stream_id`**.
+- Produces: the Praat measurement recording `signal="plain"` and `derived_from=(plain_id,)`.
 
-Tasks 5 and 6 are one change split by concern: this task moves the code, the next fixes every test it breaks. The PPG move is the consequential half — it changes `ppg.segment_rate_per_s`, hence **DDK routing corpus-wide**, not merely what a number reads.
+Tasks 5 and 6 are one change split by concern: this task moves the code, the next fixes every test it breaks.
+
+**The posteriorgram is not in this task.** `ppg_input` (`:743-765`), `write_ppg_posteriorgram` (`:767-823`)
+and its `enhanced_id` keyword stay exactly as they are, per the withdrawal of audit step 1b. Nothing about
+DDK or AIRWAY routing changes here, because `ppg.segment_rate_per_s` and `ppg.silent_fraction` are unmoved.
 
 - [ ] **Step 1: Move the Praat block**
 
-In `preprocess.py`, in `_praat_features`: `:880` → `plain_id, audio = resolve_stream(store, run_dir, "plain")`; `:882`'s activity tuple → `(plain_id,)`; `:892` → `signal="plain"`; `:894` → `derived_from=(plain_id,)`. The docstring names `enhanced` at `:859`, `:868` and `:874` — all three change.
+In `preprocess.py`, in `praat_features`: `:883` becomes `plain_id, audio = resolve_stream(store, run_dir, "plain")`; `:885`'s activity tuple becomes `(plain_id,)`; `:904` becomes `signal="plain"`; `:906` becomes `derived_from=(plain_id,)`. The docstring names `enhanced` at `:860`, `:869` and `:875` — all three change, the last being the `Raises:` clause.
 
-- [ ] **Step 2: Move the PPG block and rename the parameter**
+- [ ] **Step 2: Stop the driver cascading a missing `enhanced` stream onto Praat**
 
-`ppg_input` (`:742-763`): `:758` → `resolve_stream(store, run_dir, "plain")`, rename the local, and fix the docstring at `:743`, `:749` and `:756`.
+`extend_ppg_praat.py:195-199` treats a `ppg_input` failure as **both** blocks' absence, on a comment that
+says so: *"No enhanced stream to read is both blocks' absence, not one's: Praat reads it too."* After this
+task Praat reads `plain`, so that is false — and it is a behaviour defect, not a stale comment. `:199` writes
+`{"status": _ABSENT, "ppg": reason, "praat": reason}` and then `continue`s, so the Praat block never runs on
+a store with no `enhanced` stream even though it now can. Mark the PPG absent, let the Praat path fall
+through to `:235-245`, and correct the comment.
 
-`write_ppg_posteriorgram` (`:766-822`): rename the **keyword parameter** `enhanced_id` (`:770`) to `stream_id`, its docstring (`:783`), and its two uses at `:794` and `:821`. Fix the docstrings at `:826` and `:836`.
-
-Then both call sites, which pass it **by name**: `preprocess.py:844` and **`scripts/extend_ppg_praat.py:219`**. Missing the second leaves a `TypeError` the triage suite will not catch. Pre-alpha says rename outright — no alias.
-
-Note `:809` is `signal="enhanced"` inside `write_ppg_posteriorgram`, not `ppg_input`. Change it to `"plain"`.
+**This asymmetry is now permanent**, not a transitional state: the PPG needs `enhanced` by decision and
+Praat needs `plain`, so one stream's absence is one block's absence from here on.
 
 - [ ] **Step 3: Run and expect failures, not success**
 
@@ -717,14 +729,14 @@ Expected: **FAIL**, in the tests Task 6 enumerates. That is the point of splitti
 - [ ] **Step 4: Lint and commit a deliberately red suite**
 
 This commit leaves `preprocess_test.py` failing, on purpose — Task 6 is the fix, and splitting them keeps
-the code move reviewable separately from the twelve test edits. Say so in the commit message so a bisect
+the code move reviewable separately from the test edits. Say so in the commit message so a bisect
 does not read it as a break.
 
 ```bash
 uv run ruff format src/senselab/audio/workflows/triage/nodes/preprocess.py scripts/extend_ppg_praat.py
 uv run ruff check src/senselab/audio/workflows/triage/nodes/preprocess.py scripts/extend_ppg_praat.py
 uv run mypy src/senselab/audio/workflows/triage/nodes/preprocess.py scripts/extend_ppg_praat.py
-git add -A && git commit -m "fix(preprocess): measure the Praat scalars and the posteriorgram on plain"
+git add -A && git commit -m "fix(preprocess): measure the Praat scalars on plain"
 ```
 
 ---
@@ -732,35 +744,39 @@ git add -A && git commit -m "fix(preprocess): measure the Praat scalars and the 
 ## Task 6: Every test the move breaks, and what each becomes
 
 **Files:**
-- Test: `src/tests/audio/workflows/triage/nodes/preprocess_test.py`, `src/tests/audio/workflows/triage/live_evidence_test.py`, `routing_analysis_test.py`
+- Test: `src/tests/audio/workflows/triage/nodes/preprocess_test.py`, `routing_analysis_test.py`
 
 **Interfaces:** consumes Task 5; produces nothing.
 
-Six stale assertions, two stale names, one test whose whole premise dissolves. Each is listed with what it becomes.
+Three stale assertions, three stale names, one test whose premise splits. Each is listed with what it
+becomes. **Every row below is Praat's** — the posteriorgram's assertions are correct as they stand and
+must not be touched.
 
-- [ ] **Step 1: Retarget the class that asserts the enhanced stream**
+- [ ] **Step 1: Retarget the class, which now describes two streams rather than one**
 
-In the class whose docstring is at `:2172`:
+In `TestThePosteriorgramAndPraatBlocks`:
 
 | line | now | becomes |
 | --- | --- | --- |
-| `:2172` | docstring "Both run on ``enhanced``…" | "Both run on ``plain``…" |
-| `:2210` | `test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one` | `..._the_unprocessed_one`. **A name, so nothing will flag it** — the assertion inside it is a separate row below |
-| `:2193` | `assert attrs["signal"] == "enhanced"` | `== "plain"` |
-| `:2204` | `resolve_stream(store, tmp_path, "enhanced")` for the first measurement | `"plain"`, and rename the local |
-| `:2205` | `derived_from(measurement.id) == [enhanced_id]` | the renamed local |
-| `:2226` | `assert attrs["signal"] == "enhanced"` | `== "plain"` |
-| `:2235-2236` | `resolve_stream(...)` + `derived_from == [enhanced_id]` | `"plain"`, rename the local |
-| `:2238` | `test_both_read_the_enhanced_stream_back_out_of_the_store` | `..._the_plain_stream_...` |
+| `:2176` | docstring "Both run on ``enhanced``…" | "The posteriorgram runs on ``enhanced`` and Praat on ``plain``…" — the split is the point, so say it here |
+| `:2214` | `test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one` | `..._the_unprocessed_one`. **A name, so nothing will flag it** |
+| `:2230` | `assert attrs["signal"] == "enhanced"` | `== "plain"` |
+| `:2239-2240` | `resolve_stream(store, tmp_path, "enhanced")` + `derived_from == [enhanced_id]` | `"plain"`, and rename the local |
+| `:2242` | `test_both_read_the_enhanced_stream_back_out_of_the_store` | `test_the_posteriorgram_reads_the_enhanced_stream_back_out_of_the_store`. **The body only ever exercised `ppg_input` (`:2266`), never Praat** — the name was already wrong, and it is a rename for accuracy, not for the move. **Change nothing inside it** |
 
-- [ ] **Step 2: Decide what the no-enhanced-stream test becomes**
+`:2197`'s `assert attrs["signal"] == "enhanced"` is the **posteriorgram's** and stays.
 
-`test_both_are_absent_when_no_enhanced_stream_was_written` at `:2289-2305` asserts both measurements land in `result.absent` with `"enhanced"` in the reason. That absence came **only** from `resolve_stream(..., "enhanced")` raising. After the move `plain` always exists, both blocks always run, and the test's premise is gone.
+- [ ] **Step 2: Split the no-enhanced-stream test rather than replacing it**
 
-**Replace it with the same contract over the stream that can now be missing**, keeping the cascading-absence property it was protecting:
+`test_both_are_absent_when_no_enhanced_stream_was_written` (`:2293-2310`) asserts both measurements land in
+`result.absent` with `"enhanced"` in the reason, under `phonation_config` and a bare `_stub_models`, which
+write no `enhanced` stream at all. After Task 5 half of that premise is gone: the posteriorgram is still
+absent for exactly the stated reason, and Praat now runs on `plain` and succeeds.
+
+So the test becomes a **stronger** one and needs no monkeypatching:
 
 ```python
-    def test_both_are_absent_when_no_plain_stream_was_written(
+    def test_the_posteriorgram_is_absent_when_no_enhanced_stream_was_written(
         self,
         store: ProvStore,
         phonation_config: TriageConfig,
@@ -768,88 +784,126 @@ In the class whose docstring is at `:2172`:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A missing measurement stream is a cascading absence, not a failure of the node."""
+        """One stream's absence is one block's absence: Praat reads ``plain`` and is unaffected."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch)
-        monkeypatch.setattr(
-            preprocess_module,
-            "resolve_stream",
-            lambda *_a, **_k: (_ for _ in ()).throw(LookupError("no live stream named 'plain'")),
-        )
         result = preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
 
         assert PPG_MEASUREMENT in result.absent
-        assert PRAAT_MEASUREMENT in result.absent
+        assert "enhanced" in _absent_map(store)[PPG_MEASUREMENT]
+        assert PRAAT_MEASUREMENT not in result.absent
+        assert find_measurement(store, PRAAT_MEASUREMENT) is not None
 ```
 
-**`enhance=` is not optional.** `conftest.py:138-141` patches `_frcrn_model` and `enhance_audios` **only if
-`enhance` is passed** — a bare `_stub_models(monkeypatch)` leaves both real, so the test downloads FRCRN and
-runs it. Use `_fake_enhance(0.5)`, as `preprocess_test.py:1707` and `:1945` do. The same applies to Step 2's
-snippet.
+**An earlier version replaced it with a `resolve_stream`-patching test of a missing `plain` stream.** No
+longer needed, and worse: patching `resolve_stream` module-wide makes unrelated blocks absent too, while
+the property being protected is now testable with the fixtures the module already has.
 
-Patching `resolve_stream` is blunt and will make other blocks absent too — assert only the two this test is about. If the module's fixtures offer a way to seed a run without a `plain` stream, prefer that and drop the monkeypatch.
+- [ ] **Step 3: Write the guard that says what is true**
 
-- [ ] **Step 3: Replace the false regression guard with a true one**
+Do **not** write `test_no_measurement_reads_the_enhanced_stream`, and do not write
+`test_neither_praat_nor_the_posteriorgram_reads_the_enhanced_stream` either. Both are false: the
+posteriorgram reads `enhanced` by decision, and `enhanced_yamnet_scores`, `enhanced_ast_scores` and
+`enhanced_hear_scores` **are** measurements written with `signal="enhanced"` (`_stream_classifier_scores`
+takes the measurement name as a parameter, so the *block* is `enhanced_yamnet` but the *measurement*
+carries the `_scores` suffix, and `find_measurement(store, f"enhanced_{classifier}")` is `None` for all
+three). A guard whose name asserts something untrue is worse than none.
 
-Do **not** write `test_no_measurement_reads_the_enhanced_stream`. It would be false: `enhanced_yamnet_scores`, `enhanced_ast_scores` and `enhanced_hear_scores` **are** measurements written with `signal="enhanced"` — `_stream_classifier_scores` takes the measurement name as a **parameter** (`:2445-2452`) and each caller passes a literal — `f"{prefix}_yamnet_scores"` at `:2528`, with the AST and HeAR calls at `:2545` and `:2565` — so the *block* is `enhanced_yamnet` (`:2604`) but the *measurement* carries the `_scores` suffix. (`:2503` builds `f"{prefix}_{classifier}_summary_{suffix}"`, a different family; do not cite it here.) `find_measurement(store, f"enhanced_{classifier}")` is `None` for all three. They pass a string guard only because they read `state["enhanced_audio"]` instead of calling `resolve_stream` with a literal. A guard whose name asserts something untrue is worse than none.
-
-Scope it to the audit's actual claim — that these two measurements no longer read the denoised stream:
+The claim to guard is the one the audit actually makes after the withdrawal — that the **Praat** scalars no
+longer read the denoised stream, and that the posteriorgram deliberately still does:
 
 ```python
-    def test_neither_praat_nor_the_posteriorgram_reads_the_enhanced_stream(
+    def test_praat_reads_plain_and_the_posteriorgram_deliberately_does_not(
         self, residual_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store: ProvStore,
         wav_writer: Callable[..., Path],
     ) -> None:
-        """The audit's bound is about these two measurements, not about the stream having no readers."""
+        """Audit step 1 moved the scalars; step 1b was withdrawn, so the posteriorgram stays on ``enhanced``."""
         _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch, enhance=_fake_enhance(0.5))
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1))
         preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
-        for name in (PPG_MEASUREMENT, PRAAT_MEASUREMENT):
+        for name, expected in ((PRAAT_MEASUREMENT, "plain"), (PPG_MEASUREMENT, "enhanced")):
             measurement = find_measurement(store, name)
             assert measurement is not None
-            assert measurement.attributes["signal"] == "plain"
-        assert any(
-            find_measurement(store, f"enhanced_{classifier}_scores") is not None
-            for classifier in ("yamnet", "ast", "hear")
-        ), "the enhanced stream still has its own classifier measurements; that is not what moved"
+            assert measurement.attributes["signal"] == expected
 ```
 
-Match the fixture set the neighbouring tests use rather than the list above if they differ.
+**`enhance=` is not optional.** `conftest.py:138-140` patches `_frcrn_model` and `enhance_audios` **only if
+`enhance` is passed** — a bare `_stub_models(monkeypatch)` leaves both real, so the test downloads FRCRN and
+runs it. The `residual_config` tests in this class already pass `_fake_enhance(0.5, noise_scale=0.05, seed=1)`;
+match them. Step 2's test is the exception and passes no `enhance` on purpose, which is what makes no
+`enhanced` stream exist.
 
 - [ ] **Step 4: Run the whole triage suite**
 
 Run: `uv run pytest src/tests/audio/workflows/triage -q`
 Expected: PASS.
 
-- [ ] **Step 5: Update the two PPG fixtures for accuracy**
+- [ ] **Step 5: Update the one stale fixture, for accuracy**
 
-`live_evidence_test.py:216` and `routing_analysis_test.py:949`/`:959` hardcode `"signal": "enhanced"` on constructed measurements — `:949` is the `praat_features` fixture and `:959` the `ppg_posteriorgram` fixture, so both of this plan's streams are represented, not the PPG twice. Nothing filters on `signal`, so **they pass either way** — change them to `"plain"` because they now describe a measurement the node never writes that way, not because a test fails.
+`routing_analysis_test.py:949` hardcodes `"signal": "enhanced"` in the **`praat_features`** fixture. Nothing
+filters on `signal`, so it **passes either way** — change it to `"plain"` because it now describes a
+measurement the node never writes that way, not because a test fails.
+
+**Leave `live_evidence_test.py:216` and `routing_analysis_test.py:959` alone.** Both are
+`ppg_posteriorgram` fixtures, and `"signal": "enhanced"` is what the node still writes there. An earlier
+version of this plan changed all three.
 
 - [ ] **Step 6: Lint and commit**
 
 ```bash
 uv run ruff format src/tests/audio/workflows/triage/
 uv run ruff check src/tests/audio/workflows/triage/
-git add -A && git commit -m "test(triage): the measurement stream is plain, and the guard says what is true"
+git add -A && git commit -m "test(triage): Praat measures plain, the posteriorgram measures enhanced"
 ```
 
 ---
 
-## Task 7: The extend driver re-derives, and supersedes when it does
+## Task 7: The extend driver re-derives the Praat block, and supersedes when it does
 
 **Files:**
-- Modify: `scripts/extend_ppg_praat.py:26-27`, `:94-115`, `:187-190`, `:197`, `:235-238`
+- Modify: `scripts/extend_ppg_praat.py:26-27`, `:94-115`, `:187-193`, `:235-238`
 - Test: `src/tests/scripts/extend_ppg_praat_test.py`
 
 **Interfaces:**
 - Consumes: Task 5 — without it there is nothing stale to re-derive.
 - Produces: `--force` on the CLI; a `force: bool` keyword threaded to **the function containing the skip at `:187`** (read whether that is `process_batch` or its caller before writing the signature — the plan does not guess).
 
-**The integrity consequence, which is why `--force` cannot simply append.** `write_ppg_posteriorgram` writes `derivatives/ppg_posteriorgram.npz` at a fixed path. A forced re-derivation **overwrites that file**, so the old measurement entity's `checksum_sha256` no longer matches the bytes it names. The store is append-only, so the old entity must be **superseded**, not left live beside the new one — otherwise the store asserts two readings of the same thing and one of them is provably stale.
+**`--force` is still needed, and it is now Praat-only.** The driver skips any recording whose store already
+holds both measurements (`:188-190`), so a re-run after Task 5 changes nothing on all 62,547 stores. What
+changed with the withdrawal of audit step 1b is the *shape* of the override and the *reason* for the
+supersession, both of which get simpler:
 
-- [ ] **Step 1: Seed `plain` in the fixture, or every test in the module fails**
+- **`pending()` keeps its two-flag return** (`:118-127`) — the unforced path still needs both, and
+  `ppg_pending` still gates the PPG block at `:192`. **Only the override is one-sided:**
+  `praat_pending = praat_pending or force`. Leaving `ppg_pending` alone is what keeps the forced pass off
+  the GPU: on a store that already holds a posteriorgram the driver `continue`s at `:192-193` before
+  `ppg_input`, so no batch reaches ppgs. `:191` sets `opened[position]` before that `continue`, so the
+  Praat loop at `:233-245` still sees the store.
+- **The `ppg_held` / `praat_held` capture collapses to one local, and then to none.** With a one-sided
+  override, "did this store already hold the Praat measurement" is just `praat_pending` read **before** it.
+- **The checksum-integrity argument was entirely the posteriorgram's, and it is gone.** `praat_features`
+  writes **no sidecar** — the forty scalars are attributes of the measurement (`preprocess.py:862-864`,
+  with `"path" not in attrs` asserted at `preprocess_test.py:2235`) — so nothing is overwritten in place
+  and no stored entity is ever invalid.
+- **Supersession is still required, on the weaker and more ordinary ground:** the store is append-only, so
+  a forced run appends a second live `praat_features`, one measured on `enhanced` and one on `plain`, with
+  nothing to say which is current. Retire the old one.
+- **Which makes the write-then-supersede ordering easy rather than a judgement call.** Supersede only
+  after the replacement entity exists — previously a choice between two bad windows, now simply the
+  non-lossy order.
 
-`_seed_run` (`:61-97`) writes exactly one stream entity, `name: "enhanced"` (`:88`). After Task 5, both blocks resolve `plain` and raise `LookupError`, so essentially every test here fails — including the new one. Add a second stream entity named `plain`, written the same way, pointing at a `streams/plain.flac` written alongside `streams/enhanced.flac`.
+**One operational fact the withdrawal does not remove.** `main()` refuses with exit 2 when the ppgs venv is
+absent (`:337-345`), unconditionally — including on a `--force` pass that will do no PPG work at all. A
+Praat-only re-derivation still requires a provisioned ppgs venv on the host. Either leave that as is and say
+so in the runbook, or make the check conditional on `force`; **decide it here rather than discovering it on
+the cluster.**
+
+- [ ] **Step 1: Seed `plain` beside `enhanced` in the fixture, or every test in the module fails**
+
+`_seed_run` (`:61-97`) writes exactly one stream entity, `name: "enhanced"` (`:88-89`). After Task 5 the
+Praat block resolves `plain` and raises `LookupError`, so its half of every test here fails. Add a **second**
+stream entity named `plain`, written the same way, pointing at a `streams/plain.flac` written alongside
+`streams/enhanced.flac`. **Do not replace `enhanced`** — the posteriorgram still reads it.
 
 - [ ] **Step 2: Run the module and confirm it is green again before adding anything**
 
@@ -862,7 +916,7 @@ The module drives everything through `cli.main([...])` with the `provisioned` an
 
 ```python
 class TestForceReDerives:
-    """After a stream switch the stored measurements are stale, and skipping them looks like success."""
+    """After the stream switch the stored Praat scalars are stale, and skipping them looks like success."""
 
     def test_force_re_derives_a_store_that_already_holds_both(
         self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
@@ -876,7 +930,7 @@ class TestForceReDerives:
         store = _store_of(roots[0])
         assert store.fingerprint() != before, "--force must re-derive, not skip"
 
-    def test_force_leaves_exactly_one_live_measurement_of_each(
+    def test_force_leaves_exactly_one_live_praat_measurement(
         self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
     ) -> None:
         """The store is append-only, so the superseded reading must not stay live beside the new one."""
@@ -885,14 +939,28 @@ class TestForceReDerives:
         cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"])
 
         store = _store_of(roots[0])
-        for name in (PPG_MEASUREMENT, PRAAT_MEASUREMENT):
-            live = [e for e in live_entities(store, "measurement") if e.attributes.get("name") == name]
-            assert len(live) == 1, f"{name}: {len(live)} live measurements after --force"
+        live = [e for e in live_entities(store, "measurement") if e.attributes.get("name") == PRAAT_MEASUREMENT]
+        assert len(live) == 1, f"{len(live)} live Praat measurements after --force"
+
+    def test_force_does_not_touch_the_posteriorgram(
+        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+    ) -> None:
+        """Audit step 1b was withdrawn, so a forced pass is Praat-only — and therefore not GPU-bearing."""
+        manifest, roots = corpus(1)
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"])
+        before = find_measurement(_store_of(roots[0]), PPG_MEASUREMENT)
+        assert before is not None
+
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"])
+        after = find_measurement(_store_of(roots[0]), PPG_MEASUREMENT)
+        assert after is not None
+        assert after.id == before.id
+        assert after.attributes["signal"] == "enhanced"
 ```
 
-Use `senselab.audio.workflows.triage.nodes.common.live_entities` rather than reinventing the liveness filter. For the `supersede` call itself, `extend.py:447` and `:671-678` are the models.
+Use `senselab.audio.workflows.triage.nodes.common.live_entities` rather than reinventing the liveness filter. For the `supersede` call itself, `extend.py:303` is the signature and `:447` and `:671-678` are the two call-site models.
 
-- [ ] **Step 4: Run and watch both fail**
+- [ ] **Step 4: Run and watch all three fail**
 
 Run: `uv run pytest src/tests/scripts/extend_ppg_praat_test.py::TestForceReDerives -v`
 Expected: FAIL — `--force` is not a recognised argument.
@@ -905,37 +973,32 @@ In `build_parser`, beside `--config` (`:115`):
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Re-derive both measurements even where the store already holds them, superseding the old",
+        help="Re-derive the Praat scalars even where the store already holds them, superseding the old",
     )
 ```
 
 Thread `force` from `args.force` through to the function holding the skip. At `:187-190`:
 
 ```python
-        ppg_held, praat_held = (not p for p in pending(store))
         ppg_pending, praat_pending = pending(store)
-        if force:
-            ppg_pending = praat_pending = True
+        praat_held = not praat_pending
+        praat_pending = praat_pending or force
         if not ppg_pending and not praat_pending:
 ```
 
-**Capture what the store held before the override, or Step 6 has nothing to supersede.** Overriding both
-to `True` destroys exactly the information the supersession needs — which measurements already existed.
-Thread `ppg_held` / `praat_held` alongside the pending flags. Apply the same capture and override at the
-`:235` re-check, which recomputes `praat_pending` and would otherwise skip the Praat block on a forced run.
+`ppg_pending` is **not** overridden — that is what keeps the pass off the GPU, and what leaves the
+posteriorgram alone. Apply the same one-sided override at the `:235` re-check, which recomputes
+`praat_pending` and would otherwise skip the Praat block on a forced run; `praat_held` is already known from
+`:187` and does not need recomputing.
 
-**And decide what happens when the replacement write fails.** If supersession runs first and the write then
-raises at the driver's `except` (`:223`), the store carries an invalidated old measurement and no live
-replacement — worse than either end state. **Supersede only after the new bytes and the new entity both exist.** That is decided here rather than left
-to the implementer, and Step 6 carries it out. The window where two live measurements briefly coexist is
-shorter and more recoverable than one where the old is invalidated and no replacement exists. Correct the docstring at `:26-27` — the skip is the default and `--force` overrides it — and the comment at `:197`, which becomes false.
+Correct the docstring at `:26-27` — the skip is the default and `--force` overrides it, and the override is
+Praat-only.
 
 - [ ] **Step 6: Write the new measurement, then supersede the old one**
 
-Add a step constant beside `extend.py:77-81`'s `WORD_SUPERSEDED` / `CLIP_SPAN_SUPERSEDED` family:
+Add one step constant beside `extend.py:77-81`'s `WORD_SUPERSEDED` / `CLIP_SPAN_SUPERSEDED` family:
 
 ```python
-PPG_MEASUREMENT_SUPERSEDED = "ppg_posteriorgram_superseded"
 PRAAT_MEASUREMENT_SUPERSEDED = "praat_features_superseded"
 ```
 
@@ -945,9 +1008,15 @@ and a reason string in the same idiom:
 _STREAM_SWITCH_REASON = "it was measured on the enhanced stream; the measurement now reads plain"
 ```
 
-Then, in the forced path, for each measurement the store already held (`ppg_held` / `praat_held` from Step 5), call `extend.supersede` **after** the replacement entity exists, per Step 5's decision. The sidecar is overwritten in place, so the old entity's checksum is wrong from the moment the new bytes land; superseding immediately after closes that window without ever leaving the store with no live measurement. **`scripts/extend_withdraw_clips.py` contains no `supersede` call — do not look there.** The models are `src/senselab/audio/workflows/triage/extend.py:447` and `:671-678`; follow their argument shape exactly (`node=`, `step=`, `reason=`, `software=`).
+Then, in the forced path, when `praat_held`, call `extend.supersede` on the old entity **after**
+`praat_features` has returned the new one. **`scripts/extend_withdraw_clips.py` contains no `supersede`
+call — do not look there.** Follow `extend.py:447` and `:671-678`'s argument shape exactly (`node=`,
+`step=`, `reason=`, `software=`).
 
-- [ ] **Step 7: Run and confirm both pass**
+**No `PPG_MEASUREMENT_SUPERSEDED`.** An earlier version of this plan added one; the posteriorgram is never
+re-derived, so it is never superseded.
+
+- [ ] **Step 7: Run and confirm all pass**
 
 Run: `uv run pytest src/tests/scripts/extend_ppg_praat_test.py -v`
 Expected: PASS, including the existing skip tests without `--force` and `test_a_rerun_converges_on_the_same_graph` (`:276`), which asserts the no-force path is still idempotent.
@@ -958,7 +1027,7 @@ Expected: PASS, including the existing skip tests without `--force` and `test_a_
 uv run ruff format scripts/extend_ppg_praat.py src/tests/scripts/extend_ppg_praat_test.py
 uv run ruff check scripts/extend_ppg_praat.py src/tests/scripts/extend_ppg_praat_test.py
 uv run mypy scripts/extend_ppg_praat.py
-git add -A && git commit -m "feat(extend): --force re-derives and supersedes what the stream switch made stale"
+git add -A && git commit -m "feat(extend): --force re-derives the Praat scalars and supersedes what the stream switch made stale"
 ```
 
 ---
@@ -1030,9 +1099,9 @@ git add -A && git commit -m "fix(praat): the derived range travels with the scal
 
 **Files:** modify `specs/20260817-triage-workflow-dag/praat-instrument-audit.md`
 
-- [ ] **Step 1: Mark steps 1, 1b and 2 landed**
+- [ ] **Step 1: Mark steps 1 and 2 landed**
 
-For each: what changed, the convention and that it was not fitted, and what remains. Steps 0, 3, 4 and 5 stay open and must still read as open. Add that **step 2b is untouched** — `preprocess.py:941` derives the range on `plain` while `:951` tracks F0 on `sharp`, and this plan does not close that.
+For each: what changed, the convention and that it was not fitted, and what remains. Steps 0, 3, 4 and 5 stay open and must still read as open, and **step 1b stays withdrawn** — do not mark it landed, deferred or owed. Add that **step 2b is untouched** — `preprocess.py:941` derives the range on `plain` while `:951` tracks F0 on `sharp`, and this plan does not close that.
 
 - [ ] **Step 2: Answer the question step 1 asks and this plan did not**
 
@@ -1044,7 +1113,7 @@ Three statements, none currently in the audit:
 
 - **The bias flips rather than disappearing.** FRCRN inflated HNR and CPPS and deflated perturbation, worst on dysphonic voices — an *endogenous* confound that inverted sensitivity. On `plain`, additive noise is indistinguishable from aperiodicity, so it deflates HNR and CPPS and inflates perturbation in proportion to environment, device and level. That is the better trade **because the new confound is exogenous and covariable — but only if the covariates ride along.** They exist: SQUIM is already computed per span on `plain`, plus `clipping/` and `scene_quality/`. Record that requirement, and that the **raw-vs-enhanced pilot** the contract requires for the structurally identical diarization decision is owed here too.
 - **`plain` is not raw.** It is resampled to 16 kHz, so energy above 8 kHz — a breathiness correlate — is already gone. That caps how much of V4's sensitivity this switch can recover, and the phrase "measured on the unprocessed stream" invites the wrong assumption.
-- **The PPG's justification is not the Praat scalars'.** The breathiness argument does not transfer: the PPG is a **trained phoneme classifier**, so noisy `plain` moves it *away* from its training domain while FRCRN moved it toward. The defensible reason is D1's, and it belongs at this site — **FRCRN is out of domain on a DDK train and can smear the transients whose timing is the measurement.** Put D1's reason in the audit beside step 1b.
+- **The PPG's justification is not the Praat scalars', which is why step 1b was withdrawn rather than carried.** The breathiness argument does not transfer: the PPG is a **trained phoneme classifier**, so noisy `plain` moves it *away* from its training domain while FRCRN moved it toward. An earlier version of this plan substituted D1's reason — *FRCRN is out of domain on a DDK train and can smear the transients whose timing is the measurement* — which belongs to the **amplitude envelope**, where peak timing is the measurement, and which **nothing in this tree has measured**. The audit records the withdrawal; this plan must not re-argue it.
 
 - [ ] **Step 4: Correct the glide entry, which is owed for a different reason than stated**
 
@@ -1056,10 +1125,10 @@ Measured: an exponential 100→400 Hz glide yields **`[72.8, 600.0]`** against p
 - **Coverage now shifts F0-dependently.** Two window formulas are in this file and vary per recording: intensity smoothing at `3.2/floor` (`:556`, documented in the comment at `:171`) and harmonicity at `periods_per_window=4.5` (`:621`). A third, `3/floor`, is **not in the code** — it is Praat's own analysis window inside `To Pitch (cc)`, reached only through the floor the file passes, and period marks come from `To PointProcess (cc)` (`:750`, `:894`), which takes the pitch object rather than a window. Cite the two that are here and attribute the third to Praat. These vary per recording: a 420 Hz speaker gets an 11 ms intensity window and a 55 Hz speaker gets 64 ms — **worse than the bin's 53 ms**. So the audit's step 5 coverage figure becomes conditioned on a per-recording window and is *harder* to interpret, not easier — unless the floor is recorded, which Task 8 is what fixes.
 - **`voice.f0_range_ratio_max` intuition changes.** The bin always gave 4.17 or 5.0; the narrowing measured **8.2** on a glide (`[72.8, 600.0]`) and reaches 12 on a fallback (`[50, 600]`). Whoever populates that key should know that bin-era intuition will refuse glides, and that `_f0_range` **raises** rather than flags.
 
-- [ ] **Step 6: Record the two corpus passes this plan creates but does not run**
+- [ ] **Step 6: Record the one corpus pass this plan creates but does not run, and the two it no longer owes**
 
-- `extend_ppg_praat.py --force` over the corpus re-derives both measurements in all 62,547 stores. That is a GPU-bearing pass for the PPG — size it against the original `ppg_20260911` run rather than guessing.
-- The PPG switch changes `ppg.segment_rate_per_s` and therefore DDK routing. **The design requires a before-and-after routing count**, and alongside it the **`PpgsPosteriorgramUnavailable` rate before and after**, since the switch may change how often the model fails outright — Task 6's note about availability concerns the lookup path, not the model. Until both are run, no DDK routing figure in any document describes the shipped pipeline.
+- `extend_ppg_praat.py --force` over the corpus re-derives **the forty Praat scalars** in all 62,547 stores. With step 1b withdrawn it runs no model in a subprocess venv, so it is **CPU-only and not GPU-bearing** — size it against a Praat-only batch, not against the original `ppg_20260911` run. It does still require a provisioned ppgs venv on the host unless Task 7 makes that check conditional.
+- **No routing count is owed, and this is the consequence most worth writing down.** `ppg.segment_rate_per_s` and `ppg.silent_fraction` are unchanged, so neither the DDK before-and-after gate count nor the `PpgsPosteriorgramUnavailable` rate comparison is needed. Step 1b would also have moved **`airway.ppg_silent_fraction`**, an AIRWAY gate reading the same posteriorgram, which it never counted — so it was changing two branches' routing while owing a count for one. And **no configured gate reads a Praat scalar**, so the pass this plan does run changes no routing at all.
 - **Attribution.** Landing Tasks 1 and 5 together moves the forty scalars for two reasons at once, making any corpus-level change unattributable. A **two-arm sample re-derivation** — range-only on `enhanced`, stream-only with the bin — over a few hundred recordings separates them. That is attribution, not fitting, so the no-fitting rule does not reach it.
 
 - [ ] **Step 7: State plainly that no scalar becomes publishable from this plan**
@@ -1075,14 +1144,14 @@ Pre-empt two specific misreadings:
 
 ```bash
 uv run pytest src/tests/audio/tasks src/tests/audio/workflows/triage src/tests/scripts -q
-git add -A && git commit -m "docs(audit): steps 1, 1b and 2 landed; the corpus re-derivation is owed"
+git add -A && git commit -m "docs(audit): steps 1 and 2 landed; the Praat re-derivation is owed"
 ```
 
 ---
 
 ## Self-Review
 
-**Spec coverage.** Step 2 → Tasks 1, 2, 3, 4. Step 1 → Task 5 (Praat half), Task 6. Step 1b → Task 5 (PPG half), Task 6. The re-run path → Task 7. The derived range's auditability → Task 8. The spec update, the noise-robustness statement, the corrected glide entry and the not-publishable headline → Task 9.
+**Spec coverage.** Step 2 → Tasks 1, 2, 3, 4. Step 1 → Tasks 5 and 6. **Step 1b → nothing: withdrawn.** The re-run path → Task 7. The derived range's auditability → Task 8. The spec update, the noise-robustness statement, the corrected glide entry and the not-publishable headline → Task 9.
 
 **The one place this plan is worse than what it replaces, and how it is closed.** A single-pass narrowing
 returns `[50, 90]` for a 120 Hz voice under a 60 Hz hum — a range excluding the speaker — where the bin
@@ -1106,11 +1175,11 @@ is owed. The citable claim is the narrow one Step 8 states — no published meth
 first-pass distribution was octave-halved and acts on the answer** — not the broader "no estimator corrects
 it", which Step 8 itself marks overstated against Mertens and Liberman.
 
-**Every test the changes break is named.** `phonation_test.py:112-119`; `preprocess_test.py:2172`, `:2193`, `:2194`, `:2204-2206`, `:2226`, `:2235-2236`, `:2238`, `:2289-2305`; `extend_ppg_praat_test.py:61-97` (the fixture, which breaks the whole module). The two `signal: enhanced` fixtures in `live_evidence_test.py` and `routing_analysis_test.py` are named as **not** breaking, with the reason.
+**Every test the changes break is named.** `phonation_test.py:112-119`; `preprocess_test.py:2176`, `:2214`, `:2230`, `:2239-2240`, `:2242`, `:2293-2310`; `extend_ppg_praat_test.py:61-97` (the fixture, whose Praat half breaks across the module). The posteriorgram's own assertions — `preprocess_test.py:2197`, `:2208-2209`, `:2266`, and the `ppg_posteriorgram` fixtures at `live_evidence_test.py:216` and `routing_analysis_test.py:959` — are named as **not** changing, with the reason; only `routing_analysis_test.py:949` (the `praat_features` fixture) is updated, and for accuracy rather than because it fails.
 
 **Placeholders.** No step describes work without showing it. Four steps name an existing fixture or API to read and match rather than quoting it — Task 1 Step 1 (`_buzz`), Task 3 Steps 1–2 (the two suites' fixture sets), Task 6 Step 3 (the neighbours' fixtures), Task 7 Step 3 (`ProvStore`'s liveness API) — because this suite already has them and duplicating would be the wrong instruction. Task 7 Step 6 names `supersede`'s argument shape as something to copy from **`extend.py:447` and `:671-678`** rather than transcribing it, for the same reason — not from `extend_withdraw_clips.py`, which contains no `supersede` call.
 
-**Type consistency.** `extract_pitch_values` returns **five** `float` keys on all **three** return paths — the empty-contour guard, the main dict, and the `except`. `derive_f0_range` keeps `tuple[float, float]` and raises one of two `ValueError` subclasses. `write_ppg_posteriorgram`'s keyword is `stream_id` at the definition and both call sites. `force: bool` threads to the function holding the skip.
+**Type consistency.** `extract_pitch_values` returns **five** `float` keys on all **three** return paths — the empty-contour guard, the main dict, and the `except`. `derive_f0_range` keeps `tuple[float, float]` and raises one of two `ValueError` subclasses. `write_ppg_posteriorgram`'s signature is **unchanged**, `enhanced_id` included. `force: bool` threads to the function holding the skip and overrides `praat_pending` only.
 
 **The TDD loop starts red.** All twelve of Task 1's tests fail on current code — seven with `KeyError` on
 the three new keys and five on the bin's fixed pair. The first is the discontinuity case. The monotonicity
@@ -1118,4 +1187,10 @@ test is deliberately second and asserts the five measured ceilings rather than m
 bin returns only two distinct values over the `(110, 130, 150, 180, 220)` set and a sortedness assertion
 would pass on it.
 
-**Known limits, stated rather than hidden.** The 55 Hz test passes via the search-floor clamp, not by the floor following the voice — its docstring says so. **There is no trim at all** (Step 5 says why it was dropped), so nothing in the rule removes an octave-split mode: the `p5 / 1.5` margin, the `max` ceiling and the pinned-contour fallback bound that error between them, and the second-harmonic residual is marked owed. The percentile and margin values are this project's convention, not Hirst's parameterisation. Task 7's supersede call names its constants and its liveness assertion but defers `supersede`'s exact signature to the existing driver.
+**Known limits, stated rather than hidden.** The 55 Hz test passes via the search-floor clamp, not by the floor following the voice — its docstring says so. **There is no trim at all** (Step 5 says why it was dropped), so nothing in the rule removes an octave-split mode: the `p5 / 1.5` margin, the `max` ceiling and the pinned-contour fallback bound that error between them, and the second-harmonic residual is marked owed. The percentile and margin values are this project's convention, not Hirst's parameterisation. Task 7's supersede call names its constant and its liveness assertion but defers `supersede`'s exact signature to the existing driver.
+
+**What the withdrawal of audit step 1b removed, so it is not re-proposed**: the `ppg_input` /
+`write_ppg_posteriorgram` stream change and the `enhanced_id` → `stream_id` rename; the PPG fixture edits;
+`PPG_MEASUREMENT_SUPERSEDED` and the checksum-window argument; the GPU-bearing pass; and the DDK routing
+count with its `PpgsPosteriorgramUnavailable` comparison. The audit's step 1b is the one place to change
+if it is ever revisited.

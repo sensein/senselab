@@ -13,8 +13,8 @@ probe result.
 
 **This reorders everything else in this document.**
 
-`preprocess.py:880` resolves the **`enhanced`** stream and hands it to
-`extract_praat_parselmouth_features_from_audios`. `preprocess.py:2338` shows what `enhanced` is:
+`preprocess.py:883` resolves the **`enhanced`** stream and hands it to
+`extract_praat_parselmouth_features_from_audios`. `preprocess.py:2351` shows what `enhanced` is:
 `enhance_audios([plain], model=model)` — ClearVoice/**FRCRN**, a deep speech-enhancement network.
 
 So all 40 scalars — CPPS, HNR, jitter, shimmer, LTAS, slope and tilt, spectral moments, formants,
@@ -37,18 +37,24 @@ V4; it **inverts its sensitivity**: the measurement is most altered exactly wher
 be.
 
 **It is out of domain on most of this corpus.** Sustained vowels, coughs, DDK trains and maximal
-shouts are none of them speech-in-noise. And the same `enhanced` stream feeds the PPG, hence
-`ddk.ppg_segment_rate_per_s`, hence **DDK routing**.
+shouts are none of them speech-in-noise. The same `enhanced` stream also feeds the PPG, hence
+`ppg.segment_rate_per_s` and `ppg.silent_fraction`, hence **DDK and AIRWAY routing** — but that is
+where the argument stops transferring, and the withdrawn step 1b below says why.
 
 ### The bound — what finding 0 does *not* reach
 
-There are exactly **two** `resolve_stream(..., "enhanced")` sites in PREPROCESS: `:758`
-(`ppg_input`) and `:880` (the Praat call). Everything else reads `plain` or `preemphasised` —
+There are exactly **two** `resolve_stream(..., "enhanced")` sites in PREPROCESS: `:759`
+(`ppg_input`) and `:883` (the Praat call). Everything else reads `plain` or `preemphasised` —
 **HeAR (`:1856`), YAMNet (`:1922`) and SQUIM all run on `plain`.**
 
 So finding 0's scope is **the Praat scalars and the PPG, and nothing else.** AIRWAY's per-span
 evidence, the taxonomy labels and the quality measures are not implicated. This is worth stating
 plainly, because the finding otherwise reads as "the whole corpus is compromised", which it is not.
+
+**Identifying the two streams is not the same as remediating both, and the two halves have come
+apart.** The remediation is **the Praat scalars only**; the PPG stays on `enhanced` by decision, per
+the withdrawn step 1b below. Both call sites are still correctly named here — that part of finding 0
+stands and is what made the question askable.
 
 ### The suppressions attach to the function, not to a branch
 
@@ -82,7 +88,7 @@ Four — `mean_cpp`, `std_dev_cpp`, jitter, shimmer — carry names that will be
 norms, and `range_ratio_intensity_db` is dimensionally invalid (finding 6) and already exported.
 
 **The marker already exists and nothing reads it.** Every Praat measurement is written with
-`signal="enhanced"` (`preprocess.py:892`), and the PPG likewise (`:809`). So "flag them" is already
+`signal="enhanced"` (`preprocess.py:904`), and the PPG likewise (`:810`). So "flag them" is already
 done and it changed nothing.
 
 **The effective Step 0 is therefore a code change: make every reader of the Praat scalars require
@@ -111,7 +117,7 @@ recompute by `scripts/analyze_routing_evidence.py`.
 before it.
 
 **It is not "one argument" — that framing was wrong.** The same function writes `signal="enhanced"`
-on the measurement (`preprocess.py:892`) and `derived_from=(enhanced_id,)`, and its docstring and
+on the measurement (`preprocess.py:904`) and `derived_from=(enhanced_id,)`, and its docstring and
 `Raises:` clause both name the enhanced stream.
 
 **And the invalidation lever is not `CACHE_SCHEMA_VERSION`.** That constant lives in
@@ -132,20 +138,53 @@ argument here is stronger — FRCRN removes the aperiodic energy that *is* the m
 asymmetry should be stated rather than left as an inconsistency between two decisions of the same
 shape.
 
-### Step 1b — switch the PPG stream, which is a different site and a different event
+### Step 1b — switch the PPG stream: **withdrawn 2026-09-14 by the owner**
 
-The PPG resolves `enhanced` at **`preprocess.py:758`** (`ppg_input`), writing `signal="enhanced"` at
-`:809` — **a separate call site from the Praat one.** An earlier version of this path scoped step 1
-to `:880` alone, which would have repaired the scalars and left the routing gate reading denoiser
-output.
+The site is real and stays recorded: the PPG resolves `enhanced` at **`preprocess.py:759`**
+(`ppg_input`) and writes `signal="enhanced"` at `:810` — a call site separate from the Praat one at
+`:883`. **The PPG does not move. It reads `enhanced`, and that is a choice with a reason, not an
+unexamined inheritance.**
 
-**This one is not a scalar re-derivation.** `ppg.segment_rate_per_s` is the `ddk.ppg_segment_rate_per_s`
-gate feature, so switching the stream **changes DDK routing on every recording in the corpus** —
-which branch runs, not merely what a number reads. It needs its own before-and-after count, in the
-same way the contract's rule (a) requires a gate count
-(`../20260913-branch-contract-and-hints/design.md:121`, with the requirement at `:178` and `:551`).
+**Finding 0's argument does not reach the PPG.** FRCRN removes aperiodic energy and breathiness *is*
+aperiodic energy, so for the scalars the distortion is correlated with the variable of interest and
+inverts V4's sensitivity. The PPG is a **trained phoneme classifier**: noisy `plain` moves it *away*
+from its training domain where FRCRN moved it toward. Many recordings in this corpus carry
+background noise the PPG would handle worse on `plain`. **A trained model reading the stream closest
+to its training domain is the defensible default, and the burden is on a move away from it** — a
+burden nothing here discharged.
 
-[`branch-ddk.md`](branch-ddk.md) D1 already specifies reading `plain`; the ordered path did not.
+**The reason step 1b gave was borrowed from a different instrument, and was never measured.** It
+substituted D1's argument — *FRCRN is out of domain on a DDK train and can smear the transients
+whose timing is the measurement* — which is about the **amplitude envelope**, where peak timing
+genuinely *is* the measurement. The PPG measures no transient timing; it classifies a phoneme
+distribution per frame. D1's own instrument is a linear-amplitude envelope on `plain`
+([`branch-ddk.md`](branch-ddk.md):95-101) and is untouched by this reversal. And **no
+transient-smearing measurement exists anywhere in this tree** — checked across the four FRCRN
+benchmarks; [`benchmarks/frcrn-torch-vs-arch-2026-09-08.md`](benchmarks/frcrn-torch-vs-arch-2026-09-08.md)
+measures which non-speech events FRCRN nulls and which pass through, which is a question about
+surviving energy, not about timing. The claim was an assertion in an ordered path, and it is
+retracted here rather than left to be cited.
+
+**And DDK rhythm does not depend on the PPG.** `ddk.lexical_repetition` reads
+`transcript_repeat` — the largest repeat count of any normalised transcript token
+(`../../src/senselab/audio/workflows/triage/data/config/default.yaml:264-267`) — and
+`diadochokinesis-buttercup` (896) plus `diadochokinesis-v2-buttercup` (702) are **1,598 recordings
+of a real English word** (`branch-ddk.md:34`, `:39`), where a transcript route works directly.
+`ppg.segment_rate_per_s` is a **routing gate feature** (`default.yaml:268-271`), and
+[`branch-ddk.md`](branch-ddk.md):224-228 already demotes it as a *measurement* on the grounds that an
+argmax-change rate has no interpretable units. So the gate it feeds is the whole of its job, and the
+withdrawal leaves that job exactly as it was.
+
+**What the withdrawal buys, stated because it makes step 1 cheaper and safer.** The `--force`
+re-derivation of the Praat scalars is **not GPU-bearing** — the PPG was the only GPU work in it. And
+**no routing changes corpus-wide**: `ppg.segment_rate_per_s` and `ppg.silent_fraction` are unmoved,
+so neither the DDK gate count the contract's rule (a) requires
+(`../20260913-branch-contract-and-hints/design.md:121`, `:178`, `:551`) nor the
+`PpgsPosteriorgramUnavailable` rate comparison is owed; and **`airway.ppg_silent_fraction` is an
+AIRWAY gate reading the same posteriorgram** (`default.yaml:260-263`), which step 1b never counted,
+so it was exposing two branches' routing and owed a count for one. **No configured gate reads a
+Praat scalar** — `routing_analysis/features.py:725-726` carries them into the feature record and no
+`gates:` entry names one — so step 1 alone changes no routing at all.
 
 ### Step 2 — replace `derive_f0_range`, not the wrapper
 
@@ -689,7 +728,7 @@ convention where child is 8000.
 
 | finding | affects |
 | --- | --- |
-| **0 — the enhanced stream** | **every Praat-derived measurement in the graph**: `branch-voice.md` V4 and V6, `branch-speech.md` S4, `branch-ddk.md` D2 and its routing gate, `branch-airway.md` A6 |
+| **0 — the enhanced stream** | **every Praat-derived measurement in the graph**: `branch-voice.md` V4 and V6, `branch-speech.md` S4, `branch-ddk.md` D2, `branch-airway.md` A6. **Not the routing gates** — no configured gate reads a Praat scalar, and the PPG gates stay on `enhanced` by decision (step 1b, withdrawn) |
 | 1, 8 | [`branch-voice.md`](branch-voice.md) V3, V4, V7 |
 | 2, 3, 4, 5 | **every caller of `extract_cpp_descriptors`** — `branch-voice.md` V4 (5,113 recordings) *and* [`branch-speech.md`](branch-speech.md) S4 (~25,000, where finding 3 bites hardest) |
 | 6 | `branch-voice.md` V6 |
