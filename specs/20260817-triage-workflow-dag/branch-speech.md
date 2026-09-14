@@ -1,358 +1,238 @@
 # SPEECH branch
 
-Runs when [`routing.md`](routing.md) says the speech kind is present or uncertain, or when a hint
-forces it. [`REDACT`](redact.md) is a step of this branch, not a node beside it.
+What the branch answers: **what was said, who said it, and did the speaker do what the task asked?**
 
-## Signature
+The frame is [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md).
 
-```
-speech(store, enrollment?, hint?) -> fail(reason) | flag(reason, partial) | pass(product)
-```
+## The state of this branch
 
-Reads and writes the [element store](store.md). **Speech spans come from detected speech**: consensus
-word timings propose them, and PREPROCESS's envelope spans are `refine`d where they overlap rather
-than being the source.
+SPEECH is the largest node in the graph — 1,104 lines, nine steps — and most of it runs. Its problem
+is the opposite of VOICE's: it **measures a great deal and decides almost nothing**, because five of
+its decision points are gated behind null config.
 
-What it reads from the store:
+| step | state |
+| --- | --- |
+| 1 transcript | live; the only source of `FAIL` |
+| 2 spans | live |
+| 3 corroboration | measures SQUIM and YAMNet; **both votes inert** |
+| 4 diarization | live, but scoped to the lexical hull |
+| 5 second diarizer | **never consulted** (`speech.second_diarizer` null) |
+| 6 separation | **never selected** (`speech.separation_backend` null) |
+| 7 identification | word→speaker attribution live; enrollment path **gated** |
+| 8 PII | live |
+| 9 quality / non-target | SQUIM and proximity measured; non-target **null** |
 
-| element | author | used for |
+The branch's shape is right. What it needs is a declaration to measure against — which is what the
+contract supplies.
+
+## The tasks this branch serves
+
+Declared families, not ground truth.
+
+| family | n | shape |
 | --- | --- | --- |
-| `consensus_transcript` and its `word` elements | PREPROCESS | the transcript, its edges, the outcome behind each word, and the first text the PII scan reads |
-| the `asr_hypothesis` measurements (`asr_crisperwhisper`, `asr_qwen`) | PREPROCESS | the per-recognizer evidence the consensus was aligned from; each transcript is a PII haystack of its own |
-| `yamnet_windows` | PREPROCESS | `Speech` corroboration per span |
-| `squim` | PREPROCESS | per-span quality and the speech test |
-| `energy_envelope`, `silence` | PREPROCESS | the local floor |
-| `disruptions_file` | PREPROCESS | clipping and zero-crossing rate, measured on the original stream |
-| `span` elements | PREPROCESS | `refine`d against word timings; a span with no words is left alone |
-| `enrollment` | caller | the target speaker, with the model and revision behind it |
-| `hint` | caller, optional | task context |
+| `harvard-sentences-list` | 13,705 | read, known stimulus |
+| `free-speech` | 3,074 | spontaneous |
+| `productive-vocabulary` | 2,910 | elicited, semi-constrained |
+| `cape-v-sentences` | 2,370 | read, known stimulus, voice-quality protocol |
+| `free-speech-v2` | 2,120 | spontaneous |
+| `cape-v-sentences-v2` | 1,224 | read, known stimulus |
+| `rainbow-passage` | 897 | read, known stimulus |
+| `picture-description` | 889 (+ 373 option1, 329 option2) | spontaneous, prompted |
+| `story-recall` | 889 | spontaneous, prompted |
+| `caterpillar-passage` | 597 | read, known stimulus |
+| `story-recall-v2` | 660 | spontaneous, prompted |
+| `word-color-stroop` | 472 | read, known stimulus, timed |
 
-This branch runs pyannote, a second diarizer under one condition, separation under another, and a
-speaker-embedding comparison. **It runs no ASR, and it never re-transcribes.**
+The division that matters is **read versus spontaneous**, and the declaration carries it directly as
+`speech_type` (`read` / `non-lexical`, and spontaneous variants). A read task has a `stimulus_text`
+and can be scored word-against-word; a spontaneous task has none and cannot. Roughly 19,265 of these
+declarations are read tasks with a known stimulus — the single largest measurable population in the
+corpus, and today nothing compares a transcript to it.
 
-**It does not read AIRWAY.** Diarization is a speech-only instrument and nothing in this branch is
-conditioned on what AIRWAY found.
+**CAPE-V is a voice protocol wearing a sentence task.** Its six sentences are designed to elicit
+specific phonatory conditions, and the clinically meaningful measurements on it are VOICE's (V4),
+not SPEECH's. SPEECH's job on CAPE-V is to confirm the right sentences were read; the voice quality
+belongs to the branch that measures voice quality.
 
-## Flow
+### A recording routed here whose declared task is not speech
+
+SPEECH routed 41,565 against 33,235 declaring a speech family — and `speech.lexical` is a
+high-recall gate, so any recording with agreed lexical words reaches it. On a breath task that
+contains an aside, SPEECH transcribes it, diarizes it, scans it for PII and records what it found.
+That content is a finding about the recording, not a fault of it.
+
+## Capabilities
+
+### S1 — Consensus transcript (**built**)
+
+**Question.** What words were said, and where?
+
+**Reads.** The `consensus_transcript` measurement and its `word_ids` (`speech.py:517-534`); raises
+`LookupError` when absent. Splits lexical from bracketed.
+
+**Emits.** `FAIL` with `kind="speech"` when no lexical word survives (`speech.py:544-565`) — the
+branch's only fail path.
+
+**Serves.** All families.
+
+### S2 — Speech spans (**built**)
+
+**Reads.** Lexical word extents, grouped where they touch by `group_extents_into_runs`
+(`speech.py:573`, imported from `tasks/spans/api.py:34`). **Never the energy envelope** — SPEECH
+proposes its own spans from the transcript, which is why it was already the contract's `propose`
+precedent before the contract existed.
+
+**Emits.** `span` entities, `family: "speech"` (`speech.py:879-883`).
+
+### S3 — Stimulus conformance (**not built; the branch's largest gap**)
+
+**Question.** Did the speaker read the sentence they were given?
+
+**Reads.** `stimulus_text` from the declaration, and the lexical consensus words from S1.
+
+**Computes.** A word-level alignment of the lexical transcript against the stimulus. **Alignment
+machinery already exists** — `align_sources` (`consensus.py:276`) aligns recognizer hypotheses as
+sequences and emits one word per aligned column, over `harmonize_transcripts` which
+`consensus.py:15` imports. Aligning one hypothesis against a reference string is the same operation
+with a different second argument.
+
+**It is not a drop-in.** `align_sources` raises `LookupError` below two hypotheses
+(`consensus.py:288-290`) and returns a `Consensus` over sources, so a stimulus comparison needs
+either a second entry point beside it or a reference hypothesis wrapped as a `SourceHypothesis`.
+Which of the two is right is a design decision this document does not make.
+
+**Emits.** One `stimulus_mismatch` deviation per lexical word that is not the word the stimulus
+expected, each carrying that word's extent. Substitutions, omissions and insertions are distinct
+rows, not one score.
+
+**Fillers are already separated and must stay separate.** The consensus brackets disfluency and
+non-speech tokens — `[uh]`, `[um]`, `[breath]` — so they are not lexical and never enter the
+alignment. They are reported as `filler` deviations in their own channel. *"Read the wrong
+sentence"* and *"read it with six fillers"* are different findings.
+
+**Serves.** `harvard-sentences-list` (13,705), `cape-v-sentences` (2,370 + 1,224),
+`rainbow-passage` (897), `caterpillar-passage` (597), `word-color-stroop` (472).
+
+**Parameter-free?** The output is — an enumeration of differences, not a score against a cut.
+Nothing here is fitted, and nothing should be: whether six fillers disqualify a reading is precisely
+the judgement the contract hands downstream. The aligner's own edit weights are internal to
+`harmonize_transcripts` and are not a decision this branch makes.
+
+### S4 — Speaker count (**built, but scoped wrong**)
+
+**Question.** How many people are audible?
+
+**Reads today.** pyannote community-1 over `[first word start, last word end]` only
+(`speech.py:642-646`).
+
+**That scope is the defect.** A second speaker outside the lexical hull — before the participant
+starts, after they stop, or during a pause — is invisible. The branch-contract spec moves
+diarization to PREPROCESS as a whole-file shared derivative, which makes the count correct and makes
+it available to every branch rather than this one.
+
+**Emits.** A `speaker` entity per segment, and — under the contract — a `counts` entry
+`speaker_count` carrying `found` and the `declared` half from the declaration's
+`targeted_speaker_count`. **It asserts no discrepancy**: the count is an observation, and whether a
+second voice invalidates the recording is not SPEECH's call.
+
+**Serves.** Every family. Most of these protocols are single-target, which is what makes the count
+informative.
+
+**The second diarizer never runs.** `speech.second_diarizer` is null (`default.yaml:166`), so
+`second_record` is always `"not_consulted"` (`speech.py:685-706`). Under the contract this becomes a
+question about the shared derivative rather than about SPEECH's own pass.
+
+### S5 — Word→speaker attribution (**built**)
+
+Word-level attribution assertions always run (`speech.py:779-869`), `verb: "attribute"`, one per
+word (`:788-793`). Note for [`branch-quality.md`](branch-quality.md) and for REPORT: this is the
+highest-volume assertion verb in the store and is *not* one of the contract's five.
+
+**The enrollment path is gated.** `speech.enrollment_model` and `speech.target_match_cosine` are
+both null (`default.yaml:167, 171`), so supplying an enrollment without an override lands in
+`_flag_before_measuring` (`speech.py:502-506`). A cosine threshold for speaker identity is **owed
+ground truth** and cannot be fitted against declared families — a declaration says which task was
+performed, not who performed it.
+
+### S6 — PII (**built**)
+
+One `scan_for_pii` over the consensus and over each recognizer's own transcript
+(`speech.py:871-957`), producing `pii` entities and per-word `verb: "label", label: "pii"` marks at
+`speech.py:961`. `redact.py:237` selects on exactly that verb/label pair — which is why the
+contract's earlier proposal to rename `label` to `mark` was withdrawn: it would have stopped
+redaction silently.
+
+`pii.required_detectors` is populated. This is the one decision point in the branch that is neither
+null nor inert.
+
+### S7 — Speech quality (**measured, inert**)
+
+Per-span SQUIM (`stoi`, `pesq`, `si_sdr`) and `disruptions` (`speech.py:959-1010`), plus a per-span
+`proximity` measurement (`:1012-1054`).
+
+**Both votes are inert.** `yamnet_vote` is `"unavailable"` because `taxonomy.speech_labels` is null
+(`default.yaml:181`, read at `speech.py:589`); `squim_vote` is `"not_evaluated"` because
+`speech.speech_test_stoi_floor` and `speech.speech_test_si_sdr_floor` are both null
+(`default.yaml:168-169`, read at `speech.py:604-605`). So step 3 measures SQUIM and decides nothing.
+
+**Neither floor can be fitted.** A STOI floor fitted against declared families would encode which
+recordings the protocol labelled, not which are intelligible.
+[`branch-quality.md`](branch-quality.md) takes up what should read these numbers instead.
+
+### S8 — Non-target speech (**gated behind null config**)
+
+`nontarget_speech_s` is always `None` because all three `speech.nontarget` legs are null
+(`default.yaml:174`). Three thresholds, all owed ground truth, none fittable here.
+
+### S9 — Separation (**never selected**)
+
+`speech.separation_backend` is null (`default.yaml:172`), so `separation_state` is
+`"not_selected"` whenever two or more speakers are found (`speech.py:708-777`). Both the
+ClearerVoice and unasdiff paths are unreached.
+
+## Deviations
+
+| type | evidence |
+| --- | --- |
+| `stimulus_mismatch` | a lexical word that is not the word the stimulus expected (S3) |
+| `filler` | a bracketed disfluency or non-speech token where the task expected lexical content (S3) |
+| `off_task_extent` | a region carrying no lexical speech where the task asked for reading |
+
+`speaker_count` is a `counts` entry, not a deviation (S4).
+
+## What exists today
+
+| capability | status |
+| --- | --- |
+| S1 transcript | built |
+| S2 spans | built |
+| S3 stimulus conformance | **not built** — the aligner exists, nothing calls it with a stimulus |
+| S4 speaker count | built, scoped to the lexical hull; moves to PREPROCESS under the contract |
+| S5 attribution | built; enrollment gated |
+| S6 PII | built |
+| S7 quality | measured, both votes inert |
+| S8 non-target | gated behind null config |
+| S9 separation | gated behind null config |
+
+## What the branch emits
 
 ```
-  1. TRANSCRIPT   consensus words  ──►  per-word agreement
-        │  no words → fail
-        ▼
-  2. SPEECH SPANS from consensus word timings
-        │
-        ▼
-  3. CORROBORATE  YAMNet Speech coverage + SQUIM per span
-        │  disagree → flag
-        ▼
-  4. DIARIZE      pyannote over [first word start, last word end] only
-        │  count ≠ 1 → second diarizer, report disagreement
-        ▼
-  5. SEPARATE     only when the foreground must be extracted
-        │
-        ▼
-  6. IDENTIFY     words → speakers; target by enrollment
-        │
-        ▼
-  7. PII SCAN     the consensus transcript; scope the decision by speaker
-        │  PII found → REDACT
-        ▼            ┌──────────────────────────────────────────────┐
-     pass(product) ◄─┤ 8. QUALITY  9. NON-TARGET — parallel, reported│
-                     └──────────────────────────────────────────────┘
+spans        family: "speech", one per run of touching lexical words
+assertions   attribute (one per word), label/pii, flag
+entities     speaker (one per diarized segment), pii
+measurements squim, disruptions, proximity (per span)
+counts       speaker_count {found, declared}
+deviations   stimulus_mismatch, filler, off_task_extent
+verdict      { lexical_n, bracketed_n, speakers, second_diarizer,
+               separation_state, nontarget_speech_s, flags, ... }
 ```
 
-## 1. Transcript
-
-- **The consensus transcript is the transcript.** PREPROCESS produced it with
-  `triage.consensus.align_sources`; this branch reads it and does not re-fuse, re-clean or re-decode.
-- **Per-word `outcome` and `agreement`** are the record of what the recognizers did: `agreement`
-  when every source produced the word, `variant` when they read it differently, `insertion` when
-  only some produced it. Agreement is a count ratio, never correctness.
-- **Edges** are the derived consensus word timings; each source's own timing and the word's
-  `temporal_uncertainty_s` travel with it. This branch does not replace them with a second aligner.
-- **Bracketed words are not lexical.** `[COUGH]`, `[UM]` are in the stream with `bracketed: true`;
-  nothing here counts them toward word totals or span extents. They stay in the PII haystack so
-  that a finding's position in the scanned text maps back to the right entity.
-
-**A word carried by one recognizer alone is an insertion, not a consensus word**, and a lexical
-insertion is the fabrication evidence this branch records — a shared hallucination across two
-independent recognizers is a different and much rarer event. Each word carries which sources
-produced it.
-
-**The PII scan reads several texts in one call**: the consensus text (the plain join of every
-word's `text`) and each recognizer's own transcript from its `asr_hypothesis` measurement. A name
-only one recognizer heard — the reading a variant does not display, or an insertion — is located
-against that source's `readings` in stream order and marks the consensus word it lands on. The
-finding's extent is the hull of the covered words' per-source timings, so the cut covers every
-place a recognizer heard the name; a `(category, first, last)` raised by two haystacks is one
-finding.
-
-A recording whose non-lexical content is a sustained production reaches [`VOICE`](branch-voice.md)
-through [`routing.md`](routing.md); this branch does not defend against it with an energy test.
-
-`fail` when the consensus carries no word: no speech was detected, so this branch has no subject. No
-PII scan is written on that path, no REDACT step runs, and the file's release axis reads
-`not_assessed`.
-
-## 2. Speech spans
-
-Lexical consensus words are grouped into spans by their derived timings. A span is the extent of a
-run of words; a bracketed word does not extend one.
-
-## 3. Corroboration
-
-Two instruments per span, each over the whole span:
-
-| instrument | measure |
-| --- | --- |
-| YAMNet `Speech` | the fraction of the span's `yamnet_windows` whose label set contains a speech-family member |
-| SQUIM over the span | STOI, SI-SDR, as a **test of whether the span is speech** |
-
-Both agreeing confirms the span. Disagreement is a **`flag`**, and the measure that made it ambiguous
-travels with the flag.
-
-The SQUIM floors are estimated **across speech-containing spans** and are config keys
-(`speech.speech_test_stoi_floor`, `speech.speech_test_si_sdr_floor`), null until that estimation
-exists.
-
-## 4. Diarization
-
-**The default assumption is one speaker at a time.** Overlapping voices occur and are not the case
-this branch is built for; what it must get right is the **speaker count**.
-
-`pyannote/speaker-diarization-community-1` runs first, applied **only to `[first word start, last
-word end]`**.
-
-| pyannote's count | what happens |
-| --- | --- |
-| 1 | that is the count. **No second diarizer runs** |
-| ≠ 1 | a second diarizer is consulted and the disagreement is reported; it does not replace pyannote |
-
-- Restricting the interval is what keeps non-speech events out of the speaker count.
-- **No segment is withdrawn for overlapping an airway span.** Diarization answers a question about
-  speech, and an airway event inside a speaker turn does not remove the turn. This supersedes the
-  withdrawal rule N10; the codomain is the counts pyannote can return, and 0 is one of them.
-- Overlap is not a product of this step: pyannote's exclusive view caps per-instant speaker count at
-  1 by construction, and the branch reports the count rather than an overlap track.
-- **The count is not compared against a declared count.** `hint.targeted_speaker_count` is the
-  acquisition protocol's intent, and no corpus this graph runs on establishes where that number came
-  from. It is not read here, and a measured count that differs from a declared one is not evidence of
-  anything until the declaration's provenance is known.
-
-## 5. Separation — to extract the foreground
-
-Runs when the foreground must be extracted from a background: a speaker count above 1, or a
-non-target source the proximity leg (step 9) places behind the target.
-
-| backend | how it is invoked |
-| --- | --- |
-| `unasdiff` in **`speech_sound` mode** | slot 0 is the speech prior; the sound slot stands for **any background**, so the mode is used without conditioning the background on a class |
-| `MossFormer2_SS_16K` | two speech streams, as the alternative |
-
-Both are **measurement-gated**: neither is selected by default, the choice is the config key
-`speech.separation_backend`, and it ships null until a measurement over this corpus ranks them.
-Whether separation improves anything on overlapping speech is unmeasured —
-[`benchmarks/separation.md`](benchmarks/separation.md).
-
-Each stream is written to the store as its own element, and every measurement taken on a stream
-records which stream it came from: a quality reading from a separated stream is not the same claim as
-one from the recording. `MossFormer2_SS_16K` fixes `n_sources` at 2, so a count of ≥3 is reported
-rather than separated into the wrong number.
-
-## 6. Speaker identification — the target is enrolled, not hinted
-
-Words are attributed to speakers by their timings against the diarizer's segments. A word straddling
-a boundary is marked rather than assigned.
-
-**The target speaker is identified by an embedding enrolled across all of the subject's provided
-recordings**, not by a per-file target hint. Enrollment is a caller-supplied input and a store
-element:
-
-```
-enrollment: {
-  subject_id:  str,
-  vector:      [float],            # unit-norm, estimated across the subject's recordings
-  provenance:  { model_id, revision, task },     # REQUIRED
-  sources:     [ { recording, extent? }, ... ],  # every recording that contributed
-  distribution: { ... }?           # spread over the contributing windows, when available
-}
-```
-
-- **Provenance is required and is model + revision.** Embeddings from different models, or from two
-  commits of one model, are not comparable, so an enrollment without both is **refused rather than
-  compared**, and the branch flags.
-- `sources` names every recording behind the vector, so an enrollment is reproducible and a file's
-  own contribution to its target is visible.
-- The embedding model is the config key `speech.enrollment_model`, with its revision; it ships null.
-- Similarity to a diarized speaker is compared against `speech.target_match_cosine`, null until
-  derived.
-- Absent an enrollment, speakers are `SPEAKER_*`, no identity is claimed, and the branch flags if PII
-  was found.
-
-**A span attributed to a non-target speaker is flagged and removable.** Once attribution exists, each
-speech span carries `attributed_to`, and a span whose speaker is not the target carries a
-`nontarget` marking that a consumer may act on — excluding it from a measurement, or removing it from
-a derivative. This branch marks; it removes nothing.
-
-## 7. PII
-
-`senselab.text.tasks.pii_detection.scan_for_pii` **over the consensus transcript**, then this
-branch's own decision rule rather than the module's default.
-
-**One scan, one text.** The consensus transcript is the only text scanned, and it is the same text
-[`REDACT`](redact.md) plans and verifies against. Each finding carries which recognizers' hypotheses
-carried the word, from the consensus, so a finding resting on one recognizer alone is legible as
-such.
-
-**A repeated name is one finding, marked at every place it was said.** `scan_for_pii` dedupes by
-`(category, text, source)`, so a name said twice in the scanned text arrives here as one finding,
-not two. `_locate` (`nodes/speech.py`) therefore returns every non-overlapping occurrence of that
-finding's text, not just the first, and each occurrence gets its own `pii` entity, extent and word
-marking. Locating only the first occurrence would leave the second unmarked and therefore
-unredacted: [`REDACT`](redact.md) plans off the marking, not off the finding, so an unmarked
-occurrence would be released, and the branch's own verification re-scan would then find the name
-again and withhold the release unremediably.
-
-### The decision is scoped by speaker
-
-| finding | outcome |
-| --- | --- |
-| PII overlapping a **target speaker** span | **`flag`** |
-| PII overlapping only a **non-target** speaker's spans | no flag |
-| PII when **no target is known** | **`flag`** — there is no speaker to exempt |
-| a detector **failed to run** | **`flag`** — "could not check" is not "clean" |
-| a **required** detector was **never attempted** | **`flag`** — same reason, and it is the silent one |
-
-Completeness is `required ⊆ scanned_by` **and** `failed` empty, where `required` is the config key
-`pii.required_detectors`. A detector in `required` but neither scanned nor failed is recorded in the
-measurement's `missing` and flags.
-
-**Any finding at all sends the branch to [`REDACT`](redact.md)**, whatever the speaker scope: flagging
-asks whether a human is needed, redaction asks whether an artifact is releasable, and a non-target
-speaker naming the participant is exactly as unsafe.
-
-### Three limits on what a clean scan means
-
-**Speaker scope catches who *spoke* it, not who it is *about*.** A clinician saying the participant's
-name is the participant's PII spoken by a non-target speaker.
-
-**The scan reads a transcript, so it is a lower bound** — a mis-transcribed name is missed while the
-audio still contains it — **and an upper bound**: a hallucinated identifier is a finding about text
-that was never uttered. A clean scan is a statement about the text, never about the recording.
-
-**The store now holds PII.** A PII finding `label`s the offending `word` elements and every artifact
-must respect that marking — in particular the [report](report.md), which renders words.
-
-### What the product may carry
-
-`verdict` carries **category and extent, never the matched text**.
-
-## 8. Quality — parallel, reported
-
-Two readings per relevant span — the target speaker's speech spans, on that speaker's separated
-stream when separation ran and on the recording when it did not; every speech span when no
-enrollment was given.
-
-| reading | stream | why that stream |
-| --- | --- | --- |
-| `squim` — STOI, PESQ, SI-SDR | **plain** | SQUIM is trained on conditioned 16 kHz speech |
-| clipping, zero-crossing rate | **recording** | peak normalisation and resampling destroy the flat plateaus and the crossing rate the instruments read |
-| dropouts, discontinuities, DC offset | **recording** | same |
-
-**Every span reading names its stream.** A reading taken on the wrong stream is not a weaker
-measurement of the same quantity; it is a measurement of something else.
-
-Per span, the disruption reading reports **counts and extents, not a score**. A span with none
-reports zero, which is a different statement from a span nobody measured. The subjective SQUIM head
-is not used.
-
-**Reported, never gated.** Disruption counts are exact and need no threshold; how much is too much is
-the gate, and no such value is derived.
-
-## 9. The non-target axis
-
-A presence-level product, independent of transcription and of speaker embeddings:
-
-| leg | measure, per span |
-| --- | --- |
-| level | span RMS and peak against the file's own reference level |
-| spectral tilt | the long-term spectral slope over the span |
-| direct-to-reverberant | the span's direct-to-reverberant energy ratio |
-
-Together these are the **proximity leg**: the participant is close-miked and an examiner or bystander
-is not. It is speaker-independent and element-independent, so it applies to a span the embedder
-cannot characterise.
-
-The product is `nontarget_speech_s` — the total duration of speech spans the proximity leg places
-away from the target — reported in the verdict beside the count.
-
-**Measurement-gated.** Every threshold on every leg is a config key under `speech.nontarget` and
-ships **null**; until they are derived the legs are measured and reported per span, `nontarget_speech_s`
-is written as null rather than zero, and no span is excluded on this evidence. A close examiner may
-be indistinguishable from the target on all three legs, and the product says so rather than claiming
-a separation it does not have.
-
-## 10. REDACT
-
-When step 7 found PII, [`REDACT`](redact.md) runs as this branch's last step. When it found none, or
-when the branch failed for want of words, REDACT does not run and the file's release axis reads
-`not_assessed`.
-
-## Outcome
-
-| outcome | when |
-| --- | --- |
-| `fail` | no consensus word |
-| `flag` | PII in a target speaker's spans, or PII with no known target, or a PII detector failed to run; step 3's instruments disagreed; the speaker count is not 1; the two diarizers disagree; the count is ≥3 so separation cannot isolate a speaker; single-recognizer words survive as fabrication candidates; an enrollment was given without model and revision, or with them and no speaker matches |
-| `pass` | words, spans, speakers and quality are in the store, and the verdict below says what the branch concluded |
-
-## Product
-
-**The store holds the content; the product is the verdict and a named view over it.**
-
-```
-outcome:  fail(reason) | flag(reason, partial) | pass
-verdict:  { speaker_count, target_speaker?, enrollment_id?, words_n, speech_s,
-            nontarget_speech_s?, pii{categories[], n, scanned_by[], failed[], missing[]}, flags[] }
-view:     the element ids this branch authored or asserted over
-```
-
-What a consumer reads through the view, by element kind:
-
-| kind | what it carries | authored in |
-| --- | --- | --- |
-| `word` | text, extent, confidence from consensus agreement, the recognizers behind it, speaker, stream, `pii` marking if any | 1, 6, 7 |
-| `span` (speech) | extent, corroboration, YAMNet coverage, `attributed_to`, `nontarget` marking if any, `refines` a PREPROCESS span where one overlapped | 2, 3, 6, 9 |
-| `interval` | the diarizer's window, `[first word start, last word end]` | 4 |
-| `speaker` | diarizer segments, per diarizer, with the disagreement where two ran | 4, 6 |
-| `stream` | one per separated source, or the recording itself | 5 |
-| `enrollment` | the target vector, its model and revision, and every recording behind it | 6 |
-| `pii` | category and extent per finding, the detectors that ran, the detectors that failed, and which recognizers' hypotheses carried it. **Never the matched text** | 7 |
-| `measurement` | SQUIM per span, tagged with the stream it was taken on | 8 |
-| `measurement` | clipping and zero-crossing rate per span, on the original stream | 8 |
-| `measurement` | level, spectral tilt, direct-to-reverberant ratio per span | 9 |
-| `target_match` | speaker, similarity, and the model + revision of both embeddings | 6 |
-
-**`partial` on a `flag` is a view, not a payload** — the same element ids, with the contested
-assertions included so a reader sees both sides.
+**The verdict's basis, exactly** (`speech.py:1078-1090`): `FAIL` only from the no-lexical-words row
+at `:544-565`; `FLAG` when any flag accumulated; `PASS` otherwise.
 
 ## Out of scope
 
-ASR and re-transcription (PREPROCESS runs the recognizers and fuses the consensus), airway detection,
-speaker identity without an enrollment, emotion, language identification, diarizer ranking, quality
-gating, and removing anything — this branch *marks*.
-
-Every element and assertion above goes to the [element store](store.md) with its provenance.
-Derivations live in [`benchmarks/`](benchmarks/).
-
-## Open derivations (v2)
-
-| key | what is owed |
-| --- | --- |
-| `speech.enrollment_model` | which speaker-embedding model and revision enrollment is estimated with; **null** until chosen against a measurement |
-| `speech.target_match_cosine` | the similarity at which a diarized speaker is the enrolled target; **null** |
-| `speech.separation_backend` | `unasdiff` in `speech_sound` mode or `MossFormer2_SS_16K`; **null** until the two are ranked on this corpus |
-| `speech.separation_sound_class` | **not owed a measurement — owed a capability.** `separate_audios` refuses `speech_sound` without a conditioning class for its sound slot ("index 0 is 'Hi-hat'"), so the unconditioned background this section describes is not expressible today. Settled by an unconditioned sound slot upstream, or by naming a defensible FSD class and saying why; **null** meanwhile, and the `unasdiff` option cannot run |
-| `speech.speech_test_stoi_floor`, `speech.speech_test_si_sdr_floor` | SQUIM floors estimated across speech-containing spans; **null** |
-| `speech.nontarget.level_db`, `.tilt_db_per_octave`, `.d_to_r_db` | the proximity leg's thresholds; **null** each, and `nontarget_speech_s` is null until all three exist |
-| `speech.word_gap_ms` | the gap that ends a speech span; **null** |
+Any normative judgement on a deviation — whether a mismatch or a filler count disqualifies a reading
+belongs to whoever reads the deviations. Voice quality on CAPE-V, which is VOICE's (V4). Any refit of
+a STOI, SI-SDR, cosine or non-target threshold against declared families.
