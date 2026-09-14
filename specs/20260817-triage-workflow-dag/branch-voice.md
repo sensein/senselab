@@ -43,7 +43,7 @@ member of `VOICE_ELICITING`.
 **`loudness` and `loudness-v2` are not VOICE-declared.** Both are in `LEXICAL_SPEECH`
 (`families.py:41-42`), because the task asks the participant to say words. An earlier version of this
 document listed them here, which over-counted the table by 1,602. The *measurement* they want is
-still V5's — intensity dynamics — which is the ordinary case of a branch running on content rather
+still V6's — the loudness-condition correlates — which is the ordinary case of a branch running on content rather
 than declaration, and it parallels CAPE-V, whose voice quality belongs here while its sentence
 conformance belongs to SPEECH.
 
@@ -93,9 +93,10 @@ absence of data.
 false under the old definition and is still false under the new one:
 
 1. the envelope threshold separating attempt from background, and a minimum attempt duration;
-2. `f0_track` calls Praat's `to_pitch_cc` with floor and ceiling from `voice.f0_search_range_hz`,
-   shipping `[50.0, 600.0]` (`default.yaml:159`) — this project's number, no derivation — on top of
-   Praat's own undeclared internal voicing threshold;
+2. Praat's own undeclared internal voicing threshold, inside `to_pitch_cc`. The *range* handed to it
+   is not a free parameter — `derive_f0_range` narrows `voice.f0_search_range_hz` per recording
+   (`preprocess.py:941`, `voice.py:71`), derived at `config-derivations.md:641-648` — but the
+   voicing decision within that range is Praat's and is not declared anywhere;
 3. whether a single unvoiced frame breaks an interruption, which now affects only the *reported
    interruption structure* rather than whether a span exists at all — a much smaller consequence than
    before, and the point of the inversion.
@@ -161,21 +162,35 @@ correlation with time, direction bias. `BRANCH_DETECTORS = {"VOICE": _PITCH_TRAJ
 `glide` kind and 3 under `voice` — each carrying an empty `thresholds` and absent from `DETECTORS`,
 because they are branch measurements rather than gates.
 
-**The search range clips the diagnostically interesting endpoint of both glide families.**
-`[50.0, 600.0]` (`default.yaml:159`) excludes female falsetto, which reaches 700–900 Hz and beyond,
-and excludes the fry below 50 Hz where downward glides end. The endpoint of the sweep is exactly
-where the tracking fails.
+**Per-recording narrowing is already what the code does.** `voice.f0_search_range_hz`
+`[50.0, 600.0]` (`default.yaml:159`) is **not a fixed operating range**: it is the wide *search*
+bound of the pitch-range standardization method, from which that method narrows each recording's own
+floor and ceiling. `derive_f0_range` is called at `preprocess.py:941` and at `voice.py:71`, both off
+`plain`, so PREPROCESS and VOICE cannot hold ranges that drift. `config-derivations.md:641-648`
+records the reasoning, including why the key it replaced had to be null — *no single range serves
+both a low adult male fundamental and an infant voice, and no fixed range is needed because the range
+is derivable per recording*.
 
-Three parameter-free responses, all available now:
+An earlier version of this document recommended "use `derive_f0_range` for per-recording limits
+rather than one fixed window" as though it were a change. It is the existing behaviour, and the
+recommendation was written by assuming an absence rather than checking.
 
-- use `derive_f0_range` (`tasks/phonation/__init__.py:3-12`) for **per-recording** limits rather than
-  one fixed window — noting that **widening an F0 search range is a trade, not a free win**: it
-  increases octave errors across the whole track, so the range-clipping flag below is what makes the
-  narrow default honest rather than something to fix by widening alone;
-- add a **conformance flag**: the F0 extremum coincided with the search limit, which says the range
-  was clipped without asserting what the true extremum was;
+**The narrower question that survives** is whether the 600 Hz **outer search bound** truncates the
+endpoint of an upward glide. Female falsetto reaches 700–900 Hz, and the per-recording narrowing can
+only narrow *within* the search bound — it cannot find a ceiling above it. Symmetrically, the 50 Hz
+floor sits above the fry where downward glides end. That is a bounded question about the outer limit,
+not a claim that the range is fixed.
+
+Two parameter-free responses to it, both available now:
+
+- add a **conformance flag**: the F0 extremum coincided with the derived limit *or* with the outer
+  search bound — which says the range was clipped, and at which of the two, without asserting what
+  the true extremum was;
 - report a **robust percentile range** beside the extrema, and a **count of octave-scale
-  frame-to-frame jumps**, which is the tracker's own instability made visible.
+  frame-to-frame jumps**, the tracker's own instability made visible.
+
+**Widening the outer bound is a trade, not a free win**: it increases octave errors across the whole
+track. The conformance flag is what makes the current bound honest, and is the cheaper fix.
 
 **Add the direction deviation, keyed on the dominant monotone segment.** The sweep ran opposite to
 the requested direction — a sign, an observable rather than a classification — over the 3,150 glide
@@ -252,31 +267,29 @@ this project does not have, and Praat's default jitter, shimmer and HNR settings
 20 dB) are widely mistaken for norms and are not norms. No published perturbation norm was collected
 on AGC'd, band-limited phone audio.
 
-### V5 — Composite severity indices (**not built; and the rule I invoked was the wrong one**)
+### V5 — Composite severity indices: **moved to the corpus-level node**
 
-The Acoustic Voice Quality Index (Maryn et al. 2010) combines CPPS, HNR, shimmer local, shimmer dB
-and LTAS slope and tilt. An earlier version of this document proposed emitting it on the grounds
-that its **coefficients are published rather than fitted here**, so it discharges the no-refits rule.
+AVQI and its relatives are **not per-recording capabilities here**, and this branch no longer claims
+them. Their protocol requires a sustained vowel *and* continuous speech concatenated, which in this
+corpus are different recordings of the same session — so assembling the input is a same-session
+operation. See [`corpus-level-node.md`](corpus-level-node.md) C2.
 
-That is true and it is beside the point. **AVQI is calibrated against perceptual overall grade and
-reported on a 0–10 severity scale with a published cut-off around 2.95.** Emitting it is emitting a
-severity estimate — which engages the *non-diagnostic* constraint, not the no-refits one. Every other
-capability in this document declines to map an acoustic value to normal or disordered; this one would
-do exactly that, with a number that looks authoritative because it is externally anchored.
+Two things stay recorded here, because they are VOICE's arguments even though the capability is not
+VOICE's:
 
-**Three consequences:**
+**The rule I first invoked was the wrong one.** An earlier version proposed emitting AVQI on the
+grounds that its coefficients are **published rather than fitted here**, so it discharges the
+no-refits rule. True, and beside the point: AVQI is calibrated against perceptual overall grade and
+reported on a 0–10 severity scale with a published cut-off around 2.95. Emitting it is emitting a
+**severity estimate**, which engages the *non-diagnostic* constraint instead — and every other
+capability in this document declines to map an acoustic value to normal or disordered.
 
-1. **CPPS is promoted to V4's primary descriptor** on its own merits — it dominates AVQI's weight
-   anyway, and reported alone it is a description rather than a severity estimate.
-2. **AVQI is not a per-recording capability here.** Its protocol requires a sustained vowel *and*
-   continuous speech concatenated; in this corpus those are **different recordings**. So it is a
-   corpus-level capability like duplicate detection, not something VOICE computes on one file.
-3. **It has no validity gate.** Shimmer carries its largest positive coefficient, and V4 gates
-   shimmer everywhere else in this document. A composite that ingests an ungated shimmer inherits
-   its invalidity silently.
+**Whether this project emits any severity estimate is the owner's decision**, not one these documents
+resolve. Recorded as owed.
 
-**Whether this project emits any severity estimate is a decision for the owner**, not one this
-document resolves. Recorded as owed.
+**What VOICE keeps from it**: CPPS is V4's primary descriptor on its own merits — it carries the
+dominant weight in these composites anyway, and reported alone it is a description rather than a
+severity estimate.
 
 ### V6 — Loudness-task conditions and effort correlates (**not built**)
 
@@ -316,7 +329,9 @@ speech.** Both cite the other so a reader finds one answer.
 
 `_f0_range` (`voice.py:48-83`) reads `hint.metadata["population"]` against
 `voice.f0_range_by_population`, which is null (`default.yaml:160`), falling back to `derive_f0_range`
-over the wide search range.
+(`voice.py:71`) — which narrows the wide search bound to this recording's own floor and ceiling.
+**The fallback is the better path**, and `config-derivations.md:650` records the key as replacing the
+derived range rather than supplying something it lacks.
 
 **Conditioning an F0 search range on population silences the population most likely to be studied.**
 A male-registered speaker with unusually high F0 — puberphonia, a trans-feminine voice — falls
@@ -386,7 +401,7 @@ The residue: a phonation too quiet to clear the envelope threshold still yields 
 | V2 maximum phonation time | not built; previously specified as a longest voiced run |
 | V3 F0 trajectory | 22 detectors held; branch consumption not built; search range clips both glide endpoints |
 | V4 voice quality | Praat machinery complete; CPPS primary, perturbation gated; type-2 detection not built |
-| V5 composite severity | **not built, and deliberately** — a severity estimate, and a corpus-level protocol |
+| V5 composite severity | **moved** to [`corpus-level-node.md`](corpus-level-node.md) C2; whether to emit one at all is the owner's call |
 | V6 loudness conditions | not built; condition segmentation missing entirely |
 | V7 population F0 range | gated behind null config, and the case for it is not made |
 | V8 vowel identity | not built; use formants |

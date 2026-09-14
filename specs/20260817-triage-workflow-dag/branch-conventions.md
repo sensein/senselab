@@ -122,6 +122,14 @@ branch-proposed spans into `all.duration_*`, `all.rate_per_s` and `all.duty_frac
 
 SPEECH already mints `family: "speech"` spans today, so the exposure predates the contract.
 
+## Some capabilities are not per-recording
+
+A capability that compares across recordings, or that assembles input from several recordings of one
+session, belongs to the **corpus-level node** that runs last over the finished per-recording stores —
+[`corpus-level-node.md`](corpus-level-node.md). Duplicate detection and the composite voice-quality
+indices are there; a branch that finds another such capability flags it rather than parking it in a
+per-recording section where it cannot run.
+
 ## What a branch does with an unavailable measurement
 
 An unavailable measurement is an **absence**, never a negative. Gate evidence is `unavailable` on
