@@ -12,7 +12,9 @@ record of *why* the change was made, and renumbering its citations into a tree w
 absent would destroy the evidence rather than refresh it. **A reader wanting current line numbers
 should read [`dag.md`](dag.md) and
 [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md),
-whose citations are maintained against the tree.**
+whose citations are maintained against the tree.** **The commit that implemented this plan is
+`e169ff81`** (*"PREPROCESS writes the consensus stream; readers take words by index"*); diff it
+against the `bd71525e` pin to see what the redesign actually changed.
 
 `bd71525e` already carried the aligner fix (`5aa4f607`, cost model in
 [`transcript-alignment.md`](transcript-alignment.md)) and the owner's rulings R-1..R-5 in
