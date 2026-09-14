@@ -41,6 +41,23 @@ called out where it lands:
   figures that stood here before were an earlier, narrower measurement; step 3c says which is which
   and why both are correct for what they measure.
 
+Spot-checked again on 2026-09-13 at `51967abb`, which corrected eight citations and three claims
+about current behaviour: the gap spans below, QUALITY's margin, the `clip_contradiction_margin`
+readership, the extend drivers' fingerprint gate, TAXONOMY's third activity step, DDK's `NO_NODE`,
+four stale FIGURE line numbers and two stale `vocabulary.py` ones. The section that changed most is
+"Background, and the gap spans", which asserted the opposite of what the code does.
+
+**Where this graph is going is designed, and none of it is built.**
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+(2026-09-13) specifies a four-stage pipeline — PREPROCESS → SCREEN → BRANCHES → VERDICT — in which
+TAXONOMY and ROUTING merge into one SCREEN node; every branch works to one five-verb contract
+(`label`, `contest`, `refine`, `trim`, `propose`, of which only `propose` mints a span entity); the
+declaration is resolved from the BIDS sidecar JSON rather than parsed out of a filename; deviations
+are written as enumerated facts rather than judgements; and PREPROCESS is required to emit a *clean*
+span set rather than the permissive one a recall-first router wants. **Read it as a design.**
+Everything below this point describes the graph as it runs today, and the design is cited again at
+the three places where this document already records the matching item as owed.
+
 ## Glossary
 
 The vocabulary below is used precisely and its terms are not interchangeable. More than one defect
@@ -290,7 +307,7 @@ ground has ever had.
 
 **QUALITY is now a second, independent source of the same flag**, and it does not lift the finding
 either — it adds to it. Its verdict enters `fold_file_verdict`'s `reasons` like any other node's
-(`reasons = list(node_verdicts)`, `vocabulary.py:334`), so a clip contradiction flags the file on
+(`reasons = list(node_verdicts)`, `vocabulary.py:363`), so a clip contradiction flags the file on
 its own. Its expected count is zero on a fresh run; see step 5e.
 
 **The measured ruleset is now the only mechanism.** `taxonomy.ruleset` and `routing_analysis/`
@@ -311,7 +328,7 @@ step 3c.
 
 **The `kind` entity type stays in `PROV_TYPE` (`prov_store.py:17-38`), and that is deliberate.**
 `read_jsonl` validates every entity's `prov_type` against that literal, so removing the member makes
-every store written before 2026-09-13 unopenable — all 62,578 of them, and with them all four
+every store written before 2026-09-13 unopenable — all 62,578 of them, and with them all five
 `scripts/extend_*` drivers. **"Pre-alpha: delete outright" governs our own API surface, not the
 ability to read records already on disk.** The store is append-only and W3C PROV-shaped: a reader
 that refuses a record it previously wrote contradicts that premise. Retiring a type from the writer
@@ -736,7 +753,8 @@ classifier produced scores; there was nothing to consolidate" — when none did.
 flag rather than a silent pass: with no per-span scores, every label gate ROUTING is about to
 evaluate reads `unavailable`, so the file routes on a fraction of the evidence the ruleset was fitted
 on. `TaxonomyResult` carries `classifiers: tuple[str, ...]` and `n_labels: int`; its activity steps
-are `<classifier>_label_summary` per summarised classifier and then `conclude` (`:304`, `:351`).
+are `<classifier>_label_summary` per summarised classifier, `consensus_taxonomy` for the
+consolidation (`taxonomy.py:255-263`), and then `conclude` (`:304`, `:351`).
 
 **What is no longer here, and why it was deleted rather than fitted.** `taxonomy.presence_floor.*`
 were four nulls, `_line_state` returned `unavailable` whenever `floor is None`,
@@ -784,7 +802,7 @@ directory, the same shape as re-running `report`. It **recomputes nothing**: eve
 a store read or a display transform of one, which is why `continuity_trace` had to be persisted. A
 structural AST sweep asserts FIGURE imports no measuring API (`figure_reads_only_test.py:79-92`),
 and a second test asserts no `FigureStyle` field name can shadow a pipeline config key
-(`figure_test.py:273-283`).
+(`figure_test.py:275-288`).
 
 The pipeline configuration is **read and never overridden** — a threshold set to make a panel draw
 would produce a picture of a pipeline that is not the one in production. A panel whose element is
@@ -795,12 +813,12 @@ absent names the missing derivative and prints the reason the producing node rec
 | panel | what it shows | store entity / derivative | config key(s) |
 | --- | --- | --- | --- |
 | cover — SOURCE | the recording's path, wrapped | ADMIT's recorded path (`_source_path`) | none |
-| cover — CONSENSUS ALIGNMENT | `consensus_alignment_lines` (`:1576`): algorithm, per-source word counts and timing source, agreement/variant/insertion outcome counts, time-shift fit, word-timing uncertainty | `consensus_transcript` measurement and its word stream | none |
+| cover — CONSENSUS ALIGNMENT | `consensus_alignment_lines` (`:1568`): algorithm, per-source word counts and timing source, agreement/variant/insertion outcome counts, time-shift fit, word-timing uncertainty | `consensus_transcript` measurement and its word stream | none |
 | cover — WHOLE-FILE CLASSIFICATION SUMMARY | built by `_summary_sections` (`:620`), assembled in `summary_panel_lines` (`:887`): each of YAMNet/AST/HeAR's highest-scoring labels over the whole file | `<classifier>_label_summary` (TAXONOMY's fold of `<classifier>_scores`) | none pipeline; `style.summary_labels` caps rows listed |
 | cover — ENHANCED — SPEECH ISOLATED BY FRCRN, then RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL | `summary_panel_lines` renders both streams in sequence (`_stream_classifier_block`, `figure.py:783`; titles at `:56`): a gain/enhanced-fraction/residual-energy line, a label summary per classifier over **YAMNet, AST and HeAR** (`_SUMMARISED_CLASSIFIERS`, `figure.py:53`), and a compact speech-free line per classifier (`_stream_speech_free_line`, `:823`) | the `residual` measurement; `{enhanced,residual}_{yamnet,ast,hear}_summary_all` and their `_summary_speech_free` variants | none — all twelve stream summaries now reach the page |
 | cover — ROUTE STATES AND GATE OUTCOMES | the last part of `summary_panel_lines` (`:908`), built by `_summary_sections` from `_route_decisions` (`:589`): the file route state, then per branch its route state, whether it runs and whether a hint forced it, its unreadable gates and its fired flags, and finally every gate that fired | ROUTING's `branch_decision` entities and its `ruleset_routing` measurement | none read directly — reflects what `taxonomy.ruleset`'s gates already decided |
-| per-page — wideband spectrogram | the speech-analysis spectrogram | `spectrogram_wideband` | `spectrogram.wideband_window_ms`, `spectrogram.hop_ms` (`:1849-1851`) |
-| per-page — waveform | conditioned waveform, envelope dBFS trace, floor and `k_db` threshold lines, continuity trace and its rank-cut level | `energy_envelope` (`envelope_dbfs`, `floor_dbfs`), `continuity_trace` | `spans.k_db` (`:1939`) — read here, not by the span lane panel below it |
+| per-page — wideband spectrogram | the speech-analysis spectrogram | `spectrogram_wideband` | `spectrogram.wideband_window_ms`, `spectrogram.hop_ms` (`:1842-1843`) |
+| per-page — waveform | conditioned waveform, envelope dBFS trace, floor and `k_db` threshold lines, continuity trace and its rank-cut level | `energy_envelope` (`envelope_dbfs`, `floor_dbfs`), `continuity_trace` | `spans.k_db` (`:1931`) — read here, not by the span lane panel below it |
 | per-page — span lane | every live general span (amplitude/continuity/asr/normalization/gap), plus clip-event extents | live `span` entities (`family` absent) and clip-family spans | none read directly — the span algorithm's own keys are already baked into the stored spans |
 | per-page — YAMNet raster | the union of each span's top-K YAMNet labels, scored | `span_yamnet` per-span scores | `taxonomy.consolidation_floor` sets the row floor; `style.top_labels` (= 4, `:161`) caps labels per span (`_raster_rows`, `:448`, called `:1849-1850`) |
 | per-page — HeAR raster | the same, for HeAR | `span_hear` per-span scores | same as the YAMNet raster above |
@@ -1108,12 +1126,41 @@ not an airway input — YAMNet's airway family on `enhanced` reaches Youden 0.35
 
 #### Background, and the gap spans
 
-Unchanged. PREPROCESS writes the complement of the proposed span set as `measure: "gap"` and
-classifies it like any other span. **Background is not a branch**: the branches answer "is the
-content the protocol asked for present"; a mains hum is a property of the room. It belongs
-to QUALITY, which is the node for questions of that shape. QUALITY now has an implementation, and it
-is not this one: what it implements is a clip-consistency audit over PREPROCESS's own records. A
-gap span's background content still reaches no decision.
+PREPROCESS writes the complement of the **kept** span set as `measure: "gap"` and classifies it like
+any other span (`preprocess.py:1555-1583`). `covered` is built from `combined`, the four proposers'
+surviving spans, so a gap is the complement of what was kept and not of what was proposed, and a gap
+shorter than `spans.min_duration_ms` is not emitted at all (`:1563`, `:1566`).
+
+**A gap span is not held out of any branch, and the section here used to say it was.** Gap spans
+carry `signal`, `measure`, `merged_proposals: 0` and `contains_clip` and **no `family` key**
+(`preprocess.py:1570-1578`). `family` is written on exactly one kind of span in the whole of
+PREPROCESS — the clip spans, at `family: "clip"` (`preprocess.py:706`, `quality.py:58`). AIRWAY
+selects on `family is None` (`airway.py:198`), so every gap span is in its evidence set as an
+ordinary candidate. They are also in `state["span_ids"]`, which is what the per-span classifiers run
+over (`preprocess.py:1583`, `:1587`; `_span_hear` reads it at `:1861-1865`), so each one carries HeAR windows like any
+other span. A gap span whose HeAR windows name `Cough` or `Breathe` is labelled (`airway.py:251-277`)
+and counts into `labelled_n` (`:394`) — which is the quantity separating AIRWAY's `pass` from its
+`fail` (`airway.py:376-383`). **A gap span can therefore carry the whole airway verdict on its own**,
+and step 5a's "excluding any span carrying a `family`" is the same fact stated from the other side.
+
+**The QUALITY framing still holds for the content that is genuinely background.** The branches answer
+"is the content the protocol asked for present"; a mains hum is a property of the room, not an event,
+and it belongs to QUALITY, which is the node for questions of that shape. QUALITY now has an
+implementation and it is not this one: what it implements is a clip-consistency audit over
+PREPROCESS's own records. So background that is not airway-shaped still reaches no decision.
+
+**The mechanism cuts against the thesis rather than supporting it.** If background is not a branch's
+subject, then a span named "whatever the proposers left over" being full evidence for AIRWAY is a
+defect and not a feature — the gap set was introduced to get the background *measured*, and it ended
+up letting the background be *concluded on*.
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md),
+part (b), proposes typing gap spans as background precisely so they stay measured and visible while
+ceasing to be eligible to be something that happened; it also records the one interaction that leaves
+open — a branch-proposed event sitting inside an extent typed background. That is the place to argue
+it, not here.
+
+**How often this decides anything is unmeasured.** Nobody has counted, over the corpus, how many
+AIRWAY verdicts rest on a gap span rather than on a proposed one.
 
 #### What the ruleset still owes
 
@@ -1127,7 +1174,7 @@ gap span's background content still reaches no decision.
 | `cough.words_onomatopoeic` | staged, not swept. It is the sole member of `STAGED_DETECTORS`, outside the catalogue and outside `branch_gates`. The next profile built from the corpus carries its distribution and the import will then demand it be promoted |
 | the presence floors | **settled by deletion.** The four `taxonomy.presence_floor.*` nulls are gone from the config and the lines that read them are gone from `nodes/taxonomy.py`; adopting the ruleset retired the question rather than answering it. `taxonomy.speech_labels` is still null and still owed a value, but only by `nodes/speech.py`, which reads it as corroborating evidence inside the branch |
 | the agreement between routing and the branches | stage 1's parallel columns are gone with the second selection; the axis that replaces them is `FileVerdict.agreement`, which compares the **route** against what the branch then found (step 7). Nobody has counted that over the corpus yet, and it is the number that says whether a gate over-routes |
-| the hint layer | designed above, not implemented |
+| the hint layer | designed above, not implemented — and [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md) now proposes replacing it rather than finishing it: the per-recording facts come from the BIDS sidecar as a `declaration` measurement SCREEN resolves, and that design names three separate reasons the present hint path could not have worked (the sidecar unread, the only populated map raising on load, and its values failing a case-sensitive `BRANCHES` test) |
 | a DDK arm | there is no `nodes/ddk.py`; see step 5d |
 | the branch-held detectors | 22 of them sit in `BRANCH_DETECTORS["VOICE"]`, swept and deliberately not gated. `nodes/voice.py` does not read one. What a branch would *conclude* from a pitch trajectory is decided nowhere |
 
@@ -1165,7 +1212,8 @@ tells the two apart in its agreement table (step 7) rather than ROUTING resolvin
 **Every branch in `BRANCHES` gets a decision, DDK included.** `BRANCH_FOR_KIND` and
 `UNCLASSIFIED_BRANCHES` are gone; the loop is over `BRANCHES` itself (`routing.py:215`), so the
 four-branch vocabulary and the four-branch decision set are the same set by construction. DDK has no
-node, and `run._drive_branches` records it `SKIPPED` with `NO_NODE` when it is selected — see step 5d
+node, and `run._drive_branches` records it `SKIPPED` with `NO_NODE` whether or not it is selected
+(`run.py:300-302`, and the function's own docstring at `:257-259`) — see step 5d
 for what that then does to the file verdict.
 
 What each decision entity carries (`routing.py:225-237`):
@@ -1208,7 +1256,9 @@ exists, inert.
 ### 5a. AIRWAY — confirm or contest PREPROCESS's per-span HeAR labels
 
 Reads the per-span HeAR labels over the general span set — excluding any span carrying a `family`
-— and confirms or contests them (`airway.py:1`). It also reads PREPROCESS's `silence` windows
+— and confirms or contests them (`airway.py:1`). Only clip spans carry a `family`
+(`preprocess.py:706`), so **the gap spans are in this evidence set**, not held out of it; step 3c's
+"Background, and the gap spans" is where that lands. It also reads PREPROCESS's `silence` windows
 (`_inside_certified_silence`, `airway.py:26`; the windows are gathered at `:161-164` and the test
 applied per span at `:232`), the lexical consensus words, which exclude an already-transcribed span
 from the evidence set (`_is_transcribed`, `airway.py:64-79`, used `:216`, and again in the
@@ -1372,8 +1422,13 @@ comparison at detection and never writes a candidate it contradicts**, so on a f
 check is the **audit of that rule** and should find nothing. It does not read whether the rule ran:
 a store from the completed corpus, or one whose spans came from anywhere but `_clip_spans`, carries
 spans nothing filtered, and an audit that assumed compliance would measure nothing on a fresh store
-either. The margin and the edge guard it reports are the ones PREPROCESS recorded on the
-measurement, not ones QUALITY chose.
+either. The **edge guard** it reports is the one PREPROCESS recorded on the `clip_amplitude`
+measurement (`quality.py:246`), not one QUALITY chose. The **margin** is not: QUALITY reads
+`quality.clip_contradiction_margin` from the config itself (`quality.py:239`) and it is that value
+the comparison uses (`:271`) and that the activity and the verdict report (`:256`, `:337`). The two
+agree only because both read the same key — nothing reconciles them, and a campaign override that
+moved the key between a PREPROCESS run and a later `extend_quality.py` pass would audit spans
+against a margin they were never detected under.
 
 **What it writes.** One `assertion` per contradiction, `verb: contest`, `claim: clip`,
 `reason: clip_above_unclipped_sample`, derived from the span it contests. **PREPROCESS's spans are
@@ -1404,9 +1459,13 @@ file verdict is **not** re-folded by that driver, because `fold_file_verdict` fo
 `stoi_floor`, `pesq_floor`, `disruption_clipped_s_max`, `disruption_dropout_s_max`. **Implementing
 the node did not adopt those values**, and the check it does implement is a consistency audit over
 the store's own records rather than a quality judgement about the recording. The two keys of the
-section that *are* read — `clip_contradiction_margin` and `clip_edge_guard_samples` — are read by
-PREPROCESS, which applies them, and only reported by QUALITY. Goal 1 is the goal this node exists
-for, and it remains the goal with the widest gap between what is measured and what decides.
+section that *are* read are not read in the same places: `clip_edge_guard_samples` is PREPROCESS's
+alone (`preprocess.py:1024`, `:1200`), and every later reader takes it off the measurement, while
+`clip_contradiction_margin` has three independent `config.require` readers — `preprocess.py:1201`,
+`quality.py:239` and `extend.py:606`. The packaged config says as much in its own comment
+(`default.yaml:273`, "PREPROCESS withdraws on it, QUALITY audits on it"). Goal 1 is the goal this
+node exists for, and it remains the goal with the widest gap between what is measured and what
+decides.
 
 *Goals served*: 1, in intent. One internal-consistency check reached; none of the four SQUIM or
 disruption tolerances.
@@ -1459,7 +1518,7 @@ The triage ladder, in order (`fold_file_verdict`, `vocabulary.py:417-429`):
 
 **`UNEXPLAINED` flags, it does not discard.** Nothing routed and the recording was not measurably
 empty is a charge against the ruleset, so it appends a ROUTING `FLAG` reason carrying
-`vocabulary.UNEXPLAINED_CONTENT` (`vocabulary.py:387`) and the file lands on row 2. Collapsing it
+`vocabulary.UNEXPLAINED_CONTENT` (`vocabulary.py:388`) and the file lands on row 2. Collapsing it
 into row 3 would discard the evidence that the gates missed something.
 
 Reasons accumulate rather than being reduced to the deciding one. The list starts as **every node's
@@ -1555,9 +1614,16 @@ Four properties are worth stating, because each is a constraint the graph's own 
 - **Nothing re-folds the file verdict.** `fold_file_verdict` folds the runner's `ran` mapping, which
   is not a store fact, so a driver cannot honestly reproduce it. QUALITY's `preceded_by` naming
   `VERDICT` is how a reader tells the fold predates the verdict beside it.
-- **A pass that changes nothing writes nothing.** Each driver compares the store's fingerprint
-  before and after and skips the rewrite when it is unmoved, so a completed slice re-run is a read
-  and a task that dies mid-slice restarts where it stopped.
+- **A pass that changes nothing writes nothing — in four of the five.**
+  `extend_clip_amplitudes.py` (`:124`, `:128`), `extend_quality.py` (`:125`, `:129`),
+  `extend_reprocessed_outputs.py` (`:210`, `:217`) and `extend_withdraw_clips.py` (`:121`, `:125`)
+  each compare the store's fingerprint before and after and skip the rewrite when it is unmoved, so
+  a completed slice re-run is a read and a task that dies mid-slice restarts where it stopped.
+  **`extend_ppg_praat.py` does not.** It gates on a presence test instead — `pending(store)`
+  (`:119-128`, used at `:187-190`) — and then calls `write_store` and `export_prov` unconditionally
+  for every run it opened (`:246-247`), so a run whose derivation raised is still rewritten and
+  re-exported. Whether that is a defect or the price of the environment capture it also performs is
+  **not settled here**; the divergence is what is worth recording.
 
 **The typed-absence rule lives here** and is the reason these drivers report honestly. See the
 glossary: `extend.UNAVAILABLE` and `extend.attempt_derivation`. Before it, each driver carried its
@@ -1666,7 +1732,11 @@ correctly extracted hint forces nothing. Stage 2 re-keyed it from kinds to branc
 nothing else about it, deliberately: the hint layer is a later design, and re-keying was the minimum
 that kept it callable once kinds stopped existing. See [`benchmarks/open.md`](benchmarks/open.md), "Hints:
 mapping, extraction and vocabulary". The ruleset's own hint layer is deferred by design, not by a
-null.
+null. That later design now exists —
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md) —
+and it does not finish the hint layer so much as supersede it, reading the protocol's own `task_name`,
+`speech_type` and `stimulus_text` out of the BIDS sidecars into a `declaration` SCREEN resolves.
+Nothing of it is implemented.
 
 **Three id namespaces stay distinct.** A gate's name, a detector's name and a branch's name are not
 interchangeable even where two of them are spelled the same — `airway.ppg_silent_fraction` is both a
