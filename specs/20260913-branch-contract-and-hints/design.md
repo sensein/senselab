@@ -24,9 +24,9 @@ PREPROCESS   Shared derivatives, extend work included. Content-first, hint-blind
 SCREEN       TAXONOMY ⊕ ROUTING, merged. Consolidates the classifier evidence, resolves
              the declaration, applies the ruleset and the hints, emits the routing decision.
 
-BRANCHES     Receive every upstream output, their route, and the declaration. Mark, refine,
-             refute, propose and trim into `family: "<branch>"` spans. Emit typed deviations.
-             Conclude on their own question.
+BRANCHES     Receive every upstream output, their route, and the declaration. Annotate
+             PREPROCESS's spans (label, contest, refine, trim) and propose the ones it
+             missed as `family: "<branch>"` spans. Emit typed deviations. Conclude.
 
 VERDICT      Admit/reject, flag for human review, durable description.
 ```
@@ -41,9 +41,9 @@ its own `GRAPH_ORDER` entry gated on SPEECH's result**, not a step of SPEECH. RE
 re-read a finished store. All keep their current positions.
 
 **QUALITY is the sharp case, and it decides the scope of the verbs.** QUALITY writes `contest`
-assertions over PREPROCESS's clip spans (`quality.py`, the clip-consistency check) — that is
-`refute`, performed by a node that is not a branch. So **the verbs are store-wide, not branch-only**:
-any node may mark, refine, refute, propose or trim, and the contract below says how, regardless of
+assertions over PREPROCESS's clip spans (`quality.py`, the clip-consistency check) — one of the
+contract's own verbs, performed by a node that is not a branch. So **the verbs are store-wide, not branch-only**:
+any node may label, contest, refine, trim or propose, and the contract below says how, regardless of
 who performs it. What is branch-specific is the *family* the findings are written under and the
 question the node concludes on.
 
@@ -95,7 +95,7 @@ routing, which has already happened once.
 **Two verdicts become one, and it must fold both conclusions.** TAXONOMY and ROUTING each write one;
 `store.md` requires a node's verdict be attributed to its last step. An earlier revision demoted the
 consolidation's conclusion to a `detail` field — **that deletes a live FLAG ground.**
-`taxonomy.py:356-360` writes `Outcome.FLAG` with "no per-span classifier produced scores; there was
+`taxonomy.py:360` writes `Outcome.FLAG`, with the string at `:361`: "no per-span classifier produced scores; there was
 nothing to consolidate"; `vocabulary.py:423` folds on `outcome` and reads no `detail`; and
 `routing.py:263` writes `PASS` unconditionally. Demoting it would silently stop that flag firing.
 
@@ -148,8 +148,10 @@ exists and is already written; nothing filters on it today.
 
 **AIRWAY is not on that list, and an earlier revision wrongly put it there.** AIRWAY reads
 **`span_hear`** (`airway.py:242`, and its docstring says so at `:171`), and `attribution` is written
-only by `_span_yamnet`. With `_windows_covering` deferred below, **AIRWAY is untouched by rule (a)
-end to end.**
+only by `_span_yamnet`. With `_windows_covering` deferred below, **AIRWAY's own reads are untouched
+by rule (a)** — but `airway.cough` is a *routing gate*, so rule (a) still changes whether AIRWAY runs
+at all. The two senses must not be conflated: the rule cannot alter what AIRWAY sees, and can alter
+whether it is asked to look.
 
 **So rule (a) either moves routing or does nothing.** `airway.cough`'s feature is
 `span_label_set_stat` over `yamnet.cough_labels.peak_over_floor_db_max` (`default.yaml:245-248`),
@@ -160,16 +162,32 @@ changing the router: branch evidence is empty, and `consensus_taxonomy`'s only p
 `RecordingFeatures`, apply to the consensus and to branch evidence" as a fallback; that fallback is
 vacuous and is withdrawn.
 
-**The before-and-after gate-firing count over the corpus is therefore not a precaution, it is the
-decision procedure** for whether rule (a) ships at all.
+Worse, the gate becomes **structurally unable to fire on the class it names**: rule (a) makes
+covering-window YAMNet labels ineligible, `yamnet.py:257-258` makes a native window impossible under
+0.96 s, and coughs are usually shorter than that.
 
-**One choice remains open and must be made with that count in hand:** whether rule (a) stays scoped
-to `span_yamnet` — leaving AIRWAY genuinely unaffected — or is extended to `span_hear`, which would
-require HeAR to gain an attribution flag it does not currently write. This spec scopes it to
-`span_yamnet`; extending it is **unresolved**.
+**So the corpus count must compare candidates, not measure one change.** A single before/after has
+only one legal reading and decides nothing. The three candidates:
+
+1. **Rule (a) as written**, and `airway.cough` accepted as near-silent.
+2. **Rule (a) not shipped**, and covering-window labels kept as routing evidence.
+3. **Rule (a) shipped and `airway.cough` re-sourced onto HeAR evidence** — AIRWAY already reads
+   `span_hear`, and HeAR classifies a short span on its own content (`hear.py:426-443`), so the
+   gate's subject is available from a classifier that rule (a) does not touch.
+
+Candidate 3 is the one that keeps both the rule and the gate, and it is the reason the count is a
+comparison. **This is the decision procedure for whether rule (a) ships at all**, not a precaution
+attached to shipping it.
 
 No PREPROCESS re-run is needed; existing stores need `rewrite_consensus_taxonomy` re-run to pick up
 the consensus change.
+
+**The count itself needs a fix first.** `features.py:1079-1091` appends every live span to
+`live_spans` with no `family` filter, and `_span_statistics`'s `all.*` bucket includes them. That is
+harmless in-run, because routing precedes the branches and no family span exists yet — but **not in
+an offline recompute over finished stores** (`scripts/analyze_routing_evidence.py:158`), which is how
+a gate count would be produced. Branch-proposed spans would enter the router's own statistics. The
+family filter lands before the count does.
 
 **The remedy is incomplete, and the gap is named rather than closed.** AIRWAY has a *second*
 covering-window mechanism the flag does not touch: `_windows_covering(store, "yamnet", hear_extent)`
@@ -346,16 +364,19 @@ routes SPEECH on the ruleset's evidence and has that speech recorded.
 
 ## The branch contract
 
-> A branch receives the shared derivative state, its route, and the declaration. It **marks** what it
-> recognises, **refines** boundaries the proposer got wrong, **refutes** what was proposed but is not
-> there, **proposes** what the proposer missed but the declaration says to expect, and **trims** a
-> span to the extent that serves the task. It writes its findings as `family: "<branch>"` spans, emits
-> typed deviations, and concludes on its own question.
+> A branch receives the shared derivative state, its route, and the declaration. It **labels** what it
+> recognises, **contests** what was proposed but is not there, **refines** a boundary the proposer got
+> wrong, and **trims** a span to the extent that serves the task — all four as assertions about spans
+> that keep their own identity. It **proposes** what the proposer missed but the declaration says to
+> expect, and that alone mints a `family: "<branch>"` span. It emits typed deviations and concludes on
+> its own question.
 
 The owner's example is the specification: *a breathing task routing through AIRWAY will try to
 estimate inhalation and exhalation even though the initial spans may not have generated all of them;
 and a non-airway task routing through AIRWAY will do its best to find breathing or other airway
 information and mark, refine or refute it.*
+
+Quoted as given; "mark" and "refute" are the store's `label` and `contest`, for the reason below.
 
 The consequence worth stating plainly: **PREPROCESS's span set is clean but not complete.** Clean is
 PREPROCESS's job — the three parts above. Complete is the branch's, and only the branch can do it,
@@ -378,24 +399,52 @@ adopted: it is four rewrites plus a reverse index `ProvStore` does not expose, s
 resolves one way only.
 
 **And carrying a measurement forward is wrong on its own terms.** `attribution: "native"`
-(`preprocess.py:2013`) and `isolated_span: True` (`:340`) are claims about how the **old** extent was
+(`preprocess.py:2013`) and `isolated_span: True` (`:343`) are claims about how the **old** extent was
 fed to a model. After a narrowing refine, a traversing reader would get a label flagged `native` for
 an extent containing no native window — rule (a)'s premise inverted by rule (a)'s own spec.
 
 **So four of the five verbs annotate. They never re-mint a span. The span keeps its id, its
 `family`, its measurements and its liveness; nothing is invalidated and nothing is orphaned.**
 
-| verb | writes | carries | mints |
-| --- | --- | --- | --- |
-| `mark` | `assertion`, `wasDerivedFrom` the span | what the span carries | no |
-| `refute` | `assertion`, `wasDerivedFrom` the span | that it does not carry what was proposed | no |
-| `refine` | `assertion`, `wasDerivedFrom` the span | a **corrected extent**, beside the span's own | no |
-| `trim` | `assertion`, `wasDerivedFrom` the span | the **task-relevant sub-extent**, plus an `off_task_extent` finding | no |
-| `propose` | `span`, `family: "<branch>"`, `wasDerivedFrom` its evidence | a region PREPROCESS did not find | **yes** |
+**The contract adopts the store's existing spellings rather than inventing new ones.** An earlier
+revision renamed `label`→`mark` and `contest`→`refute`; that is withdrawn, and the rename is not
+merely unnecessary but unsafe. `verb: "label"` is written by **SPEECH as well as AIRWAY** —
+`speech.py:961` writes `{"verb": "label", "label": "pii", ...}` and `redact.py:237` selects on
+exactly that pair to decide what gets redacted. Renaming `label` stops PII redaction firing,
+silently. The real readers of `verb` are `redact.py:237`, `report.py:196`, `report.py:327` and
+`extend.py:542`; it appears in neither `verdict.py` nor `figure.py`.
+
+| verb | `verb:` value | writes | carries | mints |
+| --- | --- | --- | --- | --- |
+| label | `"label"` | `assertion`, `wasDerivedFrom` the span | what the span carries | no |
+| contest | `"contest"` | `assertion`, `wasDerivedFrom` the span | that it does not carry what was proposed | no |
+| refine | `"refine"` | `assertion`, `wasDerivedFrom` the span | `corrected_extent: [start, end]` | no |
+| trim | `"trim"` | `assertion`, `wasDerivedFrom` the span | `task_extent: [start, end]`, plus the `off_task_extent` finding | no |
+| propose | — | `span`, `family: "<branch>"`, `wasDerivedFrom` its evidence | a region PREPROCESS did not find | **yes** |
+
+`label` and `contest` already exist and keep their meanings; `refine`, `trim` and `propose` are new.
+**`abstain` and `flag` also keep their current meanings** and are not folded into this table:
+`abstain` records that colocated evidence existed and decided nothing, and `flag` is a branch-level
+finding rather than a span-level one.
+
+**The corrected extent goes in a named attribute, never in `assertion.extent`.** Every existing
+assertion sets `extent=span.extent` (`airway.py:272`, `:308`, `:330`) and `report.py:1144`'s
+`_timing` relies on that convention, so a `refine` that moved `assertion.extent` would be read as
+timing the span itself. Hence `corrected_extent` and `task_extent` as attributes, with
+`assertion.extent` continuing to name the span being annotated.
+
+**The precedent for reading these already exists.** `figure.py:577-585` consumes SQUIM *assertions*
+by walking `store.derived_from(entity.id)` — assertion → span, the one direction the store resolves.
+That is exactly the traversal the annotating verbs need, already in production.
 
 `refine` and `trim` still emit their deviations; they simply do not rewrite the store's spans. A
 corrected extent is a claim beside the original — attributable, reversible, and never in competition
 with it for a reader keying on `span_id`.
+
+**But SPEECH's, VOICE's and DDK's assertions currently reach no reader.** `report.py:1127` drops
+every assertion whose branch is not AIRWAY, and `figure.py:577-578` reads assertions only where
+`name == "squim"`. Widening REPORT's assertion read is therefore a piece of work in its own right,
+listed below, and not something the existing readers absorb for free.
 
 **This is the store's own idiom, not an invention.** `corroborated_by` already records rival
 proposals as an attribute without minting entities, and `withdraw_contradicted_clips` with
@@ -411,12 +460,15 @@ Anything written as `family: "<branch>"` — including AIRWAY's own proposals �
 Under the annotation model this affects only `propose`, and it is a constraint the AIRWAY piece must
 address rather than a defect in the contract.
 
-**A branch-proposed short span cannot be classified by YAMNet at all.** `span_yamnet_input` raises
-`SpanTooShortForYAMNet` below 0.96 s (`yamnet.py:257-258`), so rule (a)'s own motivating case — a
-200 ms cough — can never acquire a native YAMNet window, whatever proposes it and however many passes
-are run. HeAR can, via the silent buffer (`hear.py:426-443`). This is a **property of the
-classifiers**, recorded here and not resolved: a short span is HeAR-only, and rule (a) is
-unsatisfiable for YAMNet on any short span regardless of its origin.
+**Nothing measures a proposed span.** No node runs a model at branch time, and `airway.py:171-173`
+makes not re-running HeAR an explicit design point. **A proposed span therefore carries its branch's
+own evidence and no per-span classifier measurement at all**; adding a branch-time classifier pass is
+out of scope for this design and is listed as unresolved.
+
+Even if one were added, **YAMNet could not classify a short proposed span**: `span_yamnet_input`
+raises `SpanTooShortForYAMNet` below 0.96 s (`yamnet.py:257-258`), so rule (a)'s own motivating case —
+a 200 ms cough — can never acquire a native YAMNet window, whatever proposes it. HeAR has the
+capability, via the silent buffer (`hear.py:426-443`), but no mechanism invokes it at branch time.
 
 ### Where each branch already stands
 
@@ -427,35 +479,48 @@ instance of the contract.
 **VOICE was designed to and cannot.** Its subject is every live span whose `family` is `phonation`
 (`voice.py:232`, `_PHONATION_FAMILY` at `:39`). Nothing in the tree proposes one — the detector
 was retired 2026-09-04 — so the branch takes its no-span path and returns `Outcome.FAIL` on every
-recording. Under this contract **the branch is the proposer**, and that is the whole fix.
+recording.
+
+Under this contract **the branch is the proposer**, and that is the whole fix — **with the selector
+changed to the branch family.** `propose` writes `family: "voice"`; `phonation` was the retired
+proposer's name and nothing justifies keeping a second family for the same subject.
 
 **AIRWAY has half the verbs already**, writing `label`, `confirm`, `contest`, `abstain` and `flag`
 assertions across its first three steps (`airway.py:230` through `:373`).
 
-`mark` ≈ `label` and `refute` ≈ `contest` is a **writer-vocabulary rename on a closed set that
-verdict, figure, report and extend read**, so the rule from the merge applies unchanged: SCREEN-era
-code writes the new spellings, readers keep both. `confirm` becomes a `mark` carrying its
-corroborating window ids. **`abstain` and `flag` map to no verb and stay as they are** — `abstain`
-records that colocated evidence existed and decided nothing, which is neither a mark nor a refutation,
-and `flag` is a branch-level finding rather than a span-level one.
+Two of those are the contract's own verbs already, which is why the contract adopts their spellings
+rather than renaming them. `confirm` becomes a `label` carrying its corroborating window ids;
+`abstain` and `flag` keep their current meanings.
 
-**`refute` needs a threshold-free definition, and gets one — with the same budget rule (a) gets.**
+**`contest` needs a threshold-free definition, and gets one — with the same budget rule (a) gets.**
 `airway.contest_labels` is `null` (`default.yaml:138`), so `_contest_labels` returns the empty set
 (`airway.py:150`) and `contested_n` is structurally zero; the ground-truth rule forbids fitting the
-list. So `refute` is defined without one: **a branch refutes a span when it finds no evidence of any
+list. So `contest` is defined without one: **a branch contests a span when it finds no evidence of any
 kind within that span's extent.** That needs no fitted label list, and leaves the fitted list as a
-later refinement letting a branch refute on *contrary* evidence rather than only on absent evidence.
+later refinement letting a branch contest on *contrary* evidence rather than only on absent evidence.
 
 **That definition interacts badly with rule (a) and must be counted before it ships.** Rule (a) makes
 covering-window labels ineligible as evidence, and coughs are usually sub-0.96 s, so "no evidence of
-any kind" would refute most short spans. `contested_n` would go from structurally zero to near-total,
-feeding AIRWAY's verdict and the mismatch flag at `vocabulary.py:393`. **The same before-and-after
-count rule (a) requires is required here**, and for the same reason: the two changes compound.
+any kind" would contest most short spans. `contested_n` would go from structurally zero to
+near-total. **The same before-and-after count rule (a) requires is required here**, and for the same
+reason: the two changes compound.
 
-**Background-typed gap spans are not refutable.** A gap span is a statement about where PREPROCESS
-found nothing, so "no evidence within its extent" is what it already asserts; refuting it would be
-tautological and would flood `contested_n` with the one span class guaranteed to satisfy the
-definition.
+The chain that makes this urgent is not the mismatch flag — `vocabulary.py:393` is driven by
+`_agreement` over `findings`, and `_resolved` (`:209-220`) maps every non-FAIL outcome to `present`,
+so a contest never moves it. It is shorter and stronger: contests → AIRWAY's `flags` → AIRWAY
+`Outcome.FLAG` (`airway.py:379-380`) → the any-FLAG fold at `vocabulary.py:423` → `Triage.FLAG`.
+**Every contest flags the file directly.**
+
+`contested_n` also needs redefining before it can be counted: it increments inside the per-label loop
+(`airway.py:289`, `:323-324`), and a span with no members never enters that loop (`:260-261`) — which
+is exactly the population a contest-on-absence targets.
+
+**Background-typed gap spans are not contestable, and the reason is the verb's object, not the
+evidence.** A gap span carries real branch-readable evidence — gaps are appended to `span_ids`
+(`preprocess.py:1583`) and the per-span classifiers run over them, which is why 143 of 384 consensus
+rows traced to gaps. So "no evidence within the extent" is not automatically true of a gap. What is
+true is that `contest` carries *that a span does not carry what was proposed*, and **a gap proposes
+nothing**, so a contest over one has no object.
 
 **DDK has no node.** `nodes/ddk.py` does not exist. Since stage 2 the ruleset routes DDK, so a
 recording with DDK content receives a `branch_decision` with `will_run` true and is recorded
@@ -478,17 +543,19 @@ an observation with an extent.
 column would flag the corpus — the exact failure stage 1 refused when it declined to let a
 default-uncertain kind line flag every recording.
 
+A deviation is an observation **with an extent**. Three qualify:
+
 | type | what it says |
 | --- | --- |
-| `speaker_count` | how many speakers were found, and what the declaration claimed as its target |
 | `stimulus_mismatch` | a lexical word that is not the word the stimulus expected |
 | `filler` | a disfluency or non-speech token where the task expected lexical content |
-| `expected_event_count` | how many events of the declared class were found, and how many the table expected |
 | `off_task_extent` | a region of the recording that does not serve the declared task |
 
-The first and fourth are named for what they **report**, not for a verdict on it. `extra_speaker` and
-`missing_expected_event` were the earlier names; both encoded the comparison the prose below forbids,
-so under this repo's rename-outright rule they are renamed rather than footnoted.
+**`speaker_count` and `expected_event_count` are not deviations** — they are file-level counts with
+no extent, and the section's own definition excludes them. They are written **beside the
+declaration**, as two numbers each: what was found, and what was declared. Earlier drafts called them
+`extra_speaker` and `missing_expected_event` and put them in this table; both the names and the
+placement encoded a comparison the branch is not entitled to make.
 
 ### The line the ground-truth rule draws through this table
 
@@ -496,17 +563,16 @@ A declaration used as a **condition for what to look for** is the contract's who
 declaration used as a **reference to score against** is what the ground-truth rule forbids, because
 the declaration is not verified.
 
-`stimulus_mismatch`, `filler` and `off_task_extent` are on the right side: each reports something
-observed in the audio, located, with the declaration only saying where to look.
+The three deviations are on the right side of it: each reports something observed in the audio,
+located, with the declaration only saying where to look.
 
-**`expected_event_count` and `speaker_count` are the two that had to be renamed to stay on it.** As
-`missing_expected_event` and `extra_speaker` they scored the recording against a count the
-declaration asserts and nobody verified — and "expected five breaths, found three" is as likely to
-mean the table is wrong as that the participant under-performed. Renamed, each **reports two numbers,
-what was found and what was declared, and asserts no discrepancy between them.** Whoever reads them
-may compare; the branch does not.
-
-Both still **owe ground truth** before any consumer is entitled to treat the difference as a finding.
+**The two counts are what forced the line to be drawn.** As `missing_expected_event` and
+`extra_speaker` they scored the recording against a count the declaration asserts and nobody verified
+— and "expected five breaths, found three" is as likely to mean the table is wrong as that the
+participant under-performed. Recorded instead as **two numbers beside the declaration, found and
+declared, with no discrepancy asserted**, they stay observations. Whoever reads them may compare; the
+branch does not, and both **owe ground truth** before any consumer treats the difference as a
+finding.
 
 ### Read speech has the sharpest case
 
@@ -579,8 +645,15 @@ condition that no hint claims otherwise. The table above is not a replacement fo
 holds every node's `verdict` entity, ROUTING's `branch_decision`s and its `ruleset_routing`, and that
 "this node reads nothing else" (`verdict.py:218-220`). Reading branch findings and the consensus
 taxonomy is a deliberate widening of that contract. **The smallest defensible choice: VERDICT does
-not widen.** The description is assembled by REPORT, which already reads the whole store, and
-VERDICT's `detail` carries the identifiers a reader follows. Whether the durable description should
+not widen.** The description is assembled by REPORT, and VERDICT's `detail` carries the identifiers a
+reader follows.
+
+**REPORT does not read the whole store either, and an earlier revision claimed it did.** It reads
+spans and measurements across branches, but `report.py:1127` drops every assertion whose branch is not
+AIRWAY, and `figure.py:577-578` reads assertions only where `name == "squim"`. Under the annotating
+contract that means **SPEECH's, VOICE's and DDK's entire output reaches no reader at all.** Widening
+REPORT's assertion read is a prerequisite for the description job, and is listed as its own piece
+below. Whether the durable description should
 instead be its own entity written by VERDICT is **unresolved**.
 
 **A deviation does not drive a reject**, and for now does not drive a flag either. Whether a
@@ -596,7 +669,7 @@ Dependency order, with the pieces that are genuinely independent marked:
    **Independent.** Note `make_hints.py` also reads `routing.hint_kind_map` and raises when it is
    absent (`:414-416`, validated at `:20-23` and `:429-439`), so renaming only `override.yaml` breaks
    hint generation; both move together.
-2. **The `preprocess.py:1520` continuity derivation bug.** **Independent, small**, split out of piece 8.
+2. **The `preprocess.py:1520` continuity derivation bug.** **Independent, small**, split out of piece 9.
 3. **Span cleanliness (a) and (b)** — the attribution filter and background typing, scoped to
    `span_yamnet`. Includes the before-and-after gate-firing count on the corpus and a
    `rewrite_consensus_taxonomy` pass over existing stores.
@@ -608,15 +681,19 @@ Dependency order, with the pieces that are genuinely independent marked:
 6. **Whole-file diarization** — the raw-vs-enhanced pilot first, then the extend driver, then SPEECH's
    diarize step becoming a read. **Not independent of 5**: `speaker_count` needs the declaration's
    single-target claim.
-7. **The branch contract, per branch** — SPEECH first (closest to it), then AIRWAY (which also closes
+7. **Widen REPORT's assertion read** — `report.py:1127` drops every non-AIRWAY assertion and
+   `figure.py:577-578` reads only SQUIM, so under the annotating contract three branches' output
+   reaches no reader. **Independent of the branch work and a prerequisite for it**; without it a
+   branch can be built and its findings be invisible.
+8. **The branch contract, per branch** — SPEECH first (closest to it), then AIRWAY (which also closes
    the `_windows_covering` gap), then VOICE (which needs a proposer before it has a subject), then
-   DDK (which needs a node). Depends on 5, and on 6 for `speaker_count`.
-8. **Boundary reconciliation** — blocked on a parameter-free definition, per (c).
+   DDK (which needs a node). Depends on 5, on 6 for `speaker_count`, and on 7 to be visible.
+9. **Boundary reconciliation** — blocked on a parameter-free definition, per (c).
 
-**One ordering inversion is accepted and budgeted.** Piece 8 changes every span extent, hence which
-spans clear 0.96 s — the whole basis of piece 3 — and which need refining in piece 7. Since 8 is
-blocked on a definition that does not exist, 3 and 7 proceed first and **are re-measured after 8
-lands**; that re-measurement is part of 8's cost, not a surprise.
+**One ordering inversion is accepted and budgeted.** Piece 9 changes every span extent, hence which
+spans clear 0.96 s — the whole basis of piece 3 — and which need refining in piece 8. Since 9 is
+blocked on a definition that does not exist, 3 and 8 proceed first and **are re-measured after 9
+lands**; that re-measurement is part of 9's cost, not a surprise.
 
 ---
 
@@ -628,9 +705,9 @@ verification. Nothing is refit until something has been listened to.
 
 **The boundary reconciliation rule** (c) — no parameter-free definition yet.
 
-**Whether rule (a) extends from `span_yamnet` to `span_hear`.** Scoped to `span_yamnet` here, which
-leaves AIRWAY untouched by it; extending would require HeAR to gain an attribution flag it does not
-write. To be decided with the before-and-after gate count in hand.
+**Whether a branch may run a classifier pass at branch time.** Nothing does today, and
+`airway.py:171-173` makes not re-running HeAR an explicit design point, so a proposed span carries no
+per-span classifier evidence. Adding such a pass is out of scope here.
 
 **DDK has a contract, which is not the same as being specified.** What DDK concludes about a segment
 rate, and what its findings are, is undecided. Until the node exists, recordings with DDK content
