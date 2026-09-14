@@ -1,52 +1,48 @@
 # QUALITY
 
 What this node answers: **does the store contradict itself, and is anything true of the recording
-that is a property of the room rather than of the content?**
+that is a property of the room or the device rather than of the content?**
 
-The frame is [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md).
-This document is grounded in the code and in [`dag.md`](dag.md); where the two disagree the code
-wins and the disagreement is named.
+The frame is [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md);
+shared rules are in [`branch-conventions.md`](branch-conventions.md). This document is grounded in
+the code and in [`dag.md`](dag.md); where those disagree the code wins and the disagreement is named.
 
 ## QUALITY is not a branch, and the difference is load-bearing
 
-Three properties separate it from AIRWAY, SPEECH, VOICE and DDK. Each is deliberate.
-
 **It reads stored records only.** Entities and their attributes. It decodes no audio, opens no
 sidecar and re-derives nothing — every amplitude it compares was measured by the node that held the
-signal (`quality.py` module docstring, `:8-12`). This is what makes `scripts/extend_quality.py` able
-to run it over a finished store years later, and it is a property to preserve rather than a
-limitation to lift. A capability proposed for QUALITY that needs the waveform does not belong here;
-it belongs in PREPROCESS, with QUALITY reading what PREPROCESS wrote.
+signal (`quality.py:8-12`). That is what lets `scripts/extend_quality.py` run it over a finished
+store. A capability needing the waveform does not belong here; it belongs in PREPROCESS, with
+QUALITY reading what PREPROCESS wrote.
 
 **It runs on every path PREPROCESS completed.** `run.py:310` calls it unconditionally after the
-branch loop — whatever routing selected, and whether or not routing itself raised, since `selected`
-falls back to the empty set when `routed is None` (`run.py:296`). It is therefore the one node
-positioned to see every branch's output at once. Note it is *not* terminal: REDACT runs after it
-(`run.py:311-317`), and `dag.md` has been corrected on that point.
+branch loop — whatever routing selected, and whether or not routing raised, since `selected` falls
+back to the empty set when `routed is None` (`run.py:296`). So it is the one node positioned to see
+every branch's output at once.
 
-**It is not routed.** No gate selects it, and `KIND` is `None` (`quality.py:56`). So the question
-every branch document must answer — what it does on a recording routed to it whose declared task
+**It is not terminal**, though two places say it is. REDACT runs after it (`run.py:311-317`).
+`dag.md` has been corrected; `vocabulary.py:29`'s docstring still reads *"The terminal node every
+recording reaches"* — a code follow-up, noted here and not edited from this document.
+
+**It is not routed.** No gate selects it and `KIND` is `None` (`quality.py:56`), so the question the
+four branch documents must answer — what it does on a recording routed to it whose declared task
 belongs elsewhere — does not arise. QUALITY sees everything.
 
-### Where it sits in the four stages, and whether its `contest` is the contract's
+### Where it sits, and whether its `contest` is the contract's
 
-The branch-contract spec's four stages are PREPROCESS → SCREEN → BRANCHES → VERDICT, and QUALITY is
-in none of them. **It is a fifth position: after the branches, before VERDICT, reading the whole
-store.** The spec's own review flagged that the taxonomy leaves it unplaced; the resolution is that
-the four stages describe the *routing and measurement* path, and QUALITY is a cross-cutting audit
-over the result of that path. ADMIT, REDACT, REPORT and FIGURE sit outside the four for the same
-kind of reason.
+The contract's four stages are PREPROCESS → SCREEN → BRANCHES → VERDICT, and QUALITY is in none of
+them. **It is a fifth position: after the branches, before REDACT and VERDICT, reading the whole
+store.** The four stages describe the routing-and-measurement path; QUALITY is a cross-cutting audit
+over its result. ADMIT, REDACT, REPORT and FIGURE sit outside the four for the same kind of reason.
 
-**Its `contest` is the contract's `contest`.** The contract defines `contest` as *"the span does not
-carry what was proposed"*. A clip span proposes that the signal reached its ceiling over that
-extent; an unclipped sample louder than that ceiling says it did not. That is an instance of the
-contract's definition under a different test — the test being an amplitude comparison rather than an
-absence of evidence. `quality.py:291` writes `verb: CONTEST_VERB` with `CONTEST_VERB = "contest"`
-(`:61`), the same wire value AIRWAY writes, and a reader keying on `verb` gets a consistent meaning.
+**Its `contest` is the contract's `contest`.** The contract defines it as *"the span does not carry
+what was proposed"*. A clip span proposes the signal reached its ceiling; an unclipped sample louder
+than that ceiling says it did not — an instance of the definition under an amplitude test rather
+than an absence test. `quality.py:291` writes `verb: CONTEST_VERB`, `CONTEST_VERB = "contest"`
+(`:62`), the same wire value AIRWAY writes.
 
-**This is the evidence that the verbs are store-wide rather than branch-only.** QUALITY is not a
-branch and it contests. What is branch-specific is the *family* a `propose` writes, not the verb
-vocabulary.
+**This is the evidence that the verbs are store-wide.** QUALITY is not a branch and it contests.
+What is branch-specific is the *family* a `propose` writes, not the verb vocabulary.
 
 ## Capabilities
 
@@ -54,140 +50,177 @@ vocabulary.
 
 **Question.** Does any clip span assert a ceiling that a sample outside every clip span exceeds?
 
-**Reads.** PREPROCESS's `clip` spans for their extents, and the `clip_amplitude` measurement for
-every amplitude including per-span levels (`quality.py:8-12`). The spans say what was asserted; the
-measurement says what the samples were.
+**Reads.** PREPROCESS's `clip` spans for their extents and the `clip_amplitude` measurement for
+every amplitude including per-span levels (`quality.py:8-12`).
 
 **Computes.** For each clip span with a stored level, whether the whole-file unclipped peak exceeds
 that level by more than `quality.clip_contradiction_margin` of it (`quality.py:271`).
 
 **Emits.** One `contest` assertion per contradiction, `wasDerivedFrom` the span it contests
-(`quality.py:291-302`). **PREPROCESS's spans are never invalidated here** — the store is
-append-only and the span is PREPROCESS's reading, not QUALITY's to withdraw.
+(`quality.py:288-302`). **PREPROCESS's spans are never invalidated here** — the store is append-only
+and the span is PREPROCESS's reading.
 
-**Its expected count is zero, and that is the point.** `_clip_spans` now applies the same comparison
-at detection and never writes a candidate it contradicts, so this check is the *audit* of that rule
-(`quality.py:31-36`). It deliberately reads nothing about whether the rule ran: a store from the
-completed corpus, or one whose spans came from anywhere but `_clip_spans`, carries spans nothing
-filtered, and an audit that assumed compliance would measure nothing on a fresh store either.
+**Its expected count is zero, and that is the point.** `_clip_spans` applies the same comparison at
+detection and never writes a candidate it contradicts, so this is the *audit* of that rule
+(`quality.py:31-36`). It deliberately reads nothing about whether the rule ran.
 
 **One trap, recorded in `dag.md`.** The margin is QUALITY's own `config.require`
-(`quality.py:239`), not PREPROCESS's — only the edge guard comes off the measurement (`:246`). They
-agree today because both read the same key, so an override changed between a PREPROCESS run and a
-later `extend_quality.py` pass would audit spans against a margin they were never detected under.
+(`quality.py:239`); only the edge guard comes off the measurement (`:246`). They agree today because
+both read the same key, so an override changed between a PREPROCESS run and a later
+`extend_quality.py` pass would audit spans against a margin they were never detected under.
 
-**Parameter-free?** No — `quality.clip_contradiction_margin` is a threshold. But it is a
-*tolerance on a physical comparison*, not a classification cut, and it is already derived and
-recorded in `data/`. The no-refits rule does not reach it.
+**Parameter-free?** No, but `quality.clip_contradiction_margin` is a tolerance on a physical
+comparison rather than a classification cut, and it is derived and recorded in `data/`.
 
-### Q2 — Background content (**not built; depends on gap spans becoming background**)
+### Q2 — Effective bandwidth (**not built; the highest-value addition here**)
+
+**Question.** What frequency band does this recording actually carry?
+
+**Effective bandwidth is not the declared sample rate.** A 16 kHz file may carry nothing above
+4 kHz — because of the codec, the microphone, or the capture chain. And CPP, spectral slope and
+tilt, spectral moments, HNR and F3/F4 are **all bandwidth-dependent**, so an undeclared band limit
+turns device class into a pseudo-finding: a population difference that is really a phone difference.
+
+**Measurable from the long-term average spectrum**, which needs no threshold to report — the
+roll-off point is a description of the spectrum, not a classification of the device.
+
+**This is why Q5's sample-rate equality check is a weak substitute**: it compares two declarations of
+what the file *should* be, and says nothing about what it carries.
+
+**Emits.** A file-level measurement. It is the covariate
+[`branch-conventions.md`](branch-conventions.md) requires every acoustic branch measurement to carry,
+so QUALITY computing it once is what makes that rule affordable.
+
+**Where it runs.** The long-term average spectrum needs the waveform, so **PREPROCESS computes it and
+QUALITY reads it** — the same division that keeps Q1 audio-free.
+
+### Q3 — Background content (**not built; depends on gap spans becoming background**)
 
 **Question.** What is in the regions no proposer claimed, and is any of it a property of the room?
 
 **`dag.md` states the boundary**: the branches answer "is the content the protocol asked for
-present"; a mains hum is a property of the room, not an event, and questions of that shape are
-QUALITY's. But it also records that the mechanism cuts against the thesis — gap spans carry no
-`family` key (`preprocess.py:1570-1578`), `airway.py:198` selects `family is None`, and **a gap span
-can carry the whole AIRWAY verdict on its own** because `labelled_n` separates `pass` from `fail`
-(`airway.py:376-383`, `:394`).
+present"; a mains hum is a property of the room, and questions of that shape are QUALITY's. It also
+records that the mechanism cuts against the thesis — gap spans carry no `family` key
+(`preprocess.py:1570-1578`), `airway.py:198` selects `family is None`, and **a gap span can carry the
+whole AIRWAY verdict alone** because `labelled_n` separates `pass` from `fail`
+(`airway.py:376-383`, detail at `:393-398`).
 
-So background is not QUALITY's today; it is AIRWAY's, by accident of a missing attribute. If the
-branch-contract spec's part (b) types gap spans as background, they leave AIRWAY's selector and
-**QUALITY becomes where their content is concluded on**.
+So background is AIRWAY's today, by accident of a missing attribute. If the contract's part (b) types
+gap spans as background, they leave AIRWAY's selector and **QUALITY becomes where their content is
+concluded on**.
 
-**What it would then read.** The gap spans' own per-span classifier measurements — they are in
+**What it would read.** The gap spans' own per-span classifier measurements — they are in
 `state["span_ids"]` and the per-span classifiers run over them (`preprocess.py:1583`, `:1587`;
 `_span_hear` at `:1861-1865`), so each already carries HeAR windows and needs no new computation.
 
-**What it would conclude.** That a background region carries a label, and which. Not a verdict on
-the recording: a hum, a keyboard, a passing vehicle is an observation about the room. The natural
-form is a `label` assertion over the background span, and — where the label is one a branch would
-have acted on — a note that it was *not* treated as an event.
+**What it would conclude.** That a background region carries a label, and which. Not a verdict on the
+recording: a hum, a keyboard, a passing vehicle is an observation about the room.
 
-**What is unmeasured.** How often a gap span currently decides an AIRWAY verdict. `dag.md` records
-that nobody has counted it. That count is a prerequisite for knowing what part (b) would change, and
-it is a count over the corpus, not a fit against it — so the no-refits rule permits it.
+**Unmeasured.** How often a gap span currently decides an AIRWAY verdict (`dag.md`). That is a count
+over the corpus rather than a fit against it, so the no-refits rule permits it.
 
-### Q3 — Cross-branch contradiction (**not built; in remit**)
+### Q4 — Exact-duplicate detection (**not built; free**)
 
-**Question.** Do two branches say incompatible things about the same extent?
+**Question.** Has this audio been submitted before?
 
-QUALITY is the only node positioned to ask. It runs after every branch (`run.py:310`) and reads the
-whole store, so both branches' assertions are in front of it. Nothing else in the graph has that
-view: VERDICT reads only verdict entities, `branch_decision`s and `ruleset_routing`
-(`verdict.py:218-220` — "This node reads nothing else").
+ADMIT already records `checksum_sha256` on the `recording` stream entity. Two recordings under
+different task ids with the same checksum are the same audio.
 
-**What it would read.** Assertions over overlapping extents from different branches.
+**Re-submission of a previous recording under a new task id is a known failure mode of app-based
+collection at this scale**, and it invalidates any analysis that misses it — a duplicate inflates
+whatever it is counted in and, if it crosses task families, corrupts exactly the declared-family
+comparisons the corpus is scored against.
 
-**What it would emit.** A `contest`, under the same definition — one branch's span does not carry
-what another branch proposed for the same region. Its `wasDerivedFrom` names both.
+**Emits.** A file-level assertion naming the other recording. **Free**: the digest exists, and the
+comparison is equality.
 
-**What makes this hard, and why it is not specified further here.** Two branches labelling the same
-extent differently is usually *not* a contradiction: a cough during a sentence is genuinely both
-airway content and an interruption of speech, and the contract's whole premise is that content the
-task did not ask for is still content. A real contradiction needs a pair of claims that cannot both
-hold — and enumerating those pairs is a domain question nobody has answered. **In remit, not yet
-specifiable.** Recording it as in remit is what stops the next QUALITY-shaped check being built
-somewhere it does not belong.
+**Where it runs.** Cross-recording comparison is outside the single-recording store, so this belongs
+to a corpus-level pass rather than to a per-recording QUALITY invocation. Recorded here because it is
+QUALITY-shaped, with the placement named rather than assumed.
 
-### Q4 — Acquisition consistency (**not built; depends on the declaration**)
+### Q5 — Acquisition consistency (**not built; depends on the declaration**)
 
 **Question.** Does the recording match what the protocol says was recorded?
 
-**Reads.** The declaration's `recording_duration`, `audio_sample_rate`, `audio_channel_count` and
-`recording_microphone`, against the `stream` entity ADMIT wrote — which carries `sampling_rate`,
-`channels`, `size_bytes` and a `checksum_sha256`.
+**Reads.** The declaration's `declared_duration_s`, `sample_rate`, `channels` and `microphone` —
+those are the contract's `metadata` key spellings, not the BIDS sidecar's `recording_duration` /
+`audio_sample_rate` / `audio_channel_count` / `recording_microphone`, which an earlier version of
+this document used and which would send an implementer to keys that do not exist. Compared against
+the `stream` entity ADMIT wrote, carrying `sampling_rate`, `channels`, `size_bytes` and
+`checksum_sha256`.
 
-**Computes.** Equality, and for duration a difference. All three of sample rate, channel count and
-duration are directly comparable; the comparison is arithmetic, not a judgement.
+**Computes.** Equality for sample rate and channel count; a difference for duration.
 
-**Emits.** A `counts`-shaped measurement carrying `declared` and `found` per field. **Asserting no
-discrepancy** — a duration that disagrees with the declaration is an observation, and whether it
-invalidates the recording is not QUALITY's call.
+**Emits.** A `counts` measurement carrying `declared` and `found` per field, **asserting no
+discrepancy**.
 
 **Parameter-free?** Sample rate and channel count are exact. Duration needs a tolerance, and a
-tolerance is a number nobody has. State the difference and let a reader judge, rather than owe a cut.
+tolerance is a number nobody has — so QUALITY states the difference and declines to own a cut. That
+refusal is the model the withdrawn `off_task_extent` definitions in SPEECH, VOICE and DDK should
+have copied.
 
-**`recording_input_gain` is not in this capability.** A gain can be set anywhere and the signal can
-still clip; it does not predict clipping and must not be used as if it did.
+**`recording_input_gain` is not used here.** A gain can be set anywhere and the signal can still
+clip; it does not predict clipping.
 
-### Q5 — SQUIM (**measured by others; QUALITY should not conclude on it**)
+### Q6 — Cross-branch contradiction (**not built; in remit**)
 
-Per-span SQUIM (`stoi`, `pesq`, `si_sdr`) is written by PREPROCESS over the general spans and again
-by SPEECH over its own (`speech.py:959-1010`).
+**Question.** Do two branches say incompatible things about the same extent?
 
-**Should QUALITY read it?** It may — the numbers are stored records, which is QUALITY's whole diet.
-**It should not conclude on it.** `speech.speech_test_stoi_floor` and
-`speech.speech_test_si_sdr_floor` are both null (`default.yaml:168-169`) and neither can be fitted:
-a floor fitted against declared families encodes which recordings the protocol labelled, not which
-are intelligible. So there is no cut, and inventing one here would be the same error SPEECH avoided
-by leaving `squim_vote` at `not_evaluated` (`speech.py:631`).
+QUALITY is the only node positioned to ask: it runs after every branch (`run.py:310`) and reads the
+whole store. VERDICT cannot — it reads only verdict entities, `branch_decision`s and
+`ruleset_routing` (`verdict.py:218-220`, *"This node reads nothing else"*).
 
-**What QUALITY can do without a cut** is report the distribution — the per-span values and their
-spread — as a measurement, so a reader has them in one place. That is a description, not a
-judgement, and it needs no threshold.
+**What makes this hard.** Two branches labelling the same extent differently is usually *not* a
+contradiction: a cough during a sentence is genuinely both airway content and an interruption of
+speech, and the contract's premise is that content the task did not ask for is still content. A real
+contradiction needs a pair of claims that cannot both hold, and enumerating those pairs is a domain
+question nobody has answered. **In remit, not yet specifiable** — recorded so the next
+QUALITY-shaped check is not built somewhere it does not belong.
 
-**Owed ground truth.** Any intelligibility floor. It should be established by listening, not by
-fitting.
+### Q7 — SQUIM, described but not concluded on (**not built**)
+
+Per-span SQUIM is written by PREPROCESS over the general spans and again by SPEECH over its own
+(`speech.py:1006-1014`). An earlier version of this document cited `speech.py:959-1010` for it; that
+range is PII mark code and step 8 begins at `:991`. The same wrong range appeared in
+`branch-speech.md` — it propagated between the two documents.
+
+**QUALITY may read it; it must not conclude on it.** `speech.speech_test_stoi_floor` and
+`speech.speech_test_si_sdr_floor` are null (`default.yaml:168-169`) and neither can be fitted, so
+there is no cut — and inventing one here repeats the error SPEECH avoided by leaving `squim_vote` at
+`not_evaluated` (`speech.py:631`).
+
+**What it can do without a cut** is report the distribution. But two qualifiers must travel with it:
+
+- **SQUIM penalises atypical voices.** It was trained to predict perceptual quality of speech, and a
+  dysphonic voice scores low for reasons that are the *signal*, not the noise.
+- **It is out of domain on coughs, sustained vowels and DDK trains.** Reporting one number across
+  span families pools measurements whose validity differs.
+
+So if QUALITY reports SQUIM it **stratifies by span family and marks the out-of-domain ones**.
+
+**Owed.** Any intelligibility floor, and it should come from listening rather than fitting — see
+[`branch-listening-sample.md`](branch-listening-sample.md).
 
 ## What QUALITY does not emit
 
-No deviations. A deviation is a departure from what a *task* asked for, and QUALITY holds no
-declaration about a task — it holds the store. Q4's acquisition comparison is the nearest thing, and
-it is a `counts`-shaped measurement rather than a deviation because it compares the recording to its
-own metadata, not the performance to its instruction.
+**No deviations.** A deviation is a departure from what a *task* asked for, and QUALITY holds no
+task declaration — it holds the store. Q5's acquisition comparison is the nearest thing and is a
+`counts` measurement, because it compares the recording to its own metadata rather than the
+performance to its instruction.
 
-No spans. QUALITY proposes nothing; it audits what others proposed.
+**No spans.** QUALITY proposes nothing; it audits what others proposed.
 
 ## What exists today
 
 | capability | status |
 | --- | --- |
-| Q1 clip consistency | **built**; expected count zero, it is the audit of a detection-time rule |
-| Q2 background content | **not built**; blocked on gap spans being typed background |
-| Q3 cross-branch contradiction | **not built**; in remit, not yet specifiable |
-| Q4 acquisition consistency | **not built**; needs the declaration |
-| Q5 SQUIM description | **not built**; must not conclude |
+| Q1 clip consistency | **built**; expected count zero |
+| Q2 effective bandwidth | **not built**; highest-value addition; LTAS in PREPROCESS, read here |
+| Q3 background content | **not built**; blocked on gap spans being typed background |
+| Q4 duplicate detection | **not built**; free, but corpus-level rather than per-recording |
+| Q5 acquisition consistency | **not built**; needs the declaration |
+| Q6 cross-branch contradiction | **not built**; in remit, not yet specifiable |
+| Q7 SQUIM description | **not built**; must stratify and must not conclude |
 
 ## What the node emits
 
@@ -201,19 +234,24 @@ verdict      { signal, preceded_by, clip_spans_n, checked_n, unmeasurable_n,
 
 **The verdict's basis, exactly** (`quality.py:312-317`):
 
-- `FLAG` when any contradiction was found.
-- `PASS` with *"no clip span over the recording; nothing to contradict"* when nothing was measurable.
+- `FLAG` when any contradiction was found;
+- `PASS` with *"no clip span over the recording; nothing to contradict"* when nothing was measurable;
 - `PASS` with *"no clip span sits below an unclipped sample"* otherwise.
 
 `preceded_by` names the nodes whose verdicts were live when QUALITY read the store
-(`quality.py:115`, recorded at `:329`) — which on a fresh run is routing and the branches, and on an
-`extend_quality.py` pass over a run that never routed is neither.
+(`quality.py:115`, recorded at `:329`).
 
-**What it refuses.** A dependency that is absent is an operational fact, not a finding: clip spans
-with no clip-amplitude measurement beside them raise, and the runner records the node `ERRORED`
-(`quality.py:14-16`). A contradiction QUALITY *can* measure is always a finding and never a raise.
+**What it refuses.** An absent dependency is an operational fact, not a finding: clip spans with no
+clip-amplitude measurement raise, and the runner records the node `ERRORED` (`quality.py:14-16`). A
+contradiction QUALITY *can* measure is always a finding and never a raise.
 
 ## Out of scope
 
 Anything needing the waveform — that belongs in PREPROCESS. Any normative quality judgement.
 Withdrawing another node's reading. Any threshold fitted against declared families.
+
+## Unresolved
+
+- Q4's placement: a corpus-level pass rather than per-recording QUALITY.
+- Q6's contradiction pairs.
+- `vocabulary.py:29`'s docstring still calls QUALITY terminal — a code follow-up.
