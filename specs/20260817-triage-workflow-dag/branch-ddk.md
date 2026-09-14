@@ -404,3 +404,245 @@ Normative interpretation of rate or regularity. Reconciling D1 and D2 into one n
   `data/task_expectations/` does not exist yet, so the extension is free — but it must be asked for
   explicitly.
 - Whether the PPG posteriorgram is usable at all on rapid nonsense syllables.
+
+### SPARC as a shared PREPROCESS derivative (proposed; not decided)
+
+The owner proposes extracting **SPARC** (speech articulatory coding) across the corpus as a shared
+PREPROCESS derivative, in the same shape as the PPG and the whole-file diarization that
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+already owes — because articulator trajectories would give DDK rhythm directly rather than by
+inference. It is recorded here because DDK is the motivating case. **Nothing below is decided, and
+none of it is built.**
+
+It is **not cross-recording**: every product is a per-recording trajectory, so it does not belong in
+[`corpus-level-node.md`](corpus-level-node.md). `spk_emb` is the only key that even looks
+cross-recording, and nothing here proposes to pool it.
+
+#### What exists in senselab today
+
+`SparcFeatureExtractor` (`audio/tasks/features_extraction/sparc.py:188`) with three classmethods —
+`extract_sparc_features` (`:191`), `decode_sparc_features` (`:312`), `convert_voice` (`:398`). Only
+the first is relevant. It saves one WAV per input, runs `sparc.load_model(language).encode(waveform)`
+(`:64`, `:72`) inside the `sparc` subprocess venv (`:31`, `:44` — Python 3.11, `torch>=2.8,<2.9`) and
+returns one dict per audio. `lang` admits only English (`"en+"`) or `None` (`"multi"`); anything else
+raises (`:220-225`). Mono only (`:236-237`). With `resample=False` — **the default** — a sampling rate
+other than the model's raises after the worker has already run (`:265-271`); `resample=True` re-runs
+the whole subprocess on resampled audio (`:274-278`).
+
+**The documented per-recording output**, from `features_extraction/api.py:422-470` — the only place
+in the tree where any shape is written down:
+
+| key | shape in that docstring |
+| --- | --- |
+| `ema` | `(2106, 12)` float32 — frame-major, 12 articulator channels |
+| `loudness` | `(2107, 1)` |
+| `pitch` | `(2107, 1)` |
+| `periodicity` | `(2107, 1)` |
+| `pitch_stats` | `(2,)` |
+| `spk_emb` | `(64,)` |
+| `ft_len` | `2107`, a plain int |
+
+Four qualifications on that table, because it is a docstring rather than an assertion:
+
+1. **`ema` is one frame shorter than the other three tracks**, and `ft_len` matches the longer set.
+   Any per-frame alignment of articulation against pitch or loudness inherits that off-by-one.
+2. **The key set is not enforced.** The worker serialises whatever `coder.encode` returned
+   (`sparc.py:75-85`) and the parent rebuilds it key-by-key (`:302-307`); only the *failure* path
+   names the seven keys explicitly. The two tests that inspect the dict assert key presence only, never a shape
+   (`src/tests/audio/tasks/features_extraction_test.py:547-549`, `:561-563`).
+3. **The registry disagrees with the docstring on the channel count** — `14 (EMA)` at
+   `src/senselab/model_registry.yaml:562` and `model_registry.md:113` against 12 above.
+4. **Channel semantics are recorded nowhere in `src/`.** The only naming in the tree is
+   `CHANNEL_NAMES` in `tutorials/audio/speech_representations_lab.ipynb` — `TT`, `TB`, `TD`, `UL`,
+   `LL`, `LI` in x and y — and that notebook also transposes `ema` by a shape heuristic because it
+   does not know the orientation either.
+
+**Triage uses it nowhere.** `grep -rni sparc src/senselab/audio/workflows/ scripts/` returns nothing.
+Its only in-package caller is `extract_features_from_audios(sparc=True)`
+(`features_extraction/api.py:567-568`), plus that tutorial.
+
+#### Failure is a NaN, not a typed absence — and that is the gap against the PPG
+
+When `coder.encode` raises for one recording, the parent appends a dict carrying **0-dimensional NaN
+tensors under all seven keys**, with `ft_len` a bare `float('nan')` (`sparc.py:289-300`). A consumer
+that does not test `torch.isnan` or `.dim()` cannot tell a failure from a measurement.
+
+The PPG does the opposite: `PpgsPosteriorgramUnavailable` (`ppg.py:141-142`) with
+`require_posteriorgram` to unwrap it (`:167-181`), which is what lets an absence be attributed as
+one — [`dag.md`](dag.md):157 records it reaching `extend.attempt_derivation`. **A corpus-wide SPARC
+derivative needs the PPG's typed absence before it needs anything else**, or absences become
+NaN-shaped measurements. Per [`branch-conventions.md`](branch-conventions.md) and this document's own
+rule, an absence is never a negative.
+
+#### No revision is pinned, and no guard catches that
+
+`load_model(language, device=device)` (`sparc.py:64`) passes no revision, and the worker's payload
+carries no revision-shaped key (`:243-250`). `src/tests/utils/revision_pinning_guard_test.py` sweeps
+for exactly that key, so **`features_extraction/sparc.py` is invisible to it** — and it appears in
+neither `REVISION_RESOLVED_SUBPROCESS_FILES` nor `LOADER_CANNOT_PIN_SUBPROCESS_FILES`. That test's
+docstring says every subprocess backend lands in exactly one list, but
+`test_the_two_revision_allowlists_are_disjoint_and_current` (`:370-389`) checks only disjointness and
+that the named files still exist; **it does not check coverage.** `features_extraction/ppg.py` is
+absent the same way — but for the PPG that is the honest answer, because ppgs ships its checkpoint in
+the PyPI release and there is no commit to resolve ([`dag.md`](dag.md):496-498). **SPARC is not in
+that position**: `specs/20260819-091500-wav-subtype-sweep/design.md:69` names a Hugging Face repo,
+`cheoljun95/Speech-Articulatory-Coding`, so a commit exists to resolve and none is recorded. Nothing
+today *claims* a SHA, which per CLAUDE.md is the one outcome worse than recording none — but a corpus
+pass would publish provenance naming no commit at all.
+
+#### Three operational gaps against the PPG's own extension, all small
+
+- **No `ensure_sparc_venv`.** The PPG has one (`ppg.py:145-154`) whose docstring exists precisely to
+  say *call it once before fanning a batch out across an array*, because a cold build outlasts the
+  lock's patience window. SPARC calls `ensure_venv` inline at three sites (`sparc.py:227`, `:351`,
+  `:435`), so a Slurm array would race the build — the trap CLAUDE.md records under the venv lock.
+- **The worker timeout is a flat `timeout=600`** on all three paths (`sparc.py:257`, `:382`, `:462`),
+  where the PPG's is duration-proportional — `WORKER_STARTUP_S + 2.0 × audio_seconds`
+  (`ppg.py:184-200`, applied at `:236` and `:264`).
+- **No availability probe.** `ppgs_venv_available` exists (`ppg.py:164`); SPARC has no equivalent.
+- `utils/compatibility.py` marks the PPG entry `gpu_required=True` (`:159`) and the SPARC entry not
+  at all (`:166-171`), which is a claim about SPARC that nothing in this tree measured.
+
+**The host constraint is the PPG's, exactly.** In
+`specs/20260908-120042-cuda-wheel-availability-matrix/design.md:76-77` the `sparc` and `ppgs` rows are
+identical cell for cell — same `torch>=2.8,<2.9`, same `no wheel` on cu121, cu124 and cu130. So a
+SPARC pass adds no new CUDA-host problem beyond the one the PPG pass already has. The two venvs are
+nonetheless **separate trees**: `sparc.py:31` names `"sparc"`, `ppg.py:87` names `"ppgs"`, so
+`sparc.py`'s module docstring claim of a venv *"shared with ppgs where possible"* is not what the code
+does. The sharing that does hold is with `voice_cloning/sparc.py:27-40`, whose venv name, requirement
+list and Python version are byte-identical, so the two cannot thrash each other's install.
+
+#### 1. Why EMA would be the direct instrument, not another cross-check
+
+`/pa-ta-ka/` is a labial, then alveolar, then velar closure — this document already says so twice, at
+`:150-151` and `:298`. EMA channels track those articulators: a labial closure is a lip-aperture
+minimum, an alveolar closure a tongue-tip maximum, a velar closure a tongue-dorsum maximum, and the
+trajectory carries all three in one place with the order built in.
+
+Every DDK capability here infers rhythm from something else, and each inherits a defect recorded
+above:
+
+- **D1** proposes the train from an amplitude envelope. It explicitly *rejects* PREPROCESS's stored
+  `energy_envelope` — dBFS, pre-emphasised, 40 Hz-lowpassed — for three reasons at `:104-117`, and
+  requires a linear-amplitude envelope on `plain` instead. What it cannot escape is that **three of
+  its five conventions are owed** (`:159-171`), including the search band, which it calls decisive;
+  and the one convention in force, `envelope.lowpass_hz: 40.0`, was derived on the dB pre-emphasised
+  envelope and would be inherited across a condition change.
+- **D2**'s nucleus detector has a **minimum sounding interval of 0.1 s against Praat's 0.05 s**, which
+  at 6–7 syll/s sits on the measurand (`:214-216`, `:253-258`), biasing merged syllables *toward* the
+  cycle rate — the same 3× confusion D1's unit disambiguation exists to resolve.
+- **The PPG is out of domain on rapid nonsense syllables**, which is this document's closing
+  Unresolved item and D6's Owed.
+
+EMA would **measure the closures rather than infer them**, which is what makes it a candidate
+*primary* instrument for D1 rather than a fourth cross-check. It does not rescue the unit problem for
+free — a closure sequence still has to be segmented — but a labial-alveolar-velar *ordering* in the
+trajectories is an unambiguous cycle marker in a way an envelope peak is not, because the three
+closures are distinguishable by channel and not only by amplitude.
+
+#### 2. The stream question is the PPG's question again, and it is open
+
+Plan 1's Task 5 (`specs/20260914-f0-range-and-measurement-streams/plan.md:685-710`) moves the
+posteriorgram and the Praat scalars **off `enhanced` onto `plain`**, on D1's reasoning: FRCRN is out
+of domain on a DDK train, and it already feeds this branch's own routing gate
+([`praat-instrument-audit.md`](praat-instrument-audit.md) finding 0, bounded at `:43-51` to exactly
+those two blocks). SPARC used for rhythm has identical exposure: the transients whose *timing* is the
+measurement are the ones an enhancer can smear.
+
+**But SPARC is a trained model, so the trade is two-sided in the way diarization's is.** Noisy `plain`
+moves it away from its training domain where FRCRN moved it toward — the same shape as the whole-file
+diarization derivative, whose contract states plainly that **raw or enhanced is undecided and must be
+piloted first**, that the pilot precedes the corpus pass, and that it stays open pending that pilot
+(`../20260913-branch-contract-and-hints/design.md:664-667`, `:740`, `:798`).
+
+The owner's proposal says `enhanced`. **Record that as undecided, not as chosen**: a SPARC derivative
+owes the same raw-versus-enhanced pilot on the structurally identical decision, read against the
+benchmarks already in this tree, and must not default either way. A pilot run on DDK material does
+not transfer to the VOICE use in (4), which is sustained phonation — two populations, so two pilots,
+or one pilot whose scope is stated.
+
+#### 3. Place-class grouping refines D6 — and does not need SPARC
+
+**The brief for this entry attributed the /pa-ta-ka/ collapse to D4; it is D6.** D4 is the segment
+inventory over the train; D6 is sequence conformance, and it is D6 that names `/pa-ta-pa/` as a
+substitution and `/pa-pa-pa/` as a sequential task collapsed into an alternating one (`:294-310`).
+D4 supplies the segments D6 would read.
+
+D6's standing objection is a domain mismatch, not a per-phoneme error rate: whether a given syllable
+*"reliably surfaces as a particular argmax phoneme is unmeasured, and the posteriorgram is out of
+domain on rapid nonsense repetition"* (`:308-310`). The owner's sharper version — that reduced velar
+/k/ is the most frequently weakened and mislabelled segment, so an automatic finding would largely be
+recogniser error — is the right shape of worry but **is not measured anywhere in this tree**, and is
+recorded here as a hypothesis, not as a citation.
+
+**Grouping by place of articulation is robust to within-class confusion**, which is the argument for
+it: if /k/'s probability mass leaks to /g/ or /ng/, a labial/alveolar/velar partition absorbs the leak
+because all three are velar, while an exact-identity argmax reports a substitution. That is
+structural, not empirical, and it is what would make the collapse detectable at all.
+
+**It needs no SPARC.** The posteriorgram already carries the full distribution:
+`load_ppg_posteriorgram` returns `(frames, phonemes)` float32 (`ppg.py:327-346`), the sidecar and the
+measurement both carry the phoneme order (`preprocess.py:800`, `:816`), and the inventory is 40
+ARPAbet labels plus `<silent>` (`ppg.py:42-81`). **Sum the class members and then take the argmax**,
+which is strictly more robust than argmax-then-group: the latter can pick a phoneme whose own mass is
+a minority of its class's. `extract_ppg_segments` (`ppg.py:349`) is the existing argmax-then-segment
+path and does not do this; the class-summed variant is a different reduction over the same array.
+
+Record it as **a refinement of D6, not a new capability**. What it adds to D6's Owed is narrower than
+what is there now: a phoneme-to-place-class table rather than a phoneme-to-syllable mapping. That
+table is a lookup, not a fitted operating point, so under CLAUDE.md it belongs in `data/` with its
+source written beside it and needs no corpus measurement to exist. What it does **not** resolve is
+whether the posteriorgram is in domain on rapid nonsense syllables at all — grouping cannot repair a
+posteriorgram that is confidently wrong about *place*, only one confused *within* a place.
+
+#### 4. An independent F0 estimate for VOICE
+
+SPARC returns `pitch` and `periodicity` per frame, and its venv pins `torchcrepe==0.0.23` and
+`penn==0.0.14` (`sparc.py:40-41`) — so those come from a neural tracker in that family, not from
+Praat's autocorrelation. That makes it a genuinely independent second estimate rather than a second
+reading of the same method.
+
+[`branch-voice.md`](branch-voice.md):401-412 records that **no type-2 instrument works today**: the
+period-length modality test provably fails in the case it was written for (a tracker locked to the
+subharmonic gives a distribution unimodal at 2T), the octave-jump count cannot separate period
+doubling from the tracker's own octave error on the same material, the subharmonic-to-harmonic ratio
+is absent from the inventory, and Sample C's two-floor substitute is confounded. **Two independent
+trackers disagreeing by an octave is evidence a single tracker cannot produce**, which is why this is
+worth recording rather than dismissing.
+
+Record it as **a candidate owed a measurement, not as a solution.** Four reasons it is not one yet:
+disagreement localises a problem without typing it, so an octave disagreement is not by itself a
+type-2 finding; SPARC's own tracker has its own octave errors and nothing here measures their rate;
+`periodicity` is not a subharmonic-to-harmonic ratio and must not be read as one; and any
+disagreement criterion is an operating point, which the corpus may not be used to fit.
+Cross-referenced from [`branch-voice.md`](branch-voice.md)'s Unresolved.
+
+#### 5. Cost, and what is owed before any of it is built
+
+**A model pass over the whole corpus in a subprocess venv** — the same cost statement the diarization
+derivative carries, *"a model pass over the corpus, comparable to the PPG extension, delivered as an
+extend driver"* (`../20260913-branch-contract-and-hints/design.md:670-672`). It is an **extend driver
+against finished stores**, under the same contract as the original pass, and it would land as a
+`derivatives/` sidecar with the path, SHA-256, size and shape on the entity and never the array —
+the shape [`dag.md`](dag.md):490-500 records for `ppg_posteriorgram`. No wall-clock or GPU-hour figure
+for a SPARC pass exists in this tree, and none is invented here.
+
+**Owed before any of it is built:**
+
+1. **The stream decision** (2) — a raw-versus-enhanced pilot, its population stated, not a default.
+2. **Whether EMA resolves the measurand.** The only statement of SPARC's frame rate anywhere in the
+   tree is a comment in a tutorial cell (`speech_representations_lab.ipynb`, *"SPARC runs at 50 Hz"*);
+   nothing in `src/` asserts it and no test pins it. If it holds, a 20 ms frame against the 140–170 ms
+   syllable period this document cites at 6–7 syll/s (`:254-256`) leaves single-digit frames per
+   syllable — arithmetic on two in-tree numbers, conditional on an unverified third, and **not a
+   measurement**. Whether that resolves a closure, and whether the channel set is 12 or 14, are both
+   owed.
+3. **Whether SPARC is in domain on non-lexical nonsense syllables at all** — the same question D6 and
+   this document's closing Unresolved item ask of the PPG, unanswered for either model, and the
+   proposal's weakest point: a model trained on speech has no guarantee on `/puh-tuh-kuh/`.
+4. **The typed absence, the named venv builder and the proportional timeout** — the gaps above, each
+   cheap, each a prerequisite for a corpus pass rather than a follow-up.
+5. **No threshold may be fitted against this corpus.** Any rhythm criterion built on EMA arrives
+   parameter-free — a dispersion, a trend, an ordering — or arrives owed, exactly as D3's do. A
+   closure detector needs a threshold on a trajectory, and where that value comes from is the question
+   to answer before the pass, not after it.
