@@ -17,6 +17,7 @@ from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDec
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.common import (
+    PITCH_NARROWING_KEYS,
     find_measurement,
     find_measurements,
     live_entities,
@@ -1082,7 +1083,10 @@ class TestPhonationTracks:
     ) -> None:
         """A recording no range derives from leaves the pass absent, rather than guessing one."""
 
-        def _no_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float) -> tuple[float, float]:
+        def _no_range(
+            audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float, **coefficients: float
+        ) -> tuple[float, float]:
+            assert set(coefficients) == set(PITCH_NARROWING_KEYS)
             raise ValueError("no F0 range could be derived from this recording")
 
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Triage
 from senselab.utils.portable_audio_io import NORMALIZE, AudioWriteReport
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore, file_attributes
@@ -338,6 +339,40 @@ def word_hull(word: Entity) -> tuple[float, float]:
     if not spans:
         return (0.0, 0.0)
     return min(float(span[0]) for span in spans), max(float(span[1]) for span in spans)
+
+
+PITCH_NARROWING_KEYS = (
+    "pitch_floor_divisor",
+    "pitch_ceiling_quartile_multiplier",
+    "pitch_pinned_percentile",
+    "pitch_excursion_multiplier",
+    "pitch_pinned_octave_ratio",
+)
+"""The five coefficients of the per-recording F0 narrowing, as ``praat_features`` config keys."""
+
+F0_RANGE_PARAMETER_NAMES = ("search_floor_hz", "search_ceiling_hz", *PITCH_NARROWING_KEYS)
+"""Every parameter ``derive_f0_range`` takes besides the audio, in the order it declares them."""
+
+
+def f0_range_parameters(config: TriageConfig) -> dict[str, float]:
+    """Read the wide search range and the five narrowing coefficients.
+
+    Every node that derives an F0 range reads them here, so no two can hold values that drift.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        The wide search bounds and the five coefficients, keyed by the parameter names
+        ``derive_f0_range`` and ``extract_pitch_values`` take.
+
+    Raises:
+        ValueError: If the search range or any coefficient is unmeasured.
+    """
+    search = config.require("voice.f0_search_range_hz")
+    parameters = {"search_floor_hz": float(search[0]), "search_ceiling_hz": float(search[1])}
+    parameters.update({name: float(config.require(f"praat_features.{name}")) for name in PITCH_NARROWING_KEYS})
+    return parameters
 
 
 def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Audio]:

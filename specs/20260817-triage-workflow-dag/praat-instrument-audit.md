@@ -161,6 +161,118 @@ any monotone transform. This is **Hirst's two-pass method**, which is the preced
 named as such. Keep the typed absence. And **distinguish the crash return from genuine
 absence**, which it currently conflates (below).
 
+**Landed 2026-09-14.** `extract_pitch_values` narrows per recording and reports a failed analysis as
+data. What follows is the record of the rule, of the citations that may and may not be attached to
+it, and of what it does not reach. Every coefficient's own derivation is in
+[`config-derivations.md`](config-derivations.md) under `praat_features`, because a coefficient that
+decides a measurement's range is a parameter of the run and belongs in `data/` rather than as a
+module literal.
+
+**The rule is asymmetric and has three parts.** Floor `max(search_floor, p5 / 1.5)`; ceiling
+`min(search_ceiling, max(2.5 × q3, 1.5 × p95))`; and if p95 falls below twice the search floor the
+whole contour sits within an octave of the bottom of the search range, so the unnarrowed search
+range is used instead. Measured over fourteen adversarial cases the full rule places the true F0
+inside its own derived range on all thirteen that track at all (the fourteenth, a 45 Hz fry, is an
+absence at a 50 Hz floor); `2.5 × q3` with the p5 floor misses the register break and `1.5 × p95`
+misses the emphatic peak. The probe that regenerates those rows is
+`src/tests/audio/tasks/f0_range_probe.py` — committed because neither table here states the
+contamination levels its hum cases were synthesised at, so the cells could not otherwise be
+reproduced from this document.
+
+**A one-pass narrowing without the fallback would have been a regression on a common clinical
+recording.** On a synthesised 120 Hz voice with a 60 Hz hum at −22 dB the wide search locks to the
+subharmonic across the whole contour and a one-pass narrowing returns `[50.0, 90.0]`, a range the
+speaker's F0 never enters. The retired bin was accidentally robust there — a 60 Hz trimmed mean
+selected `(60, 250)`, which still contains 120 Hz — and the problem gets *more* frequent under
+step 1, because FRCRN suppresses stationary low-frequency noise and `plain` does not.
+
+**The fallback captures a larger population than the hum case it was designed for, and that must be
+stated rather than discovered.** A clean 90 Hz buzz has p95 = 90, under 2 × 50, so an ordinary low
+male voice takes the wide range. It is safe — a wide range never excludes the voice — but those
+recordings lose the octave-error robustness narrowing buys, and which voices fall back is
+floor-dependent by construction: at the shipped 50 Hz floor it is every voice whose p95 is below
+100 Hz. Raising the floor to 60 also makes the 220 Hz-plus-120 Hz-hum case fall back, to
+`[60, 600]`. Both are among the things a raised search floor would change, and neither is decided
+here.
+
+**A live misattribution in the document that justified this approach.**
+`specs/20260911-ppg-praat-batch/design.md:322` reads, verbatim: *"That is the pitch-range
+standardization method it cites (doi:10.3758/BRM.41.2.318). No fixed corpus-wide range is needed,
+because the range is derivable per recording."* That DOI is **Vogel, Maruff, Snyder & Mundt (2009),
+"Standardization of pitch range settings in voice acoustic analysis", *Behavior Research Methods*
+41(2):318–324**, and **Vogel supports none of it**: he recommends sex-specific *fixed* settings
+(male 70/250, female 100/250–300) and explicitly rejects the per-recording approach — *"managing
+speaker specific analysis settings individuality requires extensive expertise and time and is
+impractical for large volumes of data."* So the retired bin's *kind* of rule is what its cited
+source recommends; what it misattributed are the **values** — 60 Hz appears nowhere in Vogel, and
+100–500 is one of the candidates he tested and found significantly worse than gold standard, with
+`d = 2.14` as a value that *saturates* across most of his wide ranges rather than as a per-condition
+effect size his tables support. The approach is still right on the merits — Vogel's own caveat that
+*"caution should be exercised when applying suggested settings to pathological voice populations"*,
+on 20 speakers over an office-telephone channel, is an argument *for* per-recording derivation — it
+is just not Vogel's argument, and his authority must not be borrowed for it. `:320-321` of the same
+document describes the z-trim and the two bins as live behaviour, which this step deletes; rewrite
+`:320-322` together. The DOI is gone from `extract_pitch_values`' docstring, where it annotated code
+that now contradicts it.
+
+**Cite Hirst 2011 for two things and nothing else: the two-pass structure, and the ceiling's
+quartile coefficient.** His rule is a first pass at 50–700 Hz, then `floor = 0.75 × q1` and
+`ceiling = <coefficient> × q3` — quartiles, with a deliberate asymmetry that is itself an empirical finding
+worth quoting: *"if the Pitch Floor is too low then we are likely to get octave errors […] Setting
+the Pitch Ceiling too high does not, however, seem to lead to any systematic errors."* That is why
+the ceiling coefficient is adopted and the floor is not. **Which coefficient, and why 2.5 rather
+than 1.5, is not settled here** — Hirst offers both values in the same lineage and splits them by
+material; the full argument and senselab's choice of 2.5 are in
+[`config-derivations.md`](config-derivations.md) under
+`praat_features.pitch_ceiling_quartile_multiplier`, and citing "Hirst's 2.5" as an unconditional
+constant is the specific error that reading has to avoid. His floor is not adopted: `0.75 × q1`
+misses a 100→400 Hz glide's low end at 107.2, and `p5 / 1.5` is −7.02 semitones off p5 and lands below
+`0.75 × q1` on every source measured, which is the right direction for a corpus enriched for
+pathological voices. **The `p5 / 1.5` floor and the pinned-contour fallback are senselab's own; cite
+nobody for them.** Checked across De Looze & Hirst 2008, De Looze & Rauzy 2009, De Looze & Hirst
+2010, De Looze 2010 (thesis), De Looze & Hirst 2014/2014b, Hirst 2007, Hirst 2011, Hirst & De Looze
+2021, and four shipped implementations including Hirst's own Momel-INTSINT plugin: no rule of the
+form "compare the second-pass median against the first and widen back" exists in any of them. The
+authors' own term is **"two-pass"**, not "iterative", and none of the four implementations has a
+loop in the estimation path; octave errors appear in their papers only as *motivation* for
+narrowing, never as a test applied to the result. The only "revert to wide" in the lineage is a
+degenerate-input guard — Praat Vocal Toolkit's `minmaxf0.praat` reverts to 40/600 `if voicedframes =
+0`, which `_no_pitch_range()` already does on the same trigger.
+
+**Record the search-floor question rather than deciding it silently.** senselab uses 50 Hz.
+Published first passes: Hirst 2007 → 75; De Looze & Hirst 2008 and Hirst's shipped code → 60; De
+Looze 2010 (thesis) → 60, not stated in DL&H 2010, so cite the thesis; Hirst 2011 → 50; Hirst & De
+Looze 2021 → "e.g. 60"; Prosogram → 65 (verified in `prosomain.praat` 3.05, 2024; the two-pass is
+that version's, not something the 2004 paper describes), which excludes both mains fundamentals
+incidentally, with a second pass of median −12/+18 semitones — a 30-semitone window wide enough to
+survive a one-octave-low median, i.e. structural tolerance rather than correction. Raising the floor
+would trade away the 45–60 Hz creak cases this document bounds by the declared search range, and per
+the residual below it is only partial anyway, since the second harmonic survives any floor.
+
+**One consequence for another key.** The range ratio widens: the bin always gave 4.17 or 5.0, and
+the measured ranges here reach 12 (`[50, 600]`).
+`voice.f0_range_ratio_max` is null so nothing fires, but `voice.py:77-80` **raises** rather than
+flags once it is set.
+
+**Residual capture is owed, and it is the state of the art rather than a gap in this work.** The
+fallback catches capture landing within an octave of the search floor. It does not catch
+second-harmonic capture against a higher voice: measured, a 220 Hz voice under a 120 Hz-dominant hum
+gives p95 ≈ 110 against 2 × 50 = 100, so the fallback does not fire — Hirst's ceiling coefficient
+rescues that case here, but a deeper version would be caught by neither part. What no published
+method does is **test whether its own first-pass distribution was octave-halved and act on the
+answer**; that is the citable claim, and not the wider "no published estimator corrects this", since
+Mertens' *Polytonia* (2014) §5.5 is a published range estimator with designed octave handling
+(discarding syllables ≥ 18 ST from the median) and Liberman's 2018 Language Log treatment
+mode-anchors and re-tracks — a described procedure with no published code. Mark the residual owed a
+measurement on real recordings.
+
+**Why `pitch_failed` exists, and why step 2 carries it rather than `derive_f0_range`.** The
+`except Exception` returned a NaN pair byte-identical to the legitimate no-pitch return, so a caller
+could not tell a parselmouth crash from a silent recording. The distinction can only be made inside
+`extract_pitch_values`, because that frame is the only one that sees the exception — a `try/except`
+in `derive_f0_range` would be unreachable in production. The swallow stays, because other callers
+depend on the batch extractor not aborting; the signal is added as data, on all three return paths.
+
 **But narrowing is not right for every task, and step 2 and [`branch-voice.md`](branch-voice.md) V7
 currently prescribe opposite things.** Narrowing buys octave-error robustness on **stationary**
 material and is **actively wrong on a glide**: the derived ceiling is then set by how high the
@@ -229,7 +341,9 @@ That is the derived wide search every pitch-based measure inherits. **If falsett
 real enough to move the CPPS band, then finding 4's truncation logic applies at 600 Hz too** — and
 step 2, which replaces `derive_f0_range`, narrows *within* that ceiling and cannot exceed it. So
 either the F0 search ceiling is owed the same widening, or the two bands differ for a stated reason.
-**Leaving it silent invites an implementer to pick one arbitrarily.** Recorded as owed.
+**Leaving it silent invites an implementer to pick one arbitrarily.** Recorded as owed. One fact the
+landed narrowing adds to this entry: `2.5 × q3` reaches 600 for any q3 ≥ 240 Hz, so above roughly
+that F0 the ceiling every recording gets is the search bound itself and not a narrowing.
 
 **And a CPPS at F0 700 is not comparable to one at F0 120.** At 700 Hz the peak quefrency is 1.43 ms,
 only ~0.4 ms above the trend-fit origin at 1 ms, where source and filter quefrencies are not

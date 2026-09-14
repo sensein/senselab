@@ -61,11 +61,18 @@
 
 **Files:**
 - Modify: `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py:358-446`
-- Test: `src/tests/audio/tasks/features_extraction_test.py`
+- Modify: `src/senselab/audio/tasks/features_extraction/api.py` — its example dict listed `pitch_floor`/`pitch_ceiling` keys the batch extractor does not return at all (verified: 40 keys, none matching `pitch*`). Deleted rather than renumbered.
+- Modify: `src/senselab/audio/tasks/phonation/api.py` — `derive_f0_range` gains the five coefficients as **required** keyword arguments. This is Task 2's declared file, but not its declared change; **Task 2's Interfaces line saying `derive_f0_range`'s signature is unchanged is therefore stale and has been corrected there.**
+- Modify: `src/senselab/audio/workflows/triage/nodes/common.py`, `nodes/preprocess.py`, `nodes/voice.py`, `data/config/default.yaml` — see the config note below.
+- Modify: `specs/20260817-triage-workflow-dag/config-derivations.md`, `praat-instrument-audit.md`, `specs/20260911-ppg-praat-batch/design.md`.
+- Test: `src/tests/audio/tasks/features_extraction_test.py`, `src/tests/audio/tasks/phonation_test.py` (**the `TestDeriveF0Range` rewrite moved here from Task 2 Step 4 — see Step 6b**), `src/tests/audio/workflows/triage/config_test.py`, `nodes/voice_test.py`, `nodes/preprocess_test.py`.
+- Add: `src/tests/audio/tasks/f0_range_probe.py` — the reproducer for every table and tally this task records.
+
+**The coefficients are config values, not module constants.** CLAUDE.md puts thresholds in `data/` with a written derivation, and `pitch_pinned_octave_ratio` together with `pitch_pinned_percentile` *is* a branch predicate. So: five keyword parameters on `extract_pitch_values` (library defaults, since `tasks/features_extraction/` cannot read the triage config) and the same five **required** on `derive_f0_range`, which is the triage-facing wrapper; five keys under `praat_features` in the triage config; one derivation each in `config-derivations.md`. All three call sites — `preprocess.praat_features`, `preprocess.phonation_tracks` and `voice._f0_range` — read them through `nodes/common.f0_range_parameters`, which also carries `voice.f0_search_range_hz`, so no site can hold a value that drifts from another's. `PITCH_FLOOR_PERCENTILE` and `PITCH_CEILING_QUARTILE` stay module constants, with the reason written in the derivation: they feed only ratio terms and nothing is compared against them.
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: `extract_pitch_values(snd, search_floor_hz: float = 50.0, search_ceiling_hz: float = 600.0) -> Dict[str, float]` returning **five** `float` keys on all **three** return paths: `pitch_floor`, `pitch_ceiling` (both `np.nan` when no range could be derived), `pitch_frames` (voiced frames the range rests on, `0.0` when none), `pitch_failed` (`1.0` when the analysis itself raised), and `pitch_range_fell_back` (`1.0` when the contour was pinned near the search floor and the wide range was used instead). Task 2 reads `pitch_failed` and the two range values; Task 8 carries all five onto the measurement.
+- Produces: `extract_pitch_values(snd, search_floor_hz: float = 50.0, search_ceiling_hz: float = 600.0, *, pitch_floor_divisor, pitch_ceiling_quartile_multiplier, pitch_pinned_percentile, pitch_excursion_multiplier, pitch_pinned_octave_ratio) -> Dict[str, float]` returning **five** `float` keys on all **three** return paths: `pitch_floor`, `pitch_ceiling` (both `np.nan` when no range could be derived), `pitch_frames` (voiced frames the range rests on, `0.0` when none), `pitch_failed` (`1.0` when the analysis itself raised), and `pitch_range_fell_back` (`1.0` when the contour was pinned near the search floor and the wide range was used instead). Task 2 reads `pitch_failed` and the two range values; Task 8 carries all five onto the measurement. **Task 8 should know that the batch extractor emits none of the five today**: `extract_praat_parselmouth_features_from_audios` returns 40 keys and `_extract_one` consumes `pitch_floor`/`pitch_ceiling` locally without adding them to `feature_data`, so Task 8 is adding keys rather than renaming existing ones.
 
 **The narrowing must not be able to exclude the speaker's F0, and a single pass can.** Measured on a synthesised **120 Hz voice with a 60 Hz hum at ~−22 dB**: the wide search locks to the subharmonic across the whole contour and a one-pass narrowing returns **`[50.0, 90.0]`** — a range the speaker's F0 never enters. Every measure downstream is then computed over a range that excludes the voice.
 
@@ -83,7 +90,7 @@
    - **A 0.4 s register break, 110→440 Hz.** The contour is 110 Hz almost everywhere, so `q3 = 110` and `2.5 × q3 = 275` **clips the break**. `p95 = 440`, so `1.5 × p95 = 660`, clamped to 600, **keeps it**. The p95 term carries this one.
    - **A 0.35 s emphatic peak, 150→330 Hz.** Here the peak is too brief to reach p95 at all: `q3 = 150` and `p95 = 165`, so `2.5 × q3 = 375` **keeps the peak** while `1.5 × p95 = 247.5` **clips it**. The q3 term carries this one — the opposite way round.
 
-   That is the whole argument for `max`: a sustained excursion moves p95 and a brief one moves neither statistic much, so the larger of the two terms is the one that has not been diluted. Over 14 adversarial cases: `2.5 × q3` alone **13/14**, `1.5 × p95` alone **12/14**, `max(2.5 × q3, 1.5 × p95)` **14/14**.
+   That is the whole argument for `max`: a sustained excursion moves p95 and a brief one moves neither statistic much, so the larger of the two terms is the one that has not been diluted. Over the 14 adversarial cases, 13 of which place pitch at a 50 Hz floor (the 45 Hz fry is an absence, counted as neither hit nor miss): `2.5 × q3` with the p5 floor **10/13**, `1.5 × p95` with it **8/13**, the shipped `max` **13/13**. Those are the numbers `src/tests/audio/tasks/f0_range_probe.py` prints; **13/14 and 12/14 appeared in an earlier draft and are not reproducible** — the hum contamination levels were unstated, so the probe had to choose them (−6 dB for "strong", −22 dB for "hum") and now records them. Quote the probe, not this sentence's predecessors.
 3. **A pinned-contour fallback**: if **p95 falls below twice the search floor** the whole contour sits within an octave of the bottom of the search range, the narrowing is untrustworthy, and the **wide search range is used instead**. This is **senselab's own** — see A1 below.
 
 **Why all three, measured.** Neither of the first two alone is sufficient, and the failures are on different material:
@@ -95,9 +102,9 @@
 | glide 100→400, low end | 100 | `[107, 600]` miss | `[73, 550]` OK | — | **OK** |
 | register break 110→440 (0.4 s) | 440 | clipped at 275 | `[73, 600]` OK | — | **OK** |
 | emphatic peak 150→330 (0.35 s) | 330 | `[112.5, 375]` OK | clipped at 247.5 | — | **OK** |
-| | | — (see below) | **12/14** | — | **14/14** |
+| | | **10/13** (p5 floor) | **8/13** | — | **13/13** |
 
-**Read the first column as Hirst's pairing, not as a coefficient ablation.** Its floors are `0.75 × q1` — 82.5 and 107.2 on those two rows — which is why the glide's 100 Hz start is missed there, and why part 1 keeps the p5 base. Swap the p5 floor back in and both of those rows pass (`[74.1, 277.8]` and `[72.8, 600.0]`), so **`2.5 × q3`'s only miss on the set is the register break above**; the 13/14 in the tally is that variant, not this column. Keeping the two apart matters because the earlier draft printed quartile-floor numbers under a coefficient header, which made the glide look like a ceiling failure — hence the dash in this column's tally rather than the 13/14, which is the p5-floor variant's.
+**Read the first column as Hirst's pairing, not as a coefficient ablation.** Its floors are `0.75 × q1` — 82.5 and 107.2 on those two rows — which is why the glide's 100 Hz start is missed there, and why part 1 keeps the p5 base. Swap the p5 floor back in and both of those rows pass (`[74.1, 277.8]` and `[72.8, 600.0]`), so on the five rows above **`2.5 × q3`'s only miss is the register break**; over the probe's whole thirteen it misses three — that register break and the two deep-capture cases the fallback exists for — which is the 10/13 in the tally. That variant is not this column. Keeping the two apart matters because an earlier draft printed quartile-floor numbers under a coefficient header, which made the glide look like a ceiling failure — hence the p5-floor variant's 10/13 printed in its own cell rather than under this column.
 
 **Record the generators with the table.** Neither table says how its sources were synthesised — the hum
 levels in particular — so the cells cannot be reproduced from the document alone, which is how the column
@@ -320,15 +327,18 @@ Replace **from `pitch_values = pitch_values[pitch_values != 0]` (`:420`) through
             return _no_pitch_range()
 
         low, upper_quartile, high = np.percentile(
-            pitch_values, [PITCH_FLOOR_PERCENTILE, PITCH_CEILING_QUARTILE, PITCH_PINNED_PERCENTILE]
+            pitch_values, [PITCH_FLOOR_PERCENTILE, PITCH_CEILING_QUARTILE, pitch_pinned_percentile]
         )
-        if float(high) < PITCH_PINNED_OCTAVE_RATIO * float(search_floor_hz):
+        if float(high) < pitch_pinned_octave_ratio * float(search_floor_hz):
             floor, ceiling, fell_back = float(search_floor_hz), float(search_ceiling_hz), 1.0
         else:
-            floor = max(float(search_floor_hz), float(low) / PITCH_FLOOR_DIVISOR)
+            floor = max(float(search_floor_hz), float(low) / pitch_floor_divisor)
             ceiling = min(
                 float(search_ceiling_hz),
-                max(float(upper_quartile) * PITCH_CEILING_MULTIPLIER, float(high) * PITCH_EXCURSION_MULTIPLIER),
+                max(
+                    float(upper_quartile) * pitch_ceiling_quartile_multiplier,
+                    float(high) * pitch_excursion_multiplier,
+                ),
             )
             fell_back = 0.0
 
@@ -359,17 +369,29 @@ def _no_pitch_range(*, failed: float = 0.0) -> Dict[str, float]:
 
 The `except` block's return at `:445` becomes `return _no_pitch_range(failed=1.0)`. **There are then exactly three return paths — the empty-contour guard, the main dict, and the `except` — and all three carry all five keys.** Task 2 and Task 8 depend on that. Note the replacement in this step **deletes** the old non-finite `mean_pitch` guard at `:426` along with the `mean_pitch` computation it guarded, so there is no third guard to convert; do not look for one.
 
-Add beside the module's other constants:
+**The five coefficients are parameters, not constants** — see the config note under Task 1's Files.
+Two percentiles stay module constants, because they name which statistic a ratio term reads and
+nothing is compared against them. The module has **no existing constant block** (verified:
+`grep -n '^[A-Za-z_][A-Za-z_0-9]* ='` returns nothing), so place this after the
+`parselmouth = DummyParselmouth()` fallback and before `get_sound`:
 
 ```python
-PITCH_FLOOR_PERCENTILE = 5.0
-PITCH_FLOOR_DIVISOR = 1.5          # a ratio, not an octave span
-PITCH_CEILING_QUARTILE = 75.0
-PITCH_CEILING_MULTIPLIER = 2.5     # a ratio, not an octave span
-PITCH_PINNED_PERCENTILE = 95.0     # also the excursion percentile
-PITCH_EXCURSION_MULTIPLIER = 1.5   # a ratio, not an octave span
-PITCH_PINNED_OCTAVE_RATIO = 2.0    # one octave above the search floor
+PITCH_FLOOR_PERCENTILE = 5.0  # feeds only the floor's ratio term
+PITCH_CEILING_QUARTILE = 75.0  # feeds only the ceiling's first ratio term
+
+# Library defaults for the five narrowing coefficients. The triage path passes
+# `praat_features.pitch_*` instead; see specs/20260817-triage-workflow-dag/config-derivations.md.
+DEFAULT_PITCH_FLOOR_DIVISOR = 1.5  # a ratio, not an octave span
+DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER = 2.5  # a ratio, not an octave span
+DEFAULT_PITCH_PINNED_PERCENTILE = 95.0  # the branch predicate's statistic and the excursion term's
+DEFAULT_PITCH_EXCURSION_MULTIPLIER = 1.5  # a ratio, not an octave span
+DEFAULT_PITCH_PINNED_OCTAVE_RATIO = 2.0  # one octave above the search floor
 ```
+
+`pitch_pinned_percentile` is a key rather than a constant because it is **half of the branch
+predicate**: moving 95 to 90 moves the narrow-or-fall-back boundary as much as moving the ratio from
+2.0 to 1.8 does. It is deliberately one statistic serving both that predicate and the ceiling's
+excursion term, and the pair cannot move independently.
 
 **Name these carefully — Praat's own ecosystem conflates exactly this.** Hirst's `detect_f0.praat` uses
 `maximum_pitch_span = 1.5` meaning **1.5 octaves above the floor**, while his `automatic_min_max_f0.praat`
@@ -383,6 +405,40 @@ is, and no bare `1.5` or `2.0` should appear in the body.
 
 Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py::TestPitchRangeNarrowing -v`
 Expected: PASS, all twelve.
+
+- [ ] **Step 6b: Rewrite the test that pinned the bin (moved here from Task 2 Step 4)**
+
+`phonation_test.py:112-119` asserts `low == (60.0, 250.0)` and `high == (100.0, 500.0)` under the
+docstring *"The narrowing is what the standardization method does; a fixed corpus range cannot."* —
+it asserts the bin while describing what the bin is not. **Task 1 is what invalidates it**, and
+nothing in the replacement belongs to Task 2, so it must land in this commit or `phonation_test.py`
+goes red for a whole task. Replace it:
+
+```python
+    def test_a_low_voice_and_a_high_voice_get_ranges_that_follow_them(self) -> None:
+        """The range follows the recording; it is not one of two presets chosen by a threshold."""
+        low = derive_f0_range(_buzz(110.0), **_NARROWING)
+        high = derive_f0_range(_buzz(230.0), **_NARROWING)
+        assert low[0] < 110.0 < low[1], f"110 Hz must sit inside its own derived range, got {low}"
+        assert high[0] < 230.0 < high[1], f"230 Hz must sit inside its own derived range, got {high}"
+        assert low[1] < high[1], "a higher voice must get a higher ceiling"
+```
+
+`_NARROWING` is a module-level dict of `derive_f0_range`'s seven required keyword arguments at the
+packaged values; the wrapper declares no defaults, so every call in the module spreads it. While
+here, `test_every_parameter_is_required` needs strengthening: it calls `derive_f0_range(_buzz(110.0))`
+with **no** keywords, so its `TypeError` fires on the search range alone and it **cannot detect a
+coefficient gaining a default**. Add one omission per required key.
+
+- [ ] **Step 6c: Pin the call shape the coefficients travel through**
+
+Widening a test double to `**kwargs` makes it swallow anything, so dropping the config read at a call
+site or misspelling a key would leave the suite green. `voice_test.py`'s `_fake_derive_f0_range` was
+the only thing pinning `voice.py`'s call shape. Assert inside each double that
+`set(coefficients) == set(PITCH_NARROWING_KEYS)`, and add to `config_test.py` a direct test that
+`f0_range_parameters(load_triage_config())` resolves every parameter `derive_f0_range` requires — by
+`inspect.signature`, so a parameter added without a config key fails there rather than in a corpus
+pass.
 
 - [ ] **Step 7: Update the docstrings this changes**
 
@@ -415,7 +471,7 @@ of `ppg-praat-batch/design.md` has a third problem, from the other side — it d
 
 - **Say why the numbers are deliberately wider than Hirst's at the floor.** `p5 / 1.5` is −7.02 semitones off the 5th percentile and yields a floor below `0.75 × q1` on every source measured. Wider is the right direction for a corpus enriched for pathological voices, where a range that excludes the voice is the failure that matters.
 
-- **`PITCH_EXCURSION_MULTIPLIER = 1.5` has no derivation, and that must be written rather than left to look like one.** The floor's 1.5 has one (−7.02 semitones); this one is the same number reused as an excursion headroom above p95, and **the case set does not discriminate it** — sweeping it over `1.0 … 2.5` gives 15/15 throughout, as the pinned ratio does over `1.5 … 3.0`. So it is a declared convention whose only measured property is that the result is insensitive to it across that span, which is also the evidence that no operating point was fitted. State both halves: insensitivity is not derivation, and it is what keeps this off the no-fitting rule.
+- **`praat_features.pitch_excursion_multiplier: 1.5` has no derivation, and that must be written rather than left to look like one.** The floor's 1.5 has one (−7.02 semitones); this one is the same number reused as an excursion headroom above p95, and **the case set does not discriminate it** — sweeping it over `1.0 … 2.5` gives **13/13 at every step**, as the pinned ratio does over `1.5 … 3.0`; both sweeps are printed by `f0_range_probe.py`, and 13 is the denominator everywhere in this task — 14 sources, 13 of which track. So it is a declared convention whose only measured property is that the result is insensitive to it across that span, which is also the evidence that no operating point was fitted. State both halves: insensitivity is not derivation, and it is what keeps this off the no-fitting rule.
 
 - **The q15/q65 pair needs its coefficients and the right year.** It is real but never bare: `q15 × 0.83` and `q65 × 1.92`, fitted in De Looze's **2010** thesis against hand-annotated extrema and stated in De Looze & Hirst **2010** §3.1. **Do not attach a speaker count** — "28 speakers" appears nowhere in the thesis, whose counts are 68 (Aix-MARSEC manual), 53 (the automatic comparison) and 10 (PFC validation). The coefficients and the hand-annotated-extrema fit are supported verbatim; the count was invented. The **2008** paper concluded q25/q75 — q15 appears there only as a *rejected* floor candidate at coefficient 0.78, and q65 not at all. Do not write "q15/q65 (2008)".
 
@@ -446,7 +502,7 @@ git add -A && git commit -m "fix(praat): derive the F0 range per recording, and 
 
 **Interfaces:**
 - Consumes: `pitch_failed` from Task 1.
-- Produces: `F0RangeFailed(ValueError)` exported from `senselab.audio.tasks.phonation`. `derive_f0_range`'s signature and return type are unchanged.
+- Produces: `F0RangeFailed(ValueError)` exported from `senselab.audio.tasks.phonation`. `derive_f0_range`'s return type is unchanged. **Its signature is not**: Task 1 added the five narrowing coefficients as required keyword arguments, so `phonation_test.py` already carries a `_NARROWING` dict of them and every `derive_f0_range` call in this task's tests must spread it rather than passing the search range alone.
 
 **`F0RangeFailed` subclasses `ValueError`, and that choice is load-bearing at both consumers.** Verified:
 
@@ -520,26 +576,14 @@ In `derive_f0_range`, replace `:63-68`:
 
 Add `F0RangeFailed` to the `Raises:` block, and export it from `__init__.py` in both the import and `__all__`.
 
-- [ ] **Step 4: Rewrite the test that pinned the bin**
+**Step 4 moved to Task 1, as Step 6b.** It rewrote `test_a_low_voice_and_a_high_voice_get_different_ranges`, which **Task 1 alone invalidates** — nothing in the replacement mentions `F0RangeFailed` or anything else this task adds. Leaving it here made Task 1's commit land with a red test across all of `phonation_test.py`, which is a bisect landmine.
 
-Replace `test_a_low_voice_and_a_high_voice_get_different_ranges` at `:112-119`:
-
-```python
-    def test_a_low_voice_and_a_high_voice_get_ranges_that_follow_them(self) -> None:
-        """The range follows the recording; it is not one of two presets chosen by a threshold."""
-        low = derive_f0_range(_buzz(110.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
-        high = derive_f0_range(_buzz(230.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
-        assert low[0] < 110.0 < low[1], f"110 Hz must sit inside its own derived range, got {low}"
-        assert high[0] < 230.0 < high[1], f"230 Hz must sit inside its own derived range, got {high}"
-        assert low[1] < high[1], "a higher voice must get a higher ceiling"
-```
-
-- [ ] **Step 5: Run the phonation and features suites**
+- [ ] **Step 4: Run the phonation and features suites**
 
 Run: `uv run pytest src/tests/audio/tasks/phonation_test.py src/tests/audio/tasks/features_extraction_test.py -q`
 Expected: PASS. Any other failure is a caller that depended on the bin's exact output — read it rather than adjusting the assertion.
 
-- [ ] **Step 6: Lint and commit**
+- [ ] **Step 5: Lint and commit**
 
 ```bash
 uv run ruff format src/senselab/audio/tasks/phonation/ src/tests/audio/tasks/phonation_test.py

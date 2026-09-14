@@ -372,8 +372,6 @@ def extract_features_from_audios(
             'mean_intensity_db': 69.76277128148347,
             'std_intensity_db': 58.54414165935646,
             'range_ratio_intensity_db': -0.25736445047981316,
-            'pitch_floor': 60.0,
-            'pitch_ceiling': 250.0,
             'mean_hnr_db': 3.3285614070654375,
             'std_hnr_db': 3.36490968797237,
             'spectral_slope': -13.982306776816046,
