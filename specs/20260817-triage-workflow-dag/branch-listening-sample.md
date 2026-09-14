@@ -152,6 +152,11 @@ period-doubled voice locks with higher strength at the lower floor. That detects
 where V4's period-length modality test provably fails in the case it exists to catch (the tracker
 locks to the subharmonic and the distribution is unimodal at 2T).
 
+**It is not parameter-free, and owes its cut.** For a periodic signal the autocorrelation peak at 2T
+is nearly equal to the one at T, so the discriminator is "strength at the lower floor exceeds the
+higher **by some margin**" — and the margin is an operating point. It remains the best available
+proxy for the absent subharmonic-to-harmonic ratio; it just owes that number.
+
 **Merging A, B and C gets the staffing and the power wrong for all three.**
 
 ### Two constraints on Sample B

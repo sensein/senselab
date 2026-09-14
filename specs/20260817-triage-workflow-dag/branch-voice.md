@@ -144,10 +144,24 @@ describe.
 **Parameters.** The claim that this is "parameter-free in its core" is withdrawn — it was false under
 the old definition and is still false under the new one:
 
-1. **The envelope threshold and minimum attempt duration are already derived — reuse them.**
-   `spans.k_db: 6.0` (`config-derivations.md:106-120`) and `spans.min_duration_ms: 50` (`:234`)
-   are both derived, both operate on the same pre-emphasised envelope V1 reads, and both do exactly
-   this job. **V1 reuses them and introduces no second pair.** An earlier version marked them owed
+1. **The thresholds are derived and reusable — but not on the envelope they were derived for.**
+   `spans.k_db: 6.0` (`config-derivations.md:106-120`) and `spans.min_duration_ms: 50` (`:234`) are
+   both derived and both do exactly this job, so **V1 reuses the values and introduces no second
+   pair.**
+
+   **But V1 must read a linear envelope on `plain`, not the stored pre-emphasised dB one** — and an
+   earlier version justified the reuse precisely by saying both "operate on the same pre-emphasised
+   envelope V1 reads". Two of [`branch-ddk.md`](branch-ddk.md) D1's three reasons for refusing that
+   envelope transfer verbatim: **+6 dB/octave attenuates the F0 region** where quiet, low-pitched or
+   breathy sustained phonation carries most of its energy relative to the broadband floor, so a
+   6 dB-over-floor test **under-detects exactly quiet low-F0 phonation**; and a dB envelope is a
+   nonlinear transform of the quantity being thresholded.
+
+   **That is the cause of the residue V1 names and does not explain** — "a phonation too quiet to
+   clear the envelope threshold still yields no span". It is a milder form of the same bias the
+   inversion removed, on the branch's foundation across 22,277 routed recordings. Reading `plain`
+   linearly does not change the derived values; it changes the signal they are applied to, and the
+   derivation's reasoning survives the move. An earlier version marked them owed
    without checking — the same asserting-an-absence this document corrected elsewhere. What V1 may
    still need beyond them is a *minimum sustained* duration distinguishing an attempt from an
    ordinary span, which is a different quantity and is owed;
@@ -289,7 +303,20 @@ can stand on, and measuring it against the declared families would fit the decla
 `tasks/phonation`. A branch consuming it needs it promoted so the branch and the router read one
 definition.
 
-### V4 — Voice quality (**machinery exists; branch consumption not built**)
+### V4 — Voice quality (**no trustworthy descriptor exists today**)
+
+**State this once, plainly: VOICE has no trustworthy voice-quality descriptor at all until audit
+steps 0–4 land.** Not "machinery exists, consumption not built" — that badly understates it. Every
+candidate is compromised at the instrument:
+
+| descriptor | state |
+| --- | --- |
+| CPPS | **suppressed** — `> 4` cut, 330 Hz cap, vuv inflation, unweighted mean |
+| HNR | unmasked −200 dB sentinels (finding 10) **and** the sex-binned 75 → 45 ms window step (finding 1) |
+| jitter, shimmer | qualified, but **time-resolution-unvalidated at 16 kHz** — see below |
+| slope, tilt | inherit the **same point-process failure** as jitter and shimmer (below) |
+
+
 
 **Question.** What are the noise and perturbation properties of the phonation?
 
@@ -399,11 +426,16 @@ validity judgement itself**, not merely into the measurement.
 - **sample rate — and the correction here is worse than the original claim.** An earlier version
   said "this corpus has mixed rates", which is true of the *files* and false at the point of
   measurement: `resample.target_hz: 16000` means **every stream any of these measurements sees is
-  16 kHz mono**. So the time-resolution floor on jitter is **uniform across the corpus and
-  unquantified** — not a between-recording covariate but a constant nobody has measured. Whether
-  interpolated pulse placement puts that floor below the ~0.2–1% normal jitter range at 16 kHz is
-  **unmeasured, and should be measured before jitter is published at all**. *Effective bandwidth does
-  not substitute* — that is frequency content, this is time resolution.
+  16 kHz mono**. So the time-resolution floor on jitter is **uniform across the corpus** — not a
+  between-recording covariate but a constant.
+
+  **And the arithmetic is worse than "unquantified".** At 16 kHz the sample period is **62.5 µs**,
+  which is **0.75% of the period at F0 120 Hz and 1.6% at F0 250 Hz** — both at or above the
+  0.2–1% range of normal jitter. **Without sub-sample interpolation of pulse placement, jitter at
+  this rate is not noisy, it is destroyed**, and the error grows with F0. Whether Praat's pulse
+  placement interpolates enough to recover it is **unmeasured and must be measured before jitter is
+  published at all**. *Effective bandwidth does not substitute* — that is frequency content, this is
+  time resolution.
 - **segment SNR.** Additive noise inflates both measures.
 
 **Name the variant.** `local` jitter and shimmer are sensitive to slow drift; `ppq5` and `rap` much
@@ -441,13 +473,21 @@ rather than the syllable rate) over the F0 contour and the amplitude envelope of
 modulation makes `local` diverge from the smoothed variants because the short-window measure tracks
 the modulation while the longer-window one averages across it.
 
-**That holds for `ppq5` and `rap`, and inverts for `apq11` at low F0.** For a sinusoidal perturbation
-of period *P* cycles the local response is 2·sin(π/P) while the APQ11 residual is |1 − D₁₁(1/P)|;
-the two **cross at P ≈ 30 cycles**, which is a 5 Hz tremor at F0 150 Hz. Below that — **most adult
-male voices in this corpus** — `apq11` responds *more* to the tremor than `local` does.
+**The inversion is a shimmer statement, and it is broader than a previous version said.** For a
+sinusoidal perturbation of period *P* cycles the local response is 2·sin(π/P) while the 11-point
+residual is |1 − D₁₁(1/P)|; the two **cross at P ≈ 30 cycles**. That is a property of the **11-point
+smoother**, and the code exposes `local / apq3 / apq5 / apq11 / dda` for shimmer and
+`local / rap / ppq5 / ddp` for jitter (`praat_parselmouth.py:1146-1150`, `:1202-1207`) — **there is no
+`ppq11`**, so the claim as an earlier version wrote it crossed the two families, and **within jitter
+no available variant ever crosses `local`.**
 
-So the divergence cannot be read as a tremor signature **without stating F0**, and the direction of
-the expected divergence flips across a boundary that falls inside this population.
+**And the boundary sweeps a wider range than stated.** P ≈ 30 means F0 ≈ 30 × f_tremor, so across the
+4–8 Hz tremor band it runs **F0 120–240 Hz** — at the top of the band that covers most adult female
+voices too, not "most adult male voices in this corpus".
+
+So an `apq11`-versus-`local` divergence cannot be read as a tremor signature **without stating both
+F0 and the tremor frequency**, and the direction flips across a boundary that moves with the tremor
+being measured.
 
 **Emits.** A per-span measurement: modulation frequency, modulation depth for F0 and for amplitude,
 and the search band as a declared convention.
@@ -580,12 +620,20 @@ finding 6.
 
 #### The effort correlates are session-level
 
-**F0, tilt and CPP at maximal effort are interpretable only against the same participant's comfortable
-phonation in the same sitting** — which is a different recording. That is the grouping
-[`corpus-level-node.md`](corpus-level-node.md) already specifies, and moving them there **also
-resolves v1's missing second condition**: it comes from the session, not from the file.
+**`loudness-v2`'s contrast stays here, and only v1's goes to the session.** An earlier version moved
+"the correlates" wholesale to C3, which threw away the better measurement: **v2 has both conditions in
+one file**, matched on vowel, duration, mic distance, gain state and F0 bin. That is a clean
+within-file contrast, and C3's session-level reference is confounded on every one of those axes. The
+table above already said v2 has two conditions; the later section contradicted it.
 
-So: the count, the timing and within-file dispersion are V6's. The correlates are the node's.
+So:
+
+| | per-recording (V6) | session-level (C3) |
+| --- | --- | --- |
+| `loudness-v2` (705) | **the full contrast** — normal against shouted, within file | — |
+| `loudness` (897) | count, timing, dispersion across three attempts | the effort correlates, against `prolonged-vowel` |
+
+**Only v1 needs C3**, because only v1 lacks a comfortable-effort condition.
 
 **Owed.** A pause criterion for separating the events.
 

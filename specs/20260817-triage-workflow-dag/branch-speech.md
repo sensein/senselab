@@ -206,8 +206,23 @@ phrasing — and both are transcribed and then dropped.
   5,113. See [`praat-instrument-audit.md`](praat-instrument-audit.md) findings 2–5, and step 4 for
   the replacement.
 
-For the spontaneous tasks additionally **disfluency rate** (from the bracketed channel) and
-**lexical diversity** (from the transcript).
+For the spontaneous tasks additionally:
+
+**Lexical diversity — but not a bare type-token ratio.** TTR is **length-dependent**: over 30 s and
+over 3 minutes it is not the same measure. Use **MATTR or MTLD**, or report TTR only with its token
+count. In a document set that mandates support counts, this is the measure whose support count *is*
+the confound.
+
+**Disfluency rate — with the caveat that it under-counts where disfluency is greatest.** The
+bracketed channel captures **filled pauses**, but part-word and whole-word repetitions in stuttering
+are usually emitted as **lexical tokens**, not brackets. So a bracket-derived rate is lowest on the
+speakers with the most disfluency — the same impairment-correlated ASR bias S3 handles for
+`stimulus_mismatch`, and unhandled here. Attach recogniser agreement, as S3 does.
+
+**Resonance and nasality appear nowhere in this document set**, and that is a decision rather than an
+oversight: hypernasality is a first-order dysarthria dimension, and measuring it **requires
+nasometry — a second channel, not in the inventory.** Acoustic proxies exist and none is reliable
+enough to report unqualified.
 
 **Pause structure is a measurement, not a deviation.** This capability is what replaced the
 `off_task_extent` definition an earlier version of this document carried — *"a region carrying no

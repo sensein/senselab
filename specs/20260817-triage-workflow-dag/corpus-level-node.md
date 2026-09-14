@@ -142,6 +142,14 @@ the baseline would compare maximal effort against a decaying maximal effort.
 which moves tilt and depresses CPP — the same correlates being compared. C3 previously carried the
 bin caution and not this one.
 
+**Duration and onset dynamics are a fourth confound.** A 300–500 ms shouted diphthong against a
+multi-second steady monophthong differs in tilt and CPP by **segment duration and onset transient
+alone**, at the same order as the effort effect being measured.
+
+**C3 therefore serves `loudness` v1 only** (897 recordings). `loudness-v2` has both conditions in one
+file, matched on vowel, duration, distance, gain state and F0 bin — that contrast belongs in
+[`branch-voice.md`](branch-voice.md) V6 and is strictly better than anything this node can assemble.
+
 ## Candidates, not yet specified
 
 Flagged rather than designed, since each needs its own argument:
