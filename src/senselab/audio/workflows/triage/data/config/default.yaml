@@ -151,7 +151,7 @@ phonation:
 praat_features:
   time_step_s: 0.005                   # Praat's frame shift for every frame-based descriptor
   window_length_s: 0.025               # Praat's analysis window for the spectral moments
-  # The four coefficients of the per-recording F0 narrowing, read by the whole-file scalars and by
+  # The five coefficients of the per-recording F0 narrowing, read by the whole-file scalars and by
   # the phonation-spans node's derive_f0_range alike so the two cannot hold ranges that drift.
   pitch_floor_divisor: 1.5             # divides p5 of the wide contour to give the floor
   pitch_ceiling_quartile_multiplier: 2.5  # multiplies q3 in the ceiling's first term
