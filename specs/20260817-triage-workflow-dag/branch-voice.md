@@ -922,7 +922,7 @@ Attribution of a short MPT to respiratory or laryngeal cause. Any refit against 
 - Whether the MPT extent is reported as an upper bound or intersected with voicing evidence.
 - What `report.py:104` and `voice_test.py:344-352` read once `longest_span_s` is retired.
 - `phonation_spans.formant_max_hz: 5000.0` is adult-male; affects V4 and V8.
-- **The Praat wrapper audit is complete** — [`praat-instrument-audit.md`](praat-instrument-audit.md). **Finding 0 — every Praat scalar is measured on FRCRN-enhanced audio — governs this whole branch**, and its remediation steps 0 and 1 come before any other repair here.
+- **The Praat wrapper audit is complete** — [`praat-instrument-audit.md`](praat-instrument-audit.md). **Finding 0 — every Praat scalar is measured on FRCRN-enhanced audio — is provenance for this whole branch, not a defect in it.** Its remediation **step 1 was withdrawn by the owner on 2026-09-14**: the mechanism it rested on is false, so no repair here is ordered behind a stream switch. The ordering claim that used to sit on this line — *"its remediation steps 0 and 1 come before any other repair here"* — is void for step 1; step 0 still comes first, on the retired F0 bin and the wrapper defects rather than on the stream. Whether `enhanced` or `plain` is the better stream for these scalars is **unmeasured** and recorded as future research in [`branch-listening-sample.md`](branch-listening-sample.md).
 - Whether V6's effort correlates are built at all, given they are session-level and v1 supplies only one condition.
 - **`Outcome.FAIL`'s wording is itself a hazard** — `no_content_found` would carry the meaning — but
   `Outcome` is a closed vocabulary with readers, so this is recorded rather than changed.

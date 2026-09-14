@@ -549,9 +549,11 @@ closures are distinguishable by channel and not only by amplitude.
 reasoning, and that SPARC used for rhythm has identical exposure because *the transients whose timing
 is the measurement are the ones an enhancer can smear*. Both halves were wrong.
 
-**The posteriorgram does not move.** Audit step 1b is withdrawn
-([`praat-instrument-audit.md`](praat-instrument-audit.md), step 1b); plan 1's Task 5 moves the Praat
-scalars alone. The reason is the one that matters here: **a trained model reading the stream closest
+**Neither stream moves.** Audit step 1b is withdrawn
+([`praat-instrument-audit.md`](praat-instrument-audit.md), step 1b), and **audit step 1 was withdrawn
+later the same day**, taking plan 1's Task 5 with it — so the Praat scalars stay on `enhanced` too, and
+this entry no longer has a counterpart moving beside it. The reason the posteriorgram stays is the one
+that matters here: **a trained model reading the stream closest
 to its training domain is the defensible default**, and many recordings in this corpus carry
 background noise a phoneme classifier would handle worse on `plain`. FRCRN's out-of-domain risk on a
 DDK train is real, but nothing in this tree has measured transient smearing — that borrowed argument
