@@ -153,9 +153,12 @@ Highest leverage in the codebase: it is the shared root of the sex bin (finding 
 exclusions (finding 8), it contaminates **both** modules (see the corrected contrast below), and it is
 roughly fifteen lines.
 
-Narrow per recording from the wide search — robust percentiles of the wide-search contour **in
-log-Hz**, with declared margins. This is **Hirst's two-pass method**, which is the precedent and
-should be named as such. Keep the typed absence. And **distinguish the crash return from genuine
+Narrow per recording from the wide search — robust percentiles of the wide-search contour, with
+declared margins. The percentiles are taken **on linear Hz**: an earlier draft of this line said
+log-Hz, but the ratio margins (`p5 / 1.5`, `2.5 × q3`, `1.5 × p95`) are what make the rule
+scale-free, and taking a log before a percentile changes nothing, since percentiles commute with
+any monotone transform. This is **Hirst's two-pass method**, which is the precedent and should be
+named as such. Keep the typed absence. And **distinguish the crash return from genuine
 absence**, which it currently conflates (below).
 
 **But narrowing is not right for every task, and step 2 and [`branch-voice.md`](branch-voice.md) V7
