@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from senselab.audio.tasks.phonation import F0RangeFailed, F0RangeUnavailable
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.consensus import (
     SourceHypothesis,
@@ -28,7 +29,12 @@ from senselab.audio.workflows.triage.consensus import (
     vocabulary_key,
     word_attributes,
 )
-from senselab.audio.workflows.triage.extend import CONSENSUS_TRANSCRIPT, ONOMATOPOEIC_TOKENS_KEY, REBRACKET
+from senselab.audio.workflows.triage.extend import (
+    CONSENSUS_TRANSCRIPT,
+    ONOMATOPOEIC_TOKENS_KEY,
+    REBRACKET,
+    attempt_derivation,
+)
 from senselab.audio.workflows.triage.nodes.common import (
     consensus_words,
     find_measurement,
@@ -541,6 +547,24 @@ class TestADerivationThatCannotApply:
         record = _log(tmp_path)[0]
         assert not str(record[PHONATION_TRACKS]).startswith("absent")
         assert record["status"] == "error"
+
+
+class TestTheTwoF0OutcomesReachDifferentHandlers:
+    """``F0RangeFailed`` and ``F0RangeUnavailable`` are siblings; only one of them fails a row."""
+
+    def test_a_failed_f0_analysis_is_a_failed_row_and_not_an_escape(self) -> None:
+        """A RuntimeError would leave attempt_derivation and kill the array task."""
+        outcome = attempt_derivation(lambda: (_ for _ in ()).throw(F0RangeFailed("boom")))
+
+        assert outcome.failed is True
+        assert outcome.detail == "F0RangeFailed: boom"
+
+    def test_an_absent_f0_range_is_not_a_failed_row(self) -> None:
+        """The absence stays in UNAVAILABLE; only the failure is a failure."""
+        outcome = attempt_derivation(lambda: (_ for _ in ()).throw(F0RangeUnavailable("none")))
+
+        assert outcome.failed is False
+        assert outcome.detail == "absent: F0RangeUnavailable: none"
 
 
 class TestTheConsensusTaxonomyRewrite:
