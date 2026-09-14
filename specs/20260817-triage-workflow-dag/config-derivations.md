@@ -526,7 +526,7 @@ must show periodic or narrow-resonant evidence before that acoustic segment beco
 span. Word text never enters the test, and word evidence is complementary: no word cannot suppress
 a sustained-phonation span. It is null until fitted.
 formant_max_hz 5000.0, max_formants 5, formant_window_s 0.025 and formant_preemphasis_hz 50.0 are
-praat_parselmouth.py:813's own to_formant_burg defaults -- conventional, not fitted here. hop_s 0.01
+praat_parselmouth.py:888-891's own to_formant_burg defaults -- conventional, not fitted here. hop_s 0.01
 is Praat's documented time_step default, the same value phonation.hop_s already carries.
 
 ## words
@@ -574,7 +574,7 @@ Praat's harmonicity and pitch settings for the F0/formant tracks.
 
 Praat harmonicity settings hop_s 0.01, silence_threshold 0.1, periods_per_window 4.5 --
 Praat's own documented defaults for the cc method, which extract_harmonicity_descriptors
-(praat_parselmouth.py:569) already uses. Conventional, not fitted here. Two lengths follow from
+(praat_parselmouth.py:639, the call at :680) already uses. Conventional, not fitted here. Two lengths follow from
 them and are not the same length, which cost a round: periods_per_window / f0_min_hz is the
 analysis window (VOICE's RMS track averages over it), while to_harmonicity_cc refuses any segment
 shorter than (periods_per_window + 1) / f0_min_hz -- 1.2222x the window. Binary-searched at
@@ -597,13 +597,13 @@ lies inside the caller's declared range.
 
 ## praat_features
 
-Praat's settings for PREPROCESS's whole-file feature set over the `enhanced` stream, plus the four
+Praat's settings for PREPROCESS's whole-file feature set over the `enhanced` stream, plus the five
 coefficients of the per-recording F0 narrowing. All of them are forwarded verbatim to
-`extract_praat_parselmouth_features_from_audios`; the four `pitch_*` keys are also read by the
-phonation-spans node's `derive_f0_range` and by VOICE's, through
-`nodes/common.pitch_narrowing_parameters`, so the three call sites cannot hold coefficients that
-drift. They are config keys rather than module constants because a coefficient that decides a
-measurement's range is a parameter of the run, and `praat_parselmouth.py` sits in general senselab
+`extract_praat_parselmouth_features_from_audios`; the five `pitch_*` keys are also read by the
+phonation-spans node's `derive_f0_range` and by VOICE's, through `f0_range_parameters`
+(`nodes/common.py:357`, over `PITCH_NARROWING_KEYS` at `:344-351`), so the three call sites cannot
+hold coefficients that drift. They are config keys rather than module constants because a coefficient
+that decides a measurement's range is a parameter of the run, and `praat_parselmouth.py` sits in general senselab
 and cannot read this config — so it carries them as keyword arguments with library defaults, and the
 triage path passes these values.
 
@@ -749,9 +749,9 @@ voice.f0_search_range_hz replaces voice.f0_range_hz, which replaced phonation.f0
 phonation.f0_max_hz. It is [50.0, 600.0] Hz: the wide first pass each recording's own
 [floor, ceiling] is narrowed from. The two-pass structure is Hirst 2011's, whose own first pass is
 50--700 Hz in the paper and 60--750 Hz in his plugin; the coefficients that do the narrowing are the
-four `praat_features.pitch_*` keys above, one of them his and three senselab's own. PREPROCESS and
+five `praat_features.pitch_*` keys above, one of them his and four senselab's own. PREPROCESS and
 VOICE both narrow it the same way, off `plain`, and both read the coefficients through
-`nodes/common.pitch_narrowing_parameters`, so the two cannot hold ranges that drift. What was wrong
+`f0_range_parameters` (`nodes/common.py:357`), so the two cannot hold ranges that drift. What was wrong
 with the key it replaces is its premise, not its value: a fixed corpus-wide range had to be null,
 because no single range serves both a low adult male fundamental and an infant voice -- but no fixed
 range is needed, because the range is derivable per recording. Do not cite

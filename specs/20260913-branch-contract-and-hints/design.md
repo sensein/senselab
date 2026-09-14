@@ -125,8 +125,8 @@ load-bearing.**
 
 `_span_yamnet` gives a span shorter than the native window the overlap-weighted scores of the
 whole-file windows that *cover* it, marked `attribution: "covering_windows"` with
-`covering_windows_n` and `covering_seconds` (`preprocess.py:1952-1972`); a long span gets
-`attribution: "native"` (`preprocess.py:2013`). A covering-window label is a statement about up to a
+`covering_windows_n` and `covering_seconds` (`preprocess.py:1981-1985`); a long span gets
+`attribution: "native"` (`preprocess.py:2026`). A covering-window label is a statement about up to a
 second of audio attributed to a fifth of it.
 
 `_span_hear` does something different. `span_hear_input` places a span shorter than
@@ -204,10 +204,10 @@ digital silence is not what the model saw in training. Whether that distorts its
 ### (b) Gap spans are background, never events
 
 Gap spans are the complement of the **kept** spans — `covered` is built from `combined`, the four
-sources' surviving proposals (`preprocess.py:1559`) — not the complement of everything proposed. A
+sources' surviving proposals (`preprocess.py:1572`) — not the complement of everything proposed. A
 gap shorter than `min_duration_ms` is not emitted at all. They carry `measure: "gap"` and
-`merged_proposals: 0` (`preprocess.py:1568-1580`) and, being written with no `family`
-(`preprocess.py:1570-1578`), they are selected by AIRWAY's `family is None` filter (`airway.py:198`)
+`merged_proposals: 0` (`preprocess.py:1586-1591`) and, being written with no `family`
+(`preprocess.py:1583-1592`), they are selected by AIRWAY's `family is None` filter (`airway.py:198`)
 as ordinary evidence.
 
 Type them as background. They stay measured and visible; they stop being eligible to be something
@@ -222,7 +222,7 @@ branch-proposed events is **unresolved**.
 
 ### (c) Boundaries reconciled, not first-writer-wins
 
-`_novel` (`preprocess.py:1454-1479`) appends a record to `corroborated_by` on every span a later
+`_novel` (`preprocess.py:1467-1492`) appends a record to `corroborated_by` on every span a later
 candidate overlaps, and keeps the earlier proposer's extent unchanged. Four sources agreeing on an
 event is precisely when its boundary can be stated well, and that is the moment the current code
 discards the information.
@@ -235,8 +235,8 @@ until something has been listened to. **Unresolved**, deliberately, and it is wh
 last.
 
 The one part of (c) that is not blocked is a plain bug: continuity spans are `wasDerivedFrom` the
-energy envelope rather than the continuity trace (`preprocess.py:1520` — `state["envelope_id"]`),
-even though the trace is in the activity's `reads` (`:1427-1428`). The provenance edge names the
+energy envelope rather than the continuity trace (`preprocess.py:1533` — `state["envelope_id"]`),
+even though the trace is in the activity's `reads` (`:1440-1441`). The provenance edge names the
 wrong source. Small, independent, and split out of (c) below.
 
 ### Refitting `spans.k_db` was considered and rejected
@@ -403,7 +403,7 @@ adopted: it is four rewrites plus a reverse index `ProvStore` does not expose, s
 resolves one way only.
 
 **And carrying a measurement forward is wrong on its own terms.** `attribution: "native"`
-(`preprocess.py:2013`) and `isolated_span: True` (`:343`) are claims about how the **old** extent was
+(`preprocess.py:2026`) and `isolated_span: True` (`:344`) are claims about how the **old** extent was
 fed to a model. After a narrowing refine, a traversing reader would get a label flagged `native` for
 an extent containing no native window — rule (a)'s premise inverted by rule (a)'s own spec.
 
@@ -483,8 +483,8 @@ its own spans, and writes them with `family: "speech"` (`speech.py:879-883`). It
 instance of the contract.
 
 **VOICE was designed to and cannot.** Its subject is every live span whose `family` is `phonation`
-(`voice.py:232`, `_PHONATION_FAMILY` at `:39`). **Nothing reachable proposes one.** The detector that
-did was retired 2026-09-04; VOICE itself writes the family at `voice.py:339`, but that code sits
+(`voice.py:230`, `_PHONATION_FAMILY` at `:40`). **Nothing reachable proposes one.** The detector that
+did was retired 2026-09-04; VOICE itself writes the family at `voice.py:337`, but that code sits
 downstream of the no-span path it always takes, so it never runs. The branch returns `Outcome.FAIL`
 on every recording.
 
@@ -493,7 +493,7 @@ changed to the branch family.** `propose` writes `family: "voice"`, so VOICE's i
 output family coincide, which is what the contract wants.
 
 **That rename is not costless, and an earlier revision wrongly called it so.** `phonation` is the
-family VOICE **writes today** (`voice.py:339`), and REPORT reads it: `_spans_of_family(store,
+family VOICE **writes today** (`voice.py:337`), and REPORT reads it: `_spans_of_family(store,
 "phonation", voice=False)` at `report.py:673`, the `voice=True` reads at `:715` and `:1154`, the
 descriptions at `:1134` and `:1173`, and VOICE's summary keyed on `phonation_s` at `:104`.
 `_spans_of_family` (`report.py:291-308`) exists precisely to separate the detector-proposed
@@ -513,13 +513,13 @@ and it sums spans of both — `phonation` from stores written before the change,
 
 **One consequence to record rather than paper over.** `_spans_of_family`'s `voice` parameter splits on
 `("onset_kind" in span.attributes)`, and `onset_kind` is written only by the second minting at
-`voice.py:334-348` — the very minting this contract replaces with a `refine` assertion. So for stores
+`voice.py:333-346` — the very minting this contract replaces with a `refine` assertion. So for stores
 written under the contract **nothing carries `onset_kind`, and the `voice=True` reads at
 `report.py:715` and `:1154` return empty.** The split remains correct for historical stores and
 becomes vacuous for new ones; what replaces it is the distinction between a span and a `refine`
 assertion over it. REPORT's VOICE arms need that substitution, not just the family widening.
 
-**VOICE is the worked example of the contract, and of what it forbids.** `voice.py:334-348` mints a
+**VOICE is the worked example of the contract, and of what it forbids.** `voice.py:333-346` mints a
 second, period-aligned span from an input span, carrying `onset_kind` and `offset_kind` — **that is
 exactly the re-mint the annotating verbs replace.** Under this contract that minting becomes a
 `refine` assertion carrying `corrected_extent`, the original span keeps its id and its measurements,
@@ -567,7 +567,7 @@ is exactly the population a contest-on-absence targets.
 
 **Background-typed gap spans are not contestable, and the reason is the verb's object, not the
 evidence.** A gap span carries real branch-readable evidence — gaps are appended to `span_ids`
-(`preprocess.py:1583`) and the per-span classifiers run over them, which is why 143 of 384 consensus
+(`preprocess.py:1596`) and the per-span classifiers run over them, which is why 143 of 384 consensus
 rows traced to gaps in the 2026-09-07 measurement — a figure that predates its own fix, per
 Corrections below, and is cited here only for the mechanism it demonstrates. So "no evidence within the extent" is not automatically true of a gap. What is
 true is that `contest` carries *that a span does not carry what was proposed*, and **a gap proposes
@@ -728,7 +728,7 @@ Dependency order, with the pieces that are genuinely independent marked:
    **Independent.** Note `make_hints.py` also reads `routing.hint_kind_map` and raises when it is
    absent (`:414-416`, validated at `:20-23` and `:429-439`), so renaming only `override.yaml` breaks
    hint generation; both move together.
-2. **The `preprocess.py:1520` continuity derivation bug.** **Independent, small**, split out of piece 9.
+2. **The `preprocess.py:1533` continuity derivation bug.** **Independent, small**, split out of piece 9.
 3. **Span cleanliness (a) and (b)** — the attribution filter and background typing, scoped to
    `span_yamnet`. Includes the before-and-after gate-firing count on the corpus and a
    `rewrite_consensus_taxonomy` pass over existing stores.
@@ -744,7 +744,7 @@ Dependency order, with the pieces that are genuinely independent marked:
    `_EVIDENCE_BRANCHES`, so `:1127` is purely the AIRWAY-on-assertions restriction, and lifting it
    branch-wise would admit SPEECH's `verb: "attribute"` assertions — **one per word**
    (`speech.py:790-793`). Admit the contract's five verbs plus `abstain` and `flag`; leave
-   `attribute`, `measure` (`preprocess.py:1817`, `:1824`, `:1842`) and `withdraw` (`:597`) out.
+   `attribute`, `measure` (`preprocess.py:1830`, `:1837`, `:1855`) and `withdraw` (`:598`) out.
    **Independent of the branch work and a prerequisite for it**; without it a branch can be built and
    its annotations be invisible.
 8. **The branch contract, per branch** — SPEECH first (closest to it), then AIRWAY (which also closes
@@ -817,7 +817,7 @@ and the only production consumer is `features.py:755`. `dag.md:358` is the one t
 removed.
 
 **`dag.md:1111-1116` is wrong about gap spans.** It states their background content reaches no
-decision; they are written with no `family` (`preprocess.py:1570-1578`) and `airway.py:198` selects
+decision; they are written with no `family` (`preprocess.py:1583-1592`) and `airway.py:198` selects
 `family is None`, so they *are* AIRWAY evidence. `dag.md:1210` contradicts `dag.md:1116` within the
 same document. Fix dag.md.
 
