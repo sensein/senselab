@@ -18,7 +18,7 @@ import senselab.audio.workflows.triage.nodes.voice as voice_module
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.phonation import PeriodMark
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.nodes.common import find_measurements
+from senselab.audio.workflows.triage.nodes.common import PITCH_NARROWING_KEYS, find_measurements
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.audio.workflows.triage.nodes.voice import voice
@@ -101,8 +101,17 @@ FAKE_DERIVED_RANGE = (75.0, 190.0)
 """What the faked derivation returns, standing in for what Praat narrows off the recording."""
 
 
-def _fake_derive_f0_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float) -> tuple[float, float]:
-    """The derivation, faked to one range so every assertion below has fixed numbers."""
+def _fake_derive_f0_range(
+    audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float, **coefficients: float
+) -> tuple[float, float]:
+    """The derivation, faked to one range so every assertion below has fixed numbers.
+
+    Pins the call shape: dropping the coefficients at the real call site, or misspelling one, fails
+    here rather than passing silently.
+    """
+    assert set(coefficients) == set(PITCH_NARROWING_KEYS), (
+        f"voice must pass every narrowing coefficient; got {sorted(coefficients)}"
+    )
     return FAKE_DERIVED_RANGE
 
 
@@ -288,7 +297,10 @@ class TestTheSubjectIsPreprocessesSpans:
     ) -> None:
         """An underivable range is an absence; the branch stops rather than inventing a population."""
 
-        def _no_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float) -> tuple[float, float]:
+        def _no_range(
+            audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float, **coefficients: float
+        ) -> tuple[float, float]:
+            assert set(coefficients) == set(PITCH_NARROWING_KEYS)
             raise ValueError("no F0 range could be derived from this recording")
 
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])

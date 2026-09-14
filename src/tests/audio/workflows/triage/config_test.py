@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
 import pytest
 
 import senselab.audio.tasks
+from senselab.audio.tasks.phonation import derive_f0_range
 from senselab.audio.workflows.triage import config as config_module
 from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.nodes.common import F0_RANGE_PARAMETER_NAMES, f0_range_parameters
 from senselab.text.tasks.pii_detection.api import default_detectors
 
 _MAX_VALUE_CHARS = 80
@@ -335,6 +338,37 @@ class TestTheV2OpenKeys:
         assert config.require("voice.f0_search_range_hz") == [50.0, 600.0]
         with pytest.raises(ValueError, match="unknown configuration key"):
             config.require("voice.f0_range_hz")
+
+    def test_every_f0_range_parameter_comes_from_the_config(self) -> None:
+        """``derive_f0_range`` has no defaults, so each of its parameters must resolve to a key."""
+        resolved = f0_range_parameters(load_triage_config())
+        assert set(resolved) == set(F0_RANGE_PARAMETER_NAMES)
+        assert (resolved["search_floor_hz"], resolved["search_ceiling_hz"]) == (50.0, 600.0)
+        assert resolved["pitch_floor_divisor"] == 1.5
+        assert resolved["pitch_ceiling_quartile_multiplier"] == 2.5
+        assert resolved["pitch_pinned_percentile"] == 95.0
+        assert resolved["pitch_excursion_multiplier"] == 1.5
+        assert resolved["pitch_pinned_octave_ratio"] == 2.0
+
+    def test_a_narrowing_coefficient_override_reaches_the_helper(self, tmp_path: Path) -> None:
+        """The helper reads the merged mapping, so an override is what the three call sites get."""
+        override = tmp_path / "pinned.yaml"
+        override.write_text("praat_features:\n  pitch_pinned_octave_ratio: 2.5\n")
+        assert f0_range_parameters(load_triage_config(override))["pitch_pinned_octave_ratio"] == 2.5
+
+    def test_the_helper_names_exactly_the_parameters_derive_f0_range_requires(self) -> None:
+        """A parameter added to the signature without a config key fails here, not in a corpus pass."""
+        required = {
+            name
+            for name, parameter in inspect.signature(derive_f0_range).parameters.items()
+            if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        }
+        assert required == set(F0_RANGE_PARAMETER_NAMES)
+        assert all(
+            parameter.default is inspect.Parameter.empty
+            for name, parameter in inspect.signature(derive_f0_range).parameters.items()
+            if name in required
+        ), "derive_f0_range is the triage-facing wrapper; no default may stand in for a config key"
 
 
 class TestTheHashNamesParametersOnly:

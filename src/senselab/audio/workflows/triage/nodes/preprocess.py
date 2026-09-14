@@ -98,6 +98,7 @@ from senselab.audio.workflows.triage.label_membership import (
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     describe_exception,
+    f0_range_parameters,
     live_entities,
     path_attributes,
     resolve_stream,
@@ -873,15 +874,26 @@ def praat_features(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
     Raises:
         LookupError: If no live ``enhanced`` stream is in the store.
     """
+    f0_range = f0_range_parameters(config)
     parameters: dict[str, Any] = {
         "time_step_s": float(config.require("praat_features.time_step_s")),
         "window_length_s": float(config.require("praat_features.window_length_s")),
+        **f0_range,
     }
     enhanced_id, audio = resolve_stream(store, run_dir, "enhanced")
     software = software_agent(store)
     activity = _activity(store, PRAAT_MEASUREMENT, parameters, (enhanced_id,), software)
     [features] = extract_praat_parselmouth_features_from_audios(
-        [audio], time_step=parameters["time_step_s"], window_length=parameters["window_length_s"]
+        [audio],
+        time_step=parameters["time_step_s"],
+        window_length=parameters["window_length_s"],
+        search_floor_hz=f0_range["search_floor_hz"],
+        search_ceiling_hz=f0_range["search_ceiling_hz"],
+        pitch_floor_divisor=f0_range["pitch_floor_divisor"],
+        pitch_ceiling_quartile_multiplier=f0_range["pitch_ceiling_quartile_multiplier"],
+        pitch_pinned_percentile=f0_range["pitch_pinned_percentile"],
+        pitch_excursion_multiplier=f0_range["pitch_excursion_multiplier"],
+        pitch_pinned_octave_ratio=f0_range["pitch_pinned_octave_ratio"],
     )
     scalars = {name: _praat_scalar(value) for name, value in sorted(features.items())}
     return _measurement(
@@ -933,12 +945,13 @@ def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -
 
     Raises:
         LookupError: If no live ``plain`` stream is in the store.
-        ValueError: If ``voice.f0_search_range_hz`` is unmeasured.
+        ValueError: If ``voice.f0_search_range_hz`` or any ``praat_features.pitch_*`` key is
+            unmeasured.
     """
-    search = config.require("voice.f0_search_range_hz")
+    f0_range = f0_range_parameters(config)
     plain_id, plain = resolve_stream(store, run_dir, "plain")
     sharp_id, sharp, sharp_signal = sharp_stream(store, run_dir)
-    f0_min_hz, f0_max_hz = derive_f0_range(plain, search_floor_hz=float(search[0]), search_ceiling_hz=float(search[1]))
+    f0_min_hz, f0_max_hz = derive_f0_range(plain, **f0_range)
     parameters: dict[str, Any] = {
         "hop_s": float(config.require("phonation_spans.hop_s")),
         "max_formants": int(config.require("phonation_spans.max_formants")),
