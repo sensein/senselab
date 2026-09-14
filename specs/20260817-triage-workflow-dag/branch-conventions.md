@@ -12,7 +12,7 @@ The contract itself is
 A branch that proposes a span writes `family: "airway"`, `"speech"`, `"voice"` or `"ddk"`.
 
 Not cosmetic. Live convention is lowercase everywhere — `speech.py:883` writes `"speech"`,
-`voice.py:39` `"phonation"`, `quality.py:58` `"clip"`, and `report.py:673`, `:715` and `:1154` are
+`voice.py:40` `"phonation"`, `quality.py:58` `"clip"`, and `report.py:673`, `:715` and `:1154` are
 lowercase-keyed. VOICE's entire repair is that its selector and its proposals meet on one string; a
 proposal written `"VOICE"` against a selector reading `"voice"` reproduces the bug being fixed, and
 reproduces it silently.
@@ -23,8 +23,8 @@ reproduces it silently.
 It `refine`s only a span of the family it is proposing into.**
 
 Overlap is the strict interval test `a.start < b.end and a.end > b.start`, used at six sites in the
-tree: `_novel` (`preprocess.py:1465`), the `contains_clip` computations (`preprocess.py:1539`,
-`:1569`), `figure.py:402`, and the `_overlaps` helper duplicated at `speech.py:137` and
+tree: `_novel` (`preprocess.py:1467`), the `contains_clip` computations (`preprocess.py:1552`,
+`:1582`), `figure.py:402`, and the `_overlaps` helper duplicated at `speech.py:137` and
 `redact.py:212`. Ties go to the earlier span by extent.
 
 **The family scoping is not a detail — without it the rule undoes the V1/D1 inversion.** An earlier
@@ -120,7 +120,7 @@ That was wrong twice over.**
 
 **It is not in force.** The bands actually differ per measure: CPP cepstrogram 0–5000, tilt
 100–5000, **slope 50–1000 against 1000–4000**, moments 0–5000, formants 0–5000 — and **HNR is
-full-band**, because `to_harmonicity_cc` takes no maximum frequency (`praat_parselmouth.py:620-622`).
+full-band**, because `to_harmonicity_cc` takes no maximum frequency (`praat_parselmouth.py:679-681`).
 Declaring HNR "5 kHz" would mislabel the instrument, and band-limiting it later to comply would
 change every HNR value.
 

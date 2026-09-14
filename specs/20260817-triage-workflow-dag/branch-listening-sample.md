@@ -24,7 +24,7 @@ oversight.
 | `spans.k_db` | `6.0` | `config-derivations.md:106-120` — **but derived for the pre-emphasised envelope**, and [`branch-voice.md`](branch-voice.md) V1 reads a linear one on `plain`, so it is owed a **re-derivation**, which listening cannot supply |
 | `airway.labels_of_interest` | `[Cough, Breathe]` | `:555-557` — recorded as *"Vocabulary, not thresholds."* |
 | `spans.min_duration_ms` | `50` | `:234` — *"conventional and not fitted"* |
-| `voice.f0_search_range_hz` | `[50.0, 600.0]` | `:641-648` — **but the derivation is wrong**: it describes per-recording narrowing, and `derive_f0_range` is a binary sex bin. See below. |
+| `voice.f0_search_range_hz` | `[50.0, 600.0]` | `:748-760`, with the five narrowing coefficients at `:598-730` — the derivation describes per-recording narrowing and, since 2026-09-14, so does the code. Until then it did not, and that mismatch is what this document exists to catch. See below. |
 | `ddk.ppg_segment_rate_per_s` | `10 /s` | `family-taxonomy-ruleset.md:102` — *"recall-first, not J"* |
 
 These carry reasoning. Listening would tell you whether the reasoning holds on real audio; it is not
@@ -34,13 +34,18 @@ needed to explain what the number is doing.
 decision rather than a threshold, which is exactly the no-refits exemption
 [`branch-airway.md`](branch-airway.md) A1 claims. That exemption is correct.
 
-**And `voice.f0_search_range_hz` is the case that bounds this whole document.** Its derivation
-describes a wide search bound narrowed per recording; the code
-(`praat_parselmouth.py:429-436`) selects one of two hardcoded pairs at a 170 Hz mean-pitch boundary.
-An earlier version of this table repeated the derivation as fact. **A derivation is evidence that a
-decision was recorded, not evidence that it is correct** — see
+**And `voice.f0_search_range_hz` was the case that bounded this whole document.** Its derivation
+described a wide search bound narrowed per recording; until 2026-09-14 the code selected one of two
+hardcoded pairs at a 170 Hz mean-pitch boundary, and an earlier version of this table repeated the
+derivation as fact. **The code now matches the derivation** — `extract_pitch_values`
+(`praat_parselmouth.py:465-497`) narrows off percentiles of the wide pass, with the five
+coefficients as `praat_features.pitch_*` keys, each with its own derivation.
+
+**The lesson outlives the instance, which is why this entry stays.** A derivation is evidence that a
+decision was recorded, not evidence that the code does what it says — see
 [`praat-instrument-audit.md`](praat-instrument-audit.md) findings 1 and 11, and the stale plural at
-`config-derivations.md:74`.
+`config-derivations.md:74`. The way that was caught was reading the implementation, not the
+derivation, and nothing about the fix makes the next such case detectable any earlier.
 
 ### Marked unmeasured and in force — exactly one
 
@@ -73,35 +78,38 @@ a population prior would clip the voices most likely to be studied.
 
 **[`praat-instrument-audit.md`](praat-instrument-audit.md) adds a fifth kind of owed**: parameters
 that are neither configurable nor reachable from any caller, whose values deviate from Praat's own
-documented guidance, and whose effect has now been measured. The 170 Hz sex bin, the CPPS `> 4` cut,
-the vuv mean period, the 330 Hz peak-search cap, `range_db_ratio`, the 5 kHz moments band, the
-formant parameters the wrapper does not forward.
+documented guidance, and whose effect has now been measured. The CPPS `> 4` cut, the vuv mean
+period, the 330 Hz peak-search cap, `range_db_ratio`, the 5 kHz moments band, the formant parameters
+the wrapper does not forward — and, until 2026-09-14, the 170 Hz sex bin.
 
 **These are not owed a listening sample. They are owed a code change**, and no amount of annotation
-would validate them.
+would validate them. **The bin is the worked example of that**: it was closed by a code change, and
+its five replacement coefficients moved into `data/` with derivations, which is the shape the rest of
+this list wants.
 
 **The support-count gap belongs here too, and it has a specific worst case.**
-`extract_speech_rate` computes `numpeaks` (`praat_parselmouth.py:245`) and `number_syllables`
-(`:310`) and **returns only rates** — so the support count for S4's and D2's speaking and
+`extract_speech_rate` computes `numpeaks` (`praat_parselmouth.py:257`) and `number_syllables`
+(`:330`) and **returns only rates** — so the support count for S4's and D2's speaking and
 articulation rates, over roughly 25,000 and 7,989 recordings, is computed and discarded. That is what
 makes [`branch-conventions.md`](branch-conventions.md)'s mandatory support count specifically
 unsatisfiable for the two largest rate populations in the corpus.
 
-The audit also found that **`config-derivations.md:571-578` is factually wrong** about
+The audit also found that **`config-derivations.md:575-580` is factually wrong** about
 `phonation.periods_per_window: 4.5` — it cites "Praat's own documented defaults for the cc method"
 where Parselmouth and the Praat form both say 1.0. The value may still be right; the justification is
 not. **That is the first derivation found to be incorrect rather than merely thin**, and it bounds how
 much weight this document's "check the derivations first" rule can carry unchecked.
 
-And **the mandatory support count is currently unsatisfiable on the Praat path** — zero of thirteen
-functions expose one, four of them computing a count and discarding it, while `phonation/api.py`
+And **the mandatory support count is still unsatisfiable for every Praat scalar a branch reads** —
+one of thirteen functions exposes one (`extract_pitch_values`' `pitch_frames`, added 2026-09-14, and
+no branch reads it yet), four of the rest compute a count and discard it, while `phonation/api.py`
 exposes support in five of five.
 
 ### Not in any config — the genuinely undocumented literals
 
 **This is the sharpest category, and it is small.** `praat_parselmouth.py`'s syllable-nuclei
-operating points: `silence_db = -25` (`:142`), `min_dip = 4` (`:149`) dropped to `2` when the
-recording's own mean HNR is below 60 (`:154-155`), `min_pause = 0.3` (`:159`).
+operating points: `silence_db = -25` (`:154`), `min_dip = 4` (`:161`) dropped to `2` when the
+recording's own mean HNR is below 60 (`:166-167`), `min_pause = 0.3` (`:171`).
 
 They are literals inside a helper, in no config and in no derivations file, and they reach every rate
 measure [`branch-speech.md`](branch-speech.md) S4 and [`branch-ddk.md`](branch-ddk.md) D2 would
@@ -192,7 +200,7 @@ normalised autocorrelation **for any signal, doubled or not**, so the two `stren
 window length before any subharmonic exists. The bias is conservative, but it **scales with how
 steady the voice is** — which is the thing being measured.
 
-**It cannot be controlled away.** `f0_track` (`phonation/api.py:156-168`) exposes only `f0_min_hz`,
+**It cannot be controlled away.** `f0_track` (`phonation/api.py:185-191`) exposes only `f0_min_hz`,
 `f0_max_hz` and `hop_s`, and `to_pitch_cc` derives the window from the floor. The clean form —
 comparing autocorrelation functions directly at a **fixed** window — needs **a pitch-tracker window
 control independent of the floor, which is not in the inventory.**
