@@ -151,6 +151,13 @@ phonation:
 praat_features:
   time_step_s: 0.005                   # Praat's frame shift for every frame-based descriptor
   window_length_s: 0.025               # Praat's analysis window for the spectral moments
+  # The four coefficients of the per-recording F0 narrowing, read by the whole-file scalars and by
+  # the phonation-spans node's derive_f0_range alike so the two cannot hold ranges that drift.
+  pitch_floor_divisor: 1.5             # divides p5 of the wide contour to give the floor
+  pitch_ceiling_quartile_multiplier: 2.5  # multiplies q3 in the ceiling's first term
+  pitch_pinned_percentile: 95.0        # the percentile both the branch and the excursion term read
+  pitch_excursion_multiplier: 1.5      # multiplies that percentile in the ceiling's second term
+  pitch_pinned_octave_ratio: 2.0       # multiple of the search floor it must clear to narrow at all
 
 # VOICE's F0 ranges and task-duration expectations. f0_search_range_hz is also read by PREPROCESS:
 # it is the wide search each recording's own [floor, ceiling] is narrowed from, not a fixed range.

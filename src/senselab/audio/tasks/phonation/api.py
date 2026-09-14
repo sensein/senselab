@@ -42,13 +42,33 @@ class F0RangeUnavailable(ValueError):
     """The wide search placed no usable pitch in this recording; attribute it as an absence."""
 
 
-def derive_f0_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float) -> tuple[float, float]:
+def derive_f0_range(
+    audio: Audio,
+    *,
+    search_floor_hz: float,
+    search_ceiling_hz: float,
+    pitch_floor_divisor: float,
+    pitch_ceiling_quartile_multiplier: float,
+    pitch_pinned_percentile: float,
+    pitch_excursion_multiplier: float,
+    pitch_pinned_octave_ratio: float,
+) -> tuple[float, float]:
     """This recording's own F0 search range, narrowed from a wide search by the standardization method.
 
     Args:
         audio: The recording.
         search_floor_hz: Lowest pitch of the wide search. Read it from ``voice.f0_search_range_hz``.
         search_ceiling_hz: Highest pitch of that wide search. Read it from ``voice.f0_search_range_hz``.
+        pitch_floor_divisor: Divides the 5th percentile to give the floor. Read it from
+            ``praat_features.pitch_floor_divisor``.
+        pitch_ceiling_quartile_multiplier: Multiplies the upper quartile in the ceiling's first term.
+            Read it from ``praat_features.pitch_ceiling_quartile_multiplier``.
+        pitch_pinned_percentile: The percentile the branch predicate tests and the ceiling's second
+            term multiplies. Read it from ``praat_features.pitch_pinned_percentile``.
+        pitch_excursion_multiplier: Multiplies that percentile in the ceiling's second term. Read it
+            from ``praat_features.pitch_excursion_multiplier``.
+        pitch_pinned_octave_ratio: Multiple of the search floor that percentile must clear for the
+            narrowing to be used. Read it from ``praat_features.pitch_pinned_octave_ratio``.
 
     Returns:
         ``(f0_min_hz, f0_max_hz)`` for this recording, to hand to :func:`f0_track`,
@@ -60,7 +80,16 @@ def derive_f0_range(audio: Audio, *, search_floor_hz: float, search_ceiling_hz: 
             resolve — an absence, never a guessed range.
     """
     _require_parselmouth()
-    values = extract_pitch_values(audio, search_floor_hz=search_floor_hz, search_ceiling_hz=search_ceiling_hz)
+    values = extract_pitch_values(
+        audio,
+        search_floor_hz=search_floor_hz,
+        search_ceiling_hz=search_ceiling_hz,
+        pitch_floor_divisor=pitch_floor_divisor,
+        pitch_ceiling_quartile_multiplier=pitch_ceiling_quartile_multiplier,
+        pitch_pinned_percentile=pitch_pinned_percentile,
+        pitch_excursion_multiplier=pitch_excursion_multiplier,
+        pitch_pinned_octave_ratio=pitch_pinned_octave_ratio,
+    )
     floor, ceiling = float(values["pitch_floor"]), float(values["pitch_ceiling"])
     if not np.isfinite(floor) or not np.isfinite(ceiling):
         raise F0RangeUnavailable(

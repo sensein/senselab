@@ -20,6 +20,17 @@ from senselab.audio.tasks.phonation import (
 
 SR = 16000
 
+_NARROWING: dict[str, float] = {
+    "search_floor_hz": 50.0,
+    "search_ceiling_hz": 600.0,
+    "pitch_floor_divisor": 1.5,
+    "pitch_ceiling_quartile_multiplier": 2.5,
+    "pitch_pinned_percentile": 95.0,
+    "pitch_excursion_multiplier": 1.5,
+    "pitch_pinned_octave_ratio": 2.0,
+}
+"""``derive_f0_range``'s required arguments at the packaged values, since it declares no defaults."""
+
 
 def _buzz(f0: float, seconds: float = 1.0) -> Audio:
     """Return a harmonic buzz at the given F0."""
@@ -109,24 +120,29 @@ class TestPeriodMarks:
 class TestDeriveF0Range:
     """The range is the recording's own, narrowed off a wide search rather than declared."""
 
-    def test_a_low_voice_and_a_high_voice_get_different_ranges(self) -> None:
-        """The narrowing is what the standardization method does; a fixed corpus range cannot."""
-        low = derive_f0_range(_buzz(110.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
-        high = derive_f0_range(_buzz(230.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
-        assert low == (60.0, 250.0)
-        assert high == (100.0, 500.0)
-        assert low != high
+    def test_a_low_voice_and_a_high_voice_get_ranges_that_follow_them(self) -> None:
+        """The range follows the recording; it is not one of two presets chosen by a threshold."""
+        low = derive_f0_range(_buzz(110.0), **_NARROWING)
+        high = derive_f0_range(_buzz(230.0), **_NARROWING)
+        assert low[0] < 110.0 < low[1], f"110 Hz must sit inside its own derived range, got {low}"
+        assert high[0] < 230.0 < high[1], f"230 Hz must sit inside its own derived range, got {high}"
+        assert low[1] < high[1], "a higher voice must get a higher ceiling"
 
     def test_a_recording_with_no_pitch_refuses_rather_than_returning_a_range(self) -> None:
         """An underivable range is an absence, never a guess the caller cannot see."""
         silence = Audio(waveform=np.zeros((1, SR), dtype=np.float32), sampling_rate=SR)
         with pytest.raises(ValueError, match="no F0 range could be derived"):
-            derive_f0_range(silence, search_floor_hz=50.0, search_ceiling_hz=600.0)
+            derive_f0_range(silence, **_NARROWING)
 
     def test_every_parameter_is_required(self) -> None:
-        """No default stands in for a search range the caller did not choose."""
+        """No default stands in for a value the caller did not choose — search range or coefficient."""
         with pytest.raises(TypeError):
             derive_f0_range(_buzz(110.0))  # type: ignore[call-arg]
+        with pytest.raises(TypeError):
+            derive_f0_range(_buzz(110.0), search_floor_hz=50.0, search_ceiling_hz=600.0)  # type: ignore[call-arg]
+        for omitted in _NARROWING:
+            with pytest.raises(TypeError, match=omitted):
+                derive_f0_range(_buzz(110.0), **{k: v for k, v in _NARROWING.items() if k != omitted})  # type: ignore[arg-type]
 
 
 class TestF0Track:

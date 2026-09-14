@@ -316,12 +316,20 @@ whole voice kind rests on.
 
 The key's premise was that no single search range serves both a low adult male fundamental and an
 infant voice, so the caller must state which population is being measured. The first half is true. The
-second does not follow, and `extract_pitch_values` in `praat_parselmouth.py` had already shown why: it
-runs a wide 50–600 Hz autocorrelation search, trims the outliers at |z| ≤ 2, and narrows to one of the
-two published settings by where the trimmed mean falls — (60, 250) below 170 Hz, (100, 500) above.
-That is the pitch-range standardization method it cites (doi:10.3758/BRM.41.2.318). No fixed
-corpus-wide range is needed, because the range is derivable per recording, and a derived one serves
-the adult male and the infant in the same run.
+second does not follow: no fixed corpus-wide range is needed, because the range is derivable per
+recording, and a derived one serves the adult male and the infant in the same run.
+
+What `extract_pitch_values` did at the time this was written was **not** that derivation, and the
+citation it carried supported neither. It ran a wide 50–600 Hz autocorrelation search, trimmed the
+outliers at |z| ≤ 2, and then picked one of two hardcoded pairs by where the trimmed mean fell —
+(60, 250) below 170 Hz, (100, 500) above. The DOI it cited, `doi:10.3758/BRM.41.2.318`, is Vogel et
+al. (2009), who recommends fixed sex-specific settings and rejects per-recording derivation as
+impractical at scale; neither 60 Hz nor the narrowing appears in it. Both the bin and the trim are
+gone as of 2026-09-14: the function now narrows off robust percentiles of the wide contour, the
+two-pass structure and the ceiling's quartile term following Hirst 2011 and the rest being
+senselab's own. See [`praat-instrument-audit.md`](../20260817-triage-workflow-dag/praat-instrument-audit.md)
+step 2 for the rule and [`config-derivations.md`](../20260817-triage-workflow-dag/config-derivations.md)
+under `praat_features` for each coefficient.
 
 `voice.f0_range_hz` is **deleted**. `voice.f0_search_range_hz: [50.0, 600.0]` replaces it — the wide
 search the narrowing starts from, a property of the method and not a population guess.

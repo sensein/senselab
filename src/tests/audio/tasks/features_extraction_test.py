@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import numpy as np
+import parselmouth
 import pytest
 import torch
 
@@ -17,6 +19,11 @@ from senselab.audio.tasks.features_extraction.ppg import (
     to_frame_major_posteriorgram,
 )
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
+    DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER,
+    DEFAULT_PITCH_EXCURSION_MULTIPLIER,
+    DEFAULT_PITCH_FLOOR_DIVISOR,
+    DEFAULT_PITCH_PINNED_OCTAVE_RATIO,
+    DEFAULT_PITCH_PINNED_PERCENTILE,
     extract_audio_duration,
     extract_cpp_descriptors,
     extract_harmonicity_descriptors,
@@ -45,6 +52,7 @@ from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
     extract_subjective_quality_features_from_audios,
 )
+from senselab.audio.tasks.phonation import derive_f0_range
 
 try:
     import ppgs
@@ -240,6 +248,164 @@ def test_extract_pitch_values(resampled_mono_audio_sample: Audio) -> None:
 
     assert isinstance(result["pitch_floor"], float)
     assert isinstance(result["pitch_ceiling"], float)
+
+
+def _buzz(f0: float, seconds: float = 1.0) -> Audio:
+    """Return a harmonic buzz at the given F0."""
+    t = np.arange(int(seconds * 16000)) / 16000
+    wave = sum((0.3 / (h + 1) * np.sin(2 * np.pi * f0 * (h + 1) * t) for h in range(6)), np.zeros_like(t))
+    return Audio(waveform=wave.astype(np.float32)[None, :], sampling_rate=16000)
+
+
+class TestPitchRangeNarrowing:
+    """The range is this recording's own, narrowed off a wide search — never one of two sex-typed presets.
+
+    One case returns the search range unnarrowed: the pinned-contour fallback. That is the wide bracket
+    the narrowing starts from, not a preset, and ``pitch_range_fell_back`` says when it was taken.
+    """
+
+    def test_no_discontinuity_at_the_retired_170_hz_boundary(self) -> None:
+        """The retired rule stepped floor/ceiling from 60/250 to 100/500 across mean F0 = 170 Hz."""
+        below = extract_pitch_values(_buzz(165.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        above = extract_pitch_values(_buzz(175.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert below["pitch_ceiling"] == pytest.approx(above["pitch_ceiling"], rel=0.15)
+        assert below["pitch_floor"] == pytest.approx(above["pitch_floor"], rel=0.15)
+
+    def test_the_derived_range_rises_monotonically_with_source_f0(self) -> None:
+        """A preset bin is a step function of F0; a narrowing is monotone in it.
+
+        The F0 set avoids two traps: below 100 Hz the pinned-contour fallback fires and every ceiling is
+        the search ceiling, and above about 240 Hz the 2.5x q3 term clamps at 600 — either would make a
+        monotonicity assertion pass on a constant.
+        """
+        ceilings = [
+            extract_pitch_values(_buzz(f0), search_floor_hz=50.0, search_ceiling_hz=600.0)["pitch_ceiling"]
+            for f0 in (110.0, 130.0, 150.0, 180.0, 220.0)
+        ]
+        assert ceilings == pytest.approx([275.0, 325.0, 375.0, 450.0, 550.0], rel=0.02), (
+            f"measured ceilings for (110, 130, 150, 180, 220) Hz; a bin would give two values: {ceilings}"
+        )
+
+    def test_a_55_hz_source_yields_finite_perturbation(self) -> None:
+        """The retired 60 Hz floor placed zero pulses here, so jitter and shimmer were NaN.
+
+        Asserting the outcome, not the floor: ``pitch_floor < 60`` is satisfied by ``max(50.0, …)``
+        for any voice whose p5 is under 90 Hz, so it would pass without this source being tracked.
+        """
+        audio = _buzz(55.0)
+        floor, ceiling = derive_f0_range(
+            audio,
+            search_floor_hz=50.0,
+            search_ceiling_hz=600.0,
+            pitch_floor_divisor=DEFAULT_PITCH_FLOOR_DIVISOR,
+            pitch_ceiling_quartile_multiplier=DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER,
+            pitch_pinned_percentile=DEFAULT_PITCH_PINNED_PERCENTILE,
+            pitch_excursion_multiplier=DEFAULT_PITCH_EXCURSION_MULTIPLIER,
+            pitch_pinned_octave_ratio=DEFAULT_PITCH_PINNED_OCTAVE_RATIO,
+        )
+        assert np.isfinite(extract_jitter(audio, floor=floor, ceiling=ceiling)["local_jitter"])
+        assert np.isfinite(extract_shimmer(audio, floor=floor, ceiling=ceiling)["local_shimmer"])
+
+    def test_a_45_hz_source_records_where_the_exclusion_moved_to(self) -> None:
+        """The exclusion moved from 60 Hz to the search floor; it did not go away.
+
+        45 Hz places no pitch at a 50 Hz search floor, so the range is an absence and VOICE reads
+        'no phonation found' for a voice that is plainly phonating. The binding constraint is now
+        ``voice.f0_search_range_hz[0]``, and this test is the record of that.
+        """
+        derived = extract_pitch_values(_buzz(45.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_frames"] == 0.0
+        assert derived["pitch_failed"] == 0.0, "an out-of-search-range voice is an absence, not a crash"
+
+    def test_a_420_hz_source_gets_a_floor_that_follows_it(self) -> None:
+        """Measured: 420 Hz gives [280.0, 600.0]; the retired bin gave this voice a fixed 100 Hz floor.
+
+        A 420 Hz mean picks the bin's high branch, ``(100, 500)`` -- so what the bin got wrong here is the
+        **floor**, nearly two octaves under the voice, and the ceiling assertion is the weaker half. Above
+        roughly 240 Hz the 2.5x q3 term reaches the search ceiling, so 600 is the clamp and not a narrowing,
+        which is why the monotonicity test above stops at 220.
+        """
+        derived = extract_pitch_values(_buzz(420.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_floor"] == pytest.approx(280.0, rel=0.02)
+        assert derived["pitch_ceiling"] == pytest.approx(600.0)
+
+    def test_a_clean_90_hz_voice_takes_the_fallback_and_that_is_expected(self) -> None:
+        """Measured: p95 = 90 is under 2 x 50, so an ordinary low male voice gets the wide range.
+
+        Recorded because it is a larger population than the hum case the fallback was designed for. It is
+        safe -- a wide range never excludes the voice -- but those recordings lose narrowing's
+        octave-error robustness, and the behaviour moves if the search floor moves.
+        """
+        derived = extract_pitch_values(_buzz(90.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_range_fell_back"] == 1.0
+        assert (derived["pitch_floor"], derived["pitch_ceiling"]) == (50.0, 600.0)
+
+    def test_a_hum_does_not_capture_the_range_away_from_the_voice(self) -> None:
+        """A one-pass narrowing returned [50, 90] for this source — a range the voice never enters.
+
+        The retired bin was accidentally robust here, so this is the one case where the replacement
+        would have been worse than what it replaced.
+        """
+        voice = _buzz(120.0, seconds=2.0).waveform.numpy()[0]
+        t = np.arange(voice.size) / 16000
+        hum = (10 ** (-22 / 20)) * np.sin(2 * np.pi * 60.0 * t)
+        audio = Audio(waveform=(voice + hum).astype(np.float32)[None, :], sampling_rate=16000)
+
+        derived = extract_pitch_values(audio, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_floor"] <= 120.0 <= derived["pitch_ceiling"], (
+            f"the speaker's F0 must lie inside its own derived range, got "
+            f"[{derived['pitch_floor']}, {derived['pitch_ceiling']}]"
+        )
+        assert derived["pitch_range_fell_back"] == 1.0, "the pinned-contour fallback is what caught it"
+
+    def test_a_noisy_source_does_not_capture_the_range(self) -> None:
+        """Measured at 0 dB broadband SNR: 389 frames, median 120.06, range [78.6, 302.9]."""
+        voice = _buzz(120.0, seconds=2.0).waveform.numpy()[0]
+        rng = np.random.default_rng(0)
+        noisy = voice + rng.standard_normal(voice.size).astype(np.float32) * float(np.sqrt((voice**2).mean()))
+        audio = Audio(waveform=noisy.astype(np.float32)[None, :], sampling_rate=16000)
+
+        derived = extract_pitch_values(audio, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_frames"] > 0.0, "measured 389 frames; a guard here would hide a real change"
+        assert derived["pitch_floor"] <= 120.0 <= derived["pitch_ceiling"]
+        assert derived["pitch_range_fell_back"] == 0.0, "p95 = 122 clears twice the floor, so no fallback"
+
+    def test_a_glide_is_bracketed_rather_than_clipped(self) -> None:
+        """An exponential 100 to 400 Hz sweep measured [72.8, 600.0] against produced extremes 102/392."""
+        t = np.arange(2 * 16000) / 16000
+        f0 = 100.0 * (4.0 ** (t / t[-1]))
+        wave = np.sin(2 * np.pi * np.cumsum(f0) / 16000).astype(np.float32)
+        audio = Audio(waveform=wave[None, :], sampling_rate=16000)
+
+        derived = extract_pitch_values(audio, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_floor"] < 100.0 and derived["pitch_ceiling"] > 400.0
+
+    def test_the_range_reports_the_frames_it_rests_on(self) -> None:
+        """A range derived from four voiced frames is not the same claim as one from four hundred."""
+        derived = extract_pitch_values(_buzz(150.0, seconds=2.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_frames"] > 0.0
+        assert derived["pitch_failed"] == 0.0
+
+    def test_silence_is_an_absence_and_not_a_failure(self) -> None:
+        """No pitch placed is a real answer about the recording; the analysis did not fail."""
+        silence = Audio(waveform=np.zeros((1, 16000), dtype=np.float32), sampling_rate=16000)
+        derived = extract_pitch_values(silence, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert np.isnan(derived["pitch_floor"]) and np.isnan(derived["pitch_ceiling"])
+        assert derived["pitch_frames"] == 0.0
+        assert derived["pitch_failed"] == 0.0, "silence is an absence, not a crash"
+
+    def test_a_failed_analysis_is_reported_rather_than_returned_as_an_absence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The crash return was byte-identical to the no-pitch return; a caller could not tell them apart."""
+
+        def _boom(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("parselmouth exploded")
+
+        monkeypatch.setattr(parselmouth.Sound, "to_pitch_ac", _boom, raising=False)
+        derived = extract_pitch_values(_buzz(150.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_failed"] == 1.0
+        assert np.isnan(derived["pitch_floor"])
 
 
 def test_extract_pitch_descriptors(resampled_mono_audio_sample: Audio) -> None:

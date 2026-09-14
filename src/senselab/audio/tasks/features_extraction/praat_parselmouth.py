@@ -47,6 +47,18 @@ except ModuleNotFoundError:
     parselmouth = DummyParselmouth()
 
 
+PITCH_FLOOR_PERCENTILE = 5.0  # feeds only the floor's ratio term
+PITCH_CEILING_QUARTILE = 75.0  # feeds only the ceiling's first ratio term
+
+# Library defaults for the five narrowing coefficients. The triage path passes
+# `praat_features.pitch_*` instead; see specs/20260817-triage-workflow-dag/config-derivations.md.
+DEFAULT_PITCH_FLOOR_DIVISOR = 1.5  # a ratio, not an octave span
+DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER = 2.5  # a ratio, not an octave span
+DEFAULT_PITCH_PINNED_PERCENTILE = 95.0  # the branch predicate's statistic and the excursion term's
+DEFAULT_PITCH_EXCURSION_MULTIPLIER = 1.5  # a ratio, not an octave span
+DEFAULT_PITCH_PINNED_OCTAVE_RATIO = 2.0  # one octave above the search floor
+
+
 def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> parselmouth.Sound:
     """Get a sound object from a given audio file or Audio object.
 
@@ -355,35 +367,73 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
         }
 
 
+def _no_pitch_range(*, failed: float = 0.0) -> Dict[str, float]:
+    """The five-key shape every ``extract_pitch_values`` path returns when no range was derived."""
+    return {
+        "pitch_floor": np.nan,
+        "pitch_ceiling": np.nan,
+        "pitch_frames": 0.0,
+        "pitch_failed": failed,
+        "pitch_range_fell_back": 0.0,
+    }
+
+
 def extract_pitch_values(
     snd: Union[parselmouth.Sound, Path, Audio],
     search_floor_hz: float = 50.0,
     search_ceiling_hz: float = 600.0,
+    *,
+    pitch_floor_divisor: float = DEFAULT_PITCH_FLOOR_DIVISOR,
+    pitch_ceiling_quartile_multiplier: float = DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER,
+    pitch_pinned_percentile: float = DEFAULT_PITCH_PINNED_PERCENTILE,
+    pitch_excursion_multiplier: float = DEFAULT_PITCH_EXCURSION_MULTIPLIER,
+    pitch_pinned_octave_ratio: float = DEFAULT_PITCH_PINNED_OCTAVE_RATIO,
 ) -> Dict[str, float]:
-    """Estimate Pitch Range.
+    """Derive this recording's own pitch range by narrowing a wide autocorrelation search.
 
-    Calculates the mean pitch using a wide range and uses this to shorten the range for future pitch extraction
-    algorithms.
+    Runs one wide pass over ``[search_floor_hz, search_ceiling_hz]``, then narrows the floor to
+    ``max(search_floor_hz, p5 / pitch_floor_divisor)`` and the ceiling to ``min(search_ceiling_hz,
+    max(q3 * pitch_ceiling_quartile_multiplier, pinned * pitch_excursion_multiplier))``, off the
+    linear-Hz percentiles of the voiced contour, where ``pinned`` is the
+    ``pitch_pinned_percentile``-th. When ``pinned`` falls below ``pitch_pinned_octave_ratio`` times
+    the search floor the unnarrowed search range is returned instead.
 
     Args:
         snd (Union[parselmouth.Sound, Path, Audio]): A Parselmouth Sound object or a file path or an Audio object.
         search_floor_hz (float): Lowest pitch of the wide search the narrow range is derived from.
         search_ceiling_hz (float): Highest pitch of that wide search.
+        pitch_floor_divisor (float): Divides the 5th percentile to give the floor. In triage, read it
+            from ``praat_features.pitch_floor_divisor``.
+        pitch_ceiling_quartile_multiplier (float): Multiplies the upper quartile in the ceiling's
+            first term. In triage, read it from ``praat_features.pitch_ceiling_quartile_multiplier``.
+        pitch_pinned_percentile (float): The percentile the branch predicate tests and the ceiling's
+            second term multiplies — one statistic serving both. In triage, read it from
+            ``praat_features.pitch_pinned_percentile``.
+        pitch_excursion_multiplier (float): Multiplies that percentile in the ceiling's second term.
+            In triage, read it from ``praat_features.pitch_excursion_multiplier``.
+        pitch_pinned_octave_ratio (float): Multiple of the search floor that percentile must clear
+            for the narrowing to be used at all. In triage, read it from
+            ``praat_features.pitch_pinned_octave_ratio``.
 
     Returns:
-        dict: A dictionary containing the following keys:
+        dict: Five float keys, on all three return paths:
 
             - pitch_floor (float): The lowest pitch value to use in future pitch extraction algorithms.
             - pitch_ceiling (float): The highest pitch value to use in future pitch extraction algorithms.
+            - pitch_frames (float): Voiced frames the range rests on; 0.0 when none were placed.
+            - pitch_failed (float): 1.0 when the analysis itself raised, 0.0 otherwise.
+            - pitch_range_fell_back (float): 1.0 when the unnarrowed search range was returned.
 
-        Both are NaN when the wide search placed no pitch at all, which is an absence rather than
-        the higher of the two standardized ranges.
+        ``pitch_floor`` and ``pitch_ceiling`` are NaN when no range could be derived — either because
+        the wide search placed no pitch, or because the analysis failed. ``pitch_failed`` separates
+        those two.
 
     Notes:
-        Values are taken from: [Standardization of pitch-range settings in voice acoustic analysis](https://doi.org/10.3758/BRM.41.2.318)
-
-        The problem observed with doing a really broad pitch search was the occasional error if F1 was low.
-        So crude outlier detection is used to help with this.
+        The two-pass structure and the quartile ceiling term follow Hirst 2011, "The analysis by
+        synthesis of speech melody". The percentile floor, the excursion term and the pinned-contour
+        fallback are senselab's own. Every coefficient's derivation is in
+        ``specs/20260817-triage-workflow-dag/config-derivations.md`` under ``praat_features``, and the
+        rule's own record is in ``praat-instrument-audit.md`` under step 2.
 
         Important: These values are used within other functions, they are not outputs of the full code.
 
@@ -398,8 +448,9 @@ def extract_pitch_values(
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
-        >>> pitch_values(snd)
-        {'pitch_floor': 60, 'pitch_ceiling': 250}
+        >>> extract_pitch_values(snd)
+        {'pitch_floor': 80.0, 'pitch_ceiling': 300.0, 'pitch_frames': 188.0, 'pitch_failed': 0.0,
+         'pitch_range_fell_back': 0.0}
         ```
     """
     if not PARSELMOUTH_AVAILABLE:
@@ -415,34 +466,42 @@ def extract_pitch_values(
         # Other than values above, I'm using default hyperparamters
         # Details: https://www.fon.hum.uva.nl/praat/manual/Sound__To_Pitch__ac____.html
 
-        # remove outliers from wide pitch search
+        # the voiced frames of the wide pass; unvoiced frames come back as 0
         pitch_values = pitch_wide.selected_array["frequency"]
         pitch_values = pitch_values[pitch_values != 0]
-        pitch_values_Z = (pitch_values - np.mean(pitch_values)) / np.std(pitch_values)
-        pitch_values_filtered = pitch_values[abs(pitch_values_Z) <= 2]
+        if pitch_values.size == 0:
+            return _no_pitch_range()
 
-        mean_pitch = np.mean(pitch_values_filtered) if pitch_values_filtered.size else np.nan
-        if not np.isfinite(mean_pitch):
-            return {"pitch_floor": np.nan, "pitch_ceiling": np.nan}
-
-        # Here there is an interesting alternative solution to discuss: https://praatscripting.lingphon.net/conditionals-1.html
-        if mean_pitch < 170:
-            # 'male' settings
-            pitch_floor = 60.0
-            pitch_ceiling = 250.0
+        low, upper_quartile, high = np.percentile(
+            pitch_values, [PITCH_FLOOR_PERCENTILE, PITCH_CEILING_QUARTILE, pitch_pinned_percentile]
+        )
+        if float(high) < pitch_pinned_octave_ratio * float(search_floor_hz):
+            floor, ceiling, fell_back = float(search_floor_hz), float(search_ceiling_hz), 1.0
         else:
-            # 'female' and 'child' settings
-            pitch_floor = 100.0
-            pitch_ceiling = 500.0
+            floor = max(float(search_floor_hz), float(low) / pitch_floor_divisor)
+            ceiling = min(
+                float(search_ceiling_hz),
+                max(
+                    float(upper_quartile) * pitch_ceiling_quartile_multiplier,
+                    float(high) * pitch_excursion_multiplier,
+                ),
+            )
+            fell_back = 0.0
 
-        return {"pitch_floor": pitch_floor, "pitch_ceiling": pitch_ceiling}
+        return {
+            "pitch_floor": floor,
+            "pitch_ceiling": ceiling,
+            "pitch_frames": float(pitch_values.size),
+            "pitch_failed": 0.0,
+            "pitch_range_fell_back": fell_back,
+        }
     except Exception as e:
         current_frame = inspect.currentframe()
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
             logger.error(f"Traceback: {traceback.format_exc()}")
-        return {"pitch_floor": np.nan, "pitch_ceiling": np.nan}
+        return _no_pitch_range(failed=1.0)
 
 
 def extract_pitch_descriptors(
@@ -1229,6 +1288,13 @@ def extract_praat_parselmouth_features_from_audios(
     time_step: float = 0.005,
     window_length: float = 0.025,
     pitch_unit: str = "Hertz",
+    search_floor_hz: float = 50.0,
+    search_ceiling_hz: float = 600.0,
+    pitch_floor_divisor: float = DEFAULT_PITCH_FLOOR_DIVISOR,
+    pitch_ceiling_quartile_multiplier: float = DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER,
+    pitch_pinned_percentile: float = DEFAULT_PITCH_PINNED_PERCENTILE,
+    pitch_excursion_multiplier: float = DEFAULT_PITCH_EXCURSION_MULTIPLIER,
+    pitch_pinned_octave_ratio: float = DEFAULT_PITCH_PINNED_OCTAVE_RATIO,
     speech_rate: bool = True,
     intensity_descriptors: bool = True,
     harmonicity_descriptors: bool = True,
@@ -1255,6 +1321,13 @@ def extract_praat_parselmouth_features_from_audios(
         time_step (float): Time rate at which to extract features. Defaults to 0.005.
         window_length (float): Window length in seconds for spectral features. Defaults to 0.025.
         pitch_unit (str): Unit for pitch measurements. Defaults to "Hertz".
+        search_floor_hz (float): Lowest pitch of the wide search each recording's range is narrowed from.
+        search_ceiling_hz (float): Highest pitch of that wide search.
+        pitch_floor_divisor (float): Forwarded to :func:`extract_pitch_values`.
+        pitch_ceiling_quartile_multiplier (float): Forwarded to :func:`extract_pitch_values`.
+        pitch_pinned_percentile (float): Forwarded to :func:`extract_pitch_values`.
+        pitch_excursion_multiplier (float): Forwarded to :func:`extract_pitch_values`.
+        pitch_pinned_octave_ratio (float): Forwarded to :func:`extract_pitch_values`.
         speech_rate (bool): Whether to extract speech rate. Defaults to True.
         intensity_descriptors (bool): Whether to extract intensity descriptors. Defaults to True.
         harmonicity_descriptors (bool): Whether to extract harmonic descriptors. Defaults to True.
@@ -1299,7 +1372,16 @@ def extract_praat_parselmouth_features_from_audios(
     # Utility function to extract features per-audio worker
     def _extract_one(snd: Audio) -> Dict[str, Any]:
         # Shared precomputations
-        pitch_values_out = extract_pitch_values(snd=snd)
+        pitch_values_out = extract_pitch_values(
+            snd=snd,
+            search_floor_hz=search_floor_hz,
+            search_ceiling_hz=search_ceiling_hz,
+            pitch_floor_divisor=pitch_floor_divisor,
+            pitch_ceiling_quartile_multiplier=pitch_ceiling_quartile_multiplier,
+            pitch_pinned_percentile=pitch_pinned_percentile,
+            pitch_excursion_multiplier=pitch_excursion_multiplier,
+            pitch_pinned_octave_ratio=pitch_pinned_octave_ratio,
+        )
         pitch_floor = pitch_values_out["pitch_floor"]
         pitch_ceiling = pitch_values_out["pitch_ceiling"]
 
