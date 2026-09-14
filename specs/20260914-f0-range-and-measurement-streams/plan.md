@@ -564,10 +564,12 @@ class F0RangeFailed(ValueError):
 
 The base-class argument above is the rationale and stays in this plan, per the global constraints; the docstring says only what the class is.
 
-In `derive_f0_range`, replace `:63-68`:
+In `derive_f0_range`, replace the body from the `extract_pitch_values` call to the `return` (`:87-105`
+as of Task 1). The call passes all seven keyword arguments Task 1 made required — spread them as the
+existing code does rather than retyping the two shown here:
 
 ```python
-    values = extract_pitch_values(audio, search_floor_hz=search_floor_hz, search_ceiling_hz=search_ceiling_hz)
+    values = extract_pitch_values(audio, search_floor_hz=..., search_ceiling_hz=..., <the five coefficients>)
     if values.get("pitch_failed", 0.0):
         raise F0RangeFailed("the pitch analysis failed on this recording")
     floor, ceiling = float(values["pitch_floor"]), float(values["pitch_ceiling"])
