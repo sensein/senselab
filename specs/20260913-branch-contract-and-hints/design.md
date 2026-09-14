@@ -33,9 +33,12 @@ VERDICT      Admit/reject, flag for human review, durable description.
 
 ### The nodes this does not place
 
-ADMIT, QUALITY, REDACT, REPORT and FIGURE are in `GRAPH_ORDER` and are not branches. They keep their
-current positions: ADMIT before PREPROCESS, QUALITY terminal after the branch loop, REDACT a step of
-SPEECH, REPORT and FIGURE re-reading a finished store.
+`GRAPH_ORDER` has ten entries (`vocabulary.py:14-25`) and **contains neither REPORT nor FIGURE** —
+`REPORT_NODE` is defined at `run.py:44` and concatenated onto the outcome list at `:453`; FIGURE's
+name exists only at `figure.py:44`. Of the non-branch nodes it does contain: ADMIT runs before
+PREPROCESS; **QUALITY is not terminal** — REDACT runs after it (`run.py:311-317`); and **REDACT is
+its own `GRAPH_ORDER` entry gated on SPEECH's result**, not a step of SPEECH. REPORT and FIGURE
+re-read a finished store. All keep their current positions.
 
 **QUALITY is the sharp case, and it decides the scope of the verbs.** QUALITY writes `contest`
 assertions over PREPROCESS's clip spans (`quality.py`, the clip-consistency check) — that is
@@ -70,12 +73,18 @@ The merge stands on one product, one stage, and the single verified consumer.
 
 **Two node names retire, and node name is a join key.** `GRAPH_ORDER` contains `"TAXONOMY"` and
 `"routing"` (`vocabulary.py:14-25`); verdict entities, `run.json`, the figure and the report all join
-on it, and every finished store carries activities with `node: "TAXONOMY"`. Stage 2's own audit
-states the governing rule — **the writer's vocabulary may shrink, the reader's may not** — and this
-is the same shape as the `kind` prov-type fix of 2026-09-13. So: SCREEN is the only name written;
-`"TAXONOMY"` and `"routing"` remain readable, and a reader encountering either folds it as SCREEN's
-predecessor rather than raising. A regression test parametrised over the readable set, as
-`prov_store_test.py::test_every_readable_entity_type_round_trips` is for prov types.
+on it, and every finished store carries activities with `node: "TAXONOMY"`.
+
+**`"routing"` is load-bearing beyond `GRAPH_ORDER`.** `vocabulary.py:113` defines
+`_ROUTING = "routing"`, read by the flag grounds at `:373` and `:384`, and `verdict.py:36,202` joins
+on it. Dropping it from the vocabulary stops the "routing failed" FLAG firing on pre-merge stores,
+silently — the same failure shape as the demoted consolidation flag above.
+
+Stage 2's own audit states the governing rule — **the writer's vocabulary may shrink, the reader's
+may not** — and this is the same shape as the `kind` prov-type fix of 2026-09-13. So: SCREEN is the
+only name written; `"TAXONOMY"` and `"routing"` remain readable, and a reader encountering either
+folds it as SCREEN's predecessor rather than raising. A regression test parametrised over the
+readable set, as `prov_store_test.py::test_every_readable_entity_type_round_trips` is for prov types.
 
 **An ordering constraint demotes back to intra-node.** Stage 2 promoted the
 `voice.glide` / `voice.chant` → `yamnet_label_summary` dependency from step ordering inside TAXONOMY
@@ -83,12 +92,20 @@ to an edge in `GRAPH_ORDER` (`taxonomy.md:60-63`, ruleset `design.md:372-375`). 
 again. **The intra-node ordering test must return with the merge** — without it VOICE silently stops
 routing, which has already happened once.
 
-**Two verdicts become one.** TAXONOMY and ROUTING each write one; `store.md` requires a node's
-verdict be attributed to its last step. SCREEN's verdict is the **routing** conclusion, attributed to
-the routing step, because that is the stage's product. The consolidation's conclusion — whether there
-was anything to consolidate — becomes a field in that verdict's `detail`, not a verdict of its own. A
-consolidation that had nothing to work from is a fact about the run that the routing verdict reports;
-it is not a second judgement.
+**Two verdicts become one, and it must fold both conclusions.** TAXONOMY and ROUTING each write one;
+`store.md` requires a node's verdict be attributed to its last step. An earlier revision demoted the
+consolidation's conclusion to a `detail` field — **that deletes a live FLAG ground.**
+`taxonomy.py:356-360` writes `Outcome.FLAG` with "no per-span classifier produced scores; there was
+nothing to consolidate"; `vocabulary.py:423` folds on `outcome` and reads no `detail`; and
+`routing.py:263` writes `PASS` unconditionally. Demoting it would silently stop that flag firing.
+
+**SCREEN's verdict flags if either conclusion flags**, and is attributed to the routing step as the
+stage's last.
+
+**Note the compounding with rule (a).** Excluding covering-window scores makes "no per-span
+classifier produced scores" *more* common, so one piece of this design grows the population that
+triggers this flag while another piece would have removed the flag. Both pieces must name the
+interaction.
 
 **Four documents assert the split and must be updated**, not only the one cited above:
 `taxonomy.md:27-29` ("a node that both measures content and decides what runs on it cannot be checked
@@ -115,7 +132,7 @@ second of audio attributed to a fifth of it.
 
 `_span_hear` does something different. `span_hear_input` places a span shorter than
 `HEAR_WINDOW_SECONDS` in a silent 2 s buffer, "so its only detector result describes the span
-itself" (`hear.py:426-443`); a longer span is passed through (`hear.py:466-468`) and its native
+itself" (`hear.py:426-443`); a longer span is passed through (`hear.py:444-446`) and its native
 windows are mapped back by `hear_window_extent`. HeAR's short-span label is about the span.
 
 **The rule: a covering-window label is recorded, and is not eligible as evidence.** The flag already
@@ -127,16 +144,29 @@ exists and is already written; nothing filters on it today.
 | --- | --- |
 | `consensus_taxonomy` rows (`taxonomy.py:192`) | a covering-window score does not contribute a row or a `peak_by_classifier` entry |
 | `RecordingFeatures` span-label stats (`features.py:1137 _label_span_statistics`, via `_absorb_span_window`) | covering-window scores excluded from `span_label_stats` and `span_label_set_stats` |
-| branch evidence (AIRWAY's per-span read, `airway.py:242-245`) | covering-window labels not actionable |
 | figure, report | rendered as attributed-from-outside, not as the span's own label |
 
-**This is not consumer-side-only and it moves routing.** `airway.cough`'s feature is
+**AIRWAY is not on that list, and an earlier revision wrongly put it there.** AIRWAY reads
+**`span_hear`** (`airway.py:242`, and its docstring says so at `:171`), and `attribution` is written
+only by `_span_yamnet`. With `_windows_covering` deferred below, **AIRWAY is untouched by rule (a)
+end to end.**
+
+**So rule (a) either moves routing or does nothing.** `airway.cough`'s feature is
 `span_label_set_stat` over `yamnet.cough_labels.peak_over_floor_db_max` (`default.yaml:245-248`),
-built by `_label_span_statistics` from exactly these per-span measurements with no attribution check.
-Coughs are usually shorter than 0.96 s. **A before-and-after gate-firing count over the corpus is part
-of this piece, not a follow-up.** If the shift is unacceptable the rule is scoped away from
-`RecordingFeatures` and applied only to the consensus and to branch evidence — but that is a decision
-to make against the measurement, not before it.
+built by `_label_span_statistics` from exactly these per-span measurements with no attribution check,
+and coughs are usually shorter than 0.96 s. There is no scoping that keeps the rule's benefit without
+changing the router: branch evidence is empty, and `consensus_taxonomy`'s only production consumer is
+`features.py:755` — routing's own reduction. An earlier revision offered "scope away from
+`RecordingFeatures`, apply to the consensus and to branch evidence" as a fallback; that fallback is
+vacuous and is withdrawn.
+
+**The before-and-after gate-firing count over the corpus is therefore not a precaution, it is the
+decision procedure** for whether rule (a) ships at all.
+
+**One choice remains open and must be made with that count in hand:** whether rule (a) stays scoped
+to `span_yamnet` — leaving AIRWAY genuinely unaffected — or is extended to `span_hear`, which would
+require HeAR to gain an attribution flag it does not currently write. This spec scopes it to
+`span_yamnet`; extending it is **unresolved**.
 
 No PREPROCESS re-run is needed; existing stores need `rewrite_consensus_taxonomy` re-run to pick up
 the consensus change.
@@ -331,51 +361,62 @@ The consequence worth stating plainly: **PREPROCESS's span set is clean but not 
 PREPROCESS's job — the three parts above. Complete is the branch's, and only the branch can do it,
 because only the branch knows what it is looking for.
 
-### What each verb writes
+### What each verb writes — four annotate, one mints
 
-Stated per verb, because "refine a boundary" under an append-only PROV store is not an edit.
+**This reverses the previous revision of this spec**, which had `refine` and `trim` mint new span
+entities and invalidate or shadow the original. That was wrong, and the reason is that the store has
+**two** addressing mechanisms and re-minting breaks both.
 
-| verb | writes | edges | invalidates | cascade |
-| --- | --- | --- | --- | --- |
-| `mark` | `assertion`, `verb: "mark"` | `wasDerivedFrom` the span | nothing | none |
-| `refute` | `assertion`, `verb: "refute"` | `wasDerivedFrom` the span | nothing | none — the span stays live |
-| `propose` | `span`, `family: "<branch>"` | `wasDerivedFrom` the evidence that proposed it | nothing | none |
-| `refine` | new `span`, `family: "<branch>"`, new extent | `wasDerivedFrom` the original span | the original | measurements carry forward |
-| `trim` | new `span`, `family: "<branch>"`, narrower extent | `wasDerivedFrom` the original span | nothing | plus an `off_task_extent` deviation |
+**Per-span measurements are addressed by the `span_id` attribute, not by traversal.**
+`airway.py:242-245` builds `span_hear_by_span` from `window.attributes.get("span_id")` and looks up
+`span_hear_by_span.get(span.id, [])` at `:256`; `features.py:350` and `:886-926`, `taxonomy.py:103-122`
+and `figure.py:1834-1835` all key the same way. **A re-minted span carries zero labels under all
+four, silently**, while `features.py:1074` drops the invalidated original. So a `refine` would
+*delete* the span's classifier evidence from `span_label_set_stats` — including the feature
+`airway.cough` is built on. "Readers traverse `wasDerivedFrom`" is not a contract that can be
+adopted: it is four rewrites plus a reverse index `ProvStore` does not expose, since `derived_from`
+resolves one way only.
 
-**Three decisions the re-minting verbs force, made here:**
+**And carrying a measurement forward is wrong on its own terms.** `attribution: "native"`
+(`preprocess.py:2013`) and `isolated_span: True` (`:340`) are claims about how the **old** extent was
+fed to a model. After a narrowing refine, a traversing reader would get a label flagged `native` for
+an extent containing no native window — rule (a)'s premise inverted by rule (a)'s own spec.
 
-**Measurements carry forward; they are not re-measured.** A refined span's per-span measurements
-remain attached to the original entity, and a reader reaches them by traversing `wasDerivedFrom`.
-Re-measuring would mean a model pass inside every branch, and the measurement would in any case be of
-a different extent, so it would not be the same quantity. The cost is that readers must traverse;
-that is stated here as part of the contract rather than discovered per reader.
+**So four of the five verbs annotate. They never re-mint a span. The span keeps its id, its
+`family`, its measurements and its liveness; nothing is invalidated and nothing is orphaned.**
 
-**`refine` invalidates the original; `trim` does not.** Refinement asserts the original extent was
-wrong, so leaving it live double-counts. Trimming asserts the original extent was right and part of
-it is off-task, so the original stands and the narrowing is an additional, narrower finding. This is
-what keeps `trim` on the correct side of the no-suppression rule: **trimming writes a narrower
-entity, retires nothing, and records the off-task extent as its own finding.** Built any other way it
-becomes a destructive crop.
+| verb | writes | carries | mints |
+| --- | --- | --- | --- |
+| `mark` | `assertion`, `wasDerivedFrom` the span | what the span carries | no |
+| `refute` | `assertion`, `wasDerivedFrom` the span | that it does not carry what was proposed | no |
+| `refine` | `assertion`, `wasDerivedFrom` the span | a **corrected extent**, beside the span's own | no |
+| `trim` | `assertion`, `wasDerivedFrom` the span | the **task-relevant sub-extent**, plus an `off_task_extent` finding | no |
+| `propose` | `span`, `family: "<branch>"`, `wasDerivedFrom` its evidence | a region PREPROCESS did not find | **yes** |
 
-**A finished store no longer reproduces the routing that ran on it**, because `refine` retires spans
-the ruleset read. That is accepted and must be recorded: the routing decision is itself an entity in
-the store with its own inputs, so what the ruleset saw is recoverable from the decision rather than by
-re-running the gates. `store.md` makes which fold is current the reader's choice; the rule here is
-that **the current fold is the one reached by following `wasDerivedFrom` forward from a live span**,
-and retired spans are reachable but not current.
+`refine` and `trim` still emit their deviations; they simply do not rewrite the store's spans. A
+corrected extent is a claim beside the original — attributable, reversible, and never in competition
+with it for a reader keying on `span_id`.
 
-`extend.withdraw_contradicted_clips` with `_retire_quality_findings` is the only existing precedent
-for an invalidation cascade in this module, and each re-minting verb needs its own enumeration of
-what it retires written the same way, before it is built.
+**This is the store's own idiom, not an invention.** `corroborated_by` already records rival
+proposals as an attribute without minting entities, and `withdraw_contradicted_clips` with
+`_retire_quality_findings` is the module's one invalidation cascade *precisely because* minting forces
+one. Annotation needs no cascade, so there is none to enumerate.
 
-**A contradiction resolved: branch-proposed short spans.** A span a branch proposes has no per-span
-classifier measurement — PREPROCESS ran before it existed — so under rule (a) it could only ever
-acquire a covering-window label, which rule (a) declares ineligible. Resolution: **rule (a) is scoped
-to spans PREPROCESS proposed.** A branch that proposes a span and wants it classified runs its own
-classifier pass over that span, which produces a native in-span window and is therefore eligible on
-rule (a)'s own terms. A branch that proposes without classifying gets a span carrying its own
-evidence and no classifier label, which is a coherent thing to be.
+It also makes `trim` non-destructive by construction, which is what the no-suppression rule wanted
+and what the previous revision's "retires nothing" could not deliver while still double-counting in
+`features.py:1080-1093`.
+
+**A branch's own output is invisible to AIRWAY**, which selects `family is None` (`airway.py:198`).
+Anything written as `family: "<branch>"` — including AIRWAY's own proposals — is outside that filter.
+Under the annotation model this affects only `propose`, and it is a constraint the AIRWAY piece must
+address rather than a defect in the contract.
+
+**A branch-proposed short span cannot be classified by YAMNet at all.** `span_yamnet_input` raises
+`SpanTooShortForYAMNet` below 0.96 s (`yamnet.py:257-258`), so rule (a)'s own motivating case — a
+200 ms cough — can never acquire a native YAMNet window, whatever proposes it and however many passes
+are run. HeAR can, via the silent buffer (`hear.py:426-443`). This is a **property of the
+classifiers**, recorded here and not resolved: a short span is HeAR-only, and rule (a) is
+unsatisfiable for YAMNet on any short span regardless of its origin.
 
 ### Where each branch already stands
 
@@ -384,7 +425,7 @@ its own spans, and writes them with `family: "speech"` (`speech.py:879-883`). It
 instance of the contract.
 
 **VOICE was designed to and cannot.** Its subject is every live span whose `family` is `phonation`
-(`voice.py:239-240`, `_PHONATION_FAMILY` at `:39`). Nothing in the tree proposes one — the detector
+(`voice.py:232`, `_PHONATION_FAMILY` at `:39`). Nothing in the tree proposes one — the detector
 was retired 2026-09-04 — so the branch takes its no-span path and returns `Outcome.FAIL` on every
 recording. Under this contract **the branch is the proposer**, and that is the whole fix.
 
@@ -398,13 +439,23 @@ corroborating window ids. **`abstain` and `flag` map to no verb and stay as they
 records that colocated evidence existed and decided nothing, which is neither a mark nor a refutation,
 and `flag` is a branch-level finding rather than a span-level one.
 
-**`refute` needs a threshold-free definition, and gets one.** `airway.contest_labels` is `null`
-(`default.yaml:138`), so `_contest_labels` returns the empty set (`airway.py:150`) and `contested_n`
-is structurally zero; the ground-truth rule forbids fitting the list. So `refute` is defined without
-one: **a branch refutes a span when it finds no evidence of any kind within that span's extent.**
-That is a statement about absence the branch can make from what it already reads, needs no fitted
-label list, and leaves the fitted list as a later refinement that would let a branch refute on
-*contrary* evidence rather than only on absent evidence.
+**`refute` needs a threshold-free definition, and gets one — with the same budget rule (a) gets.**
+`airway.contest_labels` is `null` (`default.yaml:138`), so `_contest_labels` returns the empty set
+(`airway.py:150`) and `contested_n` is structurally zero; the ground-truth rule forbids fitting the
+list. So `refute` is defined without one: **a branch refutes a span when it finds no evidence of any
+kind within that span's extent.** That needs no fitted label list, and leaves the fitted list as a
+later refinement letting a branch refute on *contrary* evidence rather than only on absent evidence.
+
+**That definition interacts badly with rule (a) and must be counted before it ships.** Rule (a) makes
+covering-window labels ineligible as evidence, and coughs are usually sub-0.96 s, so "no evidence of
+any kind" would refute most short spans. `contested_n` would go from structurally zero to near-total,
+feeding AIRWAY's verdict and the mismatch flag at `vocabulary.py:393`. **The same before-and-after
+count rule (a) requires is required here**, and for the same reason: the two changes compound.
+
+**Background-typed gap spans are not refutable.** A gap span is a statement about where PREPROCESS
+found nothing, so "no evidence within its extent" is what it already asserts; refuting it would be
+tautological and would flood `contested_n` with the one span class guaranteed to satisfy the
+definition.
 
 **DDK has no node.** `nodes/ddk.py` does not exist. Since stage 2 the ruleset routes DDK, so a
 recording with DDK content receives a `branch_decision` with `will_run` true and is recorded
@@ -429,11 +480,15 @@ default-uncertain kind line flag every recording.
 
 | type | what it says |
 | --- | --- |
-| `extra_speaker` | more than one speaker where the declaration claims a single target |
+| `speaker_count` | how many speakers were found, and what the declaration claimed as its target |
 | `stimulus_mismatch` | a lexical word that is not the word the stimulus expected |
 | `filler` | a disfluency or non-speech token where the task expected lexical content |
-| `missing_expected_event` | the declaration expects an event class the branch did not find |
+| `expected_event_count` | how many events of the declared class were found, and how many the table expected |
 | `off_task_extent` | a region of the recording that does not serve the declared task |
+
+The first and fourth are named for what they **report**, not for a verdict on it. `extra_speaker` and
+`missing_expected_event` were the earlier names; both encoded the comparison the prose below forbids,
+so under this repo's rename-outright rule they are renamed rather than footnoted.
 
 ### The line the ground-truth rule draws through this table
 
@@ -444,13 +499,14 @@ the declaration is not verified.
 `stimulus_mismatch`, `filler` and `off_task_extent` are on the right side: each reports something
 observed in the audio, located, with the declaration only saying where to look.
 
-**`missing_expected_event` is a fit in all but name** — it scores the recording against a count the
-declaration asserts and nobody verified, and "expected five breaths, found three" is as likely to
-mean the table is wrong as that the participant under-performed. It is retained as a **recorded
-observation owing ground truth**: the branch reports what it found and what the table expected, as
-two numbers, and asserts no discrepancy. The same applies to **`extra_speaker` conditioning on
-`targeted_speaker_count`** — the speaker count found is an observation; that it exceeds a declared
-target is a comparison against an unverified claim.
+**`expected_event_count` and `speaker_count` are the two that had to be renamed to stay on it.** As
+`missing_expected_event` and `extra_speaker` they scored the recording against a count the
+declaration asserts and nobody verified — and "expected five breaths, found three" is as likely to
+mean the table is wrong as that the participant under-performed. Renamed, each **reports two numbers,
+what was found and what was declared, and asserts no discrepancy between them.** Whoever reads them
+may compare; the branch does not.
+
+Both still **owe ground truth** before any consumer is entitled to treat the difference as a finding.
 
 ### Read speech has the sharpest case
 
@@ -475,7 +531,7 @@ Move it to PREPROCESS, whole-file, in the same shape as the PPG extension:
 
 - **Every branch gets it.** A cough from a second person in a respiration recording is an airway
   finding AIRWAY has no way to notice today.
-- **`extra_speaker` becomes available for every task.**
+- **`speaker_count` becomes available for every task.**
 - **SPEECH's diarize step becomes a read**, and `speech.second_diarizer` (`default.yaml:166`, null,
   so `not_consulted`) becomes a question about the shared derivative. This is a behaviour change to a
   shipped branch, not a pure addition.
@@ -540,7 +596,7 @@ Dependency order, with the pieces that are genuinely independent marked:
    **Independent.** Note `make_hints.py` also reads `routing.hint_kind_map` and raises when it is
    absent (`:414-416`, validated at `:20-23` and `:429-439`), so renaming only `override.yaml` breaks
    hint generation; both move together.
-2. **The `preprocess.py:1520` continuity derivation bug.** **Independent, small**, split out of piece 7.
+2. **The `preprocess.py:1520` continuity derivation bug.** **Independent, small**, split out of piece 8.
 3. **Span cleanliness (a) and (b)** — the attribution filter and background typing, scoped to
    `span_yamnet`. Includes the before-and-after gate-firing count on the corpus and a
    `rewrite_consensus_taxonomy` pass over existing stores.
@@ -550,11 +606,11 @@ Dependency order, with the pieces that are genuinely independent marked:
    contract. Depends on 1. **Its dependency on 4 is optional** — the measurement can be written by
    TAXONOMY pre-merge — and decoupling it removes the only blocking dependency on the largest piece.
 6. **Whole-file diarization** — the raw-vs-enhanced pilot first, then the extend driver, then SPEECH's
-   diarize step becoming a read. **Not independent of 5**: `extra_speaker` needs the declaration's
+   diarize step becoming a read. **Not independent of 5**: `speaker_count` needs the declaration's
    single-target claim.
 7. **The branch contract, per branch** — SPEECH first (closest to it), then AIRWAY (which also closes
    the `_windows_covering` gap), then VOICE (which needs a proposer before it has a subject), then
-   DDK (which needs a node). Depends on 5, and on 6 for `extra_speaker`.
+   DDK (which needs a node). Depends on 5, and on 6 for `speaker_count`.
 8. **Boundary reconciliation** — blocked on a parameter-free definition, per (c).
 
 **One ordering inversion is accepted and budgeted.** Piece 8 changes every span extent, hence which
@@ -572,13 +628,17 @@ verification. Nothing is refit until something has been listened to.
 
 **The boundary reconciliation rule** (c) — no parameter-free definition yet.
 
+**Whether rule (a) extends from `span_yamnet` to `span_hear`.** Scoped to `span_yamnet` here, which
+leaves AIRWAY untouched by it; extending would require HeAR to gain an attribution flag it does not
+write. To be decided with the before-and-after gate count in hand.
+
 **DDK has a contract, which is not the same as being specified.** What DDK concludes about a segment
 rate, and what its findings are, is undecided. Until the node exists, recordings with DDK content
 flag.
 
 **Whether a deviation is disqualifying**, per task.
 
-**`missing_expected_event` and `extra_speaker` owe ground truth** — recorded as observations, no
+**`expected_event_count` and `speaker_count` owe ground truth** — recorded as observations, no
 discrepancy asserted.
 
 **Promoting the declaration's fields from `metadata` to typed `AudioHints` fields.**
