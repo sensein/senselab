@@ -611,56 +611,105 @@ git add -A && git commit -m "fix(phonation): a failed pitch analysis is a failur
 - Consumes: `F0RangeFailed` from Task 2.
 - Produces: nothing. This task exists because Task 2's choice of base class is only correct if asserted.
 
-- [ ] **Step 1: Write the extend-driver test**
+- [x] **Step 1: Write the extend-driver test**
 
-Add to `extend_reprocessed_outputs_test.py`, beside the existing typed-absence tests at `:504-519`:
+Add to `extend_reprocessed_outputs_test.py`. The pair landed as its **own class** after
+`TestADerivationThatCannotApply` (`:504-547`) rather than inside it: that class's docstring is
+*"An unvoiced recording has no F0 range. That is the answer, not a failure of the pass"*, and a test
+asserting `failed is True` contradicts it. As landed:
 
 ```python
+class TestTheTwoF0OutcomesReachDifferentHandlers:
+    """``F0RangeFailed`` and ``F0RangeUnavailable`` are siblings; only one of them fails a row."""
+
     def test_a_failed_f0_analysis_is_a_failed_row_and_not_an_escape(self) -> None:
         """A RuntimeError would leave attempt_derivation and kill the array task."""
         outcome = attempt_derivation(lambda: (_ for _ in ()).throw(F0RangeFailed("boom")))
+
         assert outcome.failed is True
-        assert "F0RangeFailed" in outcome.detail
+        assert outcome.detail == "F0RangeFailed: boom"
 
     def test_an_absent_f0_range_is_not_a_failed_row(self) -> None:
         """The absence stays in UNAVAILABLE; only the failure is a failure."""
         outcome = attempt_derivation(lambda: (_ for _ in ()).throw(F0RangeUnavailable("none")))
+
         assert outcome.failed is False
-        assert outcome.detail.startswith("absent")
+        assert outcome.detail == "absent: F0RangeUnavailable: none"
 ```
 
-Match the module's existing import and helper style before writing these — read `:504-519` first.
+`detail` is asserted whole rather than by substring: `describe_exception` renders
+`"<Class>: <first line>"` and `attempt_derivation` prefixes `ABSENT` to it, so the exact string is
+what the slice log records and both halves of it are the finding. `attempt_derivation` joins the
+existing `extend` import; `F0RangeFailed` and `F0RangeUnavailable` come from
+`senselab.audio.tasks.phonation`, which already exports both.
 
-- [ ] **Step 2: Write the PREPROCESS test**
+- [x] **Step 2: Write the PREPROCESS test**
+
+It landed in `TestPhonationTracks`, immediately after
+`test_an_underivable_range_leaves_the_tracks_absent` (`:1076-1096`), whose shape it follows:
 
 ```python
     def test_a_failed_f0_analysis_is_an_absence_and_does_not_abort_the_node(
         self,
         store: ProvStore,
-        phonation_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A RuntimeError would reach hard_failures and raise, taking every other block with it."""
-        _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch)
-        monkeypatch.setattr(
-            preprocess_module, "derive_f0_range", lambda *_a, **_k: (_ for _ in ()).throw(F0RangeFailed("boom"))
-        )
-        result = preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        assert "phonation_tracks" in result.absent
+        """A RuntimeError would reach ``hard_failures`` and raise, taking every other block with it."""
 
+        def _failed(
+            audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float, **coefficients: float
+        ) -> tuple[float, float]:
+            assert set(coefficients) == set(PITCH_NARROWING_KEYS)
+            raise F0RangeFailed("the pitch analysis failed on this recording")
+
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch)
+        monkeypatch.setattr(preprocess_module, "derive_f0_range", _failed)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert "phonation_tracks" in result.absent
+        assert _absent_map(store)["phonation_tracks"].startswith("F0RangeFailed")
+        assert find_measurement(store, "phonation_tracks") is None
+        assert find_measurement(store, "energy_envelope") is not None
 ```
 
-Confirm the block's registered name against the `blocks` list at `preprocess.py:2589-2629` — use whatever name that list gives the phonation-tracks block, not a guess. And follow `preprocess_test.py:1090`, which already templates the monkeypatch-a-block-into-raising pattern; do not invent a second shape for it.
+**Four things the snippet above this one got wrong against the tree, each fixed as landed:**
 
-- [ ] **Step 3: Run both and confirm they pass**
+- `phonation_config` is a real fixture (`nodes/conftest.py:217`) but not the one the sibling uses.
+  The sibling takes `config` (`preprocess_test.py:49`), and the two build the identical override
+  (`residual.enabled: false`); two adjacent tests naming the same config differently is the kind of
+  drift this plan keeps paying for.
+- `_seed_admit` takes `samples=_default_samples()` in the sibling. It is the parameter default
+  (`nodes/conftest.py:57-68`), so omitting it changes nothing — but the shape is the sibling's.
+- The raising stub is a typed `def` that asserts `set(coefficients) == set(PITCH_NARROWING_KEYS)`,
+  not a `lambda *_a, **_k`. The assertion is what keeps the stub honest about the signature Task 1
+  made required, and dropping it is exactly the second shape Step 2 says not to invent.
+- **`PreprocessResult.absent` is `tuple[str, ...]`** (`preprocess.py:169`), not a mapping. The name
+  test passes as written, but the reason lives in the verdict entity and is read through
+  `_absent_map` (`preprocess_test.py:1801`). A snippet asserting `result.absent[name]` raises
+  `TypeError: tuple indices must be integers or slices, not str`.
+
+**Confirmed, not assumed:** the phonation-tracks block is registered under
+`PHONATION_TRACKS_MEASUREMENT` (`preprocess.py:134`), whose value is `"phonation_tracks"`, at
+`preprocess.py:2606` in the `blocks` list (`:2589-2629`). The dispatch that turns its `ValueError`
+into `absent[name]` is `:2631-2640`, and the `raise` a `hard_failures` entry would reach is `:2644`.
+
+**Each new test was confirmed to discriminate by mutation, before being trusted:**
+
+| mutation | what failed |
+| --- | --- |
+| `class F0RangeFailed(RuntimeError)` | both failure tests — `F0RangeFailed: boom` escaped `attempt_derivation`, and PREPROCESS raised `RuntimeError: PREPROCESS: 1 block(s) failed unexpectedly` |
+| `F0RangeUnavailable` removed from `UNAVAILABLE` | `test_an_absent_f0_range_is_not_a_failed_row` — the absence became `failed=True` |
+| `F0RangeFailed` added to `UNAVAILABLE` | `test_a_failed_f0_analysis_is_a_failed_row_and_not_an_escape` — the failure became `absent: F0RangeFailed: boom`, `failed=False` |
+
+- [x] **Step 3: Run both and confirm they pass**
 
 Run: `uv run pytest src/tests/scripts/extend_reprocessed_outputs_test.py src/tests/audio/workflows/triage/nodes/preprocess_test.py -q`
 Expected: PASS. If the PREPROCESS test raises `RuntimeError: PREPROCESS: 1 block(s) failed unexpectedly`, `F0RangeFailed` is not a `ValueError` — go back to Task 2 Step 3.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A && git commit -m "test(triage): a failed F0 analysis is a failed row, and never a node abort"
