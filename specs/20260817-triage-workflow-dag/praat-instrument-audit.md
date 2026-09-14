@@ -724,6 +724,105 @@ The code declares its own literals undeclared.
 values are config-driven on the `phonation/api.py` path. `maximum_formant 5000` is the adult-male
 convention where child is 8000.
 
+## The wrappers discard the trajectory as well as the count (**owed a decision**)
+
+Finding 5 records that no wrapper returns the support count it computes. **One level deeper: no
+wrapper returns the trajectory either.** Most of these functions build a time-indexed Praat object,
+reduce it over the whole file, and return two to four scalars. The object is local to the call and
+goes out of scope when it returns, so the frame count finding 5 asks for is not the only thing
+thrown away — the frames themselves are.
+
+`extract_intensity_descriptors` is the plainest case. `:615` builds an `Intensity`; `:619`, `:622`,
+`:623` and `:624` call `Get mean` / `Get standard deviation` / `Get minimum` / `Get maximum` over the
+`0, 0` full time range; `:628` returns three numbers. Nothing outside that call ever sees the
+contour.
+
+**Checked function by function — and three do not follow the pattern**, which is why this is stated
+per function rather than as a blanket claim about the module:
+
+| function | what it builds | how it is reduced | frame-indexed trajectory discarded? |
+| --- | --- | --- | --- |
+| `extract_pitch_descriptors` (`:507`) | `Pitch` (`:555`) | `Get mean`, `Get standard deviation` over `0, 0` (`:560-561`) | yes |
+| `extract_intensity_descriptors` (`:574`) | `Intensity` (`:615`) | four full-range getters (`:619-624`) | yes |
+| `extract_harmonicity_descriptors` (`:639`) | `Harmonicity` (`:679`) | `Get mean`, `Get standard deviation` (`:683-684`) | yes |
+| `extract_spectral_moments` (`:1004`) | `Spectrogram` (`:1058`), sliced per voiced frame | four Python lists (`:1062`), meaned at `:1095-1098` | yes — but the lists carry **no time base**: a frame is appended only where the pitch is voiced and the moment is finite, so the four lists can differ in length from each other and from the frame grid |
+| `measure_f1f2_formants_bandwidths` (`:883`) | `Formant` (`:943`) **and** a pulse `PointProcess` | f1/b1/f2/b2 sampled at pulse times into numpy arrays (`:962-980`), then `np.nanmean` / `np.nanstd` (`:982-989`) | yes — and here the trajectory is **already a numpy array inside the function**; it is also pulse-indexed rather than frame-indexed, and covers F1–F2 only |
+| `extract_cpp_descriptors` (`:765`) | one `PowerCepstrogram` **per voiced interval** (`:826`) | Praat's `Get CPPS...` already reduces each cepstrogram to one scalar; the per-interval scalars are meaned at `:865` | **partly** — what is discarded is a per-interval series, not a per-frame one, and `:859` drops every value at or below 4 before it is even appended (finding 2) |
+| `extract_pitch_values` (`:381`) | `Pitch` (`:465`) | percentiles of the voiced contour | yes — the wide-pass contour is reduced to a range |
+| `extract_jitter` (`:1171`), `extract_shimmer` (`:1227`) | `PointProcess` (`:1201`, `:1257`) | `Get jitter (...)` / `Get shimmer (...)` over `0, 0` | **no.** A point process is a set of instants, not a frame grid, and these Praat calls emit no per-period series to return. A jitter *track* is a different computation, not a retained intermediate |
+| `extract_slope_tilt` (`:697`) | pitch-corrected `Ltas` (`:736`) | `Get slope`, `Report spectral tilt` | **no.** An LTAS is frequency-indexed and has already integrated over the whole file; there is no trajectory in the call to keep |
+| `extract_audio_duration` (`:1124`) | nothing | — | n/a |
+
+**`extract_speech_rate` (`:103`) discards more than a track.** It builds an `Intensity` (`:181`), a
+silences `TextGrid` (`:206`) and an extrema `PointProcess` (`:246`), and returns five rates. So it
+throws away a **span set** (the sounding/silent intervals) and an **event series** (`validtime`,
+`:283`, the accepted syllable nuclei) as well as the intensity contour — three kinds of product,
+none of which the caller can reach, on top of the `number_syllables` count finding 5 already names.
+
+**What survives to a consumer today, and where**
+
+| quantity | track available | where |
+| --- | --- | --- |
+| F0 + voicing strength | yes | `phonation_tracks.npz` via `f0_track` (`phonation/api.py:185`), written at `preprocess.py:976` |
+| F1–F4 + bandwidths | yes | the same npz via `formant_track` (`phonation/api.py:234`) |
+| HNR | the function exists; no shared derivative carries it | `hnr_track` (`phonation/api.py:101`) has exactly one caller in the tree, `voice.py:267`. Its whole-stream output is sliced to phonation spans and concatenated into `voice_tracks.npz` (`voice.py:368`), so even a recording routed to VOICE keeps only the in-span frames. See [`branch-voice.md`](branch-voice.md)'s unresolved item |
+| intensity | no | built and discarded per recording (`:615`). VOICE computes an RMS track of its own (`voice.py:109`), which is a level track but not Praat's intensity |
+| CPPS | no | per-interval values accumulated into `cpp_list` and meaned (`:865`) |
+| spectral moments | no | four per-frame lists built and meaned (`:1062`, `:1095-1098`) |
+| jitter / shimmer | no | a point process is built and reduced; no per-period series is produced to begin with |
+
+**`f0_track` sets unvoiced frames to NaN rather than dropping them** (`phonation/api.py:183`:
+`f0[f0 == 0.0] = np.nan`), and `formant_track` does the same for frames where Praat placed no
+formant. That is what makes continuity measurable at all on those two: the time base survives a gap,
+so a reader can tell a gap from a shortened recording. None of the discarded series above has that
+property — `extract_spectral_moments`' lists are the clearest counter-case, since a dropped frame
+leaves no trace of itself.
+
+**Why this is worth an owed item, stated against capabilities that already exist in these documents
+rather than in the abstract:**
+
+- [`branch-voice.md`](branch-voice.md) **V6** measures vocal effort as a between-condition change,
+  and on `loudness-v2` that is a change in level between a normal and a shouted "hey" within one
+  file. A per-recording `mean_db` cannot express a within-file contrast.
+- [`branch-airway.md`](branch-airway.md) **A5** counts breath events and their inter-event intervals
+  off the energy envelope, and **A6** wants spectral distribution over a single cough-labelled
+  event. Both are per-event questions asked of instruments that return per-recording means.
+- **V3**'s glide work asks what F0 did across the sweep. CPPS along the sweep would say whether voice
+  quality held across the register break; one mean over the file cannot.
+- Distinguishing a **breath** from a **voicing break** across an interruption is a question about
+  what the signal did during the gap. It needs a track with its gaps intact, not a summary.
+
+**The remedy is cheap in principle and is still owed a decision.** For the four rows where a
+frame-indexed object is built and thrown away — Pitch, Intensity, Harmonicity, Formant — the frames
+are one attribute access away (`.xs()` and `.values`, exactly what `hnr_track` and `f0_track`
+already do). For CPPS and the spectral moments the loop already materialises the series in Python.
+For jitter, shimmer and the LTAS there is nothing to return and a track would be new work, not a
+retained intermediate.
+
+But `praat_parselmouth.py` is a general senselab module with consumers outside triage, reached
+through `extract_praat_parselmouth_features_from_audios` (`:1286`), whose contract is one flat
+`Dict[str, float]` per recording. Widening a return value to carry arrays changes that contract for
+every caller and every downstream schema that flattens it. **So this is owed a decision on the API,
+not an obviously correct change, and no API is designed here.**
+
+**Where a track would live if one is added is already settled by a different argument** — in
+PREPROCESS, beside `phonation_tracks`, not in whichever branch first wants it. That rule and its
+derivation are in [`branch-voice.md`](branch-voice.md)'s unresolved section, under `hnr_track`.
+
+### A note on finding 5's wording, now that step 2 has landed
+
+Finding 5 opens *"Not one function in `praat_parselmouth.py` returns a frame, cycle or interval
+count."* **That sentence is now false and the finding it supports is not.** Step 2 landed on
+2026-09-14 and `extract_pitch_values` returns `pitch_frames` (`:494`), the voiced-frame count its
+derived range rests on — the first support count in the module, and a precedent for the shape the
+rest of finding 5 asks for. Read the finding as being about the other twelve.
+
+**Finding 5's line citations, and several others in this document, drifted when step 2 landed.**
+The three it names are now `:818` (`n_intervals`), `:955` (`n`) and `:1064` (`num_steps`), and
+`extract_speech_rate`'s two are `:257` (`numpeaks`) and `:330` (`number_syllables`); finding 6's
+`range_db_ratio` is at `:625`. Fixing every stale offset in this document is a separate sweep and is
+not done here.
+
 ## Where this lands
 
 | finding | affects |
@@ -738,6 +837,7 @@ convention where child is 8000.
 | 5, 11 | [`branch-listening-sample.md`](branch-listening-sample.md) |
 | 12 | nobody today (dormant: triage passes no `cache_dir`); any future batch over the corpus |
 | 13 | [`branch-conventions.md`](branch-conventions.md)'s per-measure bands, and `branch-voice.md` V4's sample-rate item |
+| **the discarded trajectories** | `branch-voice.md` V3 and V6; [`branch-airway.md`](branch-airway.md) A5 and A6 — every per-event or within-file question asked of an instrument that returns one mean per recording. Owed a decision on `praat_parselmouth.py`'s return contract, not a defect |
 
 ## A process finding: a revision deleted seven rules and no check caught it
 
