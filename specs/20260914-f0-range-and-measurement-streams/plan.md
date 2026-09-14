@@ -4,7 +4,7 @@
 
 **Goal:** Measure the right signal with a range derived from it — replace the binary sex-typed F0 range with a per-recording narrowing, and move the Praat scalars and the phonetic posteriorgram off the speech-enhanced stream onto the unprocessed one.
 
-**Architecture:** Three independent defects share one consequence. `extract_pitch_values` picks one of two hardcoded (floor, ceiling) pairs from a threshold on trimmed mean F0, so every measure downstream of `derive_f0_range` carries a step discontinuity at a sex-typed boundary. Separately, `preprocess.py` hands the FRCRN-enhanced stream to both the Praat extractor and the PPG worker, so forty acoustic scalars and one routing gate are computed on a denoiser's output. The fix is one function replacement and two `resolve_stream` argument changes, plus a re-run path in the extend driver that currently skips every store that already holds the measurements.
+**Architecture:** Three independent defects share one consequence. `extract_pitch_values` picks one of two hardcoded (floor, ceiling) pairs from a threshold on trimmed mean F0, so every measure downstream of `derive_f0_range` carries a step discontinuity at a sex-typed boundary. Separately, `preprocess.py` hands the FRCRN-enhanced stream to both the Praat extractor and the PPG worker, so forty acoustic scalars and one routing gate are computed on a denoiser's output. The fix is one function replacement and two stream changes, plus a re-run path in the extend driver that currently skips every store already holding the measurements.
 
 **Tech Stack:** Python 3.12, `uv`, pytest, numpy, parselmouth (Praat bindings), `ProvStore` (append-only W3C PROV-shaped provenance), Slurm array jobs on ORCD for corpus passes.
 
@@ -12,22 +12,22 @@
 
 ## Global Constraints
 
-- **No threshold may be fitted against this corpus.** Its only labels are declared task names, so fitting against them fits the declaration. Every new value must be parameter-free, or a declared convention with its reasoning recorded in `specs/`, or marked owed. The six kinds of owed are enumerated in `specs/20260817-triage-workflow-dag/branch-listening-sample.md`.
+- **No threshold may be fitted against this corpus.** Its only labels are declared task names, so fitting against them fits the declaration. Every new value must be parameter-free, or a declared convention with its reasoning recorded in `specs/`, or marked owed. The six kinds of owed are in `specs/20260817-triage-workflow-dag/branch-listening-sample.md`.
 - Every stream is resampled to **16 kHz mono** before any measurement (`resample.target_hz: 16000`, `src/senselab/audio/workflows/triage/data/config/default.yaml:19`).
-- **Pre-alpha: rename and replace outright.** No parallel fields, no aliases, no deprecation shims.
-- **Rationale goes in `specs/`, never in code comments or docstrings.** Docstrings say what a thing is and how to call it.
+- **Pre-alpha: rename and replace outright.** No parallel fields, no aliases, no deprecation shims. This governs Task 5's `enhanced_id` parameter rename.
+- **Rationale goes in `specs/`, never in code comments or docstrings.**
 - Google-style docstrings, line length 120, full type hints, `from __future__ import annotations`.
 - All Python through `uv run`. **Never `pytest -n auto`** — run the directory you changed.
 - `uv run ruff format`, `uv run ruff check`, `uv run mypy` clean on every file touched.
-- `CACHE_SCHEMA_VERSION` is **not** the invalidation lever here. It lives in `src/senselab/utils/tasks/cached_inference.py` and belongs to the `audio_analysis` workflow; `grep -r 'cached_inference\|cache_dir' src/senselab/audio/workflows/triage/` returns nothing. Re-derivation is an extend driver, which is why Task 6 exists.
+- `CACHE_SCHEMA_VERSION` is **not** the invalidation lever here. It lives in `src/senselab/utils/tasks/cached_inference.py` and belongs to `audio_analysis`; `grep -r 'cached_inference\|cache_dir' src/senselab/audio/workflows/triage/` returns nothing. Re-derivation is an extend driver, which is why Task 7 exists.
 
 ## Scope
 
-**In scope:** audit steps 2 (replace `derive_f0_range`), 1 (Praat scalars onto `plain`), 1b (PPG onto `plain`), and the extend driver's re-run path.
+**In scope:** audit step 2 (replace `derive_f0_range`, and make a crash distinguishable from an absence), step 1 (Praat scalars onto `plain`), step 1b (PPG onto `plain`), and the extend driver's re-run path.
 
-**Explicitly out of scope, each getting its own plan:** the CPPS reimplementation (step 4); jitter and shimmer from the `PeriodMark` sequence (step 3); withholding the scalars already written into 62,547 stores (step 0 — an extend driver of its own); instrument coverage per instrument (step 5); every branch capability (V1–V8, A1–A7, D1–D6, S1–S9, Q1–Q8); the SCREEN merge; and the nine pieces in the contract's decomposition.
+**Explicitly out of scope, each getting its own plan:** the CPPS reimplementation (step 4); jitter and shimmer from the `PeriodMark` sequence (step 3); withholding the scalars already written into 62,547 stores (step 0); instrument coverage per instrument (step 5); **step 2b — tracking F0 on the same signal the range was derived on** (`preprocess.py:941` derives on `plain`, `:951` tracks on `sharp`); the owed widening of `voice.f0_search_range_hz`'s 600 Hz ceiling against the CPPS band's 700 Hz; every branch capability; the SCREEN merge; and the contract's nine pieces.
 
-**One thing this plan deliberately does not resolve.** `branch-voice.md` V3 records a task-shaped tension: narrowing buys octave-error robustness on stationary material and is wrong on a glide, where the derived ceiling is set by how high the speaker went, making V3's "did F0 reach the derived limit" conformance flag partly circular. This plan implements the narrowing and leaves that open, as the design leaves it.
+**One thing this plan deliberately does not resolve.** `branch-voice.md` V3 records that narrowing buys octave-error robustness on stationary material and is wrong on a glide, where the derived ceiling is set by how high the speaker went, making V3's "did F0 reach the derived limit" flag partly circular. This plan implements the narrowing and leaves that open.
 
 ---
 
@@ -35,30 +35,29 @@
 
 | file | responsibility after this plan |
 | --- | --- |
-| `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py` | `extract_pitch_values` returns a per-recording narrowed range from robust log-Hz percentiles of the wide-search contour, and reports whether it failed or found nothing. Modify `:358-446`. |
-| `src/senselab/audio/tasks/phonation/api.py` | `derive_f0_range` distinguishes a parselmouth failure from a genuine absence. Modify `:45-69`. |
-| `src/senselab/audio/workflows/triage/nodes/preprocess.py` | `ppg_input` and the Praat block read `plain`. Modify `:758`, `:809`, `:874`, `:880-895`. |
-| `src/tests/audio/tasks/features_extraction_test.py` | the narrowing's own behaviour: monotonicity, no discontinuity, low and high sources. |
-| `src/tests/audio/tasks/phonation_test.py` | `derive_f0_range`'s contract. **Rewrite `TestDeriveF0Range` at `:109-131` — it currently asserts the bin's exact output.** |
-| `src/tests/audio/workflows/triage/nodes/preprocess_test.py` | both measurements record `signal="plain"`. **Rename the test at `:2210`, which asserts the enhanced stream in its own name.** |
-| `scripts/extend_ppg_praat.py` | gains `--force` so a completed slice can be re-derived. Modify `:94-115`, `:187-190`, `:235-238`, and the docstring at `:26-27`. |
-| `src/tests/scripts/extend_ppg_praat_test.py` | `--force` re-derives on a store that already holds both measurements. |
-| `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` | steps 1, 1b and 2 marked landed, with the new convention's reasoning. |
+| `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py` | `extract_pitch_values` narrows per recording from robust log-Hz percentiles, and **reports a failed analysis as data** rather than as an indistinguishable NaN. Modify `:358-446`. |
+| `src/senselab/audio/tasks/phonation/api.py` | `derive_f0_range` raises `F0RangeFailed` on a reported failure and `F0RangeUnavailable` on a genuine absence. Modify `:41-69`. |
+| `src/senselab/audio/workflows/triage/nodes/preprocess.py` | `ppg_input`, `write_ppg_posteriorgram` and the Praat block read `plain`. Modify `:742-763`, `:766-826`, `:839-844`, `:859-895`. |
+| `src/tests/audio/tasks/features_extraction_test.py` | the narrowing's behaviour and the failure signal. |
+| `src/tests/audio/tasks/phonation_test.py` | `derive_f0_range`'s two typed outcomes. **Rewrite `TestDeriveF0Range` `:109-131`.** |
+| `src/tests/audio/workflows/triage/nodes/preprocess_test.py` | both measurements record `signal="plain"`. **Six stale assertions plus one whole test — enumerated in Task 6.** |
+| `src/tests/audio/workflows/triage/extend_reprocessed_outputs_test.py` | a reported failure is a failed row, not an escaped exception. |
+| `scripts/extend_ppg_praat.py` | gains `--force`, which supersedes rather than appends. Modify `:26-27`, `:94-115`, `:187-190`, `:197`, `:219`, `:235-238`. |
+| `src/tests/scripts/extend_ppg_praat_test.py` | `_seed_run` seeds `plain`; `--force` re-derives and leaves exactly one live measurement. |
+| `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` | steps 1, 1b and 2 landed; the corpus passes and the noise-robustness statement recorded as owed. |
 
 ### Two existing tests pin the defects
 
-Both must be rewritten, not extended, and finding them is why this plan starts with tests rather than code:
-
-- `src/tests/audio/tasks/phonation_test.py:112-119` asserts `low == (60.0, 250.0)` and `high == (100.0, 500.0)` under the docstring *"The narrowing is what the standardization method does; a fixed corpus range cannot."* It asserts the bin while describing the thing the bin is not.
-- `src/tests/audio/workflows/triage/nodes/preprocess_test.py:2210` is named `test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one`.
+- `phonation_test.py:112-119` asserts `low == (60.0, 250.0)` and `high == (100.0, 500.0)` under the docstring *"The narrowing is what the standardization method does; a fixed corpus range cannot."* It asserts the bin while describing what the bin is not.
+- `preprocess_test.py:2238` is named `test_both_read_the_enhanced_stream_back_out_of_the_store`, and its class docstring at `:2172` opens *"Both run on ``enhanced``"*.
 
 ### What does not need changing, and why
 
-`routing_analysis/features.py` finds the PPG measurement **by name** and resolves its sidecar from the measurement's own `path` attribute — it does not filter on `signal`. So Task 5 changes the DDK gate feature's **value**, not its availability. Verified: no `signal`-keyed PPG lookup exists in that module.
+`routing_analysis/features.py` finds the PPG measurement **by name** and resolves its sidecar from the measurement's `path` attribute — it applies no `signal` filter. So Task 5 changes the DDK gate feature's **value**, not its availability. This also means `live_evidence_test.py:216` and `routing_analysis_test.py:949`/`:959`, which hardcode `"signal": "enhanced"` in PPG fixtures, will **keep passing**. Update them for accuracy, but do not expect a failure to prompt you.
 
 ---
 
-## Task 1: The narrowing replaces the bin
+## Task 1: The narrowing replaces the bin, and a failed analysis says so
 
 **Files:**
 - Modify: `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py:358-446`
@@ -66,38 +65,24 @@ Both must be rewritten, not extended, and finding them is why this plan starts w
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: `extract_pitch_values(snd, search_floor_hz: float = 50.0, search_ceiling_hz: float = 600.0) -> Dict[str, float]` returning keys `pitch_floor`, `pitch_ceiling` (both `float`, both `np.nan` when no pitch was placed) and `pitch_frames` (`float`, the count of voiced frames the narrowing rested on, `0.0` when none). Task 2 reads all three.
+- Produces: `extract_pitch_values(snd, search_floor_hz: float = 50.0, search_ceiling_hz: float = 600.0) -> Dict[str, float]` returning **five** `float` keys on **every** path: `pitch_floor`, `pitch_ceiling` (both `np.nan` when no range could be derived), `pitch_frames` (voiced frames the range rests on, `0.0` when none), `pitch_failed` (`1.0` when the analysis itself raised), and `pitch_refinement_widened` (`1.0` when the second pass disagreed with the first by an octave or more and the range was widened back). Task 2 reads `pitch_failed` and the two range values; Task 9 carries all five onto the measurement.
 
-The current body, verified at `:414-436`: it takes the wide-search contour, drops zeros, trims at ±2 SD **in linear Hz**, takes the mean, and returns one of two hardcoded pairs on `mean_pitch < 170`. Three things change — the trim moves to log-Hz, the two pairs become percentiles of the contour, and the frame count becomes an output so a caller can see how much signal the range rests on.
+**The narrowing must not be able to exclude the speaker's F0, and a single pass can.** Measured on a synthesised **120 Hz voice with a 60 Hz hum at ~−22 dB**: the wide search locks to the subharmonic across the whole contour and a one-pass narrowing returns **`[50.0, 90.0]`** — a range the speaker's F0 never enters. Every measure downstream is then computed over a range that excludes the voice. The same happens at 0 dB broadband SNR (21 surviving frames, all near 60 Hz, range `[50, 91]`).
 
-- [ ] **Step 1: Write the failing test for monotonicity**
+**The bin was accidentally robust here**: a 60 Hz trimmed mean selects `(60, 250)`, which still contains 120 Hz. So a one-pass narrowing would be a **regression** on this configuration — and 60 Hz mains against a ~120 Hz male voice, or 50 Hz against ~100 Hz, is a common clinical recording. It interacts adversely with Task 5: FRCRN suppresses stationary low-frequency noise and `plain` does not, so moving to `plain` makes the hum case *more* frequent in the same pass that introduces the vulnerability.
 
-Add to `src/tests/audio/tasks/features_extraction_test.py`:
+The fix is **De Looze & Hirst's iterative refinement**, which introduces no fitted value: re-run the pitch pass at the narrowed range, compare the second-pass median against the first, and if they disagree by **an octave or more** the narrowing was captured — widen back to the search range. An octave is a natural unit, not an operating point.
+
+**Why `pitch_failed` exists, and why this task and not Task 2 carries it.** The current `except Exception` at `:439-445` returns `{pitch_floor: nan, pitch_ceiling: nan}` — byte-identical to the legitimate no-pitch return at `:426`. A caller cannot tell a parselmouth crash from a silent recording. The audit's step 2 (`praat-instrument-audit.md:158-159`) requires that distinction, and **it can only be made here**, because this is the only frame that sees the exception. A `try/except` in `derive_f0_range` around this call would be unreachable in production: the crash never propagates past this `except`. We keep the swallow — other callers depend on the batch extractor not aborting — and add the signal as data.
+
+- [ ] **Step 1: Write the failing test — the discontinuity, which is what actually fails today**
+
+Add to `src/tests/audio/tasks/features_extraction_test.py`. Copy `_buzz` from `src/tests/audio/tasks/phonation_test.py:24-28` if this module has no equivalent; check first.
 
 ```python
 class TestPitchRangeNarrowing:
     """The range is this recording's own, narrowed off a wide search — not one of two presets."""
 
-    def test_the_derived_range_rises_monotonically_with_source_f0(self) -> None:
-        """A preset bin is a step function of F0; a narrowing is monotone in it."""
-        ceilings = [
-            extract_pitch_values(_buzz(f0), search_floor_hz=50.0, search_ceiling_hz=600.0)["pitch_ceiling"]
-            for f0 in (90.0, 130.0, 180.0, 260.0, 380.0)
-        ]
-        assert ceilings == sorted(ceilings), f"ceiling must not decrease as F0 rises: {ceilings}"
-        assert ceilings[0] < ceilings[-1], "a 90 Hz and a 380 Hz voice cannot share a ceiling"
-```
-
-Use the `_buzz` helper already in `src/tests/audio/tasks/phonation_test.py:24-28` — copy it into this module, or import it if the file already has an equivalent; check before duplicating.
-
-- [ ] **Step 2: Run it and watch it fail**
-
-Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py::TestPitchRangeNarrowing -v`
-Expected: FAIL. The 90 Hz and 130 Hz sources both land in the `< 170` bin and return ceiling 250.0, so `ceilings[0] == ceilings[1]` and the strict inequality on the ends may hold while monotonicity is satisfied only by accident — read the actual failure before proceeding.
-
-- [ ] **Step 3: Write the failing test for the absent discontinuity**
-
-```python
     def test_no_discontinuity_at_the_retired_170_hz_boundary(self) -> None:
         """The retired rule stepped floor/ceiling from 60/250 to 100/500 across mean F0 = 170 Hz."""
         below = extract_pitch_values(_buzz(165.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
@@ -106,143 +91,293 @@ Expected: FAIL. The 90 Hz and 130 Hz sources both land in the `< 170` bin and re
         assert below["pitch_floor"] == pytest.approx(above["pitch_floor"], rel=0.15)
 ```
 
-- [ ] **Step 4: Write the failing tests for the two clipped populations**
+This is deliberately first. The monotonicity test in Step 3 **passes under the bin** — ceilings for `(90, 130, 180, 260, 380)` are `[250, 250, 500, 500, 500]`, which is sorted with `250 < 500` — so starting there would begin the TDD loop green.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py::TestPitchRangeNarrowing -v`
+Expected: FAIL. 165 Hz returns ceiling 250.0 and 175 Hz returns 500.0 — a factor of two, far outside `rel=0.15`.
+
+- [ ] **Step 3: Add the remaining behaviour tests**
 
 ```python
-    def test_a_sub_60_hz_source_is_not_floored_at_60(self) -> None:
-        """Vocal fry and Parkinsonian creak sat below the retired 60 Hz floor and yielded no pulses."""
-        derived = extract_pitch_values(_buzz(55.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
-        assert derived["pitch_floor"] < 60.0, "the floor must follow the voice below the retired bin"
+    def test_the_derived_range_rises_monotonically_with_source_f0(self) -> None:
+        """A preset bin is a step function of F0; a narrowing is monotone in it."""
+        ceilings = [
+            extract_pitch_values(_buzz(f0), search_floor_hz=50.0, search_ceiling_hz=600.0)["pitch_ceiling"]
+            for f0 in (90.0, 130.0, 180.0, 260.0, 380.0)
+        ]
+        assert ceilings == sorted(ceilings), f"ceiling must not decrease as F0 rises: {ceilings}"
+        assert len(set(ceilings)) == len(ceilings), f"each voice gets its own ceiling, not a bin's: {ceilings}"
 
-    def test_a_420_hz_source_is_not_clipped_at_250(self) -> None:
-        """A child or high-F0 speaker whose trimmed mean fell below 170 was tracked to 250 Hz."""
-        derived = extract_pitch_values(_buzz(420.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
-        assert derived["pitch_ceiling"] > 420.0, "the ceiling must admit the source it was derived from"
+    def test_a_55_hz_source_yields_finite_perturbation(self) -> None:
+        """The retired 60 Hz floor placed zero pulses here, so jitter and shimmer were NaN.
+
+        Asserting the outcome, not the floor: ``pitch_floor < 60`` is satisfied by ``max(50.0, …)``
+        for any voice whose p5 is under 90 Hz, so it would pass without this source being tracked.
+        """
+        audio = _buzz(55.0)
+        floor, ceiling = derive_f0_range(audio, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert np.isfinite(extract_jitter(audio, floor=floor, ceiling=ceiling)["local_jitter"])
+        assert np.isfinite(extract_shimmer(audio, floor=floor, ceiling=ceiling)["local_shimmer"])
+
+    def test_a_45_hz_source_records_where_the_exclusion_moved_to(self) -> None:
+        """The exclusion moved from 60 Hz to the search floor; it did not go away.
+
+        45 Hz places no pitch at a 50 Hz search floor, so the range is an absence and VOICE reads
+        'no phonation found' for a voice that is plainly phonating. The binding constraint is now
+        ``voice.f0_search_range_hz[0]``, and this test is the record of that.
+        """
+        derived = extract_pitch_values(_buzz(45.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_frames"] == 0.0
+        assert derived["pitch_failed"] == 0.0, "an out-of-search-range voice is an absence, not a crash"
+
+    def test_a_420_hz_source_reaches_the_search_ceiling_rather_than_the_retired_250(self) -> None:
+        """Fixed to about 400 Hz and then saturating: 380 Hz gives 570, 420 Hz gives the 600 clamp."""
+        assert extract_pitch_values(_buzz(380.0), search_floor_hz=50.0, search_ceiling_hz=600.0)[
+            "pitch_ceiling"
+        ] == pytest.approx(570.0, rel=0.05)
+        assert extract_pitch_values(_buzz(420.0), search_floor_hz=50.0, search_ceiling_hz=600.0)[
+            "pitch_ceiling"
+        ] == pytest.approx(600.0), "the search ceiling binds above ~400 Hz, not the retired 250"
+
+    def test_a_hum_does_not_capture_the_range_away_from_the_voice(self) -> None:
+        """A one-pass narrowing returned [50, 90] for this source — a range the voice never enters.
+
+        The retired bin was accidentally robust here, so this is the one case where the replacement
+        would have been worse than what it replaced.
+        """
+        voice = _buzz(120.0, seconds=2.0).waveform.numpy()[0]
+        t = np.arange(voice.size) / 16000
+        hum = (10 ** (-22 / 20)) * np.sin(2 * np.pi * 60.0 * t)
+        audio = Audio(waveform=(voice + hum).astype(np.float32)[None, :], sampling_rate=16000)
+
+        derived = extract_pitch_values(audio, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_floor"] <= 120.0 <= derived["pitch_ceiling"], (
+            f"the speaker's F0 must lie inside its own derived range, got "
+            f"[{derived['pitch_floor']}, {derived['pitch_ceiling']}]"
+        )
+        assert derived["pitch_refinement_widened"] == 1.0, "the refinement is what caught it"
+
+    def test_a_noisy_source_does_not_capture_the_range(self) -> None:
+        """At 0 dB broadband SNR a one-pass narrowing returned [50, 91] from 21 surviving frames."""
+        voice = _buzz(120.0, seconds=2.0).waveform.numpy()[0]
+        rng = np.random.default_rng(0)
+        noisy = voice + rng.standard_normal(voice.size).astype(np.float32) * float(np.sqrt((voice**2).mean()))
+        audio = Audio(waveform=noisy.astype(np.float32)[None, :], sampling_rate=16000)
+
+        derived = extract_pitch_values(audio, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        if derived["pitch_frames"] > 0.0:
+            assert derived["pitch_floor"] <= 120.0 <= derived["pitch_ceiling"]
+
+    def test_a_glide_is_bracketed_rather_than_clipped(self) -> None:
+        """An exponential 100 to 400 Hz sweep measured [72.8, 549.5] against produced extremes 102/392."""
+        t = np.arange(2 * 16000) / 16000
+        f0 = 100.0 * (4.0 ** (t / t[-1]))
+        wave = np.sin(2 * np.pi * np.cumsum(f0) / 16000).astype(np.float32)
+        audio = Audio(waveform=wave[None, :], sampling_rate=16000)
+
+        derived = extract_pitch_values(audio, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_floor"] < 100.0 and derived["pitch_ceiling"] > 400.0
 
     def test_the_range_reports_the_frames_it_rests_on(self) -> None:
         """A range derived from four voiced frames is not the same claim as one from four hundred."""
         derived = extract_pitch_values(_buzz(150.0, seconds=2.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
         assert derived["pitch_frames"] > 0.0
+        assert derived["pitch_failed"] == 0.0
+
+    def test_silence_is_an_absence_and_not_a_failure(self) -> None:
+        """No pitch placed is a real answer about the recording; the analysis did not fail."""
+        silence = Audio(waveform=np.zeros((1, 16000), dtype=np.float32), sampling_rate=16000)
+        derived = extract_pitch_values(silence, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert np.isnan(derived["pitch_floor"]) and np.isnan(derived["pitch_ceiling"])
+        assert derived["pitch_frames"] == 0.0
+        assert derived["pitch_failed"] == 0.0, "silence is an absence, not a crash"
+
+    def test_a_failed_analysis_is_reported_rather_than_returned_as_an_absence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The crash return was byte-identical to the no-pitch return; a caller could not tell them apart."""
+
+        def _boom(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("parselmouth exploded")
+
+        monkeypatch.setattr(parselmouth.Sound, "to_pitch_ac", _boom, raising=False)
+        derived = extract_pitch_values(_buzz(150.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_failed"] == 1.0
+        assert np.isnan(derived["pitch_floor"])
 ```
 
-- [ ] **Step 5: Run all four and confirm they fail for the stated reasons**
+The last test patches the parselmouth call the function makes, not the function itself — so it exercises the real `except` path. Check the exact call at `:414-418` and patch whichever method it uses.
+
+- [ ] **Step 4: Run all six and record which fail and why**
 
 Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py::TestPitchRangeNarrowing -v`
-Expected: FAIL. `pitch_frames` raises `KeyError`; the 55 Hz case returns floor 60.0 exactly; the 420 Hz case returns ceiling 250.0 if its trimmed mean lands below 170 and 500.0 otherwise — record which, because it tells you whether the wide search is tracking the source at all.
+Expected: the discontinuity, monotonicity-uniqueness, 55 Hz and 420 Hz cases FAIL on the bin; the two `pitch_frames`/`pitch_failed` cases FAIL with `KeyError`.
 
-- [ ] **Step 6: Replace the bin with the narrowing**
+- [ ] **Step 5: Replace the body**
 
-In `praat_parselmouth.py`, replace `:420-438` (from `pitch_values = pitch_values[pitch_values != 0]` through `return {"pitch_floor": pitch_floor, "pitch_ceiling": pitch_ceiling}`) with:
+Replace **from `pitch_values = pitch_values[pitch_values != 0]` (`:420`) through `return {"pitch_floor": pitch_floor, "pitch_ceiling": pitch_ceiling}` (`:438`) inclusive** — and nothing after it, so the existing `except` block at `:439` stays where it is:
 
 ```python
         pitch_values = pitch_values[pitch_values != 0]
         if pitch_values.size == 0:
-            return {"pitch_floor": np.nan, "pitch_ceiling": np.nan, "pitch_frames": 0.0}
+            return _no_pitch_range()
 
-        log_values = np.log2(pitch_values)
-        median_log, spread_log = np.median(log_values), np.std(log_values)
-        kept = pitch_values[np.abs(log_values - median_log) <= 2.0 * spread_log] if spread_log > 0 else pitch_values
-        if kept.size == 0:
-            return {"pitch_floor": np.nan, "pitch_ceiling": np.nan, "pitch_frames": 0.0}
+        low, high = np.percentile(pitch_values, [PITCH_RANGE_LOW_PERCENTILE, PITCH_RANGE_HIGH_PERCENTILE])
+        floor = max(float(search_floor_hz), float(low) / PITCH_RANGE_MARGIN)
+        ceiling = min(float(search_ceiling_hz), float(high) * PITCH_RANGE_MARGIN)
 
-        low, high = np.percentile(kept, [PITCH_RANGE_LOW_PERCENTILE, PITCH_RANGE_HIGH_PERCENTILE])
-        pitch_floor = max(float(search_floor_hz), float(low) / PITCH_RANGE_MARGIN)
-        pitch_ceiling = min(float(search_ceiling_hz), float(high) * PITCH_RANGE_MARGIN)
+        first_median = float(np.median(pitch_values))
+        refined = get_sound(snd).to_pitch_ac(pitch_floor=floor, pitch_ceiling=ceiling)
+        refined_values = refined.selected_array["frequency"]
+        refined_values = refined_values[refined_values != 0]
+        widened = 0.0
+        if refined_values.size:
+            second_median = float(np.median(refined_values))
+            if abs(np.log2(second_median / first_median)) >= OCTAVE_IN_LOG2:
+                floor, ceiling = float(search_floor_hz), float(search_ceiling_hz)
+                widened = 1.0
+
         return {
-            "pitch_floor": pitch_floor,
-            "pitch_ceiling": pitch_ceiling,
-            "pitch_frames": float(kept.size),
+            "pitch_floor": floor,
+            "pitch_ceiling": ceiling,
+            "pitch_frames": float(pitch_values.size),
+            "pitch_failed": 0.0,
+            "pitch_refinement_widened": widened,
         }
 ```
 
-And add the three module constants beside the other module-level names near the top of the file:
+Add a module-level helper so all four absence and failure paths stay identical:
+
+```python
+def _no_pitch_range(*, failed: float = 0.0) -> Dict[str, float]:
+    """The five-key shape every ``extract_pitch_values`` path returns when no range was derived."""
+    return {
+        "pitch_floor": np.nan,
+        "pitch_ceiling": np.nan,
+        "pitch_frames": 0.0,
+        "pitch_failed": failed,
+        "pitch_refinement_widened": 0.0,
+    }
+```
+
+Then the `except` block's return at `:445` becomes `return _no_pitch_range(failed=1.0)` and the early non-finite guard at `:426` becomes `return _no_pitch_range()`. **Every return path carries all five keys**; Task 2 and Task 9 depend on that.
+
+Add beside the module's other constants:
 
 ```python
 PITCH_RANGE_LOW_PERCENTILE = 5.0
 PITCH_RANGE_HIGH_PERCENTILE = 95.0
 PITCH_RANGE_MARGIN = 1.5
+OCTAVE_IN_LOG2 = 1.0
 ```
 
-Three things to note while editing. The trim is now in **log2 Hz**, because an octave error is a factor and a linear trim about a mean that sits between two octave-separated modes removes neither. The margin is multiplicative for the same reason. And the `except Exception` at `:439-445` must also gain `"pitch_frames": 0.0` so every return path carries the same keys — Task 2 depends on that.
+**There is no trim, and that is deliberate.** An earlier draft kept a log-Hz MAD trim before the percentiles. Two reasons it is gone. It does not do the job it was added for — an octave is 1.0 in log₂ and a bimodal contour widens the MAD, so a 2-MAD window keeps *both* modes and the 95th percentile still lands in the doubled one; the refinement above is what actually catches that. And it corrupts `pitch_frames`: measured on a clean 110 Hz buzz, the trim discarded **36 of 188** voiced frames, so the percentiles were of the post-trim set (about p7/p93) and `pitch_frames` was not the voiced-frame count its consumers would read it as. The 5th/95th percentiles already trim 10%.
 
-- [ ] **Step 7: Run the tests and confirm they pass**
+Check the exact first-pass call at `:414-418` and mirror its argument style in the refinement call — if the first pass passes a time step, the second must too, or the two medians are not comparable.
+
+- [ ] **Step 6: Run and confirm all six pass**
 
 Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py::TestPitchRangeNarrowing -v`
-Expected: PASS, all five.
+Expected: PASS, all six.
 
-- [ ] **Step 8: Record the convention in the spec**
+- [ ] **Step 7: Update the docstrings this changes**
 
-The three constants are **declared conventions, not fits** — they are not derived from this corpus and must say so. Add to `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` under step 2: the 5th/95th percentiles and the 1.5× margin are Hirst's two-pass method as conventionally parameterised, the trim is in log-Hz because octave errors are multiplicative, and none of the three was fitted against the corpus. Mark the glide tension as owed, cross-referencing `branch-voice.md` V3.
+`extract_pitch_values`' `Returns:` block (`:373-380`) documents two keys and must document four. Its `Examples:` (`:402`) prints the old pair. And `src/senselab/audio/tasks/features_extraction/api.py:375-376` shows the same pair. Fix all three — each is a doctest-shaped example that now misdescribes the return.
+
+- [ ] **Step 8: Record the convention in the spec, without a false citation**
+
+Add to `praat-instrument-audit.md` under step 2:
+
+- **Cite Hirst for the two-pass structure, and nothing else.** Hirst's rule is a first pass at **50–700 Hz**, then `floor = 0.75 × q1` and `ceiling = 1.5 × q3` — **the quartiles, with a deliberately asymmetric pair**. De Looze & Hirst's variant uses q15/q65. This plan's 5th/95th with a symmetric ±1.5 is none of those, and its first pass is 50–600. Write that the **structure** is Hirst's two-pass and the **parameterisation is a senselab convention**. A claim of "Hirst as conventionally parameterised" is checkable in five minutes and would be the second wrong derivation in this document family.
+- **Say why the numbers are deliberately wider.** ±1.5 on p5/p95 is ±7.02 semitones and yields a range strictly *wider* than Hirst's at both ends. That is the right direction for a corpus enriched for pathological voices, where a narrow range is the failure that matters. Record the reason, not just the values.
+- **The iterative refinement is De Looze & Hirst's**, and it is the only part with a real citation: re-run at the narrowed range and widen back if the second-pass median moves by an octave or more. Note that an octave is a natural unit, so the refinement introduces no operating point.
+- **There is no trim, and say so.** An earlier draft carried a log-Hz MAD trim; it is removed because it does not remove an octave-split mode (an octave is 1.0 in log₂ and a bimodal contour widens the MAD, so both modes survive) and because it corrupted `pitch_frames` — measured, 36 of 188 voiced frames discarded on a clean 110 Hz buzz, making the percentiles p7/p93 of the original set. Octave robustness comes from the refinement, not from a trim.
+- The range ratio widens: the bin always gave 4.17 or 5.0, the narrowing measured **7.5** on a glide and can exceed 11. `voice.f0_range_ratio_max` is null so nothing fires, but `voice.py:77-80` **raises** rather than flags once it is set. Record it.
 
 - [ ] **Step 9: Lint and commit**
 
 ```bash
-uv run ruff format src/senselab/audio/tasks/features_extraction/praat_parselmouth.py src/tests/audio/tasks/features_extraction_test.py
-uv run ruff check src/senselab/audio/tasks/features_extraction/praat_parselmouth.py src/tests/audio/tasks/features_extraction_test.py
+uv run ruff format src/senselab/audio/tasks/features_extraction/ src/tests/audio/tasks/features_extraction_test.py
+uv run ruff check src/senselab/audio/tasks/features_extraction/ src/tests/audio/tasks/features_extraction_test.py
 uv run mypy src/senselab/audio/tasks/features_extraction/praat_parselmouth.py
-git add -A && git commit -m "fix(praat): derive the F0 range per recording instead of binning on sex"
+git add -A && git commit -m "fix(praat): derive the F0 range per recording, and report a failed analysis"
 ```
 
 ---
 
-## Task 2: A parselmouth failure stops reading as an absence
+## Task 2: `derive_f0_range` raises two different errors
 
 **Files:**
-- Modify: `src/senselab/audio/tasks/phonation/api.py:45-69`
+- Modify: `src/senselab/audio/tasks/phonation/api.py:41-69`, `src/senselab/audio/tasks/phonation/__init__.py`
 - Test: `src/tests/audio/tasks/phonation_test.py`
 
 **Interfaces:**
-- Consumes: `extract_pitch_values`'s three keys from Task 1.
-- Produces: `F0RangeUnavailable` for a genuine absence (unchanged); a new `F0RangeFailed(RuntimeError)` for a parselmouth failure. `derive_f0_range`'s signature and return type are unchanged. Both must be exported from `src/senselab/audio/tasks/phonation/__init__.py`.
+- Consumes: `pitch_failed` from Task 1.
+- Produces: `F0RangeFailed(ValueError)` exported from `senselab.audio.tasks.phonation`. `derive_f0_range`'s signature and return type are unchanged.
 
-`extract_pitch_values` has **two** identical NaN returns: the non-finite guard at `:426`, which is a real absence, and the bare `except Exception` at `:445`, which is a crash. `derive_f0_range:63-68` checks only `np.isfinite` and raises `F0RangeUnavailable` for both — the same crash/absence conflation the audit condemns for CPPS at finding 2.
+**`F0RangeFailed` subclasses `ValueError`, and that choice is load-bearing at both consumers.** Verified:
+
+- `extend.py:120-126` lists `F0RangeUnavailable` in `UNAVAILABLE`; `attempt_derivation:160-165` then catches `UNAVAILABLE` as a non-failure and `(OSError, ValueError, LookupError)` as a **failed row**. A `ValueError` subclass therefore records the failure and lets the array task continue. A `RuntimeError` subclass would escape both handlers and **kill the task** — which is the defect `extend_reprocessed_outputs_test.py:504-519` exists to prevent, after 613 rows of the last corpus pass did exactly that.
+- `preprocess.py:2619-2626`: `except (ValueError, LookupError)` records a cascading absence; `except Exception` appends to `hard_failures` and the node then **raises** at `:2630`. A `ValueError` subclass keeps one crashed recording from aborting a node whose other blocks still need to run.
+
+So `F0RangeFailed` must **not** be added to `UNAVAILABLE` — it is a failure, not an absence, and `attempt_derivation`'s `ValueError` branch is where it belongs.
 
 - [ ] **Step 1: Write the failing test**
 
+Add to `phonation_test.py`. Do not duplicate the silence case — `:120-124` already covers it.
+
 ```python
-class TestDeriveF0RangeDistinguishesFailureFromAbsence:
-    """A crashed analysis and a recording with no pitch are not the same finding."""
+class TestDeriveF0RangeSeparatesFailureFromAbsence:
+    """A crashed analysis and a recording with no pitch are different findings."""
 
-    def test_silence_is_an_absence(self) -> None:
-        """No pitch placed over the wide search is an absence, attributable as one."""
-        silence = Audio(waveform=np.zeros((1, SR), dtype=np.float32), sampling_rate=SR)
-        with pytest.raises(F0RangeUnavailable):
-            derive_f0_range(silence, search_floor_hz=50.0, search_ceiling_hz=600.0)
-
-    def test_a_parselmouth_failure_is_not_an_absence(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A crash must not be attributed as 'this recording has no pitch'."""
-
-        def _boom(*_args: object, **_kwargs: object) -> dict[str, float]:
-            raise RuntimeError("parselmouth exploded")
-
-        monkeypatch.setattr("senselab.audio.tasks.phonation.api.extract_pitch_values", _boom)
+    def test_a_reported_failure_raises_f0_range_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """extract_pitch_values reports the crash as data; derive_f0_range must not call it an absence."""
+        monkeypatch.setattr(
+            "senselab.audio.tasks.phonation.api.extract_pitch_values",
+            lambda *_a, **_k: {
+                "pitch_floor": np.nan,
+                "pitch_ceiling": np.nan,
+                "pitch_frames": 0.0,
+                "pitch_failed": 1.0,
+            },
+        )
         with pytest.raises(F0RangeFailed):
             derive_f0_range(_buzz(150.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+
+    def test_f0_range_failed_is_a_value_error(self) -> None:
+        """extend.attempt_derivation records a ValueError as a failed row; a RuntimeError escapes it."""
+        assert issubclass(F0RangeFailed, ValueError)
+        assert not issubclass(F0RangeFailed, type(None).__class__)
 ```
 
-Import `F0RangeFailed` alongside `F0RangeUnavailable` at the top of the test module.
+Drop the second assertion's odd guard if ruff objects; the first is the one that matters.
 
 - [ ] **Step 2: Run it and watch it fail**
 
-Run: `uv run pytest src/tests/audio/tasks/phonation_test.py::TestDeriveF0RangeDistinguishesFailureFromAbsence -v`
-Expected: FAIL on the import — `F0RangeFailed` does not exist.
+Run: `uv run pytest src/tests/audio/tasks/phonation_test.py::TestDeriveF0RangeSeparatesFailureFromAbsence -v`
+Expected: FAIL on import — `F0RangeFailed` does not exist.
 
-- [ ] **Step 3: Add the second typed error and stop swallowing the crash**
+- [ ] **Step 3: Add the error and read the flag**
 
-In `api.py`, beside `F0RangeUnavailable` at `:41-42`:
+Beside `F0RangeUnavailable` at `:41-42`:
 
 ```python
-class F0RangeFailed(RuntimeError):
-    """The pitch analysis itself failed; this is an operational fault, never an absence."""
+class F0RangeFailed(ValueError):
+    """The pitch analysis itself failed. A ValueError so ``extend.attempt_derivation`` records a
+    failed row rather than letting it escape, and so PREPROCESS records an absence rather than
+    aborting the node."""
 ```
 
-Then in `derive_f0_range`, replace the body from `values = extract_pitch_values(...)` through the `raise`:
+That docstring states a *what*, not a rationale — the reasoning goes in the spec per the global constraints. Trim it to one sentence if it reads as rationale.
+
+In `derive_f0_range`, replace `:63-68`:
 
 ```python
-    try:
-        values = extract_pitch_values(audio, search_floor_hz=search_floor_hz, search_ceiling_hz=search_ceiling_hz)
-    except Exception as error:
-        raise F0RangeFailed(f"the pitch analysis failed on this recording: {error}") from error
+    values = extract_pitch_values(audio, search_floor_hz=search_floor_hz, search_ceiling_hz=search_ceiling_hz)
+    if values.get("pitch_failed", 0.0):
+        raise F0RangeFailed("the pitch analysis failed on this recording")
     floor, ceiling = float(values["pitch_floor"]), float(values["pitch_ceiling"])
     if not np.isfinite(floor) or not np.isfinite(ceiling):
         raise F0RangeUnavailable(
@@ -251,16 +386,11 @@ Then in `derive_f0_range`, replace the body from `values = extract_pitch_values(
     return floor, ceiling
 ```
 
-Add `F0RangeFailed` to the `Raises:` block of the docstring, and export it from `__init__.py` beside `F0RangeUnavailable` in both the import list and `__all__`.
+Add `F0RangeFailed` to the `Raises:` block, and export it from `__init__.py` in both the import and `__all__`.
 
-- [ ] **Step 4: Run and confirm both pass**
+- [ ] **Step 4: Rewrite the test that pinned the bin**
 
-Run: `uv run pytest src/tests/audio/tasks/phonation_test.py -v`
-Expected: PASS for the new class. **`TestDeriveF0Range` at `:109-131` will now FAIL** — it asserts `low == (60.0, 250.0)`. That is correct and is Step 5.
-
-- [ ] **Step 5: Rewrite the test that pinned the bin**
-
-Replace `test_a_low_voice_and_a_high_voice_get_different_ranges` at `:112-119` with:
+Replace `test_a_low_voice_and_a_high_voice_get_different_ranges` at `:112-119`:
 
 ```python
     def test_a_low_voice_and_a_high_voice_get_ranges_that_follow_them(self) -> None:
@@ -272,211 +402,331 @@ Replace `test_a_low_voice_and_a_high_voice_get_different_ranges` at `:112-119` w
         assert low[1] < high[1], "a higher voice must get a higher ceiling"
 ```
 
-Its old docstring claimed the narrowing while asserting the bin; the new one asserts what it claims.
-
-- [ ] **Step 6: Run the whole phonation and features suites**
+- [ ] **Step 5: Run the phonation and features suites**
 
 Run: `uv run pytest src/tests/audio/tasks/phonation_test.py src/tests/audio/tasks/features_extraction_test.py -q`
-Expected: PASS. Any other failure here is a caller that depended on the bin's exact output — read it rather than adjusting the assertion.
+Expected: PASS. Any other failure is a caller that depended on the bin's exact output — read it rather than adjusting the assertion.
 
-- [ ] **Step 7: Lint and commit**
+- [ ] **Step 6: Lint and commit**
 
 ```bash
 uv run ruff format src/senselab/audio/tasks/phonation/ src/tests/audio/tasks/phonation_test.py
 uv run ruff check src/senselab/audio/tasks/phonation/ src/tests/audio/tasks/phonation_test.py
 uv run mypy src/senselab/audio/tasks/phonation/
-git add -A && git commit -m "fix(phonation): a failed pitch analysis is a fault, not an absence"
+git add -A && git commit -m "fix(phonation): a failed pitch analysis is a failure, not an absence"
 ```
 
 ---
 
-## Task 3: The narrowing's consumers still pass
+## Task 3: Both error paths behave correctly at their consumers
 
 **Files:**
-- Test: `src/tests/audio/workflows/triage/nodes/preprocess_test.py`, `src/tests/audio/workflows/triage/nodes/voice_test.py`
+- Test: `src/tests/audio/workflows/triage/extend_reprocessed_outputs_test.py`, `src/tests/audio/workflows/triage/nodes/preprocess_test.py`
 
 **Interfaces:**
-- Consumes: Tasks 1 and 2.
-- Produces: nothing. This task is a gate, not a change.
+- Consumes: `F0RangeFailed` from Task 2.
+- Produces: nothing. This task exists because Task 2's choice of base class is only correct if asserted.
 
-`derive_f0_range` has two production callers: `preprocess.py:941` (on `plain`, feeding `f0_track` and `formant_track`) and `voice.py:71-73` (on `plain`, feeding `hnr_track` and `period_marks`). Both now receive a range that varies continuously.
+- [ ] **Step 1: Write the extend-driver test**
 
-- [ ] **Step 1: Run both consumer suites**
-
-Run: `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py src/tests/audio/workflows/triage/nodes/voice_test.py -q`
-Expected: PASS. If a test fails, it asserted a window length or a track shape that followed from the bin's fixed floor — Praat's window is `periods_per_window / floor`, so a changed floor changes frame counts.
-
-- [ ] **Step 2: Commit only if something needed changing**
-
-If nothing failed, skip. If something did:
-
-```bash
-git add -A && git commit -m "test(triage): the F0 range varies continuously, so window lengths follow the voice"
-```
-
----
-
-## Task 4: The Praat scalars move to `plain`
-
-**Files:**
-- Modify: `src/senselab/audio/workflows/triage/nodes/preprocess.py:874-895`
-- Test: `src/tests/audio/workflows/triage/nodes/preprocess_test.py:2210`
-
-**Interfaces:**
-- Consumes: nothing from earlier tasks.
-- Produces: the `praat_features` measurement recording `signal="plain"` and `derived_from=(plain_id,)`.
-
-Verified at `:880`: `enhanced_id, audio = resolve_stream(store, run_dir, "enhanced")`, then `:882` mints the activity with `(enhanced_id,)`, `:892` writes `signal="enhanced"`, `:895` writes `derived_from=(enhanced_id,)`, and the docstring `Raises:` at `:874` names the enhanced stream. All five change together — this is not one argument.
-
-- [ ] **Step 1: Rename and invert the test that asserts the enhanced stream**
-
-At `preprocess_test.py:2210`, rename `test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one` to `test_praats_scalars_are_attributes_and_the_stream_is_the_unprocessed_one`, and add to its body:
+Add to `extend_reprocessed_outputs_test.py`, beside the existing typed-absence tests at `:504-519`:
 
 ```python
-        assert attrs["signal"] == "plain", "FRCRN removes aperiodic energy, which is the breathiness signal"
+    def test_a_failed_f0_analysis_is_a_failed_row_and_not_an_escape(self) -> None:
+        """A RuntimeError would leave attempt_derivation and kill the array task."""
+        outcome = attempt_derivation(lambda: (_ for _ in ()).throw(F0RangeFailed("boom")))
+        assert outcome.failed is True
+        assert "F0RangeFailed" in outcome.detail
+
+    def test_an_absent_f0_range_is_not_a_failed_row(self) -> None:
+        """The absence stays in UNAVAILABLE; only the failure is a failure."""
+        outcome = attempt_derivation(lambda: (_ for _ in ()).throw(F0RangeUnavailable("none")))
+        assert outcome.failed is False
+        assert outcome.detail.startswith("absent")
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+Match the module's existing import and helper style before writing these — read `:504-519` first.
 
-Run: `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py -k praats_scalars -v`
-Expected: FAIL with `assert 'enhanced' == 'plain'`.
+- [ ] **Step 2: Write the PREPROCESS test**
 
-- [ ] **Step 3: Change all five sites**
+```python
+    def test_a_failed_f0_analysis_is_an_absence_and_does_not_abort_the_node(
+        self,
+        store: ProvStore,
+        phonation_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A RuntimeError would reach hard_failures and raise, taking every other block with it."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        monkeypatch.setattr(
+            preprocess_module, "derive_f0_range", lambda *_a, **_k: (_ for _ in ()).throw(F0RangeFailed("boom"))
+        )
+        result = preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+        assert "phonation_tracks" in result.absent
 
-In `preprocess.py`, in the Praat block: change `:880` to `plain_id, audio = resolve_stream(store, run_dir, "plain")`, `:882`'s activity tuple to `(plain_id,)`, `:892` to `signal="plain"`, `:895` to `derived_from=(plain_id,)`, and the docstring `Raises:` at `:874` to name the `plain` stream.
+```
 
-- [ ] **Step 4: Run and confirm it passes**
+Confirm the block's registered name against the `blocks` list at `preprocess.py:2596-2616` — use whatever name that list gives the phonation-tracks block, not a guess.
 
-Run: `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py -k praats_scalars -v`
-Expected: PASS.
+- [ ] **Step 3: Run both and confirm they pass**
 
-- [ ] **Step 5: Lint and commit**
+Run: `uv run pytest src/tests/audio/workflows/triage/extend_reprocessed_outputs_test.py src/tests/audio/workflows/triage/nodes/preprocess_test.py -q`
+Expected: PASS. If the PREPROCESS test raises `RuntimeError: PREPROCESS: 1 block(s) failed unexpectedly`, `F0RangeFailed` is not a `ValueError` — go back to Task 2 Step 3.
+
+- [ ] **Step 4: Commit**
 
 ```bash
-uv run ruff format src/senselab/audio/workflows/triage/nodes/preprocess.py src/tests/audio/workflows/triage/nodes/preprocess_test.py
-uv run ruff check src/senselab/audio/workflows/triage/nodes/preprocess.py src/tests/audio/workflows/triage/nodes/preprocess_test.py
-uv run mypy src/senselab/audio/workflows/triage/nodes/preprocess.py
-git add -A && git commit -m "fix(preprocess): measure the Praat scalars on plain, not on a denoiser's output"
+git add -A && git commit -m "test(triage): a failed F0 analysis is a failed row, and never a node abort"
 ```
 
 ---
 
-## Task 5: The PPG moves to `plain`, and DDK routing moves with it
+## Task 4: The narrowing's existing consumers still pass
 
 **Files:**
-- Modify: `src/senselab/audio/workflows/triage/nodes/preprocess.py:758`, `:809`
+- Test: `src/tests/audio/workflows/triage/nodes/preprocess_test.py`, `voice_test.py`
+
+**Interfaces:** consumes Tasks 1–3; produces nothing.
+
+`derive_f0_range` has two production callers: `preprocess.py:941` (feeding `f0_track` and `formant_track`) and `voice.py:71-73` (feeding `hnr_track` and `period_marks`). Both now receive a continuously varying range, and Praat's window is `periods_per_window / floor`, so a changed floor changes frame counts.
+
+- [ ] **Step 1: Run both suites**
+
+Run: `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py src/tests/audio/workflows/triage/nodes/voice_test.py -q`
+Expected: PASS. A failure asserting a track length or window followed from the bin's fixed floor — fix the assertion to the new derivation, not the other way round.
+
+- [ ] **Step 2: Commit if anything needed changing**
+
+```bash
+git add -A && git commit -m "test(triage): window lengths follow the derived range, not a bin"
+```
+
+---
+
+## Task 5: Both measurements move to `plain`
+
+**Files:**
+- Modify: `src/senselab/audio/workflows/triage/nodes/preprocess.py:742-763`, `:766-826`, `:839-844`, `:859-895`
+- Modify: `scripts/extend_ppg_praat.py:219`
 - Test: `src/tests/audio/workflows/triage/nodes/preprocess_test.py`
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: the `ppg_posteriorgram` measurement recording `signal="plain"`.
+- Produces: both measurements recording `signal="plain"` and `derived_from=(plain_id,)`. `write_ppg_posteriorgram`'s `enhanced_id` keyword becomes **`stream_id`**.
 
-This is a different event from Task 4. The PPG feeds `ppg.segment_rate_per_s`, which is a DDK routing gate, so this changes **which branch runs** on recordings across the corpus — not just what a number reads. `routing_analysis/features.py` finds the measurement by name and resolves the sidecar from its `path` attribute, with no `signal` filter, so the feature's availability is unaffected and only its value moves.
+Tasks 5 and 6 are one change split by concern: this task moves the code, the next fixes every test it breaks. The PPG move is the consequential half — it changes `ppg.segment_rate_per_s`, hence **DDK routing corpus-wide**, not merely what a number reads.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Move the Praat block**
 
-```python
-    def test_the_posteriorgram_is_computed_on_the_unprocessed_stream(
-        self, residual_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The PPG feeds a DDK routing gate, so a denoiser in its path moves which branch runs."""
-        store, run_dir = _run_preprocess(residual_config, tmp_path, monkeypatch)
-        ppg = find_measurement(store, "ppg_posteriorgram")
-        assert ppg is not None
-        assert ppg.attributes["signal"] == "plain"
-```
+In `preprocess.py`, in `_praat_features`: `:880` → `plain_id, audio = resolve_stream(store, run_dir, "plain")`; `:882`'s activity tuple → `(plain_id,)`; `:892` → `signal="plain"`; `:895` → `derived_from=(plain_id,)`. The docstring names `enhanced` at `:859`, `:868` and `:874` — all three change.
 
-Match the fixture and helper names the neighbouring tests in this file already use — read the PPG tests near `:2259` and reuse their setup rather than inventing one.
+- [ ] **Step 2: Move the PPG block and rename the parameter**
 
-- [ ] **Step 2: Run it and watch it fail**
+`ppg_input` (`:742-763`): `:758` → `resolve_stream(store, run_dir, "plain")`, rename the local, and fix the docstring at `:743`, `:749` and `:756`.
 
-Run: `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py -k posteriorgram_is_computed -v`
-Expected: FAIL with `assert 'enhanced' == 'plain'`.
+`write_ppg_posteriorgram` (`:766-826`): rename the **keyword parameter** `enhanced_id` (`:770`) to `stream_id`, its docstring (`:783`), and its two uses at `:794` and `:821`. Fix the docstring at `:826`.
 
-- [ ] **Step 3: Change both sites**
+Then both call sites, which pass it **by name**: `preprocess.py:844` and **`scripts/extend_ppg_praat.py:219`**. Missing the second leaves a `TypeError` the triage suite will not catch. Pre-alpha says rename outright — no alias.
 
-In `ppg_input`: change `:758` to `plain_id, audio = resolve_stream(store, run_dir, "plain")`, rename the local through its uses in that function, and change `:809` to `signal="plain"`. Update the function's docstring where it names the enhanced stream.
+Note `:809` is `signal="enhanced"` inside `write_ppg_posteriorgram`, not `ppg_input`. Change it to `"plain"`.
 
-- [ ] **Step 4: Run and confirm**
+- [ ] **Step 3: Run and expect failures, not success**
 
-Run: `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py -k posteriorgram -v`
-Expected: PASS.
+Run: `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py -q`
+Expected: **FAIL**, in the tests Task 6 enumerates. That is the point of splitting the tasks — do not adjust assertions here.
 
-- [ ] **Step 5: Assert the enhanced stream has no measurement consumers left**
-
-Add to the same test class:
-
-```python
-    def test_no_measurement_reads_the_enhanced_stream(self) -> None:
-        """The audit's scope bound is that exactly two sites read it; both have moved."""
-        source = Path("src/senselab/audio/workflows/triage/nodes/preprocess.py").read_text(encoding="utf-8")
-        assert 'resolve_stream(store, run_dir, "enhanced")' not in source
-```
-
-This is the regression guard for the audit's scope claim. The enhanced stream is still *written* by the enhancement step and still read by the residual computation — this asserts only that no measurement resolves it.
-
-- [ ] **Step 6: Run the whole triage node suite**
-
-Run: `uv run pytest src/tests/audio/workflows/triage -q`
-Expected: PASS. A failure in `live_evidence_test.py` or `routing_analysis_test.py` means a fixture hardcodes `"signal": "enhanced"` for a PPG measurement — `live_evidence_test.py:216` and `routing_analysis_test.py:949`/`:959` do. Update those fixtures to `"plain"`; they are constructing a measurement the node no longer writes that way.
-
-- [ ] **Step 7: Lint and commit**
+- [ ] **Step 4: Lint and commit**
 
 ```bash
-uv run ruff format src/senselab/audio/workflows/triage/ src/tests/audio/workflows/triage/
-uv run ruff check src/senselab/audio/workflows/triage/ src/tests/audio/workflows/triage/
-uv run mypy src/senselab/audio/workflows/triage/nodes/preprocess.py
-git add -A && git commit -m "fix(preprocess): compute the posteriorgram on plain, which moves DDK routing"
+uv run ruff format src/senselab/audio/workflows/triage/nodes/preprocess.py scripts/extend_ppg_praat.py
+uv run ruff check src/senselab/audio/workflows/triage/nodes/preprocess.py scripts/extend_ppg_praat.py
+uv run mypy src/senselab/audio/workflows/triage/nodes/preprocess.py scripts/extend_ppg_praat.py
+git add -A && git commit -m "fix(preprocess): measure the Praat scalars and the posteriorgram on plain"
 ```
 
 ---
 
-## Task 6: The extend driver gains a re-run path
+## Task 6: Every test the move breaks, and what each becomes
 
 **Files:**
-- Modify: `scripts/extend_ppg_praat.py:26-27`, `:94-115`, `:187-190`, `:235-238`
+- Test: `src/tests/audio/workflows/triage/nodes/preprocess_test.py`, `src/tests/audio/workflows/triage/live_evidence_test.py`, `routing_analysis_test.py`
+
+**Interfaces:** consumes Task 5; produces nothing.
+
+Six stale assertions, two stale names, one test whose whole premise dissolves. Each is listed with what it becomes.
+
+- [ ] **Step 1: Retarget the class that asserts the enhanced stream**
+
+In the class whose docstring is at `:2172`:
+
+| line | now | becomes |
+| --- | --- | --- |
+| `:2172` | docstring "Both run on ``enhanced``…" | "Both run on ``plain``…" |
+| `:2193` | `assert attrs["signal"] == "enhanced"` | `== "plain"` |
+| `:2194` | `resolve_stream(store, tmp_path, "enhanced")` | `"plain"`, and rename the local |
+| `:2204-2206` | the same two for the second measurement | the same change |
+| `:2226` | `assert attrs["signal"] == "enhanced"` | `== "plain"` |
+| `:2235-2236` | `resolve_stream(...)` + `derived_from == [enhanced_id]` | `"plain"`, rename the local |
+| `:2238` | `test_both_read_the_enhanced_stream_back_out_of_the_store` | `..._the_plain_stream_...` |
+
+- [ ] **Step 2: Decide what the no-enhanced-stream test becomes**
+
+`test_both_are_absent_when_no_enhanced_stream_was_written` at `:2289-2305` asserts both measurements land in `result.absent` with `"enhanced"` in the reason. That absence came **only** from `resolve_stream(..., "enhanced")` raising. After the move `plain` always exists, both blocks always run, and the test's premise is gone.
+
+**Replace it with the same contract over the stream that can now be missing**, keeping the cascading-absence property it was protecting:
+
+```python
+    def test_both_are_absent_when_no_plain_stream_was_written(
+        self,
+        store: ProvStore,
+        phonation_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A missing measurement stream is a cascading absence, not a failure of the node."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        monkeypatch.setattr(
+            preprocess_module,
+            "resolve_stream",
+            lambda *_a, **_k: (_ for _ in ()).throw(LookupError("no live stream named 'plain'")),
+        )
+        result = preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+
+        assert PPG_MEASUREMENT in result.absent
+        assert PRAAT_MEASUREMENT in result.absent
+```
+
+Patching `resolve_stream` is blunt and will make other blocks absent too — assert only the two this test is about. If the module's fixtures offer a way to seed a run without a `plain` stream, prefer that and drop the monkeypatch.
+
+- [ ] **Step 3: Replace the false regression guard with a true one**
+
+Do **not** write `test_no_measurement_reads_the_enhanced_stream`. It would be false: `enhanced_yamnet`, `enhanced_ast` and `enhanced_hear` (`preprocess.py:2604-2606`, via `_stream_classifier_scores`) **are** measurements written with `signal="enhanced"`. They pass a string guard only because they read `state["enhanced_audio"]` instead of calling `resolve_stream` with a literal. A guard whose name asserts something untrue is worse than none.
+
+Scope it to the audit's actual claim — that these two measurements no longer read the denoised stream:
+
+```python
+    def test_neither_praat_nor_the_posteriorgram_reads_the_enhanced_stream(
+        self, residual_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store: ProvStore,
+        wav_writer: Callable[..., Path],
+    ) -> None:
+        """The audit's bound is about these two measurements, not about the stream having no readers."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        for name in (PPG_MEASUREMENT, PRAAT_MEASUREMENT):
+            measurement = find_measurement(store, name)
+            assert measurement is not None
+            assert measurement.attributes["signal"] == "plain"
+        assert any(
+            find_measurement(store, f"enhanced_{classifier}") is not None for classifier in ("yamnet", "ast", "hear")
+        ), "the enhanced stream still has its own classifier measurements; that is not what moved"
+```
+
+Match the fixture set the neighbouring tests use rather than the list above if they differ.
+
+- [ ] **Step 4: Run the whole triage suite**
+
+Run: `uv run pytest src/tests/audio/workflows/triage -q`
+Expected: PASS.
+
+- [ ] **Step 5: Update the two PPG fixtures for accuracy**
+
+`live_evidence_test.py:216` and `routing_analysis_test.py:949`/`:959` hardcode `"signal": "enhanced"` on constructed PPG measurements. Nothing filters on `signal`, so **they pass either way** — change them to `"plain"` because they now describe a measurement the node never writes that way, not because a test fails.
+
+- [ ] **Step 6: Lint and commit**
+
+```bash
+uv run ruff format src/tests/audio/workflows/triage/
+uv run ruff check src/tests/audio/workflows/triage/
+git add -A && git commit -m "test(triage): the measurement stream is plain, and the guard says what is true"
+```
+
+---
+
+## Task 7: The extend driver re-derives, and supersedes when it does
+
+**Files:**
+- Modify: `scripts/extend_ppg_praat.py:26-27`, `:94-115`, `:187-190`, `:197`, `:235-238`
 - Test: `src/tests/scripts/extend_ppg_praat_test.py`
 
 **Interfaces:**
-- Consumes: Tasks 4 and 5 — without them there is nothing to re-derive.
-- Produces: `--force` on the CLI, and a `force: bool` parameter on whatever function `run_slice` is called; match the module's existing signature style.
+- Consumes: Task 5 — without it there is nothing stale to re-derive.
+- Produces: `--force` on the CLI; a `force: bool` keyword threaded to **the function containing the skip at `:187`** (read whether that is `process_batch` or its caller before writing the signature — the plan does not guess).
 
-Verified: the docstring at `:26-27` says *"A recording whose store already holds both measurements is skipped"*; `pending()` at `:119-128` returns `(ppg_pending, praat_pending)` from `find_measurement(...) is None`; the skip is `:187-190`; and `:235` re-checks `pending` before the Praat block. There is **no `--force` flag** — the CLI is `manifest`, `--slice-index`, `--slice-count`, `--batch-size`, `--device`, `--log-dir`, `--config`. So re-running this driver after Tasks 4 and 5 changes nothing on all 62,547 stores, and would look like success.
+**The integrity consequence, which is why `--force` cannot simply append.** `write_ppg_posteriorgram` writes `derivatives/ppg_posteriorgram.npz` at a fixed path. A forced re-derivation **overwrites that file**, so the old measurement entity's `checksum_sha256` no longer matches the bytes it names. The store is append-only, so the old entity must be **superseded**, not left live beside the new one — otherwise the store asserts two readings of the same thing and one of them is provably stale.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Seed `plain` in the fixture, or every test in the module fails**
+
+`_seed_run` (`:61-97`) writes exactly one stream entity, `name: "enhanced"` (`:88`). After Task 5, both blocks resolve `plain` and raise `LookupError`, so essentially every test here fails — including the new one. Add a second stream entity named `plain`, written the same way, pointing at a `streams/plain.flac` written alongside `streams/enhanced.flac`.
+
+- [ ] **Step 2: Run the module and confirm it is green again before adding anything**
+
+Run: `uv run pytest src/tests/scripts/extend_ppg_praat_test.py -q`
+Expected: PASS. If not, the fixture is not seeding `plain` the way `resolve_stream` reads it — fix that before proceeding.
+
+- [ ] **Step 3: Write the failing `--force` test**
+
+The module drives everything through `cli.main([...])` with the `provisioned` and `stub_ppgs` fixtures. Follow that:
 
 ```python
 class TestForceReDerives:
     """After a stream switch the stored measurements are stale, and skipping them looks like success."""
 
-    def test_force_re_derives_a_store_that_already_holds_both(self, tmp_path: Path) -> None:
+    def test_force_re_derives_a_store_that_already_holds_both(
+        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+    ) -> None:
         """Without --force the driver skips, so a corpus-wide re-derivation silently does nothing."""
-        run_root = _seeded_run_with_both_measurements(tmp_path)
-        summary = run_slice(_manifest_for(run_root), slice_index=0, slice_count=1, force=True, **_defaults())
-        assert summary["counts"].get("skipped", 0) == 0, "force must not skip a complete store"
-        assert summary["counts"].get("ok", 0) == 1
+        manifest, roots = corpus(1)
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+        before = _store_of(roots[0]).fingerprint()
+
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"]) == 0
+        store = _store_of(roots[0])
+        assert store.fingerprint() != before, "--force must re-derive, not skip"
+
+    def test_force_leaves_exactly_one_live_measurement_of_each(
+        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+    ) -> None:
+        """The store is append-only, so the superseded reading must not stay live beside the new one."""
+        manifest, roots = corpus(1)
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"])
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"])
+
+        store = _store_of(roots[0])
+        for name in (PPG_MEASUREMENT, PRAAT_MEASUREMENT):
+            live = [
+                entity
+                for entity in store.entities("measurement")
+                if entity.attributes.get("name") == name and not store.is_invalidated(entity.id)
+            ]
+            assert len(live) == 1, f"{name}: {len(live)} live measurements after --force"
 ```
 
-Build `_seeded_run_with_both_measurements` from the fixtures already in this test module — read them first and reuse, since they know how to make a store the driver will open.
+Confirm `store.entities("measurement")` and `store.is_invalidated` against `ProvStore`'s actual API before writing — `extend_withdraw_clips_test.py` does this and is the model.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [ ] **Step 4: Run and watch both fail**
 
 Run: `uv run pytest src/tests/scripts/extend_ppg_praat_test.py::TestForceReDerives -v`
-Expected: FAIL — `run_slice` has no `force` parameter.
+Expected: FAIL — `--force` is not a recognised argument.
 
-- [ ] **Step 3: Add the flag and thread it through**
+- [ ] **Step 5: Add the flag**
 
-Add to `build_parser` beside `--config`:
+In `build_parser`, beside `--config` (`:115`):
 
 ```python
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Re-derive both measurements even where the store already holds them",
+        help="Re-derive both measurements even where the store already holds them, superseding the old",
     )
 ```
 
-Thread `force` into `run_slice` and change the skip at `:187-190` to:
+Thread `force` from `args.force` through to the function holding the skip. At `:187-190`:
 
 ```python
         ppg_pending, praat_pending = pending(store)
@@ -485,47 +735,141 @@ Thread `force` into `run_slice` and change the skip at `:187-190` to:
         if not ppg_pending and not praat_pending:
 ```
 
-Apply the same override at the `:235` re-check. Pass `args.force` at the `main` call site, and correct the docstring at `:26-27` to say the skip is the default and `--force` overrides it.
+Apply the same override at the `:235` re-check. Correct the docstring at `:26-27` — the skip is the default and `--force` overrides it — and the comment at `:197`, which becomes false.
 
-**Do not** make `--force` write a second measurement beside the first. The store is append-only and a second live `praat_features` would assert two readings of the same thing — the driver must supersede, which is what `senselab.audio.workflows.triage.extend.supersede` exists for. Read how `extend_withdraw_clips.py` uses it and follow that pattern.
+- [ ] **Step 6: Supersede the old measurement before writing the new one**
 
-- [ ] **Step 4: Run and confirm**
+Add a step constant beside `extend.py:77-81`'s `WORD_SUPERSEDED` / `CLIP_SPAN_SUPERSEDED` family:
+
+```python
+PPG_MEASUREMENT_SUPERSEDED = "ppg_posteriorgram_superseded"
+PRAAT_MEASUREMENT_SUPERSEDED = "praat_features_superseded"
+```
+
+and a reason string in the same idiom:
+
+```python
+_STREAM_SWITCH_REASON = "it was measured on the enhanced stream; the measurement now reads plain"
+```
+
+Then, in the forced path, for each measurement the store already holds, call `extend.supersede` **before** the replacement is written — the sidecar is overwritten in place, so once the new bytes exist the old entity's checksum is already wrong and the store is briefly inconsistent. Read `extend_withdraw_clips.py`'s use of `supersede` and follow its argument shape exactly (`node=`, `step=`, `reason=`, `software=`).
+
+- [ ] **Step 7: Run and confirm both pass**
 
 Run: `uv run pytest src/tests/scripts/extend_ppg_praat_test.py -v`
-Expected: PASS, and the existing skip tests still pass without `--force`.
+Expected: PASS, including the existing skip tests without `--force` and `test_a_rerun_converges_on_the_same_graph` (`:276`), which asserts the no-force path is still idempotent.
 
-- [ ] **Step 5: Lint and commit**
+- [ ] **Step 8: Lint and commit**
 
 ```bash
 uv run ruff format scripts/extend_ppg_praat.py src/tests/scripts/extend_ppg_praat_test.py
 uv run ruff check scripts/extend_ppg_praat.py src/tests/scripts/extend_ppg_praat_test.py
 uv run mypy scripts/extend_ppg_praat.py
-git add -A && git commit -m "feat(extend): --force re-derives a store the stream switch made stale"
+git add -A && git commit -m "feat(extend): --force re-derives and supersedes what the stream switch made stale"
 ```
 
 ---
 
-## Task 7: The spec records what landed, and what the corpus now owes
+## Task 8: The derived range is recorded, not just used
 
 **Files:**
-- Modify: `specs/20260817-triage-workflow-dag/praat-instrument-audit.md`
+- Modify: `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py:1302` and the `feature_data` assembly around it
+- Modify: `src/senselab/audio/workflows/triage/nodes/preprocess.py:886-895`
+- Test: `src/tests/audio/tasks/features_extraction_test.py`, `src/tests/audio/workflows/triage/nodes/preprocess_test.py`
 
-**Interfaces:**
-- Consumes: Tasks 1–6.
-- Produces: nothing in code.
+**Interfaces:** consumes Tasks 1 and 5; produces `pitch_floor`, `pitch_ceiling`, `pitch_frames`, `pitch_failed` and `pitch_refinement_widened` in the 40-scalar dict and on the `praat_features` measurement's attributes.
+
+**Without this task the plan is a net loss in auditability.** `_extract_one` (`:1302`) calls `extract_pitch_values` and threads the floor and ceiling into every subsequent extractor, but puts **neither into `feature_data`**. Under the bin a reader could at least infer which of two ranges applied. After Task 1 every recording's forty scalars are conditioned on a **recording-specific** range recorded nowhere, with no support count — which is audit finding 5 (no function returns a support count) reproduced on the very instrument this plan repairs. It is also what would have made A1 visible: 21 surviving frames is a loud signal, and nothing currently surfaces it.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+    def test_the_forty_scalars_carry_the_range_they_were_measured_under(self) -> None:
+        """Per-recording ranges make two recordings' scalars incomparable; the range must travel."""
+        [features] = extract_praat_parselmouth_features_from_audios([_buzz(150.0, seconds=2.0)])
+        for key in ("pitch_floor", "pitch_ceiling", "pitch_frames", "pitch_refinement_widened"):
+            assert key in features, f"{key} must travel with the scalars it conditioned"
+        assert features["pitch_floor"] < 150.0 < features["pitch_ceiling"]
+```
+
+And in `preprocess_test.py`, inside the class retargeted in Task 6:
+
+```python
+        for key in ("pitch_floor", "pitch_ceiling", "pitch_frames", "pitch_refinement_widened"):
+            assert key in attrs["features"], f"{key} must be on the measurement, not only in the call"
+```
+
+- [ ] **Step 2: Run and watch them fail**
+
+Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py -k range_they_were_measured -v`
+Expected: FAIL with `KeyError` or the `in` assertion — `feature_data` has no such keys.
+
+- [ ] **Step 3: Thread the five keys into `feature_data`**
+
+In `_extract_one`, after the `extract_pitch_values` call at `:1302`, add its five keys to `feature_data` under their own names. Do not rename them — they must match what `extract_pitch_values` returns so a reader grepping one finds the other. The `praat_features` measurement already carries `features=scalars` (`preprocess.py:893`), so they reach the store with no change there; confirm that and only touch `preprocess.py` if it filters keys.
+
+- [ ] **Step 4: Run and confirm**
+
+Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py src/tests/audio/workflows/triage/nodes/preprocess_test.py -q`
+Expected: PASS. The `n_features` count on the measurement rises by five — if a test asserts an exact count, update it to the new number rather than excluding the new keys.
+
+- [ ] **Step 5: Lint and commit**
+
+```bash
+uv run ruff format src/senselab/audio/tasks/features_extraction/ src/senselab/audio/workflows/triage/nodes/preprocess.py
+uv run ruff check src/senselab/audio/tasks/features_extraction/ src/senselab/audio/workflows/triage/nodes/preprocess.py
+uv run mypy src/senselab/audio/tasks/features_extraction/praat_parselmouth.py
+git add -A && git commit -m "fix(praat): the derived range travels with the scalars it conditioned"
+```
+
+---
+
+## Task 9: The spec records what landed and what is owed
+
+**Files:** modify `specs/20260817-triage-workflow-dag/praat-instrument-audit.md`
 
 - [ ] **Step 1: Mark steps 1, 1b and 2 landed**
 
-Record for each: what changed, the new convention and that it was not fitted, and what remains. Steps 0, 3, 4 and 5 stay open and must still read as open.
+For each: what changed, the convention and that it was not fitted, and what remains. Steps 0, 3, 4 and 5 stay open and must still read as open. Add that **step 2b is untouched** — `preprocess.py:941` derives the range on `plain` while `:951` tracks F0 on `sharp`, and this plan does not close that.
 
-- [ ] **Step 2: Record the two corpus passes this plan creates but does not run**
+- [ ] **Step 2: Answer the question step 1 asks and this plan did not**
 
-Tasks 4 and 5 make every `praat_features` and `ppg_posteriorgram` measurement in all 62,547 stores stale. Two consequences to write down, because neither is in the code:
+The audit's step 1 requires saying **what carries noise robustness once FRCRN leaves the measurement path**. It is now unanswered in the shipped design. Either name what does (HeAR, YAMNet and SQUIM still read `plain` and never read `enhanced`, so nothing downstream of them changes; the `enhanced` stream keeps its own classifier measurements) or record it as owed. Do not leave it unstated.
 
-- `extend_ppg_praat.py --force` over the corpus re-derives both. That is a GPU-bearing pass for the PPG; size it against the original `ppg_20260911` run rather than guessing.
-- The PPG switch changes `ppg.segment_rate_per_s` and therefore DDK routing. **The design requires a before-and-after routing count** — record that it is owed, and that until it is run, no DDK routing figure in any document describes the shipped pipeline.
+- [ ] **Step 3: Record what the stream switch trades, which is not the same as what it fixes**
 
-- [ ] **Step 3: Run the full suite and commit**
+Three statements, none currently in the audit:
+
+- **The bias flips rather than disappearing.** FRCRN inflated HNR and CPPS and deflated perturbation, worst on dysphonic voices — an *endogenous* confound that inverted sensitivity. On `plain`, additive noise is indistinguishable from aperiodicity, so it deflates HNR and CPPS and inflates perturbation in proportion to environment, device and level. That is the better trade **because the new confound is exogenous and covariable — but only if the covariates ride along.** They exist: SQUIM is already computed per span on `plain`, plus `clipping/` and `scene_quality/`. Record that requirement, and that the **raw-vs-enhanced pilot** the contract requires for the structurally identical diarization decision is owed here too.
+- **`plain` is not raw.** It is resampled to 16 kHz, so energy above 8 kHz — a breathiness correlate — is already gone. That caps how much of V4's sensitivity this switch can recover, and the phrase "measured on the unprocessed stream" invites the wrong assumption.
+- **The PPG's justification is not the Praat scalars'.** The breathiness argument does not transfer: the PPG is a **trained phoneme classifier**, so noisy `plain` moves it *away* from its training domain while FRCRN moved it toward. The defensible reason is D1's, and it belongs at this site — **FRCRN is out of domain on a DDK train and can smear the transients whose timing is the measurement.** Put D1's reason in the audit beside step 1b.
+
+- [ ] **Step 4: Correct the glide entry, which is owed for a different reason than stated**
+
+Measured: an exponential 100→400 Hz glide yields **`[72.8, 549.5]`** against produced extremes of 102 and 392 Hz. The ±7-semitone margin brackets the sweep with room to spare, so **narrowing does not clip a glide** — and it is strictly better than the bin, which capped a low-binned upward glide at 250 Hz. What degenerates is **V3's conformance flag**: after narrowing it can only fire when the margin pushes past the 50/600 clamps, so it becomes near-**vacuous** rather than circular. Record that, and drop the "actively wrong on a glide" framing — it overstates the cost and would justify a task-conditioned range the measurement does not support.
+
+- [ ] **Step 5: Record the three consequences this plan creates and does not close**
+
+- **Within-participant contrasts are improved, not restored.** A participant's shouted and comfortable productions still get *different* instruments — continuously now rather than in a 1.67× step. The right instrument for a within-participant contrast is one range shared across the productions compared. Out of scope here; record it as owed so it does not read as closed.
+- **Coverage now shifts F0-dependently.** The window formulas `3/floor` (period marks), `3.2/floor` (intensity) and `4.5/floor` (harmonicity) vary per recording: a 420 Hz speaker gets an 11 ms intensity window and a 55 Hz speaker gets 64 ms — **worse than the bin's 53 ms**. So the audit's step 5 coverage figure becomes conditioned on a per-recording window and is *harder* to interpret, not easier — unless the floor is recorded, which Task 8 is what fixes.
+- **`voice.f0_range_ratio_max` intuition changes.** The bin always gave 4.17 or 5.0; the narrowing measured **7.5** on a glide and can exceed 11. Whoever populates that key should know that bin-era intuition will refuse glides, and that `_f0_range` **raises** rather than flags.
+
+- [ ] **Step 6: Record the two corpus passes this plan creates but does not run**
+
+- `extend_ppg_praat.py --force` over the corpus re-derives both measurements in all 62,547 stores. That is a GPU-bearing pass for the PPG — size it against the original `ppg_20260911` run rather than guessing.
+- The PPG switch changes `ppg.segment_rate_per_s` and therefore DDK routing. **The design requires a before-and-after routing count**, and alongside it the **`PpgsPosteriorgramUnavailable` rate before and after**, since the switch may change how often the model fails outright — Task 6's note about availability concerns the lookup path, not the model. Until both are run, no DDK routing figure in any document describes the shipped pipeline.
+- **Attribution.** Landing Tasks 1 and 5 together moves the forty scalars for two reasons at once, making any corpus-level change unattributable. A **two-arm sample re-derivation** — range-only on `enhanced`, stream-only with the bin — over a few hundred recordings separates them. That is attribution, not fitting, so the no-fitting rule does not reach it.
+
+- [ ] **Step 7: State plainly that no scalar becomes publishable from this plan**
+
+This is the sentence most likely to be needed and least likely to be written. After this lands the scalars are on the right stream with a principled range — and `cepstral_peak_prominence_mean` is still cut at `> 4` dB, still peak-searched 60–330 Hz, still averaged unweighted over voiced intervals inflated ~70%; `range_ratio_intensity_db` is still dimensionally invalid; no function returns a support count; and step 0's withholding has not happened. **Write in the audit that no Praat scalar becomes publishable from this plan**, or "we fixed the stream and the range" will be read as "the numbers are now good."
+
+Pre-empt two specific misreadings:
+
+- **The jitter and shimmer NaN rate will fall for two opposite reasons at once** — more low voices admitted (good) and noise inflating perturbation into measurable territory (bad). Without step 5's coverage measurement nobody can separate them, so a falling NaN rate is not evidence of improvement.
+- **A 45 Hz creak reading as `F0RangeUnavailable` becomes VOICE "no phonation found"** — a false clinical statement about a phonating voice. Attribute that absence as **bounded by the declared search range**, not by the voice.
+
+- [ ] **Step 8: Run the full suite and commit**
 
 ```bash
 uv run pytest src/tests/audio/tasks src/tests/audio/workflows/triage src/tests/scripts -q
@@ -536,10 +880,16 @@ git add -A && git commit -m "docs(audit): steps 1, 1b and 2 landed; the corpus r
 
 ## Self-Review
 
-**Spec coverage.** Step 2 → Tasks 1, 2, 3. Step 1 → Task 4. Step 1b → Task 5. The re-run path → Task 6. The spec update → Task 7. Every testing requirement in the brief maps to a step: the 170 Hz discontinuity (Task 1 Step 3), the sub-60 Hz source (Task 1 Step 4), the 420 Hz source (Task 1 Step 4), crash versus absence (Task 2 Step 1), `signal="plain"` on both measurements (Tasks 4 and 5), zero `enhanced` resolve sites (Task 5 Step 5), and `--force` re-deriving (Task 6 Step 1).
+**Spec coverage.** Step 2 → Tasks 1, 2, 3, 4. Step 1 → Task 5 (Praat half), Task 6. Step 1b → Task 5 (PPG half), Task 6. The re-run path → Task 7. The derived range's auditability → Task 8. The spec update, the noise-robustness statement, the corrected glide entry and the not-publishable headline → Task 9.
 
-**Placeholders.** None. Every code step carries the actual test or the actual replacement text. Three steps name a fixture to read and reuse rather than quoting it — Task 1 Step 1 (`_buzz`), Task 5 Step 1 (the preprocess run helper), Task 6 Step 1 (`_seeded_run_with_both_measurements`) — because duplicating a fixture this suite already has would be the wrong instruction.
+**The one place this plan is worse than what it replaces, and how it is closed.** A single-pass narrowing returns `[50, 90]` for a 120 Hz voice under a 60 Hz hum — a range excluding the speaker — where the bin returned `(60, 250)`, which contains it. De Looze & Hirst's iterative refinement in Task 1 Step 5 closes it with no fitted value, and Task 1 Step 3's hum and noise cases are the regression tests. This was measured, not reasoned: the reviewer ran the draft snippet over synthesised sources.
 
-**Type consistency.** `extract_pitch_values` returns three `float`-valued keys on every path including the `except`. `derive_f0_range` keeps `tuple[float, float]` and raises one of two typed errors. `run_slice` gains `force: bool`.
+**Every test the changes break is named.** `phonation_test.py:112-119`; `preprocess_test.py:2172`, `:2193`, `:2194`, `:2204-2206`, `:2226`, `:2235-2236`, `:2238`, `:2289-2305`; `extend_ppg_praat_test.py:61-97` (the fixture, which breaks the whole module). The two `signal: enhanced` fixtures in `live_evidence_test.py` and `routing_analysis_test.py` are named as **not** breaking, with the reason.
 
-**Known gap, deliberate.** Task 6's supersession pattern is named rather than written out, because the correct form depends on how `extend_ppg_praat` structures its writes and the implementer must read `extend_withdraw_clips.py` to match it. Every other step is literal.
+**Placeholders.** No step describes work without showing it. Four steps name an existing fixture or API to read and match rather than quoting it — Task 1 Step 1 (`_buzz`), Task 3 Steps 1–2 (the two suites' fixture sets), Task 6 Step 3 (the neighbours' fixtures), Task 7 Step 3 (`ProvStore`'s liveness API) — because this suite already has them and duplicating would be the wrong instruction. Task 7 Step 6 names `supersede`'s argument shape as something to copy from `extend_withdraw_clips.py` rather than transcribing it, for the same reason.
+
+**Type consistency.** `extract_pitch_values` returns four `float` keys on all five return paths. `derive_f0_range` keeps `tuple[float, float]` and raises one of two `ValueError` subclasses. `write_ppg_posteriorgram`'s keyword is `stream_id` at the definition and both call sites. `force: bool` threads to the function holding the skip.
+
+**The TDD loop starts red.** Task 1's first test is the discontinuity case, which fails under the bin. The monotonicity test is deliberately second, because `[250, 250, 500, 500, 500]` is sorted and would pass on current code.
+
+**Known limits, stated rather than hidden.** The 55 Hz test passes via the search-floor clamp, not by the floor following the voice — its docstring says so. The log-Hz trim does not remove an octave-split mode; the 1.5× margin and the ceiling clamp bound that error, and octave robustness is marked owed. The percentile and margin values are this project's convention, not Hirst's parameterisation. Task 7's supersede call names its constants and its liveness assertion but defers `supersede`'s exact signature to the existing driver.
