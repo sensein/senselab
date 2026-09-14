@@ -11,7 +11,12 @@ probe result.
 
 ## Finding 0 — every Praat scalar is computed on FRCRN-enhanced audio
 
-**This reorders everything else in this document.**
+**Read this as a fact about provenance, not as a defect.** The identification below is correct and is
+what made the stream question askable at all. The *argument* the finding once carried — that FRCRN
+removes the aperiodic energy the scalars measure — was **withdrawn by the owner on 2026-09-14**, and
+with it the remediation step it justified (**step 1**, withdrawn below). What survives is the record
+of which stream each instrument reads, and an open research question the withdrawal opens rather than
+closes.
 
 `preprocess.py:883` resolves the **`enhanced`** stream and hands it to
 `extract_praat_parselmouth_features_from_audios`. `preprocess.py:2351` shows what `enhanced` is:
@@ -22,24 +27,52 @@ speech rate — feeding [`branch-voice.md`](branch-voice.md) V4 and V6,
 [`branch-speech.md`](branch-speech.md) S4, [`branch-ddk.md`](branch-ddk.md) D2 and
 [`branch-airway.md`](branch-airway.md) A6 are measured on the output of a generative denoiser.
 
-**Three things make this worse than anything below.**
+### The mechanism this finding asserted, and why it is retracted
 
-**The project already warns about exactly this, about a weaker version of it.**
+**Withdrawn 2026-09-14 by the owner, in two stages. Both are recorded because the second is the one a
+reader is most likely to re-propose.**
+
+The finding asserted: *FRCRN is trained to reconstruct typical speech from noise; aperiodic energy is
+what it removes, and breathiness is aperiodic energy, so it normalises dysphonic voices more than
+typical ones and inverts V4's sensitivity.* **It is quoted once, here, inside its own retraction —
+and nowhere else in this document does it stand as a live claim.** The two corrections that retire it:
+
+1. **FRCRN does not remove aperiodic energy.** Sibilants — /s/, /ʃ/ — are broadband aperiodic energy,
+   and FRCRN preserves them, because it is trained to keep speech and suppress everything else. If
+   the claim held, sibilants would vanish.
+2. **Nor does it strip the low-level noise component inside voiced phonation.** This is the narrower
+   fallback — that breathiness and hoarseness are the plausible casualty even though sibilants
+   survive — and the owner's direct experience is that **FRCRN preserves vocal texture very well.**
+   So the fallback fails too, and the whole mechanism goes with it.
+
+**The conclusion inverts rather than merely weakening, and that must be said plainly.** If
+enhancement preserves vocal texture, the live question is what **`plain`** would do to these scalars:
+background noise depresses HNR and CPPS and perturbs period detection, so a healthy voice can read as
+dysphonic. That is the same objection that withdrew step 1b for the PPG — many recordings in this
+corpus carry background noise. On that reading the current code, **Praat on `enhanced`, is
+defensible**, and step 1 was backwards.
+
+**This is not settled in the withdrawal's favour either.** Nothing here measured `enhanced` against
+`plain` for these scalars. The prior now favours `enhanced`; the comparison is **unmeasured**, and it
+is an open research question rather than a proven reversal — see *the impact of speech enhancement on
+disordered voices*, recorded as a future research direction in
+[`branch-listening-sample.md`](branch-listening-sample.md).
+
+### Two observations that survive the retraction, at their own weight
+
+**The project warns about a weaker version of this.**
 [`branch-conventions.md`](branch-conventions.md) states that *"spectral gating manufactures HNR and
 CPP values outright"* — written about **consumer** noise suppression arriving in the recording. The
-pipeline then applies a more aggressive one deliberately, and until now no document connected the two
-sentences.
+pipeline then applies a deep enhancer deliberately. The two sentences are worth connecting, but a
+warning about spectral gating is not a measurement of FRCRN, and the retraction above is what it must
+now be read against.
 
-**The distortion is correlated with the variable of interest.** FRCRN is trained to reconstruct
-typical speech from noise. Aperiodic energy is what it removes — and **breathiness is aperiodic
-energy**. It therefore normalises dysphonic voices more than typical ones. That does not add noise to
-V4; it **inverts its sensitivity**: the measurement is most altered exactly where the finding would
-be.
-
-**It is out of domain on most of this corpus.** Sustained vowels, coughs, DDK trains and maximal
-shouts are none of them speech-in-noise. The same `enhanced` stream also feeds the PPG, hence
-`ppg.segment_rate_per_s` and `ppg.silent_fraction`, hence **DDK and AIRWAY routing** — but that is
-where the argument stops transferring, and the withdrawn step 1b below says why.
+**FRCRN is out of domain on much of this corpus.** Sustained vowels, coughs, DDK trains and maximal
+shouts are none of them speech-in-noise. That is a reason the question is open, not a finding that it
+is answered; what an out-of-domain enhancer does to these scalars is exactly what nobody has measured.
+The same `enhanced` stream also feeds the PPG, hence `ppg.segment_rate_per_s` and
+`ppg.silent_fraction`, hence **DDK and AIRWAY routing** — and the withdrawn step 1b below says why the
+PPG's answer is `enhanced`.
 
 ### The bound — what finding 0 does *not* reach
 
@@ -51,10 +84,11 @@ So finding 0's scope is **the Praat scalars and the PPG, and nothing else.** AIR
 evidence, the taxonomy labels and the quality measures are not implicated. This is worth stating
 plainly, because the finding otherwise reads as "the whole corpus is compromised", which it is not.
 
-**Identifying the two streams is not the same as remediating both, and the two halves have come
-apart.** The remediation is **the Praat scalars only**; the PPG stays on `enhanced` by decision, per
-the withdrawn step 1b below. Both call sites are still correctly named here — that part of finding 0
-stands and is what made the question askable.
+**Identifying the two streams is not the same as remediating either, and as of 2026-09-14 neither is
+remediated.** The PPG stays on `enhanced` by decision (step 1b, withdrawn) and the Praat scalars stay
+on `enhanced` by withdrawal of the argument against it (step 1, withdrawn). Both call sites are still
+correctly named here — that is the part of finding 0 that stands, and it is what made the question
+askable.
 
 ### The suppressions attach to the function, not to a branch
 
@@ -71,38 +105,54 @@ for the `> 4` cut, the 60–330 Hz search and `voicing_threshold=0.3`.
 The rule generalises: **a finding about a function is stated once, here, and every document naming
 that function inherits it.**
 
-**Consequence for the rest of this document.** Findings 1–12 are real, measured, and worth fixing —
-but they are repairs to an instrument pointed at the wrong signal. Read them as *what remains once the
-stream is correct*, not as the primary problem.
+**Consequence for the rest of this document, and it is the opposite of what this paragraph used to
+say.** It read: *"Findings 1–12 are real, measured, and worth fixing — but they are repairs to an
+instrument pointed at the wrong signal. Read them as what remains once the stream is correct, not as
+the primary problem."* **That subordination is retracted with step 1.** The stream is not established
+as wrong, so findings 1–14 are not "what remains" after anything: they are **the audit's content**,
+each measured on its own and each standing without reference to which stream the wrapper reads. The
+CPPS `> 4` cut that deletes the dysphonic range (finding 2), the vuv 0.1 s mean period against
+Praat's 0.01 (finding 3), the 60–330 Hz peak search (finding 4), `range_db_ratio`'s dimensional
+invalidity (finding 6) and the 5 kHz spectral-moment cap (finding 7) are defects of the wrapper at
+any input.
 
 ---
 
 ## The remediation path
 
-In this order. Steps 0 and 1 are the ones that matter; the rest are wasted before them.
+**The ordering claim this section carried is void.** It read *"In this order. Steps 0 and 1 are the
+ones that matter; the rest are wasted before them."* Step 1 is withdrawn (below), so nothing here is
+gated on a stream switch. Step 0 still comes first, on its own grounds; steps 2–5 are independent of
+each other and of the stream, and none of them is waiting on anything.
 
-### Step 0 — largest single gain, and it is *not* free: stop publishing the compromised scalars
+### Step 0 — largest single gain, and it is *not* free: stop publishing the stale scalars
 
-**62,547 stores already carry 40 Praat scalars** computed on FRCRN output through the sex-binned
-range finding 1 records. Step 2 changed what a new run computes and nothing about those.
+**62,547 stores already carry 40 Praat scalars** computed through the sex-binned range finding 1
+records. Step 2 changed what a new run computes and nothing about those.
 Four — `mean_cpp`, `std_dev_cpp`, jitter, shimmer — carry names that will be read against published
 norms, and `range_ratio_intensity_db` is dimensionally invalid (finding 6) and already exported.
+
+**This step's grounds are the retired bin and the wrapper defects, not the stream.** An earlier
+version rested it on the values being "computed on FRCRN output"; with step 1 withdrawn that is no
+longer a charge against them. What stands is that all 40 were computed under a range rule that is no
+longer in the tree, and that four of them carry published-norm names while the wrapper defects
+findings 2–7 record were and are in force.
 
 **The marker already exists and nothing reads it.** Every Praat measurement is written with
 `signal="enhanced"` (`preprocess.py:904`), and the PPG likewise (`:810`). So "flag them" is already
 done and it changed nothing.
 
-**The effective Step 0 is therefore a code change: make every reader of the Praat scalars require
-`signal == "plain"`.** Stronger than a marker, far smaller than re-deriving anything, and it makes
-the compromised values unreadable rather than merely labelled. CLAUDE.md settles the
-withdraw-versus-flag question this document previously left open — cache invalidation is free, and
-pre-alpha replaces outright.
+**An earlier version proposed making every reader require `signal == "plain"`. That is void**, and
+had to go with step 1: Praat reads `enhanced` and keeps reading it, so a `plain` requirement would
+make every Praat scalar in the corpus unreadable and every new one too. The withdrawal mechanism has
+to be one that distinguishes **stale** from **current** — supersession in the store, which is what
+the extend driver already does — not one that keys on the stream name. CLAUDE.md settles the
+withdraw-versus-flag question this document previously left open: pre-alpha replaces outright.
 
-**An earlier version labelled this step "no code", which was wrong and would get it skipped as
-trivial.** Withdrawing or flagging 40 scalars across 62,547 finished stores is an extend driver —
-**more code than step 1's stream switch**. The ordering here is by *risk*, not by effort: step 0
-comes first because leaving norm-bearing values addressable is the most damaging state, not because
-it is the cheapest.
+**An earlier version also labelled this step "no code", which was wrong and would get it skipped as
+trivial.** Withdrawing or flagging 40 scalars across 62,547 finished stores is an extend driver. The
+ordering here is by *risk*, not by effort: step 0 comes first because leaving norm-bearing values
+addressable is the most damaging state, not because it is the cheapest.
 
 **And the verdicts are the larger hazard, which Step 0 did not mention.** VOICE `FAIL`s on **every**
 recording today, and every branch document insists a `FAIL` means "no phonation found" — so 62,547
@@ -112,32 +162,55 @@ way a scalar does not.
 **The derived artifacts carry the same values and were also unmentioned**: reports, figures, and any
 recompute by `scripts/analyze_routing_evidence.py`.
 
-### Step 1 — switch the Praat stream to `plain`
+### Step 1 — switch the Praat stream to `plain`: **withdrawn 2026-09-14 by the owner**
 
-**Nothing downstream is defensible until it happens**, and every wrapper repair below is wasted work
-before it.
+The sites are real and stay recorded: `praat_features` resolves `enhanced` at **`preprocess.py:883`**
+and writes `signal="enhanced"` at **`:904`**, with `derived_from=(enhanced_id,)` at **`:906`** and the
+enhanced stream named in its docstring at `:860`, `:869` and `:875` (the last being the `Raises:`
+clause). **Those are not defects. The Praat scalars do not move. They read `enhanced`, and the
+argument that was raised against it does not hold.**
 
-**It is not "one argument" — that framing was wrong.** The same function writes `signal="enhanced"`
-on the measurement (`preprocess.py:904`) and `derived_from=(enhanced_id,)`, and its docstring and
-`Raises:` clause both name the enhanced stream.
+**The premise was false, in the two stages finding 0 now records.** Step 1 justified the move with
+*"FRCRN removes the aperiodic energy that is the measurement."* It does not: sibilants are broadband
+aperiodic energy and FRCRN preserves them. Nor does the narrower fallback hold — that the low-level
+noise component inside voiced phonation is stripped even though sibilants survive — because FRCRN
+preserves vocal texture very well. With both gone there is no mechanism left, and the step has no
+premise.
 
-**And the invalidation lever is not `CACHE_SCHEMA_VERSION`.** That constant lives in
-`utils/tasks/cached_inference.py` and belongs to audio_analysis; grepping `cached_inference`,
-`cached_call` and `cache_dir` under `workflows/triage/` returns **zero hits**, so bumping it
-invalidates nothing in these stores. An earlier version of this step named it.
+**And the conclusion inverts rather than merely weakening.** If enhancement preserves vocal texture,
+the live question is what `plain` would do: background noise depresses HNR and CPPS and perturbs
+period detection, so a healthy voice can read as dysphonic — the same objection that withdrew step 1b
+for the PPG, and for the same reason, that many recordings in this corpus carry background noise. On
+that reading **the current code is defensible and step 1 was backwards.**
 
-**The mechanism is the extend driver step 0 already names — specifically
-`scripts/extend_ppg_praat.py`, which wrote both the PPG and the Praat blocks.** And it **skips any
-recording whose store already holds both measurements** (`extend_ppg_praat.py:26`), so **re-running
-it after a stream switch changes nothing on all 62,547 stores.** It needs either a withdrawal pass
-that retires the existing measurements first, or a force flag. Cheap to fix here; expensive to
-discover mid-implementation.
+**This is not thereby settled the other way, and must not be written as if it were.** Nothing in this
+tree has measured `enhanced` against `plain` for these scalars. The prior now favours `enhanced`; the
+comparison is unmeasured. It is recorded as **a future research direction — the impact of speech
+enhancement on disordered voices** — in [`branch-listening-sample.md`](branch-listening-sample.md),
+which also says why a corpus pass cannot answer it.
 
-**And say what carries noise robustness once FRCRN leaves the path.** The governing contract requires
-a raw-versus-enhanced **pilot** for the structurally identical diarization decision. The domain
-argument here is stronger — FRCRN removes the aperiodic energy that *is* the measurement — but the
-asymmetry should be stated rather than left as an inconsistency between two decisions of the same
-shape.
+**The two gating claims this step made are retracted explicitly, because they are what would make a
+reader treat the rest of this document as moot.** They were *"Nothing downstream is defensible until
+it happens"* and *"every wrapper repair below is wasted work before it."* **Both are void.** The
+wrapper defects stand entirely on their own and are this audit's real content: the CPPS `> 4` cut
+that deletes the dysphonic range (**finding 2**), the vuv 0.1 s mean period against Praat's 0.01
+(**finding 3**), the 60–330 Hz peak search that costs 3.8 dB at F0 420 (**finding 4**), the missing
+support counts (**finding 5**), `range_db_ratio`'s dimensional invalidity (**finding 6**) and the
+5 kHz spectral-moment cap (**finding 7**). None of those depends on which stream the wrapper reads,
+and none of them is now waiting on anything.
+
+**Two facts this step established survive it and are cited elsewhere, so they stay here.**
+
+- **The invalidation lever is not `CACHE_SCHEMA_VERSION`.** That constant lives in
+  `utils/tasks/cached_inference.py` and belongs to audio_analysis; grepping `cached_inference`,
+  `cached_call` and `cache_dir` under `workflows/triage/` returns **zero hits**, so bumping it
+  invalidates nothing in these stores. Re-derivation of anything in the corpus is an extend driver.
+- **`scripts/extend_ppg_praat.py` skips any recording whose store already holds both measurements**
+  (`extend_ppg_praat.py:26`, and the skip itself at `:187-190` with a second check at `:235-237`), so
+  a re-run over the corpus changes nothing on all 62,547 stores without a withdrawal pass or a force
+  flag. That still matters — see
+  [`../20260914-f0-range-and-measurement-streams/plan.md`](../20260914-f0-range-and-measurement-streams/plan.md)
+  Task 7, which survives this withdrawal on the F0-range grounds rather than on the stream.
 
 ### Step 1b — switch the PPG stream: **withdrawn 2026-09-14 by the owner**
 
@@ -146,13 +219,16 @@ The site is real and stays recorded: the PPG resolves `enhanced` at **`preproces
 `:883`. **The PPG does not move. It reads `enhanced`, and that is a choice with a reason, not an
 unexamined inheritance.**
 
-**Finding 0's argument does not reach the PPG.** FRCRN removes aperiodic energy and breathiness *is*
-aperiodic energy, so for the scalars the distortion is correlated with the variable of interest and
-inverts V4's sensitivity. The PPG is a **trained phoneme classifier**: noisy `plain` moves it *away*
-from its training domain where FRCRN moved it toward. Many recordings in this corpus carry
+**Finding 0's argument did not reach the PPG — and as of 2026-09-14 it does not reach the Praat
+scalars either.** When step 1b was withdrawn, the reason given was that the breathiness argument was
+specific to the scalars: the PPG is a **trained phoneme classifier**, so noisy `plain` moves it
+*away* from its training domain where FRCRN moved it toward, and many recordings in this corpus carry
 background noise the PPG would handle worse on `plain`. **A trained model reading the stream closest
 to its training domain is the defensible default, and the burden is on a move away from it** — a
-burden nothing here discharged.
+burden nothing here discharged. That reasoning is unchanged and still governs the PPG. What changed
+later the same day is that the breathiness argument was found false for the scalars too (step 1,
+withdrawn above), so the asymmetry this paragraph once drew between the two instruments is gone:
+**neither moves.**
 
 **The reason step 1b gave was borrowed from a different instrument, and was never measured.** It
 substituted D1's argument — *FRCRN is out of domain on a DDK train and can smear the transients
@@ -176,16 +252,18 @@ of a real English word** (`branch-ddk.md:34`, `:39`), where a transcript route w
 argmax-change rate has no interpretable units. So the gate it feeds is the whole of its job, and the
 withdrawal leaves that job exactly as it was.
 
-**What the withdrawal buys, stated because it makes step 1 cheaper and safer.** The `--force`
-re-derivation of the Praat scalars is **not GPU-bearing** — the PPG was the only GPU work in it. And
-**no routing changes corpus-wide**: `ppg.segment_rate_per_s` and `ppg.silent_fraction` are unmoved,
-so neither the DDK gate count the contract's rule (a) requires
+**What the withdrawal buys. This was written for step 1's corpus pass; step 1 is withdrawn, but the
+facts below are what make the *remaining* Praat re-derivation cheap and safe, so they stay.** Any
+`--force` re-derivation of the Praat scalars is **not GPU-bearing** — the PPG was the only GPU work
+in it. And **no routing changes corpus-wide**: `ppg.segment_rate_per_s` and `ppg.silent_fraction` are
+unmoved, so neither the DDK gate count the contract's rule (a) requires
 (`../20260913-branch-contract-and-hints/design.md:121`, `:178`, `:551`) nor the
 `PpgsPosteriorgramUnavailable` rate comparison is owed; and **`airway.ppg_silent_fraction` is an
 AIRWAY gate reading the same posteriorgram** (`default.yaml:260-263`), which step 1b never counted,
 so it was exposing two branches' routing and owed a count for one. **No configured gate reads a
 Praat scalar** — `routing_analysis/features.py:725-726` carries them into the feature record and no
-`gates:` entry names one — so step 1 alone changes no routing at all.
+`gates:` entry names one — so re-deriving the forty scalars, for any reason, changes no routing at
+all.
 
 ### Step 2 — replace `derive_f0_range`, not the wrapper
 
@@ -223,8 +301,15 @@ reproduced from this document.
 recording.** On a synthesised 120 Hz voice with a 60 Hz hum at −22 dB the wide search locks to the
 subharmonic across the whole contour and a one-pass narrowing returns `[50.0, 90.0]`, a range the
 speaker's F0 never enters. The retired bin was accidentally robust there — a 60 Hz trimmed mean
-selected `(60, 250)`, which still contains 120 Hz — and the problem gets *more* frequent under
-step 1, because FRCRN suppresses stationary low-frequency noise and `plain` does not.
+selected `(60, 250)`, which still contains 120 Hz.
+
+**Where that hazard is live, corrected with the withdrawal of step 1.** This paragraph used to end
+*"and the problem gets more frequent under step 1, because FRCRN suppresses stationary low-frequency
+noise and `plain` does not."* Step 1 is withdrawn, so the forty scalars keep reading `enhanced` and
+their exposure does not rise. But the hazard is **already live on the two `derive_f0_range` call
+sites that read `plain` today** — `preprocess.py:954` (`phonation_tracks`) and `voice.py:71`, reached
+through `_required` at `voice.py:193` — and it always was. It is a property of those two consumers,
+not of a stream switch that is not happening.
 
 **The fallback captures a larger population than the hum case it was designed for, and that must be
 stated rather than discovered.** A clean 90 Hz buzz has p95 = 90, under 2 × 50, so an ordinary low
@@ -927,9 +1012,12 @@ both written in the same second pass.
 
 ## Where this lands
 
+**The stream row is provenance, not a defect, as of 2026-09-14.** Steps 1 and 1b are both withdrawn,
+so no row in this table is gated on a stream switch and no repair below waits on one.
+
 | finding | affects |
 | --- | --- |
-| **0 — the enhanced stream** | **every Praat-derived measurement in the graph**: `branch-voice.md` V4 and V6, `branch-speech.md` S4, `branch-ddk.md` D2, `branch-airway.md` A6. **Not the routing gates** — no configured gate reads a Praat scalar, and the PPG gates stay on `enhanced` by decision (step 1b, withdrawn) |
+| **0 — the enhanced stream** | **provenance for every Praat-derived measurement in the graph**: `branch-voice.md` V4 and V6, `branch-speech.md` S4, `branch-ddk.md` D2, `branch-airway.md` A6 — they are measured on `enhanced` and, with step 1 withdrawn, keep being. **Not the routing gates** — no configured gate reads a Praat scalar, and the PPG gates stay on `enhanced` by decision (step 1b, withdrawn). What is owed is a **measurement**, not a move: see the future research direction in [`branch-listening-sample.md`](branch-listening-sample.md) |
 | 1, 8 | [`branch-voice.md`](branch-voice.md) V3, V4, V7 |
 | 2, 3, 4, 5 | **every caller of `extract_cpp_descriptors`** — `branch-voice.md` V4 (5,113 recordings) *and* [`branch-speech.md`](branch-speech.md) S4 (~25,000, where finding 3 bites hardest) |
 | 6 | `branch-voice.md` V6 |
@@ -995,3 +1083,13 @@ arises through a different mechanism and is not bounded by the jitter result.
 [`branch-listening-sample.md`](branch-listening-sample.md) carries the full spec, including that the
 synthesis must use **non-integer, dithered periods** — an integer-period signal produces correlated
 error and would measure a falsely clean floor.
+
+**And the withdrawal of step 1 adds a seventh kind: owed a purpose-collected study.** The question
+step 1 tried to answer by argument — **what speech enhancement does to disordered voices**, and hence
+whether these scalars are better measured on `enhanced` or on `plain` — is owed none of the six.
+Not a listening sample over this corpus, because this corpus has no disorder labels to listen
+against; not a bench measurement, because no synthesised signal carries the pathology; not a code
+change and not a config literal. It needs **selected voices with disorders and hand labels**, which
+is a study to commission, not a pass to run.
+[`branch-listening-sample.md`](branch-listening-sample.md) carries it as the seventh kind, with what
+would and would not settle it.
