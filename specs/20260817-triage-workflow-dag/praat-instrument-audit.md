@@ -578,7 +578,7 @@ convention where child is 8000.
 | 6 | `branch-voice.md` V6 |
 | 7 | `branch-voice.md` V4; [`branch-quality.md`](branch-quality.md) Q2; **[`branch-airway.md`](branch-airway.md) A6**, which reads `extract_spectral_moments` for cough descriptors — and coughs are the most broadband events in the corpus |
 | 9, and the `extract_speech_rate` deviations | [`branch-speech.md`](branch-speech.md) S4; [`branch-ddk.md`](branch-ddk.md) D2 |
-| 10 | `branch-voice.md` V1, V4 |
+| 10 | `branch-voice.md` V1 and V4 — unmasked −200 dB HNR sentinels in `voice_tracks.npz` |
 | 5, 11 | [`branch-listening-sample.md`](branch-listening-sample.md) |
 | 12 | nobody today (dormant: triage passes no `cache_dir`); any future batch over the corpus |
 | 13 | [`branch-conventions.md`](branch-conventions.md)'s per-measure bands, and `branch-voice.md` V4's sample-rate item |
@@ -603,6 +603,21 @@ the tooling that had been catching everything else.
 What would catch it: comparing section inventories across revisions, or treating a large net deletion
 in a document others cite as something to justify rather than to review line by line.
 
+**A second process rule, from a failure that recurred four times across three rounds.** A retraction
+is not complete when the new text is written. It has to:
+
+1. **delete the retracted text, not merely quote it as superseded** — the sharpest instance had a
+   retracted sentence surviving verbatim thirty lines below its own retraction, inside the same
+   numbered item, so an implementer reading top to bottom ended on the retracted conclusion, and one
+   grepping for the parameter found it either way;
+2. **propagate to every consumer in other documents** — the CPPS suppression landed in V4 and not in
+   S4, whose population is five times larger;
+3. **propagate to every summary of the changed section in the same document** — status tables, emit
+   blocks, descriptor rows. Twice the prose was rewritten and the table above it was not, **and the
+   table is what an implementer reads first.**
+
+All three failed at least once in a set that had already added a note about retraction propagation.
+
 ## What this changes about "owed"
 
 [`branch-listening-sample.md`](branch-listening-sample.md) divides owed items into values with a
@@ -613,8 +628,11 @@ instrument's own documented guidance, and whose effect has now been measured.
 Those are not owed a listening sample. They are owed a **code change**, and finding 11 shows the
 derivations file is not by itself sufficient evidence that one has been thought through.
 
-**And there is a sixth kind, with exactly one member so far: owed a bench measurement.**
-[`branch-voice.md`](branch-voice.md) V4's question — whether Praat's sub-sample pulse interpolation
-puts the jitter floor below the 0.2–1% normal range at 16 kHz — is not owed a listening sample, not a
-code change, and not a config literal. It is answered by **synthesising signals of known jitter and
-measuring what comes back**. Cheap, decisive, and nobody has done it.
+**And there is a sixth kind, with two members: owed a bench measurement.** Neither is owed a
+listening sample, a code change or a config literal; both are answered by **synthesising signals of
+known value and measuring what comes back** — the **jitter floor** at 16 kHz (≈ 0.56 Δ/T, about
+0.42% at F0 120 Hz and 0.88% at 250 Hz, inside the normal range) and **shimmer's own floor**, which
+arises through a different mechanism and is not bounded by the jitter result.
+[`branch-listening-sample.md`](branch-listening-sample.md) carries the full spec, including that the
+synthesis must use **non-integer, dithered periods** — an integer-period signal produces correlated
+error and would measure a falsely clean floor.

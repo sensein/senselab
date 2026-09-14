@@ -136,8 +136,15 @@ spectra. So the band is a property of the **measure**, declared with it, and
 [`branch-quality.md`](branch-quality.md) Q2's effective bandwidth is a validity check against
 whichever band the measure declares.
 
-**And every band sits under a 8 kHz ceiling nobody declared for this purpose**: `resample.target_hz:
+**And every band sits under an 8 kHz ceiling nobody declared for this purpose**: `resample.target_hz:
 16000`, derived from model input requirements — audit finding 13.
+
+**Which resolves HNR.** The function imposes no band; the *signal* does. So **HNR's declared band is
+0–8000 Hz** — not because anyone chose it for HNR, but because that is the ceiling the resample
+leaves, and Q2 needs a number to compare against rather than the word "full-band". Naming it
+`..._0_8000hz` under the convention-in-the-name rule would be misleading in the other direction, so
+HNR's name carries **no band** and its declared band travels beside it with the note that it is
+inherited from `resample.target_hz`, not chosen.
 
 ### The octave-jump count means three different things
 
