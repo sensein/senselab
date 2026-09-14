@@ -21,7 +21,7 @@ oversight.
 
 | key | value | derivation |
 | --- | --- | --- |
-| `spans.k_db` | `6.0` | `config-derivations.md:106-120` — *"provisional and expected to be refit… a deliberately permissive placeholder"* |
+| `spans.k_db` | `6.0` | `config-derivations.md:106-120` — **but derived for the pre-emphasised envelope**, and [`branch-voice.md`](branch-voice.md) V1 reads a linear one on `plain`, so it is owed a **re-derivation**, which listening cannot supply |
 | `airway.labels_of_interest` | `[Cough, Breathe]` | `:555-557` — recorded as *"Vocabulary, not thresholds."* |
 | `spans.min_duration_ms` | `50` | `:234` — *"conventional and not fitted"* |
 | `voice.f0_search_range_hz` | `[50.0, 600.0]` | `:641-648` — **but the derivation is wrong**: it describes per-recording narrowing, and `derive_f0_range` is a binary sex bin. See below. |
@@ -119,12 +119,25 @@ Not a listening sample, not a code change, not a config literal: answered by **s
 of known value and measuring what comes back.**
 
 - **The jitter floor at 16 kHz.** With uniform pulse-placement error Δ = 62.5 µs the induced
-  local-jitter floor is ≈ 0.57 Δ/T — about **0.42% at F0 120 Hz and 0.88% at 250 Hz**, inside the
+  local-jitter floor is ≈ 0.56 Δ/T (0.564, from ε ~ U(±Δ/2)) — about **0.42% at F0 120 Hz and 0.88% at 250 Hz**, inside the
   0.2–1% normal range. Whether Praat's sub-sample interpolation recovers it is unmeasured, and
   [`branch-voice.md`](branch-voice.md) V4 withholds jitter until it is.
 - **Shimmer's own floor**, which the timing argument does not give. Shimmer is an amplitude measure;
   its floor comes through uninterpolated peak-amplitude picking at roughly four samples per cycle of
   a 4 kHz component. It needs its own synthesised bound.
+
+**Three things the bench must do, or its answer is worthless:**
+
+- **Synthesise non-integer, dithered periods and sweep F0.** The 0.564 Δ/T floor assumes
+  *independent* placement error. A signal whose period is an integer number of samples produces
+  deterministic, correlated error and would measure a **near-zero floor** — the bench would come
+  back **falsely clean**. This is the single most important line in the spec.
+- **State shimmer's mechanism as an assumption.** "Four samples per cycle of a 4 kHz component" is a
+  worst case, not the mechanism: per-period peak amplitude is dominated by F1-region energy at
+  20–30 samples per cycle at 16 kHz, with the 4 kHz content setting curvature near the peak. Written
+  as a stated assumption, the measured bound is interpretable; written as the mechanism, it is not.
+- **Synthesise known shimmer as well as known jitter.** The two floors arise differently and neither
+  bounds the other.
 
 Cheap, decisive, and nobody has done either.
 [`praat-instrument-audit.md`](praat-instrument-audit.md) states the same kind at its tail.

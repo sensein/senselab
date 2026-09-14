@@ -110,10 +110,11 @@ worst failure mode Q2 itself names.
 
 **So the cliff search is bounded below the resample cutoff, and the bound is declared.** Two
 consequences follow and both must be stated: **any capture-chain limit above 8 kHz is unmeasurable
-from `plain`**, and that matters directly because
-[`branch-conventions.md`](branch-conventions.md) declares **HNR's band as 0–8000 Hz** — the same
-ceiling, which [`praat-instrument-audit.md`](praat-instrument-audit.md) finding 13 records as chosen
-for model inputs rather than for measurement.
+from `plain`**, and that matters directly because **HNR's band is the same 8 kHz ceiling**.
+[`branch-conventions.md`](branch-conventions.md) is careful about why: `to_harmonicity_cc` imposes
+**no** band of its own, so HNR's band is whatever the signal carries — which after
+`resample.target_hz: 16000` is 0–8000 Hz. The number is **inherited, not chosen**, which
+[`praat-instrument-audit.md`](praat-instrument-audit.md) finding 13 records.
 
 **Prefer broadband content.** Fricatives, coughs and background segments excite the band that
 matters; sustained vowels do not.

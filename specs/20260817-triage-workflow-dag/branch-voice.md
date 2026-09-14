@@ -144,47 +144,36 @@ describe.
 **Parameters.** The claim that this is "parameter-free in its core" is withdrawn — it was false under
 the old definition and is still false under the new one:
 
-1. **The thresholds are derived and reusable — but not on the envelope they were derived for.**
-   `spans.k_db: 6.0` (`config-derivations.md:106-120`) and `spans.min_duration_ms: 50` (`:234`) are
-   both derived and both do exactly this job, so **V1 reuses the values and introduces no second
-   pair.**
+1. **The envelope, and the threshold that goes with it — both owed.**
 
-   **And `spans.k_db` is owed a re-derivation on the envelope V1 actually reads.** An earlier
-   version of this item said the values transfer and "the derivation's reasoning survives the move";
-   **it does not.** `config-derivations.md:106-120` derives 6 dB for the **pre-emphasised** primary
-   pass, and the floor derivation immediately above it records a **measured** instance of exactly
-   this substitution failing: reading the rise statistic off a different signal definition shifted
-   it by ~19.8 dB, which "put ordinary background noise above both `spans.k_db` values with no real
-   event present at all".
+   **V1 reads a linear envelope on `plain`, not the stored pre-emphasised dB one.** Two of
+   [`branch-ddk.md`](branch-ddk.md) D1's three reasons for refusing that envelope transfer verbatim:
+   **+6 dB/octave attenuates the F0 region** where quiet, low-pitched or breathy sustained phonation
+   carries most of its energy relative to the broadband floor, so a 6 dB-over-floor test
+   **under-detects exactly quiet low-F0 phonation**; and a dB envelope is a nonlinear transform of
+   the quantity being thresholded. **That is the cause of the residue V1 names below** — "a
+   phonation too quiet to clear the envelope threshold still yields no span".
+
+   **`spans.k_db: 6.0` does not transfer to that envelope, and is owed a re-derivation.**
+   `config-derivations.md:106-120` derives 6 dB for the **pre-emphasised** primary pass, and the
+   floor derivation immediately above records a **measured** instance of exactly this substitution
+   failing: reading the rise statistic off a different signal definition shifted it by ~19.8 dB,
+   which "put ordinary background noise above both `spans.k_db` values with no real event present at
+   all".
 
    The physics runs the way that warning describes. `config-derivations.md:35-38` measures
-   pre-emphasis raising event-to-floor contrast by **+7.36 to +10.95 dB** on the hardest events.
-   Removing it does the reverse for low-frequency energy — so on `plain` a 6 dB-over-floor test
-   becomes more sensitive to quiet low-F0 phonation, **which V1 wants**, and simultaneously to HVAC
-   rumble, handling noise, breath puffs and DC drift, **which the +6 dB/octave tilt was
-   suppressing.** Over-proposed attempts on room rumble flow straight into V4's perturbation and
-   CPPS across 22,277 routed recordings.
+   pre-emphasis raising event-to-floor contrast by **+7.36 to +10.95 dB** on the hardest events, so
+   removing it does the reverse for low-frequency energy: on `plain` a 6 dB test becomes more
+   sensitive to quiet low-F0 phonation, **which V1 wants**, and simultaneously to HVAC rumble,
+   handling noise, breath puffs and DC drift, **which the tilt was suppressing.** Over-proposed
+   attempts on room rumble flow straight into V4 across 22,277 routed recordings.
 
    [`branch-ddk.md`](branch-ddk.md) D1 makes the identical move for `envelope.lowpass_hz` and files
    it honestly as a value derived under one condition applied under another. This does the same.
-   **`spans.min_duration_ms: 50` is conventional (`:234`) and does transfer.**
 
-   **V1 must read a linear envelope on `plain`, not the stored pre-emphasised dB one** — and an
-   earlier version justified the reuse precisely by saying both "operate on the same pre-emphasised
-   envelope V1 reads". Two of [`branch-ddk.md`](branch-ddk.md) D1's three reasons for refusing that
-   envelope transfer verbatim: **+6 dB/octave attenuates the F0 region** where quiet, low-pitched or
-   breathy sustained phonation carries most of its energy relative to the broadband floor, so a
-   6 dB-over-floor test **under-detects exactly quiet low-F0 phonation**; and a dB envelope is a
-   nonlinear transform of the quantity being thresholded.
-
-   **That is the cause of the residue V1 names and does not explain** — "a phonation too quiet to
-   clear the envelope threshold still yields no span". It is a milder form of the same bias the
-   inversion removed, on the branch's foundation across 22,277 routed recordings. Reading `plain`
-   linearly does not change the derived values; it changes the signal they are applied to, and the
-   derivation's reasoning survives the move. An earlier version marked them owed
-   without checking — the same asserting-an-absence this document corrected elsewhere. What V1 may
-   still need beyond them is a *minimum sustained* duration distinguishing an attempt from an
-   ordinary span, which is a different quantity and is owed;
+   **`spans.min_duration_ms: 50` is conventional (`config-derivations.md:234`) and does transfer.**
+   What V1 may still need beyond it is a *minimum sustained* duration distinguishing an attempt from
+   an ordinary span — a different quantity, also owed;
 2. Praat's own undeclared internal voicing threshold inside `to_pitch_cc`, **and the range handed to
    it**. An earlier version said the range "is not a free parameter" because `derive_f0_range`
    narrows per recording; V3 below establishes that it does not — it selects one of two hardcoded
@@ -333,7 +322,7 @@ candidate is compromised at the instrument:
 | --- | --- |
 | CPPS | **suppressed** — `> 4` cut, 330 Hz cap, vuv inflation, unweighted mean |
 | HNR | unmasked −200 dB sentinels (finding 10) **and** the sex-binned 75 → 45 ms window step (finding 1) |
-| jitter, shimmer | qualified, but **time-resolution-unvalidated at 16 kHz** — see below |
+| jitter, shimmer | **withheld** pending a bench measurement — time-resolution-unvalidated at 16 kHz, see below |
 | slope, tilt | inherit the **same point-process failure** as jitter and shimmer (below) |
 
 
@@ -391,7 +380,7 @@ across intervals, so finding 3's short padded intervals dominate a dysarthric re
 within-recording quantity; and `voicing_threshold=0.3` against Praat's 0.45 **compounds** the vuv
 inflation rather than being independent of it.
 
-Perturbation is secondary, and qualified rather than suppressed — see below.
+Perturbation is secondary, and **withheld** pending the bench measurement — see below.
 
 **Perturbation is invalid on much of the material it will run on.** Cycle-to-cycle perturbation is
 interpretable only on nearly-periodic signals — Titze (1995) signal typing, where type 1 is
@@ -463,7 +452,7 @@ validity judgement itself**, not merely into the measurement.
 
   **The arithmetic, corrected.** The step-to-period ratio is the wrong quantity. With independent
   uniform pulse-placement error Δ = 62.5 µs, the induced **local-jitter floor** is
-  Δ·√(6/12)·√(2/π)/T ≈ **0.57 Δ/T — about 0.42% at F0 120 Hz and 0.88% at 250 Hz.** An earlier
+  Δ·√(6/12)·√(2/π)/T ≈ **0.56 Δ/T — about 0.42% at F0 120 Hz and 0.88% at 250 Hz.** An earlier
   version gave 0.75% and 1.6% and said both were "at or above" the 0.2–1% normal range; they sit
   **inside** it. That does not weaken the conclusion — **a floor comparable to the measurand is
   fatal** — but it is the number the bench measurement is specified against.
@@ -494,10 +483,13 @@ said "must be measured before jitter is published at all" and then emitted it th
 right words and shipping the thing anyway — reproduced for a different measure. A floor that may be
 comparable to the measurand is not something a covariate discounts.
 
-So: **CPPS withheld pending audit step 4; jitter and shimmer withheld pending the bench measurement;
-everything else qualified.**
-Suppression would require a cut on the octave-jump count and a named statistic for modality — a dip
-test, a bimodality coefficient — and neither is named nor owed here, because neither is wanted.
+So: **CPPS withheld pending audit step 4; jitter, shimmer and HNR withheld; everything else
+qualified.**
+
+**HNR is withheld for its own reason**, stated here rather than left implicit in the emit block: it
+carries unmasked −200 dB sentinels (`voice.py:374`, audit finding 10) **and** its analysis window
+steps 75 → 45 ms across the sex bin (finding 1), so it is neither numerically sound nor comparable
+across the boundary. Both are code fixes, not measurements.
 
 **Emits.** A per-span measurement, every value named per
 [`branch-conventions.md`](branch-conventions.md)'s convention-in-the-name rule. **No verdict** —
@@ -803,10 +795,10 @@ The residue: a phonation too quiet to clear the envelope threshold still yields 
 
 | capability | status |
 | --- | --- |
-| V1 propose the attempt | **not built** — the branch has no subject; reuses `spans.k_db` and `spans.min_duration_ms`; stationarity qualifiers required |
+| V1 propose the attempt | **not built** — the branch has no subject; reads a linear envelope on `plain`, so **`spans.k_db` is owed a re-derivation**; `min_duration_ms` transfers; stationarity qualifiers required |
 | V2 maximum phonation time | not built; previously specified as a longest voiced run |
 | V3 F0 trajectory | 22 detectors held; branch consumption not built; **`derive_f0_range` is a binary sex-typed bin, ceiling 250 or 500 Hz** |
-| V4 voice quality | **every Praat scalar is computed on FRCRN-enhanced audio** (audit finding 0); CPPS suppressed until reimplemented; perturbation qualified |
+| V4 voice quality | **every Praat scalar is computed on FRCRN-enhanced audio** (audit finding 0); **CPPS, jitter, shimmer and HNR all withheld** — see the descriptor table above |
 | V4a vocal tremor | **not built**; largest missing capability; nearly free once DDK D1 exists |
 | V5 composite severity | **moved** to [`corpus-level-node.md`](corpus-level-node.md) C2, session-level; the protocol is unsatisfiable here |
 | V6 vocal effort events | not built; event detection and dispersion stay here, the effort correlates are session-level |
