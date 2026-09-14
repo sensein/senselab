@@ -42,6 +42,10 @@ class F0RangeUnavailable(ValueError):
     """The wide search placed no usable pitch in this recording; attribute it as an absence."""
 
 
+class F0RangeFailed(ValueError):
+    """The pitch analysis itself raised on this recording; attribute it as a failure."""
+
+
 def derive_f0_range(
     audio: Audio,
     *,
@@ -76,6 +80,7 @@ def derive_f0_range(
 
     Raises:
         ModuleNotFoundError: If parselmouth is not installed.
+        F0RangeFailed: If the pitch analysis itself raised — a failure, never an absence.
         F0RangeUnavailable: If the wide search placed no usable pitch and the narrowing did not
             resolve — an absence, never a guessed range.
     """
@@ -90,6 +95,8 @@ def derive_f0_range(
         pitch_excursion_multiplier=pitch_excursion_multiplier,
         pitch_pinned_octave_ratio=pitch_pinned_octave_ratio,
     )
+    if values.get("pitch_failed", 0.0):
+        raise F0RangeFailed("the pitch analysis failed on this recording")
     floor, ceiling = float(values["pitch_floor"]), float(values["pitch_ceiling"])
     if not np.isfinite(floor) or not np.isfinite(ceiling):
         raise F0RangeUnavailable(

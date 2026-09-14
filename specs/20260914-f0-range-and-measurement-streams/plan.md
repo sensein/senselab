@@ -538,7 +538,7 @@ class TestDeriveF0RangeSeparatesFailureFromAbsence:
             },
         )
         with pytest.raises(F0RangeFailed):
-            derive_f0_range(_buzz(150.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+            derive_f0_range(_buzz(150.0), **_NARROWING)
 
     def test_f0_range_failed_is_a_value_error(self) -> None:
         """extend.attempt_derivation records a ValueError as a failed row; a RuntimeError escapes it."""
@@ -559,12 +559,10 @@ Beside `F0RangeUnavailable` at `:41-42`:
 
 ```python
 class F0RangeFailed(ValueError):
-    """The pitch analysis itself failed. A ValueError so ``extend.attempt_derivation`` records a
-    failed row rather than letting it escape, and so PREPROCESS records an absence rather than
-    aborting the node."""
+    """The pitch analysis itself raised on this recording; attribute it as a failure."""
 ```
 
-That docstring states a *what*, not a rationale — the reasoning goes in the spec per the global constraints. Trim it to one sentence if it reads as rationale.
+The base-class argument above is the rationale and stays in this plan, per the global constraints; the docstring says only what the class is.
 
 In `derive_f0_range`, replace `:63-68`:
 
