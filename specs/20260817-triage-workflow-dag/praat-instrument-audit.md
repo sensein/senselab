@@ -112,8 +112,19 @@ before it.
 
 **It is not "one argument" — that framing was wrong.** The same function writes `signal="enhanced"`
 on the measurement (`preprocess.py:892`) and `derived_from=(enhanced_id,)`, and its docstring and
-`Raises:` clause both name the enhanced stream. Beyond the function it **invalidates 40 scalars ×
-62,547 stores**, so it needs a `CACHE_SCHEMA_VERSION` bump and a corpus recompute.
+`Raises:` clause both name the enhanced stream.
+
+**And the invalidation lever is not `CACHE_SCHEMA_VERSION`.** That constant lives in
+`utils/tasks/cached_inference.py` and belongs to audio_analysis; grepping `cached_inference`,
+`cached_call` and `cache_dir` under `workflows/triage/` returns **zero hits**, so bumping it
+invalidates nothing in these stores. An earlier version of this step named it.
+
+**The mechanism is the extend driver step 0 already names — specifically
+`scripts/extend_ppg_praat.py`, which wrote both the PPG and the Praat blocks.** And it **skips any
+recording whose store already holds both measurements** (`extend_ppg_praat.py:26`), so **re-running
+it after a stream switch changes nothing on all 62,547 stores.** It needs either a withdrawal pass
+that retires the existing measurements first, or a force flag. Cheap to fix here; expensive to
+discover mid-implementation.
 
 **And say what carries noise robustness once FRCRN leaves the path.** The governing contract requires
 a raw-versus-enhanced **pilot** for the structurally identical diarization decision. The domain
@@ -131,7 +142,8 @@ output.
 **This one is not a scalar re-derivation.** `ppg.segment_rate_per_s` is the `ddk.ppg_segment_rate_per_s`
 gate feature, so switching the stream **changes DDK routing on every recording in the corpus** —
 which branch runs, not merely what a number reads. It needs its own before-and-after count, in the
-same way [`branch-quality.md`](branch-quality.md)'s rule (a) gate count does.
+same way the contract's rule (a) requires a gate count
+(`../20260913-branch-contract-and-hints/design.md:121`, with the requirement at `:178` and `:551`).
 
 [`branch-ddk.md`](branch-ddk.md) D1 already specifies reading `plain`; the ordered path did not.
 
@@ -277,7 +289,9 @@ was.** `phonation/api.py:63` calls `extract_pitch_values` and returns its two ha
 `hnr_track` and `period_marks` all document their `f0_min_hz` as *"read it from `derive_f0_range`"*.
 (`formant_track` does not — it takes `max_formants`, `formant_max_hz`, `window_s` and
 `preemphasis_hz` and no F0 floor at all, `api.py:205-213`. An earlier version listed it here; the
-argument survives without it.)
+argument survives without it. Note **`derive_f0_range`'s own `Returns:` at `api.py:55` names
+`formant_track` as a recipient of the derived range** — that docstring is what misled two revisions
+of this document, and it is wrong about its own consumer.)
 
 The module therefore **imports the bin wholesale**, along with everything that follows from it: the
 1.67× window discontinuity in `hnr_track`, the sub-60 Hz pulse exclusion in `period_marks`, and the
@@ -440,7 +454,7 @@ the period floor should be `0.8/ceiling` and the ceiling `1.25/floor` — for th
 **0.0016 and 0.0125**, not 0.0001 and 0.02. The code passes form defaults while passing a *derived*
 range to the point process, which is the mismatch Praat's documentation tells you to avoid.
 
-### 9. The `hnr < 60` branch is measurably dead
+### 9. The `hnr < 60` branch takes one side on every probe, and the other where pitch fails
 
 `:154-155` drops `min_dip` from 4 to 2 when the recording's mean HNR is below 60.
 
@@ -545,6 +559,29 @@ convention where child is 8000.
 | 9, and the `extract_speech_rate` deviations | [`branch-speech.md`](branch-speech.md) S4; [`branch-ddk.md`](branch-ddk.md) D2 |
 | 10 | `branch-voice.md` V1, V4 |
 | 5, 11 | [`branch-listening-sample.md`](branch-listening-sample.md) |
+| 10 | `branch-voice.md` V1 and V4 — unmasked HNR sentinels in `voice_tracks.npz` |
+| 12 | nobody today (dormant: triage passes no `cache_dir`); any future batch over the corpus |
+| 13 | [`branch-conventions.md`](branch-conventions.md)'s per-measure bands, and `branch-voice.md` V4's sample-rate item |
+
+## A process finding: a revision deleted seven rules and no check caught it
+
+Worth recording here because it is about the documents rather than the instruments.
+
+A revision replacing one section of [`branch-conventions.md`](branch-conventions.md) **silently
+deleted 86 lines and seven rules** — the octave-jump interpretation, deviation-is-not-a-bad-recording,
+the whole quality-covariates section with its support counts, capture chain and distance items, the
+analysis-window conventions, and the proposing-branches precondition. **Nine passages across five
+documents still cited them.** This document's own finding 0 had its second supporting argument
+quoting verbatim a sentence that no longer existed, and [`branch-quality.md`](branch-quality.md) Q8's
+entire premise was a requirement that had been removed.
+
+**Six rounds of citation checking could not have caught it.** Every check verifies that a cited
+`file:line` exists and is in bounds; **dropped prose has no citations to fail**, and a cross-reference
+to a *document* stays valid when the *rule* inside it disappears. The failure mode is invisible to
+the tooling that had been catching everything else.
+
+What would catch it: comparing section inventories across revisions, or treating a large net deletion
+in a document others cite as something to justify rather than to review line by line.
 
 ## What this changes about "owed"
 
@@ -555,3 +592,9 @@ instrument's own documented guidance, and whose effect has now been measured.
 
 Those are not owed a listening sample. They are owed a **code change**, and finding 11 shows the
 derivations file is not by itself sufficient evidence that one has been thought through.
+
+**And there is a sixth kind, with exactly one member so far: owed a bench measurement.**
+[`branch-voice.md`](branch-voice.md) V4's question — whether Praat's sub-sample pulse interpolation
+puts the jitter floor below the 0.2–1% normal range at 16 kHz — is not owed a listening sample, not a
+code change, and not a config literal. It is answered by **synthesising signals of known jitter and
+measuring what comes back**. Cheap, decisive, and nobody has done it.

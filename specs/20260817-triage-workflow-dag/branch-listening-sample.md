@@ -119,7 +119,7 @@ A declared family is what the protocol *asked for*, not what the participant *di
 it produces a detector for the declaration. That is the no-refits rule in
 [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md).
 
-## What would supply it: two samples, not one
+## What would supply it: three samples, not one
 
 ### Sample A — event and content annotation
 

@@ -176,9 +176,12 @@ phrasing — and both are transcribed and then dropped.
   recording's own mean HNR is below 60** (`:154-155`), and `min_pause = 0.3` (`:159`). The HNR switch
   means syllable-detection sensitivity is conditioned on a voice-quality measurement of the recording
   being measured, across ~25,000 recordings of frequently dysphonic speakers. In practice mean HNR is
-  far below 60 dB for any real recording, so the `min_dip = 2` branch is **measurably always taken**
-  — probe means: buzz 50.75 dB, buzz with noise 16.90 dB, pure sine 105.60 dB — and the documented
-  "clean signal" setting of 4 is dead code.
+  far below 60 dB for any real recording, so on three synthetic probes — buzz 50.75 dB, buzz with
+  noise 16.90 dB, pure sine 105.60 dB — the `min_dip = 2` branch always took the same side. **That
+  has not been measured on the corpus**, and it is not dead code: if Praat returns undefined for the
+  mean, `NaN < 60` is `False` and `min_dip` stays at the **stricter 4**, on exactly the recordings
+  where pitch could not be measured. See [`branch-ddk.md`](branch-ddk.md) D2 and
+  [`praat-instrument-audit.md`](praat-instrument-audit.md) finding 9.
 
   **Two further deviations from Praat**, both raising the same question: `min_pause` **0.3 s against
   Praat's 0.1 s**, so hesitation pauses at 0.3–0.4 s sit on the edge and `pause_rate` under-reads for

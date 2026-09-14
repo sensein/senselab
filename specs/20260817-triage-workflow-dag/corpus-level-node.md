@@ -110,8 +110,8 @@ Moved from [`branch-voice.md`](branch-voice.md) V6.
 
 F0 shift, spectral tilt change and CPP change at maximal effort are **interpretable only against the
 same participant's comfortable phonation in the same sitting** — which is a different recording. The
-`loudness` families supply the effort; `prolonged-vowel` or `maximum-phonation-time` supplies the
-reference.
+`loudness` family supplies the effort; **`prolonged-vowel` supplies the reference** — and only
+`prolonged-vowel`, for the reason given below.
 
 **This also resolves a gap V6 could not.** `loudness` v1 (897) has only **one** condition — three
 maximal attempts, no comfortable baseline — so a between-condition correlate is not computable from
