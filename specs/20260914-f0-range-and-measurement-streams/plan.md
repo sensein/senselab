@@ -2,15 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Measure the right signal with a range derived from it — replace the binary sex-typed F0 range with a per-recording narrowing, and move the Praat scalars off the speech-enhanced stream onto the unprocessed one.
+**Goal:** Derive each recording's F0 range from the recording — replace the binary sex-typed F0 range with a per-recording narrowing, make a failed pitch analysis distinguishable from a genuine absence, and give the extend driver a way to re-derive the forty Praat scalars the retired range made stale.
 
-**Architecture:** Two independent defects share one consequence. `extract_pitch_values` picks one of two hardcoded (floor, ceiling) pairs from a threshold on trimmed mean F0, so every measure downstream of `derive_f0_range` carries a step discontinuity at a sex-typed boundary. Separately, `preprocess.py` hands the FRCRN-enhanced stream to the Praat extractor, so forty acoustic scalars are computed on a denoiser's output. The fix is one function replacement and one stream change, plus a re-run path in the extend driver that currently skips every store already holding the measurements.
+**Architecture:** `extract_pitch_values` picked one of two hardcoded (floor, ceiling) pairs from a threshold on trimmed mean F0, so every measure downstream of `derive_f0_range` carried a step discontinuity at a sex-typed boundary. The fix is one function replacement, plus a re-run path in the extend driver that currently skips every store already holding the measurements.
 
-**The posteriorgram does not move.** Audit step 1b was **withdrawn by the owner on 2026-09-14**: the PPG is a trained phoneme classifier, so `enhanced` is the stream closest to its training domain and is its defensible default. The reasoning is in the audit at step 1b. Everything this plan said about `ppg_input`, `write_ppg_posteriorgram` and DDK routing is removed accordingly, and **the forced corpus pass is no longer GPU-bearing and changes no routing**.
+**Neither stream moves — both `enhanced` decisions were withdrawn by the owner on 2026-09-14.**
+
+- **The posteriorgram.** Audit step 1b: the PPG is a trained phoneme classifier, so `enhanced` is the stream closest to its training domain and is its defensible default.
+- **The Praat scalars.** Audit step 1, withdrawn later the same day: the mechanism it rested on — FRCRN removing the aperiodic energy the scalars measure — is false in both its forms, so the step has no premise; and on `plain`, background noise depresses HNR and CPPS and perturbs period detection, which inverts the conclusion. `enhanced` versus `plain` for these scalars is **unmeasured**, and is recorded as a future research direction in `specs/20260817-triage-workflow-dag/branch-listening-sample.md`.
+
+The reasoning for both is in the audit, at steps 1 and 1b. **Tasks 5 and 6 are withdrawn with step 1** and are marked in place below; **Task 7 survives on the F0-range premise**, not the stream. The forced corpus pass is not GPU-bearing and changes no routing.
 
 **Tech Stack:** Python 3.12, `uv`, pytest, numpy, parselmouth (Praat bindings), `ProvStore` (append-only W3C PROV-shaped provenance), Slurm array jobs on ORCD for corpus passes.
 
-**Spec:** `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` — findings 0, 1 and 8, and remediation steps 1 and 2 (**step 1b is withdrawn**). Branch consumers: `specs/20260817-triage-workflow-dag/branch-voice.md` (V1, V4), `branch-ddk.md` (D1, D2), `branch-quality.md` (Q2). The contract is `specs/20260913-branch-contract-and-hints/design.md`.
+**Spec:** `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` — findings 1 and 8, and remediation step 2 (**steps 1 and 1b are both withdrawn**; finding 0 is provenance, not a defect). Branch consumers: `specs/20260817-triage-workflow-dag/branch-voice.md` (V1, V4), `branch-ddk.md` (D1, D2), `branch-quality.md` (Q2). The contract is `specs/20260913-branch-contract-and-hints/design.md`.
 
 ## Global Constraints
 
@@ -25,9 +30,9 @@
 
 ## Scope
 
-**In scope:** audit step 2 (replace `derive_f0_range`, and make a crash distinguishable from an absence), step 1 (Praat scalars onto `plain`), and the extend driver's re-run path.
+**In scope:** audit step 2 (replace `derive_f0_range`, and make a crash distinguishable from an absence) and the extend driver's re-run path.
 
-**Withdrawn, not deferred:** step 1b. It is not owed a later plan.
+**Withdrawn, not deferred:** audit steps **1** and **1b**, and with step 1 this plan's **Tasks 5 and 6**. Neither stream moves and neither is owed a later plan. What step 1 leaves behind is not a deferred task but an unmeasured research question, recorded in `specs/20260817-triage-workflow-dag/branch-listening-sample.md` as the seventh kind of owed — **the impact of speech enhancement on disordered voices** — which needs selected disordered voices with hand labels and which no corpus pass or paired measurement answers.
 
 **Explicitly out of scope, each getting its own plan:** the CPPS reimplementation (step 4); jitter and shimmer from the `PeriodMark` sequence (step 3); withholding the scalars already written into 62,547 stores (step 0); instrument coverage per instrument (step 5); **step 2b — tracking F0 on the same signal the range was derived on** (`preprocess.py:954` derives on `plain`, `:964` tracks on `sharp`); the owed widening of `voice.f0_search_range_hz`'s 600 Hz ceiling against the CPPS band's 700 Hz; every branch capability; the SCREEN merge; and the contract's nine pieces.
 
@@ -41,25 +46,26 @@
 | --- | --- |
 | `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py` | `extract_pitch_values` narrows per recording from robust **linear-Hz** percentiles (`np.percentile` on the raw contour; nothing takes a log), and **reports a failed analysis as data** rather than as an indistinguishable NaN. Modify `:358-446`. |
 | `src/senselab/audio/tasks/phonation/api.py` | `derive_f0_range` raises `F0RangeFailed` on a reported failure and `F0RangeUnavailable` on a genuine absence. Modify `:41-69`. |
-| `src/senselab/audio/workflows/triage/nodes/preprocess.py` | the Praat block reads `plain`. Modify `:859-907` only — `ppg_input` (`:743-765`) and `write_ppg_posteriorgram` (`:767-823`) are **unchanged**, `enhanced_id` keeps its name, and no call site moves. |
+| `src/senselab/audio/workflows/triage/nodes/preprocess.py` | **unchanged.** With Task 5 withdrawn the Praat block keeps resolving `enhanced` (`:883`) and recording `signal="enhanced"` (`:904`), as do `ppg_input` (`:743-765`) and `write_ppg_posteriorgram` (`:767-823`). No call site moves. |
 | `src/tests/audio/tasks/features_extraction_test.py` | the narrowing's behaviour and the failure signal. |
 | `src/tests/audio/tasks/phonation_test.py` | `derive_f0_range`'s two typed outcomes. **Rewrite `TestDeriveF0Range` `:109-131`.** |
-| `src/tests/audio/workflows/triage/nodes/preprocess_test.py` | the Praat measurement records `signal="plain"`; the posteriorgram still records `"enhanced"`. **Three stale assertions, three stale names and one test whose premise splits — enumerated in Task 6.** |
+| `src/tests/audio/workflows/triage/nodes/preprocess_test.py` | **unchanged by Tasks 5–6** — both measurements still record `signal="enhanced"` and every assertion naming it is correct. Task 8 adds the five range keys to the attribute check in this file. |
 | `src/tests/scripts/extend_reprocessed_outputs_test.py` | a reported failure is a failed row, not an escaped exception. |
-| `scripts/extend_ppg_praat.py` | gains `--force`, which re-derives **the Praat block only** and supersedes rather than appends; and stops cascading a missing `enhanced` stream onto Praat. Modify `:26-27`, `:94-115`, `:187-190`, `:195-199`, `:235-238`. `:219`'s `enhanced_id=` keyword is **unchanged**. |
-| `src/tests/scripts/extend_ppg_praat_test.py` | `_seed_run` seeds `plain` **beside** `enhanced`, which the PPG still needs; `--force` re-derives Praat and leaves exactly one live Praat measurement. |
-| `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` | steps 1 and 2 landed; the corpus pass and the noise-robustness statement recorded as owed. Step 1b already reads as withdrawn and stays that way. |
+| `scripts/extend_ppg_praat.py` | gains `--force`, which re-derives **the Praat block only** and supersedes rather than appends. Modify `:26-27`, `:94-115`, `:187-190`, `:235-238`. `:219`'s `enhanced_id=` keyword is **unchanged**, and so is the absence cascade at `:194-200` — see the item carried forward under Task 5. |
+| `src/tests/scripts/extend_ppg_praat_test.py` | `_seed_run` is **unchanged** — one `enhanced` stream entity is all either block needs. `--force` re-derives Praat and leaves exactly one live Praat measurement. |
+| `specs/20260817-triage-workflow-dag/praat-instrument-audit.md` | step 2 landed; steps 1 and 1b read as withdrawn and stay that way; the enhancement-versus-`plain` comparison recorded as a future research direction, not as owed work. |
 
-### Two existing tests pin the defects
+### One existing test pins the defect
 
 - `phonation_test.py:112-119` asserts `low == (60.0, 250.0)` and `high == (100.0, 500.0)` under the docstring *"The narrowing is what the standardization method does; a fixed corpus range cannot."* It asserts the bin while describing what the bin is not.
-- `preprocess_test.py:2213` is named `test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one`, and the class docstring at `:2174` opens *"Both run on ``enhanced``"* — true today and half true afterwards.
+
+**`preprocess_test.py:2213`'s `test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one` and the class docstring at `:2174` (*"Both run on ``enhanced``"*) were listed here as pinning a defect. They are not** — with step 1 withdrawn both describe behaviour that is correct and staying. Leave them.
 
 ### What does not need changing, and why
 
 **No routing changes.** No configured gate reads a Praat scalar: `routing_analysis/features.py:725-726` carries the forty scalars into the feature record, and no `gates:` entry in `data/config/default.yaml:227-271` names one. The four gates that read the posteriorgram — `airway.ppg_silent_fraction`, `ddk.ppg_segment_rate_per_s` and their features — are untouched, because the posteriorgram is untouched. So this plan changes forty numbers and **not which branch runs on any recording**.
 
-`routing_analysis_test.py:949` hardcodes `"signal": "enhanced"` in the **`praat_features`** fixture. Nothing filters on `signal`, so it **keeps passing**; update it for accuracy, not because a failure will prompt you. `live_evidence_test.py:216` and `routing_analysis_test.py:959` are **`ppg_posteriorgram`** fixtures and are now correct as written — leave them alone.
+`routing_analysis_test.py:949` hardcodes `"signal": "enhanced"` in the **`praat_features`** fixture. An earlier version of this plan had Task 6 Step 5 change it to `"plain"` for accuracy; with Task 5 withdrawn it is **already accurate and stays as it is**. `live_evidence_test.py:216` and `routing_analysis_test.py:959` are **`ppg_posteriorgram`** fixtures and are likewise correct — leave all three alone.
 
 ---
 
@@ -82,7 +88,7 @@
 
 **The narrowing must not be able to exclude the speaker's F0, and a single pass can.** Measured on a synthesised **120 Hz voice with a 60 Hz hum at ~−22 dB**: the wide search locks to the subharmonic across the whole contour and a one-pass narrowing returns **`[50.0, 90.0]`** — a range the speaker's F0 never enters. Every measure downstream is then computed over a range that excludes the voice.
 
-**The bin was accidentally robust here**: a 60 Hz trimmed mean selects `(60, 250)`, which still contains 120 Hz. So a one-pass narrowing would be a **regression** on this configuration — and 60 Hz mains against a ~120 Hz male voice, or 50 Hz against ~100 Hz, is a common clinical recording. It interacts adversely with Task 5: FRCRN suppresses stationary low-frequency noise and `plain` does not, so moving to `plain` makes the hum case *more* frequent in the same pass that introduces the vulnerability.
+**The bin was accidentally robust here**: a 60 Hz trimmed mean selects `(60, 250)`, which still contains 120 Hz. So a one-pass narrowing would be a **regression** on this configuration — and 60 Hz mains against a ~120 Hz male voice, or 50 Hz against ~100 Hz, is a common clinical recording. **An earlier version added that it interacts adversely with Task 5** — *"FRCRN suppresses stationary low-frequency noise and `plain` does not, so moving to `plain` makes the hum case more frequent in the same pass that introduces the vulnerability."* **Void with Task 5's withdrawal**: the forty scalars keep reading `enhanced`. The hum case is live where `derive_f0_range` already reads `plain` — `preprocess.py:954` and `voice.py:71` — and always was.
 
 **An earlier draft of this plan proposed a second-pass median comparison, and it cannot fire.** Re-running at the narrowed range and widening back when the two medians differ by an octave is unreachable by construction: the narrowed range is `[p5/1.5, p95·1.5]` with the first median near its centre, so **the second median can deviate by at most a factor of 1.5, which is 0.585 octave.** Measured with Task 1 implemented, it **fired in 0 of 120 conditions**, and it cannot fire at all when `p95 < 2·search_floor/1.5` — **66.7 Hz at the current floor, which both mains frequencies sit below.** Any threshold small enough to catch the hum case would be a fitted operating point, so "introduces no fitted value" and "closes the regression" cannot both hold with that mechanism. It is recorded here so it is not re-proposed.
 
@@ -739,173 +745,82 @@ git add -A && git commit -m "test(triage): window lengths follow the derived ran
 
 ---
 
-## Task 5: The Praat scalars move to `plain`
+## Task 5: The Praat scalars move to `plain` — **WITHDRAWN 2026-09-14 by the owner**
 
-**Files:**
-- Modify: `src/senselab/audio/workflows/triage/nodes/preprocess.py:859-907`
-- Modify: `scripts/extend_ppg_praat.py:195-199`
-- Test: `src/tests/audio/workflows/triage/nodes/preprocess_test.py`
+**Not started, not deferred, not owed a later plan.** Audit **step 1**, which this task implemented, was
+withdrawn on 2026-09-14 because its premise is false. The reasoning is in
+[`../20260817-triage-workflow-dag/praat-instrument-audit.md`](../20260817-triage-workflow-dag/praat-instrument-audit.md)
+under step 1 and under finding 0's retraction, and in short: FRCRN does **not** remove the aperiodic energy
+the scalars measure — sibilants are broadband aperiodic energy and it preserves them — and it does not strip
+the low-level noise component inside voiced phonation either, because it preserves vocal texture well. With
+both stages of the mechanism gone the step has no premise, and the conclusion inverts: on `plain`, background
+noise depresses HNR and CPPS and perturbs period detection, so a healthy voice can read as dysphonic, and
+many recordings in this corpus carry background noise. **The Praat block stays on `enhanced`.**
 
-**Interfaces:**
-- Consumes: nothing from earlier tasks.
-- Produces: the Praat measurement recording `signal="plain"` and `derived_from=(plain_id,)`.
+**What that leaves in the tree, unchanged and not a defect:** `praat_features` resolves `enhanced` at
+`preprocess.py:883`, records `signal="enhanced"` at `:904` and `derived_from=(enhanced_id,)` at `:906`, and
+names the enhanced stream in its docstring at `:860`, `:869` and `:875`. Nothing here is edited.
 
-Tasks 5 and 6 are one change split by concern: this task moves the code, the next fixes every test it breaks.
+**Do not re-propose this as a measurement either.** `enhanced` versus `plain` for these scalars is
+**unmeasured**, and the prior now favours `enhanced`. It is recorded as a future research direction — the
+impact of speech enhancement on disordered voices — in
+[`../20260817-triage-workflow-dag/branch-listening-sample.md`](../20260817-triage-workflow-dag/branch-listening-sample.md),
+where it is the seventh kind of owed, because settling it needs selected disordered voices with hand labels.
+No corpus pass and no quick paired measurement reaches it.
 
-**The posteriorgram is not in this task.** `ppg_input` (`:743-765`), `write_ppg_posteriorgram` (`:767-823`)
-and its `enhanced_id` keyword stay exactly as they are, per the withdrawal of audit step 1b. Nothing about
-DDK or AIRWAY routing changes here, because `ppg.segment_rate_per_s` and `ppg.silent_fraction` are unmoved.
+**Task 5 Step 2 contained a separable defect, and it did not go with the task.** It is preserved below as
+its own item, with what re-checking it against a `enhanced`-reading Praat block concluded.
 
-- [ ] **Step 1: Move the Praat block**
+### Carried forward from Task 5 Step 2 — the driver's absence cascade is *narrower* than stated, not gone
 
-In `preprocess.py`, in `praat_features`: `:883` becomes `plain_id, audio = resolve_stream(store, run_dir, "plain")`; `:885`'s activity tuple becomes `(plain_id,)`; `:904` becomes `signal="plain"`; `:906` becomes `derived_from=(plain_id,)`. The docstring names `enhanced` at `:860`, `:869` and `:875` — all three change, the last being the `Raises:` clause.
+`extend_ppg_praat.py:194-200` treats a `ppg_input` failure as **both** blocks' absence, on a comment at
+`:197` that says so: *"No enhanced stream to read is both blocks' absence, not one's: Praat reads it too."*
+`:199` writes `{"status": _ABSENT, "ppg": reason, "praat": reason}` and `continue`s, so the Praat block never
+runs on that store.
 
-- [ ] **Step 2: Stop the driver cascading a missing `enhanced` stream onto Praat**
+**Re-checked with Praat staying on `enhanced`, the comment is true and the cascade is correct for the
+failures it was written about.** Praat resolves the same `enhanced` stream at `preprocess.py:883`, so a
+`LookupError` from `resolve_stream` — no live `enhanced` entity — is genuinely both blocks' absence, and so
+is an `OSError` reading that stream's sidecar, because `resolve_stream` returns `Audio(filepath=...)` lazily
+(`nodes/common.py:402`) and both blocks load the same file.
 
-`extend_ppg_praat.py:195-199` treats a `ppg_input` failure as **both** blocks' absence, on a comment that
-says so: *"No enhanced stream to read is both blocks' absence, not one's: Praat reads it too."* After this
-task Praat reads `plain`, so that is false — and it is a behaviour defect, not a stale comment. `:199` writes
-`{"status": _ABSENT, "ppg": reason, "praat": reason}` and then `continue`s, so the Praat block never runs on
-a store with no `enhanced` stream even though it now can. Mark the PPG absent, let the Praat path fall
-through to `:235-245`, and correct the comment.
-
-**This asymmetry is now permanent**, not a transitional state: the PPG needs `enhanced` by decision and
-Praat needs `plain`, so one stream's absence is one block's absence from here on.
-
-- [ ] **Step 3: Run and expect failures, not success**
-
-Run: `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py -q`
-Expected: **FAIL**, in the tests Task 6 enumerates. That is the point of splitting the tasks — do not adjust assertions here.
-
-- [ ] **Step 4: Lint and commit a deliberately red suite**
-
-This commit leaves `preprocess_test.py` failing, on purpose — Task 6 is the fix, and splitting them keeps
-the code move reviewable separately from the test edits. Say so in the commit message so a bisect
-does not read it as a break.
-
-```bash
-uv run ruff format src/senselab/audio/workflows/triage/nodes/preprocess.py scripts/extend_ppg_praat.py
-uv run ruff check src/senselab/audio/workflows/triage/nodes/preprocess.py scripts/extend_ppg_praat.py
-uv run mypy src/senselab/audio/workflows/triage/nodes/preprocess.py scripts/extend_ppg_praat.py
-git add -A && git commit -m "fix(preprocess): measure the Praat scalars on plain"
-```
+**What remains a defect is one arm of the `except`, and only that.** The handler catches
+`(OSError, ValueError, LookupError)` around the whole of `ppg_input`, which does two things after resolving
+the stream that Praat does not do at all: a mono downmix (`preprocess.py:760-761`) and a resample to
+`PPGS_SAMPLE_RATE` (`:762-763`). A failure in **those** is ppgs-specific conditioning, and attributing it to
+Praat marks a Praat measurement absent that would have succeeded. **Owed a narrow fix**: catch the
+conditioning separately, or cascade only on the stream-resolution failure. It is much smaller than Task 5
+Step 2 described and it is not what that step was for, so it is recorded here rather than lost with the task.
 
 ---
 
-## Task 6: Every test the move breaks, and what each becomes
+## Task 6: Every test the move breaks, and what each becomes — **WITHDRAWN 2026-09-14 by the owner**
 
-**Files:**
-- Test: `src/tests/audio/workflows/triage/nodes/preprocess_test.py`, `routing_analysis_test.py`
+**Withdrawn with Task 5, whose tests it fixed.** No test breaks, because no code moves. Every assertion this
+task would have retargeted is **correct as it stands** and must not be edited:
+`preprocess_test.py:2176`'s class docstring (*"Both run on ``enhanced``"* — still both),
+`:2214`'s `test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one`,
+`:2230`'s `assert attrs["signal"] == "enhanced"`, `:2239-2240`'s `resolve_stream(..., "enhanced")`, and
+`test_both_are_absent_when_no_enhanced_stream_was_written` (`:2293-2310`), whose premise is intact on both
+halves. `routing_analysis_test.py:949`'s `"signal": "enhanced"` in the `praat_features` fixture is accurate
+and stays.
 
-**Interfaces:** consumes Task 5; produces nothing.
+**The one rename that was never about the stream.** Task 6 Step 1 recorded that
+`test_both_read_the_enhanced_stream_back_out_of_the_store` (`:2242`) has a body that only ever exercises
+`ppg_input` (`:2266`) and never Praat — *"the name was already wrong, and it is a rename for accuracy, not
+for the move."* That is still true and is now the only item worth anything from this task. It is a
+test-naming accuracy fix with no code change behind it; pick it up with whatever next touches that file.
 
-Three stale assertions, three stale names, one test whose premise splits. Each is listed with what it
-becomes. **Every row below is Praat's** — the posteriorgram's assertions are correct as they stand and
-must not be touched.
-
-- [ ] **Step 1: Retarget the class, which now describes two streams rather than one**
-
-In `TestThePosteriorgramAndPraatBlocks`:
-
-| line | now | becomes |
-| --- | --- | --- |
-| `:2176` | docstring "Both run on ``enhanced``…" | "The posteriorgram runs on ``enhanced`` and Praat on ``plain``…" — the split is the point, so say it here |
-| `:2214` | `test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one` | `..._the_unprocessed_one`. **A name, so nothing will flag it** |
-| `:2230` | `assert attrs["signal"] == "enhanced"` | `== "plain"` |
-| `:2239-2240` | `resolve_stream(store, tmp_path, "enhanced")` + `derived_from == [enhanced_id]` | `"plain"`, and rename the local |
-| `:2242` | `test_both_read_the_enhanced_stream_back_out_of_the_store` | `test_the_posteriorgram_reads_the_enhanced_stream_back_out_of_the_store`. **The body only ever exercised `ppg_input` (`:2266`), never Praat** — the name was already wrong, and it is a rename for accuracy, not for the move. **Change nothing inside it** |
-
-`:2197`'s `assert attrs["signal"] == "enhanced"` is the **posteriorgram's** and stays.
-
-- [ ] **Step 2: Split the no-enhanced-stream test rather than replacing it**
-
-`test_both_are_absent_when_no_enhanced_stream_was_written` (`:2293-2310`) asserts both measurements land in
-`result.absent` with `"enhanced"` in the reason, under `phonation_config` and a bare `_stub_models`, which
-write no `enhanced` stream at all. After Task 5 half of that premise is gone: the posteriorgram is still
-absent for exactly the stated reason, and Praat now runs on `plain` and succeeds.
-
-So the test becomes a **stronger** one and needs no monkeypatching:
-
-```python
-    def test_the_posteriorgram_is_absent_when_no_enhanced_stream_was_written(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """One stream's absence is one block's absence: Praat reads ``plain`` and is unaffected."""
-        _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch)
-        result = preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-
-        assert PPG_MEASUREMENT in result.absent
-        assert "enhanced" in _absent_map(store)[PPG_MEASUREMENT]
-        assert PRAAT_MEASUREMENT not in result.absent
-        assert find_measurement(store, PRAAT_MEASUREMENT) is not None
-```
-
-**An earlier version replaced it with a `resolve_stream`-patching test of a missing `plain` stream.** No
-longer needed, and worse: patching `resolve_stream` module-wide makes unrelated blocks absent too, while
-the property being protected is now testable with the fixtures the module already has.
-
-- [ ] **Step 3: Write the guard that says what is true**
-
-Do **not** write `test_no_measurement_reads_the_enhanced_stream`, and do not write
-`test_neither_praat_nor_the_posteriorgram_reads_the_enhanced_stream` either. Both are false: the
-posteriorgram reads `enhanced` by decision, and `enhanced_yamnet_scores`, `enhanced_ast_scores` and
-`enhanced_hear_scores` **are** measurements written with `signal="enhanced"` (`_stream_classifier_scores`
-takes the measurement name as a parameter, so the *block* is `enhanced_yamnet` but the *measurement*
-carries the `_scores` suffix, and `find_measurement(store, f"enhanced_{classifier}")` is `None` for all
-three). A guard whose name asserts something untrue is worse than none.
-
-The claim to guard is the one the audit actually makes after the withdrawal — that the **Praat** scalars no
-longer read the denoised stream, and that the posteriorgram deliberately still does:
-
-```python
-    def test_praat_reads_plain_and_the_posteriorgram_deliberately_does_not(
-        self, residual_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store: ProvStore,
-        wav_writer: Callable[..., Path],
-    ) -> None:
-        """Audit step 1 moved the scalars; step 1b was withdrawn, so the posteriorgram stays on ``enhanced``."""
-        _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1))
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
-        for name, expected in ((PRAAT_MEASUREMENT, "plain"), (PPG_MEASUREMENT, "enhanced")):
-            measurement = find_measurement(store, name)
-            assert measurement is not None
-            assert measurement.attributes["signal"] == expected
-```
-
-**`enhance=` is not optional.** `conftest.py:138-140` patches `_frcrn_model` and `enhance_audios` **only if
-`enhance` is passed** — a bare `_stub_models(monkeypatch)` leaves both real, so the test downloads FRCRN and
-runs it. The `residual_config` tests in this class already pass `_fake_enhance(0.5, noise_scale=0.05, seed=1)`;
-match them. Step 2's test is the exception and passes no `enhance` on purpose, which is what makes no
-`enhanced` stream exist.
-
-- [ ] **Step 4: Run the whole triage suite**
-
-Run: `uv run pytest src/tests/audio/workflows/triage -q`
-Expected: PASS.
-
-- [ ] **Step 5: Update the one stale fixture, for accuracy**
-
-`routing_analysis_test.py:949` hardcodes `"signal": "enhanced"` in the **`praat_features`** fixture. Nothing
-filters on `signal`, so it **passes either way** — change it to `"plain"` because it now describes a
-measurement the node never writes that way, not because a test fails.
-
-**Leave `live_evidence_test.py:216` and `routing_analysis_test.py:959` alone.** Both are
-`ppg_posteriorgram` fixtures, and `"signal": "enhanced"` is what the node still writes there. An earlier
-version of this plan changed all three.
-
-- [ ] **Step 6: Lint and commit**
-
-```bash
-uv run ruff format src/tests/audio/workflows/triage/
-uv run ruff check src/tests/audio/workflows/triage/
-git add -A && git commit -m "test(triage): Praat measures plain, the posteriorgram measures enhanced"
-```
+**Two facts this task established that are worth keeping, because they cost time to find and are not about
+the stream.** `conftest.py:138-140` patches `_frcrn_model` and `enhance_audios` **only if `enhance=` is
+passed** to `_stub_models`, so a bare `_stub_models(monkeypatch)` leaves both real and the test downloads
+FRCRN and runs it — any new test in this class that needs an `enhanced` stream must pass
+`_fake_enhance(...)`, and `test_both_are_absent_when_no_enhanced_stream_was_written` omits it on purpose,
+which is what makes no `enhanced` stream exist. And `enhanced_yamnet_scores`, `enhanced_ast_scores` and
+`enhanced_hear_scores` **are** measurements written with `signal="enhanced"` — `_stream_classifier_scores`
+takes the measurement name as a parameter, so the *block* is `enhanced_yamnet` but the *measurement* carries
+the `_scores` suffix, and `find_measurement(store, f"enhanced_{classifier}")` is `None` for all three. Any
+guard whose name generalises over "measurements that read `enhanced`" has to account for them.
 
 ---
 
@@ -916,13 +831,39 @@ git add -A && git commit -m "test(triage): Praat measures plain, the posteriorgr
 - Test: `src/tests/scripts/extend_ppg_praat_test.py`
 
 **Interfaces:**
-- Consumes: Task 5 — without it there is nothing stale to re-derive.
+- Consumes: **Task 1**, which is what makes the stored scalars stale. It no longer consumes Task 5.
 - Produces: `--force` on the CLI; a `force: bool` keyword threaded to **the function containing the skip at `:187`** (read whether that is `process_batch` or its caller before writing the signature — the plan does not guess).
 
-**`--force` is still needed, and it is now Praat-only.** The driver skips any recording whose store already
-holds both measurements (`:188-190`), so a re-run after Task 5 changes nothing on all 62,547 stores. What
-changed with the withdrawal of audit step 1b is the *shape* of the override and the *reason* for the
-supersession, both of which get simpler:
+**This task survives the withdrawal of Task 5, on a different premise — and the new premise was
+checked, not assumed.** It used to read: the stream switch made the stored Praat scalars stale, so the
+driver needs a way not to skip them. Task 5 is withdrawn and the stream does not change. **What makes them
+stale is Task 1.** Every Praat scalar in all 62,547 stores was computed under the **sex-typed bin** that
+Task 1 replaced, and re-deriving them on the **unchanged `enhanced` stream** would change them.
+
+**How that was verified, so a later reader does not have to redo it:**
+
+- **The bin was in the tree when the corpus was written.** `dea0a622` (2026-09-14, *"fix(praat): derive the
+  F0 range per recording"*) is Task 1; its parent still carries `if mean_pitch < 170:` with the `'male'` and
+  `'female' and 'child'` comments in `extract_pitch_values`. The `ppg_20260911` corpus pass predates it.
+- **34 of the 40 scalars are conditioned on the derived floor/ceiling.** `_extract_one`
+  (`praat_parselmouth.py:1373-1555`) takes `pitch_floor` and `pitch_ceiling` from `extract_pitch_values` and
+  threads them into `extract_pitch_descriptors`, `extract_intensity_descriptors`,
+  `extract_harmonicity_descriptors`, `measure_f1f2_formants_bandwidths`, `extract_spectral_moments`,
+  `extract_slope_tilt`, `extract_cpp_descriptors`, `extract_jitter` and `extract_shimmer` — 2 + 3 + 2 + 8 +
+  4 + 2 + 2 + 5 + 6 scalars. **Only 6 are independent of it**: `duration` from `extract_audio_duration` and
+  the five rates from `extract_speech_rate`, neither of which is passed a floor.
+- **The change is not merely nominal.** Finding 1 of the audit measures the downstream step at the bin's
+  own floor change — intensity window 53.3 → 32.0 ms, harmonicity window 75.0 → 45.0 ms — so a different
+  floor is a different analysis window, not a relabelling.
+
+**So Task 7's premise is rewritten to the F0-range change, and it no longer claims any of the following**:
+that the stored values were measured on the wrong stream; that the re-derivation switches a stream; or that
+`signal="enhanced"` on the superseded measurement is what makes it stale. The measurement being retired and
+the one replacing it are **both** `signal="enhanced"`. What separates them is the range rule.
+
+**`--force` is still needed, and it is Praat-only.** The driver skips any recording whose store already
+holds both measurements (`:187-190`, with a second `pending()` check at `:235-237`), so a re-run changes
+nothing on all 62,547 stores. The *shape* of the override and the *reason* for the supersession:
 
 - **`pending()` keeps its two-flag return** (`:118-127`) — the unforced path still needs both, and
   `ppg_pending` still gates the PPG block at `:192`. **Only the override is one-sided:**
@@ -949,17 +890,14 @@ Praat-only re-derivation still requires a provisioned ppgs venv on the host. Eit
 so in the runbook, or make the check conditional on `force`; **decide it here rather than discovering it on
 the cluster.**
 
-- [ ] **Step 1: Seed `plain` beside `enhanced` in the fixture, or every test in the module fails**
+- [ ] ~~**Step 1: Seed `plain` beside `enhanced` in the fixture, or every test in the module fails**~~
+**Dropped 2026-09-14 with Task 5.** It existed only because the Praat block was going to resolve `plain` and
+raise `LookupError` against a fixture that seeds one stream entity, `name: "enhanced"`
+(`extend_ppg_praat_test.py:61-97`, `:88-89`). Praat keeps reading `enhanced`, so the fixture is correct as
+it stands and **must not be touched**.
 
-`_seed_run` (`:61-97`) writes exactly one stream entity, `name: "enhanced"` (`:88-89`). After Task 5 the
-Praat block resolves `plain` and raises `LookupError`, so its half of every test here fails. Add a **second**
-stream entity named `plain`, written the same way, pointing at a `streams/plain.flac` written alongside
-`streams/enhanced.flac`. **Do not replace `enhanced`** — the posteriorgram still reads it.
-
-- [ ] **Step 2: Run the module and confirm it is green again before adding anything**
-
-Run: `uv run pytest src/tests/scripts/extend_ppg_praat_test.py -q`
-Expected: PASS. If not, the fixture is not seeding `plain` the way `resolve_stream` reads it — fix that before proceeding.
+- [ ] ~~**Step 2: Run the module and confirm it is green again before adding anything**~~
+**Dropped with Step 1** — nothing has been made red to recover from. Start at Step 3.
 
 - [ ] **Step 3: Write the failing `--force` test**
 
@@ -967,7 +905,7 @@ The module drives everything through `cli.main([...])` with the `provisioned` an
 
 ```python
 class TestForceReDerives:
-    """After the stream switch the stored Praat scalars are stale, and skipping them looks like success."""
+    """Every stored Praat scalar was measured under the retired sex bin, and skipping them looks like success."""
 
     def test_force_re_derives_a_store_that_already_holds_both(
         self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
@@ -996,7 +934,7 @@ class TestForceReDerives:
     def test_force_does_not_touch_the_posteriorgram(
         self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
     ) -> None:
-        """Audit step 1b was withdrawn, so a forced pass is Praat-only — and therefore not GPU-bearing."""
+        """Audit steps 1 and 1b are both withdrawn, so a forced pass is Praat-only, on ``enhanced``."""
         manifest, roots = corpus(1)
         cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"])
         before = find_measurement(_store_of(roots[0]), PPG_MEASUREMENT)
@@ -1056,8 +994,12 @@ PRAAT_MEASUREMENT_SUPERSEDED = "praat_features_superseded"
 and a reason string in the same idiom:
 
 ```python
-_STREAM_SWITCH_REASON = "it was measured on the enhanced stream; the measurement now reads plain"
+_RETIRED_F0_RANGE_REASON = "it was measured under the retired sex-typed F0 range; the range is now derived per recording"
 ```
+
+**The reason names the F0 range, not a stream.** An earlier version read *"it was measured on the enhanced
+stream; the measurement now reads plain"* — void with Task 5. The retired measurement and its replacement
+are **both** `signal="enhanced"`; what separates them is the range rule Task 1 replaced.
 
 Then, in the forced path, when `praat_held`, call `extend.supersede` on the old entity **after**
 `praat_features` has returned the new one. **`scripts/extend_withdraw_clips.py` contains no `supersede`
@@ -1078,7 +1020,7 @@ Expected: PASS, including the existing skip tests without `--force` and `test_a_
 uv run ruff format scripts/extend_ppg_praat.py src/tests/scripts/extend_ppg_praat_test.py
 uv run ruff check scripts/extend_ppg_praat.py src/tests/scripts/extend_ppg_praat_test.py
 uv run mypy scripts/extend_ppg_praat.py
-git add -A && git commit -m "feat(extend): --force re-derives the Praat scalars and supersedes what the stream switch made stale"
+git add -A && git commit -m "feat(extend): --force re-derives the Praat scalars the retired F0 range made stale"
 ```
 
 ---
@@ -1090,7 +1032,7 @@ git add -A && git commit -m "feat(extend): --force re-derives the Praat scalars 
 - Modify: `src/senselab/audio/workflows/triage/nodes/preprocess.py:886-895`
 - Test: `src/tests/audio/tasks/features_extraction_test.py`, `src/tests/audio/workflows/triage/nodes/preprocess_test.py`
 
-**Interfaces:** consumes Tasks 1 and 5; produces `pitch_floor`, `pitch_ceiling`, `pitch_frames`, `pitch_failed` and `pitch_range_fell_back` in the 40-scalar dict and on the `praat_features` measurement's attributes.
+**Interfaces:** consumes Task 1 (Task 5 is withdrawn and was never a real dependency here); produces `pitch_floor`, `pitch_ceiling`, `pitch_frames`, `pitch_failed` and `pitch_range_fell_back` in the 40-scalar dict and on the `praat_features` measurement's attributes.
 
 **Without this task the plan is a net loss in auditability.** `_extract_one` (`:1302`) calls `extract_pitch_values` and threads the floor and ceiling into every subsequent extractor, but puts **neither into `feature_data`**. Under the bin a reader could at least infer which of two ranges applied. After Task 1 every recording's forty scalars are conditioned on a **recording-specific** range recorded nowhere, with no support count — which is audit finding 5 (no function returns a support count) reproduced on the very instrument this plan repairs. It is also what would have surfaced the hum regression: a `pitch_range_fell_back` of 1.0, or a floor and ceiling that do not bracket the voice, is visible in the measurement's attributes and invisible anywhere else.
 
@@ -1105,7 +1047,7 @@ git add -A && git commit -m "feat(extend): --force re-derives the Praat scalars 
         assert features["pitch_floor"] < 150.0 < features["pitch_ceiling"]
 ```
 
-And in `preprocess_test.py`, inside the class retargeted in Task 6:
+And in `preprocess_test.py`, inside `TestThePosteriorgramAndPraatBlocks` (which Task 6 would have retargeted and, being withdrawn, did not):
 
 ```python
         for key in ("pitch_floor", "pitch_ceiling", "pitch_frames", "pitch_range_fell_back"):
@@ -1150,21 +1092,19 @@ git add -A && git commit -m "fix(praat): the derived range travels with the scal
 
 **Files:** modify `specs/20260817-triage-workflow-dag/praat-instrument-audit.md`
 
-- [ ] **Step 1: Mark steps 1 and 2 landed**
+- [ ] **Step 1: Mark step 2 landed, and steps 1 and 1b withdrawn**
 
-For each: what changed, the convention and that it was not fitted, and what remains. Steps 0, 3, 4 and 5 stay open and must still read as open, and **step 1b stays withdrawn** — do not mark it landed, deferred or owed. Add that **step 2b is untouched** — `preprocess.py:954` derives the range on `plain` while `:964` tracks F0 on `sharp`, and this plan does not close that.
+For step 2: what changed, the convention and that it was not fitted, and what remains. Steps 0, 3, 4 and 5 stay open and must still read as open. **Steps 1 and 1b stay withdrawn** — do not mark either landed, deferred or owed. Add that **step 2b is untouched** — `preprocess.py:954` derives the range on `plain` while `:964` tracks F0 on `sharp`, and this plan does not close that. *(Done on the audit as part of the 2026-09-14 withdrawal; this step is a check, not new work.)*
 
-- [ ] **Step 2: Answer the question step 1 asks and this plan did not**
+- [ ] ~~**Step 2: Answer the question step 1 asks and this plan did not**~~
+**Dropped 2026-09-14 with step 1.** It asked what carries noise robustness *once FRCRN leaves the measurement path*. FRCRN does not leave it. The question is void as posed; what replaces it is not an answer but the research direction recorded in `specs/20260817-triage-workflow-dag/branch-listening-sample.md`.
 
-The audit's step 1 requires saying **what carries noise robustness once FRCRN leaves the measurement path**. It is now unanswered in the shipped design. Either name what does (HeAR, YAMNet and SQUIM still read `plain` and never read `enhanced`, so nothing downstream of them changes; the `enhanced` stream keeps its own classifier measurements) or record it as owed. Do not leave it unstated.
+- [ ] ~~**Step 3: Record what the stream switch trades, which is not the same as what it fixes**~~
+**Dropped with step 1** — there is no switch, so there is nothing traded. Two of its three statements are void because they describe a move that is not happening, and the third is already in the audit. Retained here because each was wrong in a way worth not repeating:
 
-- [ ] **Step 3: Record what the stream switch trades, which is not the same as what it fixes**
-
-Three statements, none currently in the audit:
-
-- **The bias flips rather than disappearing.** FRCRN inflated HNR and CPPS and deflated perturbation, worst on dysphonic voices — an *endogenous* confound that inverted sensitivity. On `plain`, additive noise is indistinguishable from aperiodicity, so it deflates HNR and CPPS and inflates perturbation in proportion to environment, device and level. That is the better trade **because the new confound is exogenous and covariable — but only if the covariates ride along.** They exist: SQUIM is already computed per span on `plain`, plus `clipping/` and `scene_quality/`. Record that requirement, and that the **raw-vs-enhanced pilot** the contract requires for the structurally identical diarization decision is owed here too.
-- **`plain` is not raw.** It is resampled to 16 kHz, so energy above 8 kHz — a breathiness correlate — is already gone. That caps how much of V4's sensitivity this switch can recover, and the phrase "measured on the unprocessed stream" invites the wrong assumption.
-- **The PPG's justification is not the Praat scalars', which is why step 1b was withdrawn rather than carried.** The breathiness argument does not transfer: the PPG is a **trained phoneme classifier**, so noisy `plain` moves it *away* from its training domain while FRCRN moved it toward. An earlier version of this plan substituted D1's reason — *FRCRN is out of domain on a DDK train and can smear the transients whose timing is the measurement* — which belongs to the **amplitude envelope**, where peak timing is the measurement, and which **nothing in this tree has measured**. The audit records the withdrawal; this plan must not re-argue it.
+- **"The bias flips rather than disappearing"** rested on FRCRN inflating HNR and CPPS and deflating perturbation worst on dysphonic voices — **the mechanism the owner withdrew.** It is not an established endogenous confound; it is an unmeasured claim, and writing it into the audit as a trade-off would have preserved the retracted mechanism under a new name.
+- **"`plain` is not raw"** is true and now inert: `plain` is resampled to 16 kHz (`resample.target_hz: 16000`) so energy above 8 kHz is gone from it, but nothing moves onto `plain`, so it caps nothing here. It stays relevant only to the consumers that already read `plain`.
+- **The PPG's justification is not the Praat scalars'** — that asymmetry is gone. Both are on `enhanced`, both by owner decision, and the audit's steps 1 and 1b each record their own reason. Do not re-argue either.
 
 - [ ] **Step 4: Correct the glide entry, which is owed for a different reason than stated**
 
@@ -1178,31 +1118,31 @@ Measured: an exponential 100→400 Hz glide yields **`[72.8, 600.0]`** against p
 
 - [ ] **Step 6: Record the one corpus pass this plan creates but does not run, and the two it no longer owes**
 
-- `extend_ppg_praat.py --force` over the corpus re-derives **the forty Praat scalars** in all 62,547 stores. With step 1b withdrawn it runs no model in a subprocess venv, so it is **CPU-only and not GPU-bearing** — size it against a Praat-only batch, not against the original `ppg_20260911` run. It does still require a provisioned ppgs venv on the host unless Task 7 makes that check conditional.
+- `extend_ppg_praat.py --force` over the corpus re-derives **the forty Praat scalars** in all 62,547 stores, on the unchanged `enhanced` stream, under the per-recording range Task 1 introduced. With step 1b withdrawn it runs no model in a subprocess venv, so it is **CPU-only and not GPU-bearing** — size it against a Praat-only batch, not against the original `ppg_20260911` run. It does still require a provisioned ppgs venv on the host unless Task 7 makes that check conditional.
 - **No routing count is owed, and this is the consequence most worth writing down.** `ppg.segment_rate_per_s` and `ppg.silent_fraction` are unchanged, so neither the DDK before-and-after gate count nor the `PpgsPosteriorgramUnavailable` rate comparison is needed. Step 1b would also have moved **`airway.ppg_silent_fraction`**, an AIRWAY gate reading the same posteriorgram, which it never counted — so it was changing two branches' routing while owing a count for one. And **no configured gate reads a Praat scalar**, so the pass this plan does run changes no routing at all.
-- **Attribution.** Landing Tasks 1 and 5 together moves the forty scalars for two reasons at once, making any corpus-level change unattributable. A **two-arm sample re-derivation** — range-only on `enhanced`, stream-only with the bin — over a few hundred recordings separates them. That is attribution, not fitting, so the no-fitting rule does not reach it.
+- ~~**Attribution.**~~ **Dropped 2026-09-14 with Task 5.** It warned that landing Tasks 1 and 5 together would move the forty scalars for two reasons at once and proposed a two-arm sample re-derivation to separate them. With Task 5 withdrawn there is **one** reason — the F0 range — so the re-derivation is already single-armed and attributable, and no separating pass is owed.
 
 - [ ] **Step 7: State plainly that no scalar becomes publishable from this plan**
 
-This is the sentence most likely to be needed and least likely to be written. After this lands the scalars are on the right stream with a principled range — and `cepstral_peak_prominence_mean` is still cut at `> 4` dB, still peak-searched 60–330 Hz, still averaged unweighted over voiced intervals inflated ~70%; `range_ratio_intensity_db` is still dimensionally invalid; no function returns a support count; and step 0's withholding has not happened. **Write in the audit that no Praat scalar becomes publishable from this plan**, or "we fixed the stream and the range" will be read as "the numbers are now good."
+This is the sentence most likely to be needed and least likely to be written, **and Task 5's withdrawal makes it more necessary, not less.** After this lands the scalars have a principled range — and `cepstral_peak_prominence_mean` is still cut at `> 4` dB, still peak-searched 60–330 Hz, still averaged unweighted over voiced intervals inflated ~70%; `range_ratio_intensity_db` is still dimensionally invalid; no function returns a support count; and step 0's withholding has not happened. **Write in the audit that no Praat scalar becomes publishable from this plan**, or "we fixed the range" will be read as "the numbers are now good." Do **not** write that the stream question is settled: it is unmeasured, and the audit says so at step 1.
 
 Pre-empt two specific misreadings:
 
-- **The jitter and shimmer NaN rate will fall for two opposite reasons at once** — more low voices admitted (good) and noise inflating perturbation into measurable territory (bad). Without step 5's coverage measurement nobody can separate them, so a falling NaN rate is not evidence of improvement.
+- **The jitter and shimmer NaN rate will change, and the direction is not evidence of anything.** More low voices are admitted, because the floor now follows the recording rather than a 60 Hz bin. Without step 5's coverage measurement a falling NaN rate is not evidence of improvement. *(An earlier version attributed the second half of this to noise inflating perturbation once the measurement moved to `plain` — void with Task 5.)*
 - **A 45 Hz creak reading as `F0RangeUnavailable` becomes VOICE "no phonation found"** — a false clinical statement about a phonating voice. Attribute that absence as **bounded by the declared search range**, not by the voice.
 
 - [ ] **Step 8: Run the full suite and commit**
 
 ```bash
 uv run pytest src/tests/audio/tasks src/tests/audio/workflows/triage src/tests/scripts -q
-git add -A && git commit -m "docs(audit): steps 1 and 2 landed; the Praat re-derivation is owed"
+git add -A && git commit -m "docs(audit): step 2 landed; steps 1 and 1b withdrawn; the Praat re-derivation is owed"
 ```
 
 ---
 
 ## Self-Review
 
-**Spec coverage.** Step 2 → Tasks 1, 2, 3, 4. Step 1 → Tasks 5 and 6. **Step 1b → nothing: withdrawn.** The re-run path → Task 7. The derived range's auditability → Task 8. The spec update, the noise-robustness statement, the corrected glide entry and the not-publishable headline → Task 9.
+**Spec coverage.** Step 2 → Tasks 1, 2, 3, 4. **Steps 1 and 1b → nothing: both withdrawn, and Tasks 5 and 6 withdrawn with step 1.** The re-run path → Task 7, on the F0-range premise. The derived range's auditability → Task 8. The spec update, the corrected glide entry and the not-publishable headline → Task 9 (whose Steps 2 and 3 went with step 1).
 
 **The one place this plan is worse than what it replaces, and how it is closed.** A single-pass narrowing
 returns `[50, 90]` for a 120 Hz voice under a 60 Hz hum — a range excluding the speaker — where the bin
@@ -1226,9 +1166,9 @@ is owed. The citable claim is the narrow one Step 8 states — no published meth
 first-pass distribution was octave-halved and acts on the answer** — not the broader "no estimator corrects
 it", which Step 8 itself marks overstated against Mertens and Liberman.
 
-**Every test the changes break is named.** `phonation_test.py:112-119`; `preprocess_test.py:2176`, `:2214`, `:2230`, `:2239-2240`, `:2242`, `:2293-2310`; `extend_ppg_praat_test.py:61-97` (the fixture, whose Praat half breaks across the module). The posteriorgram's own assertions — `preprocess_test.py:2197`, `:2208-2209`, `:2266`, and the `ppg_posteriorgram` fixtures at `live_evidence_test.py:216` and `routing_analysis_test.py:959` — are named as **not** changing, with the reason; only `routing_analysis_test.py:949` (the `praat_features` fixture) is updated, and for accuracy rather than because it fails.
+**Every test the changes break is named, and the list shrank to one with Tasks 5 and 6.** `phonation_test.py:112-119` is the whole of it. **Nothing in `preprocess_test.py` breaks** — `:2176`, `:2214`, `:2230`, `:2239-2240`, `:2242`, `:2293-2310` were listed here only because of the stream move and every one of them is correct as written; so are the posteriorgram's own assertions at `:2197`, `:2208-2209`, `:2266`. `extend_ppg_praat_test.py:61-97` (the fixture) is unchanged, because both blocks still read `enhanced`. All three `"signal": "enhanced"` fixtures — `routing_analysis_test.py:949` and `:959`, `live_evidence_test.py:216` — are accurate and stay.
 
-**Placeholders.** No step describes work without showing it. Four steps name an existing fixture or API to read and match rather than quoting it — Task 1 Step 1 (`_buzz`), Task 3 Steps 1–2 (the two suites' fixture sets), Task 6 Step 3 (the neighbours' fixtures), Task 7 Step 3 (`ProvStore`'s liveness API) — because this suite already has them and duplicating would be the wrong instruction. Task 7 Step 6 names `supersede`'s argument shape as something to copy from **`extend.py:447` and `:671-678`** rather than transcribing it, for the same reason — not from `extend_withdraw_clips.py`, which contains no `supersede` call.
+**Placeholders.** No step describes work without showing it. Three steps name an existing fixture or API to read and match rather than quoting it — Task 1 Step 1 (`_buzz`), Task 3 Steps 1–2 (the two suites' fixture sets), Task 7 Step 3 (`ProvStore`'s liveness API); a fourth, Task 6 Step 3, went with that task — because this suite already has them and duplicating would be the wrong instruction. Task 7 Step 6 names `supersede`'s argument shape as something to copy from **`extend.py:447` and `:671-678`** rather than transcribing it, for the same reason — not from `extend_withdraw_clips.py`, which contains no `supersede` call.
 
 **Type consistency.** `extract_pitch_values` returns **five** `float` keys on all **three** return paths — the empty-contour guard, the main dict, and the `except`. `derive_f0_range` keeps `tuple[float, float]` and raises one of two `ValueError` subclasses. `write_ppg_posteriorgram`'s signature is **unchanged**, `enhanced_id` included. `force: bool` threads to the function holding the skip and overrides `praat_pending` only.
 
@@ -1245,3 +1185,13 @@ would pass on it.
 `PPG_MEASUREMENT_SUPERSEDED` and the checksum-window argument; the GPU-bearing pass; and the DDK routing
 count with its `PpgsPosteriorgramUnavailable` comparison. The audit's step 1b is the one place to change
 if it is ever revisited.
+
+**What the withdrawal of audit step 1 removed, so it is not re-proposed**: the `praat_features` stream
+change at `preprocess.py:883` / `:904` / `:906` and its docstring edits; every `preprocess_test.py`
+assertion Task 6 would have retargeted; the `plain` seeding of `extend_ppg_praat_test.py`'s `_seed_run`;
+the `routing_analysis_test.py:949` fixture edit; the `_STREAM_SWITCH_REASON` supersession reason; the
+noise-robustness statement and the bias-flip trade-off in Task 9; and the two-arm attribution pass. **The
+additional thing it removed is an argument, not a task** — that FRCRN strips the aperiodic energy the
+scalars measure. That claim is false and must not reappear in any form. The audit's step 1 is the one place
+to change if this is ever revisited, and what it would take is in
+`specs/20260817-triage-workflow-dag/branch-listening-sample.md` under the seventh kind of owed.
