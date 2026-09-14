@@ -12,6 +12,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
 from senselab.audio.tasks.classification.yamnet import YAMNET_WINDOW_SECONDS
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS, PpgsPosteriorgramUnavailable
+from senselab.audio.tasks.phonation import F0RangeFailed
 from senselab.audio.tasks.speech_enhancement.residual import compute_residual
 from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -1095,6 +1096,31 @@ class TestPhonationTracks:
         result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         assert "phonation_tracks" in result.absent
         assert find_measurement(store, "phonation_tracks") is None
+
+    def test_a_failed_f0_analysis_is_an_absence_and_does_not_abort_the_node(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A RuntimeError would reach ``hard_failures`` and raise, taking every other block with it."""
+
+        def _failed(
+            audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float, **coefficients: float
+        ) -> tuple[float, float]:
+            assert set(coefficients) == set(PITCH_NARROWING_KEYS)
+            raise F0RangeFailed("the pitch analysis failed on this recording")
+
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch)
+        monkeypatch.setattr(preprocess_module, "derive_f0_range", _failed)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert "phonation_tracks" in result.absent
+        assert _absent_map(store)["phonation_tracks"].startswith("F0RangeFailed")
+        assert find_measurement(store, "phonation_tracks") is None
+        assert find_measurement(store, "energy_envelope") is not None
 
 
 class TestAnAbsenceIsAttributedNotJustClassified:
