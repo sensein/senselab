@@ -21,9 +21,10 @@ oversight.
 
 | key | value | derivation |
 | --- | --- | --- |
-| `spans.k_db` | `6.0` | `config-derivations.md:74`, `:133`, `:238` |
+| `spans.k_db` | `6.0` | `config-derivations.md:106-120` — *"provisional and expected to be refit… a deliberately permissive placeholder"* |
 | `airway.labels_of_interest` | `[Cough, Breathe]` | `:555-557` — recorded as *"Vocabulary, not thresholds."* |
-| `voice.f0_search_range_hz` | `[50.0, 600.0]` | `:641-648` — a **search bound**, narrowed per recording by `derive_f0_range` |
+| `spans.min_duration_ms` | `50` | `:234` — *"conventional and not fitted"* |
+| `voice.f0_search_range_hz` | `[50.0, 600.0]` | `:641-648` — **but the derivation is wrong**: it describes per-recording narrowing, and `derive_f0_range` is a binary sex bin. See below. |
 | `ddk.ppg_segment_rate_per_s` | `10 /s` | `family-taxonomy-ruleset.md:102` — *"recall-first, not J"* |
 
 These carry reasoning. Listening would tell you whether the reasoning holds on real audio; it is not
@@ -32,6 +33,14 @@ needed to explain what the number is doing.
 `airway.labels_of_interest` is the case to be careful with: its derivation states it is a vocabulary
 decision rather than a threshold, which is exactly the no-refits exemption
 [`branch-airway.md`](branch-airway.md) A1 claims. That exemption is correct.
+
+**And `voice.f0_search_range_hz` is the case that bounds this whole document.** Its derivation
+describes a wide search bound narrowed per recording; the code
+(`praat_parselmouth.py:429-436`) selects one of two hardcoded pairs at a 170 Hz mean-pitch boundary.
+An earlier version of this table repeated the derivation as fact. **A derivation is evidence that a
+decision was recorded, not evidence that it is correct** — see
+[`praat-instrument-audit.md`](praat-instrument-audit.md) findings 1 and 11, and the stale plural at
+`config-derivations.md:74`.
 
 ### Marked unmeasured and in force — exactly one
 

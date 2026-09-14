@@ -104,6 +104,27 @@ cut-off**, and the published smartphone recording-chain sensitivity applies on t
 **This document places the capability and states the conclusion; the owner decides whether to build
 something that is not AVQI.**
 
+### C3 — Vocal effort correlates (**session-level**)
+
+Moved from [`branch-voice.md`](branch-voice.md) V6.
+
+F0 shift, spectral tilt change and CPP change at maximal effort are **interpretable only against the
+same participant's comfortable phonation in the same sitting** — which is a different recording. The
+`loudness` families supply the effort; `prolonged-vowel` or `maximum-phonation-time` supplies the
+reference.
+
+**This also resolves a gap V6 could not.** `loudness` v1 (897) has only **one** condition — three
+maximal attempts, no comfortable baseline — so a between-condition correlate is not computable from
+that file at all. At session level the second condition comes from the session.
+
+**Level: session.** It shares the grouping mechanism with C2 and with
+[`branch-quality.md`](branch-quality.md) Q2's bandwidth-from-another-recording.
+
+**One caution specific to this pair.** `derive_f0_range` selects its bin from the recording's own
+trimmed mean, and shouting raises F0 by 3–8 semitones — so the effort recording and the reference
+recording can land in **different bins** for the same speaker (`branch-voice.md` V6). Any
+cross-recording F0 comparison must record which bin each side used, or it compares two instruments.
+
 ## Candidates, not yet specified
 
 Flagged rather than designed, since each needs its own argument:

@@ -92,7 +92,11 @@ train with weak or absent modulation structure is a finding about the production
 never proposed is an absence of data, and would concentrate `DDK: FAIL` on the most impaired
 speakers.
 
-**Reads.** The audio. **Not PREPROCESS's stored `energy_envelope`** — see below.
+**Reads.** The audio, from **`plain`** — not `enhanced`, and not PREPROCESS's stored
+`energy_envelope`. Both exclusions matter: the stored envelope is wrong for the reasons below, and
+the `enhanced` stream is FRCRN output, which is out of domain on a DDK train and already feeds the
+PPG and therefore this branch's own routing gate
+([`praat-instrument-audit.md`](praat-instrument-audit.md) finding 0).
 
 **Computes.** The amplitude-envelope modulation spectrum over the proposed train. A syllable train is
 an amplitude modulation at the repetition frequency; the spectral peak gives the **rate** directly.
@@ -220,6 +224,19 @@ listed.
 - its **trend across the train** — festination, slowing, or irregular-without-trend. Among the most
   discriminative DDK features and currently absent entirely;
 - **amplitude regularity** across productions, the intensity analogue.
+
+**But CV rests on a detector D2 declares compromised, and the bias runs the wrong way.**
+`extract_speech_rate`'s **minimum sounding interval is 0.1 s against Praat's 0.05 s** — and at
+6–7 syll/s the syllable period is 140–170 ms with only 80–110 ms voiced, so **the minimum sits on the
+measurand**. Merged or dropped syllables produce doubled intervals, which **inflates CV at high
+rates — the fastest, healthiest speakers.** That is the opposite direction from the phase-tracking
+bias just removed, and not smaller.
+
+**And CV over a sequential train is not comparable to CV over an alternating one.** In `/pa-ta-ka/`
+the envelope onset lands differently relative to the release for /p/, /t/ and /k/, so the three
+within-cycle intervals are **unequal by measurement convention** and a pooled CV has a floor set by
+syllable identity rather than by motor control. **Compute CV within syllable position** on sequential
+trains, or report both — 4,794 alternating declarations against 3,195 sequential.
 
 **Parameter-free as measurements.** Dispersion and trend of a sequence need no threshold.
 

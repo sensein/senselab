@@ -160,7 +160,11 @@ phrasing — and both are transcribed and then dropped.
 - **speech rate and articulation rate**, and **phonation-time ratio** — `extract_speech_rate`
   (`praat_parselmouth.py:91`) returns all three, plus `pause_rate` and `mean_pause_dur`;
 
-  **This helper hides three operating points, one data-dependent, and none in any config** —
+  **And it runs on FRCRN-enhanced audio like every other Praat scalar** — see
+  [`praat-instrument-audit.md`](praat-instrument-audit.md) finding 0, which governs every measure in
+  this capability.
+
+  **The helper also hides three operating points, one data-dependent, and none in any config** —
   `silence_db = -25` (`praat_parselmouth.py:142`), `min_dip = 4` (`:149`) **dropped to 2 when the
   recording's own mean HNR is below 60** (`:154-155`), and `min_pause = 0.3` (`:159`). The HNR switch
   means syllable-detection sensitivity is conditioned on a voice-quality measurement of the recording
@@ -183,8 +187,9 @@ phrasing — and both are transcribed and then dropped.
   channel;
 - **speaking F0 and F0 standard deviation** — `extract_pitch_descriptors` (`:448`);
 - **intensity variability** within connected speech — `extract_intensity_descriptors` (`:515`).
-  **VOICE V6 owns intensity across instructed loudness conditions**; this owns it within connected
-  speech. On `loudness` and `loudness-v2` both apply, over different extents;
+  **VOICE V6 owns effort events; this owns intensity within connected speech.** They do not overlap:
+  an earlier version said both applied to `loudness` and `loudness-v2` over different extents, but
+  **there is no connected speech on either** — both are a single shouted syllable;
 - **connected-speech CPP** — `extract_cpp_descriptors` (`:706`).
 
 For the spontaneous tasks additionally **disfluency rate** (from the bracketed channel) and
@@ -339,6 +344,13 @@ Every acoustic measurement S4 and S8 emit carries the quality covariates of its 
 recognisers fail most often on the most impaired speech, that absence is itself impairment-correlated
 — the transcript's silence is not the speaker's. See
 [`branch-conventions.md`](branch-conventions.md).
+
+**A second population fails for an unrelated reason, and the two must not be pooled.** `loudness` and
+`loudness-v2` — **1,602 recordings** — are in `LEXICAL_SPEECH` and therefore routed here by
+declaration, while their content is a single non-lexical monosyllable. They will `FAIL` as a
+**task-content artefact**: there was never lexical speech to find. That is a fact about the family
+set, not about the speaker or the recogniser, and a consumer treating all SPEECH failures alike
+mistakes 1,602 correctly-performed recordings for failed transcription.
 
 ## What the branch emits
 
