@@ -24,7 +24,7 @@ every branch's output at once.
 `dag.md` has been corrected; `vocabulary.py:29`'s docstring still reads *"The terminal node every
 recording reaches"* — a code follow-up, noted here and not edited from this document.
 
-**It is not routed.** No gate selects it and `KIND` is `None` (`quality.py:56`), so the question the
+**It is not routed.** No gate selects it and `KIND` is `None` (`quality.py:57`), so the question the
 four branch documents must answer — what it does on a recording routed to it whose declared task
 belongs elsewhere — does not arise. QUALITY sees everything.
 
@@ -103,7 +103,14 @@ missing on its most important population.
 
 **Bandwidth is a property of the session and the device, not of the recording.** So estimate it from
 **another recording in the same session** that does carry broadband content, and attach it to the
-vowel recording with its source named. That is a session-level read, the same move
+vowel recording with its source named.
+
+**That assumption is in tension with Q8.** Importing a band across recordings assumes a
+**content-independent** capture chain — and an adaptive noise suppressor, which is Q8's own subject,
+is content-dependent: its effective band on a sustained vowel differs from its band on connected
+speech. So the import is sound for a fixed codec or microphone limit and unsound where Q8 finds
+adaptive processing. **Q8's result conditions whether Q2's import is valid**, which makes the two
+ordered rather than independent. That is a session-level read, the same move
 [`corpus-level-node.md`](corpus-level-node.md) C2 needs — **specify the two together**, since they
 share the grouping mechanism and neither works without it.
 
@@ -117,10 +124,12 @@ covariate is for.** `praat_parselmouth.py:999` builds its spectrogram with Praat
 `maximum_frequency` of 5 kHz, never named in the source
 ([`praat-instrument-audit.md`](praat-instrument-audit.md) finding 7).
 
-So for those measures the **analysis** band is binding, not the capture band.
-[`branch-conventions.md`](branch-conventions.md) now declares 5 kHz as the common analysis band —
-which makes Q2 **a validity check on whether the recording supports that band**, rather than a
-covariate against an undeclared one. That is a sharper job than the previous framing gave it.
+So for those measures the **analysis** band is binding, not the capture band —
+and it differs per measure: HNR is full-band, slope splits 50–1000 against 1000–4000, the rest sit at
+5 kHz. [`branch-conventions.md`](branch-conventions.md) therefore declares bands **per measure**
+rather than one common band, and Q2 becomes **a validity check against whichever band the measure
+declares**. That is a sharper job than the previous framing gave it, and it avoids ratifying finding
+7's defect as a convention.
 
 **It is file-level, and that is consistent.** Bandwidth is a property of the capture chain, not of a
 span, so it is computed once and referenced by every extent. An earlier version of

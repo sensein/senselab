@@ -31,7 +31,7 @@ points are gated behind null config.
 
 ## The tasks this branch serves
 
-Declared families, not ground truth. `LEXICAL_SPEECH` (`families.py:30-53`) holds 22 families; those
+Declared families, not ground truth. `LEXICAL_SPEECH` (`families.py:31-55`) holds 21 families; those
 carrying counts in the corpus profile:
 
 | family | n | shape |
@@ -144,8 +144,15 @@ instrument's design. Sentence boundaries fall out of this alignment for free —
 high-value addition in the five documents, over 3,594 recordings. **Nothing output may be presented
 as a CAPE-V score**: CAPE-V is an auditory-perceptual instrument and these are acoustic correlates.
 
-**Parameter-free?** The output is an enumeration of differences, not a score against a cut. The
-aligner's internal weights are not a decision this branch makes.
+**Parameter-free? No — and an earlier version answered "yes" three paragraphs after establishing
+otherwise.** The omission score cut is an operating point and it is owed; that is exactly the
+contradiction this section criticises the previous revision for, reintroduced within the section.
+
+What *is* parameter-free is the **enumeration**: the text diff's substitutions and insertions are
+differences, not scores against a cut. What is not is **omission detection**, which needs the cut. So
+the capability ships in two parts and only one is available now.
+
+The aligner's internal weights are not a decision this branch makes.
 
 ### S4 — Connected-speech measures (**not built; the largest gap by population**)
 
@@ -190,7 +197,14 @@ phrasing — and both are transcribed and then dropped.
   **VOICE V6 owns effort events; this owns intensity within connected speech.** They do not overlap:
   an earlier version said both applied to `loudness` and `loudness-v2` over different extents, but
   **there is no connected speech on either** — both are a single shouted syllable;
-- **connected-speech CPP** — `extract_cpp_descriptors` (`:706`).
+- **connected-speech CPP** — `extract_cpp_descriptors` (`:706`). **Withheld on the same grounds V4
+  withholds it**, and more strongly: the findings are properties of the function, not of a branch, so
+  every caller inherits them. The `> 4` cut is selection on the dependent variable, the peak search
+  is capped at 330 Hz, and **finding 3's 70% vuv inflation scales inversely with voiced-run length —
+  so it is *worst* on connected speech**, this capability's material, and mildest on the sustained
+  vowel where it was first suppressed. S4's population is roughly 25,000 recordings against V4's
+  5,113. See [`praat-instrument-audit.md`](praat-instrument-audit.md) findings 2–5, and step 4 for
+  the replacement.
 
 For the spontaneous tasks additionally **disfluency rate** (from the bracketed channel) and
 **lexical diversity** (from the transcript).
