@@ -597,8 +597,15 @@ lies inside the caller's declared range.
 
 ## praat_features
 
-Praat's settings for PREPROCESS's whole-file feature set over the `enhanced` stream. Two keys,
-both forwarded verbatim to `extract_praat_parselmouth_features_from_audios`.
+Praat's settings for PREPROCESS's whole-file feature set over the `enhanced` stream, plus the four
+coefficients of the per-recording F0 narrowing. All of them are forwarded verbatim to
+`extract_praat_parselmouth_features_from_audios`; the four `pitch_*` keys are also read by the
+phonation-spans node's `derive_f0_range` and by VOICE's, through
+`nodes/common.pitch_narrowing_parameters`, so the three call sites cannot hold coefficients that
+drift. They are config keys rather than module constants because a coefficient that decides a
+measurement's range is a parameter of the run, and `praat_parselmouth.py` sits in general senselab
+and cannot read this config — so it carries them as keyword arguments with library defaults, and the
+triage path passes these values.
 
 praat_features.time_step_s 0.005 -- the frame shift every frame-based descriptor is computed on:
 the pitch, intensity, harmonicity, formant and CPP tracks the forty scalars are pooled from. It is
@@ -615,6 +622,106 @@ extractor's own shipped value.
 Neither is a threshold: nothing is compared against them and no verdict turns on them. They are
 here because the measurement's provenance has to name the settings it was taken at, and a signature
 default is not part of a run's recorded configuration.
+
+praat_features.pitch_ceiling_quartile_multiplier 2.5 -- the only cited coefficient of the four.
+Hirst 2011 §2.1 gives both values in the same lineage: `1.5 * q3`, credited to De Looze 2010, and
+then "In the most recent implementation ... 2.5 * q3." Hirst & De Looze 2021 §13.3.4 splits them by
+material -- `1.5 · q3` for non-emphatic speech, "something like 2.5 q3" for emphatic -- and Hirst's
+shipped plugin (Nakala `doi:10.34847/nkl.5fb7xhhc`) matches that: `automatic_min_max_f0.praat`
+computes `max_f0 = ceiling((q75 * 1.5)/10)*10` and switches to 2.5 under an `Expanded_pitch_range`
+boolean. So the honest statement is not "the paper says 2.5, the script ships 1.5" -- both offer
+both. It is: 1.5 is the non-emphatic default, 2.5 is the most recent implementation's value and the
+emphatic one, and we take 2.5 because brief high excursions are the finding in this corpus rather
+than noise to be smoothed away. Do not write `ceilFac`; that variable is in the third-party
+`parantes/better-f0`, not in Hirst's tree. Hirst's first pass is 50--700 Hz in the paper and
+60--750 Hz in the plugin; senselab's is `voice.f0_search_range_hz`, and that is the one real
+divergence from his rule. What is adopted from Hirst is the two-pass structure and this coefficient,
+and nothing else -- his floor is `0.75 * q1`, which senselab does not use, because the asymmetry is
+his own empirical finding: "if the Pitch Floor is too low then we are likely to get octave errors
+[...] Setting the Pitch Ceiling too high does not, however, seem to lead to any systematic errors."
+
+praat_features.pitch_floor_divisor 1.5 -- senselab's own; cite nobody. The floor is
+`max(search_floor, p5 / 1.5)`, which is -7.02 semitones off the 5th percentile and lands below
+`0.75 * q1` on every source measured. Wider is the right direction for a corpus enriched for
+pathological voices, where a range that excludes the voice is the failure that matters, and Hirst's
+quartile floor is what misses a 100->400 Hz glide's low end at `0.75 * q1 = 107.2`. The q15/q65 pair
+sometimes cited for this is real but never bare -- `q15 * 0.83` and `q65 * 1.92`, fitted in De
+Looze's 2010 thesis against hand-annotated extrema and stated in De Looze & Hirst 2010 §3.1. Attach
+no speaker count to it; the thesis's counts are 68, 53 and 10, and the 2008 paper concluded q25/q75,
+with q15 appearing there only as a rejected floor candidate at coefficient 0.78.
+
+praat_features.pitch_excursion_multiplier 1.5 -- senselab's own, and it has no derivation, which has
+to be written rather than left to look like one. The floor's 1.5 has one (-7.02 semitones); this is
+the same number reused as headroom above p95, and the adversarial case set does not discriminate it:
+sweeping it over 1.0 ... 2.5 gives 13/13 at every step, printed by
+`src/tests/audio/tasks/f0_range_probe.py`. Thirteen is the whole denominator: the probe's fourteen
+sources include a 45 Hz fry that places no pitch at a 50 Hz floor and is counted as an absence, not
+as a miss. So it is a declared convention whose only measured property is that the result is
+insensitive to it across that span. State both halves --
+insensitivity is not derivation, and it is also the evidence that no operating point was fitted
+against this corpus. What the term is *for* is measured, and the two ceiling terms rescue opposite
+cases: on a 0.4 s register break 110->440 Hz the contour is 110 Hz almost everywhere, so `q3 = 110`
+and `2.5 * q3 = 275` clips the break while `1.5 * p95 = 660` (clamped to the search ceiling) keeps
+it; on a 0.35 s emphatic peak 150->330 Hz the peak is too brief to reach p95 at all, `q3 = 150` and
+`p95 = 165`, so `2.5 * q3 = 375` keeps the peak while `1.5 * p95 = 247.5` clips it. A sustained
+excursion moves p95 and a brief one moves neither statistic much, so the larger of the two terms is
+the one that has not been diluted -- which is the whole argument for the `max`.
+
+praat_features.pitch_pinned_octave_ratio 2.0 -- senselab's own; cite nobody. When p95 falls below
+twice the search floor the whole contour sits within an octave of the bottom of the search range,
+the narrowing is untrustworthy, and the unnarrowed search range is used instead. Note what the
+action is: the fallback does not raise the floor, it abandons narrowing. It is what catches deep
+fundamental capture, which Hirst's ceiling coefficient alone does not -- measured, 330 Hz under a
+strong 55 Hz component gives `[50.0, 137.5]` and 440 Hz under 60 Hz gives `[50.0, 157.1]`, both
+ranges the voice never enters. Sweeping the ratio over 1.5 ... 3.0 gives 13/13 at every step on the
+same thirteen tracked cases, so this too is insensitive across its plausible span rather than
+fitted. Both sweeps come from the probe named above; do not quote a denominator it does not print. Three consequences to state rather than
+discover. It fires on a clean 90 Hz buzz, because p95 = 90 is under 2 x 50 -- an ordinary low male
+voice, not only pathology -- which is safe (a wide range never excludes the voice) but costs those
+recordings the octave-error robustness narrowing buys, and the population it captures moves if
+`voice.f0_search_range_hz[0]` moves. It fires on a 55 Hz fry, which is the right outcome:
+contamination pushing the range wider is the safe direction. And residual capture is owed: the
+fallback does not catch second-harmonic capture against a higher voice -- measured, a 220 Hz voice
+under a 120 Hz-dominant hum gives p95 ~ 110 against 2 x 50 = 100, so it does not fire, and Hirst's
+ceiling coefficient is what rescues that case here. That residual is the state of the art rather
+than a gap in this work: Edlund & Heldner 2006 (`/nailon/`) §4.4 says "Correction for octave errors
+is planned to go here as well, but not currently implemented", and Portnova et al. 2025, JSLHR
+68:3568--3582 states this exact failure mode, reviews strategies for it including the two-pass, and
+then resolves it by manual labelling. Mertens' *Polytonia* (2014) §5.5 is a published range
+estimator with designed octave handling (discarding syllables >= 18 ST from the median), so "no
+published estimator corrects this" is overstated; the citable claim is that no published method
+tests whether its own first-pass distribution was octave-halved and acts on the answer.
+
+Two mechanisms are recorded here as rejected rather than left to be re-proposed. A second-pass
+median comparison -- re-run at the narrowed range and widen back when the two medians differ by an
+octave -- is unreachable by construction: the narrowed range puts the first median near its centre,
+so the second can deviate by at most a factor of `pitch_floor_divisor`, 0.585 octave. Measured, it
+fired in 0 of 120 conditions, and it cannot fire at all when `p95 < 2 * search_floor / 1.5`, 66.7 Hz
+at the current floor, which both mains frequencies sit below. And a log-Hz MAD trim before the
+percentiles does not do the job it was added for -- an octave is 1.0 in log2 and a bimodal contour
+widens the MAD, so a 2-MAD window keeps both modes -- while corrupting `pitch_frames`: measured on a
+clean 110 Hz buzz it discarded 36 of 188 voiced frames, so the percentiles were of the post-trim set
+and `pitch_frames` was not the voiced-frame count its consumers read it as. The 5th and 95th
+percentiles already trim 10%.
+
+The three percentiles (5th, upper quartile, 95th) stay module constants in `praat_parselmouth.py`
+rather than config keys. They name *which statistic* each term is taken from, not how far it is
+moved: changing one changes the rule's structure, and the keys above are the coefficients that scale
+it. Percentiles commute with any monotone transform, so linear Hz and log-Hz give identical cut
+points; the ratio margins are what carry the scale-freedom.
+
+praat_features.pitch_pinned_percentile 95.0 -- the one percentile that is a key, because it is half
+of a branch predicate rather than only an input to a ratio. `p95 < pitch_pinned_octave_ratio *
+search_floor` decides whether the recording is narrowed at all, and moving 95 to 90 moves that
+decision boundary as much as moving the ratio from 2.0 to 1.8 does, so by the criterion above it is
+a threshold. It is deliberately one statistic serving two places: the same percentile is the
+ceiling's excursion term, and the pair cannot move independently. That coupling is the design -- the
+branch asks "does the top of this contour clear the search floor by an octave" and the ceiling term
+asks "how much headroom above the top of this contour", and both questions are about the same top.
+95 rather than the maximum because a single octave-halved frame would otherwise set both, and
+rather than q3 because the excursion cases the ceiling term exists for (a 0.4 s register break) sit
+above q3 by construction. Its own insensitivity is not separately swept; the two ratios that
+multiply it are, and the sweep in the probe holds this percentile fixed.
 
 The unit the pitch descriptors are reported in is deliberately not a key. It is baked into the
 returned key names (`mean_f0_hertz`), so making it configurable would make the measurement's own
@@ -639,13 +746,20 @@ derived in the paragraphs above. UNSET, continued:
   interval.
 
 voice.f0_search_range_hz replaces voice.f0_range_hz, which replaced phonation.f0_min_hz and
-phonation.f0_max_hz. It is [50.0, 600.0] Hz: the wide search of the pitch-range standardization
-method (Notes in `extract_pitch_values`), from which that method narrows each recording's own
-[floor, ceiling]. PREPROCESS and VOICE both narrow it the same way, off `plain`, so the two cannot
-hold ranges that drift. What was wrong with the key it replaces is its premise, not its value: a
-fixed corpus-wide range had to be null, because no single range serves both a low adult male
-fundamental and an infant voice -- but no fixed range is needed, because the range is derivable per
-recording. See `specs/20260911-ppg-praat-batch/design.md`.
+phonation.f0_max_hz. It is [50.0, 600.0] Hz: the wide first pass each recording's own
+[floor, ceiling] is narrowed from. The two-pass structure is Hirst 2011's, whose own first pass is
+50--700 Hz in the paper and 60--750 Hz in his plugin; the coefficients that do the narrowing are the
+four `praat_features.pitch_*` keys above, one of them his and three senselab's own. PREPROCESS and
+VOICE both narrow it the same way, off `plain`, and both read the coefficients through
+`nodes/common.pitch_narrowing_parameters`, so the two cannot hold ranges that drift. What was wrong
+with the key it replaces is its premise, not its value: a fixed corpus-wide range had to be null,
+because no single range serves both a low adult male fundamental and an infant voice -- but no fixed
+range is needed, because the range is derivable per recording. Do not cite
+`doi:10.3758/BRM.41.2.318` for any of that; Vogel et al. (2009) recommends fixed sex-specific
+settings and rejects per-recording derivation as impractical at scale. Two bounds are owed rather
+than settled: the 600 Hz ceiling against the CPPS band's 700 Hz (`praat-instrument-audit.md` step 4),
+and the 50 Hz floor, which decides which ordinary low voices take the pinned-contour fallback. See
+`specs/20260911-ppg-praat-batch/design.md` and `praat-instrument-audit.md` step 2.
 
 voice v2 -- branch-voice.md. voice.f0_range_by_population replaces the derived range per declared
 age and sex; null, owed a fit per population, and a range spanning too wide an interval makes any

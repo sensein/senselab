@@ -24,6 +24,7 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     clamp_extent,
+    f0_range_parameters,
     find_measurement,
     live_entities,
     path_attributes,
@@ -67,10 +68,7 @@ def _f0_range(config: TriageConfig, hint: AudioHints | None, audio: Audio) -> tu
     by_population = config.get("voice.f0_range_by_population") or {}
     raw = by_population.get(population) if population is not None else None
     if raw is None:
-        search = config.require("voice.f0_search_range_hz")
-        f0_min_hz, f0_max_hz = derive_f0_range(
-            audio, search_floor_hz=float(search[0]), search_ceiling_hz=float(search[1])
-        )
+        f0_min_hz, f0_max_hz = derive_f0_range(audio, **f0_range_parameters(config))
     else:
         f0_min_hz, f0_max_hz = float(raw[0]), float(raw[1])
     ratio_max = config.get("voice.f0_range_ratio_max")
