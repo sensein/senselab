@@ -881,3 +881,73 @@ Attribution of a short MPT to respiratory or laryngeal cause. Any refit against 
   [`branch-ddk.md`](branch-ddk.md) under *SPARC as a shared PREPROCESS derivative*, where DDK rhythm
   is the motivating case; this branch is a second consumer, and its raw-versus-enhanced question is
   its own — sustained phonation, not a DDK train.
+- **`hnr_track` is a derivative sitting behind a branch, and that is a placement defect independent
+  of whether VOICE runs.** PREPROCESS's job is the shared derivative state; a branch's job is to
+  conclude on its own question. Checked against what the branches actually do:
+
+  - **AIRWAY writes no derivative at all.** It reads `silence` (`airway.py:200`), `spans_no_contrast`
+    (`:204`) and PREPROCESS's stored `span_hear` windows (`:242`), and emits assertions and a
+    verdict.
+  - **SPEECH writes findings — spans, speakers, PII entities, assertions — and one derivative it is
+    easy to miss**: when separation is configured and the speaker count is exactly two, it writes
+    `separated_<index>` WAV sidecars as `stream` entities (`speech.py:752-758`). That is signal
+    state, not a conclusion. It is gated on `speech.separation_backend`, which is null by default, so
+    nothing is written today — but the same placement question applies to it, in a weaker form,
+    because the stream is inherently interval-scoped rather than branch-scoped.
+  - **VOICE is the only branch that writes an `.npz`**, at `voice.py:368`, carrying `hnr_db` among
+    six arrays.
+
+  `hnr_track` (`tasks/phonation/api.py:101`) is the same *kind* of object as `f0_track` (`:185`) and
+  `formant_track` (`:234`): a per-frame track over the same recording on the same configured hop.
+  Those two already live in PREPROCESS's `phonation_tracks` (`preprocess.py:931-1005`). This one
+  does not, and it has exactly one caller in the tree — `voice.py:267`.
+
+  **The consequence is stronger than "VOICE fails, so it never runs."** Suppose VOICE worked
+  end to end. HNR would then exist only for recordings *routed to VOICE*. QUALITY could not read it,
+  AIRWAY could not read it, and any cross-branch question about voicing quality would be
+  unanswerable by construction rather than by omission. **A derivative whose availability depends on
+  routing is not a shared derivative.** It is narrower still than that: `voice.py:267` computes the
+  track over the whole stream, then slices it to the phonation spans and concatenates
+  (`:297-303`, `:368-376`), so even on a routed recording only in-span frames survive.
+
+  **The rule that separates the two cases**, since it generalises past this one item:
+
+  - A **derivative** is a measurement of the signal that any consumer might want. It is
+    branch-independent, so computing it per branch means recomputation and drift between the copies.
+    It belongs in PREPROCESS.
+  - A **finding** is a branch's conclusion about its own question, in its own family. It belongs to
+    the branch.
+
+  By that test `hnr_track` moves into `phonation_tracks`. VOICE's *other* write — proposing
+  `family: "phonation"` spans — stays exactly where it is: `propose` is one of the contract's five
+  verbs (`../20260913-branch-contract-and-hints/design.md:43-47`) and proposing its own subject is
+  what a branch is for.
+
+  **The consumer counts corroborate the test rather than merely illustrating it.**
+  `phonation_tracks` has three independent readers — VOICE (`voice.py:275`), REPORT's phonation lane
+  (`report.py:79`) and the routing-analysis feature reducer
+  (`routing_analysis/features.py:100`, `:664-683`). `voice_tracks` has none: no
+  `find_measurement(store, "voice_tracks")` exists anywhere in the tree.
+
+  **And to answer the entity question directly: `voice_tracks.npz` *is* named by a measurement
+  entity** — `voice.py:377-386` writes a `measurement` with `name: "voice_tracks"`, the signal, the
+  hop and `path_attributes(tracks_path, run_dir)`. The inversion is worth recording because it is the
+  opposite of what one would guess: the branch-local sidecar carries its own path, while the shared
+  `phonation_tracks` measurement carries no path at all (`preprocess.py:997-1002`) and every reader
+  spells the location itself (`features.py:100-102`). Whichever way `hnr_track` is placed, the path
+  convention should be made one convention.
+
+  **A known defect travels with the track if it moves.** Audit finding 10: `hnr_db` is written with
+  Praat's −200 dB undefined-frame sentinels unmasked, and `phonation.hnr_floor_interval_db` is null
+  (`data/config/default.yaml:146`), so nothing masks them downstream. If HNR becomes a PREPROCESS
+  derivative the defect becomes a *shared* one, reaching every consumer instead of one — so it must
+  be named at the new site and fixed there, not carried across silently. The masking rule is the
+  reason to fix it at the writer: `extract_harmonicity_descriptors`' own `Get mean` excludes the
+  sentinels, so any consumer that means the raw array will disagree with the scalar on the same
+  audio.
+
+  **The consequence for the Praat trajectory item.** If intensity, CPPS or spectral-moment tracks are
+  ever added — see [`praat-instrument-audit.md`](praat-instrument-audit.md), *"The wrappers discard
+  the trajectory as well as the count"* — **they go in PREPROCESS too**, by the same test, not into
+  whichever branch first wants one. Deciding that now is what stops the question being reopened per
+  track.
