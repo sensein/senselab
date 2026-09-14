@@ -9,6 +9,7 @@ from scipy.signal import lfilter
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.phonation import (
+    F0RangeFailed,
     FormantTrack,
     PeriodMark,
     derive_f0_range,
@@ -143,6 +144,30 @@ class TestDeriveF0Range:
         for omitted in _NARROWING:
             with pytest.raises(TypeError, match=omitted):
                 derive_f0_range(_buzz(110.0), **{k: v for k, v in _NARROWING.items() if k != omitted})  # type: ignore[arg-type]
+
+
+class TestDeriveF0RangeSeparatesFailureFromAbsence:
+    """A crashed analysis and a recording with no pitch are different findings."""
+
+    def test_a_reported_failure_raises_f0_range_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """extract_pitch_values reports the crash as data; derive_f0_range must not call it an absence."""
+        monkeypatch.setattr(
+            "senselab.audio.tasks.phonation.api.extract_pitch_values",
+            lambda *_a, **_k: {
+                "pitch_floor": np.nan,
+                "pitch_ceiling": np.nan,
+                "pitch_frames": 0.0,
+                "pitch_failed": 1.0,
+                "pitch_range_fell_back": 0.0,
+            },
+        )
+        with pytest.raises(F0RangeFailed):
+            derive_f0_range(_buzz(150.0), **_NARROWING)
+
+    def test_f0_range_failed_is_a_value_error(self) -> None:
+        """extend.attempt_derivation records a ValueError as a failed row; a RuntimeError escapes it."""
+        assert issubclass(F0RangeFailed, ValueError)
+        assert not issubclass(F0RangeFailed, RuntimeError)
 
 
 class TestF0Track:
