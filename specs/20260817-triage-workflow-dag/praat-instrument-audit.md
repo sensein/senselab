@@ -352,12 +352,12 @@ parameters it omitted are the ones that set the value:
 
 | parameter | value | why it is not optional |
 | --- | --- | --- |
-| time-averaging window | **0.01 s** — the incumbent's literal (`:776`), **not** Praat's form default of 0.02 | the first smoothing; without it the measure is CPP |
-| quefrency-averaging window | **0.001 s** — the incumbent's literal (`:777`), **not** Praat's 0.0005 | the second smoothing; likewise |
-| cepstrogram band | **5000 Hz** — the incumbent (`:767`), and this *is* finding 7's defect | declared rather than left open; changing it is a separate decision |
-| subtract tilt before smoothing | **`"no"`** (`:775`) | value-setting and previously unmentioned |
-| tilt line type | **`"Straight"`** (`:784`) — Praat's CPPS convention is exponential decay | value-setting and previously unmentioned |
-| tolerance | **0.05** (`:780`) | value-setting and previously unmentioned |
+| time-averaging window | **0.01 s** — the incumbent's literal (`:835`), **not** Praat's form default of 0.02 | the first smoothing; without it the measure is CPP |
+| quefrency-averaging window | **0.001 s** — the incumbent's literal (`:836`), **not** Praat's 0.0005 | the second smoothing; likewise |
+| cepstrogram band | **5000 Hz** — the incumbent (`:826`), and this *is* finding 7's defect | declared rather than left open; changing it is a separate decision |
+| subtract tilt before smoothing | **`"no"`** (`:834`) | value-setting and previously unmentioned |
+| tilt line type | **`"Straight"`** (`:843`) — Praat's CPPS convention is exponential decay | value-setting and previously unmentioned |
+| tolerance | **0.05** (`:839`) | value-setting and previously unmentioned |
 | trend-line fit range | **distinct from the peak search** | Praat fits from 1 ms to the end of the quefrency axis |
 | peak search band | **60–700 Hz** | see below |
 
@@ -464,12 +464,12 @@ Two modules measure the same quantities to different standards, and triage reads
 | support counts exposed | **five of five functions** | **one of thirteen** (finding 5, corrected) |
 
 **`phonation/api.py` is not clean at its input, and this is the row an earlier version of this table
-got wrong in both directions.** `derive_f0_range` (`phonation/api.py:82-91`) is a call into
-`extract_pitch_values` and nothing else, so **whatever that function's rule is, this module inherits
-it** — and `f0_track` (`phonation/api.py:185`), `hnr_track` and `period_marks` all document their
+got wrong in both directions.** `derive_f0_range` (`phonation/api.py:87-105`) is a call into
+`extract_pitch_values` and two typed raises over its result, so **whatever that function's rule is,
+this module inherits it** — and `f0_track` (`phonation/api.py:192`), `hnr_track` and `period_marks` all document their
 `f0_min_hz` as *"read it from `derive_f0_range`"*. Until 2026-09-14 what it inherited was the 170 Hz
 bin; since step 2 it inherits the per-recording derivation, with the five coefficients arriving as
-**required** keyword arguments (`:50-54`) rather than as module literals. The structural point
+**required** keyword arguments (`:54-58`) rather than as module literals. The structural point
 survives the fix and is the reason this row exists: **the module's cleanliness is a property of its
 body, not of its input**, and a change to `praat_parselmouth.py` moves it either way without a line
 of `api.py` changing. **What it inherits reaches three functions**: `hnr_track`'s analysis window
@@ -478,20 +478,20 @@ exclusion below the floor, and `f0_track`'s ceiling truncation. None of the thre
 `api.py` itself.
 
 (`formant_track` is the exception — it takes `max_formants`, `formant_max_hz`, `window_s` and
-`preemphasis_hz` and no F0 floor at all, `api.py:234-241`. An earlier version listed it as a
+`preemphasis_hz` and no F0 floor at all, `api.py:241-249`. An earlier version listed it as a
 consumer; the argument survives without it. Note **`derive_f0_range`'s own `Returns:` at
-`api.py:73-75` still names `formant_track` as a recipient of the derived range** — that docstring
+`api.py:77-79` still names `formant_track` as a recipient of the derived range** — that docstring
 misled two revisions of this document, it is wrong about its own consumer, and step 2 did not touch
 it.)
 
-**One defect at that entry point survives step 2**, in the module credited with typed absence:
-`extract_pitch_values` now distinguishes a crash from an absence in its return — `pitch_failed` — but
-**`derive_f0_range` reads only the two range values**, so a parselmouth crash and genuinely unvoiced
-audio both leave it raising the same `F0RangeUnavailable`. That is the identical crash/absence
-conflation this audit calls out for CPPS at finding 2, one frame further out than it used to be, and
-it is owed: Task 2 of
-[`../20260914-f0-range-and-measurement-streams/plan.md`](../20260914-f0-range-and-measurement-streams/plan.md).
-The other defect recorded here — a ±2 SD trim in linear Hz over the wide search, whose octave errors
+**That defect is closed, and a narrower one is not.** `extract_pitch_values` distinguishes a crash
+from an absence in its return — `pitch_failed` — and since Task 2 of
+[`../20260914-f0-range-and-measurement-streams/plan.md`](../20260914-f0-range-and-measurement-streams/plan.md)
+landed (`a28c32cd`) `derive_f0_range` reads that flag and raises `F0RangeFailed` rather than
+`F0RangeUnavailable` (`phonation/api.py:98-104`). What survives is one frame further **in**: the flag
+itself is set by a blanket `except Exception` that cannot tell a crash from a refusal, so Praat's own
+out-of-range refusal on a too-short recording is reported as a failure. **Finding 14.** The other
+defect recorded here — a ±2 SD trim in linear Hz over the wide search, whose octave errors
 contaminated the mean that selected the bin — went with the trim.
 
 **This is why step 2 replaced `derive_f0_range` rather than the wrapper**: it is the shared root, and
@@ -499,14 +499,19 @@ fixing only `praat_parselmouth.py` would have left the clean path carrying the s
 
 ## The route into triage
 
-- `preprocess.py:883-885` calls `extract_praat_parselmouth_features_from_audios` on the **`enhanced`**
-  stream. **All 40 Praat scalars come from that one call**, and only `time_step` and `window_length`
-  are config-reachable.
+- `preprocess.py:886-897` calls `extract_praat_parselmouth_features_from_audios` on the **`enhanced`**
+  stream it resolved at `:883`. **All 40 Praat scalars come from that one call**, and it passes **nine**
+  arguments read from the triage config: `time_step`, `window_length` and the seven F0-range arguments
+  step 2 added. The tenth keyword the wrapper exposes, `pitch_unit`, is set from nowhere in triage — it
+  is why the contrast table above counts ten exposed parameters where this bullet counts nine
+  configured ones, and the two are not in conflict.
 - `preprocess.py:954` derives the F0 range on **`plain`**.
 - `voice.py:71` derives it again on **`plain`**.
 
-So **three streams are analysed, and the same F0 range is derived twice independently** — and, given
-finding 1, the two derivations can land in different bins for the same recording.
+So **three streams are analysed, and the same F0 range is derived twice independently.** Under the
+retired bin (finding 1) those two derivations could land on opposite sides of the 170 Hz boundary for
+the same recording. They no longer can: both call `derive_f0_range` on `plain` with the same
+`f0_range_parameters(config)`, so what survives is duplicated work, not a divergence.
 
 ## Findings, ranked by distortion
 
@@ -727,7 +732,7 @@ documented before calling something owed".
 `:1558-1560` — `time_step`, `window_length` and eleven toggles are free variables of `_extract_one`
 rather than arguments, so two runs with different settings and one `cache_dir` collide.
 
-**Dormant in triage** (no `cache_dir` is passed at `preprocess.py:883`) but a live hazard for any
+**Dormant in triage** (no `cache_dir` is passed at `preprocess.py:886-897`) but a live hazard for any
 batch over 62,547 recordings.
 
 ### 13. The 16 kHz resample is an undeclared analysis-band decision
@@ -741,6 +746,49 @@ another, nowhere declared as such.
 
 It also means **every stream any of these measurements sees is 16 kHz mono** — which changes what the
 sample-rate covariate in [`branch-voice.md`](branch-voice.md) V4 can be (see below).
+
+### 14. A recording too short for Praat's pitch analysis is attributed as a crash
+
+`extract_pitch_values`' blanket `except Exception` (`:498`) cannot separate *Praat refused this input
+as out of range* from *the analysis crashed*: both leave through `_no_pitch_range(failed=1.0)`
+(`:504`). Task 2 made that consequential, because `derive_f0_range` now selects between two exception
+types on that one flag (`phonation/api.py:98-104`) — so a refusal Praat states in words becomes
+`F0RangeFailed`, a failure, where it is an absence.
+
+Praat requires three periods inside the sound, so it refuses when `duration < 3 / pitch_floor` —
+**60 ms at the packaged 50 Hz floor** — with the message
+`To analyse this Sound, "minimum pitch" must not be less than <3/duration> Hz.`
+
+**Measured**, a clean 150 Hz sine at 16 kHz through `derive_f0_range`:
+
+| duration | `pitch_failed` | `pitch_frames` | result |
+| --- | --- | --- | --- |
+| 10 ms | 1.0 | 0.0 | `F0RangeFailed` — reported as a crash |
+| 50 ms | 1.0 | 0.0 | `F0RangeFailed` — reported as a crash |
+| 200 ms | 0.0 | 29.0 | range `(100.0, 375.0)` |
+
+Also measured, the boundary is exact: at a 50 Hz floor, 50 ms is refused and 60 ms succeeds.
+
+**It is reachable, because ADMIT has no minimum-duration gate.** `admit.py:85-90` rejects zero
+frames, all-zero samples and constant-per-channel, and admits a 50 ms file whose samples vary. Both
+`derive_f0_range` callers — `preprocess.py:954`, and `voice.py:71` reached through `_required` at
+`voice.py:193` — pass the whole-file `plain` stream and never a span, so this needs a *whole
+recording* under 60 ms: pathological, and not excluded. At `extend`, such a row flips from
+`failed=False` to `failed=True` and `scripts/extend_reprocessed_outputs.py:333` returns exit 1 where
+it returned 0. ADMIT's missing duration floor is its own question and is recorded in
+[`admit.md`](admit.md).
+
+**The remedy is at the source, and not inside `derive_f0_range`.** Test the duration precondition
+before calling and report a too-short recording as a **typed absence** — which is what this codebase
+already does one module over. `span_yamnet_input` measures the slice against YAMNet's native frame
+and raises `SpanTooShortForYAMNet` before classifying (`classification/yamnet.py:256-258`, the class
+at `:234`); `extend.py:120-126` lists that class in `UNAVAILABLE`, so the row records an absence and
+the task continues. `AudioTooShortForAST` (`classification/huggingface.py:23`) is the same shape over
+a whole recording. Widening `derive_f0_range`'s handler instead would re-conflate exactly what Task 2
+separated.
+
+**Owed a code change** — not a listening sample and not a bench measurement: the duration
+precondition is arithmetic Praat already states, so nothing here is fitted.
 
 ## Also recorded
 
@@ -861,14 +909,21 @@ date, in place rather than as an appendix, so there is no second place to look:
   itself.
 - **The contrast table**'s `phonation/api.py` row no longer says the module *is* the bin — it says
   the module inherits whatever `extract_pitch_values` does, which is the claim that survives the fix.
-- **Every `praat_parselmouth.py` citation in this document** shifted when the five coefficients and
-  the three new return keys were added, and each was re-verified against the tree rather than
-  offset by a constant. So were the `preprocess.py`, `voice.py` and `phonation/api.py` citations,
-  which moved by different amounts or not at all.
+- **Most citations that step 2 moved were re-verified against the tree rather than offset by a
+  constant — but not all of them, and the residue was cleared later the same day.** What was still stale:
+  the route-into-triage bullet and finding 12 cited the pre-step-2 Praat call site; the CPPS
+  parameter table's six `praat_parselmouth.py` citations were short by a uniform 59 lines; and the
+  contrast section's four `phonation/api.py` citations had moved with Task 2's typed errors. Each is
+  corrected above. **What carries a verification claim after that second pass** is exactly that: the
+  contrast table and the paragraphs under it, "The route into triage", the CPPS parameter table,
+  finding 2, finding 5's `:494` / `:370-378`, finding 9, finding 11's `:639` / `:680`, finding 12,
+  and the two tables under "The wrappers discard the trajectory". Every other citation in this
+  document was not re-read in that pass and carries no claim either way.
 
-**One correction this document could not make**, because the code has not landed: the crash/absence
-conflation at `derive_f0_range` is narrowed but not closed — see the contrast section above and
-Task 2 of the F0-range plan.
+**Task 2 has since landed** (`a28c32cd`), so the crash/absence conflation this document recorded as
+owed at `derive_f0_range` is closed there. What remains of it sits one frame in, at
+`extract_pitch_values`' blanket `except Exception` — **finding 14**, and the contrast section above,
+both written in the same second pass.
 
 ## Where this lands
 
@@ -884,6 +939,7 @@ Task 2 of the F0-range plan.
 | 5, 11 | [`branch-listening-sample.md`](branch-listening-sample.md) |
 | 12 | nobody today (dormant: triage passes no `cache_dir`); any future batch over the corpus |
 | 13 | [`branch-conventions.md`](branch-conventions.md)'s per-measure bands, and `branch-voice.md` V4's sample-rate item |
+| **14 — a too-short recording read as a crash** | every consumer of `derive_f0_range`: `preprocess.py`'s `phonation_tracks` block, `branch-voice.md` V1/V3/V4, and the `extend` driver's exit code. Also [`admit.md`](admit.md), which has no duration floor to stop such a file reaching them |
 | **the discarded trajectories** | `branch-voice.md` V3 and V6; [`branch-airway.md`](branch-airway.md) A5 and A6 — every per-event or within-file question asked of an instrument that returns one mean per recording. Owed a decision on `praat_parselmouth.py`'s return contract, not a defect |
 
 ## A process finding: a revision deleted seven rules and no check caught it

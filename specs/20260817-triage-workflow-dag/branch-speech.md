@@ -173,7 +173,7 @@ phrasing — and both are transcribed and then dropped.
 
   **The helper also hides three operating points, one data-dependent, and none in any config** —
   `silence_db = -25` (`praat_parselmouth.py:154`), `min_dip = 4` (`:161`) **dropped to 2 when the
-  recording's own mean HNR is below 60** (`:154-155`), and `min_pause = 0.3` (`:159`). The HNR switch
+  recording's own mean HNR is below 60** (`:166-167`), and `min_pause = 0.3` (`:171`). The HNR switch
   means syllable-detection sensitivity is conditioned on a voice-quality measurement of the recording
   being measured, across ~25,000 recordings of frequently dysphonic speakers. In practice mean HNR is
   far below 60 dB for any real recording, so on three synthetic probes — buzz 50.75 dB, buzz with
