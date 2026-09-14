@@ -125,7 +125,7 @@ Praat's guidance is to track pitch on the unmodified signal. The range is derive
 applied to `preemphasised`, which is structurally the same mismatch the audit condemns for the
 jitter form defaults, here in the supposedly clean path.
 
-**And `voice_tracks.npz` carries unmasked sentinels.** `voice.py:305` and `:374` write `hnr_db` with
+**And `voice_tracks.npz` carries unmasked sentinels.** `voice.py:374` writes `hnr_db` with
 Praat's −200 dB undefined-frame markers unmasked — measured **389 sentinel frames** in a padded 2 s
 signal — while `phonation.hnr_floor_interval_db` is null so nothing masks them downstream. Any mean
 or percentile over that array is destroyed. [`praat-instrument-audit.md`](praat-instrument-audit.md)
@@ -355,9 +355,14 @@ covariate recovers an estimate from a filtered sample, and with support counts u
 cannot see how much was deleted.
 
 **What replaces it is step 4 of [`praat-instrument-audit.md`](praat-instrument-audit.md)'s
-remediation path** — a direct CPPS implementation of roughly thirty lines, with no value cut, no
-interval gating, a quefrency band from the recording's own F0, duration weighting, and a support
-count. Until that exists, **V4's primary descriptor is unavailable** and the branch says so rather
+remediation path** — a direct CPPS implementation with no value cut, no interval gating, duration
+weighting, a support count, both smoothing windows declared, and a **fixed wide peak-search band of
+60–700 Hz**.
+
+**Not a band derived from the recording's own F0.** An earlier version of this paragraph said that,
+and step 4 retracts it for three reasons — chiefly that `derive_f0_range` **raises** on a type-3
+voice, so a per-recording band would be unavailable on exactly the population the reimplementation
+exists to serve. Until that exists, **V4's primary descriptor is unavailable** and the branch says so rather
 than reporting a number it has just described as untrustworthy.
 
 **Three further defects in the existing function**, all in the audit: CPPS is averaged **unweighted**

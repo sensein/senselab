@@ -260,6 +260,12 @@ the number cannot be read without it — or unsteady-extent perturbation is mark
 as an unsupported band would be. A covariate a reader may ignore is not equivalent to a value they
 cannot misread.
 
+**The second option is gated on something owed.** Marking a value non-comparable needs a steadiness
+**cut**, and [`branch-voice.md`](branch-voice.md) V1's steadiness statistic and window are themselves
+owed — no statistic is named and nothing called `stationarity` or `spectral_flux` exists in
+`src/senselab`. So **only the naming option is available today**, and the non-comparable option
+becomes available when V1's statistic does.
+
 ### An aggregate must distinguish absent from normal
 
 The individual capabilities handle absence correctly: an unavailable measurement is an absence, never
@@ -289,9 +295,13 @@ These documents quote **62,547** — the recording count in
 from. The governing contract asks for the attested **62,550** until the 28-store divergence is
 accounted for.
 
-**Both are real measurements and they differ by 28.** Citing the scoring artifact is defensible when
-every branch figure comes from it, and mixing the two would be worse. The divergence is stated here
-once rather than silently differing from the contract, and it remains unaccounted for.
+**There are three numbers, not two.** 62,547 recordings scored; **62,550** attested as the corpus;
+and **62,578** stores found on disk. So 62,547 and 62,550 differ by **3**, and the 28-store gap the
+contract asks to account for is between 62,550 and the on-disk count. An earlier version of this
+section said "they differ by 28", which conflated the two gaps.
+
+Citing the scoring artifact is defensible when every branch figure comes from it, and mixing them
+would be worse. Both divergences remain unaccounted for.
 
 ## What a branch does with an unavailable measurement
 

@@ -154,7 +154,7 @@ was parameter-free and then listed four conventions without supplying three of t
 
 | convention | status |
 | --- | --- |
-| lowpass cutoff | **in force** — `envelope.lowpass_hz: 40.0`, derived at `config-derivations.md:43-47`; inherited by name |
+| lowpass cutoff | **in force, but inherited across a condition change** — `envelope.lowpass_hz: 40.0`, derived at `config-derivations.md:43-47` **on the dB, pre-emphasised envelope**, while D1 requires a linear-amplitude envelope on `plain`. That is a value derived under one condition applied under another — the structure [`praat-instrument-audit.md`](praat-instrument-audit.md) finding 8 condemns. Probably harmless at 40 Hz against a syllable rate of 5–7 Hz, but stated rather than assumed |
 | envelope extraction method | **owed** — linear-amplitude or power, per the argument above, but the method is unspecified |
 | analysis window | **owed** — and per [`branch-conventions.md`](branch-conventions.md) a measurement with no stated window is comparable to nothing |
 | **search band** | **owed, and decisive** — it determines which harmonic is findable at all, which is this capability's whole unit problem |

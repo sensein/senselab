@@ -139,7 +139,7 @@ move from firing never to firing almost always.
 (`airway.py:343-373`), emitting one `flag` assertion with `reason: "lexical_contamination"`.
 
 **Fix one — it must be conditioned on the declaration.** The check is guarded only by
-`if labels_by_span:` (`airway.py:345`), so it runs on every recording AIRWAY routes. On a Harvard
+`if labels_by_span:` (`airway.py:347`), so it runs on every recording AIRWAY routes. On a Harvard
 reading with a cough near the start and a breath near the end, the hull spans the whole recording
 and **every word between them is contamination** — on a branch that routes 23,606 recordings of
 which 13,017 declare airway. That is exactly the penalty this document's own off-declaration section
@@ -227,8 +227,10 @@ both phases were detected; and a `counts` entry `expected_event_count` carrying 
 **Owed — the operating points, not only the validation.** Envelope smoothing window, peak/trough
 criterion, and minimum breath-event duration are all required for the capability to execute and none
 exists. These have no config key and no entry in `config-derivations.md` because **the capability
-itself does not exist yet** — unlike `spans.k_db`, which is derived at `config-derivations.md:74`,
-`:133` and `:238` for a proposer that does. An earlier version marked only the validation owed, which
+itself does not exist yet** — unlike `spans.k_db`, which is derived at `config-derivations.md:106-120`
+for a proposer that does. (Not `:74`, which
+[`praat-instrument-audit.md`](praat-instrument-audit.md) identifies as stale phrasing contradicting
+the live derivation.) An earlier version marked only the validation owed, which
 was insufficient: without the detection parameters the capability cannot run at all.
 
 ### A6 — Cough event descriptors (**not built**)
@@ -289,7 +291,7 @@ airway.
 
 | capability | status |
 | --- | --- |
-| A1 label | built; `labels_of_interest` owed a derivation; vocabulary too narrow |
+| A1 label | built; `labels_of_interest` **is derived** (`config-derivations.md:555-557`, *"Vocabulary, not thresholds"*); vocabulary too narrow |
 | A2 corroborate | built; `confirm` → `label` migration owed |
 | A3 contest | gated behind null config, structurally dead; replace rather than fit |
 | A4 off-task content | built as an unconditional file-level flag; two fixes owed |
