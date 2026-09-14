@@ -83,7 +83,8 @@ In this order. Steps 0 and 1 are the ones that matter; the rest are wasted befor
 
 ### Step 0 — largest single gain, and it is *not* free: stop publishing the compromised scalars
 
-**62,547 stores already carry 40 Praat scalars** computed on FRCRN output through a sex-binned range.
+**62,547 stores already carry 40 Praat scalars** computed on FRCRN output through the sex-binned
+range finding 1 records. Step 2 changed what a new run computes and nothing about those.
 Four — `mean_cpp`, `std_dev_cpp`, jitter, shimmer — carry names that will be read against published
 norms, and `range_ratio_intensity_db` is dimensionally invalid (finding 6) and already exported.
 
@@ -288,7 +289,7 @@ survive a one-octave-low median, i.e. structural tolerance rather than correctio
 would trade away the 45–60 Hz creak cases this document bounds by the declared search range, and per
 the residual below it is only partial anyway, since the second harmonic survives any floor.
 
-**One consequence for another key.** The range ratio widens: the bin always gave 4.17 or 5.0, and
+**One consequence for another key.** The range ratio widens: the retired bin always gave 4.17 or 5.0, and
 the measured ranges here reach 12 (`[50, 600]`).
 `voice.f0_range_ratio_max` is null so nothing fires, but `voice.py:77-80` **raises** rather than
 flags once it is set.
@@ -330,7 +331,7 @@ value and for its validity qualifier**, which V4 requires and which the current 
 
 **But the admission rule is the measurement, and this step omitted it.** Jitter and shimmer are
 *defined* by which consecutive cycle pairs are allowed to contribute. Praat excludes pairs whose
-period ratio exceeds 1.3; `period_marks` applies only a range test (`phonation/api.py:147`) and **no
+period ratio exceeds 1.3; `period_marks` applies only a range test (`phonation/api.py:176`) and **no
 successive-ratio constraint at all**.
 
 Computing over that sequence unfiltered lets a single octave error or one voice break dominate the
@@ -401,7 +402,7 @@ and carries a support count (finding 5).
 of this step said "from the recording's own derived F0", which defeats the step's own purpose three
 ways:
 
-- on a type-3 voice `derive_f0_range` **raises** (`phonation/api.py:60-70`), so a band derived from it
+- on a type-3 voice `derive_f0_range` **raises** (`phonation/api.py:93-97`), so a band derived from it
   is **unavailable on exactly the population the reimplementation exists to serve**;
 - CPPS is a peak prominence measured against a regression over a quefrency range, so **changing the
   range changes the value** — a per-recording band destroys cross-recording comparability, which
@@ -412,13 +413,14 @@ ways:
 ### Step 2b — track F0 on the signal the range was derived on
 
 `phonation_tracks` derives the F0 range on **`plain`** and then tracks F0 on **`preemphasised`**
-(`preprocess.py:939-950`). [`branch-voice.md`](branch-voice.md) V1 identifies this as **structurally
+(`preprocess.py:951-964`). [`branch-voice.md`](branch-voice.md) V1 identifies this as **structurally
 the same mismatch this audit condemns for the jitter form defaults** (finding 8) — a range derived
 under one condition applied under another — and the ordered path omitted it.
 
 It matters for the same reason: +6 dB/octave attenuates the fundamental relative to the upper
 harmonics, **raising octave-error risk upward**, worst on low-F0 and creaky voices. Octave errors
-then propagate into the steadiness qualifier V1 requires and into the bin selection of finding 1.
+then propagate into the steadiness qualifier V1 requires and into the percentiles the range is
+derived from — under the retired bin, into which bin was selected.
 Praat's guidance is to track pitch on the unmodified signal.
 
 ### Step 5 — report **instrument coverage** as a first-class measurement
@@ -432,7 +434,8 @@ parameter-free and needs no norm and no listening sample.
 **Call it instrument coverage, not a dysphonia indicator.** An earlier version framed it as "arguably
 a better dysphonia indicator than the values that survive", which is the normative reading every
 other capability here declines. The no-pulses outcome is produced by the **analysis floor** — a 45 Hz
-source yields zero pulses because the floor is 60 (finding 8) — plus SNR, level and stream. It is
+source yields zero pulses because the floor never goes below `voice.f0_search_range_hz`'s 50, and
+under the retired bin it was 60 (finding 8) — plus SNR, level and stream. It is
 confounded with F0 range, hence with sex and age, and with device and duration.
 
 **And CPPS drops out of this list once step 4 lands.** CPPS is missing at the disordered end *only*
@@ -440,7 +443,7 @@ because of the `> 4` cut, which step 4 removes.
 
 **But "only jitter and shimmer" is too narrow — coverage is per instrument, not per scalar.**
 `extract_slope_tilt` builds a **pitch-corrected LTAS** with the same `0.0001 / 0.02 / 1.3` admission
-and the same binned range (`praat_parselmouth.py:678`), so the zero-pulse failure takes **slope and
+and the same derived range (`praat_parselmouth.py:737`), so the zero-pulse failure takes **slope and
 tilt down with jitter and shimmer**. And `hnr_db_mean` uses `Get mean`, which excludes undefined
 frames — so it is conditioned on the **pitch tracker** finding pitch, a different failure from the
 point process finding pulses.
@@ -457,52 +460,67 @@ Two modules measure the same quantities to different standards, and triage reads
 | | `tasks/phonation/api.py` | `tasks/features_extraction/praat_parselmouth.py` |
 | --- | --- | --- |
 | undeclared literals **in the body** | **zero** | roughly sixty |
-| config-reachable parameters | every Praat parameter, as a required keyword wired to a config key with a written derivation | **three** |
-| support counts exposed | **five of five functions** | **zero of thirteen** |
+| config-reachable parameters | every Praat parameter, as a required keyword wired to a config key with a written derivation | **ten** — `time_step`, `window_length`, `pitch_unit`, and the seven F0-range arguments step 2 added; everything else stays a body literal |
+| support counts exposed | **five of five functions** | **one of thirteen** (finding 5, corrected) |
 
-**But `phonation/api.py` is not clean at its input, and an earlier version of this table implied it
-was.** `phonation/api.py:63` calls `extract_pitch_values` and returns its two hardcoded pairs — so
-**`derive_f0_range` *is* the 170 Hz bin**, and `f0_track` (`phonation/api.py:170-171`) and
-`hnr_track` and `period_marks` all document their `f0_min_hz` as *"read it from `derive_f0_range`"*.
-(`formant_track` does not — it takes `max_formants`, `formant_max_hz`, `window_s` and
-`preemphasis_hz` and no F0 floor at all, `api.py:205-213`. An earlier version listed it here; the
-argument survives without it. Note **`derive_f0_range`'s own `Returns:` at `api.py:55` names
-`formant_track` as a recipient of the derived range** — that docstring is what misled two revisions
-of this document, and it is wrong about its own consumer.)
+**`phonation/api.py` is not clean at its input, and this is the row an earlier version of this table
+got wrong in both directions.** `derive_f0_range` (`phonation/api.py:82-91`) is a call into
+`extract_pitch_values` and nothing else, so **whatever that function's rule is, this module inherits
+it** — and `f0_track` (`phonation/api.py:185`), `hnr_track` and `period_marks` all document their
+`f0_min_hz` as *"read it from `derive_f0_range`"*. Until 2026-09-14 what it inherited was the 170 Hz
+bin; since step 2 it inherits the per-recording derivation, with the five coefficients arriving as
+**required** keyword arguments (`:50-54`) rather than as module literals. The structural point
+survives the fix and is the reason this row exists: **the module's cleanliness is a property of its
+body, not of its input**, and a change to `praat_parselmouth.py` moves it either way without a line
+of `api.py` changing. **What it inherits reaches three functions**: `hnr_track`'s analysis window
+(`periods_per_window / f0_min` — a 1.67× step under the bin, a continuum now), `period_marks`' pulse
+exclusion below the floor, and `f0_track`'s ceiling truncation. None of the three is visible from
+`api.py` itself.
 
-The module therefore **imports the bin wholesale**, along with everything that follows from it: the
-1.67× window discontinuity in `hnr_track`, the sub-60 Hz pulse exclusion in `period_marks`, and the
-ceiling truncation in `f0_track`. The contrast is true of the module's **body** and false of its
-**input**.
+(`formant_track` is the exception — it takes `max_formants`, `formant_max_hz`, `window_s` and
+`preemphasis_hz` and no F0 floor at all, `api.py:234-241`. An earlier version listed it as a
+consumer; the argument survives without it. Note **`derive_f0_range`'s own `Returns:` at
+`api.py:73-75` still names `formant_track` as a recipient of the derived range** — that docstring
+misled two revisions of this document, it is wrong about its own consumer, and step 2 did not touch
+it.)
 
-**Two more defects at that entry point**, both in the module credited with typed absence:
+**One defect at that entry point survives step 2**, in the module credited with typed absence:
+`extract_pitch_values` now distinguishes a crash from an absence in its return — `pitch_failed` — but
+**`derive_f0_range` reads only the two range values**, so a parselmouth crash and genuinely unvoiced
+audio both leave it raising the same `F0RangeUnavailable`. That is the identical crash/absence
+conflation this audit calls out for CPPS at finding 2, one frame further out than it used to be, and
+it is owed: Task 2 of
+[`../20260914-f0-range-and-measurement-streams/plan.md`](../20260914-f0-range-and-measurement-streams/plan.md).
+The other defect recorded here — a ±2 SD trim in linear Hz over the wide search, whose octave errors
+contaminated the mean that selected the bin — went with the trim.
 
-- `extract_pitch_values` returns `{nan, nan}` from a **bare `except Exception`**, so
-  `F0RangeUnavailable` fires on a parselmouth *crash* as readily as on genuinely unvoiced audio —
-  **the identical crash/absence conflation this audit calls out for CPPS at finding 2.**
-- The ±2 SD trim is computed **in linear Hz over the wide 50–600 search**, so octave errors
-  contaminate the very mean that selects the bin.
-
-**This is why step 2 replaces `derive_f0_range` rather than the wrapper**: it is the shared root, and
-fixing only `praat_parselmouth.py` would leave the clean path carrying the same bin.
+**This is why step 2 replaced `derive_f0_range` rather than the wrapper**: it is the shared root, and
+fixing only `praat_parselmouth.py` would have left the clean path carrying the same bin.
 
 ## The route into triage
 
 - `preprocess.py:883-885` calls `extract_praat_parselmouth_features_from_audios` on the **`enhanced`**
   stream. **All 40 Praat scalars come from that one call**, and only `time_step` and `window_length`
   are config-reachable.
-- `preprocess.py:941` derives the F0 range on **`plain`**.
-- `voice.py:71-73` derives it again on **`plain`**.
+- `preprocess.py:954` derives the F0 range on **`plain`**.
+- `voice.py:71` derives it again on **`plain`**.
 
 So **three streams are analysed, and the same F0 range is derived twice independently** — and, given
 finding 1, the two derivations can land in different bins for the same recording.
 
 ## Findings, ranked by distortion
 
-### 1. The 170 Hz binary sex bin is the root cause
+### 1. The 170 Hz binary sex bin was the root cause (**fixed 2026-09-14 by step 2**)
 
-`praat_parselmouth.py:429-436` selects one of two hardcoded floor/ceiling pairs from the recording's
-trimmed mean pitch: below 170 Hz → (60, 250); otherwise → (100, 500). That range then sets intensity,
+**Read this finding in the past tense.** The bin is gone from the tree: `extract_pitch_values` now
+derives the range per recording and there is no line to cite for the code described below. It stays
+because it is the reason step 2 exists, because **every Praat scalar already written into 62,547
+stores was computed under it** (step 0), and because a reader meeting those artifacts needs the
+mechanism.
+
+`extract_pitch_values` selected one of two hardcoded floor/ceiling pairs from the recording's
+±2 SD-trimmed mean pitch: below 170 Hz → (60, 250), commented *'male' settings*; otherwise →
+(100, 500), commented *'female' and 'child' settings*. That range then set intensity,
 harmonicity, formant pulse sampling, jitter, shimmer, LTAS, spectral-moment voicing and pitch
 descriptors.
 
@@ -511,21 +529,29 @@ harmonicity window **75.0 → 45.0 ms**, minimum analysable segment **91.7 → 5
 discontinuity in a continuous measurement, which can flip between two streams of the same recording.
 
 **The project already documented this as an error not to repeat.** `capability-map.md:117` and
-`:314` name this bin as the exact mistake to avoid, and the code does it anyway.
+`:314` named this bin as the exact mistake to avoid, and the code did it anyway for as long as it
+stood — which is the part of this finding worth keeping after the fix.
 
-Consumers: [`branch-voice.md`](branch-voice.md) V3, V4, V7, V8.
+**What replaced it, and what did not follow from the replacement.** Step 2 above records the derived
+rule, its coefficients and its measured behaviour. The 1.67× step is gone, replaced by a continuous
+per-recording variation in the same three windows — so the windows still differ between recordings
+and are still not stated beside the values they produced. That is now a
+[`branch-conventions.md`](branch-conventions.md) stated-window problem rather than a discontinuity.
+
+Consumers: [`branch-voice.md`](branch-voice.md) V3, V4, V7, V8 — all four rewritten for the
+derivation; the corpus already written stays governed by this finding.
 
 ### 2. The CPPS `> 4` cut deletes the dysphonic range
 
-`:800` appends a per-interval CPPS value only when `CPP_Value > 4`.
+`:859` appends a per-interval CPPS value only when `CPP_Value > 4`.
 
 **Measured**: severe dysphonia **2.78 dB**, dropped. Severe dysphonia at F0 410 Hz, **2.17 dB**,
 dropped.
 
 Two consequences:
 
-- When every interval is dysphonic the list is empty and `:809-810` returns NaN — **identical to the
-  crash return at `:821`**. A severely dysphonic recording and a crashed one are indistinguishable in
+- When every interval is dysphonic the list is empty and `:868-869` returns NaN — **identical to the
+  crash return at `:880`**. A severely dysphonic recording and a crashed one are indistinguishable in
   the corpus.
 - For partially dysphonic recordings the reported mean is over **only the intervals that exceeded
   4** — selection on the dependent variable. **No covariate recovers an estimate from that**, and with
@@ -544,7 +570,7 @@ Two consequences:
 
 ### 3. The vuv mean period is 10× Praat's default and violates Praat's own constraint
 
-`:752` calls `To TextGrid (vuv)` with maximum period **0.02** and mean period **0.1**. Praat's
+`:811` calls `To TextGrid (vuv)` with maximum period **0.02** and mean period **0.1**. Praat's
 default mean period is 0.01, and Praat documents that mean period must be **less than** maximum
 period. Here it is five times larger.
 
@@ -558,42 +584,54 @@ pushing values toward finding 2's cut — the two multiply.
 
 ### 4. The CPPS peak search is 60–330 Hz regardless of the caller's ceiling
 
-`:778-779` hardcodes the peak search band, silently replacing the 500 Hz ceiling finding 1 derived.
+`:837-838` hardcodes the peak search band, silently replacing whatever ceiling the caller derived —
+the retired bin's 500 Hz then, the per-recording ceiling now.
 
 **Measured penalty at F0 420 Hz: 3.8 dB** (10.33 vs 14.14) — roughly the entire normal-to-dysphonic
 span. Children and high-F0 females read as dysphonic; combined with noise they cross the `> 4` cut
 and disappear entirely.
 
-### 5. Support counts: zero of thirteen
+### 5. Support counts: one of thirteen
 
-Not one function in `praat_parselmouth.py` returns a frame, cycle or interval count. Three
-**compute one and discard it**: `:759` (`n_intervals = ... "Get number of rows"`), `:896`
-(`n = ... "Get number of points"`) and `:1005` (`num_steps = spectrogram.nx`).
+**Corrected 2026-09-14, when step 2 landed.** This finding opened *"Not one function in
+`praat_parselmouth.py` returns a frame, cycle or interval count."* That sentence was true when the
+audit was written and is now false by exactly one function: `extract_pitch_values` returns
+`pitch_frames` (`:494`, and `0.0` on both no-range paths via `_no_pitch_range`, `:370-378`) — the
+voiced-frame count its derived range rests on, and **the module's first support count**. It is a
+precedent for the shape the rest of this finding asks for, and it was added because the range it
+reports on is worthless without it, which is the same argument every other row here makes.
 
-An earlier version of this finding also cited `:804` and `:1036-1039`; neither computes a count —
-`:804` is `if cpp_list:`, a truthiness test, and `len(cpp_list)` is **never computed anywhere**, while
-`:1036-1039` are four `np.mean` calls.
+**The finding stands for the other twelve**, and the three that compute a count and discard it are
+unchanged: `:818` (`n_intervals = ... "Get number of rows"`), `:955` (`n = ... "Get number of
+points"`) and `:1064` (`num_steps = spectrogram.nx`).
+
+An earlier version of this finding also cited `:804` and `:1036-1039` — now `:863` and
+`:1095-1098` — and neither computes a count: `:863` is `if cpp_list:`, a truthiness test, and
+`len(cpp_list)` is **never computed anywhere**, while `:1095-1098` are four `np.mean` calls.
 
 **And there is a fourth, which matters more than the three above.** `extract_speech_rate` computes
-`numpeaks` (`:245`) and `number_syllables` (`:310`) and **returns only rates**. That syllable count
+`numpeaks` (`:257`) and `number_syllables` (`:330`) and **returns only rates**. That syllable count
 **is** the support for [`branch-speech.md`](branch-speech.md) S4's and [`branch-ddk.md`](branch-ddk.md)
 D2's speaking and articulation rates — so it is what makes the mandatory support count specifically
 unsatisfiable for **the two largest rate populations in the corpus**, roughly 25,000 recordings and
 7,989.
 
-The finding stands and is sharper: **no function returns a support count, and the one that would
-matter most computes it and throws it away.**
+The finding stands and is sharper: **every scalar a branch actually consumes is still unsupported,
+and the one whose count would matter most computes it and throws it away.** One function returning a
+count does not close a convention that binds thirteen.
 
 **So [`branch-conventions.md`](branch-conventions.md)'s mandatory support count is satisfiable on the
-`phonation/api.py` path and impossible on the Praat path** — and findings 1–4 are unauditable after
-the fact, because you cannot tell whether a `mean_cpp` rests on 2 intervals or 60.
+`phonation/api.py` path, satisfied on exactly one Praat function, and impossible on the rest** — and
+findings 1–4 are unauditable after the fact, because you cannot tell whether a `mean_cpp` rests on
+2 intervals or 60.
 
-**The convention is currently unsatisfiable for the Praat scalars.** Closing it needs those four
-functions to return the count they already compute.
+**The convention is still unsatisfiable for every Praat scalar a branch reads.** Closing it needs
+those four functions to return the count they already compute, in the shape `extract_pitch_values`
+now demonstrates.
 
 ### 6. `range_db_ratio` is dimensionally invalid
 
-`:566` computes `range_db_ratio = max_dB / min_dB` — a ratio of two logarithmic quantities.
+`:625` computes `range_db_ratio = max_dB / min_dB` — a ratio of two logarithmic quantities.
 
 **Measured**: a buzz with no silence gives **1.000**; add 0.5 s of silence at each end and
 `min_dB = −344.05`, so the ratio is **−0.244**. A "range ratio" that goes negative whenever the
@@ -606,7 +644,7 @@ built on it.
 
 ### 7. Spectral moments are band-limited to 5 kHz by an unnamed default
 
-`:999` builds the spectrogram with "default settings other than window length and frame shift", so
+`:1058` builds the spectrogram with "default settings other than window length and frame shift", so
 `maximum_frequency` is Praat's 5000 Hz default and **never appears in the source** — it reads as
 absent rather than chosen.
 
@@ -618,8 +656,11 @@ dysphonia signal. Gravity, skewness and kurtosis are computed on a band that exc
 **Measured**: `To PointProcess (periodic, cc)` places **0 pulses** on an alternating-period signal
 and **1** on a period-doubled one — so the 1.3 maximum-period factor never gets the chance to act.
 
-And with floor 60 from the bin, a 45 Hz or 55 Hz source yields **zero pulses**: vocal fry, low male
-voices and Parkinsonian creak are excluded **upstream by the bin**, not by the 0.02 s period ceiling.
+And a source below the analysis floor yields **zero pulses**, excluded upstream of the 0.02 s period
+ceiling rather than by it. Under the retired bin that floor was 60 Hz, which took 45 Hz fry, 55 Hz
+creak *and* ordinary low male voices. It is now `max(search_floor, p5 / 1.5)`, so the exclusion
+bottoms out at the declared 50 Hz search floor: 55 Hz survives, 45 Hz does not, and the bound is one
+a reader can look up.
 
 **`default.yaml:145` names `phonation.period_doubling_factor: 2.0` as a phenomenon of interest, and
 the measurement is structurally incapable of representing it.** A diplophonic voice reads as
@@ -627,13 +668,13 @@ the measurement is structurally incapable of representing it.** A diplophonic vo
 
 **The jitter/shimmer literals `0.0001 / 0.02 / 1.3 / 1.6` are Praat's own form defaults**, not
 senselab inventions. What makes them a problem is different: Praat's *Voice 2. Jitter* manual says
-the period floor should be `0.8/ceiling` and the ceiling `1.25/floor` — for the (100, 500) bin,
+the period floor should be `0.8/ceiling` and the ceiling `1.25/floor` — for a (100, 500) range,
 **0.0016 and 0.0125**, not 0.0001 and 0.02. The code passes form defaults while passing a *derived*
 range to the point process, which is the mismatch Praat's documentation tells you to avoid.
 
 ### 9. The `hnr < 60` branch takes one side on every probe, and the other where pitch fails
 
-`:154-155` drops `min_dip` from 4 to 2 when the recording's mean HNR is below 60.
+`:166-167` drops `min_dip` from 4 to 2 when the recording's mean HNR is below 60.
 
 **Measured on three synthetic probes** — buzz **50.75 dB**, buzz with noise **16.90 dB**, pure sine
 **105.60 dB**. Real speech does not approach 60 dB, so `min_dip` is **almost certainly 2 on
@@ -653,7 +694,7 @@ It costs one whole-file harmonicity computation per recording, on the denoised `
 
 ### 10. `voice_tracks.npz` carries unmasked −200 dB sentinels
 
-`voice.py:305` and `:374` write `hnr_db` with Praat's undefined-frame sentinels unmasked — **measured
+`voice.py:303` and `:372` write `hnr_db` with Praat's undefined-frame sentinels unmasked — **measured
 389 sentinel frames** in a padded 2 s signal — while `phonation.hnr_floor_interval_db` is null so
 nothing masks them downstream. Any mean or percentile over that array is destroyed, and will silently
 disagree with `extract_harmonicity_descriptors` on the same audio.
@@ -663,14 +704,14 @@ own `Get mean` **excludes** the sentinels, so it is *not* confounded with pause 
 
 ### 11. A derivation is factually wrong
 
-`config-derivations.md:571-578` documents `phonation.periods_per_window: 4.5` as *"Praat's own
+`config-derivations.md:575-580` documents `phonation.periods_per_window: 4.5` as *"Praat's own
 documented defaults for the cc method"*. **Parselmouth 0.4.7 and the Praat form both say 1.0.**
 
 The value may still be the right choice; the justification for it is not correct.
 
-**That derivation also routes readers through a wrong line**: it cites `praat_parselmouth.py:569`
-for `extract_harmonicity_descriptors`, which is at **`:580`**, its `periods_per_window=4.5` call at
-`:621`. Two documents send readers through it.
+**That derivation also routed readers through a wrong line**: it cited `praat_parselmouth.py:569`
+for `extract_harmonicity_descriptors`, which is at **`:639`**, its `periods_per_window=4.5` call at
+`:680`. Corrected in `config-derivations.md` on 2026-09-14; the wrong justification above is not.
 
 **And it is not the only stale one.** `config-derivations.md:74` says *"both `spans.k_db` values"* —
 **plural**, stale phrasing from when two `k_db` keys existed, which now contradicts *"one shared
@@ -683,7 +724,7 @@ documented before calling something owed".
 
 ### 12. joblib caches a closure
 
-`:1476-1478` — `time_step`, `window_length` and eleven toggles are free variables of `_extract_one`
+`:1558-1560` — `time_step`, `window_length` and eleven toggles are free variables of `_extract_one`
 rather than arguments, so two runs with different settings and one `cache_dir` collide.
 
 **Dormant in triage** (no `cache_dir` is passed at `preprocess.py:883`) but a live hazard for any
@@ -708,9 +749,9 @@ sample-rate covariate in [`branch-voice.md`](branch-voice.md) V4 can be (see bel
 halting speech; and minimum sounding interval **0.1 s against 0.05 s**, 2× stricter, dropping short
 voiced fragments.
 
-**Its `to_pitch_ac` call at `:290` differs from Praat on six parameters** — floor 30 vs 75,
+**Its `to_pitch_ac` call at `:302` differs from Praat on six parameters** — floor 30 vs 75,
 candidates 4 vs 15, voicing_threshold 0.25 vs 0.45, voiced_unvoiced_cost 0.25 vs 0.14, ceiling 450 vs
-600 — and **the code says so itself**, in five comment admissions at `:294`, `:297`, `:300`, `:303` and `:304`:
+600 — and **the code says so itself**, in five comment admissions at `:306`, `:309`, `:312`, `:315` and `:316`:
 
 > `# Key Hyperparamter are different to praat recommended - can't find a reason for this`
 > `# max_number_of_candidates: Positive[int] = 15 (can't find a reason for this value being lower)`
@@ -719,7 +760,7 @@ candidates 4 vs 15, voicing_threshold 0.25 vs 0.45, voiced_unvoiced_cost 0.25 vs
 The code declares its own literals undeclared.
 
 **`measure_f1f2_formants_bandwidths`' parameters are unreachable.** The wrapper forwards only `snd`,
-`floor`, `ceiling` and `frame_shift` (`:1342-1347`), so `max_formants`, `maximum_formant_hz`,
+`floor`, `ceiling` and `frame_shift` (`:1424-1429`), so `max_formants`, `maximum_formant_hz`,
 `window_length` and `pre_emphasis_from_hz` cannot be set by any caller — while the identical four
 values are config-driven on the `phonation/api.py` path. `maximum_formant 5000` is the adult-male
 convention where child is 8000.
@@ -771,7 +812,7 @@ none of which the caller can reach, on top of the `number_syllables` count findi
 | spectral moments | no | four per-frame lists built and meaned (`:1062`, `:1095-1098`) |
 | jitter / shimmer | no | a point process is built and reduced; no per-period series is produced to begin with |
 
-**`f0_track` sets unvoiced frames to NaN rather than dropping them** (`phonation/api.py:183`:
+**`f0_track` sets unvoiced frames to NaN rather than dropping them** (`phonation/api.py:215`:
 `f0[f0 == 0.0] = np.nan`), and `formant_track` does the same for frames where Praat placed no
 formant. That is what makes continuity measurable at all on those two: the time base survives a gap,
 so a reader can tell a gap from a shortened recording. None of the discarded series above has that
@@ -809,19 +850,25 @@ not an obviously correct change, and no API is designed here.**
 PREPROCESS, beside `phonation_tracks`, not in whichever branch first wants it. That rule and its
 derivation are in [`branch-voice.md`](branch-voice.md)'s unresolved section, under `hnr_track`.
 
-### A note on finding 5's wording, now that step 2 has landed
+### What step 2 changed in this document, and when
 
-Finding 5 opens *"Not one function in `praat_parselmouth.py` returns a frame, cycle or interval
-count."* **That sentence is now false and the finding it supports is not.** Step 2 landed on
-2026-09-14 and `extract_pitch_values` returns `pitch_frames` (`:494`), the voiced-frame count its
-derived range rests on — the first support count in the module, and a precedent for the shape the
-rest of finding 5 asks for. Read the finding as being about the other twelve.
+Step 2 landed on 2026-09-14. The corrections it forced were applied to this document on the same
+date, in place rather than as an appendix, so there is no second place to look:
 
-**Finding 5's line citations, and several others in this document, drifted when step 2 landed.**
-The three it names are now `:818` (`n_intervals`), `:955` (`n`) and `:1064` (`num_steps`), and
-`extract_speech_rate`'s two are `:257` (`numpeaks`) and `:330` (`number_syllables`); finding 6's
-`range_db_ratio` is at `:625`. Fixing every stale offset in this document is a separate sweep and is
-not done here.
+- **Finding 1** is recast in the past tense and carries no line citation, because the bin it
+  describes is not in the tree. It still governs every scalar already written.
+- **Finding 5**'s count is `one of thirteen`, not zero; the exception and the date are in the finding
+  itself.
+- **The contrast table**'s `phonation/api.py` row no longer says the module *is* the bin — it says
+  the module inherits whatever `extract_pitch_values` does, which is the claim that survives the fix.
+- **Every `praat_parselmouth.py` citation in this document** shifted when the five coefficients and
+  the three new return keys were added, and each was re-verified against the tree rather than
+  offset by a constant. So were the `preprocess.py`, `voice.py` and `phonation/api.py` citations,
+  which moved by different amounts or not at all.
+
+**One correction this document could not make**, because the code has not landed: the crash/absence
+conflation at `derive_f0_range` is narrowed but not closed — see the contrast section above and
+Task 2 of the F0-range plan.
 
 ## Where this lands
 

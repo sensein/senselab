@@ -105,7 +105,7 @@ an amplitude modulation at the repetition frequency; the spectral peak gives the
 
 **The stored envelope is the wrong input, for three reasons.** `energy_envelope` is
 `hilbert_envelope_dbfs` over the **pre-emphasised** stream, Butterworth-lowpassed, stored in
-**dBFS** (`preprocess.py:1269-1273`):
+**dBFS** (`preprocess.py:1283-1288`):
 
 1. **A logarithmic envelope generates harmonics of the modulation fundamental through the
    nonlinearity alone.** The f-versus-3f peak ratio is this capability's entire unit-disambiguation
@@ -187,7 +187,7 @@ inter-onset interval keeps it scale-free, but the factor is owed.
 
 **Question.** What rate does nucleus counting give, and does it agree with D1?
 
-`extract_speech_rate` (`praat_parselmouth.py:91`) returns `speaking_rate`, `articulation_rate`,
+`extract_speech_rate` (`praat_parselmouth.py:103`) returns `speaking_rate`, `articulation_rate`,
 `phonation_ratio`, `pause_rate` and `mean_pause_dur`.
 
 **Report rate over the train extent as primary, articulation rate as secondary.** Articulation rate
@@ -198,7 +198,7 @@ helper, in no config:
 
 | what | where | value |
 | --- | --- | --- |
-| silence threshold | `praat_parselmouth.py:142` | `silence_db = -25` |
+| silence threshold | `praat_parselmouth.py:154` | `silence_db = -25` |
 | minimum dip between peaks | `:149` | `min_dip = 4` |
 | **…dropped to 2 when mean HNR < 60** | `:154-155` | data-dependent |
 | minimum pause duration | `:159` | `min_pause = 0.3` |
@@ -362,7 +362,7 @@ and Unresolved on `Outcome.FAIL`'s wording.
 
 **What senselab provides**: `extract_ppg_segments` (`ppg.py:349`),
 `extract_mean_phoneme_durations` (`ppg.py:429`), `to_frame_major_posteriorgram` (`ppg.py:287`),
-`load_ppg_posteriorgram` (`ppg.py:327`), `extract_speech_rate` (`praat_parselmouth.py:91`).
+`load_ppg_posteriorgram` (`ppg.py:327`), `extract_speech_rate` (`praat_parselmouth.py:103`).
 
 **What is missing**: an envelope modulation-spectrum computation, an inter-onset interval sequence
 with dispersion and trend, and a PPG-phoneme-to-syllable mapping.

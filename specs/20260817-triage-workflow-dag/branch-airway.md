@@ -161,7 +161,7 @@ voicing are off-task content that produces no lexical word, and on a noisy breat
 transcribes little. Voicing detection catches them — **but not through `phonation_tracks`.**
 
 That measurement depends on `derive_f0_range`, which **raises when the wide search places no pitch**
-(`phonation/api.py:60-70`) — and that is the *normal* outcome on a clean breath-only recording. So
+(`phonation/api.py:93-97`) — and that is the *normal* outcome on a clean breath-only recording. So
 the instrument would be absent on precisely the population A4 must serve.
 [`branch-voice.md`](branch-voice.md) V1 states the rule that an absent `phonation_tracks` is not an
 empty one; AIRWAY inherits neither the caveat nor a fallback.
@@ -241,7 +241,7 @@ was insufficient: without the detection parameters the capability cannot run at 
 
 Duration, rise time, presence of a voiced phase, and spectral distribution over a cough-labelled
 event. All are available from the envelope and from Praat's spectral machinery
-(`extract_spectral_moments`, `praat_parselmouth.py:945`), all are non-normative descriptions, and
+(`extract_spectral_moments`, `praat_parselmouth.py:1004`), all are non-normative descriptions, and
 none is currently computed.
 
 **Two instrument problems land here, both from

@@ -345,7 +345,7 @@ path into `data/config/default.yaml`.
 
 `null` there means declared but unmeasured. Which of two readers is used matters and is called out
 throughout: `config.require(...)` **raises** on a null, and inside PREPROCESS that raise is caught
-and recorded as an absent derivative (`preprocess.py:2617-2626`) while the node still returns
+and recorded as an absent derivative (`preprocess.py:2634-2637`) while the node still returns
 normally; `config.get(...)` returns `None` and the caller carries on **silently**. The second is
 the more dangerous of the two. Its worst instance — a null silently deleting the whole ASR span
 source — was closed on 2026-09-05 by deleting the key (see PREPROCESS below); the pattern survives
@@ -461,14 +461,14 @@ all**, which it shares with VERDICT alone.
 ### 2. PREPROCESS — condition once, measure everything, decide nothing
 
 The one conditioning pass. Every model answering a whole-file question runs here — YAMNet, AST,
-HeAR, both recognizers, SQUIM, and FRCRN (a fourth model class, `FRCRN_ID`, `preprocess.py:129`) — and **no
+HeAR, both recognizers, SQUIM, and FRCRN (a fourth model class, `FRCRN_ID`, `preprocess.py:130`) — and **no
 later node re-runs one**, though YAMNet, AST and HeAR each run once *per stream* rather than once
 per file (the six `{enhanced,residual}_{yamnet,ast,hear}` block entries) (`preprocess.py:1-16`).
 
 It takes no pass/flag/fail decision, but it is not guaranteed to complete. Each block runs in its
 own `try`/`except`: a block whose config value is null, or whose upstream prerequisite is missing,
 records that derivative **absent** and the pass continues; any *other* exception is collected and,
-after every remaining block has run, re-raised as one summary (`preprocess.py:2617-2631`). So
+after every remaining block has run, re-raised as one summary (`preprocess.py:2630-2644`). So
 "unmeasured because unconfigured" and "unmeasured because broken" are different outcomes, and only
 the second stops the graph.
 
@@ -485,8 +485,8 @@ The blocks, in execution order (`preprocess.py`, the `blocks` list):
 `residual`); the last two are new and are described below.
 
 **Two blocks read the `enhanced` stream and nothing else: `ppg_posteriorgram` and `praat_features`**
-(`ppg_posteriorgram` at `preprocess.py:825`, `praat_features` at `:858`; block entries at
-`:2614-2615`). They run last, after `residual` has written the stream they read, and both
+(`ppg_posteriorgram` at `preprocess.py:826`, `praat_features` at `:859`; block entries at
+`:2627-2628`). They run last, after `residual` has written the stream they read, and both
 are measurements with no boundary decided.
 
 - **`ppg_posteriorgram`** runs `interactiveaudiolab/ppgs` over the enhanced stream resampled to
@@ -525,24 +525,24 @@ candidates something denied. `figure._spans` derives each general span's `contai
 live extents rather than from its own stored attribute, which is what lets a clip span be retired
 later without re-minting every span that overlapped it.
 
-**Residual.** FRCRN_SE_16K (`FRCRN_ID`, `preprocess.py:129`) runs on `plain`
-(`_residual`, `preprocess.py:2298`), is cross-correlation lag-aligned via `compute_residual`
+**Residual.** FRCRN_SE_16K (`FRCRN_ID`, `preprocess.py:130`) runs on `plain`
+(`_residual`, `preprocess.py:2311`), is cross-correlation lag-aligned via `compute_residual`
 (`speech_enhancement/residual.py:176`), and both the aligned enhancement and `plain − g·enhanced`
 are written as streams (`preprocess.py:2364`, `:2384`). One `residual` measurement records
 `lag_ms`, `gain_db`, `energy_fraction`, `correlation_*`, `peak_dbfs`, `rms_dbfs`, per-band energy
 fractions, and the speech preconditions `speech_present`/`n_consensus_words`/
-`speech_coverage_fraction` (`preprocess.py:2394-2404`). It decides nothing. No meaning or energy
+`speech_coverage_fraction` (`preprocess.py:2418-2441`). It decides nothing. No meaning or energy
 gate decides whether the streams are written: `speech_present`/`speech_coverage_fraction` are
-preconditions on interpretation, not gates (`preprocess.py:2320-2323`, `:2394-2404`), and speech
-regions come from `_speech_regions` (`:2280`) — the consensus's lexical words' per-source
+preconditions on interpretation, not gates (`preprocess.py:2322-2336`, `:2406-2417`), and speech
+regions come from `_speech_regions` (`:2293`) — the consensus's lexical words' per-source
 timings when a consensus exists, else this pass's own amplitude-source spans, with
 `speech_overlap_source` naming which.
 
 `residual.enabled` is **true** in the packaged config (`data/config/default.yaml:209`), so the
 block runs by default. When an operator sets it false, `_residual` raises
-`ValueError("residual.enabled is false")` (`preprocess.py:2326`) and is recorded as an absent
-derivative (`:2621-2623`), and the six stream-classifier blocks then raise
-`LookupError(f"{prefix} is absent")` (`:2460`). That absence has a different cause from the
+`ValueError("residual.enabled is false")` (`preprocess.py:2339`) and is recorded as an absent
+derivative (`:2634-2637`), and the six stream-classifier blocks then raise
+`LookupError(f"{prefix} is absent")` (`:2473`). That absence has a different cause from the
 null-threshold absences below and is not the same kind of gap.
 
 Name the twelve `{prefix}_{classifier}_summary_all` / `_summary_speech_free` derivatives
@@ -557,16 +557,16 @@ pre-emphasised one; `disruptions_file` reads the original recording (`preprocess
 (`preprocess.py:2457-2460`). Streams persist as FLAC through one shared writer —
 `STREAM_SUFFIX = ".flac"` (`common.py:18`), `write_stream` with `out_of_range="normalize"`
 (`common.py:301-323`) — whose returned gain every caller records as the stream entity's
-`write_gain` (`preprocess.py:1141`, `:2364`, `:2384`). `plain` additionally records `peak_scale`
-from a pre-write peak normalisation (`:1127-1129`); these are the only record that samples were
+`write_gain` (`preprocess.py:1154`, `:2377`, `:2397`). `plain` additionally records `peak_scale`
+from a pre-write peak normalisation (`:1139-1142`); these are the only record that samples were
 scaled.
 
 Points that decide something, or that are currently deciding something by omission:
 
 **`clip_spans` is the one block that withdraws a candidate it proposed, and it writes the
-amplitudes the audit reads.** `_clip_spans` (`preprocess.py:1182`) runs first, over the
+amplitudes the audit reads.** `_clip_spans` (`preprocess.py:1195`) runs first, over the
 **original** recording before any normalisation. It detects clip events, merges them across
-`clipping.merge_gap_ms`, and then applies `reject_contradicted_clips` (`preprocess.py:509`) before
+`clipping.merge_gap_ms`, and then applies `reject_contradicted_clips` (`preprocess.py:510`) before
 writing anything:
 
 - A clip span asserts *the signal reached its ceiling over this extent*. A sample outside every
@@ -582,7 +582,7 @@ writing anything:
   over that extent into the store for any reader that keys by extent rather than by liveness. The
   ids land in the `clip_withdrawn` derivative.
 
-`write_clip_spans` (`preprocess.py:671`) then writes the surviving spans **and**, beside them, one `clip_amplitude`
+`write_clip_spans` (`preprocess.py:672`) then writes the surviving spans **and**, beside them, one `clip_amplitude`
 measurement: the loudest unclipped sample, where it sits, how many samples are unclipped evidence,
 the guard used, and — keyed by span id — each span's own peak and how many unclipped samples exceed
 it. It is a measurement and not a span attribute because the store is append-only and a finished run
@@ -593,7 +593,7 @@ Both keys live in the `quality:` section and are the only two of its six that an
 
 **A transcribed cough is now a bracketed token.** `words.onomatopoeic_tokens` shipped null and is
 now `[cough, coughs, coughing, 咳, 呵, ahem, hack, khh, kof, cof]`, read by `_consensus`
-(`preprocess.py:2090`) with `config.get(...) or []` and handed to `align_sources`, which brackets
+(`preprocess.py:2103`) with `config.get(...) or []` and handed to `align_sources`, which brackets
 each match. The null was not inert: `words.lexical` counted a transcribed cough as speech, and 545
 `respiration-and-cough-*` recordings carried `lexical >= 4`, 523 of them also tripping the DDK
 repetition gate. The lexicon was measured at `>= 2` tokens over the corpus — sens 0.361, spec 0.999,
@@ -637,19 +637,19 @@ future run stamps the same membership the analysis derives. The floors moving ch
 `config_hash`.
 
 A short span borrows from the whole-file YAMNet pass instead: `_covering_window_attribution`
-(`preprocess.py:353`) computes `score[label] = Σ(score_w · overlap_w) / Σ overlap_w` over
+(`preprocess.py:354`) computes `score[label] = Σ(score_w · overlap_w) / Σ overlap_w` over
 whole-file `yamnet_scores` windows intersecting the span. A span shorter than the native window
 (`SpanTooShortForYAMNet`) is scored this way and carries `attribution: "covering_windows"`,
-`covering_windows_n`, `covering_seconds` (`:1227-1254`); a natively classified span carries
-`attribution: "native"` (`:1291`). A short span with no covering window is marked
+`covering_windows_n`, `covering_seconds` (`:1981-1985`); a natively classified span carries
+`attribution: "native"` (`:2026`). A short span with no covering window is marked
 `no_covering_window`; a missing whole-file pass is `yamnet_scores_absent`. HeAR still centres a
-short span in a silent 2 s buffer instead (`:1119-1121`, `span_hear_input`) and writes no
+short span in a silent 2 s buffer instead (`:1887`, `span_hear_input`) and writes no
 `attribution` field.
 
 AST has the same shape of limit and is handled the same way. Its feature extractor asserts `window_size <= len(waveform)` inside `torchaudio.compliance.kaldi.fbank`, so a trailing window shorter than 400 samples at 16 kHz (25 ms) aborts the pass. `AudioTooShortForAST` (`classification/huggingface.py:23`, raised at `:238`) is a `ValueError`, so the block is recorded as an absence rather than a hard failure and the recording keeps its YAMNet and HeAR results. A file 10.2632 s long yields one full 10.24 s window plus a 371-sample remainder, which is how this arises; it hit 55 of 62,550 recordings before the guard.
 
 **Per-span classification is batched.** Both passes build every span's input first, then make **one
-call per classifier** (`_classify_spans_in_batch`, `preprocess.py:272`). A batch is used only
+call per classifier** (`_classify_spans_in_batch`, `preprocess.py:273`). A batch is used only
 when it returns exactly one result per input — a short return is treated as a failure rather than
 aligned by position, since misattributing one span's scores to another is worse than failing — and
 a batch that raises falls back to one call per span, recording `"<Error> (after batch failed:
@@ -1127,17 +1127,17 @@ not an airway input — YAMNet's airway family on `enhanced` reaches Youden 0.35
 #### Background, and the gap spans
 
 PREPROCESS writes the complement of the **kept** span set as `measure: "gap"` and classifies it like
-any other span (`preprocess.py:1555-1583`). `covered` is built from `combined`, the four proposers'
+any other span (`preprocess.py:1568-1596`). `covered` is built from `combined`, the four proposers'
 surviving spans, so a gap is the complement of what was kept and not of what was proposed, and a gap
-shorter than `spans.min_duration_ms` is not emitted at all (`:1563`, `:1566`).
+shorter than `spans.min_duration_ms` is not emitted at all (`:1572`, `:1576`).
 
 **A gap span is not held out of any branch, and the section here used to say it was.** Gap spans
 carry `signal`, `measure`, `merged_proposals: 0` and `contains_clip` and **no `family` key**
-(`preprocess.py:1570-1578`). `family` is written on exactly one kind of span in the whole of
-PREPROCESS — the clip spans, at `family: "clip"` (`preprocess.py:706`, `quality.py:58`). AIRWAY
+(`preprocess.py:1583-1592`). `family` is written on exactly one kind of span in the whole of
+PREPROCESS — the clip spans, at `family: "clip"` (`preprocess.py:707`, `quality.py:58`). AIRWAY
 selects on `family is None` (`airway.py:198`), so every gap span is in its evidence set as an
 ordinary candidate. They are also in `state["span_ids"]`, which is what the per-span classifiers run
-over (`preprocess.py:1583`, `:1587`; `_span_hear` reads it at `:1861-1865`), so each one carries HeAR windows like any
+over (`preprocess.py:1596`, `:1600`; `_span_hear` (`:1862`) reads it at `:1874`), so each one carries HeAR windows like any
 other span. A gap span whose HeAR windows name `Cough` or `Breathe` is labelled (`airway.py:251-277`)
 and counts into `labelled_n` (`:394`) — which is the quantity separating AIRWAY's `pass` from its
 `fail` (`airway.py:376-383`). **A gap span can therefore carry the whole airway verdict on its own**,
@@ -1257,7 +1257,7 @@ exists, inert.
 
 Reads the per-span HeAR labels over the general span set — excluding any span carrying a `family`
 — and confirms or contests them (`airway.py:1`). Only clip spans carry a `family`
-(`preprocess.py:706`), so **the gap spans are in this evidence set**, not held out of it; step 3c's
+(`preprocess.py:707`), so **the gap spans are in this evidence set**, not held out of it; step 3c's
 "Background, and the gap spans" is where that lands. It also reads PREPROCESS's `silence` windows
 (`_inside_certified_silence`, `airway.py:26`; the windows are gathered at `:161-164` and the test
 applied per span at `:232`), the lexical consensus words, which exclude an already-transcribed span
@@ -1321,10 +1321,10 @@ an extent.
 ### 5c. VOICE — inert, and saying so
 
 Its subject is a store read: every live `span` whose `family` is `phonation` (`voice.py:3-4`,
-`_PHONATION_FAMILY` at `:38`). **The detector that proposed those spans was the one removed on
+`_PHONATION_FAMILY` at `:40`). **The detector that proposed those spans was the one removed on
 2026-09-04, and nothing proposes them now**, so in production this branch always takes the no-span
 path and writes `Outcome.FAIL` with a `why` naming the retirement rather than the bare "no phonation
-span in the store" a reader would take for a property of the recording (`voice.py:231-237`).
+span in the store" a reader would take for a property of the recording (`voice.py:235-240`).
 
 Its measurement machinery is intact and unreached: HNR, F0 and RMS tracks over the whole stream,
 sliced per span. **Its F0 range is no longer a null that would stop it.** It reads
@@ -1460,8 +1460,8 @@ file verdict is **not** re-folded by that driver, because `fold_file_verdict` fo
 the node did not adopt those values**, and the check it does implement is a consistency audit over
 the store's own records rather than a quality judgement about the recording. The two keys of the
 section that *are* read are not read in the same places: `clip_edge_guard_samples` is PREPROCESS's
-alone (`preprocess.py:1024`, `:1200`), and every later reader takes it off the measurement, while
-`clip_contradiction_margin` has three independent `config.require` readers — `preprocess.py:1201`,
+alone (`preprocess.py:1037`, `:1213`), and every later reader takes it off the measurement, while
+`clip_contradiction_margin` has three independent `config.require` readers — `preprocess.py:1214`,
 `quality.py:239` and `extend.py:606`. The packaged config says as much in its own comment
 (`default.yaml:273`, "PREPROCESS withdraws on it, QUALITY audits on it"). Goal 1 is the goal this
 node exists for, and it remains the goal with the widest gap between what is measured and what

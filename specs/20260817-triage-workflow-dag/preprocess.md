@@ -64,8 +64,8 @@ recording (as supplied) --> resample-+
 | `ast_windows` | per-window **set** of confident AudioSet labels | plain | TAXONOMY |
 | `hear_windows` | per-window **set** of confident health-acoustic labels | plain | TAXONOMY; AIRWAY re-evaluates candidates instead |
 | `spans` | see below | pre-emph | AIRWAY classifies. **SPEECH derives its own spans from word timings and does not read this** |
-| ~~`phonation_spans`~~ | **retired 2026-09-04 and not a derivative.** No pass proposes one; nothing reads one. The `phonation_spans` config section survives, but only its five Praat knobs — `hop_s`, `max_formants`, `formant_max_hz`, `formant_window_s`, `formant_preemphasis_hz` — and they are read by the F0/formant track block (`preprocess.py:943-947`), not by a span proposer. The section below is a design for a detector that does not exist | — | nothing |
-| `phonation_tracks` | **this is what exists, and it is whole-file.** F0 over the pre-emphasised stream and F1–F4 by Burg over `plain`, computed once on the analysis hop (`preprocess.py:951-959`) and written as one `phonation_tracks` npz (`:961-982`, name at `:133`). It is not sliced per phonation span, because there are no phonation spans. There is no `formant_tracks` derivative, and the "TAXONOMY's voice kind" consumer this table used to name is doubly gone: kinds were deleted in ruleset stage 2 | pre-emph (F0), plain (formants) | the voice scalars; no branch reads it |
+| ~~`phonation_spans`~~ | **retired 2026-09-04 and not a derivative.** No pass proposes one; nothing reads one. The `phonation_spans` config section survives, but only its five Praat knobs — `hop_s`, `max_formants`, `formant_max_hz`, `formant_window_s`, `formant_preemphasis_hz` — and they are read by the F0/formant track block (`preprocess.py:956-960`), not by a span proposer. The section below is a design for a detector that does not exist | — | nothing |
+| `phonation_tracks` | **this is what exists, and it is whole-file.** F0 over the pre-emphasised stream and F1–F4 by Burg over `plain`, computed once on the analysis hop (`preprocess.py:964-972`) and written as one `phonation_tracks` npz (`:976-990`, name at `:134`). It is not sliced per phonation span, because there are no phonation spans. There is no `formant_tracks` derivative, and the "TAXONOMY's voice kind" consumer this table used to name is doubly gone: kinds were deleted in ruleset stage 2 | pre-emph (F0), plain (formants) | the voice scalars; no branch reads it |
 | `level` | peak dBFS, RMS dBFS, LUFS | plain | voice branch reference level. **File-level only** |
 | `disruptions_file` | clipped runs, zero-crossing rate | **recording** | SPEECH step 8; VERDICT |
 | `squim` | STOI, PESQ, SI-SDR — objective head only | plain | speech branch, **per span, not per file**; reported, not gated |
@@ -242,7 +242,7 @@ them.
 | function | job | keeps `[]` | keeps internal `-` | `[UM]` → | `d-` → | `a-b` → |
 | --- | --- | --- | --- | --- | --- | --- |
 | `harmonize.normalise_token` | the alignment key that `align_sources` groups a column's members by (`consensus.py:285`) | no | no | `um` | `d` | `ab` |
-| `consensus.vocabulary_key` | the onomatopoeic lookup: normalises both a raw token and every `words.onomatopoeic_tokens` config entry before comparing them (`consensus.py:177`, `preprocess.py:1448`) | yes | yes | `[um]` | `d-` | `a-b` |
+| `consensus.vocabulary_key` | the onomatopoeic lookup: normalises both a raw token and every `words.onomatopoeic_tokens` config entry before comparing them (`consensus.py:170`, `preprocess.py:2103`) | yes | yes | `[um]` | `d-` | `a-b` |
 | `speech._norm_token` | the PII haystack key `_locate` compares a finding's tokens against the scanned text's tokens with (`speech.py:183-190`) | no | yes | `um` | `d-` | `a-b` |
 
 Each difference is load-bearing:

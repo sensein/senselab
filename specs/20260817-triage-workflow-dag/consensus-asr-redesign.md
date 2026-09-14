@@ -1,10 +1,23 @@
 # Consensus ASR redesign
 
-Plan only. Nothing here is implemented. Line references are against `design/triage-workflow-dag`
-at `bd71525e`, which already carries the aligner fix (`5aa4f607`, cost model in
+**This plan has since been implemented, and every `file:line` below is pinned to the revision it was
+written against — `design/triage-workflow-dag` at `bd71525e` (2026-09-06).** Do not resolve them
+against the current tree: `_consensus` now collects every `asr_hypothesis` measurement
+(`preprocess.py:2085-2150`) instead of naming `CRISPERWHISPER_ID` and `QWEN_ID`, words carry
+`word_attributes` (`consensus.py:391`) instead of the `existence_confidence` /
+`temporal_confidence` / `recognizers` / `timing_sources` set, `_as_non_word` has become
+`bracketed_form` (`consensus.py:182-200`), and `"event"` entities are gone — so §1's C-3, C-4 and
+C-5 rows describe code that no longer exists. That is the point of the pin: this document is the
+record of *why* the change was made, and renumbering its citations into a tree where the code is
+absent would destroy the evidence rather than refresh it. **A reader wanting current line numbers
+should read [`dag.md`](dag.md) and
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md),
+whose citations are maintained against the tree.**
+
+`bd71525e` already carried the aligner fix (`5aa4f607`, cost model in
 [`transcript-alignment.md`](transcript-alignment.md)) and the owner's rulings R-1..R-5 in
-[`consensus-asr-rulings.md`](consensus-asr-rulings.md). The rulings are binding; this plan folds
-them in and does not reopen them.
+[`consensus-asr-rulings.md`](consensus-asr-rulings.md). The rulings are binding; this plan folded
+them in and did not reopen them.
 
 Every worked example below was produced by running the code, not by reasoning: the real aligner
 (`harmonize_transcripts`, `harmonize.py:485`) driven by a scratch prototype of the algorithm in
