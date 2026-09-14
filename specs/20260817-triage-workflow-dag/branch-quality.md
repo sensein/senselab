@@ -93,6 +93,15 @@ variance. A vowel's natural spectral decay has neither the slope nor the varianc
 discriminating feature is the **abruptness and the flatness above it**, not the level at any
 frequency.
 
+**Q2 runs on `plain`.** Not `enhanced` — and this needs saying, because **the denoiser trips Q2's own
+discriminator**: spectral gating produces exactly the signature Q2 keys on, an abrupt spectral edge
+above which level variance collapses. A bandwidth measured on `enhanced` would report the suppressor's
+band as the device's.
+
+**So the Q2-after-Q8 ordering applies to detection, not only to the cross-recording import**: whether
+adaptive processing is present determines whether a measured cliff is the capture chain or the
+processing.
+
 **Prefer broadband content.** Fricatives, coughs and background segments excite the band that
 matters; sustained vowels do not.
 

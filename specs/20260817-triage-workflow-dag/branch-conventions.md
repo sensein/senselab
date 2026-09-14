@@ -95,7 +95,14 @@ elsewhere. Suppressing one scalar does not scale: it applies verbatim to DDK syl
 dB, jitter and shimmer in percent, F0 SD in semitones, and maximum phonation time in seconds.
 
 **So the name carries the convention** — `ddk_syllable_rate_from_envelope_peak_hz`, not `rate`;
-`cpps_db_voiced_intervals_60_330hz`, not `cpps`. And every such value carries a standing statement
+`cpps_db_voiced_intervals_60_330hz`, not `cpps`.
+
+**The two largest norm-bearing populations were omitted from this rule and are its clearest case.**
+`speaking_rate`, `articulation_rate` and `phonation_ratio` — [`branch-speech.md`](branch-speech.md)
+S4's ~25,000 recordings and [`branch-ddk.md`](branch-ddk.md) D2's 7,989 — carry circulating norms in
+syllables per second, and come from a helper whose `silence_db −25`, effective `min_dip 2`,
+`min_pause 0.3 s` and 0.1 s minimum sounding interval are **all non-Praat**. Published bare over
+~33,000 recordings they would be read against norms collected under Praat's own thresholds. And every such value carries a standing statement
 that it is not comparable to published norms collected under a different measurement convention, on
 different equipment.
 
@@ -129,6 +136,117 @@ whichever band the measure declares.
 
 **And every band sits under a 8 kHz ceiling nobody declared for this purpose**: `resample.target_hz:
 16000`, derived from model input requirements — audit finding 13.
+
+### The octave-jump count means three different things
+
+It appears in three places with three interpretations, and a reader needs the rule:
+
+| context | interpretation |
+| --- | --- |
+| any F0 track | **tracker instability** — the estimator jumped, no claim about the voice |
+| a glide, mid-sweep | **a normal register break** — modal to falsetto in an untrained voice |
+| a sustained vowel | **type-2 evidence** — period doubling or subharmonics |
+
+The count alone distinguishes none of them; the **task and the position within the production** do.
+A count used as type-2 evidence is restricted to sustained material, never to glides.
+
+## A deviation is not evidence of a bad recording
+
+`filler`, `repeat_attempt`, `stimulus_mismatch`, `syllable_sequence_mismatch` and `truncation` are
+produced **because of** the conditions this corpus exists to study — stuttering, aphasia, apraxia of
+speech, Parkinson's disease. Filed under a heading that reads as protocol non-compliance, they
+invite a reader to exclude the recording rather than measure it.
+
+**A deviation records that the production differed from what was asked. It says nothing about why,
+and nothing about whether the recording is usable.** Every branch document repeats this in its own
+deviation section, and any consumer that filters on deviations is filtering on impairment.
+
+## Quality covariates travel with every acoustic measurement
+
+A branch measurement carries the covariates of **its own extent**: clipping, SNR, and — where the
+measurement is bandwidth-sensitive — the sample rate.
+
+**Some covariates are file-level and cannot be per-extent.** Effective bandwidth and any AGC or
+noise-suppression signature are properties of the capture chain, and an AGC signature is not
+definable on a 400 ms span at all. Those are computed once per recording (see
+[`branch-quality.md`](branch-quality.md) Q2) and referenced by every extent; only clipping, SNR and
+support count are genuinely per-extent. An earlier version of this document required all covariates
+per-extent, which contradicted Q2's file-level emission.
+
+### Every distributional summary carries its support count
+
+F0 standard deviation over a segment that was 40% voiced, or CPP over one that was mostly silence,
+is not comparable to the same number over a fully-supported segment. **Report the count of frames
+actually contributing** beside every mean, SD, median or percentile. This is the cheapest
+interpretability guard available and it is currently nowhere in the tree.
+
+### The consumer capture chain is the dominant variance source
+
+Browser and phone capture default to automatic gain control, noise suppression and echo
+cancellation. Both are detectable without a threshold:
+
+**AGC** — report the background level in inter-phonation pauses beside the phonation level, and note
+when they move oppositely. The noise floor rising as gain is pushed while speech level falls is the
+signature.
+
+**Noise suppression is the greater hazard.** Spectral gating manufactures HNR and CPP values
+outright. It shows as: the pause noise floor collapsing toward digital silence with very low
+variance; level steps at speech boundaries; and a pause noise spectrum unlike the in-speech one.
+
+**This capability has no owner, and that is a gap.** This document requires the covariate of every
+measurement; it previously delegated the computation to
+[`branch-quality.md`](branch-quality.md) Q2, which specifies **bandwidth only** and has no AGC row —
+and QUALITY's own rule sends anything needing the waveform to PREPROCESS. So the covariate is
+required of everyone and computed by nobody. **It needs a named capability, an owner and a computing
+node before any measurement can claim to carry it.** Recorded in
+[`branch-quality.md`](branch-quality.md) as owed.
+
+**And it is not parameter-free either.** "Very low variance" and "a level step" are cuts, however
+they are phrased. Comparative framing reduces the number of parameters; it does not remove them.
+Whatever owns this declares them.
+
+### AGC has no covariate at shimmer's own extent
+
+AGC acts over tens to hundreds of milliseconds — **inside the shimmer analysis window** — and it
+directly modulates cycle-to-cycle amplitude, which is the quantity shimmer measures. On consumer
+capture it is the single largest threat to it.
+
+But this document places the AGC signature at **file level**, on the grounds that it "is not
+definable on a 400 ms span at all". So **a per-extent shimmer value has no AGC covariate available at
+its own extent**, and the file-level one describes a different timescale from the one doing the
+damage. Recorded as a hole rather than papered over.
+
+### Mouth-to-mic distance and reverberation
+
+Plausibly the largest uncontrolled variable in unsupervised phone collection, and directionally
+harmful: **reverberation inflates shimmer while depressing CPP and HNR — it moves every voice-quality
+number toward dysphonia.** Distance change is also task-correlated, since participants pull the
+phone away when asked to be loud.
+
+Neither is directly in the inventory. Derivable proxies are a direct-to-reverberant estimate and
+level relative to the noise floor. **At minimum this is named as an unmeasured confound** rather
+than omitted.
+
+## Analysis-window conventions are conventions, not fits
+
+Where a measurement needs a window — excluding the attack and decay of a sustained vowel, a search
+band for a modulation peak, a roll-off reference for bandwidth — the window is **declared as a
+convention** and the measurement reported against it. A stated convention is not a fitted threshold.
+A measurement with no stated window is comparable to nothing.
+
+**"Parameter-free" is a claim to check, not to assert.** Several capabilities in these documents
+claimed it and were wrong: a modulation spectrum needs an envelope extraction, a lowpass cutoff, an
+analysis window and a search band; a roll-off is defined relative to something.
+
+## A precondition all four proposing branches share
+
+**`features.py:1079-1091` must gain a `family` filter before any branch-proposed span exists.** It
+appends every live span to `live_spans` with no filter, and `_span_statistics`' `all.*` bucket
+includes them. In the live pipeline routing precedes the branches, so nothing changes there — but an
+offline recompute over finished stores (`scripts/analyze_routing_evidence.py:158`) would pull
+branch-proposed spans into `all.duration_*`, `all.rate_per_s` and `all.duty_fraction`.
+
+SPEECH already mints `family: "speech"` spans today, so the exposure predates the contract.
 
 ### Non-comparable beats a covariate, and steadiness is the harder case
 

@@ -158,8 +158,16 @@ the *absence* of the target and were withdrawn.
 
 **And the lexical channel is the wrong instrument on its own.** Humming, laughter and speech-like
 voicing are off-task content that produces no lexical word, and on a noisy breath recording an ASR
-transcribes little. Voicing detection from the F0 track (`phonation_tracks`, `preprocess.py:919`)
-catches them and is available now.
+transcribes little. Voicing detection catches them — **but not through `phonation_tracks`.**
+
+That measurement depends on `derive_f0_range`, which **raises when the wide search places no pitch**
+(`phonation/api.py:60-70`) — and that is the *normal* outcome on a clean breath-only recording. So
+the instrument would be absent on precisely the population A4 must serve.
+[`branch-voice.md`](branch-voice.md) V1 states the rule that an absent `phonation_tracks` is not an
+empty one; AIRWAY inherits neither the caveat nor a fallback.
+
+**A4's voicing channel must therefore be frame-wise over a fixed wide range**, not gated on a
+whole-file derived one.
 
 **The voicing channel needs the same exclusion the lexical one has.** A cough has a voiced phase —
 which A6 measures as an ordinary cough descriptor — and voiced exhalation is normal in several breath
@@ -188,8 +196,16 @@ exhalation-primary is not the universal answer either:
 - on `fivebreaths` and `threequickbreaths` a deep mouth inhalation is often the **louder** event, so
   exhalation-primary biases downward there instead.
 
-The primary-event choice is therefore per-family, driven by the declaration, and stated per family
-rather than fixed once.
+**But the choice must not be driven by the declaration, and an earlier version made it so.** Tuning
+the detector per declared family means that on `v2-threebreathsnose` it is tuned for near-silent nasal
+breathing — so a participant who breathed through the **mouth** instead, **which is exactly what the
+nose/mouth pair tests**, is measured by a detector selected on the assumption they complied. The
+deviation the task pair exists to expose is hidden by the detector chosen for it. It also contradicts
+this layer's own content-not-declaration principle.
+
+**So: detect both phases always, report per recording which was detectable, and let the declaration
+govern only what is reported.** The per-family reasoning above is right about the acoustics and wrong
+about where it applies — it belongs in the interpretation, not in the detector.
 
 **Name the outputs acoustically, not spirometrically.** An acoustic breath event is not a respiratory
 cycle. "Cycle duration" and "I:E ratio" import meaning from spirometry onto what are breath-event

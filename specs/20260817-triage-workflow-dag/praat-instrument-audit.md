@@ -177,8 +177,31 @@ then **not the published quantity**, and the entire difference between the two i
 
 ### Step 4 — implement CPPS directly, roughly thirty lines
 
-Log-power spectrum → cepstrum → robust regression over the quefrency range → peak prominence,
-frame-wise, returning the frame count.
+Log-power spectrum → cepstrum → robust regression over the trend range → peak prominence, frame-wise,
+returning the frame count — **and then the two smoothing steps, which are the *S* in CPPS.**
+
+**An earlier version of this step gave four operations and would have produced CPP, not CPPS.** The
+parameters it omitted are the ones that set the value:
+
+| parameter | value | why it is not optional |
+| --- | --- | --- |
+| time-averaging window | **0.01 s** | the first smoothing; without it the measure is CPP |
+| quefrency-averaging window | **0.001 s** | the second smoothing; likewise |
+| cepstrogram band | **declare it** | the per-measure band rule in [`branch-conventions.md`](branch-conventions.md) obliges it, and Praat's own default here is 5 kHz |
+| trend-line fit range | **distinct from the peak search** | Praat fits from 1 ms to the end of the quefrency axis |
+| peak search band | **60–700 Hz** | see below |
+
+**The trend range and the peak-search band are different things**, and an earlier version conflated
+them: "declare 60–500 Hz" read as the regression range. Fitting the trend over 2–16.7 ms instead of
+Praat's 1 ms-to-end **changes every value**.
+
+**And 500 Hz is too low for the peak search.** Untrained falsetto routinely exceeds 700 Hz, so an
+upward glide's endpoint sits above it — the same truncation finding 4 identifies at 330 Hz, moved
+rather than removed. **Declare 60–700 Hz.**
+
+This is a replacement for a *suppressed primary descriptor*, in a document set whose own rule is that
+a measurement with no stated window is comparable to nothing. It cannot ship under-determined in
+exactly the parameters that determine it.
 
 This removes the interval gating, so it works on the aperiodic voices that motivated promoting CPPS
 in the first place; has **no value cut** (finding 2); is **duration-weighted** rather than unweighted;
@@ -195,8 +218,7 @@ ways:
   contradicts the common-band rule in this same document set;
 - it is not what the method does: the published convention uses a fixed wide search.
 
-**Declare 60–500 Hz**, which covers children and the top of an upward glide while fixing the 330 Hz
-truncation (finding 4).
+
 
 ### Step 2b — track F0 on the signal the range was derived on
 
@@ -225,8 +247,17 @@ source yields zero pulses because the floor is 60 (finding 8) — plus SNR, leve
 confounded with F0 range, hence with sex and age, and with device and duration.
 
 **And CPPS drops out of this list once step 4 lands.** CPPS is missing at the disordered end *only*
-because of the `> 4` cut, which step 4 removes. After the path completes, **only jitter and shimmer
-are missing-not-at-random.**
+because of the `> 4` cut, which step 4 removes.
+
+**But "only jitter and shimmer" is too narrow — coverage is per instrument, not per scalar.**
+`extract_slope_tilt` builds a **pitch-corrected LTAS** with the same `0.0001 / 0.02 / 1.3` admission
+and the same binned range (`praat_parselmouth.py:678`), so the zero-pulse failure takes **slope and
+tilt down with jitter and shimmer**. And `hnr_db_mean` uses `Get mean`, which excludes undefined
+frames — so it is conditioned on the **pitch tracker** finding pitch, a different failure from the
+point process finding pulses.
+
+**Report two coverage figures**: one for the **point process** (jitter, shimmer, slope, tilt) and one
+for the **pitch tracker** (HNR, and anything reading the F0 contour).
 
 ---
 

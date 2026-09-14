@@ -142,9 +142,12 @@ That is precisely the 3× confusion the disambiguation exists to resolve, so a m
 recording can have its unit assigned in the wrong direction. D3 makes this argument about CV; it
 applies to the unit as well.
 
-**For a sequential train the 2f component is more informative than 3f**, since the strongest
-within-cycle asymmetry is usually between one syllable and the other two rather than evenly across
-three.
+**And the harmonic pattern itself resolves the unit, more sharply than "2f is more informative".**
+For a three-syllable cycle with one odd syllable — pattern (A, B, B), which is the usual case when
+one place of articulation is weaker — the cycle-rate and 2×cycle-rate components have **equal
+pre-shaping magnitude**. So **`|X1| ≈ |X2| < |X3|` is itself the signature** that the fundamental is
+the cycle rate and 3f is the syllable rate. That is a testable pattern rather than a heuristic about
+which component to prefer.
 
 **Not parameter-free, and only one of the four has a value.** An earlier version claimed the method
 was parameter-free and then listed four conventions without supplying three of them:
