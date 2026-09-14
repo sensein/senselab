@@ -66,7 +66,7 @@ not beside it**: evaluated earlier, both gates would read `unavailable` and VOIC
 **The two measurements do not have the readership this file used to claim for them.** FIGURE prints
 the label summaries on its cover (`figure.py:614`) and reads no `consensus_taxonomy` at all. REPORT
 reads neither: its classifier panels come from PREPROCESS's `<classifier>_windows`
-(`report.py:425`, `:443`), written at `preprocess.py:1662`, not from anything TAXONOMY writes.
+(`report.py:425`, `:443`), written at `preprocess.py:1671-1689`, not from anything TAXONOMY writes.
 `consensus_taxonomy` has **one** production reader, `routing_analysis/features.py:755` — ROUTING's
 own feature reduction — plus the `rewrite_consensus_taxonomy` extend driver that recomputes it
 (`extend.py:330`). The voice rework that would consume it is unbuilt (`voice.py:240`).

@@ -102,8 +102,8 @@ band as the device's.
 adaptive processing is present determines whether a measured cliff is the capture chain or the
 processing.
 
-**And `plain` is itself the 16 kHz stream**, resampled at `preprocess.py:1106` from
-`resample.target_hz` — so **every recording captured at 44.1 or 48 kHz carries an abrupt edge with
+**And `plain` is itself the 16 kHz stream**, resampled at `preprocess.py:1138` from
+`resample.target_hz` (read at `:1119`) — so **every recording captured at 44.1 or 48 kHz carries an abrupt edge with
 near-zero variance above it at ~7.7–8 kHz.** That is exactly Q2's discriminating signature, on the
 majority of the corpus. **As specified, Q2 would report the pipeline as the capture chain** — the
 worst failure mode Q2 itself names.
@@ -143,7 +143,7 @@ criterion. All are declared as conventions per
 [`branch-conventions.md`](branch-conventions.md).
 
 **And the existing spectral measures are already band-limited in a way that changes what this
-covariate is for.** `praat_parselmouth.py:999` builds its spectrogram with Praat's default
+covariate is for.** `praat_parselmouth.py:1058` builds its spectrogram with Praat's default
 `maximum_frequency` of 5 kHz, never named in the source
 ([`praat-instrument-audit.md`](praat-instrument-audit.md) finding 7).
 
@@ -170,7 +170,7 @@ it** — the division that keeps Q1 audio-free.
 **`dag.md` states the boundary**: the branches answer "is the content the protocol asked for
 present"; a mains hum is a property of the room, and questions of that shape are QUALITY's. It also
 records that the mechanism cuts against the thesis — gap spans carry no `family` key
-(`preprocess.py:1570-1578`), `airway.py:198` selects `family is None`, and **a gap span can carry the
+(`preprocess.py:1583-1592`), `airway.py:198` selects `family is None`, and **a gap span can carry the
 whole AIRWAY verdict alone** because `labelled_n` separates `pass` from `fail`
 (`airway.py:376-383`, detail at `:393-398`).
 
@@ -179,7 +179,7 @@ gap spans as background, they leave AIRWAY's selector and **QUALITY becomes wher
 concluded on**.
 
 **What it would read.** The gap spans' own per-span classifier measurements — they are in
-`state["span_ids"]` and the per-span classifiers run over them (`preprocess.py:1583`, `:1587`;
+`state["span_ids"]` and the per-span classifiers run over them (`preprocess.py:1596`, `:1600`;
 `_span_hear` at `:1861-1865`), so each already carries HeAR windows and needs no new computation.
 
 **What it would conclude.** That a background region carries a label, and which. Not a verdict on the

@@ -114,7 +114,7 @@ file ADMIT must admit and describe, not one it can measure with this.
 | normalised autocorrelation with an RMS floor, as a **track** | nothing. `features_extraction.torchaudio.extract_pitch_from_audios(audios, freq_low=80, freq_high=500)` returns a torchaudio `detect_pitch_frequency` contour — a pitch track, not a normalised-autocorrelation periodicity track, and it carries no periodicity value. Praat's `extract_harmonicity_descriptors(snd, floor, frame_shift)` returns `{hnr_db_mean, hnr_db_std_dev}` — **summary statistics only** | MISSING |
 | `period_marks`: an ordered point process of glottal period boundaries, each with duration, amplitude and the placing peak | nothing. Praat's `PointProcess` is reachable through `parselmouth` but senselab exposes only `extract_jitter(snd, floor, ceiling)` and `extract_shimmer(snd, floor, ceiling)`, both of which return **means and std devs** — precisely the resampled summary the design says is unrecoverable | MISSING |
 | `energy_track`, `periodicity_track`, `f0_candidates` on the analysis hop | F0 partially, via `extract_pitch_from_audios` or Praat `to_pitch_ac`; periodicity and energy tracks not at all | PARTIAL |
-| an F0 search range that flags rather than resolves an ambiguous run | `features_extraction.praat_parselmouth.extract_pitch_values(snd)` picks the range with a **hard-coded rule**: mean pitch < 170 Hz → floor 60 / ceiling 250, else 100 / 500. It resolves the ambiguity the design says must be flagged | **actively contrary** — do not reuse it for this |
+| an F0 search range that flags rather than resolves an ambiguous run | `features_extraction.praat_parselmouth.extract_pitch_values(snd)` derives the range per recording from percentiles of a wide pass (since 2026-09-14; it previously picked one of two hard-coded pairs at a 170 Hz mean-pitch boundary). It still **resolves** the ambiguity the design says must be flagged, but it now reports `pitch_range_fell_back` and `pitch_frames` alongside, so the resolution is at least visible | **PARTIAL** — reusable as a range source, not as the flag |
 | the gate's two floors | undecided by design: periodicity in `(0.44, 0.933)`, RMS in `(0.0007, 0.0161)`, no fitted value. Nothing to map, and nothing may default one | MISSING **and must stay unset** |
 | runs are elementary, never merged | — | MISSING (part of the gate task) |
 
@@ -310,8 +310,10 @@ Must refuse rather than guess:
   and a midpoint of `(0.44, 0.933)` would be an invented decision. The function signature is where
   that stays visible;
 - `f0_min_hz` / `f0_max_hz` likewise have no defaults — one range cannot serve a low adult male
-  fundamental and an infant voice, and `praat_parselmouth.extract_pitch_values`' hard-coded
-  `mean < 170 → 60/250` rule is the exact mistake not to repeat;
+  fundamental and an infant voice. `praat_parselmouth.extract_pitch_values`' hard-coded
+  `mean < 170 → 60/250` rule was the exact mistake not to repeat, and it was repeated for as long as
+  it stood; it was replaced by a per-recording derivation on 2026-09-14, which is what a default
+  here should look like — derived from the recording, not from an inferred demographic;
 - merging adjacent runs: not offered at all. No merge criterion has been measured, so there is no
   parameter to expose.
 

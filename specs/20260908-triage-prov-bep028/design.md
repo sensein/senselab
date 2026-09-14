@@ -279,7 +279,7 @@ The five-venv table in the commissioning brief was verified against this host an
 transformers 5.14.1/5.16.1), `qwen-asr`/`qwen-asr-cpu` (torch 2.8.0, transformers 4.57.6),
 `yamnet` (tensorflow 2.21.0, keras 3.14.0, numpy 2.4.4), `hear` (tensorflow 2.21.0, keras 3.15.1,
 numpy 2.4.6) — reproduced by `env_capture_measure_scan.py` in the scratchpad. One thing the brief
-did not say: `preprocess.py:1923-1926` runs **both** ASR backends (`asr_crisperwhisper` and
+did not say: `preprocess.py:2600-2604` runs **both** ASR backends (`asr_crisperwhisper` and
 `asr_qwen`) for consensus, not one or the other, so a single run's own environment picture is
 `clearvoice(-cpu)` + `crisperwhisper(-cpu)` + `qwen-asr(-cpu)` + `yamnet` + `hear` — five venvs,
 not a choice among them.

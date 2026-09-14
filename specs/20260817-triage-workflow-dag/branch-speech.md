@@ -165,14 +165,14 @@ phrasing — and both are transcribed and then dropped.
 **What to measure**, all components present in the inventory:
 
 - **speech rate and articulation rate**, and **phonation-time ratio** — `extract_speech_rate`
-  (`praat_parselmouth.py:91`) returns all three, plus `pause_rate` and `mean_pause_dur`;
+  (`praat_parselmouth.py:103`) returns all three, plus `pause_rate` and `mean_pause_dur`;
 
   **And it runs on FRCRN-enhanced audio like every other Praat scalar** — see
   [`praat-instrument-audit.md`](praat-instrument-audit.md) finding 0, which governs every measure in
   this capability.
 
   **The helper also hides three operating points, one data-dependent, and none in any config** —
-  `silence_db = -25` (`praat_parselmouth.py:142`), `min_dip = 4` (`:149`) **dropped to 2 when the
+  `silence_db = -25` (`praat_parselmouth.py:154`), `min_dip = 4` (`:161`) **dropped to 2 when the
   recording's own mean HNR is below 60** (`:154-155`), and `min_pause = 0.3` (`:159`). The HNR switch
   means syllable-detection sensitivity is conditioned on a voice-quality measurement of the recording
   being measured, across ~25,000 recordings of frequently dysphonic speakers. In practice mean HNR is

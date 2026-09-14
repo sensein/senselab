@@ -29,7 +29,7 @@
 
 **Withdrawn, not deferred:** step 1b. It is not owed a later plan.
 
-**Explicitly out of scope, each getting its own plan:** the CPPS reimplementation (step 4); jitter and shimmer from the `PeriodMark` sequence (step 3); withholding the scalars already written into 62,547 stores (step 0); instrument coverage per instrument (step 5); **step 2b — tracking F0 on the same signal the range was derived on** (`preprocess.py:941` derives on `plain`, `:951` tracks on `sharp`); the owed widening of `voice.f0_search_range_hz`'s 600 Hz ceiling against the CPPS band's 700 Hz; every branch capability; the SCREEN merge; and the contract's nine pieces.
+**Explicitly out of scope, each getting its own plan:** the CPPS reimplementation (step 4); jitter and shimmer from the `PeriodMark` sequence (step 3); withholding the scalars already written into 62,547 stores (step 0); instrument coverage per instrument (step 5); **step 2b — tracking F0 on the same signal the range was derived on** (`preprocess.py:954` derives on `plain`, `:964` tracks on `sharp`); the owed widening of `voice.f0_search_range_hz`'s 600 Hz ceiling against the CPPS band's 700 Hz; every branch capability; the SCREEN merge; and the contract's nine pieces.
 
 **One thing this plan deliberately does not resolve.** `branch-voice.md` V3 records that narrowing buys octave-error robustness on stationary material and is wrong on a glide, where the derived ceiling is set by how high the speaker went, making V3's "did F0 reach the derived limit" flag partly circular. This plan implements the narrowing and leaves that open.
 
@@ -503,7 +503,7 @@ git add -A && git commit -m "fix(praat): derive the F0 range per recording, and 
 ## Task 2: `derive_f0_range` raises two different errors
 
 **Files:**
-- Modify: `src/senselab/audio/tasks/phonation/api.py:41-69`, `src/senselab/audio/tasks/phonation/__init__.py`
+- Modify: `src/senselab/audio/tasks/phonation/api.py:41-98`, `src/senselab/audio/tasks/phonation/__init__.py`
 - Test: `src/tests/audio/tasks/phonation_test.py`
 
 **Interfaces:**
@@ -513,7 +513,7 @@ git add -A && git commit -m "fix(praat): derive the F0 range per recording, and 
 **`F0RangeFailed` subclasses `ValueError`, and that choice is load-bearing at both consumers.** Verified:
 
 - `extend.py:120-126` lists `F0RangeUnavailable` in `UNAVAILABLE`; `attempt_derivation:160-165` then catches `UNAVAILABLE` as a non-failure and `(OSError, ValueError, LookupError)` as a **failed row**. A `ValueError` subclass therefore records the failure and lets the array task continue. A `RuntimeError` subclass would escape both handlers and **kill the task** — which is the defect `extend_reprocessed_outputs_test.py:504-519` exists to prevent, after 613 rows of the last corpus pass did exactly that.
-- `preprocess.py:2619-2627`: `except (ValueError, LookupError)` records a cascading absence; `except Exception` appends to `hard_failures` and the node then **raises** at `:2631`. A `ValueError` subclass keeps one crashed recording from aborting a node whose other blocks still need to run.
+- `preprocess.py:2631-2640`: `except (ValueError, LookupError)` records a cascading absence; `except Exception` appends to `hard_failures` and the node then **raises** at `:2631`. A `ValueError` subclass keeps one crashed recording from aborting a node whose other blocks still need to run.
 
 So `F0RangeFailed` must **not** be added to `UNAVAILABLE` — it is a failure, not an absence, and `attempt_derivation`'s `ValueError` branch is where it belongs.
 
@@ -651,7 +651,7 @@ Match the module's existing import and helper style before writing these — rea
 
 ```
 
-Confirm the block's registered name against the `blocks` list at `preprocess.py:2576-2616` — use whatever name that list gives the phonation-tracks block, not a guess. And follow `preprocess_test.py:1090`, which already templates the monkeypatch-a-block-into-raising pattern; do not invent a second shape for it.
+Confirm the block's registered name against the `blocks` list at `preprocess.py:2589-2629` — use whatever name that list gives the phonation-tracks block, not a guess. And follow `preprocess_test.py:1090`, which already templates the monkeypatch-a-block-into-raising pattern; do not invent a second shape for it.
 
 - [ ] **Step 3: Run both and confirm they pass**
 
@@ -673,7 +673,7 @@ git add -A && git commit -m "test(triage): a failed F0 analysis is a failed row,
 
 **Interfaces:** consumes Tasks 1–3; produces nothing.
 
-`derive_f0_range` has two production callers: `preprocess.py:941` (feeding `f0_track` and `formant_track`) and `voice.py:71-73` (feeding `hnr_track` and `period_marks`). Both now receive a continuously varying range, and Praat's window is `periods_per_window / floor`, so a changed floor changes frame counts.
+`derive_f0_range` has two production callers: `preprocess.py:954` (feeding `f0_track` and `formant_track`) and `voice.py:71` (feeding `hnr_track` and `period_marks`). Both now receive a continuously varying range, and Praat's window is `periods_per_window / floor`, so a changed floor changes frame counts.
 
 - [ ] **Step 1: Run both suites**
 
@@ -1035,7 +1035,7 @@ git add -A && git commit -m "feat(extend): --force re-derives the Praat scalars 
 ## Task 8: The derived range is recorded, not just used
 
 **Files:**
-- Modify: `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py:1302` and the `feature_data` assembly around it
+- Modify: `src/senselab/audio/tasks/features_extraction/praat_parselmouth.py:1375-1384` and the `feature_data` assembly around it
 - Modify: `src/senselab/audio/workflows/triage/nodes/preprocess.py:886-895`
 - Test: `src/tests/audio/tasks/features_extraction_test.py`, `src/tests/audio/workflows/triage/nodes/preprocess_test.py`
 
@@ -1077,7 +1077,7 @@ because threading config into that function is a separate change with its own ca
 
 - [ ] **Step 3: Thread the five keys into `feature_data`**
 
-In `_extract_one`, after the `extract_pitch_values` call at `:1302`, add its five keys to `feature_data` under their own names. Do not rename them — they must match what `extract_pitch_values` returns so a reader grepping one finds the other. The `praat_features` measurement already carries `features=scalars` (`preprocess.py:893`), so they reach the store with no change there; confirm that and only touch `preprocess.py` if it filters keys.
+In `_extract_one`, after the `extract_pitch_values` call at `praat_parselmouth.py:1375-1384`, add its five keys to `feature_data` under their own names. Do not rename them — they must match what `extract_pitch_values` returns so a reader grepping one finds the other. The `praat_features` measurement already carries `features=scalars` (`preprocess.py:898`, read at `:905`), so they reach the store with no change there; confirm that and only touch `preprocess.py` if it filters keys.
 
 - [ ] **Step 4: Run and confirm**
 
@@ -1101,7 +1101,7 @@ git add -A && git commit -m "fix(praat): the derived range travels with the scal
 
 - [ ] **Step 1: Mark steps 1 and 2 landed**
 
-For each: what changed, the convention and that it was not fitted, and what remains. Steps 0, 3, 4 and 5 stay open and must still read as open, and **step 1b stays withdrawn** — do not mark it landed, deferred or owed. Add that **step 2b is untouched** — `preprocess.py:941` derives the range on `plain` while `:951` tracks F0 on `sharp`, and this plan does not close that.
+For each: what changed, the convention and that it was not fitted, and what remains. Steps 0, 3, 4 and 5 stay open and must still read as open, and **step 1b stays withdrawn** — do not mark it landed, deferred or owed. Add that **step 2b is untouched** — `preprocess.py:954` derives the range on `plain` while `:964` tracks F0 on `sharp`, and this plan does not close that.
 
 - [ ] **Step 2: Answer the question step 1 asks and this plan did not**
 
