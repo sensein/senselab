@@ -874,24 +874,37 @@ nothing on all 62,547 stores. The *shape* of the override and the *reason* for t
   the GPU: on a store that already holds a posteriorgram the driver `continue`s at `:192-193` before
   `ppg_input`, so no batch reaches ppgs. `:191` sets `opened[position]` before that `continue`, so the
   Praat loop at `:233-245` still sees the store.
-- **The `ppg_held` / `praat_held` capture collapses to one local, and then to none.** With a one-sided
-  override, "did this store already hold the Praat measurement" is just `praat_pending` read **before** it.
+- **The `ppg_held` / `praat_held` capture collapses to one local, and not to none** — the plan said "and
+  then to none" and that is wrong. A bool is not enough: the supersession needs the retiring **entity's
+  id**, and by the time the Praat loop runs, `find_measurement` would return the replacement. What landed is
+  one dict, `retiring: dict[int, str]`, filled under `force` from `find_measurement(store, PRAAT_MEASUREMENT)`
+  read **before** the override and carried to the second loop by position.
 - **The checksum-integrity argument was entirely the posteriorgram's, and it is gone.** `praat_features`
   writes **no sidecar** — the forty scalars are attributes of the measurement (`preprocess.py:862-864`,
   with `"path" not in attrs` asserted at `preprocess_test.py:2235`) — so nothing is overwritten in place
   and no stored entity is ever invalid.
 - **Supersession is still required, on the weaker and more ordinary ground:** the store is append-only, so
-  a forced run appends a second live `praat_features`, one measured on `enhanced` and one on `plain`, with
-  nothing to say which is current. Retire the old one.
+  a forced run appends a second live `praat_features` — both `signal="enhanced"`, one taken under the
+  retired sex-typed bin and one under the derived range — with nothing to say which is current. Retire the
+  old one. (The "one on `enhanced` and one on `plain`" this bullet used to read is a Task 5 leftover: no
+  stream moves.)
 - **Which makes the write-then-supersede ordering easy rather than a judgement call.** Supersede only
   after the replacement entity exists — previously a choice between two bad windows, now simply the
   non-lossy order.
 
-**One operational fact the withdrawal does not remove.** `main()` refuses with exit 2 when the ppgs venv is
-absent (`:337-345`), unconditionally — including on a `--force` pass that will do no PPG work at all. A
-Praat-only re-derivation still requires a provisioned ppgs venv on the host. Either leave that as is and say
-so in the runbook, or make the check conditional on `force`; **decide it here rather than discovering it on
-the cluster.**
+**One operational fact the withdrawal does not remove, now decided.** `main()` refuses with exit 2 when the
+ppgs venv is absent (`:337-345`), unconditionally — including on a `--force` pass that, on this corpus, will
+do no PPG work at all. **The gate stays unconditional, and the runbook says so.** An earlier version of this
+paragraph offered "make the check conditional on `force`" as an equally available second option. It is not
+available: it is unsafe, and the flag's name is what hides that.
+
+`--force` is **one-sided** — it overrides `praat_pending` alone. A store that lacks a posteriorgram
+therefore still takes the PPG path at `:192-193` on a forced pass and still reaches `ppg_input` and
+`extract_ppgs_from_audios`. "A forced pass does no PPG work" is a property of *this* corpus, where every
+store already holds a posteriorgram, not a property of the flag. A gate conditional on `force` would let
+exactly that store run with no venv provisioned, which is the cold-build race the gate exists to prevent.
+Recorded in the module docstring of `scripts/extend_ppg_praat.py` and in `main()`'s own docstring so it is
+not "fixed" later by someone reading only the flag name.
 
 - [ ] ~~**Step 1: Seed `plain` beside `enhanced` in the fixture, or every test in the module fails**~~
 **Dropped 2026-09-14 with Task 5.** It existed only because the Praat block was going to resolve `plain` and
@@ -902,62 +915,45 @@ it stands and **must not be touched**.
 - [ ] ~~**Step 2: Run the module and confirm it is green again before adding anything**~~
 **Dropped with Step 1** — nothing has been made red to recover from. Start at Step 3.
 
-- [ ] **Step 3: Write the failing `--force` test**
+- [x] **Step 3: Write the failing `--force` test**
 
-The module drives everything through `cli.main([...])` with the `provisioned` and `stub_ppgs` fixtures. Follow that:
+The module drives everything through `cli.main([...])` with the `provisioned` and `stub_ppgs` fixtures. Follow that.
 
-```python
-class TestForceReDerives:
-    """Every stored Praat scalar was measured under the retired sex bin, and skipping them looks like success."""
+**Two of the three sketches below were unusable as written, for the same reason the supersession guard
+exists.** The landed class is `TestForceReDerives` in `src/tests/scripts/extend_ppg_praat_test.py`; read it
+rather than these.
 
-    def test_force_re_derives_a_store_that_already_holds_both(
-        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
-    ) -> None:
-        """Without --force the driver skips, so a corpus-wide re-derivation silently does nothing."""
-        manifest, roots = corpus(1)
-        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
-        before = _store_of(roots[0]).fingerprint()
+- **`assert store.fingerprint() != before` cannot express "--force re-derived".** With the same config on
+  both passes the re-derivation is byte-identical, the content-addressed entity id is the same, and the
+  activity id — whose digest excludes `started`/`ended` (`prov_store.py:309-317`) — is the same too, so the
+  fingerprint is **unchanged** by a forced pass that genuinely ran Praat. What distinguishes the two is the
+  **per-recording log row**: `praat` reads `"skipped"` unforced and `"ok"` forced. The landed test asserts
+  that, and also that `ppg` reads `"skipped"` on the forced pass — which is the Praat-only property stated
+  directly rather than inferred.
+- **"one live measurement after --force" needs a store whose stored reading actually differs.** Under an
+  identical config there is nothing to supersede, so the landed module splits it: one test seeds the first
+  pass through `--config` with a different `pitch_ceiling_quartile_multiplier` — standing in for the retired
+  range rule — and asserts the forced pass leaves one live measurement, the stale one invalidated, and the
+  live one carrying today's coefficient; a second test asserts that an unchanged re-derivation retires
+  **nothing** and still leaves exactly one.
+- A fourth test pins the venv gate on a forced pass, so the decision recorded above has a test and not only
+  a docstring.
 
-        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"]) == 0
-        store = _store_of(roots[0])
-        assert store.fingerprint() != before, "--force must re-derive, not skip"
+Use `senselab.audio.workflows.triage.nodes.common.find_measurements` — the plural of `find_measurement`,
+already the liveness filter this needs — rather than `live_entities` plus a name predicate.
 
-    def test_force_leaves_exactly_one_live_praat_measurement(
-        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
-    ) -> None:
-        """The store is append-only, so the superseded reading must not stay live beside the new one."""
-        manifest, roots = corpus(1)
-        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"])
-        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"])
+The one sketch that survived intact is the posteriorgram check — the forced pass must leave the PPG
+measurement's id and its `signal="enhanced"` untouched. For the `supersede` call itself, `extend.py:303` is
+the signature and `:447` and `:671-678` are the two call-site models.
 
-        store = _store_of(roots[0])
-        live = [e for e in live_entities(store, "measurement") if e.attributes.get("name") == PRAAT_MEASUREMENT]
-        assert len(live) == 1, f"{len(live)} live Praat measurements after --force"
-
-    def test_force_does_not_touch_the_posteriorgram(
-        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
-    ) -> None:
-        """Audit steps 1 and 1b are both withdrawn, so a forced pass is Praat-only, on ``enhanced``."""
-        manifest, roots = corpus(1)
-        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"])
-        before = find_measurement(_store_of(roots[0]), PPG_MEASUREMENT)
-        assert before is not None
-
-        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"])
-        after = find_measurement(_store_of(roots[0]), PPG_MEASUREMENT)
-        assert after is not None
-        assert after.id == before.id
-        assert after.attributes["signal"] == "enhanced"
-```
-
-Use `senselab.audio.workflows.triage.nodes.common.live_entities` rather than reinventing the liveness filter. For the `supersede` call itself, `extend.py:303` is the signature and `:447` and `:671-678` are the two call-site models.
-
-- [ ] **Step 4: Run and watch all three fail**
+- [x] **Step 4: Run and watch them fail**
 
 Run: `uv run pytest src/tests/scripts/extend_ppg_praat_test.py::TestForceReDerives -v`
-Expected: FAIL — `--force` is not a recognised argument.
+Ran: **5 failed, 1 passed** — every test touching `--force` failed with
+`pytest: error: unrecognized arguments: --force`. The one that passed is the unforced-skip test, which
+documents the behaviour that is staying and so was green by construction.
 
-- [ ] **Step 5: Add the flag**
+- [x] **Step 5: Add the flag**
 
 In `build_parser`, beside `--config` (`:115`):
 
@@ -986,7 +982,7 @@ posteriorgram alone. Apply the same one-sided override at the `:235` re-check, w
 Correct the docstring at `:26-27` — the skip is the default and `--force` overrides it, and the override is
 Praat-only.
 
-- [ ] **Step 6: Write the new measurement, then supersede the old one**
+- [x] **Step 6: Write the new measurement, then supersede the old one**
 
 Add one step constant beside `extend.py:77-81`'s `WORD_SUPERSEDED` / `CLIP_SPAN_SUPERSEDED` family:
 
@@ -1009,15 +1005,33 @@ Then, in the forced path, when `praat_held`, call `extend.supersede` on the old 
 call — do not look there.** Follow `extend.py:447` and `:671-678`'s argument shape exactly (`node=`,
 `step=`, `reason=`, `software=`).
 
+**Supersede only when the returned id differs from the stored one — the plan missed this and it inverts
+the outcome.** `ProvStore.entity` ids are content-addressed over `(run_id, prov_type, extent, attributes)`
+(`prov_store.py:297`), so a forced re-derivation that reproduces the stored reading writes the **same id**
+and `_entities[eid]` is overwritten in place, not appended. An unconditional `supersede(store, praat_held.id)`
+would then invalidate the entity the forced pass had just written, leaving **zero** live `praat_features` and
+turning `find_measurement` into `None` for every consumer. Guarding on `written_id != retired` is also the
+right reading of it on its own terms: an append-only store that converged has nothing to retire, which is the
+same set-union property `test_a_rerun_converges_on_the_same_graph` pins for the unforced path. In production
+Task 1's range change does move the attributes, so the ids differ and the supersession fires; the guard is
+what keeps a forced pass over an already-re-derived slice idempotent rather than destructive.
+
+**Where the two new names live.** `PRAAT_MEASUREMENT_SUPERSEDED` goes in `extend.py` beside the other
+`*_SUPERSEDED` step names, which is the store's shared step vocabulary. `_RETIRED_F0_RANGE_REASON` goes in
+`scripts/extend_ppg_praat.py`, beside `_OK`/`_ABSENT`/`_ERROR`/`_SKIPPED`: it is this driver's own reason and
+nothing in `extend.py` reads it, so putting it there would add a private constant that module never uses.
+
 **No `PPG_MEASUREMENT_SUPERSEDED`.** An earlier version of this plan added one; the posteriorgram is never
 re-derived, so it is never superseded.
 
-- [ ] **Step 7: Run and confirm all pass**
+- [x] **Step 7: Run and confirm all pass**
 
 Run: `uv run pytest src/tests/scripts/extend_ppg_praat_test.py -v`
-Expected: PASS, including the existing skip tests without `--force` and `test_a_rerun_converges_on_the_same_graph` (`:276`), which asserts the no-force path is still idempotent.
+Ran: **22 passed**, including the existing skip tests without `--force` and
+`test_a_rerun_converges_on_the_same_graph`, which asserts the no-force path is still idempotent.
+`src/tests/scripts/` is 231 passed, 8 skipped; `src/tests/audio/workflows/triage/` is 1134 passed.
 
-- [ ] **Step 8: Lint and commit**
+- [x] **Step 8: Lint and commit**
 
 ```bash
 uv run ruff format scripts/extend_ppg_praat.py src/tests/scripts/extend_ppg_praat_test.py

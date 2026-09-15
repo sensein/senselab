@@ -2,7 +2,7 @@
 r"""Extend finished triage runs with the posteriorgram and Praat blocks, in place.
 
     uv run python scripts/extend_ppg_praat.py MANIFEST --slice-index I --slice-count N \
-        [--batch-size 500] [--device cpu]
+        [--batch-size 500] [--device cpu] [--force]
 
 ``MANIFEST`` is a JSONL, one object per line, each carrying ``stem``, ``enhanced`` (the absolute
 path of that recording's ``run/streams/enhanced.flac``), ``family``, ``duration_s`` and ``lexical``.
@@ -24,7 +24,15 @@ build outlasts the venv lock's patience and every task racing it waits:
         "from senselab.audio.tasks.features_extraction import ensure_ppgs_venv; ensure_ppgs_venv()"
 
 A recording whose store already holds both measurements is skipped, so a task that dies mid-way
-restarts where it stopped and a completed slice re-run changes nothing.
+restarts where it stopped and a completed slice re-run changes nothing. ``--force`` overrides that
+skip for the **Praat block only**: the scalars are re-derived and, when the new reading differs from
+the stored one, the stored one is superseded. The posteriorgram is never re-derived, forced or not.
+
+``--force`` still requires a provisioned ppgs venv on this host, and the gate above is deliberately
+unconditional. ``--force`` overrides ``praat_pending`` alone, so a store that is *missing* its
+posteriorgram still takes the PPG path on a forced pass and still calls ppgs. That every store in
+the ``ppg_20260911`` corpus already holds one is a property of that corpus, not of the flag, so
+making the gate conditional on ``--force`` would let such a store run with no venv provisioned.
 
 The reasoning -- the batch-size benchmark, the venv-lock hazard, the convergence argument -- is in
 ``specs/20260911-ppg-praat-batch/design.md``.
@@ -50,6 +58,7 @@ from senselab.audio.tasks.features_extraction import (
 )
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
+    PRAAT_MEASUREMENT_SUPERSEDED,
     RUN_SUBDIR,
     SLICES_SUBDIR,
     batches,
@@ -57,10 +66,17 @@ from senselab.audio.workflows.triage.extend import (
     read_manifest,
     read_store,
     run_root_of,
+    supersede,
     take_slice,
     write_store,
 )
-from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception, find_measurement
+from senselab.audio.workflows.triage.nodes.common import (
+    capture_environments,
+    describe_exception,
+    find_measurement,
+    software_agent,
+)
+from senselab.audio.workflows.triage.nodes.preprocess import NODE as PREPROCESS_NODE
 from senselab.audio.workflows.triage.nodes.preprocess import (
     PPG_MEASUREMENT,
     PRAAT_MEASUREMENT,
@@ -79,6 +95,10 @@ _OK = "ok"
 _ABSENT = "absent"
 _ERROR = "error"
 _SKIPPED = "skipped"
+
+_RETIRED_F0_RANGE_REASON = (
+    "it was measured under the retired sex-typed F0 range; the range is now derived per recording"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -113,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
     parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-derive the Praat scalars even where the store already holds them, superseding the old",
+    )
     return parser
 
 
@@ -153,6 +178,7 @@ def process_batch(
     *,
     device: DeviceType | None,
     used_venvs: dict[str, Path],
+    force: bool = False,
 ) -> list[dict[str, Any]]:
     """Extend every run in one batch, one ppgs call across all of them.
 
@@ -165,12 +191,15 @@ def process_batch(
         config: The triage configuration.
         device: Where ppgs runs.
         used_venvs: The venv-use record the slice opened, read when each store is written.
+        force: Re-derive the Praat block on stores that already hold it, superseding the stored
+            reading when the new one differs. The posteriorgram block is not forced.
 
     Returns:
         One outcome record per input row, in order.
     """
     outcomes: dict[int, dict[str, Any]] = {}
     opened: dict[int, tuple[Path, ProvStore]] = {}
+    retiring: dict[int, str] = {}
     inputs: list[tuple[int, str, Audio]] = []
 
     for position, row in enumerate(rows):
@@ -184,11 +213,15 @@ def process_batch(
                 "praat": describe_exception(error),
             }
             continue
+        held = find_measurement(store, PRAAT_MEASUREMENT) if force else None
         ppg_pending, praat_pending = pending(store)
+        praat_pending = praat_pending or force
         if not ppg_pending and not praat_pending:
             outcomes[position] = {"status": _SKIPPED, "ppg": _SKIPPED, "praat": _SKIPPED}
             continue
         opened[position] = (run_root, store)
+        if held is not None:
+            retiring[position] = held.id
         if not ppg_pending:
             continue
         try:
@@ -233,12 +266,23 @@ def process_batch(
         run_root, store = opened[position]
         ppg = ppg_status.get(position, _SKIPPED)
         _, praat_pending = pending(store)
+        praat_pending = praat_pending or force
         praat: str
         if not praat_pending:
             praat = _SKIPPED
         else:
             try:
-                praat_features(store, config, run_dir=run_root / RUN_SUBDIR)
+                written_id = praat_features(store, config, run_dir=run_root / RUN_SUBDIR)
+                retired = retiring.get(position)
+                if retired is not None and retired != written_id:
+                    supersede(
+                        store,
+                        retired,
+                        node=PREPROCESS_NODE,
+                        step=PRAAT_MEASUREMENT_SUPERSEDED,
+                        reason=_RETIRED_F0_RANGE_REASON,
+                        software=software_agent(store),
+                    )
                 praat = _OK
             except Exception as error:  # noqa: BLE001 — a recording Praat refuses is an outcome
                 praat = describe_exception(error)
@@ -260,6 +304,7 @@ def run_slice(
     device: DeviceType | None,
     config: TriageConfig,
     log_dir: Path,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Extend every run in one array task's stride of the manifest.
 
@@ -271,6 +316,7 @@ def run_slice(
         device: Where ppgs runs.
         config: The triage configuration.
         log_dir: Where this task's ``slices/`` log goes.
+        force: Re-derive the Praat block on stores that already hold it.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -286,7 +332,7 @@ def run_slice(
     with record_venv_use() as used_venvs:
         for number, batch in enumerate(batches(mine, batch_size), start=1):
             batch_started = time.time()
-            log.extend(process_batch(batch, config, device=device, used_venvs=used_venvs))
+            log.extend(process_batch(batch, config, device=device, used_venvs=used_venvs, force=force))
             print(
                 f"[slice {slice_index}/{slice_count}] batch {number}: {len(batch)} recordings in "
                 f"{time.time() - batch_started:.0f}s",
@@ -310,6 +356,7 @@ def run_slice(
         "batch_size": batch_size,
         "device": device.value if device is not None else None,
         "config_hash": config.config_hash,
+        "force": force,
         "rows": len(mine),
         "counts": counts,
         "elapsed_s": time.time() - started,
@@ -352,6 +399,7 @@ def main(argv: list[str] | None = None) -> int:
             device=DeviceType(args.device) if args.device else None,
             config=load_triage_config(args.config) if args.config else load_triage_config(),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
+            force=args.force,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
