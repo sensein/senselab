@@ -23,10 +23,20 @@ build outlasts the venv lock's patience and every task racing it waits:
     uv run python -c \
         "from senselab.audio.tasks.features_extraction import ensure_ppgs_venv; ensure_ppgs_venv()"
 
+**The posteriorgram is derived on the recordings that have consensus ASR output, and only those.**
+A store holding no live ``consensus_transcript``, or one whose consensus left no live word, is out
+of the posteriorgram's scope and the driver does not call ppgs on it; Praat needs no transcript and
+is derived on every recording regardless. The scope keys on the consensus stream itself, not on its
+unbracketed subset, so a recording whose whole transcript is ``[breath]``/``[cough]`` is in. Until
+now this rule lived only in the manifest an operator built for the ``ppg_20260911`` pass, which
+cannot be rebuilt from this tree; it is now the driver's, so a manifest naming every recording
+yields the same scope.
+
 A recording whose store already holds both measurements is skipped, so a task that dies mid-way
 restarts where it stopped and a completed slice re-run changes nothing. ``--force`` overrides that
 skip for the **Praat block only**: the scalars are re-derived and, when the new reading differs from
-the stored one, the stored one is superseded. The posteriorgram is never re-derived, forced or not.
+the stored one, the stored one is superseded. The posteriorgram is never re-derived, forced or not,
+and ``--force`` does not widen its scope.
 
 ``--force`` still requires a provisioned ppgs venv on this host, and the gate above is deliberately
 unconditional. ``--force`` overrides ``praat_pending`` alone, so a store that is *missing* its
@@ -58,6 +68,7 @@ from senselab.audio.tasks.features_extraction import (
 )
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
+    CONSENSUS_TRANSCRIPT,
     PRAAT_MEASUREMENT_SUPERSEDED,
     RUN_SUBDIR,
     SLICES_SUBDIR,
@@ -72,6 +83,7 @@ from senselab.audio.workflows.triage.extend import (
 )
 from senselab.audio.workflows.triage.nodes.common import (
     capture_environments,
+    consensus_words,
     describe_exception,
     find_measurement,
     software_agent,
@@ -141,8 +153,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def has_consensus_output(store: ProvStore) -> bool:
+    """Whether the recognizers left this store a consensus transcript with anything in it.
+
+    Reads the consensus stream under the store's own live rule, not the transcript's ``n_words``.
+
+    Args:
+        store: The run's store.
+
+    Returns:
+        True when the store holds a live ``consensus_transcript`` and that consensus left at least
+        one live word; False when the transcript is absent, and False when it is present but the
+        recognizers produced nothing.
+    """
+    if find_measurement(store, CONSENSUS_TRANSCRIPT) is None:
+        return False
+    return bool(consensus_words(store))
+
+
 def pending(store: ProvStore) -> tuple[bool, bool]:
-    """Which of the two measurements this store is still missing.
+    """Which of the two measurements this store is still owed.
+
+    The posteriorgram is owed only where :func:`has_consensus_output` holds; Praat is owed wherever
+    it is missing, transcript or no transcript.
 
     Args:
         store: The run's store.
@@ -150,7 +183,8 @@ def pending(store: ProvStore) -> tuple[bool, bool]:
     Returns:
         ``(ppg_pending, praat_pending)``.
     """
-    return find_measurement(store, PPG_MEASUREMENT) is None, find_measurement(store, PRAAT_MEASUREMENT) is None
+    ppg_missing = find_measurement(store, PPG_MEASUREMENT) is None
+    return ppg_missing and has_consensus_output(store), find_measurement(store, PRAAT_MEASUREMENT) is None
 
 
 def _posteriorgrams(audios: list[Audio], device: DeviceType | None) -> tuple[list[Any] | None, str | None]:

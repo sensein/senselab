@@ -523,17 +523,65 @@ unavailable. For these two measurements that count is **60,202**, never the corp
 ### Two jobs, and they must not be folded into one
 
 - **Re-deriving the 60,202 is CPU-only.** `--force` overrides `praat_pending` alone
-  (`../../scripts/extend_ppg_praat.py:218`, `:269`), and every store the manifest names already holds
-  a posteriorgram, so `ppg_pending` is false, the driver `continue`s at `:225-226` before
+  (`../../scripts/extend_ppg_praat.py:254`, `:305`), and every store the manifest names already holds
+  a posteriorgram, so `ppg_pending` is false, the driver `continue`s at `:261-262` before
   `ppg_input`, and no batch reaches ppgs. Size it against a Praat-only pass.
-- **A first derivation for the 2,376 is GPU-bearing.** None of them holds a posteriorgram, so every
-  one of them takes the PPG path the 60,202 skip. It needs a manifest that does not exist yet and it
-  has a different resource profile; folding it into the forced re-derivation puts the ppgs venv and
-  a GPU allocation back into a pass sized as CPU-only.
+- **The 2,376 owe Praat and nothing else.** This was written as a GPU-bearing job needing a manifest
+  that did not exist, on the reading that any pass over them would take the PPG path. The section
+  below withdraws that: the driver now declines the posteriorgram on them itself, so the catch-up is
+  CPU-only, needs no new manifest and no new flag, and can be run over the full store set.
 
-**So "a forced pass does no PPG work" is a property of this manifest, not of the flag** — which
-[`praat-instrument-audit.md`](../20260817-triage-workflow-dag/praat-instrument-audit.md) step 2
-already says, and the 2,376 are exactly the stores that would make it false.
+**So "a forced pass does no PPG work" was a property of this manifest, not of the flag** — which
+[`praat-instrument-audit.md`](../20260817-triage-workflow-dag/praat-instrument-audit.md) step 2 says.
+It is a property of the driver now.
+
+## Why the 2,376 were excluded, and where that rule lives
+
+The exclusion above was never a coverage failure. Sampled on ORCD from the 2,376, 2026-09-14:
+**78 of 80** hold a `consensus_transcript` measurement whose `n_words` is 0, **2 of 80** hold no such
+measurement at all, and **78 of 80** hold `asr_hypothesis` measurements — so the recognizers ran and
+returned nothing. A separate driver read and wrote all 2,376 with zero errors, so they are healthy
+stores. **The rule the operator applied was: derive the posteriorgram where there is consensus ASR
+output.** A phoneme posteriorgram over audio no recognizer read has no consumer, and the batch it
+would join is the GPU cost of the pass.
+
+**That rule lived only in `ppg_20260911/manifest.jsonl`, which cannot be rebuilt from this tree.**
+That is the defect, not the exclusion: the pass was reproducible only from an artifact on a cluster.
+`pending()` applies it now, so a manifest naming all 62,578 recordings yields the same 60,202 for
+the posteriorgram.
+
+### The predicate, and the population it must not exclude
+
+The corpus is three populations, not two:
+
+| population | rows | in scope |
+| --- | --- | --- |
+| `consensus_transcript` with `n_words == 0`, or absent | 2,376 | no |
+| every consensus token bracketed — `[breath]`, `[cough]`, `[UH]` | 14,836 | **yes** |
+| at least one plain word | 45,366 | yes |
+
+**The rule keys on consensus ASR output, so the bracketed-only population is in.** `lexical_words`
+counts only unbracketed words and would have excluded 14,836 recordings — a sixth of the in-scope
+corpus, and exactly the low-energy breath and cough tasks the exclusion above is already biased
+toward. `consensus_words` is the right helper; `lexical_words` is not.
+
+`has_consensus_output` reads a live `consensus_transcript` **and** at least one live word entity,
+rather than the transcript's `n_words`. The two agree on today's corpus — the consensus block writes
+one `word` entity per consensus word, so `n_words == 0` and an empty live word set are the same
+stores — but `n_words` is the alignment's count at write time and `rebracket` carries it through
+verbatim (`extend.py`, `attributes={**consensus.attributes, ...}`) while recomputing `word_ids`. The
+entities are read under the store's own invalidation rule and cannot go stale; the integer can.
+Requiring the transcript as well as the words keeps the predicate saying what the rule says, and
+separates "the consensus block never ran" from "it ran and heard nothing" — both out of scope, for
+different reasons.
+
+### What did not change
+
+`--force` stays one-sided. It overrides `praat_pending` alone and does not widen the posteriorgram's
+scope; a `--force` that reached `ppg_pending` would put the 2,376 back on the GPU path the rule
+exists to keep them off. The venv gate in `main()` stays unconditional — it is a property of the
+host, not of the slice, and a gate conditional on the slice's scope would let a later slice holding
+in-scope rows start a cold build under the array.
 
 
 ## Reading one range back: `plot_range_with_ppg`
