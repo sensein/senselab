@@ -404,6 +404,52 @@ drops `expected_speech` precisely where the prompt exists.
 `expectations: null` and naming why. An absent declaration and an unread one must stay
 distinguishable, which is the same rule the graph already applies to absent measurements.
 
+### A ruleset that fires may write or refine a span's label — owner decision, 2026-09-15
+
+The owner: *"rulesets could update span labels if relevant."*
+
+Today the ruleset decides routing and nothing else. This widens it: **when a rule fires, it may stamp
+or refine a label on the span whose evidence fired it** — `label` where the span carried none,
+`refine` where it carried one the rule sharpens, under the same verb table as any other annotation.
+SCREEN's product becomes the routing decision *and* the labels its own evidence supports.
+
+**It removes VOICE's span-source problem rather than relocating it.** The phonation label is applied
+at SCREEN time by the rule that fired, so VOICE receives a *labelled* subject and no retired detector
+has to be resurrected. **This changes the plan
+[`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
+currently implies**, and it demotes this spec's own claim below — that the branch becoming the
+proposer "is the whole fix" — to one of three options, listed with what each costs at that document's
+§ *The span source is one of three options*. **The owner has not chosen between them.**
+
+**A ruleset-written label is an assertion about a span and needs the same provenance as any other** —
+which rule wrote it, from which evidence, at what value. Without those three it is indistinguishable
+from a classifier's own label, which is precisely the distinction the store exists to keep.
+
+**Two prerequisites, both owed a code change, because the evaluation carries neither today.**
+
+- **The value is not recorded at all.** `evaluate_gate` computes `value = gate_value(features, gate)`
+  (`routing_analysis/ruleset.py:405`) and returns only a three-member enum (`:406-409`);
+  `RouteEvaluation.gate_outcomes` is `Mapping[str, GateOutcome]` (`:210`, filled at `:467`) and
+  `route_attributes` serialises exactly that and no number (`live_evidence.py:172-190`, the key at
+  `:185`). So a rule-written label could not today cite the number that produced it. Registered
+  against the ruleset at [`../20260817-triage-workflow-dag/routing.md`](../20260817-triage-workflow-dag/routing.md)
+  § *Open derivations*.
+- **The span identity is discarded one step before the gate sees it.** `live_spans` rows carry
+  `"id"` (`routing_analysis/features.py:1084`) and the reduction
+  `span_longest_s[measure] = max(durations)` (`:1134`) keeps only the scalar. A `Gate` is "one
+  threshold rule over one number" (`ruleset.py:92-106`) with no span in it, so **"the span whose
+  evidence fired it" is not addressable from a fired gate.** Which span a reduction attributes to is
+  a contract question rather than a threshold: `max` has a unique argument only until two spans tie.
+
+**Which evidence the phonation label should come from, on the measurement we have.** A **directed
+recommendation with its evidence, not a settled rule.** Drive the phonation label from the **measured
+gate**, not from the classifier label. On the 20 s held vowel of the 2026-09-15 run the consensus
+taxonomy read `Chant` 0.937, `Music` 0.930, `Mantra` 0.899 and `Brass instrument` 0.661 — all
+outranking anything voice-specific — while `voice.sustained` measured 15.89 s off the amplitude
+envelope and was right (benchmark § G and § D). A label sourced from the consensus would name that
+vowel music. **One recording is one recording**: this is the direction the evidence points, not a
+fitted rule.
+
 ### Two standing rules
 
 **A hint may add and inform. It may never suppress.** Routing is the union:
@@ -434,6 +480,49 @@ Quoted as given; "mark" and "refute" are the store's `label` and `contest`, for 
 The consequence worth stating plainly: **PREPROCESS's span set is clean but not complete.** Clean is
 PREPROCESS's job — the three parts above. Complete is the branch's, and only the branch can do it,
 because only the branch knows what it is looking for.
+
+### A branch refines and reviews, and a correct subject is not a precondition — owner decision, 2026-09-15
+
+The owner: *"voice would still need to improve/update/review phonation spans and other tasks that are
+assigned to it."*
+
+**A branch does not wait for a correct subject to be handed to it.** It receives spans and *improves*
+them, which in the five verbs is **`refine`** — assert a tightened extent on an existing span, which
+keeps its id, its `family` and its measurements. Reviewing a span is `label`, `contest` or `refine`.
+**Only `propose` mints**, and it mints only what nothing proposed at all.
+
+**So `FAIL` for "no span of my family" is the wrong shape of answer.** Not because the recording must
+hold the branch's subject — it may not — but because a branch that returns before reading the spans it
+was given has reviewed nothing. Where the branch's own family is absent, the answer is the annotations
+it made on what was there.
+
+**VOICE is where this is visible, and the inconsistency is worth stating plainly.** **VOICE is
+routed by a measurement on `amplitude` spans and then fails for want of a `phonation` span.**
+`voice.sustained`'s feature is `[span_longest, amplitude]` — the longest live amplitude span in
+seconds, cut 3.0 s (`default.yaml:252-255`) — while the selector at `voice.py:230` admits only
+`_PHONATION_FAMILY` (`:40`). The amplitude spans the route was decided on are live in the store,
+unexamined, when the branch takes the no-span return at `voice.py:235-264`. Measured on 13 real b2ai
+recordings, **6 of 6 VOICE-routed recordings returned `Outcome.FAIL`** there, including a
+maximum-phonation-time recording whose `voice.sustained` read **15.89 s** and a glide at **12.27 s**
+([`../20260817-triage-workflow-dag/benchmarks/hints-and-routing-2026-09-15.md`](../20260817-triage-workflow-dag/benchmarks/hints-and-routing-2026-09-15.md)
+§ D).
+
+**And the second half of the owner's sentence carries as much as the first.** A branch must also do
+its best on *other tasks assigned to it* — a recording routed to it whose declared family is none of
+its own. That is the owner's standing rule for branches, already stated for AIRWAY in the owner's
+example quoted at the head of this section, and the decision generalises it: **a branch receiving a
+task outside its declared families does its best to find, mark, refine or refute evidence of its own
+kind, rather than failing for want of a declared subject.** For VOICE that is the common case rather
+than the edge case — it routed 22,277 recordings against 8,306 declaring a voice family.
+
+**This is also what `voice.py:333-346` does wrongly today.** It mints a *second* span from an input
+span, re-keyed by period-aligned onset and carrying `onset_kind` — the re-minting the annotating verbs
+replace with a `refine` assertion, and the reason `_spans_of_family` (`report.py:289-306`) must split
+one family into two populations on `("onset_kind" in attributes)`. Once the minting becomes a
+`refine`, that split has nothing to separate.
+[`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
+§ *The state of this branch* already states that; what the decision adds is that improving those spans
+**is VOICE's work**, not a precondition it is entitled to wait for.
 
 ### What each verb writes — four annotate, one mints
 
@@ -541,11 +630,20 @@ Under this contract **the branch is the proposer**, and that is the whole fix �
 changed to the branch family.** `propose` writes `family: "voice"`, so VOICE's input filter and its
 output family coincide, which is what the contract wants.
 
+**"The whole fix" is now one of three options, on the owner decisions of 2026-09-15 above.** A
+ruleset-written phonation label gives VOICE a labelled amplitude span to `refine` without any
+proposer, the `consensus_taxonomy` rework is still on the table, and a replacement detector is the
+third. The three and their costs are at
+[`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
+§ *The span source is one of three options*; **the owner has not chosen.** Everything in the rest of
+this section — the selector change, the family rename, what it costs REPORT — applies to whichever
+source mints or labels the span, so none of it is withdrawn.
+
 **That rename is not costless, and an earlier revision wrongly called it so.** `phonation` is the
 family VOICE **writes today** (`voice.py:337`), and REPORT reads it: `_spans_of_family(store,
 "phonation", voice=False)` at `report.py:673`, the `voice=True` reads at `:715` and `:1154`, the
 descriptions at `:1134` and `:1173`, and VOICE's summary keyed on `phonation_s` at `:104`.
-`_spans_of_family` (`report.py:291-308`) exists precisely to separate the detector-proposed
+`_spans_of_family` (`report.py:289-306`) exists precisely to separate the detector-proposed
 population from VOICE's own, by `onset_kind`. So this is a **writer-vocabulary change on a family
 REPORT reads**, and it is settled by the rule this spec already invokes twice: **the writer's
 vocabulary may shrink, the reader's may not.**
@@ -557,7 +655,7 @@ this reason), and the `kind` fix is the precedent to follow rather than re-deriv
 
 Concretely: `report.py:104`'s `phonation_s` **stays**. It names seconds of phonation, not a family,
 and it sums spans of both — `phonation` from stores written before the change, `voice` after.
-`_spans_of_family` (`report.py:291-308`) grows to read both families; it currently takes a single
+`_spans_of_family` (`report.py:289-306`) grows to read both families; it currently takes a single
 `family: str`, so it needs either a sequence parameter or two calls merged.
 
 **One consequence to record rather than paper over.** `_spans_of_family`'s `voice` parameter splits on
@@ -799,6 +897,12 @@ Dependency order, with the pieces that are genuinely independent marked:
 8. **The branch contract, per branch** — SPEECH first (closest to it), then AIRWAY (which also closes
    the `_windows_covering` gap), then VOICE (which needs a proposer before it has a subject), then
    DDK (which needs a node). Depends on 5, on 6 for `speaker_count`, and on 7 to be visible.
+
+   **The owner decisions of 2026-09-15 change VOICE's place in this piece**: which of three span
+   sources VOICE gets is undecided, and one of them — a ruleset-written label — lands in SCREEN
+   rather than here. The options are at
+   [`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
+   § *The span source is one of three options*.
 9. **Boundary reconciliation** — blocked on a parameter-free definition, per (c).
 
 **One ordering inversion is accepted and budgeted.** Piece 9 changes every span extent, hence which
@@ -815,6 +919,16 @@ quality floors, the deviation thresholds. The corpus is labelled by declaration,
 verification. Nothing is refit until something has been listened to.
 
 **The boundary reconciliation rule** (c) — no parameter-free definition yet.
+
+**Which of three sources gives VOICE its subject** — amplitude spans with a ruleset-written label
+and `refine`, the `consensus_taxonomy` rework as written, or a new phonation detector replacing the
+retired one. All three, and the evidence bearing on each, are at
+[`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
+§ *The span source is one of three options*. The owner has not chosen.
+
+**What a ruleset-written label records, exactly** — the rule, the evidence path and the value are
+settled as required; the entity shape, and which span a reduced feature attributes its firing to, are
+not.
 
 **The writer/reader vocabulary rule deserves stating once.** This design retires three
 writer-vocabulary values with live readers: the `kind` entity type (done 2026-09-13), the node names
