@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.features_extraction.praat_parselmouth import CppsSettings
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Triage
 from senselab.utils.portable_audio_io import NORMALIZE, AudioWriteReport
@@ -373,6 +374,45 @@ def f0_range_parameters(config: TriageConfig) -> dict[str, float]:
     parameters = {"search_floor_hz": float(search[0]), "search_ceiling_hz": float(search[1])}
     parameters.update({name: float(config.require(f"praat_features.{name}")) for name in PITCH_NARROWING_KEYS})
     return parameters
+
+
+CPPS_SCALAR_KEYS = (
+    "pitch_floor_hz",
+    "time_step_s",
+    "max_frequency_hz",
+    "preemphasis_from_hz",
+    "time_averaging_s",
+    "quefrency_averaging_s",
+    "robust_tolerance",
+)
+"""The ``praat_features.cpps`` keys that are a bare number, in the order the settings declare them."""
+
+
+def cpps_settings(config: TriageConfig) -> CppsSettings:
+    """Read every setting the smoothed cepstral peak prominence is computed under.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        The settings, built from ``praat_features.cpps``.
+
+    Raises:
+        ValueError: If any key is unmeasured.
+    """
+    peak_floor, peak_ceiling = config.require("praat_features.cpps.peak_search_range_hz")
+    trend_start, trend_end = config.require("praat_features.cpps.trend_range_s")
+    scalars = {name: float(config.require(f"praat_features.cpps.{name}")) for name in CPPS_SCALAR_KEYS}
+    return CppsSettings(
+        peak_search_floor_hz=float(peak_floor),
+        peak_search_ceiling_hz=float(peak_ceiling),
+        trend_start_s=float(trend_start),
+        trend_end_s=float(trend_end),
+        subtract_tilt_before_smoothing=bool(config.require("praat_features.cpps.subtract_tilt_before_smoothing")),
+        tilt_line_type=str(config.require("praat_features.cpps.tilt_line_type")),
+        peak_interpolation=str(config.require("praat_features.cpps.peak_interpolation")),
+        **scalars,
+    )
 
 
 def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Audio]:
