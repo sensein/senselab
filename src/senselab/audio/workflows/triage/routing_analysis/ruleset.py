@@ -391,6 +391,23 @@ def gate_value(features: RecordingFeatures, gate: Gate) -> float | None:
     return detector_value(features, Detector(name=gate.name, kind="", reader=gate.feature, unit="", thresholds=()))
 
 
+def gate_outcome_of(value: float | None, gate: Gate) -> GateOutcome:
+    """Which outcome one already-read number is, so a caller needing both reads the gate once.
+
+    Args:
+        value: What :func:`gate_value` read, or None when the evidence is not in the store.
+        gate: The gate.
+
+    Returns:
+        The outcome. ``UNAVAILABLE`` is not a negative: the measurement the gate needs was never
+        written.
+    """
+    if value is None:
+        return GateOutcome.UNAVAILABLE
+    fired = value >= gate.threshold if gate.op == AT_LEAST else value <= gate.threshold
+    return GateOutcome.FIRED if fired else GateOutcome.SILENT
+
+
 def evaluate_gate(features: RecordingFeatures, gate: Gate) -> GateOutcome:
     """Whether a gate fired, stayed silent, or could not be read at all.
 
@@ -399,14 +416,9 @@ def evaluate_gate(features: RecordingFeatures, gate: Gate) -> GateOutcome:
         gate: The gate.
 
     Returns:
-        The outcome. ``UNAVAILABLE`` is not a negative: the measurement the gate needs was never
-        written.
+        The outcome, from :func:`gate_outcome_of` over what the gate reads.
     """
-    value = gate_value(features, gate)
-    if value is None:
-        return GateOutcome.UNAVAILABLE
-    fired = value >= gate.threshold if gate.op == AT_LEAST else value <= gate.threshold
-    return GateOutcome.FIRED if fired else GateOutcome.SILENT
+    return gate_outcome_of(gate_value(features, gate), gate)
 
 
 def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvaluation:
