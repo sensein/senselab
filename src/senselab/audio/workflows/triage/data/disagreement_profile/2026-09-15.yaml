@@ -1,0 +1,11 @@
+# How a routing/declaration disagreement is qualified into one of three findings.
+# Read by `senselab.audio.workflows.triage.routing_analysis.gate_matrix`. Nothing in the pipeline
+# reads this file: it governs reporting only, and no value here can change how a recording routes.
+schema_version: "1"
+
+# A deciding gate whose reading sits within this fraction of its own threshold is reported as a
+# THRESHOLD question; one outside it as an EVIDENCE question. Relative, so one band covers gates
+# whose units are seconds, dB, counts and probabilities alike.
+# A DECLARED REPORTING CONVENTION, not a fitted cut. What was measured, why nothing was fitted to
+# it, and what would replace it: specs/20260915-gate-family-matrix/design.md.
+near_threshold_band: 0.25
