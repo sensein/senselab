@@ -477,7 +477,7 @@ def _ppg_summary(attributes: Mapping[str, Any], run_dir: Path) -> dict[str, floa
     summary["segment_count"] = float(len(segments))
     if duration_s > 0.0:
         summary["segment_rate_per_s"] = len(segments) / duration_s
-    for key, value in _stats(durations).items():
+    for key, value in value_stats(durations).items():
         summary[f"segment_duration_{key}"] = value
     labels = [int(segment["phoneme_index"]) for segment in segments]
     summary["distinct_phonemes"] = float(len(set(labels)))
@@ -774,7 +774,7 @@ def _absorb_measurement(
                 features.peaks[peak_key(stream, classifier, str(label))] = peak
 
 
-def _stats(values: Sequence[float]) -> dict[str, float]:
+def value_stats(values: Sequence[float]) -> dict[str, float]:
     """The distribution summary every span- and SQUIM-derived quantity is reduced to.
 
     Args:
@@ -878,7 +878,7 @@ def _distribution(prefix: str, selected: Sequence[dict[str, Any]]) -> dict[str, 
         ``{"<prefix>.span_count": n}`` and ``{"<prefix>.peak_over_floor_db_<statistic>": value}``.
     """
     out = {f"{prefix}.span_count": float(len(selected))}
-    for key, value in _stats(_finite_peaks(selected)).items():
+    for key, value in value_stats(_finite_peaks(selected)).items():
         out[f"{prefix}.peak_over_floor_db_{key}"] = value
     return out
 
@@ -942,9 +942,9 @@ def _span_statistics(spans: Sequence[dict[str, Any]], duration_s: float | None) 
     for measure in (*SPAN_MEASURES, "all"):
         selected = [span for span in spans if measure == "all" or span["measure"] == measure]
         durations = [float(span["duration"]) for span in selected]
-        for key, value in _stats(durations).items():
+        for key, value in value_stats(durations).items():
             out[f"{measure}.duration_{key}"] = value
-        for key, value in _stats(_finite_peaks(selected)).items():
+        for key, value in value_stats(_finite_peaks(selected)).items():
             out[f"{measure}.peak_over_floor_db_{key}"] = value
         out[f"{measure}.corroborated_n"] = float(sum(1 for span in selected if span["corroborated"]))
         out[f"{measure}.corroborated_total"] = float(sum(int(span["corroborated"]) for span in selected))
@@ -978,7 +978,7 @@ def _squim_statistics(
         out[f"{population}.unmeasured"] = float(sum(1 for row in selected if "unmeasured" in row))
         for metric in SQUIM_METRICS:
             values = [float(row[metric]) for row in selected if metric in row]
-            for key, value in _stats(values).items():
+            for key, value in value_stats(values).items():
                 out[f"{population}.{metric}.{key}"] = value
     return out
 
