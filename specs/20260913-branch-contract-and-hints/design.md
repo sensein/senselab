@@ -309,6 +309,20 @@ take an `Outcome.FLAG` against ROUTING (`vocabulary.py:382-384`). This is a **va
 `routing.md:76-78` documents testing the value unchanged as deliberate, and that test is not the
 defect.
 
+**A fourth, found by measurement rather than by reading: the null map makes the file verdict assert
+the opposite of the declaration.** Because every tag is unmapped, no decision carries `hint_tags`, so
+`_hint_claims` returns `{}` rather than `None` (`nodes/verdict.py:182-184`) and `FileVerdict.hints`
+reads `found_unclaimed` / `no_claim` for every branch — including `AIRWAY: found_unclaimed` on runs
+whose `may_contain` declared `[cough, airway]`. It renders: `summary.json`'s
+`recording.declared_hints` (`report.py:1097`) and the PDF header (`report.py:1426-1427`, `:1467`).
+The `UNREAD_DECLARATION` flag built for this case fires only when no decision survived
+(`vocabulary.py:385-386`). Recorded, with the vocabulary decision it is blocked on, at
+[`../20260817-triage-workflow-dag/verdict.md`](../20260817-triage-workflow-dag/verdict.md) and
+measured in
+[`../20260817-triage-workflow-dag/benchmarks/hints-and-routing-2026-09-15.md`](../20260817-triage-workflow-dag/benchmarks/hints-and-routing-2026-09-15.md)
+§ B. **Owed a code change.** The first three items above are what a hint-blind run costs; this one is
+what it *says*, and it is worse, because a silent inertness misleads nobody.
+
 ### What SCREEN resolves
 
 One `declaration` measurement per recording, carrying task identity, expected content and structure,
@@ -347,9 +361,44 @@ contract written in this spec** — keys `task_name`, `acoustic_task_name`, `spe
 a data structure outside the triage module, which would need its own consumers and tests. Promoting
 them to typed fields is **unresolved** and deferred.
 
+**The contract and the live readers name different keys — owed a code change, and the contract is the
+side to change.** Checked against the tree 2026-09-15: `nodes/voice.py` reads
+`hint.metadata["population"]` (`voice.py:66`) and `hint.metadata["task"]` (`voice.py:146`), and
+**neither key is in the seven above**, so a hint written to this contract reaches neither consumer. Of
+the three `metadata` keys anything in `src/senselab` reads, only ROUTING's `speech_type`
+(`routing.py:42`, read at `:80`) is covered. The contract is the side to move: `task_name` and
+`acoustic_task_name` are the sidecar's own names and separate the per-recording grain from the
+per-family one, which is the distinction a single `task` cannot carry, and `population` is not a field
+the sidecars hold at all — so deciding what `voice.py:146` should read is deciding which grain a
+declared duration range is keyed at, which is this spec's question rather than the branch's. V7's and
+V2's reading of the same mismatch from the branch's side is in
+[`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
+*Unresolved*. Both paths are inert today — `voice.f0_range_by_population` and
+`voice.task_duration_ranges` are both null (`default.yaml:183`, `:185`) — so this costs nothing until
+either is populated, which is the moment it becomes silent.
+
 **When the two grains disagree** — both carry `speech_type` and `stimulus_text` — the recording-grain
 file wins, and the disagreement is recorded on the declaration as a field rather than resolved
 silently.
+
+**Measured, across all 112 recordings of the local corpus copy, 2026-09-15.** The grains disagree on
+exactly the field this spec exists to carry, and agree on the ones it could have guessed:
+
+- `speech_type` and `language`: **never disagree** between the two sidecars.
+- `stimulus_text`: **disagrees on 44 of 112** — *empty* in the acoustictask JSON for Harvard, Cape-V,
+  Productive-Vocabulary and Stroop, *family-generic* for Free-speech, while the recording JSON carries
+  the actual prompt.
+- the corpus's `speech_type` distribution: `non-lexical` 59, `read` 30, `elicited` 19, `recall` 4 —
+  the same four values
+  [`../20260817-triage-workflow-dag/benchmarks/open.md`](../20260817-triage-workflow-dag/benchmarks/open.md)
+  § *Hints* enumerates.
+- `recording_profile_name`: `Speech` 87, `Breathe` 20, `Cough` 5.
+
+Two consequences for whatever builds the declaration. The `*_acoustictask-metadata.json` is **per task
+family, not per recording** — one file serves all 11 breath/cough wavs of a session — so it alone
+cannot build a per-recording hint, and the precedence rule above is not a tie-break for rare cases but
+the only path to the prompt on 39% of the corpus. And a builder that reads the family sidecar only
+drops `expected_speech` precisely where the prompt exists.
 
 **When no hint is supplied**, SCREEN writes the `declaration` measurement anyway, carrying
 `expectations: null` and naming why. An absent declaration and an unread one must stay

@@ -143,6 +143,14 @@ carried over onto the conditioned population **unswept**, because the conditione
 smaller and louder than the blanket one and no sweep over it exists. Re-fitting it from the corpus
 run is the first thing to do with that run.
 
+**One data point that the cut is too high here, measured 2026-09-15.** On a 13-recording b2ai v3.1
+run the gate's feature was UNAVAILABLE on 12, and on the one recording that had it — five deliberate
+coughs — it read **43.10 dB**, below the 50.0 cut, so `airway.cough` fired on neither cough recording
+in the sample. One recording is not a sweep and this moves nothing; it is recorded because the
+population the re-fit is owed on now has a reading in it. The consequence for the branch is in
+[`branch-airway.md`](branch-airway.md) *The number that governs this branch*; the run is
+[`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § E.
+
 ### `voice.chant`, added: the best voice separator in the sweep, previously unused
 
 `voice.yamnet_chant_peak.plain` — the bare `Chant` label on the plain stream, not the singing union
@@ -152,6 +160,18 @@ firing 0.14. That is the highest J of any voice-family detector in the sweep, ab
 VOICE gate rather than replacing `voice.glide`, because the two read different constructions of the
 same evidence (one label against a twelve-label union) and either firing is enough — the content-first
 rule is that a reading is used, not that the readings must agree.
+
+**On real voice material the two constructions are one number — owed a code change.** Measured
+2026-09-15 on the two recordings of a 13-recording b2ai v3.1 run where VOICE matters most,
+`voice.glide` and `voice.chant` returned **identical** values: **0.90926** on the MPT recording and
+**0.65875** on the glide recording. The singing-subtree union's peak *is* the bare `Chant` peak there
+— which is to say `Chant` carried the union — so on this material the "one label against a twelve-label
+union" distinction this section rests on does not exist, and two of the ruleset's eleven gates are one
+detector counted twice. Two recordings do not show that the union is redundant in general; what they
+show is that the union is not a second reading whenever `Chant` wins it, which is the case the corpus
+J was computed on. What is owed is either a union that excludes its own argmax label, or one gate
+instead of two — not a threshold. Values in
+[`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § G.
 
 ### SPEECH routes on ASR words alone, at two of them
 
@@ -248,6 +268,27 @@ spread, and no operating point.
 posteriorgram's argmax-segment rate, which is a rate of articulatory change and needs no recogniser
 to spell the unit. It was fitted rather than assumed, and its measurements are in
 `specs/20260911-praat-ppg-detectors/design.md`. Threshold 3 on the lexical gate is still unswept.
+
+**Both gates watched on real material of both kinds, 2026-09-15.** Thirteen b2ai v3.1 recordings, two
+of them real DDK:
+
+| gate | on the two DDK recordings | on the four speech recordings | cut |
+| --- | --- | --- | --- |
+| `ddk.ppg_segment_rate_per_s` | **12.33, 14.70** /s — both fire | **8.89, 8.64, 7.44, 7.10** /s — none fires | 10 |
+| `ddk.lexical_repetition` | — | **5, 4, 8** fire; **2** (a 4.0 s Harvard sentence) does not | 3 |
+
+The acoustic gate separated the two kinds with no overlap: nearest speech value 1.11 /s below the cut,
+nearest DDK value 2.33 /s above it, the two populations 3.44 /s apart with the cut inside that gap.
+**Thirteen recordings locate no boundary** and this is not a
+re-fit; what it is, is the first time the gate has been watched on both kinds in one run, and it
+agrees with the fit.
+
+The lexical gate fired on ordinary function-word repetition in connected speech and is the **sole**
+gate routing all three false DDK positives in that run — so the 24.6% fall-through above is only half
+the cost of reading a transcript for a non-lexical unit; the other half is firing on transcripts that
+have nothing to do with DDK. It missed the one speech recording it missed by a single repeat. Still
+unswept, and now with a measured false-positive mechanism against it. Values in
+[`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § F.
 
 ## What `speech.intrusion` on prolonged vowels actually was
 

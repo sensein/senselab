@@ -61,6 +61,18 @@ for building the branch. See [`dag.md`](dag.md), "DDK".
 **Flag gates annotate; they never route.** A fired flag gate is recorded on its branch's decision in
 `flag_gates` and changes no `will_run`.
 
+### Measured: recall 13/13, and precision is what produced every flag
+
+On 13 b2ai v3.1 recordings across three subjects, every declared branch was reached — AIRWAY 4/4,
+VOICE 3/3, SPEECH 4/4, DDK 2/2 — and every whole-file state read `routed`, so neither `empty` nor
+`unexplained` was exercised. Against that, VOICE routed 3 speech tasks, AIRWAY 4 non-airway tasks and
+DDK 3 pure-speech tasks; the files came out **5 `pass`, 8 `flag`, no `discard`**. Each flag traces to
+one of three things, and none of them is a missed route: a branch running on material it has no
+subject in ([`branch-voice.md`](branch-voice.md)), a routed branch with no node
+([`branch-ddk.md`](branch-ddk.md)), or a route taken on a label that is wrong
+([`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § G).
+Thirteen recordings fit nothing; what they show is which axis to measure next.
+
 ## Hints force execution; they never alter the reading
 
 A hint naming a branch — through `may_contain` or the task's `speech_type` — **forces that branch to
@@ -79,6 +91,28 @@ thing to chase from a tag the vocabulary does not cover.
 
 The hint layer is due its own design pass. This node's job here was re-keying it from kinds to
 branches, and the forcing behaviour is otherwise unchanged.
+
+### Measured: the hint changes nothing, and the map would have changed no route
+
+Thirteen b2ai v3.1 recordings run twice — once `hint=None`, once hinted from the BIDS sidecars — differ
+in exactly one field across both stores: `unmapped_tags`, `[]` against the declared tags, on four
+decisions. `forced_by_hint` false on 52/52 decisions. Replaying `_map_tags` and the `will_run` rule
+offline with the map **populated** forces **zero** branches on any of the 13, because the content
+ruleset had already routed every declared branch; the only tag left unmapped would be `non-lexical`,
+which names no branch.
+
+That is evidence for content-first routing on this material and **not** an argument that the map is
+unnecessary — thirteen recordings say nothing about the population where content and declaration
+disagree, which is the population a forcing map exists for. The values, the diff method and the
+counterfactual's exact map are in
+[`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § A.
+
+**Gate values are not recorded anywhere.** `route_attributes` (`live_evidence.py:172-190`) writes
+`gate_outcomes` as `{name: outcome}`; the number each gate compared against its cut is in no element,
+so every value in that benchmark had to be recovered by re-reducing the finished store through
+`extract_features` and `gate_value`. Whether the evaluation should carry the values beside the
+outcomes is **owed a decision**: it is what makes a shipped cut auditable from a run rather than only
+from a re-reduction, and it is a store-contract change, not a threshold.
 
 ## REDACT is inside the speech branch
 
@@ -172,6 +206,7 @@ Derivations live in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md) a
 
 | key | what is owed |
 | --- | --- |
-| `routing.hint_branch_map` | which hint tags and `speech_type` values force which branch; a vocabulary, owed the corpus it was drawn from. **Null** in the packaged config, so every tag is unmapped and nothing is forced |
-| the ruleset's operating points | scored 0.97 / 0.95 / 0.96 / 0.94 sensitivity across AIRWAY / SPEECH / VOICE / DDK over 62,547 recordings, 333 of them (0.5%) reaching no branch. Which gates are provisional is in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md) |
+| `routing.hint_branch_map` | which hint tags and `speech_type` values force which branch; a vocabulary, owed the corpus it was drawn from. **Null** in the packaged config, so every tag is unmapped and nothing is forced. Measured 2026-09-15: populating it would have forced nothing on 13 real recordings, so what it is owed is a population where content and declaration disagree, not a larger sample of agreement |
+| the ruleset's operating points | scored 0.97 / 0.95 / 0.96 / 0.94 sensitivity across AIRWAY / SPEECH / VOICE / DDK over 62,547 recordings, 333 of them (0.5%) reaching no branch. Which gates are provisional is in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md). **Recall is not the axis under strain on real material**: 13/13 declared branches were reached in the 2026-09-15 run and every flag traced to over-routing, to a branch with no subject, or to a wrong label |
+| the gate values behind an evaluation | the `ruleset_routing` measurement records each gate's outcome and not the number behind it, so a run cannot be audited against its own cuts without re-reducing the store. **Owed a decision** on whether the evaluation carries the values |
 | the `unexplained` population | 0.5% of the corpus at the scored operating points, and nobody has looked at what is in those recordings. They now flag rather than passing silently, which is what makes the question askable |
