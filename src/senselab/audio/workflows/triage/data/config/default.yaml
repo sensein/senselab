@@ -217,14 +217,19 @@ taxonomy:
   # family set each branch is scored against. Each operating point and the firing spread it came
   # from are in `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`, keyed by gate name.
   ruleset:
-    reference_family_set:               # branch -> the families set it is SCORED against; routes nothing
+    # branch -> the family set it is SCORED against; routes nothing. MULTI-LABEL: a family may be a
+    # positive for several branches, and the diadochokinesis families are positives for both
+    # SPEECH (via `speech`) and DDK (via `syllable_repetition`).
+    reference_family_set:
       AIRWAY: airway
-      SPEECH: lexical_speech
+      SPEECH: speech                    # speech = lexical_speech | syllable_repetition
       VOICE: voice
       DDK: syllable_repetition
-    excluded_by_construction:           # branch -> families HELD OUT of its scoring; not negatives, not positives
+    # branch -> families HELD OUT of its scoring; not negatives, not positives. Null everywhere:
+    # no branch's reference set omits families whose content is what the branch is for.
+    excluded_by_construction:
       AIRWAY: null
-      SPEECH: syllable_repetition       # DDK is speech, and sits outside lexical_speech only by construction
+      SPEECH: null
       VOICE: null
       DDK: null
     branch_gates:                       # branch -> gates, any one of which routes it, on any recording
