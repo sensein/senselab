@@ -21,11 +21,15 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import PHONEME_LABELS, PPGS_SAMPLE_RATE, PpgsPosteriorgramUnavailable
+from senselab.audio.workflows.triage.consensus import ConsensusWord, word_attributes
+from senselab.audio.workflows.triage.extend import CONSENSUS_TRANSCRIPT
 from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
     find_measurements,
+    lexical_words,
     path_attributes,
     software_agent,
+    write_measurement,
 )
 from senselab.audio.workflows.triage.nodes.preprocess import PPG_MEASUREMENT, PRAAT_MEASUREMENT
 from senselab.utils import subprocess_venv
@@ -63,13 +67,79 @@ def _fake_ppgs(audios: List[Audio], device: Optional[DeviceType] = None) -> List
     return out
 
 
-def _seed_run(root: Path, *, seconds: float = 0.5, hz: float = 120.0) -> Path:
+_HEARD = ("alpha", "beta")
+"""The consensus a seeded run carries unless a test asks for another: two plain words."""
+
+
+def _write_consensus(store: ProvStore, tokens: Sequence[str], *, seconds: float) -> None:
+    """Add one ``consensus_transcript`` and its word stream, in the shape PREPROCESS writes them.
+
+    A token wrapped in brackets is stored bracketed, which is how the corpus's ``[breath]``-only
+    recordings read; ``tokens`` empty is the recognizers returning nothing, which is a transcript
+    carrying no words rather than no transcript.
+
+    Args:
+        store: The run's store.
+        tokens: The consensus surfaces, in stream order.
+        seconds: The stream's duration, divided evenly among the words.
+    """
+    agent = software_agent(store)
+    activity = store.activity(node="PREPROCESS", step="consensus", parameters={"sources": ["a", "b"]})
+    store.was_associated_with(activity, agent)
+    step = seconds / max(len(tokens), 1)
+    word_ids: list[str] = []
+    for index, token in enumerate(tokens):
+        extent = (index * step, (index + 1) * step)
+        word = ConsensusWord(
+            index=index,
+            text=token,
+            bracketed=token.startswith("[") and token.endswith("]"),
+            outcome="agreement",
+            sources=("a", "b"),
+            readings={"a": token, "b": token},
+            timings={"a": extent, "b": extent},
+            extent=extent,
+            onset_spread_s=0.0,
+            offset_spread_s=0.0,
+            temporal_uncertainty_s=0.0,
+            variants=(),
+            agreement=1.0,
+        )
+        word_id = store.entity(prov_type="word", extent=extent, attributes=word_attributes(word))
+        store.was_generated_by(word_id, activity)
+        store.was_attributed_to(word_id, agent)
+        word_ids.append(word_id)
+    write_measurement(
+        store,
+        activity,
+        agent,
+        name=CONSENSUS_TRANSCRIPT,
+        signal="plain",
+        attributes={
+            "role": "consensus",
+            "n_sources": 2,
+            "n_words": len(tokens),
+            "word_ids": word_ids,
+            "text": " ".join(tokens),
+        },
+    )
+
+
+def _seed_run(
+    root: Path,
+    *,
+    seconds: float = 0.5,
+    hz: float = 120.0,
+    transcript: Optional[Sequence[str]] = _HEARD,
+) -> Path:
     """Write one finished run: an ``enhanced`` stream on disk and a store that names it.
 
     Args:
         root: The run root, created if absent.
         seconds: The stream's duration.
         hz: Its fundamental, so Praat finds a pitch.
+        transcript: The consensus surfaces this run heard; ``()`` for a consensus that heard
+            nothing, and None for a run whose consensus block never wrote a transcript at all.
 
     Returns:
         The enhanced stream's path.
@@ -98,6 +168,8 @@ def _seed_run(root: Path, *, seconds: float = 0.5, hz: float = 120.0) -> Path:
     )
     store.was_generated_by(entity, activity)
     store.was_attributed_to(entity, agent)
+    if transcript is not None:
+        _write_consensus(store, transcript, seconds=seconds)
     store.write_jsonl(run_dir / "store.jsonl")
     return enhanced
 
@@ -140,14 +212,24 @@ def _log_rows(log_dir: Path) -> list[dict[str, Any]]:
 
 
 @pytest.fixture
-def corpus(tmp_path: Path) -> Callable[[int], tuple[Path, list[Path]]]:
-    """A factory for a manifest over N finished runs."""
+def corpus(tmp_path: Path) -> Callable[..., tuple[Path, list[Path]]]:
+    """A factory for a manifest over N finished runs, each carrying the consensus it is given.
 
-    def _build(count: int) -> tuple[Path, list[Path]]:
+    ``transcripts`` names one consensus per run, in manifest order; without it every run carries
+    :data:`_HEARD`, which is what puts it in the posteriorgram's scope.
+    """
+
+    def _build(count: int, transcripts: Optional[Sequence[Optional[Sequence[str]]]] = None) -> tuple[Path, list[Path]]:
+        if transcripts is not None and len(transcripts) != count:
+            raise ValueError(f"{len(transcripts)} transcripts for {count} runs")
         roots = []
         for index in range(count):
             root = tmp_path / "corpus" / f"sub-{index:02d}_ses-1_20260911-000000"
-            _seed_run(root, hz=110.0 + 10.0 * index)
+            _seed_run(
+                root,
+                hz=110.0 + 10.0 * index,
+                transcript=_HEARD if transcripts is None else transcripts[index],
+            )
             roots.append(root)
         return _manifest(tmp_path / "manifest.jsonl", roots), roots
 
@@ -205,7 +287,7 @@ class TestTheExtendPass:
     """What one pass adds to a finished run, and what it leaves untouched."""
 
     def test_both_measurements_are_merged_into_the_existing_store(
-        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+        self, corpus: Callable[..., tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
     ) -> None:
         """The store keeps every record it had and gains the two the blocks wrote."""
         manifest, roots = corpus(2)
@@ -225,7 +307,7 @@ class TestTheExtendPass:
 
     def test_nothing_is_written_outside_the_recordings_own_run(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         provisioned: None,
         stub_ppgs: None,
         tmp_path: Path,
@@ -236,7 +318,7 @@ class TestTheExtendPass:
         assert sorted(entry.name for entry in roots[0].iterdir()) == ["prov", "run"]
 
     def test_the_bep028_files_are_re_exported_from_the_merged_store(
-        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+        self, corpus: Callable[..., tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
     ) -> None:
         """``prov/`` must not disagree with the store it was exported from."""
         manifest, roots = corpus(1)
@@ -256,7 +338,7 @@ class TestTheExtendPass:
 
     def test_the_ppgs_venv_gets_its_own_environment_record(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         provisioned: None,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -285,7 +367,7 @@ class TestTheExtendPass:
         assert venvs[0].dependencies["torch"] == "2.8.0"
 
     def test_a_rerun_converges_on_the_same_graph(
-        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+        self, corpus: Callable[..., tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
     ) -> None:
         """Merging is a set union, so a task that dies and reruns must add nothing the second time.
 
@@ -303,7 +385,7 @@ class TestTheExtendPass:
             assert len([e for e in store.entities("measurement") if e.attributes["name"] == PPG_MEASUREMENT]) == 1
 
     def test_a_half_extended_run_gains_only_what_it_is_missing(
-        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+        self, corpus: Callable[..., tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
     ) -> None:
         """Praat alone is redone when the posteriorgram already landed, and the entity is not doubled."""
         manifest, roots = corpus(1)
@@ -331,7 +413,7 @@ class TestOneBadRecording:
 
     def test_a_typed_absence_leaves_the_rest_of_the_batch_intact(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         provisioned: None,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -359,7 +441,7 @@ class TestOneBadRecording:
 
     def test_a_run_with_no_store_is_recorded_and_the_others_still_extend(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         provisioned: None,
         stub_ppgs: None,
         tmp_path: Path,
@@ -376,7 +458,7 @@ class TestOneBadRecording:
 
     def test_a_whole_batch_failure_keeps_every_recordings_praat_features(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         provisioned: None,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -403,7 +485,7 @@ class TestTheBatching:
 
     def test_the_batch_size_bounds_the_calls_not_the_recordings(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         provisioned: None,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -425,7 +507,7 @@ class TestTheVenvGate:
 
     def test_a_missing_venv_refuses_and_names_the_pre_build(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -437,12 +519,119 @@ class TestTheVenvGate:
         assert find_measurement(_store_of(roots[0]), PPG_MEASUREMENT) is None
 
 
+class TestTheTranscriptScope:
+    """The posteriorgram is derived where the recognizers produced a consensus, and nowhere else.
+
+    The ``ppg_20260911`` pass applied this from an operator's manifest that cannot be rebuilt from
+    the tree; it is the driver's rule now, so a manifest naming every recording yields the scope.
+    """
+
+    def test_a_consensus_that_heard_nothing_takes_praat_and_no_posteriorgram(
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        provisioned: None,
+        stub_ppgs: None,
+        tmp_path: Path,
+    ) -> None:
+        """A transcript carrying no word is the corpus's 2,376: Praat lands, ppgs is never asked."""
+        manifest, roots = corpus(1, [()])
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        store = _store_of(roots[0])
+        assert find_measurement(store, CONSENSUS_TRANSCRIPT) is not None
+        assert find_measurement(store, PPG_MEASUREMENT) is None, "a wordless recording ran a phoneme classifier"
+        assert find_measurement(store, PRAAT_MEASUREMENT) is not None, "Praat needs no transcript"
+        assert _log_rows(tmp_path)[0]["status"] == "ok"
+
+    def test_a_store_with_no_transcript_entity_is_out_of_scope_too(
+        self, corpus: Callable[..., tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+    ) -> None:
+        """Two of the eighty sampled hold no ``consensus_transcript`` at all; absence is not consent."""
+        manifest, roots = corpus(1, [None])
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        store = _store_of(roots[0])
+        assert find_measurement(store, CONSENSUS_TRANSCRIPT) is None
+        assert find_measurement(store, PPG_MEASUREMENT) is None
+        assert find_measurement(store, PRAAT_MEASUREMENT) is not None
+
+    def test_a_transcript_of_only_bracketed_tokens_is_in_scope(
+        self, corpus: Callable[..., tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+    ) -> None:
+        """The rule keys on the consensus stream, not on its unbracketed subset.
+
+        14,836 of the corpus are ``[breath]``/``[cough]`` throughout, so ``lexical_words`` as the
+        predicate would drop every one of them.
+        """
+        manifest, roots = corpus(1, [("[breath]", "[cough]")])
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        store = _store_of(roots[0])
+        assert lexical_words(store) == [], "this recording must carry no unbracketed word"
+        assert find_measurement(store, PPG_MEASUREMENT) is not None, "the bracketed-only population is in scope"
+
+    def test_only_the_recordings_in_scope_reach_the_model(
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        provisioned: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One ppgs call per batch, and the two out-of-scope rows are not in it."""
+        sizes: list[int] = []
+
+        def _counting(audios: List[Audio], device: Optional[DeviceType] = None) -> List[Any]:
+            sizes.append(len(audios))
+            return _fake_ppgs(audios, device)
+
+        monkeypatch.setattr(cli, "extract_ppgs_from_audios", _counting)
+        manifest, roots = corpus(4, [_HEARD, (), None, ("[breath]",)])
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        assert sizes == [2], "the wordless and the transcript-less rows were handed to the model"
+        held = [find_measurement(_store_of(root), PPG_MEASUREMENT) is not None for root in roots]
+        assert held == [True, False, False, True]
+        assert all(find_measurement(_store_of(root), PRAAT_MEASUREMENT) is not None for root in roots)
+
+    def test_force_does_not_widen_the_scope(
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        provisioned: None,
+        stub_ppgs: None,
+        tmp_path: Path,
+    ) -> None:
+        """--force is one-sided: it overrides ``praat_pending`` alone, never the transcript rule."""
+        manifest, roots = corpus(1, [()])
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"]) == 0
+        row = _log_rows(tmp_path)[0]
+        assert row["praat"] == "ok", "--force must still re-derive Praat on an out-of-scope recording"
+        assert find_measurement(_store_of(roots[0]), PPG_MEASUREMENT) is None, "--force widened the PPG scope"
+
+    def test_the_venv_gate_holds_even_where_nothing_is_in_scope(
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The gate is a property of the host, not of the slice.
+
+        A scope-conditional gate would let a later slice holding in-scope rows start a cold build
+        under the array, which is what the unconditional one exists to prevent.
+        """
+        monkeypatch.setattr(cli, "ppgs_venv_is_provisioned", lambda: False)
+        manifest, roots = corpus(2, [(), None])
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 2
+        assert "ensure_ppgs_venv" in capsys.readouterr().err
+        assert find_measurement(_store_of(roots[0]), PRAAT_MEASUREMENT) is None, "nothing may be measured"
+
+
 class TestForceReDerives:
     """Every stored Praat scalar was measured under the retired sex-typed F0 bin, so skipping looks like success."""
 
     def test_without_force_the_praat_block_is_skipped(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         provisioned: None,
         stub_ppgs: None,
         tmp_path: Path,
@@ -458,7 +647,7 @@ class TestForceReDerives:
 
     def test_force_re_derives_a_store_that_already_holds_both(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         provisioned: None,
         stub_ppgs: None,
         tmp_path: Path,
@@ -474,7 +663,7 @@ class TestForceReDerives:
 
     def test_force_supersedes_a_reading_taken_under_a_different_range_rule(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         provisioned: None,
         stub_ppgs: None,
         tmp_path: Path,
@@ -501,7 +690,7 @@ class TestForceReDerives:
         assert live[0].attributes["signal"] == "enhanced"
 
     def test_an_unchanged_re_derivation_retires_nothing(
-        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+        self, corpus: Callable[..., tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
     ) -> None:
         """A forced pass that reproduces the stored reading has nothing to retire, and must not retire it."""
         manifest, roots = corpus(1)
@@ -513,7 +702,7 @@ class TestForceReDerives:
         assert find_measurement(store, PRAAT_MEASUREMENT) is not None
 
     def test_force_does_not_touch_the_posteriorgram(
-        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+        self, corpus: Callable[..., tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
     ) -> None:
         """Audit steps 1 and 1b are both withdrawn, so a forced pass is Praat-only, on ``enhanced``."""
         manifest, roots = corpus(1)
@@ -529,7 +718,7 @@ class TestForceReDerives:
 
     def test_the_venv_gate_holds_on_a_forced_pass(
         self,
-        corpus: Callable[[int], tuple[Path, list[Path]]],
+        corpus: Callable[..., tuple[Path, list[Path]]],
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
