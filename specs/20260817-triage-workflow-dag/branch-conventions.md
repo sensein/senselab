@@ -49,6 +49,25 @@ Three consequences worth stating rather than leaving implied:
    under `spans.min_separation_ms: 30`; the branch's single attempt span simply covers all three. The
    branch is not refining them, so they neither need merging nor conflict with it.
 
+### The two owner decisions of 2026-09-15 leave the minting rule alone and open one question
+
+**Neither decision changes this rule.** That a branch *refines and reviews rather than waits for a
+correct subject*
+([`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+§ *A branch refines and reviews*) is a statement about what a branch owes, not about which spans it
+may mint over; the family scoping above is what stops the same statement collapsing V1 into a
+`refine`.
+
+**What it does open: whose family a ruleset-written label puts a span in.** A fired rule may now stamp
+or refine a span's label (that design's § *A ruleset that fires may write or refine a span's label*),
+and the candidate it would label for VOICE is an `amplitude` span — `voice.sustained`'s feature is
+`[span_longest, amplitude]` (`data/config/default.yaml:252-255`). Under the rule above VOICE may
+`refine` only a span of the family it proposes into, so a label alone does not make that span
+refinable. Either the label sets the span's `family`, which is a writer touching a span PREPROCESS
+minted, or the scoping widens for the four annotating verbs while staying for `propose`.
+**Unresolved**; it is one of the costs weighed at
+[`branch-voice.md`](branch-voice.md) § *The span source is one of three options*.
+
 ## Deviations and counts are stored, and need no new `PROV_TYPE`
 
 | what | stored as |
