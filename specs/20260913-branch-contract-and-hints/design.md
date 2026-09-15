@@ -811,10 +811,18 @@ Move it to PREPROCESS, whole-file, in the same shape as the PPG extension:
   so `not_consulted`) becomes a question about the shared derivative. This is a behaviour change to a
   shipped branch, not a pure addition.
 
-**Raw or enhanced is undecided and must be piloted first.** The derivative's headline justification
-is catching a quiet background talker, and enhancement suppresses exactly that; this project's
-standing conclusion for off-target speaker detection is that it runs on raw for that reason. A few
-dozen files scored on both streams decides it, and that pilot precedes the corpus pass.
+**The stream is `enhanced`, decided by the owner on 2026-09-15. No pilot is owed.**
+
+The consideration that had held it open is real and was weighed: the derivative's headline
+justification is catching a quiet background talker, and enhancement suppresses exactly that — which
+is why this project's standing conclusion for *off-target speaker detection* in `audio_analysis` is
+that it runs on raw. That conclusion belongs to a different question and does not carry here. The
+owner's direction is `enhanced`, matching the PPG, which reads `enhanced` by the same owner's
+decision and for the same reason: many of these recordings carry background noise a model trained on
+clean speech handles worse on the unprocessed stream.
+
+The stream is a config key rather than a literal, so the comparison remains a config change for
+anyone who later wants to make it — but it is not owed, and nothing here is pending it.
 
 The claim that pyannote is reliable at the single/multi-speaker distinction is **uncited** and is not
 relied on here; `benchmarks/diarization.md` and `benchmarks/glides-diarization.md` are in this tree
