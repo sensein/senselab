@@ -175,6 +175,22 @@ praat_features:
     tilt_line_type: straight           # declared for provenance; any other value is refused
     peak_interpolation: parabolic      # declared for provenance; any other value is refused
 
+# Diarization as one shared PREPROCESS derivative: how many voices the recording holds, and where
+# each of them is. This block MEASURES ONLY. It takes no multi-voice decision and gates nothing --
+# the recording-level judgement is QUALITY's, taken against each branch's refined spans after the
+# branches have run. Speaker IDENTITY stays with SPEECH, which is to READ these segments rather
+# than run a diarizer of its own; that read-swap is not yet made.
+diarization:
+  model: pyannote/speaker-diarization-community-1  # the speaker_diarization task's own default backend
+  revision: main                       # resolved to an immutable commit BEFORE the load; the agent records that SHA
+  # One measurement per stream, `<stream>_diarization`, never summed. Enhancement PARTITIONS the
+  # recording rather than destroying what it removes: `enhanced` answers how many voices survive
+  # it, `residual` answers whether one was taken out. Owner-directed 2026-09-15.
+  streams: [enhanced, residual]
+  exclusive: false                     # keep pyannote's overlapping view; the exclusive partition makes concurrency unreadable
+  min_speakers: null                   # lower bound handed to the clustering; null hands none
+  max_speakers: null                   # upper bound, same -- a cap makes a count above it unreportable
+
 # VOICE's F0 ranges and task-duration expectations. f0_search_range_hz is also read by PREPROCESS:
 # it is the wide search each recording's own [floor, ceiling] is narrowed from, not a fixed range.
 voice:

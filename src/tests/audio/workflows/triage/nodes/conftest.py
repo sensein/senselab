@@ -100,11 +100,14 @@ def _stub_models(
     record: dict[str, Any] | None = None,
     enhance: Callable[..., list] | None = None,
     ppgs: Callable[..., list] | None = None,
+    diarize: Callable[..., list] | None = None,
 ) -> None:
     """Replace every model call PREPROCESS makes, on the node module, and record each one's kwargs.
 
     ``ppgs`` defaults to a random posteriorgram of the right shape: the real one lives in a
-    subprocess venv whose first build takes 810 s, so no test may reach it.
+    subprocess venv whose first build takes 810 s, so no test may reach it. ``diarize`` defaults to
+    one speaker over the whole recording: pyannote's checkpoints are gated, so no test may reach
+    the real diarizer either.
     """
     seen = record if record is not None else {}
 
@@ -135,7 +138,22 @@ def _stub_models(
     monkeypatch.setattr(preprocess_module, "detect_health_acoustic_events", fake_hear)
     monkeypatch.setattr(preprocess_module, "transcribe_audios", fake_transcribe)
     monkeypatch.setattr(preprocess_module, "extract_objective_quality_features_from_audios", fake_squim)
+
+    def fake_diarize(audios: list, **kwargs: Any) -> list:  # noqa: ANN401
+        """One speaker over each whole recording, which is what the corpus's material should give."""
+        seen["diarize"] = dict(kwargs)
+        return [
+            [ScriptLine(speaker="SPEAKER_00", start=0.0, end=audio.waveform.shape[-1] / audio.sampling_rate)]
+            for audio in audios
+        ]
+
     monkeypatch.setattr(preprocess_module, "extract_ppgs_from_audios", ppgs or fake_ppgs)
+    monkeypatch.setattr(
+        preprocess_module,
+        "diarization_model",
+        lambda config: _FakeModel(str(config.require("diarization.model"))),
+    )
+    monkeypatch.setattr(preprocess_module, "diarize_audios", diarize or fake_diarize)
     if enhance is not None:
         monkeypatch.setattr(preprocess_module, "_frcrn_model", lambda: _FakeModel("alibabasglab/FRCRN_SE_16K"))
         monkeypatch.setattr(preprocess_module, "enhance_audios", enhance)

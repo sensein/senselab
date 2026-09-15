@@ -840,6 +840,124 @@ reintroduce the defect. And there is no minimum value: the retired `> 4` cut del
 range outright (finding 2), and a configurable floor is the same selection on the dependent variable
 with a knob on it.
 
+## diarization
+
+Whole-file diarization as one shared PREPROCESS derivative: how many voices the recording holds,
+and where each of them is. Owed by
+[`specs/20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)'s
+"Whole-file diarization as a shared derivative", and the derivative that closes it. The division of
+labour it lands under: **PREPROCESS measures, branches refine their task spans, QUALITY judges
+multi-voice against those refined spans after every branch.** Nothing in this section is a
+threshold on a decision, because this block takes none.
+
+diarization.model `pyannote/speaker-diarization-community-1`. Not a new choice: it is the default
+`senselab.audio.tasks.speaker_diarization.diarize_audios` already resolves to when a caller passes
+no model, and the block calls that task rather than pyannote directly. Naming it here rather than
+inheriting the task's default is what makes a run's `config_hash` change when the backend changes.
+The **claim that pyannote is reliable at the single-versus-multi-speaker distinction is uncited**,
+as `20260913-branch-contract-and-hints/design.md` already records; `benchmarks/diarization.md` and
+`benchmarks/glides-diarization.md` are the measurements to read it against. What *is* measured is
+its ceiling: the seed-17 speaker-ceiling probe (TTS corpus, k=1..8, 20 sessions/k) found no
+structural saturation -- predicted counts at k=8 spanned {5,6,7,8} -- and that backend's
+`DiarizationCapabilities` record names it the strongest of the six at low k, which is the range
+this derivative lives in.
+
+diarization.revision `main`. The ref the spec is pinned *from*, not the ref anything loads through.
+`PyannoteAudioModel` resolves it to an immutable commit at construction, and
+`speaker_diarization/pyannote.py` resolves again and passes `revision=<sha>` to
+`Pipeline.from_pretrained`, so the load is commit-addressed and the model agent records that SHA.
+CLAUDE.md's rule -- a load must pass a SHA, never a ref -- is satisfied by the backend, which is
+the reason the block goes through the task instead of calling pyannote itself. Pinning a literal
+SHA here instead would freeze the corpus to one checkpoint and is the change to make when a
+campaign wants that; it is not the default because nothing has yet been measured against a
+specific commit of this checkpoint.
+
+diarization.streams `[enhanced, residual]`. **Owner-directed on 2026-09-15, and settled.** The
+question `20260913-branch-contract-and-hints/design.md` held open was raw-versus-enhanced, on the
+grounds that the derivative's headline use is catching a quiet background talker and enhancement
+suppresses exactly that -- which is also this project's standing conclusion for off-target speaker
+detection (`SPEECH_DETECTION_SOTA_REVIEW_2026.md`). The owner's resolution dissolves the dilemma
+rather than picking a side: **enhancement does not destroy the background talker, it partitions the
+recording.** `residual = plain - g*enhanced` is already computed, lag-aligned, gain-fitted, written
+as its own stream and already classified beside `enhanced` (`residual_yamnet_scores` and friends)
+and already read by the ruleset (`airway.breath`'s `[residual, energy_fraction]`,
+`taxonomy.ruleset.emptiness.peak_streams`). So both halves are diarized:
+
+- **`enhanced`** answers *how many voices survived enhancement*, which for a single-participant
+  protocol recording should be one.
+- **`residual`** answers *whether a voice was removed*, which is the evidence that a quiet
+  background talker was there at all.
+
+Neither alone answers the owner's question and **the two counts are never summed**: one measurement
+per stream, `enhanced_diarization` and `residual_diarization`, each with its own `signal`, its own
+`derived_from` and its own sidecar. A disagreement between them is itself the finding. Cost roughly
+doubles against a single-stream pass, which is why this is a list a campaign can shorten to one
+entry rather than a literal.
+
+Adding a stream costs one line and no code: `diarization: {streams: [enhanced, residual, plain]}`.
+The measurement records the stream it was taken on, so two readings can never be compared as if
+they were the same.
+
+diarization.exclusive `false`. The overlapping view, not pyannote's exclusive partition. This is
+the one setting here that is a correctness choice rather than a preference:
+`speaker_diarization/pyannote.py` spells out that under the exclusive view "a per-instant speaker
+count derived from these segments is capped at 1 by construction, so it reports *no overlap* as a
+confident measurement rather than as something the input could not express". `community-1` computes
+overlap internally -- its local segmentation model is `segmentation-3.0` -- and the exclusive view
+discards it. Two people talking at once is precisely the evidence a multi-voice reading wants, so
+the block takes the view that can express it. The speaker set is identical under either view; only
+`overlap_s` and `max_concurrent_speakers` differ, and under the partition both would be structural
+zeros.
+
+diarization.min_speakers, diarization.max_speakers: null, meaning **no bound is handed to the
+clustering**. Null here is a stated choice, not an unmeasured one, and it is the same shape as
+`windows.yamnet.label_thresholds` and `voice.f0_range_by_population`: an override a caller may
+supply, absent by default. Neither bound is fitted on this corpus, and a `max_speakers: 2` would
+be worse than unfitted -- it would cap the measurement at the answer, making "three voices"
+unreportable on the very recordings a multi-voice reading exists to find. Pyannote is the only
+backend of the six that acts on these hints at all
+(`DiarizationCapabilities.honors_speaker_hints`), so stating one is a real change to the estimate
+and owes its own measurement.
+
+**No minimum duration key.** One was considered and is deliberately absent. A floor would turn a
+measurable recording into an absence, and the corpus is short -- median 7.0 s, mean 15.0 s -- so
+any floor worth having would fall inside the bulk of it. Probed directly on 2026-09-15 against
+community-1 on CPU, head-truncated clips of a real b2ai recording at 0.05, 0.1, 0.25, 0.5, 1.0 and
+2.0 s all returned without raising, so there is no structural length below which the model refuses
+and no measurement a floor could be read off. The measurement carries `duration_s`, so a consumer
+that wants to discount a short reading has the number to do it with.
+
+**What is recorded, and where.** Per stream: `n_speakers` is the headline the owner asked for
+("pyannote to see if it's 1 or more"), with `speakers`, `n_segments`, `per_speaker_s`, `speech_s`,
+`overlap_s` and `max_concurrent_speakers` beside it -- all attributes, because a consumer answering
+"one voice or more" must not have to open a file. The segment table is an `.npz` sidecar under
+`derivatives/<stream>_diarization.npz`, named by the entity through its path and SHA-256, following
+the posteriorgram: what grows with the recording's length is written beside the run, never inlined.
+Its `starts`/`ends`/`speakers`/`streams` are four parallel columns of one table, so concatenating
+the two streams' files gives a self-describing segment list a consumer intersects with a span by
+arithmetic alone.
+
+One measurement per stream rather than one carrying both, so `signal` keeps meaning what it means
+everywhere else in the store and each entity's `derived_from` names exactly the stream it was
+measured on -- the same shape `enhanced_yamnet_scores` and `residual_yamnet_scores` already use. It
+also makes each stream its own block, so a run whose `residual` was never written still gets its
+`enhanced` reading and records the other as its own absence, and an extend pass that widens
+`streams` measures only what is missing.
+
+The segments are deliberately **not** written as `span` entities, which would be the other
+idiomatic home for timed regions: `live_entities(store, "span")` is the branches' set of candidate
+task spans, and a per-speaker time partition is not a candidate for anything -- putting it there
+would widen an existing consumer's input set as a side effect of adding a measurement. Attribution
+of a speaker *to* a span is a live design question with a contract tension; it is written up in
+[`../20260915-preprocess-diarization/design.md`](../20260915-preprocess-diarization/design.md) and
+is not decided here.
+
+**Zero is a measurement.** Measured on the b2ai sample on 2026-09-15: every `Respiration-and-cough`
+recording (breath, cough, five-breaths, three-quick-breaths) diarized to **zero** speakers and zero
+segments, while every `Story-recall` and `Harvard-Sentences` recording returned exactly one. A
+recording whose segmentation finds no speech has no speaker, and that is an answer with a value,
+not an absence -- the distinction this repository has paid for before.
+
 ## voice
 
 VOICE's F0 ranges and task-duration expectations.

@@ -78,23 +78,23 @@ recording (as supplied) --> resample-+
 | `residual` | `plain - g·FRCRN_SE_16K(plain)`, lag-aligned, gain-fitted; `enhanced` (the aligned FRCRN output) written alongside it | residual | none — off by default, not wired into any branch |
 | `enhanced_yamnet_scores`/`ast_scores`/`hear_scores`, `residual_yamnet_scores`/`ast_scores`/`hear_scores` | whole-file classifier windows over `enhanced` and `residual`, each carrying `speech_overlap` | enhanced, residual | none — off by default |
 | `{enhanced,residual}_{yamnet,ast,hear}_summary_all`/`_speech_free` | per-label mean/max/window-count, over every window and over speech-free windows only | enhanced, residual | none — off by default |
-| `diarization` | **owed a code change; nothing writes one.** pyannote over each `enhanced` file as instructed, one whole-file measurement of whether the recording holds one speaker or more — shaped like `ppg_posteriorgram`: a block over that stream, plus an `extend_*` driver for finished runs. The stream itself is the one part still open; see below. `diariz` and `pyannote` appear nowhere in `preprocess.py`; SPEECH's own diarization lives inside that branch and is scoped to `[first word start, last word end]`, so a voice outside the lexical hull is invisible to it | enhanced | QUALITY's multi-voice check ([`branch-quality.md`](branch-quality.md) Q9); every branch, once it is shared |
+| `{enhanced,residual}_diarization` (the `diarization` derivative: one measurement per stream in `diarization.streams`) | whole-file speaker diarization via `speaker_diarization.diarize_audios` (pyannote `speaker-diarization-community-1`, overlapping view, no speaker bounds). Per stream: `n_speakers` and the per-speaker totals are attributes; the `(start, end, speaker, stream)` segment table is one `derivatives/<stream>_diarization.npz` the entity names by digest. **The two counts are never summed** — `enhanced` says how many voices survived enhancement, `residual` says whether one was removed. **Zero speakers is a value, not an absence** | `enhanced`, `residual` | QUALITY judges multi-voice against branch-refined spans; a branch refining a span intersects with the segments. **SPEECH is to read this instead of running its own pyannote pass over the word hull** (owner, 2026-09-15) — that read-swap is not in this change; what it needs is enumerated in [`../20260915-preprocess-diarization/design.md`](../20260915-preprocess-diarization/design.md) |
 
-**Why the one owed row is owed here.** QUALITY is the node positioned to judge *how many voices are
+**Why this measurement is made here.** QUALITY is the node positioned to judge *how many voices are
 in this recording* — it runs after every branch and reads spans beside the measurements behind them —
 and it opens no audio, so the measurement has to be made where the waveform is in hand, which is
 this node. Owner-directed, 2026-09-15. The division is PREPROCESS measures, the branches refine
 their own task spans, QUALITY judges; a speaker *identity* question stays with SPEECH. See
 [`branch-quality.md`](branch-quality.md) § Q9 and [`dag.md`](dag.md) steps 2 and 5e.
 
-**The derivative is already owed in the contract design, and the stream is the open part.**
-[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
-§ *Whole-file diarization as a shared derivative* owes exactly this block — whole-file, PPG-shaped,
-delivered as an extend driver, with SPEECH's own diarize step becoming a read of it — and holds
-**raw against enhanced undecided pending a pilot**, because the derivative's headline justification
-is catching a quiet background talker and enhancement suppresses one. The owner's instruction names `enhanced`; that document's standing conclusion for
-off-target speaker detection is raw. **The two are not reconciled here**: the pilot named there is
-what settles it, and whichever stream wins, the block's shape and this row's consumer do not change.
+**The stream question is settled, and it is both halves.** The contract design
+([`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+§ *Whole-file diarization as a shared derivative*) once held raw against enhanced undecided pending a
+pilot, on the grounds that the derivative exists to catch a quiet background talker and enhancement
+suppresses one. The owner retired that on 2026-09-15: **enhancement partitions rather than destroys.**
+If the background voice is suppressed, `enhanced` holds a single speaker and the suppressed voice is
+in `residual`, where it can be read directly. Both streams are measured, no pilot is owed, and the
+question does not arise.
 
 A derivative is admitted when it is written to the store with provenance. It does not need a
 declared consumer — see [`store.md`](store.md).
