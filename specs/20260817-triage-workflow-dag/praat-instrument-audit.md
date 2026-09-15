@@ -18,12 +18,13 @@ with it the remediation step it justified (**step 1**, withdrawn below). What su
 of which stream each instrument reads, and an open research question the withdrawal opens rather than
 closes.
 
-`preprocess.py:883` resolves the **`enhanced`** stream and hands it to
-`extract_praat_parselmouth_features_from_audios`. `preprocess.py:2351` shows what `enhanced` is:
+`preprocess.py:884` resolves the **`enhanced`** stream and hands it to
+`extract_praat_parselmouth_features_from_audios`. `preprocess.py:2352` shows what `enhanced` is:
 `enhance_audios([plain], model=model)` — ClearVoice/**FRCRN**, a deep speech-enhancement network.
 
-So all 40 scalars — CPPS, HNR, jitter, shimmer, LTAS, slope and tilt, spectral moments, formants,
-speech rate — feeding [`branch-voice.md`](branch-voice.md) V4 and V6,
+So all 45 scalars — the forty descriptors (CPPS, HNR, jitter, shimmer, LTAS, slope and tilt,
+spectral moments, formants, speech rate) and, since Task 8, the five keys naming the derived F0
+range — feeding [`branch-voice.md`](branch-voice.md) V4 and V6,
 [`branch-speech.md`](branch-speech.md) S4, [`branch-ddk.md`](branch-ddk.md) D2 and
 [`branch-airway.md`](branch-airway.md) A6 are measured on the output of a generative denoiser.
 
@@ -77,8 +78,9 @@ PPG's answer is `enhanced`.
 ### The bound — what finding 0 does *not* reach
 
 There are exactly **two** `resolve_stream(..., "enhanced")` sites in PREPROCESS: `:759`
-(`ppg_input`) and `:883` (the Praat call). Everything else reads `plain` or `preemphasised` —
-**HeAR (`:1856`), YAMNet (`:1922`) and SQUIM all run on `plain`.**
+(`ppg_input`) and `:884` (the Praat call). Everything else reads `plain` or `preemphasised` —
+**HeAR (`:1731`), YAMNet (`:1705`) and SQUIM all run on `plain`**, and so do their per-span variants
+(`:1888`, `:1961`).
 
 So finding 0's scope is **the Praat scalars and the PPG, and nothing else.** AIRWAY's per-span
 evidence, the taxonomy labels and the quality measures are not implicated. This is worth stating
@@ -139,7 +141,7 @@ longer in the tree, and that four of them carry published-norm names while the w
 findings 2–7 record were and are in force.
 
 **The marker already exists and nothing reads it.** Every Praat measurement is written with
-`signal="enhanced"` (`preprocess.py:904`), and the PPG likewise (`:810`). So "flag them" is already
+`signal="enhanced"` (`preprocess.py:905`), and the PPG likewise (`:810`). So "flag them" is already
 done and it changed nothing.
 
 **An earlier version proposed making every reader require `signal == "plain"`. That is void**, and
@@ -164,9 +166,9 @@ recompute by `scripts/analyze_routing_evidence.py`.
 
 ### Step 1 — switch the Praat stream to `plain`: **withdrawn 2026-09-14 by the owner**
 
-The sites are real and stay recorded: `praat_features` resolves `enhanced` at **`preprocess.py:883`**
-and writes `signal="enhanced"` at **`:904`**, with `derived_from=(enhanced_id,)` at **`:906`** and the
-enhanced stream named in its docstring at `:860`, `:869` and `:875` (the last being the `Raises:`
+The sites are real and stay recorded: `praat_features` resolves `enhanced` at **`preprocess.py:884`**
+and writes `signal="enhanced"` at **`:905`**, with `derived_from=(enhanced_id,)` at **`:907`** and the
+enhanced stream named in its docstring at `:860`, `:870` and `:876` (the last being the `Raises:`
 clause). **Those are not defects. The Praat scalars do not move. They read `enhanced`, and the
 argument that was raised against it does not hold.**
 
@@ -206,7 +208,7 @@ and none of them is now waiting on anything.
   `cached_call` and `cache_dir` under `workflows/triage/` returns **zero hits**, so bumping it
   invalidates nothing in these stores. Re-derivation of anything in the corpus is an extend driver.
 - **`scripts/extend_ppg_praat.py` skips any recording whose store already holds both measurements**
-  (`extend_ppg_praat.py:26`, and the skip itself at `:187-190` with a second check at `:235-237`), so
+  (`extend_ppg_praat.py:26`, and the skip itself at `:218-221` with a second check at `:268-272`), so
   a re-run over the corpus changes nothing on all 62,547 stores without a withdrawal pass or a force
   flag. That still matters — see
   [`../20260914-f0-range-and-measurement-streams/plan.md`](../20260914-f0-range-and-measurement-streams/plan.md)
@@ -216,7 +218,7 @@ and none of them is now waiting on anything.
 
 The site is real and stays recorded: the PPG resolves `enhanced` at **`preprocess.py:759`**
 (`ppg_input`) and writes `signal="enhanced"` at `:810` — a call site separate from the Praat one at
-`:883`. **The PPG does not move. It reads `enhanced`, and that is a choice with a reason, not an
+`:884`. **The PPG does not move. It reads `enhanced`, and that is a choice with a reason, not an
 unexamined inheritance.**
 
 **Finding 0's argument did not reach the PPG — and as of 2026-09-14 it does not reach the Praat
@@ -262,7 +264,7 @@ unmoved, so neither the DDK gate count the contract's rule (a) requires
 AIRWAY gate reading the same posteriorgram** (`default.yaml:260-263`), which step 1b never counted,
 so it was exposing two branches' routing and owed a count for one. **No configured gate reads a
 Praat scalar** — `routing_analysis/features.py:725-726` carries them into the feature record and no
-`gates:` entry names one — so re-deriving the forty scalars, for any reason, changes no routing at
+`gates:` entry names one — so re-deriving the Praat block, for any reason, changes no routing at
 all.
 
 ### Step 2 — replace `derive_f0_range`, not the wrapper
@@ -286,6 +288,33 @@ it, and of what it does not reach. Every coefficient's own derivation is in
 decides a measurement's range is a parameter of the run and belongs in `data/` rather than as a
 module literal.
 
+**No Praat scalar becomes publishable from step 2.** The range is now principled and the instrument
+is not. `cepstral_peak_prominence_mean` is still cut at `> 4` dB (finding 2), still peak-searched
+60–330 Hz whatever ceiling the caller derived (finding 4), and still averaged unweighted over voiced
+intervals the vuv mean period inflates by ~70% (finding 3); `range_ratio_intensity_db` is still
+`max_dB / min_dB` and still dimensionally invalid (finding 6); twelve of thirteen functions still
+return no support count (finding 5); the spectral moments are still capped at 5 kHz (finding 7); and
+**step 0's withholding has not happened**, so all 40 scalars in all 62,547 stores remain addressable.
+Step 2 closed **finding 1** and moved **finding 8**'s pulse exclusion onto a declared bound — it did
+not close finding 8, whose period-doubling incapacity is structural and untouched. It closed nothing
+else, and "we fixed the range" must not be read as "the numbers are now good."
+
+**And the stream question is not settled by any of this.** Steps 1 and 1b are withdrawn, which
+removes an argument, not a measurement: `enhanced` versus `plain` for these scalars is **unmeasured**
+(step 1 above), and the research direction is in
+[`branch-listening-sample.md`](branch-listening-sample.md) as the seventh kind of owed.
+
+**Two misreadings to pre-empt, because both are available from the change itself.**
+
+- **The jitter and shimmer NaN rate will change, and the direction is not evidence of anything.**
+  More low voices are admitted, because the floor now follows the recording rather than sitting at
+  the bin's 60 Hz (finding 8). Without step 5's coverage measurement a falling NaN rate is not
+  evidence of improvement. *(An earlier version attributed the second half of this to noise inflating
+  perturbation once the measurement moved to `plain` — void with step 1's withdrawal.)*
+- **A 45 Hz creak reading as `F0RangeUnavailable` becomes VOICE "no phonation found"**, which is a
+  false clinical statement about a phonating voice. Attribute that absence as **bounded by the
+  declared search range**, not by the voice.
+
 **The rule is asymmetric and has three parts.** Floor `max(search_floor, p5 / 1.5)`; ceiling
 `min(search_ceiling, max(2.5 × q3, 1.5 × p95))`; and if p95 falls below twice the search floor the
 whole contour sits within an octave of the bottom of the search range, so the unnarrowed search
@@ -305,9 +334,9 @@ selected `(60, 250)`, which still contains 120 Hz.
 
 **Where that hazard is live, corrected with the withdrawal of step 1.** This paragraph used to end
 *"and the problem gets more frequent under step 1, because FRCRN suppresses stationary low-frequency
-noise and `plain` does not."* Step 1 is withdrawn, so the forty scalars keep reading `enhanced` and
+noise and `plain` does not."* Step 1 is withdrawn, so the Praat scalars keep reading `enhanced` and
 their exposure does not rise. But the hazard is **already live on the two `derive_f0_range` call
-sites that read `plain` today** — `preprocess.py:954` (`phonation_tracks`) and `voice.py:71`, reached
+sites that read `plain` today** — `preprocess.py:955` (`phonation_tracks`) and `voice.py:71`, reached
 through `_required` at `voice.py:193` — and it always was. It is a property of those two consumers,
 not of a stream switch that is not happening.
 
@@ -335,9 +364,10 @@ source recommends; what it misattributed are the **values** — 60 Hz appears no
 effect size his tables support. The approach is still right on the merits — Vogel's own caveat that
 *"caution should be exercised when applying suggested settings to pathological voice populations"*,
 on 20 speakers over an office-telephone channel, is an argument *for* per-recording derivation — it
-is just not Vogel's argument, and his authority must not be borrowed for it. `:320-321` of the same
-document describes the z-trim and the two bins as live behaviour, which this step deletes; rewrite
-`:320-322` together. The DOI is gone from `extract_pitch_values`' docstring, where it annotated code
+is just not Vogel's argument, and his authority must not be borrowed for it. This step used to add
+that `:320-322` of the same document describes the z-trim and the two bins as live behaviour and
+must be rewritten. **That rewrite has happened**: the passage is at `:322-327` and reads in the past
+tense, ending *"Both the bin and the trim are gone as of 2026-09-14"*. The DOI is gone from `extract_pitch_values`' docstring, where it annotated code
 that now contradicts it.
 
 **Cite Hirst 2011 for two things and nothing else: the two-pass structure, and the ceiling's
@@ -374,10 +404,64 @@ survive a one-octave-low median, i.e. structural tolerance rather than correctio
 would trade away the 45–60 Hz creak cases this document bounds by the declared search range, and per
 the residual below it is only partial anyway, since the second harmonic survives any floor.
 
-**One consequence for another key.** The range ratio widens: the retired bin always gave 4.17 or 5.0, and
-the measured ranges here reach 12 (`[50, 600]`).
-`voice.f0_range_ratio_max` is null so nothing fires, but `voice.py:77-80` **raises** rather than
-flags once it is set.
+**Three consequences step 2 creates and does not close. None is a defect in the rule; each is a
+thing a reader of these values has to know, and none of them reads as closed.**
+
+- **Within-participant contrasts are improved, not restored.** A participant's shouted and
+  comfortable productions still get *different* instruments — continuously now, rather than in the
+  1.67× step finding 1 measures. The right instrument for a within-participant contrast is **one
+  range shared across the productions compared**, which step 2 does not build and no step here owns.
+  Owed.
+- **Instrument coverage now shifts F0-dependently.** Two window formulas live in this file and both
+  vary per recording: intensity smoothing at `3.2 / floor` (`praat_parselmouth.py:615`; the formula
+  is spelled out in the comment at `:183`, which annotates `extract_speech_rate`'s own **fixed**
+  `minimum_pitch=50` call at `:181` rather than this one) and harmonicity at
+  `periods_per_window=4.5`, i.e. `4.5 / floor` (`:680`). A third figure, `3 / floor`, is **not in
+  this file at all** — it is Praat's own analysis window inside `To Pitch (ac)`, which the file
+  reaches only through the floor it passes to `to_pitch_ac` (`:555`, `:807`, `:1055` on the derived
+  floor; `:465` is `extract_pitch_values`' own wide first pass, and `:952`'s `to_pitch_cc` is the
+  file's one cross-correlation pitch call). **No pulse-placing call takes a window at all**:
+  `To PointProcess (cc)` (`:809`, `:953`) takes the pitch object, and
+  `To PointProcess (periodic, cc)` (`:1185`, `:1241`) takes the floor/ceiling pair. So: a 420 Hz
+  speaker gets an **11 ms** intensity window and a 55 Hz speaker gets **64 ms** — *worse* than the
+  bin's 53 ms. Step 5's coverage figure is therefore conditioned on a per-recording window and is
+  **harder** to interpret, not easier. What makes it interpretable at all is that the floor is recorded, which
+  **Task 8 landed on 2026-09-14**: the five range keys ride in with the scalars they conditioned and
+  are attributes of every new `praat_features` measurement (`preprocess.py:899`, `:906`).
+- **`voice.f0_range_ratio_max` intuition changes.** The retired bin always gave 4.17 or 5.0; the
+  narrowing measured **8.2** on the glide above (`[72.8, 600.0]`) and reaches **12** on a fallback
+  (`[50, 600]`). Whoever populates that key should know that bin-era intuition will refuse glides,
+  and that `_f0_range` (`voice.py:74-80`) **raises** rather than flags once the key is set. It is
+  null today, so nothing fires.
+
+**The corpus pass step 2 creates, does not run, and does not owe a routing count.**
+`scripts/extend_ppg_praat.py --force` over the corpus re-derives **the Praat block only** — now
+**forty-five** scalars per store, the forty descriptors plus the five range keys Task 8 added
+(`praat_parselmouth.py:1494`, seeding `feature_data` from `extract_pitch_values`' return;
+`preprocess.py:861-863`) — in all 62,547 stores, on the unchanged `enhanced` stream, under the
+per-recording range step 2 introduced. Four things a reader sizing that pass needs:
+
+- **It is CPU-only.** With step 1b withdrawn the posteriorgram is never re-derived, forced or not
+  (`extend_ppg_praat.py:29`), so the pass runs no model in a subprocess venv. Size it against a
+  Praat-only batch, not against the original `ppg_20260911` run.
+- **It still requires a provisioned ppgs venv on the host, and that gate is deliberately
+  unconditional** (`extend_ppg_praat.py:31-35`, pinned by
+  `src/tests/scripts/extend_ppg_praat_test.py:530-540`). `--force` is one-sided: it overrides
+  `praat_pending` alone (`:218`, `:269`), so a store that is *missing* its posteriorgram still takes
+  the PPG path on a forced pass and still calls ppgs. That **zero** stores do so is a property of the
+  `ppg_20260911` corpus, not of the flag, and making the gate conditional on `--force` would let such
+  a store run with no venv provisioned.
+- **The store converges rather than doubling.** `ProvStore` entity ids are content-addressed over
+  `(run_id, prov_type, extent, attributes)` (`../../src/senselab/utils/prov_store.py:297`), so a
+  re-derivation that reproduces a stored reading writes the *same* id and appends nothing. A forced
+  pass supersedes only where the reading actually changed.
+- **No routing count is owed, and this is the consequence most worth writing down.**
+  `ppg.segment_rate_per_s` and `ppg.silent_fraction` are unchanged, so neither the DDK gate count nor
+  the `PpgsPosteriorgramUnavailable` rate comparison is needed; and **no configured gate reads a
+  Praat scalar** (`routing_analysis/features.py:725-726` carries them into the feature record; no
+  `gates:` entry in `../../src/senselab/audio/workflows/triage/data/config/default.yaml:227-271`
+  names one). The pass changes forty-five numbers per store and **not which branch runs on any
+  recording**.
 
 **Residual capture is owed, and it is the state of the art rather than a gap in this work.** The
 fallback catches capture landing within an octave of the search floor. It does not catch
@@ -398,11 +482,20 @@ could not tell a parselmouth crash from a silent recording. The distinction can 
 in `derive_f0_range` would be unreachable in production. The swallow stays, because other callers
 depend on the batch extractor not aborting; the signal is added as data, on all three return paths.
 
-**But narrowing is not right for every task, and step 2 and [`branch-voice.md`](branch-voice.md) V7
-currently prescribe opposite things.** Narrowing buys octave-error robustness on **stationary**
-material and is **actively wrong on a glide**: the derived ceiling is then set by how high the
-speaker went, which makes V3's "did F0 reach the derived limit" flag partly circular. **3,150 glide
-recordings sit on that difference**, so the narrowing is task-conditioned, not universal.
+**What narrowing costs on a glide, corrected 2026-09-14 against a measurement.** This paragraph read
+that narrowing is *"actively wrong on a glide"* and that the narrowing is therefore task-conditioned.
+**Measured, it is not.** An exponential 100→400 Hz sweep derives `[72.8, 600.0]` against produced
+extremes of 102 and 392 Hz — the `p5 / 1.5` floor sits −7.02 semitones under the sweep's low end and
+the ceiling clamps at the declared 600, so **the sweep is bracketed rather than clipped**
+(`src/tests/audio/tasks/features_extraction_test.py:373-381`). It is also strictly better than what
+it replaced: the bin capped a low-binned upward glide at 250 Hz.
+
+**What does degenerate is [`branch-voice.md`](branch-voice.md) V3's conformance flag**, and it
+degenerates in the opposite direction to the one claimed. "Did F0 reach the derived limit" can now
+only fire when the margin pushes past the 50/600 clamps, so on the 3,150 glide recordings it is
+**near-vacuous**, not circular. That is a defect in the flag, not a reason to condition the range on
+the task — and the earlier framing would have justified exactly such a task-conditioned range on a
+cost the measurement does not support.
 
 ### Step 3 — build V4 on `phonation/api.py`
 
@@ -416,7 +509,7 @@ value and for its validity qualifier**, which V4 requires and which the current 
 
 **But the admission rule is the measurement, and this step omitted it.** Jitter and shimmer are
 *defined* by which consecutive cycle pairs are allowed to contribute. Praat excludes pairs whose
-period ratio exceeds 1.3; `period_marks` applies only a range test (`phonation/api.py:176`) and **no
+period ratio exceeds 1.3; `period_marks` applies only a range test (`phonation/api.py:183`) and **no
 successive-ratio constraint at all**.
 
 Computing over that sequence unfiltered lets a single octave error or one voice break dominate the
@@ -487,7 +580,7 @@ and carries a support count (finding 5).
 of this step said "from the recording's own derived F0", which defeats the step's own purpose three
 ways:
 
-- on a type-3 voice `derive_f0_range` **raises** (`phonation/api.py:93-97`), so a band derived from it
+- on a type-3 voice `derive_f0_range` **raises** (`phonation/api.py:98-104`), so a band derived from it
   is **unavailable on exactly the population the reimplementation exists to serve**;
 - CPPS is a peak prominence measured against a regression over a quefrency range, so **changing the
   range changes the value** — a per-recording band destroys cross-recording comparability, which
@@ -497,9 +590,14 @@ ways:
 
 ### Step 2b — track F0 on the signal the range was derived on
 
-`phonation_tracks` derives the F0 range on **`plain`** and then tracks F0 on **`preemphasised`**
-(`preprocess.py:951-964`). [`branch-voice.md`](branch-voice.md) V1 identifies this as **structurally
-the same mismatch this audit condemns for the jitter form defaults** (finding 8) — a range derived
+**Open, and untouched by step 2.** `phonation_tracks` derives the F0 range on **`plain`**
+(`preprocess.py:955`) and then tracks F0 on the **`sharp`** stream (`:954`, `:965`) — pre-emphasised
+where the run wrote one, `plain` otherwise (`sharp_stream`, `:911`). Step 2 replaced what
+`derive_f0_range` computes and moved neither call, so the mismatch below survives the fix intact and
+stays open.
+
+[`branch-voice.md`](branch-voice.md) V1 identifies this as **structurally the same mismatch this
+audit condemns for the jitter form defaults** (finding 8) — a range derived
 under one condition applied under another — and the ordered path omitted it.
 
 It matters for the same reason: +6 dB/octave attenuates the fundamental relative to the upper
@@ -535,6 +633,14 @@ point process finding pulses.
 
 **Report two coverage figures**: one for the **point process** (jitter, shimmer, slope, tilt) and one
 for the **pitch tracker** (HNR, and anything reading the F0 contour).
+
+**Step 2 made this figure harder to interpret, not easier, and Task 8 is what keeps it interpretable
+at all.** The analysis windows behind both figures are now per-recording rather than one of two — an
+11 ms intensity window at a 280 Hz floor against 64 ms at the 50 Hz clamp, where the bin gave 53 ms
+(the two formulas and the third that is Praat's own are in step 2's consequences above). So each
+coverage figure is conditioned on a window that varies with the recording, and the condition is only
+readable because the derived floor and ceiling are recorded on the measurement as of Task 8. **Report
+the figure against the recorded floor**, not as a bare proportion.
 
 ---
 
@@ -584,13 +690,14 @@ fixing only `praat_parselmouth.py` would have left the clean path carrying the s
 
 ## The route into triage
 
-- `preprocess.py:886-897` calls `extract_praat_parselmouth_features_from_audios` on the **`enhanced`**
-  stream it resolved at `:883`. **All 40 Praat scalars come from that one call**, and it passes **nine**
-  arguments read from the triage config: `time_step`, `window_length` and the seven F0-range arguments
-  step 2 added. The tenth keyword the wrapper exposes, `pitch_unit`, is set from nowhere in triage — it
-  is why the contrast table above counts ten exposed parameters where this bullet counts nine
-  configured ones, and the two are not in conflict.
-- `preprocess.py:954` derives the F0 range on **`plain`**.
+- `preprocess.py:887-898` calls `extract_praat_parselmouth_features_from_audios` on the **`enhanced`**
+  stream it resolved at `:884`. **All 45 Praat scalars come from that one call** — the forty
+  descriptors and, since Task 8, the five keys naming the range they were measured under — and it
+  passes **nine** arguments read from the triage config: `time_step`, `window_length` and the seven
+  F0-range arguments step 2 added. The tenth keyword the wrapper exposes, `pitch_unit`, is set from
+  nowhere in triage — it is why the contrast table above counts ten exposed parameters where this
+  bullet counts nine configured ones, and the two are not in conflict.
+- `preprocess.py:955` derives the F0 range on **`plain`**.
 - `voice.py:71` derives it again on **`plain`**.
 
 So **three streams are analysed, and the same F0 range is derived twice independently.** Under the
@@ -633,7 +740,7 @@ derivation; the corpus already written stays governed by this finding.
 
 ### 2. The CPPS `> 4` cut deletes the dysphonic range
 
-`:859` appends a per-interval CPPS value only when `CPP_Value > 4`.
+`:859` drops every per-interval CPPS value at or below 4 dB before it is appended at `:860`.
 
 **Measured**: severe dysphonia **2.78 dB**, dropped. Severe dysphonia at F0 410 Hz, **2.17 dB**,
 dropped.
@@ -690,6 +797,13 @@ audit was written and is now false by exactly one function: `extract_pitch_value
 voiced-frame count its derived range rests on, and **the module's first support count**. It is a
 precedent for the shape the rest of this finding asks for, and it was added because the range it
 reports on is worthless without it, which is the same argument every other row here makes.
+
+**And since Task 8 that count reaches the corpus rather than stopping at the function's return.**
+`_extract_one` seeds `feature_data` from `extract_pitch_values`' five keys
+(`praat_parselmouth.py:1494`), so `pitch_frames` — with the floor, the ceiling, `pitch_failed` and
+`pitch_range_fell_back` — is an attribute of every new `praat_features` measurement
+(`preprocess.py:899`, `:906`). One of thirteen is still one of thirteen; what changed is that the one
+is now readable from the store, which is the shape the other twelve owe.
 
 **The finding stands for the other twelve**, and the three that compute a count and discard it are
 unchanged: `:818` (`n_intervals = ... "Get number of rows"`), `:955` (`n = ... "Get number of
@@ -814,10 +928,10 @@ documented before calling something owed".
 
 ### 12. joblib caches a closure
 
-`:1558-1560` — `time_step`, `window_length` and eleven toggles are free variables of `_extract_one`
+`:1561-1563` — `time_step`, `window_length` and eleven toggles are free variables of `_extract_one`
 rather than arguments, so two runs with different settings and one `cache_dir` collide.
 
-**Dormant in triage** (no `cache_dir` is passed at `preprocess.py:886-897`) but a live hazard for any
+**Dormant in triage** (no `cache_dir` is passed at `preprocess.py:887-898`) but a live hazard for any
 batch over 62,547 recordings.
 
 ### 13. The 16 kHz resample is an undeclared analysis-band decision
@@ -856,7 +970,7 @@ Also measured, the boundary is exact: at a 50 Hz floor, 50 ms is refused and 60 
 
 **It is reachable, because ADMIT has no minimum-duration gate.** `admit.py:85-90` rejects zero
 frames, all-zero samples and constant-per-channel, and admits a 50 ms file whose samples vary. Both
-`derive_f0_range` callers — `preprocess.py:954`, and `voice.py:71` reached through `_required` at
+`derive_f0_range` callers — `preprocess.py:955`, and `voice.py:71` reached through `_required` at
 `voice.py:193` — pass the whole-file `plain` stream and never a span, so this needs a *whole
 recording* under 60 ms: pathological, and not excluded. At `extend`, such a row flips from
 `failed=False` to `failed=True` and `scripts/extend_reprocessed_outputs.py:333` returns exit 1 where
@@ -893,7 +1007,7 @@ candidates 4 vs 15, voicing_threshold 0.25 vs 0.45, voiced_unvoiced_cost 0.25 vs
 The code declares its own literals undeclared.
 
 **`measure_f1f2_formants_bandwidths`' parameters are unreachable.** The wrapper forwards only `snd`,
-`floor`, `ceiling` and `frame_shift` (`:1424-1429`), so `max_formants`, `maximum_formant_hz`,
+`floor`, `ceiling` and `frame_shift` (`:1427-1431`), so `max_formants`, `maximum_formant_hz`,
 `window_length` and `pre_emphasis_from_hz` cannot be set by any caller — while the identical four
 values are config-driven on the `phonation/api.py` path. `maximum_formant 5000` is the adult-male
 convention where child is 8000.
@@ -937,15 +1051,15 @@ none of which the caller can reach, on top of the `number_syllables` count findi
 
 | quantity | track available | where |
 | --- | --- | --- |
-| F0 + voicing strength | yes | `phonation_tracks.npz` via `f0_track` (`phonation/api.py:185`), written at `preprocess.py:976` |
-| F1–F4 + bandwidths | yes | the same npz via `formant_track` (`phonation/api.py:234`) |
-| HNR | the function exists; no shared derivative carries it | `hnr_track` (`phonation/api.py:101`) has exactly one caller in the tree, `voice.py:267`. Its whole-stream output is sliced to phonation spans and concatenated into `voice_tracks.npz` (`voice.py:368`), so even a recording routed to VOICE keeps only the in-span frames. See [`branch-voice.md`](branch-voice.md)'s unresolved item |
+| F0 + voicing strength | yes | `phonation_tracks.npz` via `f0_track` (`phonation/api.py:192`), written at `preprocess.py:977` |
+| F1–F4 + bandwidths | yes | the same npz via `formant_track` (`phonation/api.py:241`) |
+| HNR | the function exists; no shared derivative carries it | `hnr_track` (`phonation/api.py:108`) has exactly one caller in the tree, `voice.py:267`. Its whole-stream output is sliced to phonation spans and concatenated into `voice_tracks.npz` (`voice.py:368`), so even a recording routed to VOICE keeps only the in-span frames. See [`branch-voice.md`](branch-voice.md)'s unresolved item |
 | intensity | no | built and discarded per recording (`:615`). VOICE computes an RMS track of its own (`voice.py:109`), which is a level track but not Praat's intensity |
 | CPPS | no | per-interval values accumulated into `cpp_list` and meaned (`:865`) |
 | spectral moments | no | four per-frame lists built and meaned (`:1062`, `:1095-1098`) |
 | jitter / shimmer | no | a point process is built and reduced; no per-period series is produced to begin with |
 
-**`f0_track` sets unvoiced frames to NaN rather than dropping them** (`phonation/api.py:215`:
+**`f0_track` sets unvoiced frames to NaN rather than dropping them** (`phonation/api.py:222`:
 `f0[f0 == 0.0] = np.nan`), and `formant_track` does the same for frames where Praat placed no
 formant. That is what makes continuity measurable at all on those two: the time base survives a gap,
 so a reader can tell a gap from a shortened recording. None of the discarded series above has that
@@ -1010,10 +1124,56 @@ owed at `derive_f0_range` is closed there. What remains of it sits one frame in,
 `extract_pitch_values`' blanket `except Exception` — **finding 14**, and the contrast section above,
 both written in the same second pass.
 
+### What Tasks 7, 8 and 9 changed in this document, and when
+
+Also 2026-09-14, in a third pass over the same document. Tasks 5 and 6 of that plan were withdrawn
+with step 1 and changed nothing here.
+
+- **Task 7** added `--force` to `scripts/extend_ppg_praat.py`. What it forced into this document is
+  the corpus-pass paragraph under step 2, including the **deliberately unconditional** venv gate and
+  the reason it is one-sided, and `ProvStore`'s content-addressed entity ids.
+- **Task 8** put the derived floor and ceiling on the measurement, so **the Praat scalar dict is 45
+  keys, not 40**, and every statement in this document counting a *current* run's scalars was
+  re-counted. The four that still say 40 are the ones about the **62,547 stores already written**
+  (step 0, and finding 0's retracted-mechanism paragraphs), which carry 40 and always will.
+- **Task 9** corrected the glide entry against a measurement, recorded step 2's three open
+  consequences, and wrote the not-publishable headline into step 2. Steps 2 and 3 of Task 9 were
+  dropped with audit step 1: each would have re-entered the retracted FRCRN mechanism as a
+  "trade-off" under a new name.
+- **Every `file:line` in this document was re-read against the tree in that third pass**, which is a
+  wider claim than either earlier pass made, and it found two classes of stale citation.
+  - **From Task 8 shifting `nodes/preprocess.py` by one line from `:884` on**: the four
+    `praat_features` citations (`:883`/`:904`/`:906` and the docstring's `:869`/`:875`), the
+    route-into-triage call range (`:886-897`, twice, the second in finding 12), the three
+    `phonation_tracks` citations (`:954`, and step 2b's `:951-964`), and the npz write (`:976`, the
+    `mkdir` above it).
+  - **Predating that and never re-read by either earlier pass** — the second pass said in as many
+    words that citations outside its listed set carried no claim either way, and **seventeen of them
+    were wrong.** In `phonation/api.py`: `:176` for `period_marks`' range test (it is `:183`),
+    `:93-97` for `derive_f0_range`'s raises (`:98-104`), `:185` for `f0_track` (`:192`), `:234` for
+    `formant_track` (`:241`), `:101` for `hnr_track` (`:108`), `:215` for `f0_track`'s NaN
+    assignment (`:222`). In `preprocess.py`: `:2351` (the `try:` above `enhance_audios`), two more
+    `:883`s for the Praat call, and `:1856`/`:1922` for HeAR and YAMNet on `plain`, neither of which
+    was even in the right function. In `praat_parselmouth.py`: `:1558-1560` for the joblib closure
+    (`:1561-1563`) and `:1424-1429` for what the wrapper forwards to the formant call
+    (`:1427-1431`), plus `:859`, which names the `> 4` condition and was described as the append
+    (`:860`). In `extend_ppg_praat.py`: `:187-190` and `:235-237` for the two skip checks, which are
+    docstring and batch-call lines — the correct `:218` and `:269` were already cited correctly
+    elsewhere in this document, so the two spellings disagreed with each other. And the
+    [`../20260911-ppg-praat-batch/design.md`](../20260911-ppg-praat-batch/design.md) pointer told a
+    reader to rewrite a passage that had already been rewritten. Each is corrected above. **None was
+    off by a uniform offset**, which is why the second pass's offset reasoning would not have caught
+    them, and why "this citation is in bounds" is not a check.
+  - Nothing in `voice.py`, `default.yaml`, `routing_analysis/features.py`, `prov_store.py` or the
+    test files had moved.
+
 ## Where this lands
 
 **The stream row is provenance, not a defect, as of 2026-09-14.** Steps 1 and 1b are both withdrawn,
 so no row in this table is gated on a stream switch and no repair below waits on one.
+
+**Step 2 landing closes one row and no others. No Praat scalar becomes publishable from it** — the
+long form is under step 2, and every row below except finding 1's is open exactly as it was.
 
 | finding | affects |
 | --- | --- |
