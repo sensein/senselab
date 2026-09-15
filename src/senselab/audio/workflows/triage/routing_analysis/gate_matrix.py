@@ -1,11 +1,20 @@
-"""The family x gate matrix over the shipped ruleset, and the disagreements it leaves behind.
+"""Where each task family routes, the family x gate matrix behind it, and the disagreements left.
 
 Every configured gate is re-evaluated on every recording of a finished features shard and reduced
-two ways. :func:`gate_matrix` is one cell per (task family, gate): how many recordings the gate
-fired on, stayed silent on and could not be read on, plus the distribution of the number it read.
-:func:`qualify_disagreements` takes the branches a recording's declared family assigns it that
-routing did not select, and the branches routing selected that the declaration does not assign, and
-names the deciding gate and its reading for each.
+three ways. :func:`family_routing` is one cell per (task family, branch): how many recordings of
+the family that branch routed, which gates fired to send them, which gate each routing hinged on
+alone, and how far past its cut the routing was. :func:`gate_matrix` is one cell per (task family,
+gate), the per-gate layer underneath: how many recordings the gate fired on, stayed silent on and
+could not be read on, plus the distribution of the number it read. :func:`qualify_disagreements`
+takes the branches a recording's declared family assigns it that routing did not select, and the
+branches routing selected that the declaration does not assign, and names the deciding gate and its
+reading for each.
+
+**Routing is additive and the reference is multi-label.** A recording routes to every branch one of
+whose gates fires, so several branches on one recording is intended rather than an error, and a
+family declares the *set* of branches that legitimately apply to it — a diadochokinesis family
+declares both ``SPEECH`` and ``DDK``. A branch routed beyond that set is therefore reported as
+:data:`BEYOND_DECLARATION` and never as a false positive of a precision.
 
 ``unavailable`` is a category of its own throughout. A gate whose evidence was never written did
 not decline to fire, so :attr:`GateCell.fired_rate_evaluable` is None on a cell no recording could
@@ -30,6 +39,7 @@ import yaml
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures, value_stats
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     AT_LEAST,
+    ROUTE_STATES,
     Gate,
     GateOutcome,
     Ruleset,
@@ -53,6 +63,12 @@ EXTRA = "extra"
 
 DISAGREEMENT_KINDS: tuple[str, ...] = (MISSED, EXTRA)
 """Both directions of disagreement, in report order."""
+
+DECLARED = "declared"
+"""A (family, branch) cell the family's reference family sets name."""
+
+BEYOND_DECLARATION = "beyond_declaration"
+"""A (family, branch) cell the reference sets do not name. Not an error: routing is additive."""
 
 
 class Deciding(Enum):
@@ -624,4 +640,266 @@ def group_disagreements(disagreements: Iterable[Disagreement]) -> list[Disagreem
             n_with_unavailable_gate=unread[(family, branch, kind)],
         )
         for family, branch, kind in ordered
+    ]
+
+
+@dataclass(frozen=True)
+class FamilyRouting:
+    """Where one task family's recordings routed on one branch, and which gate sent them there.
+
+    One row of the answer to "for each task family, how many are routed where and what the
+    decision criteria are". A branch routes when *any* of its gates fires, so ``fired_gates`` sums
+    to at least ``routed`` and ``sole_gates`` to at most it: a routing several gates agreed on is
+    counted once in ``routed``, once per gate in ``fired_gates``, and in no entry of ``sole_gates``.
+
+    Attributes:
+        family: The task family.
+        branch: The branch.
+        n: How many recordings of the family were read.
+        declared: Whether the family's reference family sets name this branch. The reference is
+            multi-label, so a family may declare several branches: a diadochokinesis family
+            declares both ``SPEECH`` and ``DDK``.
+        routed: How many recordings of the family this branch routed on content.
+        fired_gates: Gate to how many of those routings it fired on, in descending count. A routing
+            two gates both fired on appears under each.
+        sole_gates: Gate to how many routings it was the only firing gate on, in descending count.
+            A gate's entry here is the routing that disappears if the gate is removed.
+        not_routed: How many recordings of the family this branch did not route.
+        not_routed_all_unavailable: Of those, how many had *every* gate of the branch unreadable,
+            which is a missing-evidence non-routing and not a silent one.
+        not_routed_some_unavailable: Of those, how many had at least one gate unreadable.
+        routed_with_unavailable: Of the routings, how many were made while at least one gate of the
+            branch could not be read, so the branch was entered on partial evidence.
+        margins: :func:`~senselab.audio.workflows.triage.routing_analysis.features.value_stats`
+            over the relative margin of the least-clearing firing gate on each routing, and empty
+            when the branch routed nothing. How far past its cut the routing actually was.
+    """
+
+    family: str
+    branch: str
+    n: int
+    declared: bool
+    routed: int
+    fired_gates: Mapping[str, int]
+    sole_gates: Mapping[str, int]
+    not_routed: int
+    not_routed_all_unavailable: int
+    not_routed_some_unavailable: int
+    routed_with_unavailable: int
+    margins: Mapping[str, float]
+
+    @property
+    def routed_rate(self) -> float | None:
+        """Fraction of the family's recordings this branch routed, or None when there are none."""
+        return self.routed / self.n if self.n else None
+
+    @property
+    def agreement(self) -> str:
+        """How this cell stands against the declaration, as one word.
+
+        Returns:
+            ``declared`` when the family names the branch, ``beyond_declaration`` when it does not.
+            Neither is a verdict: the declaration says what the participant was asked for, not what
+            the recording holds, and additive routing is intended.
+        """
+        return DECLARED if self.declared else BEYOND_DECLARATION
+
+    def gates_summary(self) -> str:
+        """Which gates routed this cell, and how many each.
+
+        Returns:
+            ``<gate>:<count>`` per firing gate, most common first, or ``-`` when the branch routed
+            nothing here.
+        """
+        return ", ".join(f"{gate}:{count}" for gate, count in self.fired_gates.items()) or "-"
+
+    def sole_summary(self) -> str:
+        """Which gates were the only one firing, and how many each.
+
+        Returns:
+            ``<gate>:<count>`` per gate, most common first, or ``-`` when no routing here hinged on
+            a single gate.
+        """
+        return ", ".join(f"{gate}:{count}" for gate, count in self.sole_gates.items()) or "-"
+
+    def as_json(self) -> dict[str, Any]:
+        """This cell as one flat row.
+
+        Returns:
+            The counts, the routed rate, how the cell stands against the declaration, the firing
+            and sole-firing gates joined into one field each, and the margin distribution.
+        """
+        row: dict[str, Any] = {
+            "family": self.family,
+            "branch": self.branch,
+            "n": self.n,
+            "declared": self.declared,
+            "agreement": self.agreement,
+            "routed": self.routed,
+            "routed_rate": self.routed_rate,
+            "not_routed": self.not_routed,
+            "not_routed_all_unavailable": self.not_routed_all_unavailable,
+            "not_routed_some_unavailable": self.not_routed_some_unavailable,
+            "routed_with_unavailable": self.routed_with_unavailable,
+            "firing_gates": self.gates_summary(),
+            "sole_firing_gates": self.sole_summary(),
+        }
+        row.update({f"margin.{key}": number for key, number in self.margins.items()})
+        return row
+
+
+@dataclass(frozen=True)
+class FamilyStates:
+    """What became of one task family's recordings overall, across every branch at once.
+
+    Attributes:
+        family: The task family.
+        n: How many recordings of the family were read.
+        declared: The branches the family's reference family sets name, in branch order.
+        states: How many recordings landed in each
+            :class:`~senselab.audio.workflows.triage.routing_analysis.ruleset.RouteState`, keyed by
+            its value. Every state is present whether or not the family carried one, and they sum
+            to ``n``.
+        branch_counts: How many recordings routed to each number of branches, keyed by the count as
+            a string. ``"0"`` is every recording no gate fired on, and an entry above ``"1"`` is
+            additive routing, which is intended.
+    """
+
+    family: str
+    n: int
+    declared: tuple[str, ...]
+    states: Mapping[str, int]
+    branch_counts: Mapping[str, int]
+
+    def as_json(self) -> dict[str, Any]:
+        """This family as one flat row.
+
+        Returns:
+            The counts, the declared branches joined by ``+``, one column per route state and one
+            per branch-count bucket.
+        """
+        row: dict[str, Any] = {
+            "family": self.family,
+            "n": self.n,
+            "declared": "+".join(self.declared) or "-",
+            "n_declared": len(self.declared),
+        }
+        row.update({f"state.{name}": count for name, count in self.states.items()})
+        row.update({f"branches_routed.{key}": count for key, count in self.branch_counts.items()})
+        return row
+
+
+def _routing_gates(record: RecordingFeatures, ruleset: Ruleset, branch: str) -> tuple[list[tuple[float, str]], int]:
+    """Which of one branch's gates fired on one recording, with their margins, and how many were unread.
+
+    Args:
+        record: The recording's extracted evidence.
+        ruleset: The loaded ruleset.
+        branch: The branch.
+
+    Returns:
+        The ``(relative margin, gate name)`` of every gate that fired, and how many gates of the
+        branch could not be read at all. An unread gate is in neither the firing list nor a silence.
+    """
+    fired: list[tuple[float, str]] = []
+    unread = 0
+    for name in ruleset.branch_gates.get(branch, ()):
+        gate = ruleset.gates[name]
+        value = gate_value(record, gate)
+        if value is None:
+            unread += 1
+        elif gate_outcome_of(value, gate) is GateOutcome.FIRED:
+            fired.append((relative_margin(value, gate), name))
+    return fired, unread
+
+
+def family_routing(records: Sequence[RecordingFeatures], ruleset: Ruleset) -> list[FamilyRouting]:
+    """How many recordings of each task family routed to each branch, and which gate sent them.
+
+    Every (family, branch) pair is returned, so a branch a family never routed to is present and
+    reads zero rather than being absent. Routing is additive by design: a recording routes to every
+    branch one of whose gates fires, and several branches on one recording is not an error.
+
+    Args:
+        records: The recordings, from a features shard.
+        ruleset: The loaded ruleset.
+
+    Returns:
+        One cell per ``(family, branch)``, in family name then
+        :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES` order.
+    """
+    families = sorted({record.family for record in records})
+    seen: Counter[str] = Counter()
+    routed: Counter[tuple[str, str]] = Counter()
+    fired_gates: dict[tuple[str, str], Counter[str]] = {}
+    sole_gates: dict[tuple[str, str], Counter[str]] = {}
+    margins: dict[tuple[str, str], list[float]] = {}
+    routed_partial: Counter[tuple[str, str]] = Counter()
+    missing_all: Counter[tuple[str, str]] = Counter()
+    missing_some: Counter[tuple[str, str]] = Counter()
+    for record in records:
+        seen[record.family] += 1
+        for branch in BRANCHES:
+            key = (record.family, branch)
+            fired, unread = _routing_gates(record, ruleset, branch)
+            if fired:
+                routed[key] += 1
+                fired_gates.setdefault(key, Counter()).update(name for _, name in fired)
+                if len(fired) == 1:
+                    sole_gates.setdefault(key, Counter())[fired[0][1]] += 1
+                margins.setdefault(key, []).append(min(margin for margin, _ in fired))
+                if unread:
+                    routed_partial[key] += 1
+                continue
+            if unread:
+                missing_some[key] += 1
+                if unread == len(ruleset.branch_gates.get(branch, ())):
+                    missing_all[key] += 1
+    return [
+        FamilyRouting(
+            family=family,
+            branch=branch,
+            n=seen[family],
+            declared=branch in ruleset.reference_branches(family),
+            routed=routed[(family, branch)],
+            fired_gates=dict(fired_gates.get((family, branch), Counter()).most_common()),
+            sole_gates=dict(sole_gates.get((family, branch), Counter()).most_common()),
+            not_routed=seen[family] - routed[(family, branch)],
+            not_routed_all_unavailable=missing_all[(family, branch)],
+            not_routed_some_unavailable=missing_some[(family, branch)],
+            routed_with_unavailable=routed_partial[(family, branch)],
+            margins=value_stats(sorted(margins.get((family, branch), []))),
+        )
+        for family in families
+        for branch in BRANCHES
+    ]
+
+
+def family_states(records: Sequence[RecordingFeatures], ruleset: Ruleset) -> list[FamilyStates]:
+    """What became of each task family's recordings overall: the route state and how many branches.
+
+    Args:
+        records: The recordings.
+        ruleset: The loaded ruleset.
+
+    Returns:
+        One entry per family seen, in name order.
+    """
+    seen: Counter[str] = Counter()
+    states: dict[str, Counter[str]] = {}
+    widths: dict[str, Counter[str]] = {}
+    for record in records:
+        evaluation = evaluate_routes(record, ruleset)
+        seen[record.family] += 1
+        states.setdefault(record.family, Counter())[evaluation.state.value] += 1
+        widths.setdefault(record.family, Counter())[str(len(evaluation.routed))] += 1
+    return [
+        FamilyStates(
+            family=family,
+            n=seen[family],
+            declared=ruleset.reference_branches(family),
+            states={name: states[family].get(name, 0) for name in ROUTE_STATES},
+            branch_counts={str(width): widths[family].get(str(width), 0) for width in range(len(BRANCHES) + 1)},
+        )
+        for family in sorted(seen)
     ]

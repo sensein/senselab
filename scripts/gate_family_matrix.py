@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Build the family x ruleset-gate matrix over a triage corpus and draw it.
+"""Where each task family routes, the family x ruleset-gate matrix behind it, and the heatmap.
 
     uv run python scripts/gate_family_matrix.py <features> <out_dir> [--config FILE] [--profile FILE]
 
@@ -8,17 +8,24 @@ one shard file out of it. The gates come from ``taxonomy.ruleset`` in the triage
 a partial override changes what is measured without touching this script. Reads stores only through
 that shard, runs no model, and writes nothing into a run directory.
 
-``out_dir`` receives five outputs. ``gate_matrix.parquet`` is one row per (task family, gate):
-how many recordings the gate fired on, was silent on and could not be read on, the three rates, and
-the distribution of what it read. ``branch_agreement.json`` carries the per-branch 2x2 against the
-declared family with recall, precision and specificity, plus the families the reference sets assign
-to no branch. ``disagreements.parquet`` is one row per recording and branch the two sides differ
-on, naming the gate the difference turns on and what it read; ``disagreement_groups.parquet`` is
-the same grouped by task family. ``gate_matrix_fired.png`` and ``gate_matrix_unavailable.png`` are
-the heatmap's two panels.
+``out_dir`` receives seven outputs. ``family_routing.parquet`` is the headline: one row per (task
+family, branch) saying how many recordings of the family that branch routed, which gates fired to
+send them, which gate each routing hinged on alone, and how far past its cut the routing was.
+``family_states.parquet`` is one row per family: the route states and how many branches each
+recording routed to. ``gate_matrix.parquet`` is the per-gate layer underneath, one row per (task
+family, gate): how many recordings the gate fired on, was silent on and could not be read on, the
+three rates, and the distribution of what it read. ``branch_agreement.json`` carries the per-branch
+2x2 against the declared family with every count preserved, plus the families the reference sets
+assign to no branch. ``disagreements.parquet`` is one row per recording and branch the two sides
+differ on, naming the gate the difference turns on and what it read;
+``disagreement_groups.parquet`` is the same grouped by task family. ``gate_matrix_fired.png`` and
+``gate_matrix_unavailable.png`` are the heatmap's two panels.
 
-The declared task family is a reference standard and not ground truth. Every rate here is an
-agreement rate with the declaration, and a disagreement can be routing reading the recording
+**Routing is additive and the reference is multi-label.** A recording routes to every branch one of
+whose gates fires, and a family declares the set of branches that legitimately apply to it, so a
+diadochokinesis recording routing to both SPEECH and DDK agrees with the declaration twice over.
+No rate here is a precision or an accuracy: the declared task family is a reference standard and
+not ground truth, so a branch routed beyond the declared set can be routing reading the recording
 correctly against a declaration the participant did not follow.
 """
 
@@ -37,7 +44,11 @@ from senselab.audio.workflows.triage.routing_analysis.gate_matrix import (
     DISAGREEMENT_KINDS,
     MISSED,
     DisagreementGroup,
+    FamilyRouting,
+    FamilyStates,
     GateMatrix,
+    family_routing,
+    family_states,
     gate_matrix,
     group_disagreements,
     load_disagreement_profile,
@@ -51,7 +62,7 @@ from senselab.audio.workflows.triage.routing_analysis.gate_plot import (
     HeatmapStyle,
     write_gate_matrix,
 )
-from senselab.audio.workflows.triage.routing_analysis.report import load_features
+from senselab.audio.workflows.triage.routing_analysis.report import OVER_ROUTING_BUDGETS, load_features
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     BranchScore,
     Ruleset,
@@ -63,6 +74,8 @@ from senselab.audio.workflows.triage.routing_analysis.tables import write_rows
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
 
 MATRIX_FILE = "gate_matrix.parquet"
+ROUTING_FILE = "family_routing.parquet"
+STATES_FILE = "family_states.parquet"
 AGREEMENT_FILE = "branch_agreement.json"
 DISAGREEMENT_FILE = "disagreements.parquet"
 GROUP_FILE = "disagreement_groups.parquet"
@@ -72,9 +85,27 @@ UNAVAILABLE_FIGURE = "gate_matrix_unavailable.png"
 TOP_GROUPS = 25
 """How many disagreement groups the stdout table shows before it stops."""
 
+TOP_ROUTING = 60
+"""How many per-family routing rows the stdout table shows before it stops."""
+
 FRAMING = (
-    "Declared task family is a reference standard, NOT ground truth. Every rate below is an "
-    "agreement rate with the declaration; either side can be the one that is wrong."
+    "Declared task family is a reference standard, NOT ground truth, and it is MULTI-LABEL: a "
+    "family declares every branch that legitimately applies to it, so a diadochokinesis family "
+    "declares both SPEECH and DDK. Routing is ADDITIVE BY DESIGN — a recording routes to every "
+    "branch one of whose gates fires — so a branch beyond the declared set is not an error and no "
+    "figure here is a precision or an accuracy. Either side can be the one that is wrong."
+)
+
+PREVALENCE_WARNING = (
+    "it moves with how many recordings of each family the corpus holds, which the over-routing "
+    "rate does not, so it cannot be compared across corpora or against a budget."
+)
+
+ROUTER_FRAMING = (
+    "A router's errors are ASYMMETRIC: an over-routed recording costs a branch some discarded "
+    "work, an under-routed one is never seen by anything that could interpret it. Thresholds were "
+    "chosen as the loosest cut inside an over-routing budget, not by maximising Youden's J. See "
+    "specs/20260817-triage-workflow-dag/dag.md:186-196,246-256 and family-taxonomy-ruleset.md:886-888."
 )
 
 
@@ -88,6 +119,32 @@ def _rate(value: float | None) -> str:
         Three decimal places, or ``-`` for a rate that does not exist. A dash is never a zero.
     """
     return "-" if value is None else f"{value:.3f}"
+
+
+def _budget(rate: float | None) -> str:
+    """The tightest declared over-routing budget one false-positive rate sits inside.
+
+    Args:
+        rate: The false-positive rate, or None where there are no undeclared recordings.
+
+    Returns:
+        The budget as a percentage, ``>20%`` when the rate exceeds every declared budget, or ``-``
+        when there is no rate. A branch outside every budget is over-routing beyond what any
+        threshold was selected to permit.
+    """
+    if rate is None:
+        return "-"
+    inside = [budget for budget in OVER_ROUTING_BUDGETS if rate <= budget]
+    return f"{min(inside):.0%}" if inside else f">{max(OVER_ROUTING_BUDGETS):.0%}"
+
+
+def _budget_list() -> str:
+    """The declared over-routing budgets, for the table's footnote.
+
+    Returns:
+        Each budget as a percentage, comma-separated.
+    """
+    return ", ".join(f"{budget:.0%}" for budget in OVER_ROUTING_BUDGETS)
 
 
 def print_matrix(matrix: GateMatrix, ruleset: Ruleset) -> None:
@@ -115,6 +172,59 @@ def print_matrix(matrix: GateMatrix, ruleset: Ruleset) -> None:
     print("  (the second block is the unavailable rate)")
 
 
+def print_family_routing(routing: list[FamilyRouting], states: list[FamilyStates], n_recordings: int) -> None:
+    """Write where each task family routed, and which gate decided it, to stdout.
+
+    Args:
+        routing: The per-(family, branch) cells.
+        states: The per-family route states and branch counts.
+        n_recordings: How many recordings were reduced.
+    """
+    print(f"\nWHERE EACH TASK FAMILY ROUTES, {n_recordings} recordings over {len(states)} families")
+    print(f"  {FRAMING}")
+    print(
+        f"\n  {'family':<38s} {'branch':<7s} {'decl':>5s} {'n':>6s} {'routed':>7s} {'rate':>6s} "
+        f"{'m p50':>8s}  deciding gates (sole-firing in brackets)"
+    )
+    shown = 0
+    for cell in routing:
+        if cell.routed == 0 and not cell.declared:
+            continue
+        if shown >= TOP_ROUTING:
+            break
+        median = cell.margins.get("median")
+        sole = cell.sole_summary()
+        print(
+            f"  {cell.family:<38s} {cell.branch:<7s} {'yes' if cell.declared else '-':>5s} "
+            f"{cell.n:6d} {cell.routed:7d} {_rate(cell.routed_rate):>6s} "
+            f"{'-' if median is None else f'{median:+.3f}':>8s}  {cell.gates_summary()}"
+            f"{'' if sole == '-' else f'  [{sole}]'}"
+        )
+        shown += 1
+    skipped = sum(1 for cell in routing if cell.routed or cell.declared) - shown
+    if skipped > 0:
+        print(f"    ... {skipped} more (family, branch) cells in {ROUTING_FILE}")
+    print(f"  A cell that neither routed nor was declared is omitted here; all of them are in {ROUTING_FILE}.")
+    print("  decl=yes means the family's reference set names this branch. A routed cell with decl='-' is")
+    print("  BEYOND THE DECLARATION, which additive routing intends and which is not an error.")
+    print("  m p50 = median relative margin of the least-clearing firing gate: how far past its cut the routing was.")
+
+    print("\n  per family: route state, and how many branches each recording routed to")
+    print(
+        f"  {'family':<38s} {'n':>6s} {'declared':<14s} {'routed':>7s} {'empty':>7s} {'unexpl':>7s}  "
+        + " ".join(f"{'->' + str(width):>6s}" for width in range(len(BRANCHES) + 1))
+    )
+    for entry in states:
+        widths = " ".join(f"{entry.branch_counts.get(str(width), 0):6d}" for width in range(len(BRANCHES) + 1))
+        print(
+            f"  {entry.family:<38s} {entry.n:6d} {('+'.join(entry.declared) or '-'):<14s} "
+            f"{entry.states.get('routed', 0):7d} {entry.states.get('empty', 0):7d} "
+            f"{entry.states.get('unexplained', 0):7d}  {widths}"
+        )
+    print("  '->k' is how many recordings routed to exactly k branches. k>1 is additive routing, which is intended.")
+    print("  k=0 splits into empty (the bypass fired: nothing to route) and unexplained (content no gate read).")
+
+
 def print_agreement(scores: dict[str, BranchScore], unassigned: dict[str, int], n_recordings: int) -> None:
     """Write each branch's agreement with the declared family to stdout.
 
@@ -126,8 +236,12 @@ def print_agreement(scores: dict[str, BranchScore], unassigned: dict[str, int], 
     print(f"\nbranch agreement with the declared family, {n_recordings} recordings")
     print(f"  {FRAMING}")
     print(
-        f"\n  {'branch':<8s} {'reference set':<20s} {'agreed':>7s} {'extra':>7s} {'silent':>7s} "
-        f"{'missed':>7s} {'recall':>7s} {'precis':>7s} {'specif':>7s}"
+        f"\n  {'branch':<8s} {'reference set':<20s} {'agreed':>7s} {'beyond':>7s} {'silent':>7s} "
+        f"{'missed':>7s} {'recall':>7s} {'over-rt':>8s} {'budget':>9s} {'decl/':>7s}"
+    )
+    print(
+        f"  {'':<8s} {'':<20s} {'(tp)':>7s} {'(fp)':>7s} {'(tn)':>7s} {'(fn)':>7s} "
+        f"{'(sens)':>7s} {'(1-spec)':>8s} {'spent':>9s} {'routed':>7s}"
     )
     for branch in BRANCHES:
         score = scores[branch]
@@ -135,19 +249,28 @@ def print_agreement(scores: dict[str, BranchScore], unassigned: dict[str, int], 
         print(
             f"  {branch:<8s} {score.reference_family_set:<20s} {table.tp:7d} {table.fp:7d} "
             f"{table.tn:7d} {table.fn:7d} {_rate(table.sensitivity):>7s} "
-            f"{_rate(table.precision):>7s} {_rate(table.specificity):>7s}"
+            f"{_rate(table.false_positive_rate):>8s} {_budget(table.false_positive_rate):>9s} "
+            f"{_rate(table.positive_share_of_fired):>7s}"
         )
-    print("  agreed=declared and routed  extra=routed not declared  missed=declared not routed  silent=neither")
-    print("\n  with each branch's construction exclusions held out of the population:")
+    print("  agreed=declared and routed  beyond=routed not declared  missed=declared not routed  silent=neither")
+    print(f"  {ROUTER_FRAMING}")
+    print("  recall = sensitivity, the axis under-routing costs. over-rt = the false-positive rate over the")
+    print(f"  undeclared recordings, which IS the over-routing budget spent. Declared budgets: {_budget_list()}.")
+    print("  decl/routed is a raw derived count ratio, kept so nothing is lost. It is NOT a precision and NOT")
+    print(f"  an accuracy: {PREVALENCE_WARNING}")
     for branch in BRANCHES:
         score = scores[branch]
         if not score.held_out_family_set:
             continue
         kept = score.excluding_construction
         print(
-            f"  {branch:<8s} held out {score.held_out_family_set} ({score.n_held_out} recordings): "
-            f"recall {_rate(kept.sensitivity)} precision {_rate(kept.precision)} "
-            f"specificity {_rate(kept.specificity)}"
+            f"\n  {branch:<8s} SECONDARY, holding out {score.held_out_family_set} "
+            f"({score.n_held_out} recordings) — not the figure to take away, because holding out a "
+            f"declared branch's families discards a branch the DAG routes to:"
+        )
+        print(
+            f"    routed/decl {_rate(kept.sensitivity)}  silent/undecl {_rate(kept.specificity)}  "
+            f"decl/routed {_rate(kept.positive_share_of_fired)}"
         )
     if unassigned:
         total = sum(unassigned.values())
@@ -238,6 +361,8 @@ def main(argv: list[str] | None = None) -> int:
     evaluations = [evaluate_routes(record, ruleset) for record in records]
     scores = score_branches(evaluations, ruleset)
     unassigned = unassigned_families(records, ruleset)
+    routing = family_routing(records, ruleset)
+    states = family_states(records, ruleset)
     disagreements = qualify_disagreements(records, ruleset, near_threshold_band=band)
     groups = group_disagreements(disagreements)
 
@@ -246,14 +371,20 @@ def main(argv: list[str] | None = None) -> int:
         "recordings": len(records),
         "near_threshold_band": band,
         "disagreement_profile": profile["source"],
-        "reference": "declared task family; a reference standard, not ground truth",
+        "reference": "declared task family; a multi-label reference standard, not ground truth",
+        "routing": "additive; a recording routes to every branch one of whose gates fires",
     }
     n_cells = write_rows(matrix.rows(), arguments.out_dir / MATRIX_FILE, header)
+    n_routing = write_rows([cell.as_json() for cell in routing], arguments.out_dir / ROUTING_FILE, header)
+    n_states = write_rows([entry.as_json() for entry in states], arguments.out_dir / STATES_FILE, header)
     n_rows = write_rows([entry.as_json() for entry in disagreements], arguments.out_dir / DISAGREEMENT_FILE, header)
     n_groups = write_rows([group.as_json() for group in groups], arguments.out_dir / GROUP_FILE, header)
     agreement: dict[str, Any] = {
         **header,
         "framing": FRAMING,
+        "router_framing": ROUTER_FRAMING,
+        "over_routing_budgets": list(OVER_ROUTING_BUDGETS),
+        "prevalence_warning": PREVALENCE_WARNING,
         "finding_classes": list(DECIDING_CLASSES),
         "branches": {branch: score.as_json() for branch, score in scores.items()},
         "unassigned_families": unassigned,
@@ -265,12 +396,13 @@ def main(argv: list[str] | None = None) -> int:
     for panel, name in ((FIRED_PANEL, FIRED_FIGURE), (UNAVAILABLE_PANEL, UNAVAILABLE_FIGURE)):
         write_gate_matrix(matrix, ruleset, arguments.out_dir / name, panel=panel, style=style, subtitle=subtitle)
 
+    print_family_routing(routing, states, len(records))
     print_matrix(matrix, ruleset)
     print_agreement(scores, unassigned, len(records))
     print_groups(groups, band, profile["source"])
     print(
-        f"\n[gates] wrote {n_cells} cells, {n_rows} disagreements, {n_groups} groups and 2 figures "
-        f"to {arguments.out_dir}",
+        f"\n[gates] wrote {n_routing} routing cells, {n_states} family states, {n_cells} gate cells, "
+        f"{n_rows} disagreements, {n_groups} groups and 2 figures to {arguments.out_dir}",
         flush=True,
     )
     return 0

@@ -158,7 +158,7 @@ this run.
 
 ---
 
-## C — Routing recall was 13/13; precision is what generates flags
+## C — Routing recall was 13/13; the over-routing budget is what generates flags
 
 Every declared branch was reached: **AIRWAY 4/4, VOICE 3/3, SPEECH 4/4, DDK 2/2**. Every whole-file
 `RouteState` was `ROUTED` — no recording read `empty` and none read `unexplained`.
@@ -168,11 +168,31 @@ speech tasks.**
 
 File outcomes: **5 `pass`, 8 `flag`.** No `discard`.
 
-Recall is not the axis under strain here, which is the opposite of what the corpus sweep's
-sensitivity figures foreground ([`../family-taxonomy-ruleset.md`](../family-taxonomy-ruleset.md)
-scored 0.97 / 0.95 / 0.96 / 0.94). On this material every flag traces to a branch that ran on
-material it has no subject in (D), a branch with no node (F), or a route taken on a label that is
-wrong (G).
+**Corrected 2026-09-15.** This section previously reported per-branch *precision* of 0.500 AIRWAY /
+0.571 SPEECH / 0.500 VOICE / 0.400 DDK and read them as a finding about routing quality. They are
+withdrawn as a finding, for three reasons, and the raw counts they came from are unchanged:
+
+- **Precision moves with prevalence.** These 13 recordings were assembled to exercise all four
+  branches, so each branch sits near a quarter of the sample against corpus prevalences of 0.208 /
+  0.531 / 0.133 / 0.128. The figure is not comparable to another corpus, or to a sensitivity.
+- **The corpus already implied them, and three of four are worse there.** Deriving `tp/(tp+fp)`
+  from the 62,547-recording 2x2 in
+  [`../runs/ruleset-score-20260912/ruleset_score.json`](../runs/ruleset-score-20260912/ruleset_score.json)
+  gives **0.536 / 0.762 / 0.357 / 0.335**. There was no contradiction with the ruleset work; there
+  was a quantity nobody had computed.
+- **Over-routing is a budget, not an error.** `../dag.md:186-196` and `:246-256`: a router's errors
+  are asymmetric, an over-routed recording costs a branch some discarded work, and thresholds were
+  chosen as the loosest cut inside an over-routing budget. `../dag.md:250-256` records a threshold
+  loosened on purpose for *"1,929 additional branch invocations the branches discard"*.
+
+The comparable quantity is recall, and on this sample it is 1.000 against corpus sensitivities of
+0.972 / 0.954 / 0.957 / 0.937 (**`../dag.md:1035-1038`** — an earlier version of this line
+attributed those four figures to `../family-taxonomy-ruleset.md`, which does not carry them). The
+full analysis is in
+[`../../20260915-gate-family-matrix/design.md`](../../20260915-gate-family-matrix/design.md).
+
+On this material every flag traces to a branch that ran on material it has no subject in (D), a
+branch with no node (F), or a route taken on a label that is wrong (G).
 
 ### Every gate's value on every recording
 
