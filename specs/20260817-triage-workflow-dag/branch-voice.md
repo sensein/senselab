@@ -313,13 +313,15 @@ search bound are different facts about the recording, and above q3 240 Hz they a
 hardcoded pairs: below 170 Hz → floor 60, ceiling 250, commented *'male' settings*; otherwise floor
 100, ceiling 500, commented *'female' and 'child' settings*. That bin, not the search range, was what
 bound every F0-derived measure: the ceiling truncated an ordinary male upward glide, the floor
-clipped downward glides into fry well above the stated bound, and every F0-derived measure across
-62,547 recordings carried a **discontinuity at 170 Hz** along a sex-typed boundary — a measured
+clipped downward glides into fry well above the stated bound, and every F0-derived measure in the
+corpus carried a **discontinuity at 170 Hz** along a sex-typed boundary — a measured
 **1.67× step** in the intensity window, the harmonicity window and the minimum analysable segment —
 in a corpus that deliberately enrols gender-diverse participants. `capability-map.md:117` and `:314`
 had already named that bin as the exact mistake not to repeat, and the code did it anyway. **The
-scalars already written into 62,547 stores were computed under it** (audit step 0), so the diagnosis
-governs every existing artifact even though it governs no new one.
+scalars already written into 60,202 stores were computed under it** (audit step 0), so the diagnosis
+governs every existing artifact even though it governs no new one. It is 60,202 and not the corpus
+because the pass that wrote them ran over a 60,202-row manifest and 2,376 stores hold no Praat
+measurement at all ([`../20260911-ppg-praat-batch/design.md`](../20260911-ppg-praat-batch/design.md)).
 
 Report also a **robust percentile range** beside the extrema and a **count of octave-scale
 frame-to-frame jumps** (interpreted per [`branch-conventions.md`](branch-conventions.md)).

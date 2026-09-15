@@ -174,8 +174,10 @@ can read as dysphonic, and many recordings in this corpus carry background noise
 labels**, measured both ways. Nothing cheaper reaches it:
 
 - **A corpus pass cannot answer it.** This corpus's only labels are declared task names, so a
-  paired `enhanced`-vs-`plain` re-derivation over all 62,547 stores yields two distributions with
-  nothing to say which is *closer to the voice*. A difference is not a direction.
+  paired `enhanced`-vs-`plain` re-derivation over the corpus yields two distributions with nothing to
+  say which is *closer to the voice*. A difference is not a direction. (This said "all 62,547 stores"
+  and would reach fewer: the scalars exist in 60,202, and 2,376 stores carry none —
+  [`../20260911-ppg-praat-batch/design.md`](../20260911-ppg-praat-batch/design.md).)
 - **A quick paired measurement cannot answer it either.** Showing that CPPS shifts by *n* dB between
   the two streams measures the enhancer, not the instrument's validity. The question is which reading
   agrees with a perceptual judgement of the disorder, which requires the judgement to exist.
