@@ -197,6 +197,18 @@ branch figure and a gate figure and are not interchangeable; see step 3c. `score
 both 2x2 tables rather than choosing, and `load_ruleset` refuses a branch that holds out families
 its own reference set calls positive.
 
+**No branch declares one any more, as of 2026-09-15.** The owner directed that a declared branch be
+included in the evaluation rather than held out of another branch's population, so
+`reference_family_set.SPEECH` is now `speech` (= `lexical_speech | syllable_repetition`) and
+`excluded_by_construction` is null throughout. The mechanism and both validation errors stay; the
+refusal above is what would catch a half-applied version of that change. **The specificity figures
+in this paragraph are unchanged** — exclusion and multi-label leave the negative side identical,
+because the held-out families were all positives, so the branch figure is **0.895** either way and
+the gate figure is still **0.855**. The positive side is what changes: the 7,989 recordings become
+7,626 credited routings and **363 counted misses** instead of being discarded. The branch table at
+the end of this document was measured under the single-label reference and is labelled there.
+Derivation: [`../20260915-gate-family-matrix/design.md`](../20260915-gate-family-matrix/design.md).
+
 **polarity** — `above` or `below`: which side of the threshold fires. 152 of the 172 catalogue
 detectors are `above` and 20 are `below`. A gate spells the same thing as `op: at_least` / `at_most`, which
 `ruleset._POLARITY` maps back onto the polarity vocabulary the recall curve reads. It is not
@@ -1029,6 +1041,11 @@ measurement, which is the failure mode that makes a scored ruleset look better t
 the branch anyway**, because that is a fact about the store and not about the recording.
 
 Per-branch, against the reference family sets, from `branches.<BRANCH>` of the run named above:
+
+Measured under the **single-label** reference (`SPEECH: lexical_speech`, `syllable_repetition` held
+out), which is what shipped until 2026-09-15. Under the multi-label reference now configured, every
+`spec` and `spec-excl` below is unchanged and SPEECH's `spec` reads **0.895** directly; only
+SPEECH's positive side moves. See the note at "held out by construction" above.
 
 | branch | sens | spec | spec-excl | held out by construction | reference set |
 | --- | --- | --- | --- | --- | --- |

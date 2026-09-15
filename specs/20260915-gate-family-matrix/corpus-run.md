@@ -122,3 +122,20 @@ If the shard already exists, drop step 1 and the allocation becomes
   not name all 48, so this list should be non-empty on the corpus and is worth reading.
 - The 13-recording sample had recall 1.000 on all four branches. On 3 subjects that is not a
   measurement. If the corpus disagrees, the corpus is right.
+- **`family_routing.parquet` is the answer to "for each task family, how many are routed where and
+  what are the decision criteria".** One row per (task family, branch): `routed` and `routed_rate`,
+  `firing_gates` naming every gate that sent recordings there with its count, `sole_firing_gates`
+  naming the gate each routing hinged on alone — that is the routing which disappears if the gate
+  is removed — and `margin.*` over the least-clearing firing gate. `declared`/`agreement` say
+  whether the family's reference set names the branch; `beyond_declaration` is additive routing,
+  not an error.
+- **`family_states.parquet`** carries `branches_routed.0` .. `branches_routed.4` per family. Anything
+  above `.1` is additive routing and is intended; `.0` splits into `state.empty` (the bypass fired)
+  and `state.unexplained` (content no gate read), and only the second is a charge against the
+  ruleset.
+- **SPEECH's 2x2 should now show the diadochokinesis families as positives**, not as 7,626 false
+  positives: expect roughly tp 39,319 / fp 2,246 / tn 19,077 / fn 1,905, sens ~0.954 and spec
+  ~0.895. If `fp` comes back near 9,872 the config override did not take.
+- **Read `over-rt` and the budget it sits inside, not `decl/routed`.** The per-branch table's last
+  column is a raw count ratio kept so nothing is lost; it is prevalence-dependent and is not a
+  precision. `specs/20260915-gate-family-matrix/design.md` § 2026-09-15 says why.
