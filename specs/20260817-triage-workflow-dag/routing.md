@@ -110,9 +110,13 @@ counterfactual's exact map are in
 **Gate values are not recorded anywhere.** `route_attributes` (`live_evidence.py:172-190`) writes
 `gate_outcomes` as `{name: outcome}`; the number each gate compared against its cut is in no element,
 so every value in that benchmark had to be recovered by re-reducing the finished store through
-`extract_features` and `gate_value`. Whether the evaluation should carry the values beside the
-outcomes is **owed a decision**: it is what makes a shipped cut auditable from a run rather than only
-from a re-reduction, and it is a store-contract change, not a threshold.
+`extract_features` and `gate_value`. **The owner decided this on 2026-09-15, from the other side:** a
+fired rule may write or refine a span's label
+([`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md) § *A fired rule may write or refine a
+span's label*), and a label citing neither the value nor the span it came from is indistinguishable
+from a classifier's own. So carrying the values is no longer an open question — **owed a code
+change**, a store-contract change and not a threshold, and it is also what makes a shipped cut
+auditable from a run rather than only from a re-reduction.
 
 ## REDACT is inside the speech branch
 
@@ -208,5 +212,5 @@ Derivations live in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md) a
 | --- | --- |
 | `routing.hint_branch_map` | which hint tags and `speech_type` values force which branch; a vocabulary, owed the corpus it was drawn from. **Null** in the packaged config, so every tag is unmapped and nothing is forced. Measured 2026-09-15: populating it would have forced nothing on 13 real recordings, so what it is owed is a population where content and declaration disagree, not a larger sample of agreement |
 | the ruleset's operating points | scored 0.97 / 0.95 / 0.96 / 0.94 sensitivity across AIRWAY / SPEECH / VOICE / DDK over 62,547 recordings, 333 of them (0.5%) reaching no branch. Which gates are provisional is in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md). **Recall is not the axis under strain on real material**: 13/13 declared branches were reached in the 2026-09-15 run and every flag traced to over-routing, to a branch with no subject, or to a wrong label |
-| the gate values behind an evaluation | the `ruleset_routing` measurement records each gate's outcome and not the number behind it, so a run cannot be audited against its own cuts without re-reducing the store. **Owed a decision** on whether the evaluation carries the values |
+| the gate values behind an evaluation | the `ruleset_routing` measurement records each gate's outcome and not the number behind it, so a run cannot be audited against its own cuts without re-reducing the store. **Decided 2026-09-15: the evaluation carries them**, because a fired rule may now write a span's label and such a label must cite the rule, the evidence and the value. **Owed a code change**, no longer a decision. The span identity is owed with it: `live_spans` rows carry `"id"` (`routing_analysis/features.py:1084`) and `span_longest_s[measure] = max(durations)` (`:1134`) keeps only the scalar, so no fired gate can name the span it read |
 | the `unexplained` population | 0.5% of the corpus at the scored operating points, and nobody has looked at what is in those recordings. They now flag rather than passing silently, which is what makes the question askable |

@@ -364,6 +364,63 @@ not a sensitivity of zero.
 per-branch 2x2 with sensitivity and specificity, and the worst fall-through families, and persists
 all of it to `ruleset_score.json`. It holds no rule logic.
 
+## A fired rule may write or refine a span's label
+
+**Owner decision, 2026-09-15:** *"rulesets could update span labels if relevant."*
+
+The ruleset's product has been the routing decision and nothing else — `evaluate_routes` returns a
+`RouteEvaluation` and `nodes/routing.py` turns it into one `ruleset_routing` measurement and four
+`branch_decision` elements. This widens it: **when a rule fires, it may stamp or refine a label on the
+span whose evidence fired it.** `label` where the span carried none, `refine` where it carried one the
+rule sharpens — the verbs are the store-wide ones in
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+§ *What each verb writes*, not new ones. The middle stage's product becomes the routing decision *and*
+the labels its own evidence supports.
+
+**What it buys, on the one branch where the gap is measured.** VOICE is routed by `voice.sustained`,
+whose feature is `[span_longest, amplitude]` (`default.yaml:252-255`), and then fails for want of a
+`phonation` span (`nodes/voice.py:230`, the family at `:40`, the return at `:235-264`). If the rule
+that fired writes the phonation label onto the amplitude span it read, **the branch receives a
+labelled subject at SCREEN time and no retired detector has to be resurrected** — which removes that
+span-source problem rather than relocating it. It is one of three live options; the other two, and
+what each costs, are at [`branch-voice.md`](branch-voice.md) § *The span source is one of three
+options*.
+
+**A rule-written label needs the same provenance as any other assertion**: which rule wrote it, from
+which evidence path, at what value. Without those three it is indistinguishable from a classifier's
+own label, and keeping that distinction is what the store is for.
+
+**Neither the value nor the span survives the evaluator today, and both are owed a code change.**
+
+- **The value.** `evaluate_gate` computes `value = gate_value(features, gate)` (`ruleset.py:405`) and
+  returns one of three enum members (`:406-409`). `RouteEvaluation.gate_outcomes` is
+  `Mapping[str, GateOutcome]` (`:210`, filled at `:467`), and `route_attributes` serialises that and
+  no number (`live_evidence.py:172-190`, the key at `:185`). Every value in [`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md)
+  had to be recovered by re-reducing finished stores for exactly this reason. Registered at
+  [`routing.md`](routing.md) § *Open derivations*.
+- **The span.** A `Gate` is "one threshold rule over one number" (`ruleset.py:92-106`) and carries no
+  span. `live_spans` rows do carry `"id"` (`routing_analysis/features.py:1084`), and the reduction
+  `span_longest_s[measure] = max(durations)` (`:1134`) keeps only the scalar — so the identity is
+  discarded one step before the gate sees it. **Which span a reduced feature attributes its firing to
+  is a contract question, not a threshold**: `max` has a unique argument only until two spans tie, and
+  a set-membership feature such as `span_label_set_stat` may have fired on several at once.
+
+**Which evidence a phonation label should come from — a directed recommendation, not a settled rule.**
+Drive it from the **measured gate**, not from the classifier label, because on this material the
+labels are wrong for exactly this case. On the 20 s held vowel of the 2026-09-15 run the consensus
+taxonomy read `Chant` 0.937, `Music` 0.930, `Mantra` 0.899 and `Brass instrument` 0.661 — all
+outranking anything voice-specific — while `voice.sustained` measured 15.89 s off the amplitude
+envelope and was right (benchmark § G and § D). A label sourced from the consensus would name that
+vowel music. **One recording is one recording**, so this is the direction the evidence points and not
+a fitted rule.
+
+**This touches neither of the contract's standing rules** — *a hint may add and inform, never
+suppress* and *content the task did not ask for is content, not error*
+([`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+§ *Two standing rules*). A rule that writes a label still routes exactly what it routed; writing a
+label suppresses no branch and relaxes no cut, and a label is evidence about a span rather than a
+judgement about the recording.
+
 ## Next: the hint layer, which refines and never suppresses
 
 Not implemented here, deliberately. The declared family is currently used only to score. The next
