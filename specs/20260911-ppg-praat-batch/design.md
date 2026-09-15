@@ -208,6 +208,13 @@ Three modes, each recorded rather than raised:
 The per-slice log goes to `<log-dir>/slices/slice-<i>-of-<n>.jsonl` with a `.summary.json` beside it.
 That is the only thing written outside a recording's own run root, and it is a log, not a derivative.
 
+A fourth value is not a failure mode. A recording the transcript rule kept off the model reads
+`out-of-scope` in its `ppg` field, and in its row `status` wherever the Praat block landed — so the
+summary counts it apart from the `ok` rows, and the log separates it from the `skipped` of a store
+that already holds a posteriorgram. Both once read `skipped`, which is what made a regression that
+ran or failed ppgs on the 2,376 below invisible. A row whose Praat block failed is `absent` or
+`error` as before: the value says the rule fired, not that the row is done.
+
 ## Batch size is the whole lever; the device is noise beside it
 
 Measured on 32 real `enhanced.flac` tracks, mean duration 5.4 s, on an A100 node:

@@ -211,6 +211,11 @@ def _log_rows(log_dir: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+def _summary(log_dir: Path) -> dict[str, Any]:
+    """The summary sidecar the slice wrote beside its log."""
+    return json.loads((log_dir / "slices" / "slice-0-of-1.summary.json").read_text())
+
+
 @pytest.fixture
 def corpus(tmp_path: Path) -> Callable[..., tuple[Path, list[Path]]]:
     """A factory for a manifest over N finished runs, each carrying the consensus it is given.
@@ -541,7 +546,7 @@ class TestTheTranscriptScope:
         assert find_measurement(store, CONSENSUS_TRANSCRIPT) is not None
         assert find_measurement(store, PPG_MEASUREMENT) is None, "a wordless recording ran a phoneme classifier"
         assert find_measurement(store, PRAAT_MEASUREMENT) is not None, "Praat needs no transcript"
-        assert _log_rows(tmp_path)[0]["status"] == "ok"
+        assert _log_rows(tmp_path)[0]["status"] == "out-of-scope"
 
     def test_a_store_with_no_transcript_entity_is_out_of_scope_too(
         self, corpus: Callable[..., tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
@@ -624,6 +629,100 @@ class TestTheTranscriptScope:
         assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 2
         assert "ensure_ppgs_venv" in capsys.readouterr().err
         assert find_measurement(_store_of(roots[0]), PRAAT_MEASUREMENT) is None, "nothing may be measured"
+
+
+class TestTheLogSaysWhichSkipIsWhich:
+    """A posteriorgram the rule kept off the model and one the store already holds are two facts.
+
+    Both used to read ``skipped``. The catch-up pass over the 2,376 stores that hold neither
+    measurement turns on the difference: a regression that ran or failed ppgs on them would
+    otherwise be invisible in the log it writes.
+    """
+
+    def test_an_out_of_scope_recording_reads_out_of_scope_and_not_skipped(
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        provisioned: None,
+        stub_ppgs: None,
+        tmp_path: Path,
+    ) -> None:
+        """The row the catch-up pass writes: Praat landed, and the rule is why ppgs did not run."""
+        manifest, _ = corpus(1, [()])
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        row = _log_rows(tmp_path)[0]
+        assert row["ppg"] == "out-of-scope"
+        assert row["praat"] == "ok"
+        assert row["status"] == "out-of-scope"
+
+    def test_a_store_that_already_holds_its_posteriorgram_still_reads_skipped(
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        provisioned: None,
+        stub_ppgs: None,
+        tmp_path: Path,
+    ) -> None:
+        """An in-scope recording extended twice: the second pass has nothing to do, and says so."""
+        manifest, _ = corpus(1)
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+        row = _log_rows(tmp_path)[0]
+        assert row["ppg"] == "skipped"
+        assert row["praat"] == "skipped"
+        assert row["status"] == "skipped"
+
+    def test_a_second_pass_over_an_out_of_scope_recording_still_reads_out_of_scope(
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        provisioned: None,
+        stub_ppgs: None,
+        tmp_path: Path,
+    ) -> None:
+        """The re-run takes the whole-recording skip, where the two facts are just as distinct."""
+        manifest, _ = corpus(1, [()])
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+        row = _log_rows(tmp_path)[0]
+        assert row["ppg"] == "out-of-scope"
+        assert row["praat"] == "skipped"
+        assert row["status"] == "out-of-scope"
+
+    def test_the_summary_counts_the_two_populations_apart(
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        provisioned: None,
+        stub_ppgs: None,
+        tmp_path: Path,
+    ) -> None:
+        """One in-scope row and one out of it, counted as what each is rather than both as ``ok``."""
+        manifest, _ = corpus(2, [_HEARD, ()])
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        assert _summary(tmp_path)["counts"] == {"ok": 1, "out-of-scope": 1}
+
+    def test_an_out_of_scope_recording_whose_praat_fails_is_not_out_of_scope(
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        provisioned: None,
+        stub_ppgs: None,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """The new value says the rule fired, not that the row is done: a failed block still shows."""
+
+        def _refuse(store: ProvStore, config: object, *, run_dir: Path) -> str:
+            raise RuntimeError("praat refused this recording")
+
+        monkeypatch.setattr(cli, "praat_features", _refuse)
+        manifest, _ = corpus(1, [()])
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        row = _log_rows(tmp_path)[0]
+        assert row["ppg"] == "out-of-scope"
+        assert "praat refused this recording" in row["praat"]
+        assert row["status"] == "absent"
 
 
 class TestForceReDerives:
