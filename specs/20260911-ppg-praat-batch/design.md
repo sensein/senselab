@@ -464,9 +464,27 @@ Measured on a random sample of 80 of the excluded stores:
   them with zero errors (2,087 already held a live `clip_amplitude`, 289 were newly written), so
   this is not a broken-store exclusion.
 
-**The manifest's `lexical` field is not the consensus word count and must not be read as one.** The
-manifest carries 14,836 rows with `lexical == 0`, and a sample of 40 of those found consensus words
-on **40 of 40**. Whatever `lexical` counts, it is not what the selection used.
+**The manifest's `lexical` field is not the consensus word count, and the difference is the
+bracketing rule.** Two counts exist over the same transcript: `consensus_words`
+(`../../src/senselab/audio/workflows/triage/nodes/common.py:300-308`) is every live `word` entity —
+the transcript's `n_words` — while `lexical_words` (`:311-321`) keeps only those whose `bracketed`
+attribute is False. A token is bracketed when the recognizer already bracketed it or when its
+vocabulary key is in `words.onomatopoeic_tokens`, which `bracketed_form`
+(`../../src/senselab/audio/workflows/triage/consensus.py:183-200`) rewrites to `[COUGH]` — so a
+recognizer that writes the plain word *cough* and one that writes `[COUGH]` agree.
+
+So the corpus is three populations, not two:
+
+| population | rows | what it is |
+| --- | ---: | --- |
+| `n_words == 0` | 2,376 | the recognizer returned nothing; **excluded from this manifest** |
+| `n_words > 0`, `lexical == 0` | 14,836 | every token bracketed — `[breath]`, `[cough]`, `[UH]` |
+| `lexical > 0` | 45,366 | at least one plain word |
+
+Measured: of 30 sampled `lexical == 0` stores, **33 of 33** word entities carried `bracketed: true`.
+The manifest is the second and third populations together, which is exactly *has consensus ASR
+output* — bracketed-only recordings included, since a bracketed marker is output even though no part
+of it is a word.
 
 **So the rule is right for the posteriorgram and wrong for the Praat scalars.** A phoneme
 posteriorgram over a recording with no recognised speech classifies nothing, so scoping the PPG to
