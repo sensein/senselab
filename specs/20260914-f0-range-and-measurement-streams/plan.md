@@ -1053,13 +1053,13 @@ git add -A && git commit -m "feat(extend): --force re-derives the Praat scalars 
 
 **Without this task the plan is a net loss in auditability.** `_extract_one` (`:1302`) calls `extract_pitch_values` and threads the floor and ceiling into every subsequent extractor, but puts **neither into `feature_data`**. Under the bin a reader could at least infer which of two ranges applied. After Task 1 every recording's forty scalars are conditioned on a **recording-specific** range recorded nowhere, with no support count — which is audit finding 5 (no function returns a support count) reproduced on the very instrument this plan repairs. It is also what would have surfaced the hum regression: a `pitch_range_fell_back` of 1.0, or a floor and ceiling that do not bracket the voice, is visible in the measurement's attributes and invisible anywhere else.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
     def test_the_forty_scalars_carry_the_range_they_were_measured_under(self) -> None:
         """Per-recording ranges make two recordings' scalars incomparable; the range must travel."""
         [features] = extract_praat_parselmouth_features_from_audios([_buzz(150.0, seconds=2.0)])
-        for key in ("pitch_floor", "pitch_ceiling", "pitch_frames", "pitch_range_fell_back"):
+        for key in ("pitch_floor", "pitch_ceiling", "pitch_frames", "pitch_failed", "pitch_range_fell_back"):
             assert key in features, f"{key} must travel with the scalars it conditioned"
         assert features["pitch_floor"] < 150.0 < features["pitch_ceiling"]
 ```
@@ -1067,34 +1067,48 @@ git add -A && git commit -m "feat(extend): --force re-derives the Praat scalars 
 And in `preprocess_test.py`, inside `TestThePosteriorgramAndPraatBlocks` (which Task 6 would have retargeted and, being withdrawn, did not):
 
 ```python
-        for key in ("pitch_floor", "pitch_ceiling", "pitch_frames", "pitch_range_fell_back"):
+        for key in ("pitch_floor", "pitch_ceiling", "pitch_frames", "pitch_failed", "pitch_range_fell_back"):
             assert key in attrs["features"], f"{key} must be on the measurement, not only in the call"
 ```
 
-- [ ] **Step 2: Run and watch them fail**
+- [x] **Step 2: Run and watch them fail**
 
 Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py -k range_they_were_measured -v`
 Expected: FAIL with `KeyError` or the `in` assertion — `feature_data` has no such keys.
 
-**Two consequences of this task that must be stated, not discovered.** The five keys reach `record.praat`
+**One consequence of this task that must be stated, not discovered.** The five keys reach `record.praat`
 through `features.py:726`, so `pitch_failed` and `pitch_range_fell_back` become **two new routing indicator
 features** — harmless today because no gate names them, but they are now in the feature vector and the
-ruleset's own audit should know. And `_extract_one` calls `extract_pitch_values(snd=snd)` with **no search
-range**, so the 40-scalar path uses the signature defaults (50/600) rather than `voice.f0_search_range_hz`.
-That is two sources for one range, the Praat one being a code literal — in tension with this plan's own
-constraints, and it is the literal Task 8 will record as provenance. Record it as owed; do not fix it here,
-because threading config into that function is a separate change with its own callers.
+ruleset's own audit should know. Verified by calling `_absorb_measurement` with a `praat_features`
+measurement carrying the five keys: `_finite_scalars` keeps all five, `pitch_failed` and
+`pitch_range_fell_back` among them, because both are finite floats rather than bools.
 
-- [ ] **Step 3: Thread the five keys into `feature_data`**
+**A second consequence this plan claimed here is void — Task 1 closed it.** It said `_extract_one` calls
+`extract_pitch_values(snd=snd)` with no search range, so the 40-scalar path used the signature defaults
+(50/600) rather than `voice.f0_search_range_hz`, giving two sources for one range with the Praat one a code
+literal. As of Task 1 that is false: `_extract_one` (`praat_parselmouth.py:1375-1384`) forwards all seven
+parameters from its enclosing scope, `preprocess.py:886-897` supplies all seven from `f0_range_parameters`,
+and that function (`nodes/common.py:356-375`) reads the bounds from `voice.f0_search_range_hz` and the five
+coefficients from `praat_features.*`. There is **one** source for the range, and nothing is owed.
+
+- [x] **Step 3: Thread the five keys into `feature_data`**
 
 In `_extract_one`, after the `extract_pitch_values` call at `praat_parselmouth.py:1375-1384`, add its five keys to `feature_data` under their own names. Do not rename them — they must match what `extract_pitch_values` returns so a reader grepping one finds the other. The `praat_features` measurement already carries `features=scalars` (`preprocess.py:898`, read at `:905`), so they reach the store with no change there; confirm that and only touch `preprocess.py` if it filters keys.
 
-- [ ] **Step 4: Run and confirm**
+- [x] **Step 4: Run and confirm**
 
 Run: `uv run pytest src/tests/audio/tasks/features_extraction_test.py src/tests/audio/workflows/triage/nodes/preprocess_test.py -q`
 Expected: PASS. The `n_features` count on the measurement rises by five — if a test asserts an exact count, update it to the new number rather than excluding the new keys.
 
-- [ ] **Step 5: Lint and commit**
+Landed: `preprocess.py` filters nothing — `scalars` is built from every key `features` carries
+(`:898`) and `n_features` is `len(scalars)` (`:905`), so it needed no change. No test asserted an
+exact count: the only two assertions are `n_features == len(attrs["features"])` and `> 0`
+(`preprocess_test.py:2259-2260`), and `routing_analysis_test.py:950` counts its own fixture.
+Measured on `src/tests/data_for_testing/had_that_curiosity.wav` at 16 kHz: 45 scalars, with
+`pitch_floor` 77.32, `pitch_ceiling` 422.83, `pitch_frames` 365.0, `pitch_failed` 0.0,
+`pitch_range_fell_back` 0.0, against a `mean_f0_hertz` of 146.94.
+
+- [x] **Step 5: Lint and commit**
 
 ```bash
 uv run ruff format src/senselab/audio/tasks/features_extraction/ src/senselab/audio/workflows/triage/nodes/preprocess.py

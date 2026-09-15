@@ -407,6 +407,13 @@ class TestPitchRangeNarrowing:
         assert derived["pitch_failed"] == 1.0
         assert np.isnan(derived["pitch_floor"])
 
+    def test_the_forty_scalars_carry_the_range_they_were_measured_under(self) -> None:
+        """Per-recording ranges make two recordings' scalars incomparable; the range must travel."""
+        [features] = extract_praat_parselmouth_features_from_audios([_buzz(150.0, seconds=2.0)])
+        for key in ("pitch_floor", "pitch_ceiling", "pitch_frames", "pitch_failed", "pitch_range_fell_back"):
+            assert key in features, f"{key} must travel with the scalars it conditioned"
+        assert features["pitch_floor"] < 150.0 < features["pitch_ceiling"]
+
 
 def test_extract_pitch_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of pitch features."""

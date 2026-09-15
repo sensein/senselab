@@ -53,6 +53,11 @@ def extract_health_measurements(
         that may be used for health monitoring.
             Metrics include:
 
+            - pitch_floor
+            - pitch_ceiling
+            - pitch_frames
+            - pitch_failed
+            - pitch_range_fell_back
             - speaking_rate
             - articulation_rate
             - phonation_ratio
