@@ -174,6 +174,49 @@ scored 0.97 / 0.95 / 0.96 / 0.94). On this material every flag traces to a branc
 material it has no subject in (D), a branch with no node (F), or a route taken on a label that is
 wrong (G).
 
+### Every gate's value on every recording
+
+Recorded because nothing in the store keeps it: `route_attributes` stores `gate_outcomes` but not
+the values (`../../../src/senselab/audio/workflows/triage/live_evidence.py:172-190`), so these were
+recovered by re-reducing each finished store through `extract_features` + `gate_value`. They are the
+evidence under findings C through G, and without them each of those findings rests on a number
+nobody can re-read.
+
+`*` = fired. `na` = **unavailable**, meaning the feature key was absent and the gate was never
+judged — which is not the same as a gate that read a value and declined, and must never be folded
+into one. Thresholds are in the header row.
+
+| rec | sp.lexical ≥2 | sp.agree ≥3 | vo.sustained ≥3.0 | vo.glide ≥.05 | vo.chant ≥.02 | ai.breath ≥.10 | ai.cough ≥50 | ai.bracket ≥1 | ai.ppg_silent ≥.757 | ddk.lex ≥3 | ddk.ppg ≥10 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| A1 | 0 | 0 | 0.63 | .013 | .011 | .010 | 43.10 | 0 | **0.949\*** | 0 | 0.49 |
+| A2 | 0 | 0 | 0.80 | .0002 | .00005 | .0008 | na | **1\*** | 0.699 | 1 | 4.47 |
+| A3 | 0 | 0 | 1.80 | .006 | .003 | **0.938\*** | na | 0 | 0.750 | 0 | 3.55 |
+| A4 | 0 | 0 | 1.03 | .0009 | .0007 | **0.927\*** | na | 0 | **0.984\*** | 0 | 0.72 |
+| V1 | **3\*** | **3\*** | **4.39\*** | **.364\*** | **.161\*** | **0.249\*** | na | 0 | 0.456 | 2 | 4.46 |
+| V2 | 1 | 0 | **15.89\*** | **.909\*** | **.909\*** | **0.238\*** | na | 0 | 0.131 | 1 | 3.78 |
+| V3 | 1 | 0 | **12.27\*** | **.659\*** | **.659\*** | .004 | na | 0 | 0.733 | 1 | 0.74 |
+| S1 | **68\*** | **67\*** | 2.57 | .030 | **.0221\*** | .007 | na | 0 | 0.180 | **5\*** | 8.89 |
+| S2 | **10\*** | **10\*** | 2.81 | 0 | 0 | .00001 | na | 0 | 0.238 | 2 | 7.10 |
+| S3 | **98\*** | **97\*** | 2.71 | **.088\*** | **.086\*** | **0.252\*** | na | 0 | 0.190 | **4\*** | 8.64 |
+| S4 | **53\*** | **51\*** | **4.68\*** | **.112\*** | **.088\*** | .013 | na | **1\*** | 0.400 | **8\*** | 7.44 |
+| D1 | **11\*** | **10\*** | 1.51 | .001 | .001 | .005 | na | 0 | 0.145 | **11\*** | **12.33\*** |
+| D2 | **20\*** | 0 | 1.28 | .00001 | 0 | 0 | na | 0 | 0.102 | **8\*** | **14.70\*** |
+
+**Every cell is identical in the hinted run**, which is finding A restated as data.
+
+Three readings this table supports and the prose above does not:
+
+- **`voice.sustained` has a value on all 13** — 0.63 to 15.89 s — so VOICE is routed by a
+  measurement that exists on every recording, and then fails for want of a `phonation` span that
+  exists on none. It is the clearest statement of the inconsistency finding D describes.
+- **`ai.cough` is `na` on 12 of 13.** The one value, 43.10 dB against a 50.0 cut, is finding E.
+- **`ddk.ppg` separates cleanly** — 12.33 and 14.70 on the two real DDK recordings against a
+  maximum of 8.89 across all four speech recordings, a margin of 1.11 /s below the cut on the
+  nearest speech recording. `ddk.lex` does not separate at all, which is finding F.
+
+**13 recordings across 3 subjects fits no threshold.** Every number here is an observation on real
+material; none is a fitted value, and the corpus sweep is the measurement that would be.
+
 ---
 
 ## D — VOICE fails on every recording it runs, including true voice material
