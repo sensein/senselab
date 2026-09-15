@@ -29,7 +29,12 @@ from senselab.audio.workflows.triage.nodes.preprocess import (
     PPG_MEASUREMENT,
     PRAAT_MEASUREMENT,
     QWEN_ID,
+    diarization_measurement,
+    diarization_model,
+    diarization_streams,
+    diarized_segments,
     preprocess,
+    speaker_activity,
 )
 from senselab.audio.workflows.triage.nodes.quality import quality
 from senselab.audio.workflows.triage.vocabulary import Outcome
@@ -1016,6 +1021,8 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "residual_hear",
             "ppg_posteriorgram",
             "praat_features",
+            "enhanced_diarization",
+            "residual_diarization",
         }
         for name in ("span_hear", "span_yamnet"):
             windows = find_measurements(store, name)
@@ -2335,3 +2342,431 @@ class TestThePosteriorgramAndPraatBlocks:
         assert PRAAT_MEASUREMENT in result.absent
         for name in (PPG_MEASUREMENT, PRAAT_MEASUREMENT):
             assert "enhanced" in _absent_map(store)[name]
+
+
+ENHANCED_DIARIZATION = diarization_measurement("enhanced")
+RESIDUAL_DIARIZATION = diarization_measurement("residual")
+
+
+def _diarizer(*segments: tuple[float, float, str]) -> Callable[..., list]:
+    """A stand-in diarizer returning one fixed set of ``(start, end, speaker)`` segments per audio."""
+
+    def _diarize(audios: list, **kwargs: Any) -> list:  # noqa: ANN401
+        return [[ScriptLine(speaker=speaker, start=start, end=end) for start, end, speaker in segments]] * len(audios)
+
+    return _diarize
+
+
+class TestSpeakerActivity:
+    """The summary the block folds the diarizer's segments into. No model, no store, no file."""
+
+    def test_one_speaker_over_one_segment_is_one_voice_and_no_overlap(self) -> None:
+        """The owner's question is one voice or more; this is the shape of `one`."""
+        activity = speaker_activity([(0.0, 3.0, "SPEAKER_00")])
+        assert activity["n_speakers"] == 1
+        assert activity["speakers"] == ["SPEAKER_00"]
+        assert activity["speech_s"] == pytest.approx(3.0)
+        assert activity["overlap_s"] == pytest.approx(0.0)
+        assert activity["max_concurrent_speakers"] == 1
+
+    def test_two_speakers_talking_at_once_are_two_voices_with_measured_overlap(self) -> None:
+        """Concurrency is the fact the exclusive partition cannot express, so it must survive here."""
+        activity = speaker_activity([(0.0, 2.0, "SPEAKER_00"), (1.5, 3.0, "SPEAKER_01")])
+        assert activity["n_speakers"] == 2
+        assert activity["overlap_s"] == pytest.approx(0.5)
+        assert activity["max_concurrent_speakers"] == 2
+        assert activity["speech_s"] == pytest.approx(3.0)
+        assert activity["per_speaker_s"]["SPEAKER_00"] == pytest.approx(2.0)
+        assert activity["per_speaker_s"]["SPEAKER_01"] == pytest.approx(1.5)
+
+    def test_two_speakers_that_never_coincide_carry_no_overlap(self) -> None:
+        """Two voices is not the same claim as two voices at once; a turn-taking pair has only one."""
+        activity = speaker_activity([(0.0, 1.0, "SPEAKER_00"), (2.0, 3.0, "SPEAKER_01")])
+        assert activity["n_speakers"] == 2
+        assert activity["overlap_s"] == pytest.approx(0.0)
+        assert activity["max_concurrent_speakers"] == 1
+        assert activity["speech_s"] == pytest.approx(2.0)
+
+    def test_one_speakers_own_repeated_turns_are_one_voice_counted_once(self) -> None:
+        """Segments are not voices: two turns by one person are one speaker, totalled without double-counting."""
+        activity = speaker_activity([(0.0, 2.0, "SPEAKER_00"), (1.0, 3.0, "SPEAKER_00")])
+        assert activity["n_speakers"] == 1, "the count is of distinct speakers, not of segments"
+        assert activity["n_segments"] == 2
+        assert activity["per_speaker_s"]["SPEAKER_00"] == pytest.approx(3.0)
+        assert activity["speech_s"] == pytest.approx(3.0)
+        assert activity["overlap_s"] == pytest.approx(0.0), "one voice cannot overlap itself"
+        assert activity["max_concurrent_speakers"] == 1
+
+    def test_no_segments_is_zero_voices_rather_than_an_absence(self) -> None:
+        """A breath or cough recording holds no speaker; that is a measurement with a value."""
+        activity = speaker_activity([])
+        assert activity["n_speakers"] == 0
+        assert activity["speakers"] == []
+        assert activity["speech_s"] == pytest.approx(0.0)
+        assert activity["max_concurrent_speakers"] == 0
+
+    def test_a_line_naming_no_region_is_dropped_rather_than_counted_as_a_speaker(self) -> None:
+        """A speaker with no extent would raise the count without putting a voice anywhere."""
+        lines = [
+            ScriptLine(speaker="SPEAKER_00", start=0.0, end=1.0),
+            ScriptLine(speaker="SPEAKER_01", start=None, end=None),
+            ScriptLine(text="unattributed", start=1.0, end=2.0),
+            ScriptLine(speaker="SPEAKER_02", start=2.0, end=2.0),
+        ]
+        assert diarized_segments(lines) == [(0.0, 1.0, "SPEAKER_00")]
+
+
+class TestTheDiarizationBlock:
+    """How many voices the configured stream holds, and where. It measures; it decides nothing."""
+
+    def test_a_single_speaker_recording_is_one_voice_in_a_sidecar_named_by_digest(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The count is an attribute; the segments are the npz, and the entity names it by SHA-256."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(
+            monkeypatch,
+            enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
+            diarize=_diarizer((0.2, 2.4, "SPEAKER_00")),
+        )
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        measurement = find_measurement(store, ENHANCED_DIARIZATION)
+        assert measurement is not None
+        attrs = measurement.attributes
+        assert attrs["n_speakers"] == 1
+        assert attrs["speakers"] == ["SPEAKER_00"]
+        assert attrs["n_segments"] == 1
+        assert attrs["signal"] == "enhanced"
+        assert attrs["exclusive"] is False
+        assert attrs["model"] == residual_config.require("diarization.model")
+        assert attrs["path"] == f"derivatives/{ENHANCED_DIARIZATION}.npz"
+        assert len(attrs["checksum_sha256"]) == 64
+        assert attrs["size_bytes"] > 0
+        assert "starts" not in attrs and "segments" not in attrs
+
+        payload = np.load(tmp_path / attrs["path"])
+        assert payload["starts"].tolist() == [pytest.approx(0.2)]
+        assert payload["ends"].tolist() == [pytest.approx(2.4)]
+        assert list(payload["speakers"]) == ["SPEAKER_00"]
+
+        enhanced_id, _ = resolve_stream(store, tmp_path, "enhanced")
+        assert store.derived_from(measurement.id) == [enhanced_id]
+        agents = [a for a in store.agents("model") if a.model_id == residual_config.require("diarization.model")]
+        assert agents and agents[0].commit_sha
+
+    def test_a_two_speaker_recording_reports_two_voices_and_where_the_second_one_is(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """QUALITY needs *where*, so the second voice's own extent survives into the sidecar."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(
+            monkeypatch,
+            enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
+            diarize=_diarizer((0.0, 2.0, "SPEAKER_00"), (1.5, 2.5, "SPEAKER_01")),
+        )
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        measurement = find_measurement(store, ENHANCED_DIARIZATION)
+        assert measurement is not None
+        attrs = measurement.attributes
+        assert attrs["n_speakers"] == 2
+        assert attrs["max_concurrent_speakers"] == 2
+        assert attrs["overlap_s"] == pytest.approx(0.5)
+        assert attrs["per_speaker_s"]["SPEAKER_01"] == pytest.approx(1.0)
+
+        payload = np.load(tmp_path / attrs["path"])
+        second = [
+            (float(start), float(end))
+            for start, end, speaker in zip(payload["starts"], payload["ends"], payload["speakers"])
+            if speaker == "SPEAKER_01"
+        ]
+        assert second == [(pytest.approx(1.5), pytest.approx(2.5))]
+
+    def test_a_recording_with_no_speech_is_zero_voices_rather_than_an_absence(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Breath and cough recordings really do diarize to nothing; zero is an answer, not a failure."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), diarize=_diarizer())
+        result = preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        measurement = find_measurement(store, ENHANCED_DIARIZATION)
+        assert measurement is not None
+        assert measurement.attributes["n_speakers"] == 0
+        assert measurement.attributes["n_segments"] == 0
+        assert ENHANCED_DIARIZATION not in result.absent
+        assert (tmp_path / "derivatives" / f"{ENHANCED_DIARIZATION}.npz").is_file()
+
+    def test_a_model_this_host_cannot_obtain_is_a_typed_absence_not_a_node_failure(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Pyannote's checkpoints are gated: no token is a failure to measure, not a bug to raise on."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1))
+
+        def _gated(**kwargs: Any) -> Any:  # noqa: ANN401
+            raise ValueError("401 Client Error: gated repo; no token on this host")
+
+        monkeypatch.setattr(preprocess_module, "diarization_model", diarization_model)
+        monkeypatch.setattr(preprocess_module, "PyannoteAudioModel", _gated)
+        result = preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        assert find_measurement(store, ENHANCED_DIARIZATION) is None
+        assert ENHANCED_DIARIZATION in result.absent
+        reason = _absent_map(store)[ENHANCED_DIARIZATION]
+        assert "SpeakerDiarizationUnavailable" in reason
+        assert "gated repo" in reason
+        assert not (tmp_path / "derivatives" / f"{ENHANCED_DIARIZATION}.npz").exists()
+        assert find_measurement(store, PRAAT_MEASUREMENT) is not None
+
+    def test_a_diarizer_that_raises_mid_call_is_the_same_typed_absence(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A model that loads and then fails on this recording is still an absence, not a crash."""
+        _seed_admit(store, tmp_path, wav_writer)
+
+        def _explode(audios: list, **kwargs: Any) -> list:  # noqa: ANN401
+            raise RuntimeError("segmentation produced no frames")
+
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), diarize=_explode)
+        result = preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        assert find_measurement(store, ENHANCED_DIARIZATION) is None
+        assert ENHANCED_DIARIZATION in result.absent
+        assert "SpeakerDiarizationUnavailable" in _absent_map(store)[ENHANCED_DIARIZATION]
+
+    def test_the_block_is_absent_when_the_configured_stream_was_never_written(
+        self,
+        store: ProvStore,
+        phonation_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No stream of that name is a cascading absence, exactly as it is for the posteriorgram."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        result = preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+
+        assert ENHANCED_DIARIZATION in result.absent
+        assert "enhanced" in _absent_map(store)[ENHANCED_DIARIZATION]
+
+    def test_which_stream_is_diarized_is_a_config_value_the_measurement_records(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A campaign that diarizes another stream says so in one key, and the entity names it.
+
+        The measurement must carry the stream it was taken on: a count measured on ``plain`` and one
+        measured on ``enhanced`` are different readings, and a reader that cannot tell them apart
+        would compare them as if they were the same.
+        """
+        override = tmp_path / "plain_diarization.yaml"
+        override.write_text("residual:\n  enabled: false\ndiarization:\n  streams: [plain]\n")
+        config = load_triage_config(override)
+        assert diarization_streams(config) == ("plain",)
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, diarize=_diarizer((0.0, 1.0, "SPEAKER_00")))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+
+        measurement = find_measurement(store, diarization_measurement("plain"))
+        assert measurement is not None
+        assert measurement.attributes["signal"] == "plain"
+        assert measurement.attributes["path"] == "derivatives/plain_diarization.npz"
+        plain_id, _ = resolve_stream(store, tmp_path, "plain")
+        assert store.derived_from(measurement.id) == [plain_id]
+        assert find_measurement(store, ENHANCED_DIARIZATION) is None, "an unnamed stream is not diarized"
+
+    def test_the_configured_speaker_bounds_are_what_the_diarizer_is_handed(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The packaged file hands no bound; an override that states one must reach the call."""
+        override = tmp_path / "bounded.yaml"
+        override.write_text("residual:\n  enabled: false\ndiarization:\n  streams: [plain]\n  max_speakers: 3\n")
+        config = load_triage_config(override)
+        _seed_admit(store, tmp_path, wav_writer)
+        seen: dict[str, Any] = {}
+        _stub_models(monkeypatch, record=seen, diarize=None)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+
+        assert seen["diarize"]["max_speakers"] == 3
+        assert seen["diarize"]["min_speakers"] is None
+        assert seen["diarize"]["exclusive"] is False
+        measurement = find_measurement(store, diarization_measurement("plain"))
+        assert measurement is not None
+        assert measurement.attributes["max_speakers"] == 3
+
+    def test_the_block_reads_each_stream_back_out_of_the_store(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An extend pass over a finished run has only the store, and must hand over the same samples."""
+        _seed_admit(store, tmp_path, wav_writer)
+        seen: list[int] = []
+
+        def _recording_diarize(audios: list, **kwargs: Any) -> list:  # noqa: ANN401
+            seen.append(audios[0].waveform.shape[-1])
+            return [[ScriptLine(speaker="SPEAKER_00", start=0.0, end=1.0)]]
+
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), diarize=_recording_diarize)
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        replayed = [
+            preprocess_module.diarization_input(store, tmp_path, stream)[1].waveform.shape[-1]
+            for stream in diarization_streams(residual_config)
+        ]
+        assert seen == replayed
+
+    def test_both_halves_of_the_enhancement_partition_are_measured_separately(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The two readings answer different questions and must never collapse into one number.
+
+        ``enhanced`` says how many voices survived enhancement; ``residual`` says whether one was
+        removed. A store carrying only their sum could answer neither.
+        """
+        _seed_admit(store, tmp_path, wav_writer)
+
+        calls: list[int] = []
+
+        def _by_stream(audios: list, **kwargs: Any) -> list:  # noqa: ANN401
+            """One speaker on the first stream the blocks reach, none on the second."""
+            calls.append(len(calls))
+            return [[ScriptLine(speaker="SPEAKER_00", start=0.0, end=1.0)] if calls[-1] == 0 else []]
+
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), diarize=_by_stream)
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        enhanced = find_measurement(store, ENHANCED_DIARIZATION)
+        residual = find_measurement(store, RESIDUAL_DIARIZATION)
+        assert enhanced is not None and residual is not None
+        assert enhanced.attributes["signal"] == "enhanced"
+        assert residual.attributes["signal"] == "residual"
+        assert enhanced.attributes["n_speakers"] == 1
+        assert residual.attributes["n_speakers"] == 0, "an empty residual is a value, not an absence"
+        enhanced_id, _ = resolve_stream(store, tmp_path, "enhanced")
+        residual_id, _ = resolve_stream(store, tmp_path, "residual")
+        assert store.derived_from(enhanced.id) == [enhanced_id]
+        assert store.derived_from(residual.id) == [residual_id]
+
+    def test_the_sidecar_names_the_stream_on_every_row_so_two_can_be_concatenated(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Intersecting a span with the segments must be arithmetic, over one self-describing table."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(
+            monkeypatch,
+            enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
+            diarize=_diarizer((0.1, 1.0, "SPEAKER_00")),
+        )
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        rows: list[tuple[float, float, str, str]] = []
+        for stream in diarization_streams(residual_config):
+            measurement = find_measurement(store, diarization_measurement(stream))
+            assert measurement is not None
+            payload = np.load(tmp_path / measurement.attributes["path"])
+            assert list(payload["streams"]) == [stream] * len(payload["starts"])
+            rows.extend(
+                (float(s), float(e), str(spk), str(sig))
+                for s, e, spk, sig in zip(payload["starts"], payload["ends"], payload["speakers"], payload["streams"])
+            )
+        assert rows == [
+            (pytest.approx(0.1), pytest.approx(1.0), "SPEAKER_00", "enhanced"),
+            (pytest.approx(0.1), pytest.approx(1.0), "SPEAKER_00", "residual"),
+        ]
+
+    def test_a_configuration_naming_no_stream_is_a_loud_absence_not_a_silent_skip(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Turning the derivative off must leave a record saying so, not simply nothing.
+
+        ``diarization.streams: null`` is how a campaign declines this derivative. The node must
+        still finish, and its verdict must name the derivative absent with the configuration's own
+        reason — a block list that quietly registered nothing would be indistinguishable from a
+        derivative nobody had written yet.
+        """
+        override = tmp_path / "no_diarization.yaml"
+        override.write_text("residual:\n  enabled: false\ndiarization:\n  streams: null\n")
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        result = preprocess(store, _audio(tmp_path), load_triage_config(override), run_dir=tmp_path)
+
+        assert "diarization" in result.absent
+        assert "has no value" in _absent_map(store)["diarization"]
+        assert find_measurement(store, ENHANCED_DIARIZATION) is None
+        assert find_measurement(store, "energy_envelope") is not None, "the rest of the node still ran"
+
+    def test_one_streams_absence_does_not_cost_the_other_its_reading(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One block per stream, so a run with no residual still measures what it does have.
+
+        The override turns the residual block off, so this run writes ``plain`` but no ``residual``;
+        naming both streams isolates the missing one's failure to its own entry.
+        """
+        override = tmp_path / "plain_and_residual.yaml"
+        override.write_text("residual:\n  enabled: false\ndiarization:\n  streams: [plain, residual]\n")
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, diarize=_diarizer((0.0, 1.0, "SPEAKER_00")))
+        result = preprocess(store, _audio(tmp_path), load_triage_config(override), run_dir=tmp_path)
+
+        assert find_measurement(store, diarization_measurement("plain")) is not None
+        assert find_measurement(store, RESIDUAL_DIARIZATION) is None
+        assert set(result.absent) & {"plain_diarization", RESIDUAL_DIARIZATION} == {RESIDUAL_DIARIZATION}
+        assert "residual" in _absent_map(store)[RESIDUAL_DIARIZATION]

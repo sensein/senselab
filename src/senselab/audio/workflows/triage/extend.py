@@ -50,7 +50,11 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_measurement,
 )
 from senselab.audio.workflows.triage.nodes.preprocess import NODE as PREPROCESS_NODE
-from senselab.audio.workflows.triage.nodes.preprocess import WithdrawnClip, write_withdrawn_clips
+from senselab.audio.workflows.triage.nodes.preprocess import (
+    SpeakerDiarizationUnavailable,
+    WithdrawnClip,
+    write_withdrawn_clips,
+)
 from senselab.audio.workflows.triage.nodes.quality import (
     CLIP_AMPLITUDE_MEASUREMENT,
     CLIP_LEVELS,
@@ -80,6 +84,7 @@ CLIP_SPAN_SUPERSEDED = "clip_span_superseded"
 CLIP_CONTEST_SUPERSEDED = "clip_contest_superseded"
 QUALITY_VERDICT_SUPERSEDED = "quality_verdict_superseded"
 PRAAT_MEASUREMENT_SUPERSEDED = "praat_features_superseded"
+DIARIZATION_MEASUREMENT_SUPERSEDED = "diarization_superseded"
 ONOMATOPOEIC_TOKENS_KEY = "words.onomatopoeic_tokens"
 ASR_MEASURE = "asr"
 
@@ -124,6 +129,7 @@ UNAVAILABLE: tuple[type[BaseException], ...] = (
     F0RangeUnavailable,
     PpgsPosteriorgramUnavailable,
     SpanTooShortForYAMNet,
+    SpeakerDiarizationUnavailable,
 )
 """Every typed absence a derivation may raise: each says this recording has no such thing to derive.
 

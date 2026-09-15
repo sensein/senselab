@@ -1,7 +1,7 @@
 """PREPROCESS — one conditioning pass, every shared derivative written to the store.
 
-Every model that answers a whole-file question runs here: YAMNet, AST and HeAR alike. No later node
-re-runs one. The recognizers, the aligner, SQUIM, level and the window classifiers read the plain
+Every model that answers a whole-file question runs here: YAMNet, AST, HeAR and the diarizer alike.
+No later node re-runs one. The recognizers, the aligner, SQUIM, level and the window classifiers read the plain
 resampled signal; the envelope, spans, spectrograms, gammatone and the phonation pass read the
 pre-emphasised one; ``disruptions_file`` reads the original recording. This node takes no pass/flag/
 fail decision of its own — but it is not guaranteed to complete. Each block still runs in its own
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from functools import partial
 from importlib.metadata import version as _dist_version
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -75,6 +76,7 @@ from senselab.audio.tasks.spans.api import (
     rank_cut_level,
     segments_between_change_points,
 )
+from senselab.audio.tasks.speaker_diarization.api import diarize_audios
 from senselab.audio.tasks.spectral_continuity.api import spectral_continuity
 from senselab.audio.tasks.speech_enhancement.api import enhance_audios
 from senselab.audio.tasks.speech_enhancement.residual import band_energy_fractions, compute_residual
@@ -119,7 +121,7 @@ from senselab.audio.workflows.triage.nodes.quality import (
     clip_spans,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.data_structures import HFModel
+from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine
 from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, Entity, ProvStore, file_digest
 
 NODE = "PREPROCESS"
@@ -132,6 +134,10 @@ FRCRN_ID = "alibabasglab/FRCRN_SE_16K"
 PPGS_MODEL_ID = "interactiveaudiolab/ppgs"
 PPG_MEASUREMENT = "ppg_posteriorgram"
 PRAAT_MEASUREMENT = "praat_features"
+DIARIZATION_DERIVATIVE = "diarization"
+"""The derivative name. One measurement per stream is written, each ``<stream>_diarization``."""
+DIARIZATION_SAMPLE_RATE = 16000
+"""The rate pyannote's own model card fixes. Not a tunable: the backend refuses any other rate."""
 PHONATION_TRACKS_MEASUREMENT = "phonation_tracks"
 WITHDRAW_VERB = "withdraw"
 """The assertion verb for a candidate the detector proposed in this activity and then took back."""
@@ -846,6 +852,319 @@ def ppg_posteriorgram(store: ProvStore, *, run_dir: Path) -> str:
         enhanced_id=enhanced_id,
         audio=audio,
         posteriorgram=require_posteriorgram(result),
+    )
+
+
+class SpeakerDiarizationUnavailable(ValueError):
+    """The diarizer could not be obtained or could not run on this host; record it as an absence.
+
+    A ``ValueError`` so the block runner files it beside every other cascading absence rather than
+    as a node failure: a host with no Hugging Face token, no network, or no ``pyannote-audio`` has
+    not found a bug, it has failed to measure.
+    """
+
+
+def diarization_model(config: TriageConfig) -> PyannoteAudioModel:
+    """The diarizer's spec, pinned to an immutable commit at construction.
+
+    Args:
+        config: The triage configuration, read for ``diarization.model`` and ``.revision``.
+
+    Returns:
+        The model spec, carrying the resolved ``commit_sha``.
+
+    Raises:
+        SpeakerDiarizationUnavailable: If the repository cannot be reached or is not accessible to
+            this host's token — pyannote's checkpoints are gated.
+    """
+    model_id = str(config.require("diarization.model"))
+    revision = str(config.require("diarization.revision"))
+    try:
+        return PyannoteAudioModel(path_or_uri=model_id, revision=revision)
+    except Exception as err:  # noqa: BLE001 — a spec that will not resolve is an absence, not a bug
+        raise SpeakerDiarizationUnavailable(
+            f"the diarizer {model_id}@{revision} could not be resolved: {describe_exception(err)}"
+        ) from err
+
+
+def diarization_parameters(config: TriageConfig, model: PyannoteAudioModel) -> dict[str, Any]:
+    """Every setting the diarization was measured under, as the activity and the entity record it.
+
+    The commit is not among them: the model agent carries it, and a second copy on the entity is
+    the parallel-field shape this repository's pre-alpha convention rules out.
+
+    Args:
+        config: The triage configuration.
+        model: The resolved model spec.
+
+    Returns:
+        The model id, the view taken, and the two speaker bounds — None where the configuration
+        hands the clustering no bound.
+    """
+    return {
+        "model": str(model.path_or_uri),
+        "exclusive": bool(config.require("diarization.exclusive")),
+        "min_speakers": config.get("diarization.min_speakers"),
+        "max_speakers": config.get("diarization.max_speakers"),
+    }
+
+
+def diarization_streams(config: TriageConfig) -> tuple[str, ...]:
+    """Which streams the derivative is measured on, in the order the configuration names them.
+
+    Args:
+        config: The triage configuration, read for ``diarization.streams``.
+
+    Returns:
+        The stream names.
+
+    Raises:
+        ValueError: If ``diarization.streams`` has no value, or names no stream.
+    """
+    streams = tuple(str(name) for name in config.require("diarization.streams"))
+    if not streams:
+        raise ValueError("diarization.streams names no stream; remove the key or name at least one")
+    return streams
+
+
+def diarization_measurement(stream: str) -> str:
+    """The measurement name one stream's diarization is written under.
+
+    One measurement per stream rather than one carrying both, so ``signal`` keeps meaning what it
+    means everywhere else in the store and each entity's ``derived_from`` names exactly the stream
+    it was measured on. Same shape as ``enhanced_yamnet_scores`` and ``residual_yamnet_scores``.
+
+    Args:
+        stream: The stream's name.
+
+    Returns:
+        The measurement's name.
+    """
+    return f"{stream}_{DIARIZATION_DERIVATIVE}"
+
+
+def diarization_input(store: ProvStore, run_dir: Path, stream: str) -> tuple[str, Audio]:
+    """One stream, conditioned as pyannote reads it: mono at :data:`DIARIZATION_SAMPLE_RATE`.
+
+    The one place the diarizer's input is prepared, so an extend pass over a finished run hands the
+    model the same samples this pass did.
+
+    Args:
+        store: The provenance store, read for the live stream entity.
+        run_dir: The run directory the stream's sidecar path is relative to.
+        stream: The stream's name.
+
+    Returns:
+        The stream entity's id and the conditioned audio.
+
+    Raises:
+        LookupError: If no live stream of that name is in the store.
+    """
+    stream_id, audio = resolve_stream(store, run_dir, stream)
+    if audio.waveform.shape[0] != 1:
+        audio = Audio(waveform=audio.waveform.mean(dim=0, keepdim=True), sampling_rate=audio.sampling_rate)
+    if int(audio.sampling_rate) != DIARIZATION_SAMPLE_RATE:
+        [audio] = resample_audios([audio], DIARIZATION_SAMPLE_RATE)
+    return stream_id, audio
+
+
+def diarized_segments(lines: Sequence[ScriptLine]) -> list[tuple[float, float, str]]:
+    """The diarizer's script lines as timed, labelled segments, in time order.
+
+    A line carrying no speaker, no start or no end names no region of the recording and is dropped:
+    it would otherwise enter the count as a speaker with no extent.
+
+    Args:
+        lines: One recording's script lines, as ``diarize_audios`` returned them.
+
+    Returns:
+        ``(start, end, speaker)`` per usable line, sorted by start then end.
+    """
+    segments = [
+        (float(line.start), float(line.end), str(line.speaker))
+        for line in lines
+        if line.speaker is not None and line.start is not None and line.end is not None and line.end > line.start
+    ]
+    return sorted(segments)
+
+
+def speaker_activity(segments: Sequence[tuple[float, float, str]]) -> dict[str, Any]:
+    """What the diarizer's segments say about how many voices the recording holds, and for how long.
+
+    ``n_speakers`` is the headline the owner asked for. Zero is a measurement, not an absence: a
+    recording the segmentation finds no speech in has no speaker, which is the ordinary outcome for
+    a breath or cough task. Overlap is only readable when the diarizer's overlapping view was
+    taken; under the exclusive partition ``overlap_s`` is zero by construction.
+
+    Args:
+        segments: ``(start, end, speaker)`` per segment.
+
+    Returns:
+        ``speakers``, ``n_speakers``, ``n_segments``, ``per_speaker_s``, ``speech_s``,
+        ``overlap_s`` and ``max_concurrent_speakers``.
+    """
+    speakers = sorted({speaker for _, _, speaker in segments})
+    per_speaker: dict[str, float] = {}
+    for speaker in speakers:
+        per_speaker[speaker] = _merged_duration([(s, e) for s, e, label in segments if label == speaker])
+    edges = sorted({edge for start, end, _ in segments for edge in (start, end)})
+    speech_s = 0.0
+    overlap_s = 0.0
+    concurrent = 0
+    for left, right in zip(edges, edges[1:]):
+        active = len({label for start, end, label in segments if start <= left and end >= right})
+        if active:
+            speech_s += right - left
+            concurrent = max(concurrent, active)
+        if active > 1:
+            overlap_s += right - left
+    return {
+        "speakers": speakers,
+        "n_speakers": len(speakers),
+        "n_segments": len(segments),
+        "per_speaker_s": per_speaker,
+        "speech_s": speech_s,
+        "overlap_s": overlap_s,
+        "max_concurrent_speakers": concurrent,
+    }
+
+
+def _merged_duration(intervals: Sequence[tuple[float, float]]) -> float:
+    """The total length of a set of intervals, counting overlapped time once."""
+    total = 0.0
+    current: tuple[float, float] | None = None
+    for start, end in sorted(intervals):
+        if current is None or start > current[1]:
+            if current is not None:
+                total += current[1] - current[0]
+            current = (start, end)
+        else:
+            current = (current[0], max(current[1], end))
+    return total + (current[1] - current[0] if current is not None else 0.0)
+
+
+def write_diarization(
+    store: ProvStore,
+    *,
+    run_dir: Path,
+    signal: str,
+    stream_id: str,
+    audio: Audio,
+    model: PyannoteAudioModel,
+    parameters: dict[str, Any],
+    segments: Sequence[tuple[float, float, str]],
+) -> str:
+    """Persist one stream's diarization beside the run and register the measurement that names it.
+
+    The speaker count and the per-speaker totals are attributes, because they are the facts a
+    consumer reads to answer "one voice or more" and must be legible without opening a file. The
+    segment table is the sidecar, because its length scales with the recording's: the PPG precedent
+    is that what grows with duration is written to ``derivatives/`` in an ``.npz`` the entity names
+    by digest, never inlined. The segments are deliberately not written as ``span`` entities
+    either — ``live_entities(store, "span")`` is the branches' set of candidate task spans, and a
+    per-speaker time partition is not a candidate for anything.
+
+    The sidecar's ``starts``/``ends``/``speakers``/``streams`` are four parallel columns of one
+    table, so concatenating two streams' files gives a complete, self-describing segment list a
+    consumer can intersect with a span by arithmetic alone.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory the sidecar is written under.
+        signal: The stream's name, as the measurement records it.
+        stream_id: The stream entity the diarization was measured on.
+        model: The diarizer's spec, for the agent's commit.
+        audio: The conditioned audio the model read, for the duration.
+        parameters: The settings the diarizer ran under, as the activity records them.
+        segments: ``(start, end, speaker)`` per segment, in time order.
+
+    Returns:
+        The measurement entity's id.
+    """
+    name = diarization_measurement(signal)
+    duration_s = audio.waveform.shape[-1] / int(audio.sampling_rate)
+    agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
+    activity = _activity(store, name, parameters, (stream_id,), agent)
+    relative = f"derivatives/{name}.npz"
+    (run_dir / "derivatives").mkdir(parents=True, exist_ok=True)
+    np.savez(
+        run_dir / relative,
+        starts=np.asarray([start for start, _, _ in segments], dtype=np.float64),
+        ends=np.asarray([end for _, end, _ in segments], dtype=np.float64),
+        speakers=np.asarray([speaker for _, _, speaker in segments], dtype=np.str_),
+        streams=np.asarray([signal] * len(segments), dtype=np.str_),
+        duration_s=np.float64(duration_s),
+        sampling_rate=np.int64(audio.sampling_rate),
+    )
+    return _measurement(
+        store,
+        activity,
+        agent,
+        name=name,
+        signal=signal,
+        extent=(0.0, duration_s),
+        attributes={
+            **path_attributes(relative, run_dir),
+            **speaker_activity(segments),
+            **parameters,
+            "duration_s": duration_s,
+            "sampling_rate": int(audio.sampling_rate),
+            "layout": "segments_by_start",
+        },
+        derived_from=(stream_id,),
+    )
+
+
+def diarization(
+    store: ProvStore,
+    config: TriageConfig,
+    *,
+    run_dir: Path,
+    stream: str,
+    device: DeviceType | None = None,
+) -> str:
+    """How many voices one stream holds, and where each of them is, to one npz sidecar.
+
+    Args:
+        store: The provenance store.
+        config: The triage configuration.
+        run_dir: The run directory the sidecar is written under.
+        stream: Which stream to diarize; one of :func:`diarization_streams`.
+        device: Where the diarizer runs. A host fact rather than a configured one, so it is an
+            argument and not a config key; None lets the backend select.
+
+    Returns:
+        The measurement entity's id.
+
+    Raises:
+        LookupError: If no live stream of that name is in the store.
+        SpeakerDiarizationUnavailable: If the diarizer could not be obtained or could not run.
+    """
+    stream_id, audio = diarization_input(store, run_dir, stream)
+    model = diarization_model(config)
+    parameters = diarization_parameters(config, model)
+    try:
+        [lines] = diarize_audios(
+            [audio],
+            model=model,
+            device=device,
+            min_speakers=config.get("diarization.min_speakers"),
+            max_speakers=config.get("diarization.max_speakers"),
+            exclusive=bool(parameters["exclusive"]),
+        )
+    except Exception as err:  # noqa: BLE001 — a diarizer this host cannot run is an absence
+        raise SpeakerDiarizationUnavailable(
+            f"{str(model.path_or_uri)} produced no diarization of {stream}: {describe_exception(err)}"
+        ) from err
+    return write_diarization(
+        store,
+        run_dir=run_dir,
+        signal=stream,
+        stream_id=stream_id,
+        audio=audio,
+        model=model,
+        parameters=parameters,
+        segments=diarized_segments(lines),
     )
 
 
@@ -2295,6 +2614,38 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         derivatives[PRAAT_MEASUREMENT] = entity_id
         view.append(entity_id)
 
+    def _diarization(stream: str) -> None:
+        """How many voices one stream holds, and where each of them is, to one npz.
+
+        One block per stream, so a run whose ``residual`` was never written still gets its
+        ``enhanced`` reading and records the other as its own absence. Reads the stream back out of
+        the store rather than out of ``state``, for the same reason the posteriorgram does: this
+        pass and an extend pass over a finished run must hand the model the same samples. The count
+        is recorded, never judged -- no multi-voice gate lives here.
+        """
+        entity_id = diarization(store, config, run_dir=run_dir, stream=stream)
+        derivatives[diarization_measurement(stream)] = entity_id
+        view.append(entity_id)
+
+    def _diarization_blocks() -> list[tuple[str, Callable[[], None]]]:
+        """One block per configured stream, or one block that records why there are none.
+
+        Building the list is itself config-reading, and a null ``diarization.streams`` would
+        otherwise abort the whole node before any block ran. It is recorded as this derivative's
+        own absence instead, which is what every other unmeasured config value does.
+        """
+        try:
+            streams = diarization_streams(config)
+        except ValueError as error:
+            message = describe_exception(error)
+
+            def _unreadable() -> None:
+                """Re-raise the configuration failure inside the block runner."""
+                raise ValueError(message)
+
+            return [(DIARIZATION_DERIVATIVE, _unreadable)]
+        return [(diarization_measurement(stream), partial(_diarization, stream)) for stream in streams]
+
     def _speech_regions() -> tuple[list[tuple[float, float]], str]:
         """Speech regions for the residual's ``speech_overlap``, and which source produced them.
 
@@ -2631,6 +2982,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ("gammatone", _gammatone),
         (PPG_MEASUREMENT, _ppg_posteriorgram),
         (PRAAT_MEASUREMENT, _praat_features),
+        *_diarization_blocks(),
     ]
     hard_failures: list[tuple[str, str]] = []
     for name, block in blocks:
