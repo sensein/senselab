@@ -1026,12 +1026,43 @@ recordings carry background noise that a model trained on clean speech handles w
 unprocessed stream. The `audio_analysis` conclusion that off-target speaker detection runs on raw
 belongs to a different question and does not carry here.
 
-The claim that pyannote is reliable at the single/multi-speaker distinction is **uncited** and is not
-relied on here; `benchmarks/diarization.md` and `benchmarks/glides-diarization.md` are in this tree
-and the pilot should be read against them.
+**Raw or enhanced: resolved 2026-09-15 by measuring both halves, not by picking a side.** The
+reason this was open stands: the derivative's headline justification is catching a quiet background
+talker, enhancement suppresses exactly that, and this project's standing conclusion for off-target
+speaker detection is that it runs on raw for that reason. The owner's resolution:
 
-**Cost:** a model pass over the corpus, comparable to the PPG extension, delivered as an extend
-driver.
+> the derivative exists to catch a quiet background talker and enhancement suppresses exactly
+> that → then the enhanced audio has a single speaker, and the residual can be analyzed. there is
+> no problem with this.
+
+Enhancement **partitions** the recording rather than destroying what it removes, and the residual is
+already first-class here — computed, lag-aligned, gain-fitted, written as its own stream, already
+classified beside `enhanced`, already read by the ruleset. So `diarization.streams` is
+`[enhanced, residual]`: the enhanced half says how many voices survived enhancement, the residual
+half says whether one was removed, **the two counts are never summed**, and a disagreement between
+them is itself the finding. **No pilot is owed.** The derivation is in
+[`../20260817-triage-workflow-dag/config-derivations.md`](../20260817-triage-workflow-dag/config-derivations.md)'s
+`diarization` section.
+
+The claim that pyannote is reliable at the single/multi-speaker distinction is **uncited** and is
+still not relied on here; `benchmarks/diarization.md` and `benchmarks/glides-diarization.md` are in
+this tree and the corpus pass should be read against them.
+
+**Cost:** two model passes over the corpus, delivered as an extend driver.
+
+**Landed 2026-09-15.** PREPROCESS's `diarization` block writes one measurement per stream, and
+`scripts/extend_diarization.py` adds them to the stores that already exist.
+
+**What this section still asks for and the change deliberately does not do.** The owner has since
+directed that *"speech should not have to rerun pyannote to do this, just take the output and use
+it"* — so SPEECH's own pass over the word hull (`speech.py:642-646`) is going away and this
+derivative becomes the only diarization in the graph. That read-swap is **not** in this change,
+because it is a behaviour change to a shipped branch: exactly what SPEECH reads today, what the
+migration gains, and the three consequences it must handle are enumerated in
+[`../20260915-preprocess-diarization/design.md`](../20260915-preprocess-diarization/design.md)'s
+"What SPEECH must read". `speech.second_diarizer` is untouched and becomes a question about the
+shared derivative. The multi-voice *judgement* is likewise absent by design — PREPROCESS measures,
+branches refine their task spans, QUALITY judges against those refined spans after every branch.
 
 ### An extend driver runs a stage's work late
 
