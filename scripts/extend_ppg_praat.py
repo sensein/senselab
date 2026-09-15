@@ -30,7 +30,9 @@ is derived on every recording regardless. The scope keys on the consensus stream
 unbracketed subset, so a recording whose whole transcript is ``[breath]``/``[cough]`` is in. Until
 now this rule lived only in the manifest an operator built for the ``ppg_20260911`` pass, which
 cannot be rebuilt from this tree; it is now the driver's, so a manifest naming every recording
-yields the same scope.
+yields the same scope. Such a row reads ``out-of-scope`` in the slice log -- in its ``ppg`` field,
+and in its ``status`` wherever the Praat block landed -- and so is distinct there from a row whose
+posteriorgram was already held, which reads ``skipped``.
 
 A recording whose store already holds both measurements is skipped, so a task that dies mid-way
 restarts where it stopped and a completed slice re-run changes nothing. ``--force`` overrides that
@@ -107,6 +109,7 @@ _OK = "ok"
 _ABSENT = "absent"
 _ERROR = "error"
 _SKIPPED = "skipped"
+_OUT_OF_SCOPE = "out-of-scope"
 
 _RETIRED_F0_RANGE_REASON = (
     "it was measured under the retired sex-typed F0 range; the range is now derived per recording"
@@ -187,6 +190,39 @@ def pending(store: ProvStore) -> tuple[bool, bool]:
     return ppg_missing and has_consensus_output(store), find_measurement(store, PRAAT_MEASUREMENT) is None
 
 
+def ppg_idle_status(store: ProvStore) -> str:
+    """Why a store that :func:`pending` says is owed no posteriorgram is not getting one.
+
+    Args:
+        store: The run's store.
+
+    Returns:
+        ``_SKIPPED`` when the store already holds a posteriorgram, ``_OUT_OF_SCOPE`` when it holds
+        none and the transcript rule kept it off the model.
+    """
+    return _SKIPPED if find_measurement(store, PPG_MEASUREMENT) is not None else _OUT_OF_SCOPE
+
+
+def row_status(ppg: str, praat: str) -> str:
+    """One recording's verdict over its two blocks' outcomes.
+
+    Args:
+        ppg: The posteriorgram's outcome: a status, or the message that stopped it.
+        praat: The Praat block's outcome, in the same form.
+
+    Returns:
+        ``_OUT_OF_SCOPE`` where both landed and the transcript rule kept the posteriorgram off the
+        model, ``_SKIPPED`` where both were already held, ``_OK`` where both landed otherwise,
+        ``_ABSENT`` where one landed and ``_ERROR`` where neither did.
+    """
+    landed = [ppg in (_OK, _SKIPPED, _OUT_OF_SCOPE), praat in (_OK, _SKIPPED)]
+    if not all(landed):
+        return _ABSENT if any(landed) else _ERROR
+    if ppg == _OUT_OF_SCOPE:
+        return _OUT_OF_SCOPE
+    return _SKIPPED if ppg == _SKIPPED and praat == _SKIPPED else _OK
+
+
 def _posteriorgrams(audios: list[Audio], device: DeviceType | None) -> tuple[list[Any] | None, str | None]:
     """Run one batch through ppgs, turning a whole-batch failure into a message rather than a raise.
 
@@ -235,6 +271,7 @@ def process_batch(
     opened: dict[int, tuple[Path, ProvStore]] = {}
     retiring: dict[int, str] = {}
     inputs: list[tuple[int, str, Audio]] = []
+    ppg_status: dict[int, str] = {}
 
     for position, row in enumerate(rows):
         try:
@@ -250,13 +287,15 @@ def process_batch(
         held = find_measurement(store, PRAAT_MEASUREMENT) if force else None
         ppg_pending, praat_pending = pending(store)
         praat_pending = praat_pending or force
+        idle = ppg_idle_status(store)
         if not ppg_pending and not praat_pending:
-            outcomes[position] = {"status": _SKIPPED, "ppg": _SKIPPED, "praat": _SKIPPED}
+            outcomes[position] = {"status": row_status(idle, _SKIPPED), "ppg": idle, "praat": _SKIPPED}
             continue
         opened[position] = (run_root, store)
         if held is not None:
             retiring[position] = held.id
         if not ppg_pending:
+            ppg_status[position] = idle
             continue
         try:
             enhanced_id, audio = ppg_input(store, run_root / RUN_SUBDIR)
@@ -269,7 +308,6 @@ def process_batch(
 
     results, batch_error = _posteriorgrams([audio for _, _, audio in inputs], device) if inputs else ([], None)
 
-    ppg_status: dict[int, str] = {}
     for offset, (position, enhanced_id, audio) in enumerate(inputs):
         run_root, store = opened[position]
         if results is None:
@@ -298,7 +336,7 @@ def process_batch(
             written.append({**row, **outcomes[position]})
             continue
         run_root, store = opened[position]
-        ppg = ppg_status.get(position, _SKIPPED)
+        ppg = ppg_status[position]
         _, praat_pending = pending(store)
         praat_pending = praat_pending or force
         praat: str
@@ -323,9 +361,7 @@ def process_batch(
         capture_environments(store, used_venvs)
         write_store(store, run_root)
         export_prov(store, run_root)
-        landed = [ppg in (_OK, _SKIPPED), praat in (_OK, _SKIPPED)]
-        status = _OK if all(landed) else (_ABSENT if any(landed) else _ERROR)
-        written.append({**row, "status": status, "ppg": ppg, "praat": praat})
+        written.append({**row, "status": row_status(ppg, praat), "ppg": ppg, "praat": praat})
     return written
 
 
@@ -442,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Rows:    {summary['rows']}")
     print(f"Log:     {summary['log']}")
     for status, number in sorted(summary["counts"].items()):
-        print(f"  {status:<9} {number}")
+        print(f"  {status:<12} {number}")
     return 1 if summary["counts"].get(_ERROR) else 0
 
 
