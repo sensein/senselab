@@ -450,26 +450,47 @@ and thinnest on glides — that is, on the whole of AIRWAY's task content (every
 and on one of VOICE's core measures ([`branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md):34,
 `:38`), and so on the quietest, lowest-energy material in the corpus.
 
-**The cause is not established, and nothing here may be written as if it were.** A bias toward the
-low-energy families is *consistent with* the manifest having been built under some selection
-criterion — but that is a hypothesis the shape of the loss suggests, not a finding, and nothing in
-this pass measured why any store was left out. **No document may say this manifest filtered on
-energy, on spans, or on anything else until someone has shown that it did.**
+**The cause was established on 2026-09-14, by probing the excluded stores on ORCD.** The manifest
+is the set of recordings that produced **consensus ASR output**, and the 2,376 are the recordings
+that produced none.
 
-What is known is where not to look: **no script in this tree builds this manifest.** The only
-in-tree manifest builder, `../../scripts/analyze_routing_evidence.py:85-136`, enumerates
-`*.summary.json` and writes `stem`/`run_root`/`store`/`task_id`/`family` — a different key set from
-this manifest's `stem`/`enhanced`/`family`/`duration_s`/`lexical` (see The driver above). The
-selection rule is therefore not recoverable from the repository and has to be recovered from the
-operator artifact on ORCD.
+Measured on a random sample of 80 of the excluded stores:
 
-**Recovering it is owed, and it is owed before anyone reasons from per-family Praat or PPG
-coverage.** In [`branch-listening-sample.md`](../20260817-triage-workflow-dag/branch-listening-sample.md)'s
-vocabulary this is **none of the seven kinds of owed**: not a listening sample, because nothing here
-needs hearing; not a bench measurement, because no synthesised signal says which stores a manifest
-named; not a purpose-collected study; and not a config value at all, so not any of the first five.
-It is owed a **provenance reconstruction** — after which the 3.8% is either a documented exclusion
-or a defect, and today it is neither.
+- **78 hold a `consensus_transcript` entity whose `n_words` is 0.** Two hold no consensus entity at
+  all. None holds a non-empty transcript.
+- **78 show ASR hypothesis entities**, so recognition ran and returned nothing. These are wordless
+  recordings, not unprocessed ones.
+- The excluded stores are otherwise healthy: the clip-amplitude driver read and wrote all 2,376 of
+  them with zero errors (2,087 already held a live `clip_amplitude`, 289 were newly written), so
+  this is not a broken-store exclusion.
+
+**The manifest's `lexical` field is not the consensus word count and must not be read as one.** The
+manifest carries 14,836 rows with `lexical == 0`, and a sample of 40 of those found consensus words
+on **40 of 40**. Whatever `lexical` counts, it is not what the selection used.
+
+**So the rule is right for the posteriorgram and wrong for the Praat scalars.** A phoneme
+posteriorgram over a recording with no recognised speech classifies nothing, so scoping the PPG to
+stores with consensus ASR output is the owner's stated rule and is what happened — the PPG needs no
+catch-up pass and none is owed. The Praat scalars inherited that population only because one driver
+and one manifest serve both blocks. F0, HNR, CPPS, jitter, shimmer and maximum phonation time do not
+need a word; on a sustained vowel or a breath task **zero words is the expected result**, and those
+are the families the exclusion falls hardest on — 28% of `respiration-and-cough-v2-breath` against 6%
+of `glides-high-to-low`.
+
+**What is owed is therefore a Praat-only first derivation over the 2,376, not a provenance
+reconstruction.** It is CPU-only: the PPG must not run on these stores, by the same rule that
+excluded them. The manifest already exists on ORCD as
+`clipfix_20260913/manifest_amplitudes.jsonl`, whose row set is **exactly** this gap — verified as a
+set equality, not a matching count. Driving it through `extend_ppg_praat.py` would run the PPG
+block, because `pending()` reports a missing posteriorgram as pending regardless of transcript; a
+Praat-only path for these stores is what the pass needs and does not yet have.
+
+**One thing this does not settle.** The `ppg_20260911` manifest was built by an operator artifact,
+not by any script in this tree — the only in-tree builder,
+`../../scripts/analyze_routing_evidence.py:85-136`, emits a different key set. The *rule* is now
+known from its output; the *code that applied it* is still not in the repository, so a future pass
+that must reproduce this selection has to re-derive it from consensus output rather than re-run a
+script.
 
 ### The consequence, which is one specific misreading
 
