@@ -79,6 +79,7 @@ WITHDRAW_CLIPS = "withdraw_contradicted_clips"
 CLIP_SPAN_SUPERSEDED = "clip_span_superseded"
 CLIP_CONTEST_SUPERSEDED = "clip_contest_superseded"
 QUALITY_VERDICT_SUPERSEDED = "quality_verdict_superseded"
+PRAAT_MEASUREMENT_SUPERSEDED = "praat_features_superseded"
 ONOMATOPOEIC_TOKENS_KEY = "words.onomatopoeic_tokens"
 ASR_MEASURE = "asr"
 

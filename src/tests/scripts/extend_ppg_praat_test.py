@@ -21,7 +21,12 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import PHONEME_LABELS, PPGS_SAMPLE_RATE, PpgsPosteriorgramUnavailable
-from senselab.audio.workflows.triage.nodes.common import find_measurement, path_attributes, software_agent
+from senselab.audio.workflows.triage.nodes.common import (
+    find_measurement,
+    find_measurements,
+    path_attributes,
+    software_agent,
+)
 from senselab.audio.workflows.triage.nodes.preprocess import PPG_MEASUREMENT, PRAAT_MEASUREMENT
 from senselab.utils import subprocess_venv
 from senselab.utils.data_structures import DeviceType
@@ -126,6 +131,12 @@ def _manifest(path: Path, roots: Sequence[Path]) -> Path:
 def _store_of(root: Path) -> ProvStore:
     """Read one run's store back under its own run id."""
     return ProvStore.read_jsonl(root / "run" / "store.jsonl", run_id=root.name)
+
+
+def _log_rows(log_dir: Path) -> list[dict[str, Any]]:
+    """The per-recording outcome records the slice wrote, in manifest order."""
+    path = log_dir / "slices" / "slice-0-of-1.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 @pytest.fixture
@@ -424,3 +435,106 @@ class TestTheVenvGate:
         assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 2
         assert "ensure_ppgs_venv" in capsys.readouterr().err
         assert find_measurement(_store_of(roots[0]), PPG_MEASUREMENT) is None
+
+
+class TestForceReDerives:
+    """Every stored Praat scalar was measured under the retired sex-typed F0 bin, so skipping looks like success."""
+
+    def test_without_force_the_praat_block_is_skipped(
+        self,
+        corpus: Callable[[int], tuple[Path, list[Path]]],
+        provisioned: None,
+        stub_ppgs: None,
+        tmp_path: Path,
+    ) -> None:
+        """The default is the restart-safe skip, which is what makes a corpus re-derivation a no-op."""
+        manifest, roots = corpus(1)
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+        before = _store_of(roots[0]).fingerprint()
+
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+        assert _store_of(roots[0]).fingerprint() == before
+        assert _log_rows(tmp_path)[0]["praat"] == "skipped"
+
+    def test_force_re_derives_a_store_that_already_holds_both(
+        self,
+        corpus: Callable[[int], tuple[Path, list[Path]]],
+        provisioned: None,
+        stub_ppgs: None,
+        tmp_path: Path,
+    ) -> None:
+        """--force must run the Praat block on a store that holds it, not report a skip as success."""
+        manifest, roots = corpus(1)
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"]) == 0
+        row = _log_rows(tmp_path)[0]
+        assert row["praat"] == "ok", "--force must re-derive, not skip"
+        assert row["ppg"] == "skipped", "--force is Praat-only; the posteriorgram block must not run"
+
+    def test_force_supersedes_a_reading_taken_under_a_different_range_rule(
+        self,
+        corpus: Callable[[int], tuple[Path, list[Path]]],
+        provisioned: None,
+        stub_ppgs: None,
+        tmp_path: Path,
+    ) -> None:
+        """The corpus was measured under coefficients the tree no longer holds; the stale reading must retire.
+
+        The store is append-only, so without the supersession the forced pass leaves two live
+        ``praat_features`` measurements with nothing saying which is current.
+        """
+        manifest, roots = corpus(1)
+        stale = tmp_path / "stale.yaml"
+        stale.write_text("praat_features:\n  pitch_ceiling_quartile_multiplier: 2.0\n", encoding="utf-8")
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--config", str(stale)]) == 0
+        retired = find_measurement(_store_of(roots[0]), PRAAT_MEASUREMENT)
+        assert retired is not None
+
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"]) == 0
+        store = _store_of(roots[0])
+        live = find_measurements(store, PRAAT_MEASUREMENT)
+        assert [entity.id for entity in live] != [retired.id], "the stale reading is still the live one"
+        assert len(live) == 1, f"{len(live)} live Praat measurements after --force"
+        assert store.is_invalidated(retired.id)
+        assert live[0].attributes["pitch_ceiling_quartile_multiplier"] == 2.5
+        assert live[0].attributes["signal"] == "enhanced"
+
+    def test_an_unchanged_re_derivation_retires_nothing(
+        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+    ) -> None:
+        """A forced pass that reproduces the stored reading has nothing to retire, and must not retire it."""
+        manifest, roots = corpus(1)
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"])
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"])
+
+        store = _store_of(roots[0])
+        assert len(find_measurements(store, PRAAT_MEASUREMENT)) == 1
+        assert find_measurement(store, PRAAT_MEASUREMENT) is not None
+
+    def test_force_does_not_touch_the_posteriorgram(
+        self, corpus: Callable[[int], tuple[Path, list[Path]]], provisioned: None, stub_ppgs: None
+    ) -> None:
+        """Audit steps 1 and 1b are both withdrawn, so a forced pass is Praat-only, on ``enhanced``."""
+        manifest, roots = corpus(1)
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"])
+        before = find_measurement(_store_of(roots[0]), PPG_MEASUREMENT)
+        assert before is not None
+
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"])
+        after = find_measurement(_store_of(roots[0]), PPG_MEASUREMENT)
+        assert after is not None
+        assert after.id == before.id
+        assert after.attributes["signal"] == "enhanced"
+
+    def test_the_venv_gate_holds_on_a_forced_pass(
+        self,
+        corpus: Callable[[int], tuple[Path, list[Path]]],
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--force overrides ``praat_pending`` alone, so a store missing its posteriorgram still needs ppgs."""
+        monkeypatch.setattr(cli, "ppgs_venv_is_provisioned", lambda: False)
+        manifest, _ = corpus(1)
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--force"]) == 2
+        assert "ensure_ppgs_venv" in capsys.readouterr().err
