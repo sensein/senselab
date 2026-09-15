@@ -101,6 +101,17 @@ Key audio processing capabilities in `audio/tasks/`:
   raises, rather than being detected as dead and taken over.
 - **`uv sync` is subtractive.** It removes extras not named in the command, so always pass the full
   set (`--all-extras`).
+- **`uv sync` is also only half of setup, and the other half fails as a missing *import*.**
+  `torchcodec` `dlopen`s FFmpeg by soname at import time, so without the shared libraries
+  `src/tests/conftest.py` aborts collection with *"Dependencies failed to import — test environment
+  is broken"* — **for every test, including ones that never open audio**. That reads as a missing
+  Python package, so the reflex is to re-run `uv sync`, which changes nothing. The fix is
+  `bash scripts/install-ffmpeg.sh` plus `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS); the PyAV
+  wheel does not satisfy it, because PyAV mangles the filenames out of soname reach. The recipe is
+  in [README.md](README.md#development) and is not repeated here — what is here is the signature,
+  because this file is what reaches a fresh agent or worktree and the README is not. In a batch
+  script export it explicitly: a Slurm job does not inherit the login shell, and this omission has
+  killed whole job arrays with `OSError: Could not load this library: .../libtorchcodec_core4.so`.
 - **Cache invalidation is free.** Bump `CACHE_SCHEMA_VERSION` in
   `src/senselab/utils/tasks/cached_inference.py` rather than reasoning about which
   `artifacts/analyze_audio_cache/` entries survive. A stale entry that *looks* readable costs far
