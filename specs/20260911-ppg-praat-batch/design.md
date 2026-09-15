@@ -140,7 +140,10 @@ uv run python scripts/extend_ppg_praat.py MANIFEST --slice-index I --slice-count
 ```
 
 Input is the manifest at `/orcd/scratch/bcs/002/satra/ppg_20260911/manifest.jsonl`, 60,202 rows, one
-JSON object per line carrying `stem`, `enhanced`, `family`, `duration_s` and `lexical`.
+JSON object per line carrying `stem`, `enhanced`, `family`, `duration_s` and `lexical`. **Those
+60,202 rows are not the corpus** — 2,376 of the 62,578 stores on disk are absent from this manifest
+and hold neither measurement; see *The manifest is not the corpus* below before quoting either
+measurement's coverage.
 
 **What it relies on that the manifest does not state.** The manifest carries no run root. The driver
 derives one from `enhanced`: `<run_root>/run/streams/enhanced.flac`, so the run root is the path's
@@ -387,6 +390,111 @@ marginal, because the point is to catch a hung worker rather than to bound a slo
 
 The failures are recoverable without recomputing anything: the driver skips a recording whose store
 already holds both measurements, so re-running the same manifest touches only the 1,883.
+
+
+## The manifest is not the corpus: 2,376 stores hold neither measurement
+
+**Inside the manifest, coverage is total**, and the section above is the whole account of how:
+58,308 extended on the first pass, 1,883 `TimeoutExpired` absences, 11 stores already complete and
+skipped — 58,308 + 1,883 + 11 = 60,202 — and a 32-slice retry that recovered all 1,883. **Coverage
+of the corpus is not**, and the two read as one unless the difference is written down.
+
+Measured on ORCD, 2026-09-14:
+
+| set | rows |
+| --- | --- |
+| `ppg_20260911/manifest.jsonl` — what this pass ran over | 60,202 |
+| `clipfix_20260913/manifest_all.jsonl` — the full store set | 62,578 |
+| in the full set, absent from the PPG manifest | **2,376** (3.8%) |
+
+Every path in the PPG manifest is in the full one, so the difference is one-directional: the
+manifest is a subset, not an overlapping set. And the 2,376 do not hold stale readings taken under
+the retired sex-typed F0 range — **they hold neither measurement and never did**:
+
+- **0 of 25** stores sampled from the gap carry `ppg_posteriorgram` or `praat_features`; **25 of 25**
+  sampled from the manifest carry both.
+- **97.5% of the gap stores have an `enhanced.flac` on disk** — 10 of 400 sampled were missing one —
+  so this is not a missing-stream exclusion. Both blocks read that stream and nothing else.
+
+Against the scored count the arithmetic differs and both statements are true of the same set:
+62,578 − 60,202 = **2,376**, and 62,547 − 60,202 = **2,345**. Which denominator applies is
+[`branch-conventions.md`](../20260817-triage-workflow-dag/branch-conventions.md)'s three-numbers
+question, not a second gap.
+
+### The exclusion is biased toward the low-energy task families
+
+No family is excluded outright — all 148 have some of both — but the rate varies more than
+fourfold. The ten deepest:
+
+| family | missing | present | rate |
+| --- | --- | --- | --- |
+| `respiration-and-cough-v2-breath` | 197 | 504 | 28% |
+| `respiration-and-cough-v2-threebreathsnose` | 144 | 555 | 21% |
+| `respiration-and-cough-fivebreaths-1` | 180 | 716 | 20% |
+| `respiration-and-cough-fivebreaths-2` | 153 | 741 | 17% |
+| `respiration-and-cough-fivebreaths-3` | 150 | 745 | 17% |
+| `maximum-phonation-time-v2-1` | 106 | 594 | 15% |
+| `respiration-and-cough-fivebreaths-4` | 121 | 774 | 14% |
+| `respiration-and-cough-v2-threebreathsmouth` | 98 | 601 | 14% |
+| `maximum-phonation-time-2` | 84 | 818 | 9% |
+| `glides-high-to-low` | 96 | 1458 | 6% |
+
+These totals are over the 62,578-store set, so they sit at or a little above the per-family counts in
+[`branch-airway.md`](../20260817-triage-workflow-dag/branch-airway.md):17-25, which are over the
+scored 62,547 — `v2-threebreathsnose` and `v2-threebreathsmouth` match at 699, `v2-breath` reads 701
+against 699. That direction is the expected one and is not a third divergence.
+
+**Where the loss falls is the part that matters.** It is deepest on breath and maximum-phonation-time
+and thinnest on glides — that is, on the whole of AIRWAY's task content (every
+`respiration-and-cough-*` family is AIRWAY's, [`branch-airway.md`](../20260817-triage-workflow-dag/branch-airway.md):17-25)
+and on one of VOICE's core measures ([`branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md):34,
+`:38`), and so on the quietest, lowest-energy material in the corpus.
+
+**The cause is not established, and nothing here may be written as if it were.** A bias toward the
+low-energy families is *consistent with* the manifest having been built under some selection
+criterion — but that is a hypothesis the shape of the loss suggests, not a finding, and nothing in
+this pass measured why any store was left out. **No document may say this manifest filtered on
+energy, on spans, or on anything else until someone has shown that it did.**
+
+What is known is where not to look: **no script in this tree builds this manifest.** The only
+in-tree manifest builder, `../../scripts/analyze_routing_evidence.py:85-136`, enumerates
+`*.summary.json` and writes `stem`/`run_root`/`store`/`task_id`/`family` — a different key set from
+this manifest's `stem`/`enhanced`/`family`/`duration_s`/`lexical` (see The driver above). The
+selection rule is therefore not recoverable from the repository and has to be recovered from the
+operator artifact on ORCD.
+
+**Recovering it is owed, and it is owed before anyone reasons from per-family Praat or PPG
+coverage.** In [`branch-listening-sample.md`](../20260817-triage-workflow-dag/branch-listening-sample.md)'s
+vocabulary this is **none of the seven kinds of owed**: not a listening sample, because nothing here
+needs hearing; not a bench measurement, because no synthesised signal says which stores a manifest
+named; not a purpose-collected study; and not a config value at all, so not any of the first five.
+It is owed a **provenance reconstruction** — after which the 3.8% is either a documented exclusion
+or a defect, and today it is neither.
+
+### The consequence, which is one specific misreading
+
+Any later per-family analysis of `praat_features` or `ppg_posteriorgram` carries a 3.8% hole that is
+**more than four times deeper on breath tasks (28%) than on glides (6%)**. Uncorrected, that reads as
+a finding about breath recordings when it is a finding about the manifest. It is the misreading this
+section exists to prevent, and
+[`branch-conventions.md`](../20260817-triage-workflow-dag/branch-conventions.md)'s rule is what
+prevents it: every aggregate reports the count it was computed over and the count that was
+unavailable. For these two measurements that count is **60,202**, never the corpus.
+
+### Two jobs, and they must not be folded into one
+
+- **Re-deriving the 60,202 is CPU-only.** `--force` overrides `praat_pending` alone
+  (`../../scripts/extend_ppg_praat.py:218`, `:269`), and every store the manifest names already holds
+  a posteriorgram, so `ppg_pending` is false, the driver `continue`s at `:225-226` before
+  `ppg_input`, and no batch reaches ppgs. Size it against a Praat-only pass.
+- **A first derivation for the 2,376 is GPU-bearing.** None of them holds a posteriorgram, so every
+  one of them takes the PPG path the 60,202 skip. It needs a manifest that does not exist yet and it
+  has a different resource profile; folding it into the forced re-derivation puts the ppgs venv and
+  a GPU allocation back into a pass sized as CPU-only.
+
+**So "a forced pass does no PPG work" is a property of this manifest, not of the flag** — which
+[`praat-instrument-audit.md`](../20260817-triage-workflow-dag/praat-instrument-audit.md) step 2
+already says, and the 2,376 are exactly the stores that would make it false.
 
 
 ## Reading one range back: `plot_range_with_ppg`

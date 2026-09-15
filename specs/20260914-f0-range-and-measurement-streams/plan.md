@@ -11,7 +11,7 @@
 - **The posteriorgram.** Audit step 1b: the PPG is a trained phoneme classifier, so `enhanced` is the stream closest to its training domain and is its defensible default.
 - **The Praat scalars.** Audit step 1, withdrawn later the same day: the mechanism it rested on — FRCRN removing the aperiodic energy the scalars measure — is false in both its forms, so the step has no premise; and on `plain`, background noise depresses HNR and CPPS and perturbs period detection, which inverts the conclusion. `enhanced` versus `plain` for these scalars is **unmeasured**, and is recorded as a future research direction in `specs/20260817-triage-workflow-dag/branch-listening-sample.md`.
 
-The reasoning for both is in the audit, at steps 1 and 1b. **Tasks 5 and 6 are withdrawn with step 1** and are marked in place below; **Task 7 survives on the F0-range premise**, not the stream. The forced corpus pass is not GPU-bearing and changes no routing.
+The reasoning for both is in the audit, at steps 1 and 1b. **Tasks 5 and 6 are withdrawn with step 1** and are marked in place below; **Task 7 survives on the F0-range premise**, not the stream. The forced pass is not GPU-bearing and changes no routing — and it is a pass over the `ppg_20260911` manifest's **60,202** stores, not over the corpus: 2,376 of the 62,578 stores hold neither measurement and are owed a separate, GPU-bearing first derivation (`specs/20260911-ppg-praat-batch/design.md`, *The manifest is not the corpus*).
 
 **Tech Stack:** Python 3.12, `uv`, pytest, numpy, parselmouth (Praat bindings), `ProvStore` (append-only W3C PROV-shaped provenance), Slurm array jobs on ORCD for corpus passes.
 
@@ -34,7 +34,7 @@ The reasoning for both is in the audit, at steps 1 and 1b. **Tasks 5 and 6 are w
 
 **Withdrawn, not deferred:** audit steps **1** and **1b**, and with step 1 this plan's **Tasks 5 and 6**. Neither stream moves and neither is owed a later plan. What step 1 leaves behind is not a deferred task but an unmeasured research question, recorded in `specs/20260817-triage-workflow-dag/branch-listening-sample.md` as the seventh kind of owed — **the impact of speech enhancement on disordered voices** — which needs selected disordered voices with hand labels and which no corpus pass or paired measurement answers.
 
-**Explicitly out of scope, each getting its own plan:** the CPPS reimplementation (step 4); jitter and shimmer from the `PeriodMark` sequence (step 3); withholding the scalars already written into 62,547 stores (step 0); instrument coverage per instrument (step 5); **step 2b — tracking F0 on the same signal the range was derived on** (`preprocess.py:954` derives on `plain`, `:964` tracks on `sharp`); the owed widening of `voice.f0_search_range_hz`'s 600 Hz ceiling against the CPPS band's 700 Hz; every branch capability; the SCREEN merge; and the contract's nine pieces.
+**Explicitly out of scope, each getting its own plan:** the CPPS reimplementation (step 4); jitter and shimmer from the `PeriodMark` sequence (step 3); withholding the scalars already written into 60,202 stores (step 0); instrument coverage per instrument (step 5); **step 2b — tracking F0 on the same signal the range was derived on** (`preprocess.py:954` derives on `plain`, `:964` tracks on `sharp`); the owed widening of `voice.f0_search_range_hz`'s 600 Hz ceiling against the CPPS band's 700 Hz; every branch capability; the SCREEN merge; and the contract's nine pieces.
 
 **One thing this plan deliberately does not resolve.** `branch-voice.md` V3 records that narrowing buys octave-error robustness on stationary material and is wrong on a glide, where the derived ceiling is set by how high the speaker went, making V3's "did F0 reach the derived limit" flag partly circular. This plan implements the narrowing and leaves that open.
 
@@ -840,8 +840,10 @@ guard whose name generalises over "measurements that read `enhanced`" has to acc
 **This task survives the withdrawal of Task 5, on a different premise — and the new premise was
 checked, not assumed.** It used to read: the stream switch made the stored Praat scalars stale, so the
 driver needs a way not to skip them. Task 5 is withdrawn and the stream does not change. **What makes them
-stale is Task 1.** Every Praat scalar in all 62,547 stores was computed under the **sex-typed bin** that
-Task 1 replaced, and re-deriving them on the **unchanged `enhanced` stream** would change them.
+stale is Task 1.** Every Praat scalar in all **60,202** stores that carry one was computed under the
+**sex-typed bin** that Task 1 replaced, and re-deriving them on the **unchanged `enhanced` stream** would
+change them. (60,202, not 62,547: the `ppg_20260911` pass ran over a 60,202-row manifest and 2,376 stores
+carry no Praat measurement to be made stale — `specs/20260911-ppg-praat-batch/design.md`.)
 
 **How that was verified, so a later reader does not have to redo it:**
 
@@ -866,7 +868,7 @@ the one replacing it are **both** `signal="enhanced"`. What separates them is th
 
 **`--force` is still needed, and it is Praat-only.** The driver skips any recording whose store already
 holds both measurements (`:187-190`, with a second `pending()` check at `:235-237`), so a re-run changes
-nothing on all 62,547 stores. The *shape* of the override and the *reason* for the supersession:
+nothing on the 60,202 stores the manifest names. The *shape* of the override and the *reason* for the supersession:
 
 - **`pending()` keeps its two-flag return** (`:118-127`) — the unforced path still needs both, and
   `ppg_pending` still gates the PPG block at `:192`. **Only the override is one-sided:**
@@ -894,7 +896,8 @@ nothing on all 62,547 stores. The *shape* of the override and the *reason* for t
 
 **One operational fact the withdrawal does not remove, now decided.** `main()` refuses with exit 2 when the
 ppgs venv is absent (`:337-345`), unconditionally — including on a `--force` pass that, on this corpus, will
-do no PPG work at all. **The gate stays unconditional, and the runbook says so.** An earlier version of this
+do no PPG work at all — a property of the manifest's 60,202 stores, every one of which already holds a
+posteriorgram, and not of the 2,376 it omits. **The gate stays unconditional, and the runbook says so.** An earlier version of this
 paragraph offered "make the check conditional on `force`" as an equally available second option. It is not
 available: it is unsafe, and the flag's name is what hides that.
 
@@ -1149,8 +1152,8 @@ Measured: an exponential 100→400 Hz glide yields **`[72.8, 600.0]`** against p
 
 - [x] **Step 6: Record the one corpus pass this plan creates but does not run, and the two it no longer owes**
 
-- `extend_ppg_praat.py --force` over the corpus re-derives **the forty-five Praat scalars** — forty descriptors plus the five range keys Task 8 added — in all 62,547 stores, on the unchanged `enhanced` stream, under the per-recording range Task 1 introduced. With step 1b withdrawn it runs no model in a subprocess venv, so it is **CPU-only and not GPU-bearing** — size it against a Praat-only batch, not against the original `ppg_20260911` run.
-- **It still requires a provisioned ppgs venv on the host, and Task 7 deliberately left that gate unconditional.** This step said "unless Task 7 makes that check conditional"; Task 7 landed and did not, because `--force` is one-sided — it overrides `praat_pending` alone, so a store *missing* its posteriorgram still takes the PPG path on a forced pass and reaches `ppg_input`. That no store in `ppg_20260911` does is a property of that corpus, not of the flag. `extend_ppg_praat_test.py:530-540` (`test_the_venv_gate_holds_on_a_forced_pass`) pins it.
+- `extend_ppg_praat.py --force` re-derives **the forty-five Praat scalars** — forty descriptors plus the five range keys Task 8 added — in the **60,202** stores the `ppg_20260911` manifest names, on the unchanged `enhanced` stream, under the per-recording range Task 1 introduced. **It is not a pass over the corpus**: 2,376 of the 62,578 stores hold neither measurement, and giving them one is a separate, GPU-bearing first derivation (`specs/20260911-ppg-praat-batch/design.md`, *The manifest is not the corpus*). With step 1b withdrawn it runs no model in a subprocess venv, so it is **CPU-only and not GPU-bearing** — size it against a Praat-only batch, not against the original `ppg_20260911` run.
+- **It still requires a provisioned ppgs venv on the host, and Task 7 deliberately left that gate unconditional.** This step said "unless Task 7 makes that check conditional"; Task 7 landed and did not, because `--force` is one-sided — it overrides `praat_pending` alone, so a store *missing* its posteriorgram still takes the PPG path on a forced pass and reaches `ppg_input`. That no store in `ppg_20260911` does is a property of that **manifest** — the 2,376 stores it omits hold no posteriorgram and would take the PPG path — not of the flag. `extend_ppg_praat_test.py:530-540` (`test_the_venv_gate_holds_on_a_forced_pass`) pins it.
 - **A forced pass converges rather than doubling the store.** Task 7 established that `ProvStore` entity ids are content-addressed over `(run_id, prov_type, extent, attributes)` (`utils/prov_store.py:297`), so a re-derivation reproducing a stored reading writes the *same* id and appends nothing. It supersedes only where the reading actually changed — which is what a reader sizing the pass needs to know.
 - **No routing count is owed, and this is the consequence most worth writing down.** `ppg.segment_rate_per_s` and `ppg.silent_fraction` are unchanged, so neither the DDK before-and-after gate count nor the `PpgsPosteriorgramUnavailable` rate comparison is needed. Step 1b would also have moved **`airway.ppg_silent_fraction`**, an AIRWAY gate reading the same posteriorgram, which it never counted — so it was changing two branches' routing while owing a count for one. And **no configured gate reads a Praat scalar**, so the pass this plan does run changes no routing at all.
 - ~~**Attribution.**~~ **Dropped 2026-09-14 with Task 5.** It warned that landing Tasks 1 and 5 together would move the forty scalars for two reasons at once and proposed a two-arm sample re-derivation to separate them. With Task 5 withdrawn there is **one** reason — the F0 range — so the re-derivation is already single-armed and attributable, and no separating pass is owed.

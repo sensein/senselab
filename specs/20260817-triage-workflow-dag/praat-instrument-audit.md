@@ -129,8 +129,13 @@ each other and of the stream, and none of them is waiting on anything.
 
 ### Step 0 — largest single gain, and it is *not* free: stop publishing the stale scalars
 
-**62,547 stores already carry 40 Praat scalars** computed through the sex-binned range finding 1
-records. Step 2 changed what a new run computes and nothing about those.
+**60,202 stores already carry 40 Praat scalars** computed through the sex-binned range finding 1
+records. Step 2 changed what a new run computes and nothing about those. **The count is 60,202 and
+not 62,547**: the `ppg_20260911` pass that wrote every one of these measurements ran over a
+60,202-row manifest, and 2,376 of the 62,578 stores on disk hold no Praat measurement at all
+([`../20260911-ppg-praat-batch/design.md`](../20260911-ppg-praat-batch/design.md), *The manifest is
+not the corpus*). Step 0's scope is the 60,202; the 2,376 need a first derivation, not a
+withdrawal.
 Four — `mean_cpp`, `std_dev_cpp`, jitter, shimmer — carry names that will be read against published
 norms, and `range_ratio_intensity_db` is dimensionally invalid (finding 6) and already exported.
 
@@ -152,7 +157,7 @@ the extend driver already does — not one that keys on the stream name. CLAUDE.
 withdraw-versus-flag question this document previously left open: pre-alpha replaces outright.
 
 **An earlier version also labelled this step "no code", which was wrong and would get it skipped as
-trivial.** Withdrawing or flagging 40 scalars across 62,547 finished stores is an extend driver. The
+trivial.** Withdrawing or flagging 40 scalars across 60,202 finished stores is an extend driver. The
 ordering here is by *risk*, not by effort: step 0 comes first because leaving norm-bearing values
 addressable is the most damaging state, not because it is the cheapest.
 
@@ -209,8 +214,11 @@ and none of them is now waiting on anything.
   invalidates nothing in these stores. Re-derivation of anything in the corpus is an extend driver.
 - **`scripts/extend_ppg_praat.py` skips any recording whose store already holds both measurements**
   (`extend_ppg_praat.py:26`, and the skip itself at `:218-221` with a second check at `:268-272`), so
-  a re-run over the corpus changes nothing on all 62,547 stores without a withdrawal pass or a force
-  flag. That still matters — see
+  a re-run over the manifest changes nothing on the 60,202 stores it names without a withdrawal pass
+  or a force flag. On the 2,376 stores the manifest omits a re-run is not a no-op at all — it is a
+  first derivation, and a GPU-bearing one
+  ([`../20260911-ppg-praat-batch/design.md`](../20260911-ppg-praat-batch/design.md)). That still
+  matters — see
   [`../20260914-f0-range-and-measurement-streams/plan.md`](../20260914-f0-range-and-measurement-streams/plan.md)
   Task 7, which survives this withdrawal on the F0-range grounds rather than on the stream.
 
@@ -294,7 +302,8 @@ is not. `cepstral_peak_prominence_mean` is still cut at `> 4` dB (finding 2), st
 intervals the vuv mean period inflates by ~70% (finding 3); `range_ratio_intensity_db` is still
 `max_dB / min_dB` and still dimensionally invalid (finding 6); twelve of thirteen functions still
 return no support count (finding 5); the spectral moments are still capped at 5 kHz (finding 7); and
-**step 0's withholding has not happened**, so all 40 scalars in all 62,547 stores remain addressable.
+**step 0's withholding has not happened**, so all 40 scalars in all 60,202 stores that carry them
+remain addressable.
 Step 2 closed **finding 1** and moved **finding 8**'s pulse exclusion onto a declared bound — it did
 not close finding 8, whose period-doubling incapacity is structural and untouched. It closed nothing
 else, and "we fixed the range" must not be read as "the numbers are now good."
@@ -435,11 +444,19 @@ thing a reader of these values has to know, and none of them reads as closed.**
   null today, so nothing fires.
 
 **The corpus pass step 2 creates, does not run, and does not owe a routing count.**
-`scripts/extend_ppg_praat.py --force` over the corpus re-derives **the Praat block only** — now
-**forty-five** scalars per store, the forty descriptors plus the five range keys Task 8 added
-(`praat_parselmouth.py:1494`, seeding `feature_data` from `extract_pitch_values`' return;
-`preprocess.py:861-863`) — in all 62,547 stores, on the unchanged `enhanced` stream, under the
-per-recording range step 2 introduced. Four things a reader sizing that pass needs:
+`scripts/extend_ppg_praat.py --force` over the `ppg_20260911` manifest re-derives **the Praat block
+only** — now **forty-five** scalars per store, the forty descriptors plus the five range keys Task 8
+added (`praat_parselmouth.py:1494`, seeding `feature_data` from `extract_pitch_values`' return;
+`preprocess.py:861-863`) — in the **60,202** stores that manifest names, on the unchanged `enhanced`
+stream, under the per-recording range step 2 introduced. Five things a reader sizing that pass
+needs:
+
+- **It does not cover the corpus.** 2,376 of the 62,578 stores on disk are absent from that manifest
+  and hold neither `praat_features` nor `ppg_posteriorgram`
+  ([`../20260911-ppg-praat-batch/design.md`](../20260911-ppg-praat-batch/design.md), *The manifest is
+  not the corpus*). Giving them these measurements is a **first derivation and GPU-bearing**, because
+  none of them holds a posteriorgram to skip on; it is a separate pass and must not be folded into
+  this one, which is sized as CPU-only.
 
 - **It is CPU-only.** With step 1b withdrawn the posteriorgram is never re-derived, forced or not
   (`extend_ppg_praat.py:29`), so the pass runs no model in a subprocess venv. Size it against a
@@ -449,8 +466,9 @@ per-recording range step 2 introduced. Four things a reader sizing that pass nee
   `src/tests/scripts/extend_ppg_praat_test.py:530-540`). `--force` is one-sided: it overrides
   `praat_pending` alone (`:218`, `:269`), so a store that is *missing* its posteriorgram still takes
   the PPG path on a forced pass and still calls ppgs. That **zero** stores do so is a property of the
-  `ppg_20260911` corpus, not of the flag, and making the gate conditional on `--force` would let such
-  a store run with no venv provisioned.
+  `ppg_20260911` **manifest**, not of the flag — the 2,376 stores it omits are exactly the stores
+  that would make it false — and making the gate conditional on `--force` would let such a store run
+  with no venv provisioned.
 - **The store converges rather than doubling.** `ProvStore` entity ids are content-addressed over
   `(run_id, prov_type, extent, attributes)` (`../../src/senselab/utils/prov_store.py:297`), so a
   re-derivation that reproduces a stored reading writes the *same* id and appends nothing. A forced
@@ -711,7 +729,7 @@ the same recording. They no longer can: both call `derive_f0_range` on `plain` w
 
 **Read this finding in the past tense.** The bin is gone from the tree: `extract_pitch_values` now
 derives the range per recording and there is no line to cite for the code described below. It stays
-because it is the reason step 2 exists, because **every Praat scalar already written into 62,547
+because it is the reason step 2 exists, because **every Praat scalar already written into 60,202
 stores was computed under it** (step 0), and because a reader meeting those artifacts needs the
 mechanism.
 
@@ -1134,8 +1152,10 @@ with step 1 and changed nothing here.
   the reason it is one-sided, and `ProvStore`'s content-addressed entity ids.
 - **Task 8** put the derived floor and ceiling on the measurement, so **the Praat scalar dict is 45
   keys, not 40**, and every statement in this document counting a *current* run's scalars was
-  re-counted. The four that still say 40 are the ones about the **62,547 stores already written**
-  (step 0, and finding 0's retracted-mechanism paragraphs), which carry 40 and always will.
+  re-counted. The four that still say 40 are the ones about the **stores already written**
+  (step 0, and finding 0's retracted-mechanism paragraphs), which carry 40 and always will. Those
+  four said 62,547 until 2026-09-14 and now say **60,202**, which is what the `ppg_20260911` manifest
+  covered.
 - **Task 9** corrected the glide entry against a measurement, recorded step 2's three open
   consequences, and wrote the not-publishable headline into step 2. Steps 2 and 3 of Task 9 were
   dropped with audit step 1: each would have re-entered the retracted FRCRN mechanism as a
