@@ -1391,15 +1391,30 @@ third is a real cost this document should not soften:
   like any other. VERDICT orders its reasons through `GRAPH_ORDER`, which does not name DDK, so the
   reason sorts last rather than being dropped.
 
-**That flag is the honest outcome, and it is scoped.** It fires on recordings that carry
-syllable-repetition content and on no others, which is exactly the property the rejected alternative
-lacked. The alternative, recorded here because it looks obvious: adding `"ddk": "DDK"` to the old
+**That flag is the honest outcome, and it is scoped.** It fires on recordings that the two gates
+select, which is exactly the property the rejected alternative lacked — though the gates and
+"syllable-repetition content" are not the same set, measured below. The alternative, recorded here
+because it looks obvious: adding `"ddk": "DDK"` to the old
 `BRANCH_FOR_KIND`. TAXONOMY wrote no `ddk` kind line, `routing` read a missing line as `uncertain`,
 and `uncertain` ran the branch — so DDK would have been selected on *every* recording, flagged every
 recording, and entered the fold carrying a `ddk` kind whose state was not `absent`, which alone would
 have stopped the `acoustically_empty` discard from ever firing. A branch with no node must not
 acquire a default that asserts presence, and must not acquire one asserting absence without evidence
 either. Routing it on its own measured gates does neither.
+
+**Measured 2026-09-15, and the scope claim needs qualifying in both directions.** On 13 b2ai v3.1
+recordings DDK routed **5**: the two real DDK recordings via `ddk.ppg_segment_rate_per_s`, and three
+pure-speech recordings via `ddk.lexical_repetition` alone, on ordinary function-word repetition. The
+acoustic gate made no error on that sample; the unswept lexical gate made every one. So the flag is
+scoped to what the gates select and not to what the recordings contain — which is far better than the
+alternative's "every recording" and not the same thing as "syllable-repetition content and no others".
+**And it changed no file's outcome**: all five already carried another flag, so the missing node cost
+that run a flag *reason* on 38% of it and a flagged *file* on none of it. That is the difference
+between an artifact and a defect, and it does not weaken the argument for building the node so much as
+relocate it: the case rests on the branch having a subject, not on the flag count.
+[`branch-ddk.md`](branch-ddk.md) *The state of this branch* carries the reading;
+[`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md) § *`ddk.lexical_repetition` is lexical*
+carries the gate values.
 
 One artifact of the half-state is still visible: `report.py` builds `_EVIDENCE_BRANCHES = (*BRANCHES,
 "REDACT")`, so `_branch_evidence` emits an always-empty `"DDK"` key in the report JSON. Its

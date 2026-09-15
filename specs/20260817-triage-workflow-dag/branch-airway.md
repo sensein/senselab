@@ -51,6 +51,20 @@ graph by a factor of 24, and it bears directly on the contract's finding that `a
 structurally unable to fire on the class it names once covering-window YAMNet labels are ineligible.
 Any capability here must treat an unavailable measurement as an absence, never as a negative.
 
+**Watched on 13 real recordings, 2026-09-15, that unavailability is what the number looks like from
+inside a run.** `airway.cough` was UNAVAILABLE on **12 of 13**, and on the one recording where its
+feature existed — five deliberate coughs — it read **43.10 dB** against the **50.0 dB** cut and stayed
+silent. So the gate did not fire on either cough recording in the sample. AIRWAY's route state read
+`unavailable` rather than `declined` on **4 of 13**, leaving the branch effectively ungated on nearly
+a third of the sample. The two cough recordings reached AIRWAY by unrelated gates:
+`airway.ppg_silent_fraction` at **0.949** on a 6 s file that is mostly silence with five bursts — a
+*silence* measure — and `airway.bracketed_event` at **1**, the recogniser having written `[cough]`
+into a transcript that is literally `'[cough]'`. Neither is the cough detector. The 43.10 dB reading
+is one recording and licenses no new value; what it is evidence for is that the cut
+[`family-taxonomy-ruleset.md:141-144`](family-taxonomy-ruleset.md) records as *carried over unswept*
+is too high for this population. Values in
+[`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § E.
+
 ## Capabilities
 
 ### A1 — Label an airway event (**built**)

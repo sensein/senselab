@@ -14,6 +14,18 @@ shared rules are in [`branch-conventions.md`](branch-conventions.md); owed groun
 did was retired on 2026-09-04, and the module's only `prov_type="span"` write (`voice.py:333-346`)
 sits downstream of the no-span return at `:235-264`, which every recording takes.
 
+**Measured on real material, 2026-09-15.** All **6** VOICE-routed recordings of a 13-recording b2ai
+v3.1 run returned `Outcome.FAIL` with the retired-detector reason (`voice.py:235-239`) — including the
+MPT recording carrying **15.89 s** of held phonation and the glide recording carrying **12.27 s**,
+both on `voice.sustained` against a 3.0 s cut. VERDICT converts each to
+`mismatch: routing routed VOICE, it found no subject` (`vocabulary.py:393-397`), making this **the
+largest single flag source in the run, 6 of 13**, and the sole reason the glide recording flags at
+all. `default.yaml:181` still ships `voice.hint_tags` marked *"unread as of v2"*, so the branch also
+carries a dead second copy of the hint vocabulary while having no subject to apply it to. On that
+evidence this is the highest-value next piece of work in the graph: it is the only finding of that run
+blocked on nothing but implementation. Values in
+[`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § D.
+
 **And VOICE is the worked example of what the contract forbids.** `voice.py:333-346` mints a
 *second* span from an input span, re-keyed by period-aligned onset and carrying `onset_kind`. That is
 the re-minting the contract replaces with a `refine` assertion, and it is why `report.py:291-308`

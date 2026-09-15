@@ -128,6 +128,31 @@ independently could disagree whenever the config or the hint handed to them diff
 A hint never resolves a subject, never suppresses a branch's conclusion, and never turns a `flag`
 into a `pass`. Its one power on this axis is to prevent a `discard` (above) and to name a mismatch.
 
+### `hints` states a falsehood when `hint_branch_map` is null — **owed a code change**
+
+With the packaged `routing.hint_branch_map: null` every declared tag is unmapped, so no decision
+carries `hint_tags` and `_hint_claims` returns `{}` rather than `None` (`nodes/verdict.py:182-184`).
+The `hints` table is then built (`vocabulary.py:350-357`) through `_hint_reading(claimed=False, …)`
+(`vocabulary.py:279-291`), which writes `found_unclaimed` or `no_claim` for **every** branch.
+
+Measured on four runs handed `may_contain: [cough, airway]`: the verdict reads
+**`AIRWAY: found_unclaimed`** — an assertion that nobody claimed AIRWAY, on a recording whose
+declaration claimed it. It is not confined to the store. It reaches `summary.json`'s
+`recording.declared_hints` (`report.py:1097`) and the PDF header (`report.py:1426-1427`, rendered at
+`:1467`), verified in a released summary.
+
+`UNREAD_DECLARATION` (`vocabulary.py:385-386`) exists for exactly this case and does not fire:
+`_hint_claims` returns `None` only when a hint was supplied and **no decision survived**
+(`nodes/verdict.py:182`), not when the decisions survived and could resolve nothing.
+
+**This is a defect, not an owed derivation, and the fix is blocked on a vocabulary decision.** The
+product below pins four `hints` tokens; what the field should say when no map is configured — a fifth
+token such as `unresolvable`, or `hints: {}` plus the existing flag — is the owner's call and not a
+measurement. The upstream causes are registered at
+[`../20260913-branch-contract-and-hints/design.md:288-311`](../20260913-branch-contract-and-hints/design.md);
+this consequence on the verdict table and the rendered report is registered here and in
+[`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § B.
+
 ## The triage fold
 
 Evaluated in order; the first that applies wins.
