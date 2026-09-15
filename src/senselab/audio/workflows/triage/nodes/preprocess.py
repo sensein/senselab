@@ -859,7 +859,8 @@ def _praat_scalar(value: Any) -> Any:  # noqa: ANN401 — Praat's own value, of 
 def praat_features(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
     """Praat/Parselmouth's whole-file feature set over the ``enhanced`` stream.
 
-    Every scalar is an attribute of the measurement: the set is forty numbers, small enough that a
+    Every scalar is an attribute of the measurement: forty-five numbers — the forty descriptors and
+    the five keys naming the F0 range they were measured under — small enough that a
     sidecar would only add an indirection. A non-finite scalar is recorded as null, JSON's only
     representation of a number Praat could not place.
 
