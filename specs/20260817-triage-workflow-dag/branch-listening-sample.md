@@ -156,9 +156,9 @@ Cheap, decisive, and nobody has done either.
 [`praat-instrument-audit.md`](praat-instrument-audit.md)'s **step 1** — the proposal to move the
 Praat scalars off the FRCRN-`enhanced` stream onto `plain`.
 
-**What is known.** `praat_features` measures all forty scalars on `enhanced`
-(`../../src/senselab/audio/workflows/triage/nodes/preprocess.py:883`, recorded as `signal="enhanced"`
-at `:904`). The argument that was raised against that — *FRCRN removes the aperiodic energy that is
+**What is known.** `praat_features` measures all forty-five scalars on `enhanced`
+(`../../src/senselab/audio/workflows/triage/nodes/preprocess.py:884`, recorded as `signal="enhanced"`
+at `:905`). The argument that was raised against that — *FRCRN removes the aperiodic energy that is
 the measurement* — is false: sibilants are broadband aperiodic energy and FRCRN preserves them, and
 the narrower fallback, that the low-level noise component inside voiced phonation is stripped even
 though sibilants survive, is false too — FRCRN preserves vocal texture very well. So the mechanism
