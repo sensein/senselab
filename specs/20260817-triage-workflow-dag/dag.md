@@ -522,6 +522,20 @@ decision, because `taxonomy.ruleset` has two posteriorgram gates and ROUTING eva
 the repetition triple) and `RecordingFeatures.praat` carries the scalars.
 `airway.ppg_silent_fraction` and `ddk.ppg_segment_rate_per_s` are the two gates.
 
+**A third `enhanced`-stream block is owed and does not exist: diarization.** `diariz` and `pyannote`
+appear nowhere in `nodes/preprocess.py`; the graph's only diarization is SPEECH's, inside that branch
+and scoped to the lexical hull. The owner's instruction is that PREPROCESS gain a block shaped like
+`ppg_posteriorgram` — pyannote over each `enhanced` file, writing one whole-file measurement of
+whether the recording holds one speaker or more, with an `extend_*` driver for finished runs — so
+that *"more than one speaker in this recording"* can be raised as a deviation by the node positioned
+to raise it (step 5e). **Owed a code change.** It is not in the block list above, because that list
+is read off the code; it is listed as owed in [`preprocess.md`](preprocess.md) § *Derivatives*.
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+§ *Whole-file diarization as a shared derivative* owes the same block and leaves **one thing open
+that the instruction settles differently**: it holds raw against enhanced undecided pending a pilot, since
+enhancement suppresses the quiet background talker the derivative exists to catch. The shape is not
+in dispute; the stream is, and the pilot is what decides it.
+
 **FIGURE draws neither.** `figure.py` mentions no posteriorgram and no Praat scalar anywhere. A PPG
 lane exists — `_ppg_panel` / `plot_range_with_ppg` in `audio/tasks/plotting/plotting.py`, whose bars
 were made full-height washed bands at `9e171ad0` precisely so that no bar edge could be read as a
@@ -1274,13 +1288,13 @@ exists, inert.
 
 Reads the per-span HeAR labels over the general span set — excluding any span carrying a `family`
 — and confirms or contests them (`airway.py:1`). Only clip spans carry a `family`
-(`preprocess.py:707`), so **the gap spans are in this evidence set**, not held out of it; step 3c's
+(`preprocess.py:705-709`), so **the gap spans are in this evidence set**, not held out of it; step 3c's
 "Background, and the gap spans" is where that lands. It also reads PREPROCESS's `silence` windows
-(`_inside_certified_silence`, `airway.py:26`; the windows are gathered at `:161-164` and the test
-applied per span at `:232`), the lexical consensus words, which exclude an already-transcribed span
-from the evidence set (`_is_transcribed`, `airway.py:64-79`, used `:216`, and again in the
-lexical-contamination check at `:306-336`), and YAMNet's whole-file per-window labels, which drive
-the confirm/contest verb (`_windows_covering`, `airway.py:46-61`, used `:258`). Config:
+(`_inside_certified_silence`, `airway.py:31-48`; the windows are gathered at `:200-201` and the test
+applied per span at `:269`), the lexical consensus words, which exclude an already-transcribed span
+from the evidence set (`_is_transcribed`, `airway.py:69-84`, used `:253`, and again in the
+lexical-contamination check at `:343-373`), and YAMNet's whole-file per-window labels, which drive
+the confirm/contest verb (`_windows_covering`, `airway.py:51-66`, used `:295`). Config:
 `airway.labels_of_interest` (`Cough`, `Breathe`), `taxonomy.classifier_ontology_profile` and
 `airway.corroboration_overrides` (which AudioSet classes corroborate which HeAR label — derived
 from the classifier-ontology profile, see
@@ -1288,6 +1302,9 @@ from the classifier-ontology profile, see
 `taxonomy.airway_ontology_roots`, and `airway.contest_labels` (**null**; when supplied it is
 refused, at branch execution, if it intersects the AudioSet airway evidence derived from those roots
 rather than the corroboration sets).
+
+**Its own DAG** — every step, what it reads by name and what it writes by verb — is below,
+§ *AIRWAY's own DAG*.
 
 *Goals served*: 2.
 
@@ -1309,6 +1326,8 @@ Null keys that disable paths here: `speech.second_diarizer`, `speech.separation_
 `speech.nontarget.*` legs (read via an f-string at `speech.py:1058`). It used to `require`
 `speech.word_gap_ms` as well, which is why this branch errored on every recording of the 112-file
 collection; that key is now deleted and **SPEECH passes under the packaged config**.
+
+**Its own DAG**, nine steps and their inputs, is below, § *SPEECH's own DAG*.
 
 *Goals served*: 2 and 3.
 
@@ -1383,6 +1402,9 @@ the owner's decision was to hold them here rather than gate the router on them. 
 does not import `routing_analysis`, and what the branch would *conclude* from a trajectory is
 decided nowhere. Until it is, "held for VOICE" means held, not used.
 
+**Its own DAG**, with the reached path and the unreached one drawn apart, is below,
+§ *VOICE's own DAG*.
+
 *Goals served*: none of the three; it was never one of them.
 
 ### 5d. DDK — routed, unbuilt
@@ -1444,6 +1466,9 @@ pointed, and stage 2 took it: ROUTING reads routed branches, so DDK needs no kin
 acoustic syllable-repetition evidence `ddk.ppg_segment_rate_per_s` reads is a routing feature; what a
 branch would *conclude* about a rate is decided nowhere. The measurement behind it is 855
 declared-DDK recordings that route somewhere and never to DDK, of which the cut at 10 recovers 351.
+
+**The path a routed DDK actually takes** — two gates, a decision, a lookup that finds nothing, a
+fold reason — is drawn below, § *DDK's own DAG*.
 
 *Goals served*: none yet.
 
@@ -1520,6 +1545,39 @@ alone (`preprocess.py:1037`, `:1213`), and every later reader takes it off the m
 (`default.yaml:273`, "PREPROCESS withdraws on it, QUALITY audits on it"). Goal 1 is the goal this
 node exists for, and it remains the goal with the widest gap between what is measured and what
 decides.
+
+**Multiple voices in one recording is QUALITY's question, and what it lacks is the input, not the
+placement.** The **placement** is already right, for the reason the node's own docstring gives: it
+runs *"After every branch, on every path PREPROCESS completed — whatever routing selected ... so
+every branch has already written whatever it was going to write"* (`quality.py:3-6`), and it already
+reads PREPROCESS's spans together with the measurement behind them — the clip-consistency check is
+the worked example, *"the spans say what was asserted, the measurement says what the samples were"*
+(`:10-12`). **The missing piece is the input.** There is **no diarization derivative**: `diariz` and
+`pyannote` appear nowhere in `nodes/preprocess.py`, and the only diarization in the graph is
+SPEECH's, scoped to `[first word start, last word end]`, so a second voice before the participant
+starts, after they stop, or in a pause is invisible to it
+([`branch-speech.md`](branch-speech.md) § S5). PREPROCESS is owed an extension shaped exactly like
+`ppg_posteriorgram`: a block over the `enhanced` stream that runs pyannote and writes one whole-file
+diarization measurement — establishing whether the recording holds one speaker or more — with an
+`extend_*` driver for finished runs.
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+§ *Whole-file diarization as a shared derivative* already owes that block and holds the **stream**
+choice undecided pending a pilot, raw against enhanced,
+because enhancement suppresses a quiet background talker; the instruction names `enhanced` and the
+two are not reconciled. It is recorded as **owed a code change** in step 2's derivative
+list and in [`preprocess.md`](preprocess.md) § *Derivatives*. With it, *"more than one speaker in
+this recording"* is a deviation QUALITY can raise; without it nothing in the graph states that fact
+at the file level.
+
+**The division, plainly: PREPROCESS measures, the branches refine, QUALITY judges.** Diarization is
+a shared derivative, so it is measured once where the waveform is in hand; each branch refines and
+reviews its own task-specific spans; and QUALITY, running after all of them, judges multi-voice
+against the refined spans. **A speaker *identity* question stays with SPEECH** — whose voice this is,
+against an enrollment — by the owner's earlier decision; *how many voices are in this recording* is a
+recording-level fact, which is the kind QUALITY is placed to judge.
+[`branch-quality.md`](branch-quality.md) § Q9 carries the capability.
+
+**Its own DAG**, and what it reads without ever opening audio, is below, § *QUALITY's own DAG*.
 
 *Goals served*: 1, in intent. One internal-consistency check reached; none of the four SQUIM or
 disruption tolerances.
@@ -1684,12 +1742,262 @@ glossary: `extend.UNAVAILABLE` and `extend.attempt_derivation`. Before it, each 
 own list of words to treat as determinate, and that per-case form is what let one derivation's
 absence read as the whole row's failure.
 
+## Inside each branch — the DAG one level down
+
+The call graph above stops at the branch boundary: it shows what routes a branch and where its
+verdict goes. What follows is the level below that boundary, one subsection per branch, each read off
+that branch's own module. **None of it is a second design.** Where a `branch-*.md` already argues a
+point — a capability's specification, a measurement, a change it is owed — this says what the flow
+*is* and points there; what a reader will not find below is every capability's argument, which is why
+each subsection names the document that carries it.
+
+Four things hold for all five and are stated once rather than five times:
+
+- **No branch reads its own `branch_decision`.** The runner reads it and either calls the branch or
+  records it `SKIPPED` (`run.py:302-309`). A branch's evidence is the store PREPROCESS left; ROUTING
+  decides only *whether* it is called. Nothing in `airway.py`, `speech.py`, `voice.py` or
+  `quality.py` reads `ruleset_routing`.
+- **No branch reads another branch's output.** SPEECH is the one that comes closest and it does not:
+  the prior spans it collects exclude anything SPEECH itself authored and are used for `used` and
+  `wasDerivedFrom` edges only (`speech.py:578-580`, `:894-896`).
+- **A branch's subject is a family test over the live spans**, and the three tests are disjoint:
+  `family is None` (AIRWAY — the general set *and* the gap spans, since a gap span carries no
+  `family` key, `preprocess.py:1588-1596`), `family == "phonation"` (VOICE), `family == "clip"` with
+  a matching `signal` (QUALITY). SPEECH tests no family: it mints `family: "speech"` from the
+  consensus word timings. Clip spans carry `family: "clip"` (`preprocess.py:705-709`), which is what
+  holds them out of AIRWAY's set.
+- **`hint` reaches every branch and decides nothing in any of them.** AIRWAY never reads it and
+  QUALITY deletes it (`quality.py:238`); SPEECH reads `target_speaker` only to flag that it is *not*
+  read as evidence (`speech.py:536-540`); VOICE reads `metadata["population"]` and
+  `metadata["task"]`, and both land on null config keys, so both paths fall through to the derived
+  range and to `not_evaluated`.
+
+### AIRWAY's own DAG
+
+```mermaid
+graph TD
+  SPANS["span: family is None<br/>(general + gap; clip held out)"] --> CLASSIFY
+  SPANHEAR["span_hear per-span windows<br/>(PREPROCESS)"] --> CLASSIFY
+  WORDS["consensus lexical words"] -->|"a transcribed span is skipped"| CLASSIFY
+  SILENCE["silence graded windows"] -->|"in_certified_silence"| CLASSIFY
+  CLASSIFY["1 classify<br/>one label assertion per span x label"] --> CONFIRM
+  YAMNET["yamnet_window whole-file windows<br/>(PREPROCESS)"] -->|"by overlap with the HeAR window"| CONFIRM
+  CONFIRM["2 confirm<br/>confirm / contest / abstain"] --> LEXICAL
+  WORDS --> LEXICAL
+  LEXICAL["3 lexical<br/>hull of the labelled spans"] --> VERDICT_A
+  VERDICT_A["4 verdict<br/>labelled_n, by_label, contested_n, merged_n, flags"]
+```
+
+**What it reads.** PREPROCESS's `span_hear` measurements keyed by `span_id` (`airway.py:242-245`),
+its whole-file `yamnet_window` measurements by overlap (`_windows_covering`, `:51-66`, used `:295`),
+the `silence` measurement's graded windows (`:200-201`, applied per span at `:269`), the
+`consensus_transcript`'s lexical `word` entities (`_is_transcribed`, `:69-84`, used `:253`), and
+`spans_no_contrast` on the no-span path (`:204`). **No TAXONOMY product**: it reads neither a
+`*_label_summary` nor `consensus_taxonomy`. Its ROUTING decision is `routed` when any of
+`airway.breath`, `airway.cough`, `airway.bracketed_event` or `airway.ppg_silent_fraction` fired.
+**It runs no model** — the HeAR and YAMNet passes both happened in PREPROCESS.
+
+**Its steps, in the order the code performs them.**
+
+1. **classify** (`airway.py:231-280`) — for each span that no lexical word overlaps, one `label`
+   assertion per `airway.labels_of_interest` label its own `span_hear` windows carry.
+2. **confirm** (`:284-341`) — for each label assertion, the YAMNet windows overlapping its HeAR
+   window are read: a label in that HeAR label's AudioSet corroboration closure gives `confirm`, one
+   in `airway.contest_labels` gives `contest`, and neither gives `abstain`.
+3. **lexical** (`:343-373`) — the hull of the labelled spans becomes an `interval`, and a lexical
+   word overlapping it produces one `flag` assertion.
+4. **outcome** (`:375-400`) — `FAIL` on no label of interest, `FLAG` on any accumulated flag,
+   `PASS` otherwise.
+
+**What it writes.** Assertions `label` (`:272`), `confirm` / `contest` (`:306-316`), `abstain`
+(`:328-337`) and `flag` with `reason: lexical_contamination` (`:365-369`); one `interval` entity
+named `airway_labelled_interval` (`:353-355`); **no measurement and no sidecar**; a verdict carrying
+`{labelled_n, by_label, contested_n, merged_n, flags}`. It mints no span and writes none of
+`refine`, `trim` or `propose`; `confirm` and `abstain` are outside the contract's five verbs, and
+[`branch-airway.md`](branch-airway.md) § *What exists today* carries the owed `confirm` → `label`
+migration.
+
+**State: implemented and running.** Its per-capability status (A1–A7), the off-task flag's three
+owed changes, the selector widening A5 would need, and the 56,505-of-62,547 `unavailable` gate
+figure are in [`branch-airway.md`](branch-airway.md).
+
+### SPEECH's own DAG
+
+```mermaid
+graph TD
+  CONS["consensus_transcript + word entities<br/>(PREPROCESS)"] --> S1
+  S1["1 transcript<br/>read, never re-fused"] --> S2
+  S2["2 spans<br/>lexical word timings grouped"] --> S3
+  YW["yamnet_windows fold + yamnet_window<br/>(PREPROCESS)"] --> S3
+  S3["3 corroborate<br/>classifier vote + SQUIM vote per span"] --> S4
+  S4["4 diarize<br/>pyannote over the lexical hull"] --> S5
+  S5["5 separate<br/>only when a backend is named"] --> S6
+  ENR["enrollment<br/>(caller-supplied, not a store read)"] --> S6
+  S6["6 identify<br/>word to speaker, speaker to target"] --> S7
+  ASR["per-source asr_hypothesis transcripts"] --> S7
+  S7["7 pii<br/>one scan over consensus + each source"] --> S8
+  REC["recording stream<br/>(unconditioned)"] --> S8
+  S8["8 quality<br/>SQUIM per span, disruptions per span"] --> S9
+  LVL["level measurement"] --> S9
+  S9["9 proximity<br/>the non-target axis"] --> VERDICT_S
+  VERDICT_S["verdict<br/>speaker_count, pii, flags, ..."]
+  S7 -.->|"live PII found"| REDACT_S["REDACT (run.py:311)"]
+```
+
+**What it reads.** The `consensus_transcript` measurement and the live `word` entities it lists
+(`speech.py:518-527`), each source's own `asr_hypothesis` transcript (`_hypotheses`, `:256`), the
+`yamnet_windows` fold and the per-window `yamnet_window` measurements (`:581-588`), the `level`
+measurement for the proximity reference (`:1040-1043`), the `plain` stream and the unconditioned
+`recording` stream (`:511-512`), and the prior spans of any family for derivation edges only. **No
+TAXONOMY product**: `taxonomy.speech_labels` is a config key, not TAXONOMY's output, and
+`speech.py:589` is its one remaining reader. Its ROUTING decision is `routed` when `speech.lexical`
+fired; `speech.transcript_agreement` is a flag gate and annotates without routing. Its spans are
+**its own**: it reads no family and derives `family: "speech"` spans from the lexical word timings.
+
+**Its steps** are the nine the module names, in design order: transcript (`:517`), spans (`:571`),
+corroborate (`:577`), diarize (`:641`), separate (`:704`), identify (`:774`), PII (`:900`), quality
+(`:991`), proximity (`:1036`). Three are conditional and two of those never fire under the packaged
+config: the second diarizer only when pyannote's count is not 1 **and** `speech.second_diarizer` is
+set (null), separation only when `speech.separation_backend` names a backend (null), and the
+enrollment comparison only when a caller supplies an enrollment.
+
+**What it writes.** `span` entities of `family: "speech"`, one per grouped run of lexical words
+(`:879-891`) — the only branch that mints in its own family today; assertions `attribute`, one per
+word, speaker or `None` with a `straddles` / `unassigned` note (`:790-794`), and `label` with
+`label: "pii"` on every word an occurrence covers (`:958-962`); entities `interval`
+(`diarization_interval`), `speaker` per diarized segment, `enrollment`, `target_match` per diarized
+speaker, and `pii` per located occurrence; measurements `pii_scan`, and per span `squim`,
+`disruptions` and `proximity`; `separated_{index}` streams with their FLAC sidecars when separation
+runs. Its verdict carries `{speaker_count, diarization, words_n, speech_s, nontarget_speech_s, pii,
+second_diarizer, separation, flags}`. `attribute` is the highest-volume verb in the store and is not
+one of the contract's five ([`branch-speech.md`](branch-speech.md) § S6).
+
+**State: implemented and running**, and the only branch carrying two of the three goals. What it
+measures and does not conclude on — S3's stimulus conformance, S4's connected-speech measures, S5's
+hull-scoped speaker count, the null-gated non-target axis and the never-selected separation — is in
+[`branch-speech.md`](branch-speech.md).
+
+### VOICE's own DAG
+
+```mermaid
+graph TD
+  STREAM["plain stream"] --> REQ
+  HINTV["hint.metadata population / task"] --> REQ
+  REQ["_required (voice.py:193)<br/>F0 range derived; raises before any write"] --> SEL
+  SEL["span: family == 'phonation'"] --> EMPTY
+  EMPTY["no span, every recording<br/>FAIL naming the 2026-09-04 retirement"] --> VERDICT_V
+  SEL -.->|"unreached"| MEAS
+  TRACKS["phonation_tracks npz<br/>(PREPROCESS)"] -.-> MEAS
+  MEAS["measure per span<br/>HNR, F0, RMS sliced; period marks"] -.-> OUTV
+  OUTV["second span at the period onset<br/>+ period_marks + voice_tracks.npz"] -.-> VERDICT_V
+  VERDICT_V["verdict<br/>spans_n, phonation_s, longest_span_s, flags"]
+```
+
+**What it reads.** Every live `span` whose `family` is `phonation` (`voice.py:227-231`,
+`_PHONATION_FAMILY` at `:40`) — **and nothing proposes one**, so the subject is empty on every
+recording. On the unreached path it reads the `phonation_tracks` measurement and its npz
+(`:275-279`, a `LookupError` when absent), and it takes `energy_envelope` and `silence` as `used`
+edges only (`:222-225`). **No TAXONOMY product is read**, though the retired proposer was
+TAXONOMY's: the module's own docstring still names TAXONOMY as the current proposer (`voice.py:3-4`)
+and the no-span `why` still says the branch is pending a rework onto `consensus_taxonomy`
+(`:236-239`) — both now contradicted by the owner's settled flow
+([`branch-voice.md`](branch-voice.md) § *VOICE refines and reviews spans*), and **owed a code
+change**. Its ROUTING decision is `routed` when `voice.sustained`, `voice.glide` or `voice.chant`
+fired, and the first of those reads the longest **`amplitude`** span — a span family VOICE's own
+selector does not admit.
+
+**Its steps.** Resolve the stream (`:192`); resolve every `require` key and the F0 range at entry
+(`:193`), which on a recording with no derivable pitch raises **before the first store write**;
+open the analysis activity (`:208-225`); select the phonation spans (`:227-234`); take the no-span
+`FAIL` (`:235-264`). The steps past that point — the whole-stream HNR/F0/RMS tracks sliced per span,
+the per-span period marks, the concatenated `voice_tracks.npz`, the task-duration reading — are
+intact and unreached.
+
+**What it writes today: a verdict and nothing else.** Every store write of substance sits downstream
+of the no-span return: a second `span` per input span, re-keyed to the period-aligned onset
+(`:333-346`), a `period_marks` measurement per span (`:352`), the `voice_tracks` measurement with
+`derivatives/voice_tracks.npz` (`:366-388`), and a verdict carrying `{spans_n, phonation_s,
+longest_span_s, longest_span_criterion, production, ambiguous_spans_n, marks_skipped_short_n,
+task_range, gate_interval, flags}`. It writes **no assertion at all** — no verb of the contract's
+five — and the re-mint at `:333-346` is precisely what the contract replaces with a `refine`.
+
+**State: implemented and failing on every recording**, and one state worse on pitchless audio, where
+`F0RangeUnavailable` leaves the node before any record exists and the runner renders the most
+informative absence in the pipeline as an operational fault (step 5c). The 6-of-13 measurement, the
+22 held detectors, and V1–V8 are in [`branch-voice.md`](branch-voice.md).
+
+### DDK's own DAG
+
+```mermaid
+graph TD
+  G1["ddk.lexical_repetition, at least 3<br/>(transcript_repeat; UNMEASURED)"] --> DEC
+  G2["ddk.ppg_segment_rate_per_s, at least 10<br/>(posteriorgram segments per second)"] --> DEC
+  DEC["branch_decision: will_run<br/>(routing.py:215-237)"] --> LOOKUP
+  LOOKUP["run._drive_branches looks DDK up<br/>and finds nothing (run.py:303-305)"] --> SKIP
+  SKIP["NodeOutcome SKIPPED, note NO_NODE<br/>no entity, no verdict"] --> FOLD
+  FOLD["fold: 'DDK was asked to run and never ran'<br/>(vocabulary.py:398-401)"]
+```
+
+**What it reads: nothing.** There is no `nodes/ddk.py`, no `DDK` in `GRAPH_ORDER` and no entry in
+the dispatch table (`run.py:297-301`); `DDK` is in `BRANCHES` (`vocabulary.py:31`) and in
+`taxonomy.ruleset`, which is the whole of its existence. **Its internal steps: none.** **What it
+writes: nothing** — not an entity, not a measurement, not a verdict. Its only record is the runner's
+`NodeOutcome(state=SKIPPED, note=NO_NODE)` and, downstream of that, one `FLAG` reason in the file
+fold.
+
+**State: no node**, and routed on content since ruleset stage 2. What a node would need, what the
+flag costs and the 5-of-13 / 22,363-of-corpus scope readings are in step 5d above and in
+[`branch-ddk.md`](branch-ddk.md), which also carries D1–D6 and the emit block a built branch would
+fill.
+
+### QUALITY's own DAG
+
+```mermaid
+graph TD
+  REC_Q["recording stream entity<br/>(named, never loaded)"] --> CHECK
+  CLIP["span: family == 'clip', signal == 'recording'<br/>(PREPROCESS)"] --> CHECK
+  AMP["clip_amplitude measurement<br/>levels per span id, unclipped peak, edge guard"] --> CHECK
+  MARGIN["quality.clip_contradiction_margin<br/>(read from the config, not the measurement)"] --> CHECK
+  CHECK["clip_consistency<br/>unclipped peak above level x (1 + margin)?"] --> ASSERT
+  ASSERT["contest assertion per contradicted span<br/>claim clip, reason clip_above_unclipped_sample"] --> VERDICT_Q
+  VERDS["live verdicts of every other node"] -->|"preceded_by"| VERDICT_Q
+  VERDICT_Q["verdict<br/>FLAG on a contradiction, else PASS with two reasons"]
+```
+
+**What it reads: stored records only.** The `recording` stream entity's id without loading it
+(`_stream_id`, `quality.py:133-153`), PREPROCESS's live `clip` spans over that signal (`clip_spans`,
+`:156-177`), the `clip_amplitude` measurement beside them (`:180-200`, a `LookupError` when clip
+spans exist without it), and the `node` of every other live verdict for `preceded_by` (`:115-130`).
+It reads **no PREPROCESS derivative that needs audio, no TAXONOMY product and no branch output as
+evidence** — what it takes from the branches is only the list of names that had concluded. It has no
+ROUTING decision at all: it is not in `BRANCHES`, has no entry in `branch_gates`, and the runner
+calls it unconditionally at `run.py:310`, after the branch loop at `:302`.
+
+**Its steps.** Read the margin from the config (`:239`, `require`); name the stream; read
+`preceded_by`; select the clip spans and their amplitudes (`:244-249`), taking the edge guard from
+the measurement rather than choosing one; open the `clip_consistency` activity (`:251-264`); compare
+each span's own level against the loudest unclipped sample (`:270-283`); write one assertion per
+contradiction; fold the outcome (`:304-317`).
+
+**What it writes.** One `assertion` per contradiction — `verb: contest`, `claim: clip`,
+`reason: clip_above_unclipped_sample`, derived from the span it contests (`:286-302`) — and its
+verdict. **No span, no measurement, no sidecar**, and it never invalidates PREPROCESS's reading. Its
+verdict is `FLAG` with the contradiction count, or `PASS` with one of two distinguishable reasons;
+on a fresh store the expected count is zero, because `_clip_spans` applies the same comparison at
+detection.
+
+**State: implemented and running**, one capability of the nine its document now lists. Q1 is built;
+Q2, Q3, Q5–Q9 are not and Q4 moved to the corpus-level node. Three of the unbuilt ones wait on a
+PREPROCESS derivative nothing writes yet — the bandwidth spectrum (Q2), the capture-chain signature
+(Q8), and the diarization the multi-voice question needs (Q9, and step 5e).
+[`branch-quality.md`](branch-quality.md) carries all of them.
+
 ## Summary: the three goals against what actually decides them
 
 | goal | measured | decides anything | where it stops |
 | --- | --- | --- | --- |
 | 1. bad quality | yes — SQUIM, level, `disruptions_file`, per-span SQUIM, forty Praat scalars, and now per-span and whole-file clip amplitudes | **one internal-consistency check, and nothing about the recording** | QUALITY exists and runs (step 5e), but what it decides is whether PREPROCESS's own clip spans contradict PREPROCESS's own amplitudes — a store-consistency audit whose expected count is zero. `quality.stoi_floor`, `quality.pesq_floor`, `quality.disruption_clipped_s_max` and `quality.disruption_dropout_s_max` are still null and still read by **nothing in `src/senselab`** |
-| 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | **yes, for which branch looks** | the ruleset of step 3c now decides which branch is asked, so a recording no longer reaches every branch by default. What it still does not decide is what SPEECH then concludes about a second speaker: `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design |
+| 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | **yes, for which branch looks** | the ruleset of step 3c now decides which branch is asked, so a recording no longer reaches every branch by default. What it still does not decide is what SPEECH then concludes about a second speaker: `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design. And the diarization named here is SPEECH's, over the lexical hull only: there is **no whole-file diarization derivative**, so *how many voices are in this recording* is stated nowhere, by any node (steps 2 and 5e) |
 | 3. PII | yes — the consensus transcript and each recognizer's own transcript are scanned in one call | **yes** | the one goal fully wired to a decision, and the only one whose acting node cannot run: `redaction.padding_ms` and `redaction.fill` are null and both `require`d, so REDACT raises. SPEECH marks PII; nothing releases a redacted product |
 
 ## What each run records about itself
