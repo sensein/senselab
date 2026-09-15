@@ -42,6 +42,11 @@ content and decides what runs on it cannot be checked against itself.
 compared against the branches' conclusions ([`verdict.md`](verdict.md)), but it never enters a
 measurement, because a measurement that reads the declaration cannot disagree with it.
 
+**Checked empirically, 2026-09-15.** Thirteen b2ai v3.1 recordings run twice, hinted and unhinted:
+`consensus_taxonomy`, all three label summaries and the node verdict are identical in all 13 pairs,
+and TAXONOMY returned `pass` on all 13. The docstring at `taxonomy.py:336` says the parameter is not
+read; this is the run that confirms nothing reaches it indirectly either.
+
 ## Product
 
 ```
@@ -57,6 +62,24 @@ Two file-scoped measurements, both with `extent=None`:
 | --- | --- |
 | `<classifier>_label_summary` | per label, peak, median and window count over the whole file, off the verbatim scores sidecar, so it needs no threshold. A classifier that never ran gets no summary — a missing summary and an all-zero one stay distinguishable |
 | `consensus_taxonomy` | the per-span labels of `span_yamnet` and `span_hear` consolidated into one file-level taxonomy, **one row per AudioSet ontology node** rather than per label string, each classifier's own spellings kept in `labels_by_classifier`. Disagreement is recorded, not resolved: a label only one vocabulary contains is not a vote against it |
+
+**The label summary's descending-peak order is not observable from the store.** `taxonomy.py:94` sorts
+`labels` by descending peak and the function's `Returns:` at `:68` states the ordering, but
+`ProvStore.write_jsonl` serialises every entity with `json.dumps(..., sort_keys=True)`
+(`prov_store.py:536`), so the persisted mapping is alphabetical. Harmless today — the only consumer
+re-sorts by `(peak, median)` before printing (`figure.py:646-650`) and `consensus_taxonomy.labels` is a
+list and keeps its rank — but the docstring promises a reader something a store cannot show, and the
+next consumer that trusts the order will be wrong on read-back rather than on write. Measured in
+[`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § H.
+
+**AST is summarised and never consolidated.** `SUMMARISED_CLASSIFIERS` holds three
+(`taxonomy.py:42`); `PER_SPAN_CLASSIFIERS` holds two, `{"yamnet": "span_yamnet", "hear": "span_hear"}`
+(`taxonomy.py:99`). So `ast_label_summary` is written on every run and `consensus_taxonomy` reads none
+of it — which the "What it reads" table above states structurally and which nothing states as a
+decision. Whether the exclusion is deliberate is **owed a decision**, not a measurement: it is
+consistent with [`benchmarks/taxonomy.md`](benchmarks/taxonomy.md)'s *"AST disagrees usefully, and
+shares a corpus"* and with [`benchmarks/open.md`](benchmarks/open.md)'s note that `classify_audios`
+softmaxes AST's multi-label scores, and neither of those is recorded as the reason.
 
 `voice.glide` and `voice.chant` — two of the ruleset's eleven gates — read `plain|yamnet`, which the
 feature reader populates from `yamnet_label_summary`. **That is why TAXONOMY runs before ROUTING and

@@ -22,6 +22,17 @@ version of this document implied it fires only on recordings with DDK content, u
 roughly threefold against numbers the same document carries below. Since this flag is the standing
 argument for building the node, the number matters.
 
+**And on a real run the flag adds a *reason* to 38% of the sample and a flagged *file* to none.**
+Measured 2026-09-15 on 13 b2ai v3.1 recordings: DDK routed **5 of 13** — the two real DDK recordings
+plus three pure-speech ones — each recorded `SKIPPED` with `NO_NODE` (`run.py:302-305`, the constant at
+`:46`) and raised to `"DDK was asked to run and never ran"` (`vocabulary.py:398-401`). **All five
+already carried another flag**, so the missing node changed no file's triage outcome in that run. The
+distinction is the difference between an artifact and a defect, and it cuts both ways: the flag reason
+is real and it over-fires on speech, but building the node would have rescued nothing here. Whether
+the corpus-scale 22,363 behaves the same way is unmeasured — a flagged file whose only reason is DDK
+is the population that would settle it, and nobody has counted it. Values in
+[`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § F.
+
 Everything below is **not built** unless it says otherwise.
 
 ## The tasks this branch serves
@@ -66,12 +77,12 @@ posteriorgram is an absence, never a negative.
 
 ## How DDK is routed today
 
-Two gates, either of which routes (`default.yaml:218`, `:264-271`):
+Two gates, either of which routes (`default.yaml:234`, defined at `:280-287`):
 
-| gate | feature | threshold |
-| --- | --- | --- |
-| `ddk.lexical_repetition` | `transcript_repeat` — largest repeat count of any normalised token | `>= 3`, marked **UNMEASURED** in the config |
-| `ddk.ppg_segment_rate_per_s` | `ppg.segment_rate_per_s` — contiguous argmax-phoneme segments per second | `>= 10` |
+| gate | feature | threshold | measured 2026-09-15, 13 recordings |
+| --- | --- | --- | --- |
+| `ddk.lexical_repetition` | `transcript_repeat` — largest repeat count of any normalised token | `>= 3`, marked **UNMEASURED** at `default.yaml:283` | fired on 3 of 4 speech recordings (5, 4, 8) on function-word repetition; **the sole gate routing every false DDK positive** |
+| `ddk.ppg_segment_rate_per_s` | `ppg.segment_rate_per_s` — contiguous argmax-phoneme segments per second | `>= 10` | fired on both real DDK recordings (12.33, 14.70 /s) and on no speech recording (8.89, 8.64, 7.44, 7.10 /s) |
 
 The second reads no transcript, so it routes a syllable train an ASR declines to transcribe — which
 is most of them, since `/pa-pa-pa/` is not lexical.

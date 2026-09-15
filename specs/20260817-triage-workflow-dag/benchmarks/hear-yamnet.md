@@ -89,3 +89,27 @@ label file is not exhaustive, and a coarse region with no label is not evidence 
 **HeAR** fires strongly on speech in its own airway label space — over 11.6–13.2 s: `Snore` 0.864,
 `Throat Clear` 0.732, `Cough` 0.372. Restricting `labels_of_interest` is what keeps that out of an
 airway verdict; it is not cosmetic.
+
+### At b2ai rates, 2026-09-15 — and restricting `labels_of_interest` does not keep it out
+
+Thirteen b2ai v3.1 recordings across three subjects
+([`hints-and-routing-2026-09-15.md`](hints-and-routing-2026-09-15.md)):
+
+| HeAR label | recordings at ≥ 0.2 | worst readings |
+| --- | --- | --- |
+| `Snore` | **8 of 13** | **0.977** on continuous narration, 0.991 on a prolonged vowel |
+| `Cough` | **8 of 13** | six of the eight hold no cough at all |
+
+The one-recording reading above is therefore not an artifact of that recording. And the mitigation
+this file names is the problem rather than the fix: `airway.labels_of_interest` is
+`[Cough, Breathe]` (`default.yaml:136`), so the label set AIRWAY acts on is exactly where HeAR fires
+on speech. On that run it is how a story-recall recording reached AIRWAY and then flagged
+`lexical_contamination`. Restricting the label set bounds *which* wrong labels reach a verdict; it
+does not stop them.
+
+**YAMNet's whole-file consensus is noisy on real breath, too.** Five deep breaths over 20.5 s
+consolidated to `Music` 0.629, `Synthesizer` 0.473, `Keyboard (musical)` 0.465, `Wild animals` 0.430,
+with `Breathing` **twelfth at 0.288**; the same task on another subject read `Breathing` 0.991. A 20 s
+held vowel read `Chant` 0.937, `Music` 0.930, `Mantra` 0.899, `Brass instrument` 0.661 above anything
+voice-specific — and VOICE routed it correctly, through that musical confusion. Two subjects per task
+type; the point is the spread, not either value.
