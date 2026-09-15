@@ -249,35 +249,162 @@ end through `scripts/extend_diarization.py` with the real model on both streams:
 | `residual` | **1** | 10 | 48.16 | 0.00 | 63.8 s |
 | `plain` (measured separately, for comparison, not written) | **2** | 15 | 64.78 | 3.54 | ~70 s |
 
-**`enhanced`'s second speaker is a false split, not a second person.** `SPEAKER_00` holds 66.37 s
-across ten segments; `SPEAKER_01` holds 9.53 s across seventeen, none longer than 1.35 s, one of
-them 0.02 s, and **every one of them nested wholly inside a `SPEAKER_00` segment**. An interviewer
-or an intruding voice produces turns *between* the participant's, not seventeen sub-second fragments
-interleaved inside them. The likely mechanism is the clustering splitting one speaker's own
-variation — a register change, or a passage at a different level — into a second cluster. It is
-exactly the failure mode the uncited single-versus-multi claim needs testing against, and it
-appeared on the first real store tried.
+The geometry, as measured. `enhanced`'s `SPEAKER_00` holds 66.37 s across ten segments; its
+`SPEAKER_01` holds 9.53 s across seventeen, none longer than 1.35 s, the shortest 0.017 s, and every
+one of them nested wholly inside a `SPEAKER_00` segment. `residual`'s ten segments run 2.41–15.44 s,
+17.40–21.68 s, 30.54–36.03 s, 57.47–65.59 s and so on, every one of them also inside a `SPEAKER_00`
+segment of the enhanced stream and none in a gap. The store's own `residual` measurement records
+`enhanced_energy_fraction` **0.109** and `energy_fraction` **0.825** — FRCRN kept 11% of the energy
+and 82% went into the residual, the near-nulling mode
+`20260817-triage-workflow-dag/config-derivations.md`'s `residual` section documents.
 
-**`residual`'s one speaker is leaked target speech, not a background talker.** Its ten segments run
-2.41–15.44 s, 17.40–21.68 s, 30.54–36.03 s, 57.47–65.59 s and so on — every one of them *inside* a
-`SPEAKER_00` segment of the enhanced stream, none of them in a gap. The store's own `residual`
-measurement says why: `enhanced_energy_fraction` is **0.109** and `energy_fraction` is **0.825**, so
-FRCRN kept 11% of the energy and 82% went into the residual. That is the near-nulling mode
-`20260817-triage-workflow-dag/config-derivations.md`'s `residual` section already documents. The
-residual half is reporting imperfect separation on this recording, not a second person. A genuine
-background talker would show up where the target is silent.
+**That geometry does not settle what either speaker is, and an earlier version of this section read
+as though it did.** Seventeen sub-second turns nested inside a narrator's is the textbook signature
+of a *backchannelling interviewer*, not of a clustering artefact; residual segments that coincide
+with the target's speech are equally consistent with leakage and with a background talker speaking
+over the participant; and an energy fraction says how much energy was retained, never whose. The
+next section is the measurement that does settle it. Both original readings survive it, but the
+evidence for them is the embedding comparison below, not the nesting pattern above.
 
 Both streams' extents are `(0.0, 88.0733125)`, the same as `plain`'s, and the residual
 measurement's `lag_samples` is **0** — so on this recording the timebases coincide exactly. See the
 caveat in "Three consequences" below: that is a property of this recording's lag, not a guarantee.
 
+### Settling it with speaker embeddings
+
+Second pass, same day, same host. The store's `derivatives/` was never written back to
+`~/Downloads/triage_prov_sample/` and `store.jsonl` carries no diarization measurement, so there was
+no sidecar to reuse: **the diarization was regenerated** from `streams/{enhanced,residual,plain}.flac`
+of a copy, conditioned as `diarization_input` conditions it (mono, 16 kHz) and run through
+`diarize_audios` at the same commit `3533c8cf8e369892e6b79ff1bf80f7b0286a54ee` with
+`exclusive=False`. It reproduces the table above exactly — 2/27, 1/10, 2/15, and the same segment
+boundaries — in 64.4 s, 63.1 s and 65.3 s.
+
+**Instrument.** `extract_speaker_embeddings_from_audios` with the task default,
+`speechbrain/spkrec-ecapa-voxceleb` (192-D), on CPU. A target centroid is the spherical mean of the
+vectors of the `SPEAKER_00`-minus-`SPEAKER_01` regions of `enhanced` that are at least 2.0 s long
+(ten regions, 44.2 s). In the held-out variant reported below, the centroid is built from five of
+those regions and every same-speaker control window is drawn only from the other five, so no control
+scores against a centroid it helped build.
+
+**The control that makes the comparison readable.** A cosine has no absolute meaning at these
+durations, so the fragments are read against two duration-matched references rather than against a
+remembered threshold. For each `SPEAKER_01` fragment length, 24 windows of *exactly that length* are
+drawn from `SPEAKER_00`-exclusive speech — a known same speaker — and 24 from three **impostors**:
+the `Story-recall` of `sub-17578482…`, `sub-17cee767…` and `sub-1f4ea26f…`, conditioned by the same
+recipe and FRCRN-enhanced at the same commit `3766e6a64b0d8cb58f08d913d617bf129f11ed53`, each of
+which diarizes to one speaker. Same protocol, same conditioning, same enhancement, different people.
+The recipe was checked against this store: re-conditioning its own `streams/00_source.wav` reproduces
+`plain` sample for sample.
+
+#### `enhanced`: false split
+
+Cosine to the held-out target centroid:
+
+| population | n | mean | sd | median | min | max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `SPEAKER_01` fragments | 16 | **0.340** | 0.158 | 0.341 | 0.088 | 0.597 |
+| same speaker, duration-matched, held out | 360 | **0.319** | 0.181 | 0.301 | −0.061 | 0.737 |
+| impostor, duration-matched | 360 | **0.083** | 0.073 | 0.078 | −0.143 | 0.260 |
+
+Mann-Whitney AUC: same-speaker over impostor **0.889** — the test *does* discriminate at these
+durations, which is what licenses reading the first row at all. `SPEAKER_01` over impostor **0.921**.
+`SPEAKER_01` over same-speaker **0.538**, i.e. chance: the fragments are not distinguishable from
+windows of the participant's own voice cut to the same lengths. Thirteen of the sixteen sit above the
+impostor 95th percentile (0.208). Against the full (non-held-out) centroid the same three populations
+read 0.350 ± 0.161, 0.326 ± 0.180 (n=384) and 0.092 ± 0.072 (n=384).
+
+The label is not what drives the number; the duration is. `SPEAKER_00`'s own six segments of 3 s or
+more score 0.74–0.91 against the centroid, and its own short ones score 0.21 (0.52 s), 0.38 (0.61 s)
+and 0.46 (1.11 s) — inside `SPEAKER_01`'s range. This is also why the raw segment-level pairwise
+table the question was originally posed in terms of is the wrong instrument: within-`SPEAKER_00`
+0.492 ± 0.231 (n=45), within-`SPEAKER_01` 0.204 ± 0.102 (n=120), between 0.278 ± 0.149 (n=160) looks
+like separation and is mostly a duration contrast, since `SPEAKER_00` pairs average 6.6 s per side
+and `SPEAKER_01` pairs 0.6 s.
+
+**Verdict: false split.** The mechanism the earlier text guessed at is the right one; what was
+missing was any evidence that could have distinguished it from an interviewer.
+
+The same test on `plain`, whose diarization also reads two speakers: its five `SPEAKER_01` fragments
+(0.22–1.20 s) score 0.350 ± 0.113 against a held-out `plain` centroid, against 0.271 ± 0.189 (n=80)
+for duration-matched same-speaker windows and 0.050 ± 0.074 (n=90) for duration-matched impostors —
+AUC 0.998 over impostor, 0.62 over same-speaker. **Also a false split**, so the split is not
+something enhancement introduced.
+
+#### `residual`: the target, leaked
+
+Cosine to the target's `enhanced` centroid, with the residual channel's own cost measured on the
+impostors (each impostor's residual is computed by `compute_residual` at the same `max_lag_ms`):
+
+| population | n | mean | sd | median | max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| target `residual` segments vs **target** centroid | 10 | **0.612** | 0.236 | 0.714 | 0.804 |
+| impostor `residual` vs **its own** centroid | 13 | 0.572 | 0.311 | 0.702 | 0.808 |
+| impostor `residual` vs **target** centroid | 13 | **0.067** | 0.057 | 0.068 | 0.163 |
+| impostor `enhanced` (clean, ≥2 s) vs target centroid | 13 | 0.151 | 0.040 | 0.154 | 0.217 |
+
+Row two says the residual channel by itself costs a same-speaker match very little; row three says a
+*different* person heard through that same channel scores near zero against this target. Row one sits
+in row two's distribution and an order of magnitude above row three's. Eight of the ten segments score
+0.60–0.80; the one outlier is the 0.051 s segment at 16.973 s (0.079), which is below the length
+ECAPA can use.
+
+**Verdict: false split — the residual's single speaker is the target's own voice, leaked.** Not a
+background talker. This is the reading the earlier text reached from the energy fraction; it is now
+measured rather than inferred.
+
+#### What this evidence cannot do, quantified
+
+- **One fragment cannot be embedded at all.** ECAPA raises
+  `Padding size should be less than the corresponding input dimension` for a standalone span below
+  about **0.04 s**, so the 0.017 s `SPEAKER_01` fragment has no vector and is excluded. Sixteen of
+  seventeen remain.
+- **None of the sixteen reaches the 2.0 s profile-enrollment window**, and only four reach 1.0 s.
+  The usual "embeddings want about a second" caution applies in full. What rescues the comparison is
+  not that the vectors are good but that the *impostor* control is computed from the same bad
+  vectors: at 0.12–1.35 s a known different speaker still scores 0.083 ± 0.073 while a known same
+  speaker scores 0.319 ± 0.181, so there is real, if degraded, discrimination (AUC 0.889) to read the
+  fragments against. Had those two populations overlapped, the honest answer here would have been
+  "not settled by this evidence".
+- **A heterogeneous batch corrupts a short vector, and silently.**
+  `SpeechBrainEmbeddings.extract_speechbrain_speaker_embeddings_from_audios` zero-pads every member
+  of a batch to the longest one and passes `wav_lens`; the same span embedded alone versus batched
+  with a 14 s neighbour gives cosine **0.52 at 0.05 s, 0.65 at 0.1 s, 0.88 at 0.2–0.3 s, 0.98 at
+  0.5 s** and ≥0.94 above. Batching also *hides* the length floor above: the 0.017 s fragment raises
+  when embedded alone and returns a vector — of 98% padding — when batched with longer spans. Every
+  number in this section was computed in length-homogeneous batches (at most a 1.25× spread). This
+  is a property of the backend, not of this measurement; it is recorded here because any future
+  per-segment embedding pass will hit it.
+- **Nothing here was listened to.**
+
+#### What the store's own ASR already said
+
+Independent of the embeddings, the 115 consensus words (`plain`, CrisperWhisper 2.0 turbo + Qwen3-ASR,
+already in `store.jsonl` as `word` entities with extents) were intersected with the fragment extents.
+Every `SPEAKER_01` fragment covers words of the participant's own running narration — "other people
+about", "grandfather", "special name for", "goes out every day", "for a small walk", "to him" — each
+grammatically continuous with the `SPEAKER_00` sentence it sits inside. Not one carries a backchannel,
+and the consensus vocabulary does carry non-lexical tokens (`[UM]`, `[UH]`) where they occurred, so a
+transcribed "mhm" was expressible and absent. Corroboration rather than proof: a quiet backchannel
+under loud narration could be missed by both ASR models, which is why the embedding comparison is the
+primary evidence and this is the check on it.
+
 **Both readings are why `n_speakers` alone must not become a gate.** A QUALITY rule reading
 "`enhanced` ≥ 2 means a second person" would have flagged this recording; one reading "`residual`
-≥ 1 means a voice was removed" would have flagged it too. What distinguishes a real second voice
-from either artefact is the **segment geometry** — per-speaker totals, segment counts, and whether
-one speaker's segments nest inside another's or fill its gaps — which is in the sidecar precisely so
-whoever writes that rule can use it. The 48-file probe says nothing about the false-positive rate;
-this one store says it is not zero on either stream.
+≥ 1 means a voice was removed" would have flagged it too. The 48-file probe says nothing about the
+false-positive rate; this one store says it is not zero on either stream.
+
+**Segment geometry is what raises the question, not what answers it.** Per-speaker totals, segment
+counts and whether one speaker's segments nest inside another's are in the sidecar and are worth
+having — but a backchannelling interviewer and a false split produce the same nesting, so a rule
+built on geometry alone would have decided this recording correctly by luck and the interview case
+incorrectly by construction. What separated them here was **an embedding comparison against a
+duration-matched impostor control**: same protocol, same conditioning, same enhancement, a different
+person, windows cut to the same lengths as the fragments under test. That is the shape any
+multi-voice rule needs, and it needs the target's own short windows as its other reference, because
+at these durations a cosine has no absolute meaning. Whoever writes the rule should also read the
+length floor above: below roughly 0.04 s there is no vector at all, and below about 0.5 s a vector
+depends on what it was batched with.
 
 ### Cost
 
@@ -425,5 +552,7 @@ task that has to download will succeed, just slowly, and 64 at once will rate-li
 
 Run one slice first (`--slice-count 64 --slice-index 0`), read its `speaker_counts` histogram (per
 stream) and `elapsed_s` out of `slices/slice-0-of-64.summary.json`, and size the rest from that. The
-histogram is also the first corpus-scale evidence on the false-split rate the one store above
-suggests is non-zero.
+histogram is also the first corpus-scale evidence on the false-split rate, which the one store above
+measures as non-zero on both streams. A histogram alone will not say which counts above one are
+splits: that needs the embedding-against-impostor comparison the section above describes, run over
+the slice's own segments.
