@@ -417,9 +417,11 @@ SCREEN's product becomes the routing decision *and* the labels its own evidence 
 at SCREEN time by the rule that fired, so VOICE receives a *labelled* subject and no retired detector
 has to be resurrected. **This changes the plan
 [`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
-currently implies**, and it demotes this spec's own claim below — that the branch becoming the
-proposer "is the whole fix" — to one of three options, listed with what each costs at that document's
-§ *The span source is one of three options*. **The owner has not chosen between them.**
+currently implies**, and it retires this spec's own claim below — that the branch becoming the
+proposer "is the whole fix". **The owner has since settled the source**: VOICE's subject is the spans
+the ruleset labelled and VOICE refines them, at that document's § *The subject is the spans the
+ruleset labelled, and VOICE refines them*. What stays open there is the family a label on an
+`amplitude` span puts it in, and the two prerequisites below.
 
 **A ruleset-written label is an assertion about a span and needs the same provenance as any other** —
 which rule wrote it, from which evidence, at what value. Without those three it is indistinguishable
@@ -630,12 +632,13 @@ Under this contract **the branch is the proposer**, and that is the whole fix �
 changed to the branch family.** `propose` writes `family: "voice"`, so VOICE's input filter and its
 output family coincide, which is what the contract wants.
 
-**"The whole fix" is now one of three options, on the owner decisions of 2026-09-15 above.** A
-ruleset-written phonation label gives VOICE a labelled amplitude span to `refine` without any
-proposer, the `consensus_taxonomy` rework is still on the table, and a replacement detector is the
-third. The three and their costs are at
+**"The whole fix" is now the ruleset's label plus VOICE's `refine`, on the owner decisions of
+2026-09-15 above.** A ruleset-written phonation label gives VOICE a labelled amplitude span to
+`refine` without any proposer, and that is the settled flow:
 [`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
-§ *The span source is one of three options*; **the owner has not chosen.** Everything in the rest of
+§ *The subject is the spans the ruleset labelled, and VOICE refines them*. Neither the
+`consensus_taxonomy` rework nor a replacement detector is the span source any more; V1 stays as the
+specification of the refiner. Everything in the rest of
 this section — the selector change, the family rename, what it costs REPORT — applies to whichever
 source mints or labels the span, so none of it is withdrawn.
 
@@ -898,11 +901,11 @@ Dependency order, with the pieces that are genuinely independent marked:
    the `_windows_covering` gap), then VOICE (which needs a proposer before it has a subject), then
    DDK (which needs a node). Depends on 5, on 6 for `speaker_count`, and on 7 to be visible.
 
-   **The owner decisions of 2026-09-15 change VOICE's place in this piece**: which of three span
-   sources VOICE gets is undecided, and one of them — a ruleset-written label — lands in SCREEN
-   rather than here. The options are at
+   **The owner decisions of 2026-09-15 change VOICE's place in this piece**: its subject is a
+   ruleset-written label, which lands in SCREEN rather than here, and VOICE's own work is the
+   `refine` over it. The settled flow is at
    [`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
-   § *The span source is one of three options*.
+   § *The subject is the spans the ruleset labelled, and VOICE refines them*.
 9. **Boundary reconciliation** — blocked on a parameter-free definition, per (c).
 
 **One ordering inversion is accepted and budgeted.** Piece 9 changes every span extent, hence which
@@ -920,11 +923,14 @@ verification. Nothing is refit until something has been listened to.
 
 **The boundary reconciliation rule** (c) — no parameter-free definition yet.
 
-**Which of three sources gives VOICE its subject** — amplitude spans with a ruleset-written label
-and `refine`, the `consensus_taxonomy` rework as written, or a new phonation detector replacing the
-retired one. All three, and the evidence bearing on each, are at
+**Which source gives VOICE its subject is settled, 2026-09-15**: amplitude spans with a
+ruleset-written label, refined by VOICE. The flow and the evidence behind it are at
 [`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
-§ *The span source is one of three options*. The owner has not chosen.
+§ *The subject is the spans the ruleset labelled, and VOICE refines them*. **What remains unresolved is whose family a
+ruleset-written label puts a span in**, since a branch `refine`s only a span of the family it
+proposes into — at
+[`../20260817-triage-workflow-dag/branch-conventions.md`](../20260817-triage-workflow-dag/branch-conventions.md)
+§ *The two owner decisions of 2026-09-15 leave the minting rule alone and open one question*.
 
 **What a ruleset-written label records, exactly** — the rule, the evidence path and the value are
 settled as required; the entity shape, and which span a reduced feature attributes its firing to, are

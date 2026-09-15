@@ -398,9 +398,10 @@ whose feature is `[span_longest, amplitude]` (`default.yaml:252-255`), and then 
 `phonation` span (`nodes/voice.py:230`, the family at `:40`, the return at `:235-264`). If the rule
 that fired writes the phonation label onto the amplitude span it read, **the branch receives a
 labelled subject at SCREEN time and no retired detector has to be resurrected** — which removes that
-span-source problem rather than relocating it. It is one of three live options; the other two, and
-what each costs, are at [`branch-voice.md`](branch-voice.md) § *The span source is one of three
-options*.
+span-source problem rather than relocating it. **This is the settled flow as of 2026-09-15** — the
+branch receives labelled spans and refines them — at [`branch-voice.md`](branch-voice.md)
+§ *The subject is the spans the ruleset labelled, and VOICE refines them*, which also carries the two
+prerequisites it is owed and the family-scoping question it runs into.
 
 **A rule-written label needs the same provenance as any other assertion**: which rule wrote it, from
 which evidence path, at what value. Without those three it is indistinguishable from a classifier's
