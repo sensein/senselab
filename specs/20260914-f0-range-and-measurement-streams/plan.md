@@ -732,10 +732,13 @@ git add -A && git commit -m "test(triage): a failed F0 analysis is a failed row,
 
 `derive_f0_range` has two production callers: `preprocess.py:954` (feeding `f0_track` and `formant_track`) and `voice.py:71` (feeding `hnr_track` and `period_marks`). Both now receive a continuously varying range, and Praat's window is `periods_per_window / floor`, so a changed floor changes frame counts.
 
-- [ ] **Step 1: Run both suites**
+- [x] **Step 1: Run both suites**
 
 Run: `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py src/tests/audio/workflows/triage/nodes/voice_test.py -q`
 Expected: PASS. A failure asserting a track length or window followed from the bin's fixed floor — fix the assertion to the new derivation, not the other way round.
+
+**Ran 2026-09-14 at `502b5e13`: 121 passed, 0 failed.** No assertion in either module depended on the
+bin's fixed floor, so Step 2 was a no-op and nothing was committed.
 
 - [ ] **Step 2: Commit if anything needed changing**
 
