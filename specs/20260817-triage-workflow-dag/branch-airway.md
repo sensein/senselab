@@ -122,7 +122,9 @@ when it is in `airway.contest_labels`, and an `abstain` carrying `colocated_wind
 fired (`airway.py:303-341`).
 
 **The corroboration verb changes from `confirm` to `label`.** The contract's verb set is `label`,
-`contest`, `refine`, `trim`, `propose`, plus `abstain` and `flag` keeping their meanings.
+`contest`, `refine`, `trim`, `propose`, plus `abstain` and `flag` keeping their meanings. `refine`
+covers a span's metadata as well as its extent as of 2026-09-15 (the contract's § *`refine` covers
+metadata as well as extent*).
 `confirm` is on neither list, and the contract's piece 7 widens REPORT's assertion read **by verb** —
 so AIRWAY's corroborations would go invisible in the very change designed to make branch assertions
 visible. The migration is a one-line change at `airway.py:303` — **but only because `confirm` and `contest`
