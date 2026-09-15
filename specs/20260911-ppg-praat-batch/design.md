@@ -215,6 +215,30 @@ that already holds a posteriorgram. Both once read `skipped`, which is what made
 ran or failed ppgs on the 2,376 below invisible. A row whose Praat block failed is `absent` or
 `error` as before: the value says the rule fired, not that the row is done.
 
+### `out-of-scope` is unreachable on a freshly-run store, and that is an unresolved asymmetry
+
+`ppg_idle_status` (`../../scripts/extend_ppg_praat.py:193-203`) returns `_OUT_OF_SCOPE` on exactly one
+condition: the store holds no posteriorgram. Everything else reads `_SKIPPED`.
+
+But PREPROCESS writes the posteriorgram **unconditionally**. `_ppg_posteriorgram`
+(`../../src/senselab/audio/workflows/triage/nodes/preprocess.py:2278-2286`, registered in the block
+list at `:2628`) calls `ppg_posteriorgram(store, run_dir=run_dir)` with **no `has_consensus_output`
+check** — that predicate exists only in this driver (`extend_ppg_praat.py:159`, read at `:190`) and
+nowhere in `src/senselab/`. So every store a fresh `run_triage` produces already holds a
+posteriorgram and reads `skipped`. **`out-of-scope` is reachable only on older corpus stores, or
+where the PPG step failed.**
+
+The consequence is that **the transcript rule has two different answers depending on which path
+produced the store**, and nothing states that. A recording the rule would keep off the model gets a
+posteriorgram anyway when it comes through PREPROCESS, and does not when it comes through this
+driver.
+
+**Recorded as an unresolved asymmetry needing a decision, not as a defect.** It may well be
+deliberate: `airway.ppg_silent_fraction` and `ddk.ppg_segment_rate_per_s` both read the posteriorgram,
+so scoping it out of fresh runs would change routing on two branches. What is owed is the decision and
+its reasoning — either the driver's predicate belongs in PREPROCESS, or the two paths differ for a
+stated reason and `out-of-scope` is documented as a property of the back-fill path alone.
+
 ## Batch size is the whole lever; the device is noise beside it
 
 Measured on 32 real `enhanced.flac` tracks, mean duration 5.4 s, on an A100 node:
@@ -251,6 +275,41 @@ once per 500, and `write_ppg_posteriorgram` per recording — the same write pat
 
 `rows[i::n]` sharding is kept from `d45de3ba`: task *i* of *n* takes a stride, not a block, so no task
 draws the corpus's long tail on its own.
+
+## Sizing a Praat-only pass: the budget is total audio, not row count
+
+Measured 2026-09-14, while rehearsing the `--force` Praat re-derivation
+([`../20260914-f0-range-and-measurement-streams/measurements-2026-09-14-forced-rederivation.md`](../20260914-f0-range-and-measurement-streams/measurements-2026-09-14-forced-rederivation.md)).
+The pass that would have used this was **cancelled by the owner on 2026-09-14** on a finding about the
+derived range, not about cost; the sizing is recorded for whenever it does run.
+
+**Corpus duration distribution**, from the manifest's `duration_s` over **60,202** recordings:
+
+| median | p75 | p90 | p99 | max | mean | total |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.0 s | 18.5 s | 30.0 s | 93.5 s | 332.6 s | 15.0 s | 250.2 h |
+
+**Measured cost: 0.121 s of CPU per second of audio**, essentially all Praat — on an 88.07 s
+recording, `praat_features` was **10.18 s of a 10.67 s critical path**, against `read_store` 0.19 s,
+`write_store` 0.12 s and `export_prov` 0.17 s. **Fixed cost is negligible**, and that holds even at
+the top of the range: the store in question carried 5,800 lines and its prov export was 7.9 MB. This
+was measured on a laptop under load, so it is an **upper bound** — and it agrees with the 0.59 s/file
+at 5.4 s mean duration (9.1× realtime) already recorded above.
+
+At 250.2 h total that is roughly **851 s per slice for a 128-slice array**, comfortably inside a
+2-hour limit.
+
+**The 2.09 s/recording figure from the original pass holds because the median recording is 7 s, not
+because of the hardware.** Nothing about the per-recording number survives a corpus with a different
+duration distribution. The budget scales with **duration**, and `rows[i::n]` sharding equalises row
+counts rather than audio, so **any re-slicing should be by total audio rather than by row count** —
+the same property the flat worker timeout got wrong below, applied to the slice instead of the batch.
+
+**One discrepancy left standing rather than reconciled.** *The worker timeout was flat* below quotes
+*"median 7.22 s, p95 60.02 s, longest 307.46 s"*; this measurement gives median 7.0 s and max 332.6 s
+over the same 60,202 rows. The two were taken at different times by different means and the
+difference is not explained here. Neither was re-measured for this entry; a reader quoting a corpus
+duration should say which of the two they are quoting.
 
 ## The venv must exist before the array is submitted
 
