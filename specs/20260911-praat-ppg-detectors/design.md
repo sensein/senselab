@@ -10,8 +10,13 @@ not this document's.
 
 The two derivatives already exist in every recording's store, added by
 `specs/20260911-ppg-praat-batch/`: `praat_features` carries forty scalars as attributes,
-`ppg_posteriorgram` names a float16 npz by path and digest. 60,202 of the 62,547 readable stores
-carry both. Until now `RecordingFeatures` surfaced neither, so no detector could read either.
+`ppg_posteriorgram` names a float16 npz by path and digest. **60,202 stores carry both, and 2,376 of
+the 62,578 stores on disk carry neither** — the pass ran over a 60,202-row manifest, and against the
+62,547 scored here the same set leaves 2,345. The absences are not uniform across task families:
+28% on `respiration-and-cough-v2-breath` against 6% on `glides-high-to-low`, which is a hole in every
+per-family reading below and is deepest on the families this document's detectors are aimed at. See
+[`../20260911-ppg-praat-batch/design.md`](../20260911-ppg-praat-batch/design.md), *The manifest is
+not the corpus*. Until now `RecordingFeatures` surfaced neither, so no detector could read either.
 
 ## The three routing failures this is aimed at
 

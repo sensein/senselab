@@ -920,9 +920,17 @@ now are; nothing further is proposed on that feature.
 
 `voice.f0_search_range_hz` was `null`, and `phonation_tracks` raises rather than choosing a search
 range, so the whole-corpus run wrote no phonation track anywhere. The key is now `[50.0, 600.0]`
-and an extend pass has written `phonation_tracks` into all **62,547** stores — present in 200 of
-200 sampled. The sidecar carries `times_s`, `f0_hz` (NaN where Praat placed no pitch) and
-`strength`, one value per frame on `phonation_spans.hop_s`.
+and an extend pass has written `phonation_tracks` — present in 200 of 200 sampled. The sidecar
+carries `times_s`, `f0_hz` (NaN where Praat placed no pitch) and `strength`, one value per frame on
+`phonation_spans.hop_s`.
+
+**This said "into all 62,547 stores" and that is not established**, so the count is gone rather than
+restated. The pass that wrote them reports a corpus pass over **60,202** recordings
+([`../20260912-extend-reprocessed-outputs/design.md`](../20260912-extend-reprocessed-outputs/design.md):321),
+which is the `ppg_20260911` manifest's row count and not the corpus's, and 2,376 stores lie outside
+that manifest ([`../20260911-ppg-praat-batch/design.md`](../20260911-ppg-praat-batch/design.md),
+*The manifest is not the corpus*). Whether those 2,376 carry `phonation_tracks` is **unmeasured**,
+and a 200-store sample says nothing about them unless it was drawn to include them.
 
 `RecordingFeatures` had no field that read any of it. Its only F0 evidence was
 `praat.mean_f0_hertz` and `praat.std_f0_hertz`, two scalars over the whole file — which is exactly

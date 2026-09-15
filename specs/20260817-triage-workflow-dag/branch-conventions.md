@@ -312,6 +312,16 @@ section said "they differ by 28", which conflated the two gaps.
 Citing the scoring artifact is defensible when every branch figure comes from it, and mixing them
 would be worse. Both divergences remain unaccounted for.
 
+**And two measurements reach none of those three numbers.** `praat_features` and `ppg_posteriorgram`
+are in **60,202** stores — the row count of the manifest the `ppg_20260911` pass ran over — and
+**2,376 of the 62,578 stores hold neither**, measured 2026-09-14. The loss is not uniform across task
+families: it runs from **28%** on `respiration-and-cough-v2-breath` to **6%** on `glides-high-to-low`,
+so it is deepest on AIRWAY's entire task content and on `maximum-phonation-time`. A per-family
+statistic over a Praat scalar or a posteriorgram therefore has a family-dependent hole, which without
+the paired counts above reads as a finding about breath recordings rather than about the manifest.
+The measurement, what is and is not known about its cause, and what it is owed are in
+[`../20260911-ppg-praat-batch/design.md`](../20260911-ppg-praat-batch/design.md).
+
 ## What a branch does with an unavailable measurement
 
 An unavailable measurement is an **absence**, never a negative. Gate evidence is `unavailable` on
