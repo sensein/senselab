@@ -489,9 +489,12 @@ The owner: *"voice would still need to improve/update/review phonation spans and
 assigned to it."*
 
 **A branch does not wait for a correct subject to be handed to it.** It receives spans and *improves*
-them, which in the five verbs is **`refine`** — assert a tightened extent on an existing span, which
-keeps its id, its `family` and its measurements. Reviewing a span is `label`, `contest` or `refine`.
-**Only `propose` mints**, and it mints only what nothing proposed at all.
+them, which in the five verbs is **`refine`** — assert a corrected extent, corrected metadata, or
+both on an existing span, which keeps its id, its `family` and its measurements. Reviewing a span is
+`label`, `contest` or `refine`. **Only `propose` mints**, and it mints only what nothing proposed at
+all. (Until the owner decision of 2026-09-15, `refine` was extent-only and this sentence read
+"assert a tightened extent on an existing span"; § *`refine` covers metadata as well as extent*
+records the widening.)
 
 **So `FAIL` for "no span of my family" is the wrong shape of answer.** Not because the recording must
 hold the branch's subject — it may not — but because a branch that returns before reading the spans it
@@ -562,11 +565,33 @@ silently. The real readers of `verb` are `redact.py:237`, `report.py:196`, `repo
 | --- | --- | --- | --- | --- |
 | label | `"label"` | `assertion`, `wasDerivedFrom` the span | what the span carries | no |
 | contest | `"contest"` | `assertion`, `wasDerivedFrom` the span | that it does not carry what was proposed | no |
-| refine | `"refine"` | `assertion`, `wasDerivedFrom` the span | `corrected_extent: [start, end]` | no |
+| refine | `"refine"` | `assertion`, `wasDerivedFrom` the span | `corrected_extent: [start, end]` and/or `corrected_attributes: {key: value}`, at least one | no |
 | trim | `"trim"` | `assertion`, `wasDerivedFrom` the span | `task_extent: [start, end]`, plus the `off_task_extent` finding | no |
 | propose | — | `span`, `family: "<branch>"`, `wasDerivedFrom` its evidence | a region PREPROCESS did not find | **yes** |
 
-`label` and `contest` already exist and keep their meanings; `refine`, `trim` and `propose` are new.
+`label` and `contest` already exist and keep their meanings. **`refine`, `trim` and `propose` are
+written by nothing in the graph** — swept over `nodes/` and `extend.py` on 2026-09-15, the full
+inventory of `verb:` values any node writes is:
+
+| verb written | by | site |
+| --- | --- | --- |
+| `label` | AIRWAY, SPEECH | `airway.py:266`; `speech.py:961`, carrying `label: "pii"` |
+| `confirm` | AIRWAY | the loop pair at `airway.py:303`, written at `:310` |
+| `contest` | AIRWAY, QUALITY | the same loop pair at `airway.py:303`, written at `:310`; `quality.py:291` via `CONTEST_VERB` (`:62`) |
+| `abstain` | AIRWAY | `airway.py:332` |
+| `flag` | AIRWAY | `airway.py:368`, `reason: lexical_contamination` |
+| `measure` | PREPROCESS | `preprocess.py:1835`, `:1842`, `:1860` |
+| `withdraw` | PREPROCESS | `preprocess.py:599` via `WITHDRAW_VERB` (`:136`) |
+| `attribute` | SPEECH | `speech.py:793`, one per word |
+| `refine`, `trim`, `propose` | — | **nothing writes them** |
+
+So three of the contract's five verbs are unwritten, and six verbs are written that the table does
+not carry. Of those six, `abstain` and `flag` are sanctioned below as keeping their meanings outside
+the table, and `confirm` has a settled migration (§ *Where each branch already stands* — `confirm`
+becomes a `label` carrying its corroborating window ids). **`attribute`, `measure` and `withdraw`
+have no such standing.** `attribute` acquires one in § *`refine` covers metadata as well as extent*
+below; `measure` and `withdraw` are PREPROCESS's and are untouched by these decisions.
+
 **`abstain` and `flag` also keep their current meanings** and are not folded into this table:
 `abstain` records that colocated evidence existed and decided nothing, and `flag` is a branch-level
 finding rather than a span-level one.
@@ -616,11 +641,150 @@ raises `SpanTooShortForYAMNet` below 0.96 s (`yamnet.py:257-258`), so rule (a)'s
 a 200 ms cough — can never acquire a native YAMNet window, whatever proposes it. HeAR has the
 capability, via the silent buffer (`hear.py:426-443`), but no mechanism invokes it at branch time.
 
+### `refine` covers metadata as well as extent — owner decision, 2026-09-15
+
+The owner, on speaker attribution and SPEECH: *"speech may need to resolve across multiple speakers,
+so it could fall under refinement (adding/adjusting span metadata, or creating an aggregated span)."*
+
+Attribution maps onto the verbs already in the table and **no sixth verb is added**:
+
+- **adding or adjusting a span's metadata → `refine`**
+- **creating an aggregated span → `propose`**, which remains the only minting verb
+
+**This widens `refine`, and the old definition is recorded rather than overwritten.** Until
+2026-09-15 `refine` was **extent-only**: the table's `carries` column read `corrected_extent:
+[start, end]` and nothing else, and § *A branch refines and reviews* glossed the verb as *"assert a
+tightened extent on an existing span"*. A store written before this date therefore holds `refine`
+assertions that are all extent corrections, and a reader of one must not infer from their shape that
+metadata refinement was declined — it was not yet available. **From 2026-09-15 `refine` means
+improving a span in either way: its extent, its metadata, or both.** The verb's object is unchanged —
+an existing span, which keeps its id, its `family`, its measurements and its liveness.
+
+**The contract was already using the widened sense before it admitted to it, which is the reason the
+change is a correction and not only an addition.** § *A ruleset that fires may write or refine a
+span's label*, decided earlier the same day, says a fired rule writes `label` where the span carried
+none and **`refine` where it carried one the rule sharpens** — a *label*, which is metadata, not an
+extent. [`../20260817-triage-workflow-dag/family-taxonomy-ruleset.md`](../20260817-triage-workflow-dag/family-taxonomy-ruleset.md)
+§ *A fired rule may write or refine a span's label* restates it in the same words. Under the
+extent-only table neither statement was writable.
+
+#### The attribute shape
+
+A `refine` assertion carries **one or both** of two named attributes, and must carry at least one:
+
+| attribute | what it corrects | shape |
+| --- | --- | --- |
+| `corrected_extent` | the span's extent | `[start, end]` |
+| `corrected_attributes` | the span's metadata | a mapping from the span attribute's own key to the corrected value |
+
+`assertion.extent` continues to name the span being annotated, for the reason given above: every
+existing assertion sets `extent=span.extent` (`airway.py:272`, `:308`, `:330`) and `report.py:1144`'s
+`_timing` reads it as that span's timing. A metadata refinement gets a named attribute for exactly
+the same reason an extent correction does.
+
+**Presence is the discriminator, for a reader and for code.** `"corrected_extent" in attributes` says
+an extent is being corrected; `"corrected_attributes" in attributes` says metadata is; both present
+is one act of improvement that did both, which is the ordinary case when a boundary fix changes what
+the span should be called. A `refine` carrying neither is malformed — a testable condition rather
+than a convention, and the one shape a reader may reject.
+
+**Why a nested mapping rather than a flat `corrected_<key>` per field.** Because the store has
+readers that key on an assertion's **top-level** attribute names without testing `verb` at all:
+`figure.py:578` and `routing_analysis/features.py:1092` both select assertions on
+`attributes.get("name") == "squim"`, and `report.py:1129` builds an entity's rendered description
+from `attributes.get("name") or attributes.get("family")` for every branch entity it lists. A
+corrected value written at the top level under the span's own key — `name`, `family`, `label` — is
+therefore one field name away from being read as the assertion's own property. Nesting puts every
+corrected value out of reach of every existing top-level test, and it lets one assertion correct more
+than one field without a reader having to diff the assertion against the span to work out which keys
+were meant.
+
+**The prior value is not copied into the assertion, and does not need to be.** For the extent,
+`assertion.extent` already carries it. For the metadata, the span carries it: nothing rewrites a
+span's attributes, the module's only `was_invalidated_by` call is `extend.py:327`, and `quality.py:27`
+states the rule outright — *"PREPROCESS's spans are never invalidated here: the store is
+append-only"*. So the span reached through `store.derived_from(assertion.id)` still holds what the
+refiner read. An absent key on that span additionally distinguishes *correcting* a value from
+*supplying* one, with no extra attribute.
+
+#### An aggregated span is a `propose`, and three questions it raises
+
+**What family it carries: `family: "<branch>"`, unchanged.** Aggregation changes nothing about the
+minting rule, and [`../20260817-triage-workflow-dag/branch-conventions.md`](../20260817-triage-workflow-dag/branch-conventions.md)
+§ *`propose` versus `refine` — scoped by family* already works this exact case: *"A phonation broken
+by two 400 ms gaps is three PREPROCESS spans under `spans.min_separation_ms: 30`; the branch's single
+attempt span simply covers all three. The branch is not refining them, so they neither need merging
+nor conflict with it."* An aggregate covers ground no live span *of the branch's own family* covers,
+so it mints under the rule as written.
+
+**What it is `wasDerivedFrom`: every span it aggregates, plus the evidence that built it.** This is
+production practice rather than a new rule. SPEECH's `family: "speech"` span is already
+`wasDerivedFrom` every live non-SPEECH span it overlaps (`speech.py:893-895`, over the `prior_spans`
+set built at `:577-578`), and `ProvStore.derived_from` returns a **list** (`utils/prov_store.py:525`),
+so many-to-one derivation is a capability of the store and not a tolerated irregularity. The one
+production reader that walks the relation iterates it — `for span_id in store.derived_from(entity.id)`
+at `figure.py:580` — so an aggregate does not break it.
+
+**Whether the spans it aggregates are left untouched: yes, and it is a property of the code, not only
+of the design.** Nothing under `nodes/` invalidates anything; the module's single `was_invalidated_by`
+call is `extend.py:327`, inside `withdraw_contradicted_clips`. An aggregate neither retires nor
+contradicts the spans beneath it — the same shape as § *(b) Gap spans are background, never events*,
+where a branch-proposed span inside a background extent supersedes the typing for that extent and
+retires nothing.
+
+**None of the three is undetermined, so none is recorded as owed.** The adjacent question that *is*
+open — whose family a **ruleset-written label** puts a span in, and therefore whether the labelled
+span is refinable by the branch at all — is untouched by this decision and stays where it was, at
+[`../20260817-triage-workflow-dag/branch-conventions.md`](../20260817-triage-workflow-dag/branch-conventions.md)
+§ *The two owner decisions of 2026-09-15 leave the minting rule alone and open one question*.
+
+#### SPEECH's `attribute` writes become `refine` or `propose` — owed a code change
+
+`speech.py:793` writes one `verb: "attribute"` assertion per word — the highest-volume verb in the
+store and not one of the contract's five. Under this decision it has two destinations and no third:
+
+- **`refine`**, where the claim is *this span's speaker is X*: adding or adjusting the span's speaker
+  metadata, carried in `corrected_attributes`. The span-level home already exists — SPEECH computes
+  `attributed_to` from its words (`speech.py:877-878`), writes it on the span (`:885`) and derives
+  `nontarget` from it (`:886-888`) — so what the migration moves is the per-word assertion, not the
+  claim itself.
+- **`propose`**, where resolving across speakers produces an **aggregated span**: one span per
+  contiguous run attributed to the same speaker, minted `family: "speech"` under the three answers
+  above.
+
+Which words land in which is SPEECH's own piece to settle, not this section's; what is settled is
+that `attribute` has no standing as a fifth branch verb and that these two are its destinations.
+Recorded against the branch at
+[`../20260817-triage-workflow-dag/branch-speech.md`](../20260817-triage-workflow-dag/branch-speech.md)
+§ *S6 — Word→speaker attribution*.
+
+#### What this does not resolve
+
+**Who may attribute a speaker to a span is still open.** The owner's sentence is about SPEECH, a
+branch. Whether PREPROCESS's coming whole-file diarization derivative may itself attribute speakers
+to spans, or must emit segments for consumers to intersect, is a different question and is not
+decided here. The division recorded today stands unchanged —
+[`../20260817-triage-workflow-dag/dag.md`](../20260817-triage-workflow-dag/dag.md)
+§ *5e. QUALITY — a graph edge every recording reaches, and now a node*: **PREPROCESS measures, the
+branches refine, QUALITY judges**, with a speaker *identity* question staying with SPEECH.
+
+**One document disagrees about whether `refine` is a verb at all.**
+[`../20260817-triage-workflow-dag/store.md`](../20260817-triage-workflow-dag/store.md) `:40` and
+`:72` state that *"`refine` and `withdraw` are gone as verbs"*, replaced by `wasDerivedFrom` and
+`wasInvalidatedBy`, with `wasDerivedFrom` glossed as *"a narrower extent **or a better value**"* —
+which is this decision's widened sense, reached by a different route. This contract reinstates
+`refine` as a `verb:` value, so the two documents conflict, and they conflicted before this decision
+rather than because of it. Not reconciled here: `store.md` is out of this spec's scope for the same
+reason § *Explicitly unresolved* gives for the writer/reader vocabulary rule.
+
 ### Where each branch already stands
 
-**SPEECH already does it, unnamed.** It ignores the general span set, groups lexical word runs into
-its own spans, and writes them with `family: "speech"` (`speech.py:879-883`). It is the working
-instance of the contract.
+**SPEECH already does it, unnamed.** It takes no subject from the general span set, groups lexical
+word runs into its own spans, and writes them with `family: "speech"` (`speech.py:879-883`). It is
+the working instance of the contract. It does not *ignore* the general set, and an earlier revision
+said so: it `used`s every live non-SPEECH span (`speech.py:577-578`, the edges at `:600-601`) and
+makes each of its own spans `wasDerivedFrom` the ones it overlaps (`:893-895`) — which is the
+provenance shape § *An aggregated span is a `propose`* generalises.
 
 **VOICE was designed to and cannot.** Its subject is every live span whose `family` is `phonation`
 (`voice.py:230`, `_PHONATION_FAMILY` at `:40`). **Nothing reachable proposes one.** The detector that
@@ -807,9 +971,26 @@ Move it to PREPROCESS, whole-file, in the same shape as the PPG extension:
 - **Every branch gets it.** A cough from a second person in a respiration recording is an airway
   finding AIRWAY has no way to notice today.
 - **`speaker_count` becomes available for every task.**
-- **SPEECH's diarize step becomes a read**, and `speech.second_diarizer` (`default.yaml:166`, null,
-  so `not_consulted`) becomes a question about the shared derivative. This is a behaviour change to a
-  shipped branch, not a pure addition.
+- **SPEECH's diarize step becomes a read — owner decision, 2026-09-15**: *"speech should not have
+  to rerun pyannote to do this, just take the output and use it."* SPEECH does not run pyannote; it
+  reads the shared derivative. `speech.second_diarizer` (`data/config/default.yaml:189`, null, so
+  `second_record` stays `"not_consulted"` at `speech.py:684-685`) becomes a question about that
+  derivative rather than about SPEECH's own pass. This is a behaviour change to a shipped branch, not
+  a pure addition, and it is **owed a code change**: removing SPEECH's diarizer run and replacing it
+  with a read.
+
+**The migration gains coverage rather than trading it, which is why the decision costs nothing to
+take.** SPEECH's own run is scoped to `(min word start, max word end)` — the lexical word hull,
+computed at `speech.py:642-645` under the step comment at `:641` that says as much — so a speaker who
+talks before the participant starts, after they stop, or inside a pause falls outside the interval
+and cannot be found at all. A whole-file derivative has no hull. The branch's own account of the
+defect is at [`../20260817-triage-workflow-dag/branch-speech.md`](../20260817-triage-workflow-dag/branch-speech.md)
+§ *S5 — Speaker count*.
+
+**It lands together with the `attribute` → `refine`/`propose` migration** of § *`refine` covers
+metadata as well as extent*: both touch SPEECH's speaker handling and the same assertions — step 6's
+word→speaker attribution (`speech.py:774-798`) consumes the `speaker_segments` the shared derivative
+would now supply.
 
 **The streams are `enhanced` and `residual`, decided by the owner on 2026-09-15. No pilot is owed,
 and the question that would have needed one does not arise.**
@@ -916,14 +1097,21 @@ Dependency order, with the pieces that are genuinely independent marked:
 5. **The declaration** — the two-grain table, SCREEN's `declaration` measurement, the `metadata` key
    contract. Depends on 1. **Its dependency on 4 is optional** — the measurement can be written by
    TAXONOMY pre-merge — and decoupling it removes the only blocking dependency on the largest piece.
-6. **Whole-file diarization** — the raw-vs-enhanced pilot first, then the extend driver, then SPEECH's
-   diarize step becoming a read. **Not independent of 5**: `speaker_count` needs the declaration's
-   single-target claim.
+6. **Whole-file diarization** — the extend driver, then SPEECH's diarize step becoming a read. The
+   streams and the SPEECH read are both settled by the owner decisions of 2026-09-15 in § *Whole-file
+   diarization as a shared derivative*, so **no pilot is owed**; an earlier revision of this list put
+   one first. **Not independent of 5**: `speaker_count` needs the declaration's single-target claim.
 7. **Widen REPORT's assertion read — by verb, not by branch.** `report.py:1123` already filters to
-   `_EVIDENCE_BRANCHES`, so `:1127` is purely the AIRWAY-on-assertions restriction, and lifting it
-   branch-wise would admit SPEECH's `verb: "attribute"` assertions — **one per word**
-   (`speech.py:790-793`). Admit the contract's five verbs plus `abstain` and `flag`; leave
-   `attribute`, `measure` (`preprocess.py:1830`, `:1837`, `:1855`) and `withdraw` (`:598`) out.
+   `_EVIDENCE_BRANCHES` (defined at `:56`), so `:1127` is purely the AIRWAY-on-assertions
+   restriction, and lifting it branch-wise would admit SPEECH's `verb: "attribute"` assertions —
+   **one per word** (`speech.py:790-793`). Admit the contract's five verbs plus `abstain` and `flag`,
+   and `deviate` with them
+   ([`../20260817-triage-workflow-dag/branch-conventions.md`](../20260817-triage-workflow-dag/branch-conventions.md)
+   § *Deviations and counts are stored*); leave `measure` (`preprocess.py:1835`, `:1842`, `:1860`) and
+   `withdraw` (`:599`) out. **`attribute` is on the leave-out list only until its migration lands** —
+   under § *`refine` covers metadata as well as extent* it becomes `refine` or `propose`, both
+   admitted. Either order works; doing 7 first makes the migrated assertions visible the day they are
+   written.
    **Independent of the branch work and a prerequisite for it**; without it a branch can be built and
    its annotations be invisible.
 8. **The branch contract, per branch** — SPEECH first (closest to it), then AIRWAY (which also closes
@@ -993,7 +1181,10 @@ extent.
 **Whether VERDICT should write the durable description as its own entity**, rather than REPORT
 assembling it.
 
-**Raw vs enhanced for diarization** — pending the pilot.
+**Raw vs enhanced for diarization is resolved, 2026-09-15** — the streams are `enhanced` and
+`residual`, and no pilot is owed (§ *Whole-file diarization as a shared derivative*). It was listed
+here as unresolved until that date, and the line is kept so a reader of the older text finds where it
+went.
 
 **The corpus size disagrees with itself by 28.** `20260910-taxonomy-routing-evidence/measurements.md:1,18-19`
 and two other documents attest **62,550 recordings / 62,547 stores read**; a

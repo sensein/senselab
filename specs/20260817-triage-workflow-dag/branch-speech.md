@@ -22,7 +22,7 @@ points are gated behind null config.
 | 1 transcript | `:517` | live; the only source of `FAIL` |
 | 2 spans | `:571` | live |
 | 3 corroborate | `:577` | measures SQUIM and YAMNet; **both votes inert** |
-| 4 diarize | `:641` | live, scoped to the lexical hull |
+| 4 diarize | `:641` | live, scoped to the lexical hull; **becomes a read of PREPROCESS's derivative** by owner decision 2026-09-15 — see S5 |
 | 5 separation | `:704` | **never selected** (`speech.separation_backend` null) |
 | 6 identify | `:774` | word→speaker live to `:798`; `:800-869` enrollment-gated |
 | 7 PII | `:900` | live; scan call at `:912` |
@@ -263,10 +263,20 @@ right call because the instruments require content keys. These two do not.
 
 ### S5 — Speaker count (**built, scoped wrong**, step 4)
 
-Reads pyannote community-1 over `[first word start, last word end]` only (`speech.py:641-646`). A
-second speaker outside the lexical hull — before the participant starts, after they stop, or in a
-pause — is invisible. The contract moves diarization to PREPROCESS as a whole-file shared derivative,
-which fixes the scope and makes it available to every branch.
+Reads pyannote community-1 over `[first word start, last word end]` only — the lexical word hull,
+computed at `speech.py:642-645` under the step comment at `:641`, with the diarizer resolved at `:646`.
+A second speaker outside the hull — before the participant starts, after they stop, or in a pause — is
+invisible. The contract moves diarization to PREPROCESS as a whole-file shared derivative, which fixes
+the scope and makes it available to every branch.
+
+**SPEECH does not run pyannote; it reads the shared derivative — owner decision, 2026-09-15.** The
+owner: *"speech should not have to rerun pyannote to do this, just take the output and use it."* The
+contract's § *Whole-file diarization as a shared derivative* had this as a consequence to be
+budgeted; it is now decided. **Owed a code change**: remove SPEECH's own diarizer run and replace it
+with a read of PREPROCESS's derivative. The migration *gains* coverage — a whole-file derivative has
+no hull — so nothing is traded for the saved model pass. It lands together with S6's `attribute` →
+`refine`/`propose` migration: step 6 reads the `speaker_segments` this step produces, so both changes
+touch the same assertions.
 
 **Emits** a `counts` entry `speaker_count` carrying `found` and `declared` from the declaration's
 `targeted_speaker_count`, asserting no discrepancy.
@@ -275,14 +285,35 @@ which fixes the scope and makes it available to every branch.
 explicitly instruct. Report pairwise embedding similarity beside the count so an over-split is
 visible as one.
 
-The second diarizer never runs: `speech.second_diarizer` is null (`default.yaml:166`), so
-`second_record` is always `"not_consulted"` (`speech.py:685-703`).
+The second diarizer never runs: `speech.second_diarizer` is null
+(`data/config/default.yaml:189` — an earlier version of this line cited `:166`, which is a `cpps`
+key), so `second_record` is always `"not_consulted"` (`speech.py:684-702`). Under the decision above
+it becomes a question about the shared derivative rather than about a second pass of SPEECH's own.
 
 ### S6 — Word→speaker attribution (**built**, step 6)
 
-Always-run through `speech.py:774-798`, `verb: "attribute"`, one assertion per word (`:788-793`) —
+Always-run through `speech.py:774-798`, `verb: "attribute"`, one assertion per word (`:790-793`) —
 the highest-volume assertion verb in the store, and not one of the contract's five. Relevant to the
 contract's piece 7, which widens REPORT's assertion read by verb.
+
+**`attribute` becomes `refine` or `propose` — owner decision, 2026-09-15, owed a code change.** The
+owner: *"speech may need to resolve across multiple speakers, so it could fall under refinement
+(adding/adjusting span metadata, or creating an aggregated span)."* So attribution needs no sixth
+verb, and `attribute` has exactly two destinations:
+
+- **`refine`** where the claim is *this span's speaker is X* — adding or adjusting the span's speaker
+  metadata, carried in `corrected_attributes` (the contract's § *`refine` covers metadata as well as
+  extent*, which widened `refine` past extent-only on the same date). The span-level home already
+  exists: `attributed_to` is computed from the words at `speech.py:877-878`, written on the span at
+  `:885`, and `nontarget` derived from it at `:886-888`. What moves is the per-word assertion, not the
+  claim.
+- **`propose`** where resolving across speakers produces an **aggregated span** — one span per
+  contiguous run attributed to the same speaker — minted `family: "speech"`, `wasDerivedFrom` the
+  spans it aggregates, leaving them untouched
+  ([`branch-conventions.md`](branch-conventions.md) § *An aggregated span is a `propose`*).
+
+Which words land in which is this branch's to settle. It lands with S5's diarization read, whose
+`speaker_segments` this step consumes.
 
 `:800-869` is the enrollment path. `speech.enrollment_model` (`default.yaml:171`) and
 `speech.target_match_cosine` (`:167`) are both null, so an enrollment supplied without an override
@@ -389,7 +420,8 @@ mistakes 1,602 correctly-performed recordings for failed transcription.
 
 ```
 spans        family: "speech", one per run of touching lexical words
-assertions   attribute (one per word), label/pii, flag, deviate
+assertions   attribute (one per word) — migrating to refine/propose per S6;
+             label/pii, flag, deviate
 entities     speaker (one per diarized segment), pii
 measurements squim, disruptions, proximity, connected-speech measures (S4)
 counts       speaker_count {found, declared}
