@@ -209,6 +209,22 @@ construction. Excluding DDK from the negatives, specificity at `>= 4` is **0.933
 0.696. At `>= 2` the same correction runs 71.3% DDK and **0.855** excluding DDK. Every
 specificity quoted in this section is the DDK-excluded one unless it says otherwise.
 
+> **Superseded as a treatment, 2026-09-15; the figures above stand.** The owner directed that a
+> declared branch must be *in* the evaluation: *"there is a declared branch, which means evaluation
+> of rulesets should include it."* So DDK families are no longer held out of SPEECH's population —
+> they are **positives** for it, via a multi-label reference (`reference_family_set.SPEECH` is now
+> `speech`, not `lexical_speech`, and `excluded_by_construction` is null for every branch).
+>
+> **Every specificity on this page is unchanged by that.** Exclusion and multi-label leave the
+> negative side identical, because the excluded families were all positives: over the SPEECH branch
+> both give spec **0.895**, and this gate's sweep rows are untouched. What changes is the positive
+> side, which exclusion discarded — 7,626 correct SPEECH routings that earned no credit and **363
+> DDK recordings SPEECH did not route**, a real miss that holding them out made invisible.
+>
+> Read the numbers above as the gate sweep they are. Do not read "exclude DDK from the negatives"
+> as the recommended treatment. Derivation:
+> [`../20260915-gate-family-matrix/design.md`](../20260915-gate-family-matrix/design.md).
+
 **`words.total` is the wrong field to read.** `total >= 1` scores specificity **0.075**, because
 bracketed tokens fire almost everywhere — nearly every recording carries a `[breath]` or an `[uh]`.
 `lexical`, the non-bracketed count, is the field that separates. The bracketed half is not noise

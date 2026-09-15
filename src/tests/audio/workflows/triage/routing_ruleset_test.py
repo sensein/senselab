@@ -74,11 +74,16 @@ class TestTheReferenceStandardIsNotARouter:
             assert set_name in FAMILY_SETS
 
     def test_the_reference_branch_comes_off_the_task_entity(self, ruleset: Ruleset) -> None:
-        """One family per branch, read through the family sets rather than restated here."""
+        """Read through the family sets rather than restated here, and multi-label since 2026-09-15.
+
+        A diadochokinesis family declares SPEECH as well as DDK: the material is speech and it is
+        DDK, so routing to both agrees with the declaration on both counts. It used to declare DDK
+        alone, with ``syllable_repetition`` held out of SPEECH's population instead.
+        """
         assert ruleset.reference_branches("harvard-sentences-list") == ("SPEECH",)
         assert ruleset.reference_branches("voluntary-cough") == ("AIRWAY",)
         assert ruleset.reference_branches("prolonged-vowel") == ("VOICE",)
-        assert ruleset.reference_branches("diadochokinesis-pataka") == ("DDK",)
+        assert ruleset.reference_branches("diadochokinesis-pataka") == ("SPEECH", "DDK")
 
     def test_a_family_no_set_carries_is_a_reference_positive_for_nothing(self, ruleset: Ruleset) -> None:
         """An unrecognised task id is not silently swept into a branch."""

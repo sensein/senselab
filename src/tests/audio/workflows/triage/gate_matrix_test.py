@@ -14,12 +14,17 @@ import pytest
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.gate_matrix import (
+    BEYOND_DECLARATION,
     DECIDING_CLASSES,
+    DECLARED,
     EXTRA,
     MISSED,
     PROFILE_DIR,
     Deciding,
+    FamilyRouting,
     GateCell,
+    family_routing,
+    family_states,
     gate_matrix,
     gate_order,
     group_disagreements,
@@ -39,7 +44,12 @@ from senselab.audio.workflows.triage.routing_analysis.gate_plot import (
     panel_values,
 )
 from senselab.audio.workflows.triage.routing_analysis.report import Confusion
-from senselab.audio.workflows.triage.routing_analysis.ruleset import Ruleset, load_ruleset
+from senselab.audio.workflows.triage.routing_analysis.ruleset import (
+    ROUTE_STATES,
+    Ruleset,
+    evaluate_routes,
+    load_ruleset,
+)
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
 
 COUGH_KEY = "yamnet.cough_labels.peak_over_floor_db_max"
@@ -100,6 +110,20 @@ def _sustained(family: str, seconds: float, stem: str = "") -> RecordingFeatures
         The record.
     """
     return _features(family, stem or f"sub-1_ses-1_task-{family}-{seconds}", span_longest_s={"amplitude": seconds})
+
+
+def _cell(cells: list[FamilyRouting], family: str, branch: str) -> FamilyRouting:
+    """The one routing cell of a (family, branch) pair.
+
+    Args:
+        cells: What :func:`family_routing` returned.
+        family: The task family.
+        branch: The branch.
+
+    Returns:
+        The cell.
+    """
+    return next(cell for cell in cells if cell.family == family and cell.branch == branch)
 
 
 class TestUnavailableIsNeverFoldedIntoNotFired:
@@ -496,25 +520,40 @@ class TestTheGroupsAggregateByTaskFamily:
 
 
 class TestTheBranchAgreementRates:
-    """Recall, precision and specificity, each with its own denominator."""
+    """Sensitivity, specificity and the positive share of the firings, each with its own denominator.
 
-    def test_precision_is_over_the_routings_and_specificity_over_the_negatives(self) -> None:
+    The share is not called precision. Under a multi-label proxy reference and additive routing a
+    firing the declaration does not assign is not established to be an error, so the quantity is
+    not an accuracy and must not be named as one.
+    """
+
+    def test_the_share_of_firings_is_over_the_routings_and_specificity_over_the_negatives(self) -> None:
         """A 2x2 of tp 3, fp 7, tn 13, fn 2 by hand.
 
-        recall 3/(3+2) = 0.6, precision 3/(3+7) = 0.3, specificity 13/(13+7) = 0.65.
+        sensitivity 3/(3+2) = 0.6, share of firings 3/(3+7) = 0.3, specificity 13/(13+7) = 0.65.
         """
         table = Confusion(tp=3, fp=7, tn=13, fn=2)
         assert table.sensitivity == pytest.approx(0.6)
-        assert table.precision == pytest.approx(0.3)
+        assert table.positive_share_of_fired == pytest.approx(0.3)
         assert table.specificity == pytest.approx(0.65)
 
-    def test_precision_is_none_when_the_branch_never_routed(self) -> None:
-        """No firings means no fraction of firings, which is not a precision of zero."""
-        assert Confusion(tp=0, fp=0, tn=9, fn=4).precision is None
+    def test_the_share_is_none_when_the_branch_never_routed(self) -> None:
+        """No firings means no fraction of firings, which is not a share of zero."""
+        assert Confusion(tp=0, fp=0, tn=9, fn=4).positive_share_of_fired is None
 
-    def test_precision_reaches_the_machine_readable_output(self) -> None:
+    def test_the_share_reaches_the_machine_readable_output(self) -> None:
         """The over-routing side has to be readable off the JSON, not only off the table."""
-        assert Confusion(tp=1, fp=1, tn=1, fn=1).as_json()["precision"] == pytest.approx(0.5)
+        assert Confusion(tp=1, fp=1, tn=1, fn=1).as_json()["positive_share_of_fired"] == pytest.approx(0.5)
+
+    def test_no_output_of_the_2x2_is_named_precision(self) -> None:
+        """The name is the defect being fixed: a proxy reference cannot yield an accuracy."""
+        assert "precision" not in Confusion(tp=1, fp=1, tn=1, fn=1).as_json()
+        assert not hasattr(Confusion(tp=1, fp=1, tn=1, fn=1), "precision")
+
+    def test_every_raw_count_survives_into_the_output(self) -> None:
+        """Renaming a rate must not cost a count; the 2x2 is what everything else is derived from."""
+        row = Confusion(tp=3, fp=7, tn=13, fn=2).as_json()
+        assert (row["tp"], row["fp"], row["tn"], row["fn"]) == (3, 7, 13, 2)
 
 
 class TestUnassignedFamiliesAreReportedNotAbsorbed:
@@ -534,6 +573,7 @@ class TestUnassignedFamiliesAreReportedNotAbsorbed:
         """The reference mapping is read from the config, never restated in the analysis."""
         assert set(ruleset.reference_family_set) == set(BRANCHES)
         assert ruleset.reference_family_set["VOICE"] == "voice"
+        assert ruleset.reference_family_set["SPEECH"] == "speech"
 
 
 class TestTheDisagreementProfile:
@@ -662,3 +702,189 @@ class TestGateCellArithmetic:
         assert row["fired_rate_evaluable"] is None
         assert row["unavailable_rate"] == pytest.approx(1.0)
         assert row["fired_rate"] == pytest.approx(0.0)
+
+
+class TestTheReferenceIsMultiLabel:
+    """A family declares the SET of branches that apply to it, not one, and nothing is held out."""
+
+    def test_a_ddk_family_declares_both_speech_and_ddk(self, ruleset: Ruleset) -> None:
+        """Diadochokinesis material is speech and is DDK, so routing to both agrees twice over."""
+        assert ruleset.reference_branches("diadochokinesis-pa") == ("SPEECH", "DDK")
+
+    def test_a_lexical_family_declares_speech_alone(self, ruleset: Ruleset) -> None:
+        """Multi-label must not mean every family gets every branch."""
+        assert ruleset.reference_branches("harvard-sentences-list") == ("SPEECH",)
+        assert ruleset.reference_branches("prolonged-vowel") == ("VOICE",)
+        assert ruleset.reference_branches("voluntary-cough") == ("AIRWAY",)
+
+    def test_speech_is_scored_against_the_union_and_not_the_lexical_half(self, ruleset: Ruleset) -> None:
+        """``lexical_speech`` excludes DDK by construction; ``speech`` is the union that does not."""
+        assert ruleset.reference_family_set["SPEECH"] == "speech"
+
+    def test_no_branch_holds_any_family_out_of_its_population(self, ruleset: Ruleset) -> None:
+        """Holding out a declared branch's families discards a branch the DAG routes to."""
+        assert dict(ruleset.excluded_by_construction) == {}
+        assert all(ruleset.held_out(branch) == frozenset() for branch in BRANCHES)
+
+    def test_a_ddk_recording_routing_to_speech_is_agreement_not_an_extra(self, ruleset: Ruleset) -> None:
+        """The single-label reference charged this as a false positive. It is not one."""
+        record = _features(
+            "diadochokinesis-pa",
+            words={"agreement": 10, "total": 11, "lexical": 11},
+            transcript="pa pa pa pa",
+        )
+        evaluation = evaluate_routes(record, ruleset)
+        assert "SPEECH" in evaluation.agreed
+        assert "SPEECH" not in evaluation.extra
+
+
+class TestWhereEachFamilyRoutes:
+    """The per-family routing breakdown: how many go where, and which gate sent them."""
+
+    def test_every_family_and_branch_pair_is_a_cell(self, ruleset: Ruleset) -> None:
+        """A branch a family never routed to must read zero, not be absent."""
+        records = [_features("prolonged-vowel"), _features("voluntary-cough")]
+        cells = family_routing(records, ruleset)
+        assert {(cell.family, cell.branch) for cell in cells} == {
+            (family, branch) for family in ("prolonged-vowel", "voluntary-cough") for branch in BRANCHES
+        }
+
+    def test_a_routing_two_gates_agreed_on_is_counted_once_and_credited_to_both(self, ruleset: Ruleset) -> None:
+        """``routed`` is per recording; ``fired_gates`` is per gate. They are different denominators."""
+        record = _features(
+            "diadochokinesis-pa",
+            transcript="pa pa pa pa",
+            ppg={"silent_fraction": 0.1, "segment_rate_per_s": 12.33},
+        )
+        cell = _cell(family_routing([record], ruleset), "diadochokinesis-pa", "DDK")
+        assert cell.routed == 1
+        assert cell.fired_gates == {"ddk.lexical_repetition": 1, "ddk.ppg_segment_rate_per_s": 1}
+        assert cell.sole_gates == {}
+
+    def test_a_routing_one_gate_carried_alone_names_that_gate_as_sole(self, ruleset: Ruleset) -> None:
+        """A sole-firing gate is the routing that disappears if the gate is removed."""
+        record = _features("rainbow-passage", transcript="the the the the")
+        cell = _cell(family_routing([record], ruleset), "rainbow-passage", "DDK")
+        assert cell.routed == 1
+        assert cell.sole_gates == {"ddk.lexical_repetition": 1}
+
+    def test_a_branch_beyond_the_declaration_says_so_rather_than_scoring_as_error(self, ruleset: Ruleset) -> None:
+        """``prolonged-vowel`` on three lexical words routes SPEECH. Not declared, not an error."""
+        record = _features("prolonged-vowel", words={"agreement": 0, "total": 3, "lexical": 3})
+        cell = _cell(family_routing([record], ruleset), "prolonged-vowel", "SPEECH")
+        assert cell.routed == 1
+        assert cell.declared is False
+        assert cell.agreement == BEYOND_DECLARATION
+
+    def test_a_declared_cell_says_declared(self, ruleset: Ruleset) -> None:
+        """The other side of the same field, so the value is not constant."""
+        record = _features("harvard-sentences-list", words={"agreement": 0, "total": 9, "lexical": 9})
+        cell = _cell(family_routing([record], ruleset), "harvard-sentences-list", "SPEECH")
+        assert cell.declared is True
+        assert cell.agreement == DECLARED
+
+    def test_the_margin_is_the_least_clearing_firing_gate(self, ruleset: Ruleset) -> None:
+        """How far past its cut the routing actually was is the narrowest gate, not the widest."""
+        record = _features(
+            "diadochokinesis-pa",
+            transcript="pa pa pa pa pa pa pa pa pa pa pa pa",
+            ppg={"silent_fraction": 0.1, "segment_rate_per_s": 10.5},
+        )
+        cell = _cell(family_routing([record], ruleset), "diadochokinesis-pa", "DDK")
+        assert cell.margins["median"] == pytest.approx(0.05)
+
+    def test_the_routed_rate_is_over_every_recording_of_the_family(self, ruleset: Ruleset) -> None:
+        """Three recordings, one routing: 1/3, not 1/1."""
+        records = [
+            _features("rainbow-passage", "a", transcript="the the the the"),
+            _features("rainbow-passage", "b"),
+            _features("rainbow-passage", "c"),
+        ]
+        cell = _cell(family_routing(records, ruleset), "rainbow-passage", "DDK")
+        assert cell.routed == 1
+        assert cell.n == 3
+        assert cell.routed_rate == pytest.approx(1 / 3)
+        assert cell.not_routed == 2
+
+    def test_a_non_routing_with_every_gate_unread_is_not_a_silent_one(self, ruleset: Ruleset) -> None:
+        """DDK declares two gates; dropping both features leaves the branch unevaluable, not silent."""
+        record = _features("diadochokinesis-pa", consensus_present=False, ppg={})
+        cell = _cell(family_routing([record], ruleset), "diadochokinesis-pa", "DDK")
+        assert cell.routed == 0
+        assert cell.not_routed_all_unavailable == 1
+        assert cell.not_routed_some_unavailable == 1
+
+    def test_a_partly_unread_branch_is_some_and_not_all(self, ruleset: Ruleset) -> None:
+        """One of DDK's two gates unread is a partial, which must not read as total."""
+        record = _features("diadochokinesis-pa", ppg={})
+        cell = _cell(family_routing([record], ruleset), "diadochokinesis-pa", "DDK")
+        assert cell.routed == 0
+        assert cell.not_routed_some_unavailable == 1
+        assert cell.not_routed_all_unavailable == 0
+
+    def test_a_routing_made_while_a_gate_was_unread_is_flagged_as_partial_evidence(self, ruleset: Ruleset) -> None:
+        """DDK entered on the repetition gate while the PPG rate could not be read at all."""
+        record = _features("diadochokinesis-pa", transcript="pa pa pa pa", ppg={})
+        cell = _cell(family_routing([record], ruleset), "diadochokinesis-pa", "DDK")
+        assert cell.routed == 1
+        assert cell.routed_with_unavailable == 1
+        assert cell.sole_gates == {"ddk.lexical_repetition": 1}
+
+    def test_a_cell_that_routed_nothing_carries_no_margins_and_no_gates(self, ruleset: Ruleset) -> None:
+        """An empty distribution must stay empty rather than reporting a zero nobody measured."""
+        cell = _cell(family_routing([_features("prolonged-vowel")], ruleset), "prolonged-vowel", "DDK")
+        assert cell.routed == 0
+        assert cell.margins == {}
+        assert cell.gates_summary() == "-"
+        assert cell.sole_summary() == "-"
+
+    def test_the_json_row_carries_the_counts_and_the_gates(self, ruleset: Ruleset) -> None:
+        """The breakdown has to be readable off the table, not only off the object."""
+        record = _features("rainbow-passage", transcript="the the the the")
+        row = _cell(family_routing([record], ruleset), "rainbow-passage", "DDK").as_json()
+        assert row["routed"] == 1
+        assert row["agreement"] == BEYOND_DECLARATION
+        assert row["firing_gates"] == "ddk.lexical_repetition:1"
+        assert row["sole_firing_gates"] == "ddk.lexical_repetition:1"
+
+
+class TestFamilyStatesCountAdditiveRouting:
+    """How many branches each recording routed to, which is the measure of additive routing."""
+
+    def test_a_recording_routed_to_two_branches_lands_in_the_two_bucket(self, ruleset: Ruleset) -> None:
+        """A DDK recording routes SPEECH and DDK. That is two, and it is intended."""
+        record = _features(
+            "diadochokinesis-pa",
+            words={"agreement": 10, "total": 11, "lexical": 11},
+            transcript="pa pa pa pa",
+            ppg={"silent_fraction": 0.1, "segment_rate_per_s": 12.33},
+        )
+        entry = family_states([record], ruleset)[0]
+        assert entry.branch_counts["2"] == 1
+        assert entry.branch_counts["1"] == 0
+        assert entry.declared == ("SPEECH", "DDK")
+
+    def test_every_branch_count_bucket_is_present_at_zero(self, ruleset: Ruleset) -> None:
+        """A bucket nothing landed in must read zero rather than be missing from the row."""
+        entry = family_states([_features("prolonged-vowel")], ruleset)[0]
+        assert set(entry.branch_counts) == {str(width) for width in range(len(BRANCHES) + 1)}
+        assert entry.branch_counts["0"] == 1
+
+    def test_every_route_state_is_present_and_they_sum_to_the_recordings(self, ruleset: Ruleset) -> None:
+        """The three states partition the family, so a reader can check the row adds up."""
+        records = [_features("rainbow-passage", "a", transcript="the the the the"), _features("rainbow-passage", "b")]
+        entry = family_states(records, ruleset)[0]
+        assert set(entry.states) == set(ROUTE_STATES)
+        assert sum(entry.states.values()) == entry.n == 2
+
+    def test_the_json_row_names_every_declared_branch(self, ruleset: Ruleset) -> None:
+        """A multi-label declaration has to survive into the table as more than one branch."""
+        row = family_states([_features("diadochokinesis-pa")], ruleset)[0].as_json()
+        assert row["declared"] == "SPEECH+DDK"
+        assert row["n_declared"] == 2
+
+    def test_a_family_declaring_nothing_reads_a_dash_and_not_an_empty_string(self, ruleset: Ruleset) -> None:
+        """An unassigned family is in no branch's set, which must be visible in the row."""
+        row = family_states([_features("not-a-real-family")], ruleset)[0].as_json()
+        assert row["declared"] == "-"
+        assert row["n_declared"] == 0

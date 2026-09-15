@@ -97,8 +97,13 @@ class Confusion:
         return self.tn / negatives if negatives else None
 
     @property
-    def precision(self) -> float | None:
-        """Fraction of firings the reference calls positive, or None when the detector never fired."""
+    def positive_share_of_fired(self) -> float | None:
+        """Fraction of firings the reference calls positive, or None when the detector never fired.
+
+        Not named precision. Every reference standard here but ``agreed_asr`` is a proxy, so a
+        firing the reference calls negative is not established to be an error and this share is not
+        an accuracy. ``specs/20260915-gate-family-matrix/design.md`` carries the naming.
+        """
         fired = self.tp + self.fp
         return self.tp / fired if fired else None
 
@@ -119,8 +124,8 @@ class Confusion:
         """This table and its derived rates, for the machine-readable output.
 
         Returns:
-            The four counts plus sensitivity, specificity, precision, the false-positive rate and
-            Youden's J.
+            The four counts plus sensitivity, specificity, the positive share of the firings, the
+            false-positive rate and Youden's J.
         """
         return {
             "tp": self.tp,
@@ -129,7 +134,7 @@ class Confusion:
             "fn": self.fn,
             "sensitivity": self.sensitivity,
             "specificity": self.specificity,
-            "precision": self.precision,
+            "positive_share_of_fired": self.positive_share_of_fired,
             "false_positive_rate": self.false_positive_rate,
             "youden": self.youden,
         }
