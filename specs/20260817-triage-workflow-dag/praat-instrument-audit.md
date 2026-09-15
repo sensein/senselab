@@ -570,10 +570,16 @@ then **not the published quantity**, and the entire difference between the two i
 **So it is a design decision, stated as one, and forced into the name** per
 [`branch-conventions.md`](branch-conventions.md)'s convention-in-the-name rule.
 
-### Step 4 — implement CPPS directly, roughly thirty lines
+### Step 4 — implement CPPS directly, roughly thirty lines (**landed 2026-09-14**)
 
 Log-power spectrum → cepstrum → robust regression over the trend range → peak prominence, frame-wise,
 returning the frame count — **and then the two smoothing steps, which are the *S* in CPPS.**
+
+**Landed.** `extract_cpp_descriptors` no longer calls `Get CPPS...` and no longer takes a `floor`,
+a `ceiling` or a `frame_shift`; it takes a `CppsSettings`, every field of which is a
+`praat_features.cpps` config key with its derivation beside it. It returns a third scalar,
+`cpp_frames`, which reaches the corpus as `cepstral_peak_prominence_frames`. What the step got wrong
+when it was checked against the tree, and what this change owes, are the two subsections below.
 
 **An earlier version of this step gave four operations and would have produced CPP, not CPPS.** The
 parameters it omitted are the ones that set the value:
@@ -642,6 +648,64 @@ ways:
   is what [`branch-conventions.md`](branch-conventions.md) requires of a per-measure band — fixed
   *across recordings*, whatever it is;
 - it is not what the method does: the published convention uses a fixed wide search.
+
+#### What step 4 was wrong about, checked against the tree at `db7c3070`
+
+Every line citation in the parameter table and in findings 2, 4 and 5 was re-read at `db7c3070` and
+**all of them are correct**: `:826` is the `To PowerCepstrogram` call, `:834`–`:844` are the twelve
+positional arguments of `Get CPPS...` in the order the table gives them, `:859`–`:860` are the cut
+and the append, `:868-869` and `:880` are the two indistinguishable NaN returns, `:818` is the
+discarded `n_intervals`, and `phonation/api.py:98-104` are the two raises. Three things the step
+itself got wrong:
+
+- **The parameter table is incomplete in exactly the way the step condemns.** It lists eight
+  settings and calls them the ones "that set the value", but `:826` passes three more that also set
+  it and that the table never names: the cepstrogram's **pitch floor 60 Hz**, its **time step
+  0.002 s** and its **pre-emphasis from 50 Hz**. The pitch floor is not a minor omission — it sets
+  the analysis window, three of its periods with a Gaussian's physical duration twice that, so at
+  60 Hz the window is 100 ms and **a recording shorter than 100 ms places no frame at all**. A step
+  arguing that a measurement with no stated window is comparable to nothing omitted the parameter
+  that sets the window. All three are config keys now.
+- **The 60 in "peak search band 60–700 Hz" is a different 60 from the one at `:826`.** The retired
+  code used one literal for two jobs — the cepstrogram's analysis window and the peak search floor —
+  and the step reproduces the conflation. They are `cpps.pitch_floor_hz` and
+  `cpps.peak_search_range_hz[0]` now, and they happen to be equal rather than being the same
+  decision.
+- **"Roughly thirty lines" is out by about a factor of two on the arithmetic and six on the file.**
+  The framing, the two moving averages, the vectorised Huber fit and the parabolic refinement are
+  about sixty lines of arithmetic; with the docstrings that declare what each setting is, the
+  helpers and the validation, it is about two hundred. The estimate is not load-bearing, but it read
+  as an argument that the direct implementation is cheap, and the cheap part is the DSP rather than
+  the declaring.
+
+One thing the step did not anticipate, recorded because it changes what the number means: **removing
+the voicing gate means silence is now in the average.** Praat's own `Get CPPS` over a whole file does
+exactly this and it is the published convention, but a recording that is half silence and one that is
+a tenth silence are no longer directly comparable on the mean alone. `cpp_frames` does not fix that —
+it counts frames, not voiced frames. Whether a silence-excluding variant is owed is a decision, not a
+defect, and it belongs beside the 600/700 tension rather than inside this step.
+
+#### This change owes its own corpus re-derivation, separate from the F0-range one
+
+**It must not ride along with the F0-range pass scheduled for 2026-09-15.** This changes
+`cepstral_peak_prominence_mean` and `cepstral_peak_prominence_std` on all 62,578 stores, and adds
+`cepstral_peak_prominence_frames`. The F0-range change (step 2) changes a different set of scalars
+through a different mechanism. Landing both in one pass would make every changed value attributable
+to either cause and to neither: a CPPS that moved could be the new estimator, the new band, the
+removed gate, the removed cut, or the new F0 range reaching some other scalar the comparison is
+conditioned on — and nothing in the store would separate them. The F0-range pass is already
+scheduled and must stay attributable to the F0-range change alone, so **this one is deliberately not
+scheduled, not scripted and not triggered here, and `scripts/extend_ppg_praat.py` is untouched.**
+
+The two directions the values move, so the re-derivation has a prediction to be checked against
+rather than being read for surprise. Measured on
+`src/tests/data_for_testing/audio_48khz_mono_16bits.wav`: the retired implementation reads
+**6.926 dB** over 11 of 15 voiced intervals, unweighted, with four intervals (1.63, 3.64, 2.09,
+2.90 dB) deleted by the cut; the direct implementation reads **5.570 dB** over 2411 frames. Most of
+the 1.36 dB is the cut and the gate, not the band: at the retired 60–330 band the direct
+implementation reads 5.376 dB, so the widening to 700 adds 0.19 dB on this recording and 4.55 dB on
+a 420 Hz source. **Expect the corpus mean to fall and its variance to widen**, because the values
+the cut deleted are all at the low end and they come back.
 
 ### Step 2b — track F0 on the signal the range was derived on
 
@@ -818,9 +882,18 @@ and are still not stated beside the values they produced. That is now a
 Consumers: [`branch-voice.md`](branch-voice.md) V3, V4, V7, V8 — all four rewritten for the
 derivation; the corpus already written stays governed by this finding.
 
-### 2. The CPPS `> 4` cut deletes the dysphonic range
+### 2. The CPPS `> 4` cut deletes the dysphonic range (**fixed 2026-09-14 by step 4**)
 
-`:859` drops every per-interval CPPS value at or below 4 dB before it is appended at `:860`.
+**Past tense as of step 4**, which replaced the function outright: there is no cut, no voicing gate,
+and the mean is over frames rather than over interval means. The two sub-defects below went with it —
+the average is duration-weighted because equal-duration frames are what is pooled, and `std_dev_cpp`
+is now the within-recording frame-to-frame SD that published work reports rather than a
+between-interval one. The third, `voicing_threshold=0.3`, is **not** fixed: it is still at `:807` in
+the retired code's place in history and still applies wherever a voicing gate is used, but CPPS no
+longer runs through one. The finding still governs every value already in the corpus, which is why
+step 4 owes a re-derivation.
+
+`:859` dropped every per-interval CPPS value at or below 4 dB before it was appended at `:860`.
 
 **Measured**: severe dysphonia **2.78 dB**, dropped. Severe dysphonia at F0 410 Hz, **2.17 dB**,
 dropped.
@@ -856,58 +929,86 @@ period. Here it is five times larger.
 silence into the cepstrogram.
 
 **Severity scales inversely with voiced-run length**, so it is worst on fragmented, dysarthric and
-apraxic productions and negligible on the sustained-vowel control task. And it **depresses CPPS**,
-pushing values toward finding 2's cut — the two multiply.
+apraxic productions and negligible on the sustained-vowel control task. And it **depressed CPPS**,
+pushing values toward finding 2's cut — the two multiplied.
 
-### 4. The CPPS peak search is 60–330 Hz regardless of the caller's ceiling
+**Step 4 severed that path on 2026-09-14, and only that path.** CPPS no longer runs through a vuv
+TextGrid, so the inflation cannot reach it; every value in the corpus was computed before that, and
+every other interval-gated measure is unchanged.
 
-`:837-838` hardcodes the peak search band, silently replacing whatever ceiling the caller derived —
-the retired bin's 500 Hz then, the per-recording ceiling now.
+### 4. The CPPS peak search is 60–330 Hz regardless of the caller's ceiling (**fixed 2026-09-14 by step 4**)
+
+`:837-838` hardcoded the peak search band, silently replacing whatever ceiling the caller derived —
+the retired bin's 500 Hz then, the per-recording ceiling later.
 
 **Measured penalty at F0 420 Hz: 3.8 dB** (10.33 vs 14.14) — roughly the entire normal-to-dysphonic
 span. Children and high-F0 females read as dysphonic; combined with noise they cross the `> 4` cut
 and disappear entirely.
 
-### 5. Support counts: one of thirteen
+**The band is `praat_features.cpps.peak_search_range_hz`, `[60.0, 700.0]`, and it is still not the
+caller's ceiling** — deliberately, because a per-recording band destroys cross-recording
+comparability and is unavailable on the population this serves. Re-measured on a 420 Hz harmonic
+buzz under the new implementation: **23.53 dB at 60–700 against 18.98 dB at 60–330, a 4.55 dB
+penalty**, the same defect on a different source. What stays open is the 600 Hz `f0_search_range_hz`
+ceiling this band now exceeds by 100 Hz; that is recorded in step 4 and in the
+`praat_features.cpps.peak_search_range_hz` derivation, not closed here.
 
-**Corrected 2026-09-14, when step 2 landed.** This finding opened *"Not one function in
+### 5. Support counts: two of thirteen
+
+**Corrected twice on 2026-09-14: first to `one of thirteen` when step 2 landed, then to two when
+step 4 did.** The second is `extract_cpp_descriptors`, which returns `cpp_frames` — the frames the
+mean and SD rest on, `0.0` when the recording is shorter than one analysis window and on the crash
+path alike — and it reaches the corpus as `cepstral_peak_prominence_frames` through `_extract_one`.
+It is the count findings 1–4 were unauditable without: a reader can now tell a `mean_cpp` over 40
+frames from one over 2400. **It does not close the convention**, and the rest of this finding stands
+unchanged for the other eleven; in particular `extract_speech_rate`'s syllable count, the one that
+matters most, is still computed and thrown away.
+
+The original wording, with the step-2 correction: This finding opened *"Not one function in
 `praat_parselmouth.py` returns a frame, cycle or interval count."* That sentence was true when the
 audit was written and is now false by exactly one function: `extract_pitch_values` returns
-`pitch_frames` (`:494`, and `0.0` on both no-range paths via `_no_pitch_range`, `:370-378`) — the
+`pitch_frames` (`:551`, and `0.0` on both no-range paths via `_no_pitch_range`, `:427-435`) — the
 voiced-frame count its derived range rests on, and **the module's first support count**. It is a
 precedent for the shape the rest of this finding asks for, and it was added because the range it
 reports on is worthless without it, which is the same argument every other row here makes.
 
 **And since Task 8 that count reaches the corpus rather than stopping at the function's return.**
 `_extract_one` seeds `feature_data` from `extract_pitch_values`' five keys
-(`praat_parselmouth.py:1494`), so `pitch_frames` — with the floor, the ceiling, `pitch_failed` and
+(`praat_parselmouth.py:1654`), so `pitch_frames` — with the floor, the ceiling, `pitch_failed` and
 `pitch_range_fell_back` — is an attribute of every new `praat_features` measurement
-(`preprocess.py:899`, `:906`). One of thirteen is still one of thirteen; what changed is that the one
-is now readable from the store, which is the shape the other twelve owe.
+(`preprocess.py:903`, `:910`). What changed is that the count is readable from the store, which is
+the shape the other eleven owe.
 
-**The finding stands for the other twelve**, and the three that compute a count and discard it are
-unchanged: `:818` (`n_intervals = ... "Get number of rows"`), `:955` (`n = ... "Get number of
-points"`) and `:1064` (`num_steps = spectrogram.nx`).
+**The finding stands for the other eleven**, and the two that still compute a count and discard it
+are `:1122` (`n = ... "Get number of points"`) and `:1231` (`num_steps = spectrogram.nx`). The third,
+`:818` (`n_intervals = ... "Get number of rows"`), went with the function step 4 replaced.
 
-An earlier version of this finding also cited `:804` and `:1036-1039` — now `:863` and
-`:1095-1098` — and neither computes a count: `:863` is `if cpp_list:`, a truthiness test, and
-`len(cpp_list)` is **never computed anywhere**, while `:1095-1098` are four `np.mean` calls.
+An earlier version of this finding also cited `:804` and `:1036-1039` — `:863` and `:1095-1098` at
+`db7c3070` — and neither computed a count: `:863` was `if cpp_list:`, a truthiness test, and
+`len(cpp_list)` was **never computed anywhere**, while `:1095-1098` are four `np.mean` calls, now
+`:1255-1258`.
 
-**And there is a fourth, which matters more than the three above.** `extract_speech_rate` computes
-`numpeaks` (`:257`) and `number_syllables` (`:330`) and **returns only rates**. That syllable count
+**Step 4 moved every line in `praat_parselmouth.py` below the CPPS function** — the replacement is
+about 200 lines against the original 116, and the `CppsSettings` declaration adds 60 near the top.
+The citations in this finding were re-read after that change. Citations into this file elsewhere in
+this document were verified at `db7c3070` and have **not** been re-offset; check one before relying
+on it.
+
+**And there is a third still open, which matters more than the two above.** `extract_speech_rate`
+computes `numpeaks` (`:314`) and `number_syllables` (`:387`) and **returns only rates**. That syllable count
 **is** the support for [`branch-speech.md`](branch-speech.md) S4's and [`branch-ddk.md`](branch-ddk.md)
 D2's speaking and articulation rates — so it is what makes the mandatory support count specifically
 unsatisfiable for **the two largest rate populations in the corpus**, roughly 25,000 recordings and
 7,989.
 
-The finding stands and is sharper: **every scalar a branch actually consumes is still unsupported,
-and the one whose count would matter most computes it and throws it away.** One function returning a
-count does not close a convention that binds thirteen.
+The finding stands and is sharper: **the scalar whose count would matter most computes it and throws
+it away.** Two functions returning a count do not close a convention that binds thirteen.
 
 **So [`branch-conventions.md`](branch-conventions.md)'s mandatory support count is satisfiable on the
-`phonation/api.py` path, satisfied on exactly one Praat function, and impossible on the rest** — and
-findings 1–4 are unauditable after the fact, because you cannot tell whether a `mean_cpp` rests on
-2 intervals or 60.
+`phonation/api.py` path, satisfied on two Praat functions, and impossible on the rest.** Findings 1–4
+were unauditable after the fact because you could not tell whether a `mean_cpp` rested on 2 intervals
+or 60; `cpp_frames` closes that for values written from step 4 onward and for no value already in the
+corpus, which is the second reason step 4 owes a re-derivation.
 
 **The convention is still unsatisfiable for every Praat scalar a branch reads.** Closing it needs
 those four functions to return the count they already compute, in the shape `extract_pitch_values`
@@ -1261,7 +1362,7 @@ long form is under step 2, and every row below except finding 1's is open exactl
 | --- | --- |
 | **0 — the enhanced stream** | **provenance for every Praat-derived measurement in the graph**: `branch-voice.md` V4 and V6, `branch-speech.md` S4, `branch-ddk.md` D2, `branch-airway.md` A6 — they are measured on `enhanced` and, with step 1 withdrawn, keep being. **Not the routing gates** — no configured gate reads a Praat scalar, and the PPG gates stay on `enhanced` by decision (step 1b, withdrawn). What is owed is a **measurement**, not a move: see the future research direction in [`branch-listening-sample.md`](branch-listening-sample.md) |
 | 1, 8 | [`branch-voice.md`](branch-voice.md) V3, V4, V7 |
-| 2, 3, 4, 5 | **every caller of `extract_cpp_descriptors`** — `branch-voice.md` V4 (5,113 recordings) *and* [`branch-speech.md`](branch-speech.md) S4 (~25,000, where finding 3 bites hardest) |
+| ~~2, 4~~, 3, 5 | **every caller of `extract_cpp_descriptors`** — `branch-voice.md` V4 (5,113 recordings) *and* [`branch-speech.md`](branch-speech.md) S4 (~25,000, where finding 3 bites hardest). **2 and 4 are fixed in code by step 4** and 5 is half-closed for CPPS; **all four still govern every value in the corpus**, because the stores predate the fix and step 4's re-derivation is deliberately unscheduled. Finding 3's vuv inflation no longer reaches CPPS at all — the gate it inflated is gone — but it still reaches every other interval-gated measure |
 | 6 | `branch-voice.md` V6 |
 | 7 | `branch-voice.md` V4; [`branch-quality.md`](branch-quality.md) Q2; **[`branch-airway.md`](branch-airway.md) A6**, which reads `extract_spectral_moments` for cough descriptors — and coughs are the most broadband events in the corpus |
 | 9, and the `extract_speech_rate` deviations | [`branch-speech.md`](branch-speech.md) S4; [`branch-ddk.md`](branch-ddk.md) D2 |

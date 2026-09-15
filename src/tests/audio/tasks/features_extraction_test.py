@@ -19,11 +19,14 @@ from senselab.audio.tasks.features_extraction.ppg import (
     to_frame_major_posteriorgram,
 )
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
+    DEFAULT_CPPS_SETTINGS,
     DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER,
     DEFAULT_PITCH_EXCURSION_MULTIPLIER,
     DEFAULT_PITCH_FLOOR_DIVISOR,
     DEFAULT_PITCH_PINNED_OCTAVE_RATIO,
     DEFAULT_PITCH_PINNED_PERCENTILE,
+    CppsSettings,
+    _robust_line_fit,
     extract_audio_duration,
     extract_cpp_descriptors,
     extract_harmonicity_descriptors,
@@ -455,10 +458,141 @@ def test_extract_slope_tilt(resampled_mono_audio_sample: Audio) -> None:
 
 def test_extract_cpp_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of cepstral peak prominence (CPP) features."""
-    result = extract_cpp_descriptors(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
+    result = extract_cpp_descriptors(resampled_mono_audio_sample)
     assert isinstance(result, dict)
-    assert "mean_cpp" in result
-    assert isinstance(result["mean_cpp"], float)
+    assert set(result) == {"mean_cpp", "std_dev_cpp", "cpp_frames"}
+    assert all(isinstance(value, float) for value in result.values())
+
+
+def _rough_buzz(f0: float, seconds: float, *, jitter: float = 0.0, noise: float = 0.0, seed: int = 7) -> np.ndarray:
+    """Return a harmonic buzz with frequency jitter and additive noise, as bare samples."""
+    generator = np.random.default_rng(seed)
+    t = np.arange(int(seconds * 16000)) / 16000
+    if jitter:
+        phase = 2 * np.pi * np.cumsum(f0 * (1.0 + jitter * generator.standard_normal(t.size))) / 16000
+    else:
+        phase = 2 * np.pi * f0 * t
+    wave = sum((0.3 / (h + 1) * np.sin((h + 1) * phase) for h in range(6)), np.zeros_like(t))
+    return wave + noise * generator.standard_normal(t.size) if noise else wave
+
+
+def _as_audio(samples: np.ndarray) -> Audio:
+    """Wrap bare samples as a 16 kHz mono Audio."""
+    return Audio(waveform=np.asarray(samples, dtype=np.float32)[None, :], sampling_rate=16000)
+
+
+class TestCppsIsMeasuredDirectly:
+    """CPPS is computed frame-wise over the whole recording, not per voiced interval.
+
+    What the incumbent did instead, and what each of these guards, is in
+    ``specs/20260817-triage-workflow-dag/praat-instrument-audit.md`` under step 4.
+    """
+
+    def test_a_dysphonic_value_below_4_db_is_reported(self) -> None:
+        """The retired ``> 4`` cut returned this recording as NaN, indistinguishable from a crash."""
+        measured = extract_cpp_descriptors(_as_audio(_rough_buzz(150.0, 2.0, jitter=0.02, noise=0.5)))
+        assert measured["cpp_frames"] > 0.0
+        assert 0.0 < measured["mean_cpp"] < 4.0, (
+            f"this source must land inside the band the cut deleted, not beside it: {measured['mean_cpp']}"
+        )
+
+    def test_an_aperiodic_source_is_measured_rather_than_skipped(self) -> None:
+        """No pitch is placed on noise, so the voicing gate found no interval and returned nothing."""
+        measured = extract_cpp_descriptors(_as_audio(0.3 * np.random.default_rng(3).standard_normal(2 * 16000)))
+        assert measured["cpp_frames"] > 0.0
+        assert np.isfinite(measured["mean_cpp"])
+
+    def test_the_mean_is_duration_weighted_across_unequal_stretches(self) -> None:
+        """A 1.6 s clean stretch and a 0.25 s rough one are not worth the same.
+
+        Asserts against the unweighted mean of the two stretches' own means, which is what averaging
+        per interval computes, and against the frame-weighted mean, which is what pooling frames does.
+        """
+        clean = _rough_buzz(150.0, 1.6, seed=11)
+        rough = _rough_buzz(150.0, 0.25, jitter=0.05, noise=0.45, seed=12)
+        whole = extract_cpp_descriptors(_as_audio(np.concatenate([clean, np.zeros(int(0.4 * 16000)), rough])))
+        parts = [extract_cpp_descriptors(_as_audio(part)) for part in (clean, rough)]
+        unweighted = float(np.mean([part["mean_cpp"] for part in parts]))
+        weighted = float(
+            np.average([part["mean_cpp"] for part in parts], weights=[part["cpp_frames"] for part in parts])
+        )
+        assert whole["mean_cpp"] == pytest.approx(weighted, abs=0.6), (
+            f"pooling frames must reproduce the frame-weighted combination: {whole['mean_cpp']} vs {weighted}"
+        )
+        assert abs(weighted - unweighted) > 4.0, "the two stretches must differ enough for the weighting to show"
+
+    def test_each_smoothing_window_smooths(self) -> None:
+        """Without the two windows this is CPP, a differently-named quantity.
+
+        The time window is asserted through the frame-to-frame spread it narrows, over three window
+        widths so a single noisy comparison cannot carry it; the quefrency window through the value
+        itself, which it moves by about 8 dB.
+        """
+        audio = _as_audio(_rough_buzz(150.0, 2.0, jitter=0.03, noise=0.3))
+        spreads = [
+            extract_cpp_descriptors(audio, CppsSettings(time_averaging_s=window))["std_dev_cpp"]
+            for window in (0.002, 0.01, 0.05)
+        ]
+        assert spreads[0] > spreads[1] > spreads[2], f"a wider time window must smooth strictly more: {spreads}"
+        unsmoothed = extract_cpp_descriptors(audio, CppsSettings(quefrency_averaging_s=0.0001))
+        assert abs(unsmoothed["mean_cpp"] - extract_cpp_descriptors(audio)["mean_cpp"]) > 1.0
+
+    def test_the_trend_fit_is_robust_to_an_outlying_stretch(self) -> None:
+        """A real cepstrum carries a low-quefrency excursion; least squares follows it and CPPS drops."""
+        quefrency = np.linspace(0.001, 0.05, 400)
+        decibels = (-300.0 * quefrency + 5.0)[None, :].copy()
+        decibels[0, :20] += 40.0
+        [slope], _ = _robust_line_fit(quefrency, decibels, 0.05)
+        least_squares = float(np.polyfit(quefrency, decibels[0], 1)[0])
+        assert abs(slope - (-300.0)) < 10.0, f"the robust fit must ignore the excursion: {slope}"
+        assert abs(least_squares - (-300.0)) > 100.0, "the comparison is only meaningful if least squares fails"
+
+    def test_the_frame_count_travels_with_the_two_scalars(self) -> None:
+        """Without it a reader cannot tell a mean over 2 frames from one over 900."""
+        short = extract_cpp_descriptors(_as_audio(_rough_buzz(150.0, 0.5)))
+        long = extract_cpp_descriptors(_as_audio(_rough_buzz(150.0, 2.0)))
+        assert short["cpp_frames"] > 0.0
+        assert long["cpp_frames"] > 3 * short["cpp_frames"]
+
+    def test_a_high_voice_is_not_truncated_by_the_retired_330_hz_ceiling(self) -> None:
+        """A 420 Hz source's peak sits at 2.4 ms, outside a band that stops at 330 Hz."""
+        audio = _as_audio(_rough_buzz(420.0, 2.0))
+        wide = extract_cpp_descriptors(audio)
+        narrow = extract_cpp_descriptors(audio, CppsSettings(peak_search_ceiling_hz=330.0))
+        assert wide["mean_cpp"] - narrow["mean_cpp"] > 2.0
+
+    def test_the_peak_band_is_fixed_rather_than_derived_from_this_recording(self) -> None:
+        """Two voices an octave apart must be scored against the same band, or neither is comparable."""
+        low = extract_cpp_descriptors(_as_audio(_rough_buzz(110.0, 2.0)))
+        high = extract_cpp_descriptors(_as_audio(_rough_buzz(220.0, 2.0)))
+        assert np.isfinite(low["mean_cpp"]) and np.isfinite(high["mean_cpp"])
+        assert DEFAULT_CPPS_SETTINGS.peak_search_floor_hz == 60.0
+        assert DEFAULT_CPPS_SETTINGS.peak_search_ceiling_hz == 700.0
+
+    def test_a_recording_shorter_than_one_window_is_an_absence_not_a_value(self) -> None:
+        """The window is 0.1 s; a 0.05 s recording places no frame, and no frame is not a zero."""
+        measured = extract_cpp_descriptors(_as_audio(_rough_buzz(150.0, 0.05)))
+        assert measured["cpp_frames"] == 0.0
+        assert np.isnan(measured["mean_cpp"])
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            CppsSettings(tilt_line_type="exponential decay"),
+            CppsSettings(peak_interpolation="none"),
+            CppsSettings(subtract_tilt_before_smoothing=True),
+        ],
+    )
+    def test_a_setting_this_function_does_not_implement_is_refused(self, settings: CppsSettings) -> None:
+        """A silently ignored setting in a provenance record is worse than no setting."""
+        with pytest.raises(ValueError):
+            extract_cpp_descriptors(_as_audio(_rough_buzz(150.0, 1.0)), settings)
+
+    def test_the_wrapper_publishes_the_support_count_beside_the_scalars(self) -> None:
+        """One of thirteen Praat functions returned a count; this is the second."""
+        [features] = extract_praat_parselmouth_features_from_audios([_as_audio(_rough_buzz(150.0, 2.0))])
+        assert features["cepstral_peak_prominence_frames"] > 0.0
+        assert np.isfinite(features["cepstral_peak_prominence_mean"])
 
 
 def test_measure_f1f2_formants_bandwidths(resampled_mono_audio_sample: Audio) -> None:
