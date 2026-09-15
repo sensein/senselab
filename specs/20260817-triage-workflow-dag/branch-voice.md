@@ -28,13 +28,65 @@ blocked on nothing but implementation. Values in
 
 **And VOICE is the worked example of what the contract forbids.** `voice.py:333-346` mints a
 *second* span from an input span, re-keyed by period-aligned onset and carrying `onset_kind`. That is
-the re-minting the contract replaces with a `refine` assertion, and it is why `report.py:291-308`
+the re-minting the contract replaces with a `refine` assertion, and it is why `report.py:289-306`
 needs `_spans_of_family` to split one family into two populations on `("onset_kind" in attributes)`.
 Once the minting becomes a `refine`, the split has nothing to separate.
 
 **Consequence for REPORT.** `onset_kind` is written only at `voice.py:341`, so on stores written
 under the contract the `voice=True` reads at `report.py:715` and `:1154` return empty. REPORT's VOICE
 arms need the span-versus-assertion distinction substituted in, not the family merely widened.
+
+### VOICE refines and reviews spans, and that is its work — owner decision, 2026-09-15
+
+The owner: *"voice would still need to improve/update/review phonation spans and other tasks that are
+assigned to it."*
+
+**The branch does not wait for a correct subject to be handed to it.** It receives spans and improves
+them, which in the contract's five verbs is **`refine`** — a tightened extent asserted on an existing
+span, which keeps its id, its `family` and its measurements. **Only `propose` mints.** Reviewing is
+`label`, `contest` or `refine`; it is never a second span.
+
+That is what the re-mint at `voice.py:333-346` should have been, per the paragraph above — the
+decision is what makes the substitution *the branch's job* rather than a defect waiting on a proposer.
+The frame is
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+§ *A branch refines and reviews, and a correct subject is not a precondition*.
+
+**The inconsistency the decision resolves, stated plainly.** **VOICE is routed by a measurement on
+`amplitude` spans and then fails for want of a `phonation` span.** `voice.sustained`'s feature is
+`[span_longest, amplitude]` — the longest live amplitude span in seconds, cut 3.0 s
+(`default.yaml:252-255`) — and the selector at `voice.py:230` admits only `_PHONATION_FAMILY`
+(`:40`). The amplitude spans the route was decided on are live in the store, unexamined, when the
+branch takes the no-span return at `:235-264`.
+
+**And the second half of the owner's sentence matters as much.** VOICE must do its best on *other
+tasks assigned to it* — a recording routed here whose declared family is not voice-eliciting, which
+§ *A recording routed here whose declared task is not voice* below records as 22,277 routed against
+8,306 declared. The standing rule: **a branch receiving a task outside its declared families does its
+best to find, mark, refine or refute evidence of its own kind, rather than failing for want of a
+declared subject.** So **a `FAIL` reading "no span of my family" is the wrong shape of answer for such
+a recording** — the right answer is the annotations VOICE made on the spans it was given, and `FAIL`
+is reserved for having looked and found no attempt (§ *A branch `FAIL` is an absence of detected
+content*).
+
+### The span source is one of three options, and the owner has not chosen
+
+The no-span `why` at `voice.py:237-238` says the branch is *"pending a rework onto
+`consensus_taxonomy`"*, and `config-derivations.md:502` and `taxonomy.md:95` both carry that plan. **It is not deleted.** The owner decisions of 2026-09-15 add two alternatives, and all three are live:
+
+| option | what VOICE's subject becomes | what it costs |
+| --- | --- | --- |
+| **(a) amplitude spans + a ruleset-written label + `refine`** | the `amplitude` spans `voice.sustained` already measured, labelled at SCREEN by the rule that fired, refined by VOICE | the ruleset must carry the gate **value** and the **span identity** it fired on, neither of which exists: `evaluate_gate` returns an enum and drops `gate_value`'s number (`routing_analysis/ruleset.py:405-409`), and `span_longest_s[measure] = max(durations)` (`features.py:1134`) drops the `"id"` its own rows carry (`:1084`). Both **owed a code change**. And it needs the labelled span to be *in VOICE's family*, because [`branch-conventions.md`](branch-conventions.md) § *`propose` versus `refine`* scopes `refine` to the family the branch proposes into — so a ruleset label on an `amplitude` span either sets the family or the convention widens for annotation; **unresolved**, and named there. No new model pass, no new detector, and the subject is the same evidence the route was taken on |
+| **(b) the `consensus_taxonomy` rework as written** | spans proposed from the consolidated classifier labels | needs the decision `config-derivations.md:502` says nobody has made — which consolidated labels express the voice kind and how they map to a state. And the label evidence is measurably wrong on exactly this material: the 20 s held vowel read `Chant` 0.937, `Music` 0.930, `Mantra` 0.899, `Brass instrument` 0.661, all outranking anything voice-specific ([`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § G). It also lifts the permanent-`uncertain` artefact `config-derivations.md:499-503` describes, which no other option addresses |
+| **(c) a new phonation detector replacing the retired one** | spans proposed by a detector of the branch's own | the most work and the only option that owes a fitted boundary — and the ground-truth rule in [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md) § *Refitting `spans.k_db` was considered and rejected* forbids fitting one against declared families, so it is blocked on listening ([`branch-listening-sample.md`](branch-listening-sample.md)). V1 above is that detector's specification, and it is *not* blocked as a capability: V1 is envelope-first and qualified by voicing, so it is compatible with (a) as a refiner of amplitude spans rather than only as a proposer |
+
+**What the evidence says and does not say.** `voice.sustained` read 15.89 s on the MPT recording and
+12.27 s on the glide (§ *The state of this branch*), so the amplitude spans behind (a) are real
+material on the recordings VOICE exists for; the consensus labels on the same recording named that
+vowel music, which is evidence against sourcing the *label* from (b)'s channel. Thirteen recordings
+license neither a threshold nor a choice between the three. **(a), (b) and (c) are not exclusive** —
+(a) gives the branch a subject soonest, (b) is the only one that lifts the TAXONOMY fold artefact, and
+(c) is what V1 specifies regardless.
 
 ## The tasks this branch serves
 
@@ -936,6 +988,10 @@ Attribution of a short MPT to respiratory or laryngeal cause. Any refit against 
 
 ## Unresolved
 
+- **Which of three sources gives this branch its subject** — see § *The span source is one of three
+  options*. The owner has not chosen between amplitude spans with a ruleset-written label, the
+  `consensus_taxonomy` rework, and a new detector. Options (a) and (b) are each **owed a code change**
+  elsewhere; (c) is blocked on listening.
 - **Whether to emit an AVQI-shaped number that is not AVQI** (V5). The protocol is unsatisfiable in this corpus, so this is the actual question; the owner decides it, but not as an open choice between AVQI and nothing.
 - **Three declaration fields this branch reads are not in the contract's `metadata` contract**:
   V2's expected duration, V7's `population`, V8's expected vowel. The contract froze the entry keys;
