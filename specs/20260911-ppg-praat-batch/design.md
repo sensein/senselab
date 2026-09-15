@@ -305,11 +305,23 @@ duration distribution. The budget scales with **duration**, and `rows[i::n]` sha
 counts rather than audio, so **any re-slicing should be by total audio rather than by row count** —
 the same property the flat worker timeout got wrong below, applied to the slice instead of the batch.
 
-**One discrepancy left standing rather than reconciled.** *The worker timeout was flat* below quotes
-*"median 7.22 s, p95 60.02 s, longest 307.46 s"*; this measurement gives median 7.0 s and max 332.6 s
-over the same 60,202 rows. The two were taken at different times by different means and the
-difference is not explained here. Neither was re-measured for this entry; a reader quoting a corpus
-duration should say which of the two they are quoting.
+**The discrepancy with the older figures is a scope difference, resolved 2026-09-14.** *The worker
+timeout was flat* below quotes *"median 7.22 s, p95 60.02 s, longest 307.46 s"*. Re-measured over
+**every one of the 60,202 manifest rows** (all carry `duration_s`; none missing):
+
+| statistic | full manifest | older figures |
+| --- | ---: | ---: |
+| median | **7.04 s** | 7.22 s |
+| p95 | **59.61 s** | 60.02 s |
+| p99 | **93.54 s** | — |
+| longest | **332.56 s** | 307.46 s |
+
+`307.4554375` **is** a real row in the manifest, and **8 recordings exceed it**. So the older figures
+were taken over a subset that excludes the tail — a sample or an earlier manifest — not over the
+corpus. They are not wrong about what they measured; they are not the corpus distribution. The
+full-manifest figures above are the ones to quote, and the method is stated so a later reader can
+reproduce them rather than choose between two unattributed numbers. What produced the older subset
+is not recorded anywhere and was not recovered.
 
 ## The venv must exist before the array is submitted
 
