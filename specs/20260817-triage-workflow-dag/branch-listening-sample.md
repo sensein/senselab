@@ -184,6 +184,39 @@ labels**, measured both ways. Nothing cheaper reaches it:
 - **A bench measurement cannot answer it.** Synthesised signals carry no pathology, so the sixth kind
   does not reach here.
 
+**One adverse data point, recorded beside the question rather than reopening it.** From an end-to-end
+`run_triage` on **1.5 s of synthesised broadband noise** — **not a real recording**, and that caveat
+governs everything below:
+
+| stream | derived range | voiced frames |
+| --- | --- | --- |
+| plain | NaN / NaN | 0 |
+| preemphasised | NaN / NaN | 0 |
+| enhanced | **290.72 / 600.0** | **102** |
+
+Enhancement manufactured voiced frames on wordless audio. `phonation_tracks`, which reads `plain`,
+correctly recorded `F0RangeUnavailable`. `praat_features`, which reads `enhanced`, derived a confident
+range with `pitch_failed = 0.0` and `pitch_range_fell_back = 0.0` from roughly **34%** of the file's
+frames — and **29 of its 45 scalars then came back null**, so the range was confident and the
+measurement it conditioned was mostly absent.
+
+**This does not reopen the decision.** The owner's grounds for withdrawing step 1 were about **real
+disordered voices**, and synthetic broadband noise is out of domain for FRCRN — an enhancer asked to
+find speech in something that contains none is not being asked the question this item asks. It is
+recorded because it arrived after the withdrawal and because it is the only `enhanced`-versus-`plain`
+observation anyone has on this path. **A real breath recording would be the test** — wordless, in
+domain, and available without a purpose-collected study — and it is not the study this item owes.
+
+**It also exposed that the two consumers can disagree about whether a range exists at all.** The same
+recording is simultaneously an `F0RangeUnavailable` absence and a confidently-derived range depending
+on which node is asked, because `praat_features` resolves `enhanced`
+(`../../src/senselab/audio/workflows/triage/nodes/preprocess.py:884`) and `phonation_tracks` calls
+`derive_f0_range(plain, …)` (`:955`). On two ordinary speech inputs the two ranges differed by
+fractions of a hertz, which is why it had not surfaced. That asymmetry, and the config comment at
+`data/config/default.yaml:154-155` whose *"cannot hold ranges that drift"* is true of the shared
+coefficients and not of the ranges, are recorded at
+[`praat-instrument-audit.md`](praat-instrument-audit.md) step 2b.
+
 **Scope, so nobody plans it as part of something else.** This is a **future research direction**, not
 a blocker: no repair in the audit waits on it, and the withdrawal of step 1 removed the only thing
 that did. The goal of the triage work is much simpler than answering it.

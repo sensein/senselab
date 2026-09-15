@@ -358,6 +358,38 @@ floor-dependent by construction: at the shipped 50 Hz floor it is every voice wh
 `[60, 600]`. Both are among the things a raised search floor would change, and neither is decided
 here.
 
+**Measured on a real recording, the narrowing did not narrow — and the flag said it had.** Rehearsing
+the forced re-derivation on one Story-recall store (88.07 s, 115 consensus words) gave p5 = 62.34,
+q3 = 238.62, p95 = 265.81, so floor `max(50, 41.56)` = **50.00** and ceiling
+`min(600, max(596.55, 398.71))` = **596.55**. The derived range is `[50.00, 596.55]` against a search
+range of `[50, 600]`: the floor *exactly* on the search floor, the ceiling 3.45 Hz under the search
+ceiling — **with `pitch_range_fell_back = 0.0`**, which asserts the narrowing branch was taken and
+applied. Two independent mechanisms, both in the same expression
+(`praat_parselmouth.py:475-489`; the floor's `max` at `:481`, the ceiling's `min(..., max(...))` at
+`:482-488`):
+
+- **Floor pinning, which is new and was recorded nowhere before this.** 16.1% of the wide pass's
+  voiced frames sit below 100 Hz — 12.0% below 75, 2.0% below 60 — a second mode near 52–70 Hz, creak
+  or period doubling that the 50 Hz search admits. That drags p5 down until `p5 / 1.5` falls under the
+  search floor and the `max()` pins it there. Generalised: **any recording with roughly ≥5% creaky
+  frames pins its floor at the search floor.** The pinned-contour fallback does not catch it — the
+  fallback tests p95, which here is 265.81, far above `2 × 50`. This is the opposite failure from the
+  hum case above: that one returns a range **excluding** the speaker, this one returns a range that
+  excludes nothing while reporting itself as narrowed.
+- **Ceiling pinning**, which is the fact already recorded as owed under step 4 below — `2.5 × q3`
+  reaches 600 for any q3 ≥ 240 Hz — now met on a real recording. This voice's q3 is 238.62, **1.4 Hz**
+  under. For ordinary adult-female and child voices the ceiling term is effectively a constant at the
+  search ceiling. Cross-referenced, not restated; the entry is at step 4.
+
+**Owed a code change, at minimum to the flag.** A consumer reading `pitch_range_fell_back = 0.0`
+cannot distinguish a narrowed range from a pinned one without recomputing the predicate from bounds
+it does not have. Whether the *rule* should change too — whether a floor pinned by a creak mode is
+the right instrument — is not settled by this, because the recording has no ground truth and neither
+reading is established as better. **The corpus re-derivation pass was cancelled by the owner on
+2026-09-14 on this finding**, pending that decision. The full measurement, the forty-five paired
+scalars and the record that the driver mechanics themselves worked are in
+[`../20260914-f0-range-and-measurement-streams/measurements-2026-09-14-forced-rederivation.md`](../20260914-f0-range-and-measurement-streams/measurements-2026-09-14-forced-rederivation.md).
+
 **A live misattribution in the document that justified this approach.**
 `specs/20260911-ppg-praat-batch/design.md:322` reads, verbatim: *"That is the pitch-range
 standardization method it cites (doi:10.3758/BRM.41.2.318). No fixed corpus-wide range is needed,
@@ -581,6 +613,11 @@ either the F0 search ceiling is owed the same widening, or the two bands differ 
 landed narrowing adds to this entry: `2.5 × q3` reaches 600 for any q3 ≥ 240 Hz, so above roughly
 that F0 the ceiling every recording gets is the search bound itself and not a narrowing.
 
+**That is no longer a reasoned-about case.** The first real recording re-derived under the narrowing
+has q3 = **238.62**, **1.4 Hz** under the threshold, and its ceiling came back at **596.55** against a
+search ceiling of 600 — the pinning realised, 3.45 Hz short of exact. See step 2's *Measured on a real
+recording* subsection, where it appears beside a second and independent pinning of the **floor**.
+
 **And a CPPS at F0 700 is not comparable to one at F0 120.** At 700 Hz the peak quefrency is 1.43 ms,
 only ~0.4 ms above the trend-fit origin at 1 ms, where source and filter quefrencies are not
 separable. Widening is still right — falsetto truncation is worse — but by this set's own
@@ -623,6 +660,24 @@ harmonics, **raising octave-error risk upward**, worst on low-F0 and creaky voic
 then propagate into the steadiness qualifier V1 requires and into the percentiles the range is
 derived from — under the retired bin, into which bin was selected.
 Praat's guidance is to track pitch on the unmodified signal.
+
+**A second stream asymmetry sits beside it: two consumers derive two ranges, from two streams.**
+`praat_features` resolves **`enhanced`** (`preprocess.py:884`) and narrows inside
+`extract_pitch_values`; `phonation_tracks` calls `derive_f0_range(plain, …)` (`:955`). Same
+coefficients, different signal, so two ranges — and nothing reconciles them. On two ordinary speech
+inputs the two came back within fractions of a hertz of each other, which is why this had not
+surfaced. On **1.5 s of synthesised broadband noise** it is the difference between an absence and a
+confident range: `phonation_tracks` recorded `F0RangeUnavailable` on `plain` while `praat_features`
+derived `[290.72, 600.0]` on `enhanced` with `pitch_failed = 0.0` and
+`pitch_range_fell_back = 0.0`. The measurement, and its caveat that synthetic noise is out of
+domain for FRCRN, is in
+[`branch-listening-sample.md`](branch-listening-sample.md) under the seventh kind of owed.
+
+**And the config says the opposite.** `data/config/default.yaml:154-155` reads *"read by the
+whole-file scalars and by the phonation-spans node's `derive_f0_range` alike so the two cannot hold
+ranges that drift."* That is true of the **coefficients** and not of the **ranges**: the coefficients
+are shared, the streams are not, and the ranges therefore can and do drift. **Owed a correction to
+that comment**, whether or not the streams are ever reconciled.
 
 ### Step 5 — report **instrument coverage** as a first-class measurement
 
@@ -742,6 +797,13 @@ descriptors.
 **Measured downstream step at the 40 Hz floor change**: intensity window **53.3 → 32.0 ms**,
 harmonicity window **75.0 → 45.0 ms**, minimum analysable segment **91.7 → 55.0 ms** — a **1.67×**
 discontinuity in a continuous measurement, which can flip between two streams of the same recording.
+
+**Read those three figures as the bin's own step and not as the direction of step 2's replacement.**
+They are the 60 → 100 Hz move *within* the retired bin. The first real recording re-derived under the
+narrowing moved the other way — the bin had selected `[100, 500]` and the derived floor came back at
+50 — so on it the same two formulas give **intensity 32.0 → 64.0 ms** and **harmonicity 45.0 → 90.0
+ms**, both **doubled** rather than shrunk. Step 2's *Measured on a real recording* subsection has the
+case; the general statement is the F0-dependent-coverage consequence there, not a direction.
 
 **The project already documented this as an error not to repeat.** `capability-map.md:117` and
 `:314` named this bin as the exact mistake to avoid, and the code did it anyway for as long as it
