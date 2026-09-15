@@ -544,7 +544,7 @@ bracketed word (`khh` -> `[KHH]`) with the raw token kept in the word's `reading
 
 Which declared tags force which kind's branch.
 
-routing.hint_kind_map -- which may_contain tags and which metadata.speech_type values force which
+routing.hint_branch_map -- which may_contain tags and which metadata.speech_type values force which
 kind's branch. A vocabulary, null, owed the corpus it was drawn from. A tag matching no entry forces
 nothing and is recorded as unmapped; forcing only ever ADDS a branch.
 
