@@ -51,7 +51,8 @@ four stale FIGURE line numbers and two stale `vocabulary.py` ones. The section t
 [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
 (2026-09-13) specifies a four-stage pipeline — PREPROCESS → SCREEN → BRANCHES → VERDICT — in which
 TAXONOMY and ROUTING merge into one SCREEN node; every branch works to one five-verb contract
-(`label`, `contest`, `refine`, `trim`, `propose`, of which only `propose` mints a span entity); the
+(`label`, `contest`, `refine`, `trim`, `propose`, of which only `propose` mints a span entity, and
+`refine` covers a span's metadata as well as its extent as of 2026-09-15); the
 declaration is resolved from the BIDS sidecar JSON rather than parsed out of a filename; deviations
 are written as enumerated facts rather than judgements; and PREPROCESS is required to emit a *clean*
 span set rather than the permissive one a recall-first router wants. **Read it as a design.**
@@ -531,10 +532,14 @@ that *"more than one speaker in this recording"* can be raised as a deviation by
 to raise it (step 5e). **Owed a code change.** It is not in the block list above, because that list
 is read off the code; it is listed as owed in [`preprocess.md`](preprocess.md) § *Derivatives*.
 [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
-§ *Whole-file diarization as a shared derivative* owes the same block and leaves **one thing open
-that the instruction settles differently**: it holds raw against enhanced undecided pending a pilot, since
-enhancement suppresses the quiet background talker the derivative exists to catch. The shape is not
-in dispute; the stream is, and the pilot is what decides it.
+§ *Whole-file diarization as a shared derivative* owes the same block, and the **stream** question
+an earlier version of this paragraph recorded as open — raw against enhanced, pending a pilot,
+because enhancement suppresses the quiet background talker the derivative exists to catch — **was
+settled by the owner on 2026-09-15**: diarize both `enhanced` and `residual`, because enhancement
+partitions the recording rather than destroying that talker, so a suppressed voice is in `residual`
+where it can be analysed directly. Neither the shape nor the stream is in dispute now, and no pilot
+is owed. **SPEECH reads the derivative rather than running pyannote itself**, by the owner's decision
+of the same date.
 
 **FIGURE draws neither.** `figure.py` mentions no posteriorgram and no Praat scalar anywhere. A PPG
 lane exists — `_ppg_panel` / `plot_range_with_ppg` in `audio/tasks/plotting/plotting.py`, whose bars
@@ -1561,11 +1566,14 @@ starts, after they stop, or in a pause is invisible to it
 diarization measurement — establishing whether the recording holds one speaker or more — with an
 `extend_*` driver for finished runs.
 [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
-§ *Whole-file diarization as a shared derivative* already owes that block and holds the **stream**
-choice undecided pending a pilot, raw against enhanced,
-because enhancement suppresses a quiet background talker; the instruction names `enhanced` and the
-two are not reconciled. It is recorded as **owed a code change** in step 2's derivative
-list and in [`preprocess.md`](preprocess.md) § *Derivatives*. With it, *"more than one speaker in
+§ *Whole-file diarization as a shared derivative* already owes that block, and the **stream** choice
+is settled: the owner decided on 2026-09-15 that both `enhanced` and `residual` are diarized, because
+enhancement partitions the recording rather than destroying a quiet background talker — a voice
+suppressed out of `enhanced` is in `residual`, where it can be analysed directly. **No pilot is
+owed**, and an earlier version of this paragraph recorded the choice as undecided pending one.
+**SPEECH reads that derivative rather than running pyannote itself**, also by owner decision of
+2026-09-15. It is recorded as **owed a code change** in step 2's derivative list and in
+[`preprocess.md`](preprocess.md) § *Derivatives*. With it, *"more than one speaker in
 this recording"* is a deviation QUALITY can raise; without it nothing in the graph states that fact
 at the file level.
 

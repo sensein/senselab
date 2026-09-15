@@ -390,7 +390,10 @@ The ruleset's product has been the routing decision and nothing else — `evalua
 span whose evidence fired it.** `label` where the span carried none, `refine` where it carried one the
 rule sharpens — the verbs are the store-wide ones in
 [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
-§ *What each verb writes*, not new ones. The middle stage's product becomes the routing decision *and*
+§ *What each verb writes*, not new ones. A label is metadata rather than an extent, so this was
+unwritable under the verb table as it then stood; the owner widened `refine` to cover metadata later
+the same day (that design's § *`refine` covers metadata as well as extent*), which is what makes the
+sentence above licit. The middle stage's product becomes the routing decision *and*
 the labels its own evidence supports.
 
 **What it buys, on the one branch where the gap is measured.** VOICE is routed by `voice.sustained`,
