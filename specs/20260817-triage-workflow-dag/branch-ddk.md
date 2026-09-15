@@ -382,7 +382,8 @@ with dispersion and trend, and a PPG-phoneme-to-syllable mapping.
 
 ```
 spans        family: "ddk", one per syllable train (D1)
-assertions   refine (corrected_extent) where a PREPROCESS span's extent is wrong;
+assertions   refine (corrected_extent, corrected_attributes, or both) where a
+             PREPROCESS span's extent or metadata is wrong;
              deviate (syllable_sequence_mismatch, truncation)
 measurements harmonic peak structure f and 3f with its stated unit (D1),
              nucleus rates with their four declared operating points (D2),

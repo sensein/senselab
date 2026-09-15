@@ -42,9 +42,15 @@ The owner: *"voice would still need to improve/update/review phonation spans and
 assigned to it."*
 
 **The branch does not wait for a correct subject to be handed to it.** It receives spans and improves
-them, which in the contract's five verbs is **`refine`** — a tightened extent asserted on an existing
-span, which keeps its id, its `family` and its measurements. **Only `propose` mints.** Reviewing is
-`label`, `contest` or `refine`; it is never a second span.
+them, which in the contract's five verbs is **`refine`** — a corrected extent, corrected metadata, or
+both, asserted on an existing span, which keeps its id, its `family` and its measurements. **Only
+`propose` mints.** Reviewing is `label`, `contest` or `refine`; it is never a second span.
+
+**`refine` was extent-only until 2026-09-15**, when the owner widened it to cover a span's metadata as
+well (the contract's § *`refine` covers metadata as well as extent*). For VOICE the extent half is
+still the load-bearing one — the re-mint below is a boundary claim — but a VOICE assertion that
+corrects what a span *is* rather than where it runs is now a `refine` too, and not a second span
+either.
 
 That is what the re-mint at `voice.py:333-346` should have been, per the paragraph above — the
 decision is what makes the substitution *the branch's job* rather than a defect waiting on a proposer.
@@ -76,10 +82,10 @@ content*).
 span's label*, and
 [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
 § *A ruleset that fires may write or refine a span's label*), and a branch **refines and reviews**
-the spans it is given — a correct subject is not a precondition, and `refine` asserts a tightened
-extent without minting a new span (§ *VOICE refines and reviews spans* above). **So VOICE's subject
-is the spans the ruleset labelled, and VOICE refines them.** A `consensus_taxonomy` rework and a new
-phonation detector are no longer open questions about where the subject comes from; what is left is
+the spans it is given — a correct subject is not a precondition, and `refine` asserts a corrected
+extent, corrected metadata or both without minting a new span (§ *VOICE refines and reviews spans*
+above). **So VOICE's subject is the spans the ruleset labelled, and VOICE refines them.** A
+`consensus_taxonomy` rework and a new phonation detector are no longer open questions about where the subject comes from; what is left is
 engineering, listed below. **It costs no new model pass and no new detector**: the subject is the
 same evidence the route was taken on.
 
@@ -980,7 +986,8 @@ branch returns at `:264` — about 153 lines, or roughly 200 counting the helper
 ```
 spans        family: "voice" phonation attempts, each carrying voiced fraction,
              interruption structure and F0 availability (V1)
-assertions   refine (corrected_extent) where a PREPROCESS span's extent is wrong;
+assertions   refine (corrected_extent, corrected_attributes, or both) where a
+             PREPROCESS span's extent or metadata is wrong;
              label naming vowel identity (V8);
              deviate (sweep_direction_mismatch, truncation, repeat_attempt)
 measurements per-span trajectory with the derived F0 range and whether it fell

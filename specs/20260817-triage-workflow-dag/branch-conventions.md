@@ -70,6 +70,37 @@ rest on 2026-09-15, at [`branch-voice.md`](branch-voice.md) § *The subject is t
 labelled, and VOICE refines them*, which names this section as where the family question is
 decided.
 
+### An aggregated span is a `propose`, and the rule above already answers it — 2026-09-15
+
+The owner, on SPEECH and speaker attribution: *"speech may need to resolve across multiple speakers,
+so it could fall under refinement (adding/adjusting span metadata, or creating an aggregated span)."*
+**Creating an aggregated span is a `propose`** — the contract's only minting verb — and the three
+questions that raises are answered by the scoping rule above plus existing practice, so none is
+recorded as owed.
+
+**Its family is the branch's own**, `family: "<branch>"`. An aggregate covers ground no live span *of
+the branch's family* covers, so the rule at the head of this section permits the mint without
+amendment. Consequence 3 above is this case already: three PREPROCESS spans broken by gaps, one
+branch span covering all three, no refinement of the three and no conflict with them.
+
+**It is `wasDerivedFrom` every span it aggregates, plus the evidence that built it.** SPEECH does this
+today — its `family: "speech"` span is `wasDerivedFrom` every live non-SPEECH span it overlaps
+(`speech.py:893-895`, over the `prior_spans` set at `:577-578`) — and `ProvStore.derived_from` returns
+a **list** (`../../src/senselab/utils/prov_store.py:525`), so many-to-one derivation is a capability of
+the store. `figure.py:580` iterates the relation rather than taking its first element, so the one
+production reader that walks it is unaffected.
+
+**The spans it aggregates stay untouched.** Nothing under `nodes/` invalidates anything: the module's
+single `was_invalidated_by` call is `extend.py:327`, and `quality.py:27` states the rule outright —
+*"PREPROCESS's spans are never invalidated here: the store is append-only"*.
+
+**`refine` widened on the same date and does not change this rule either.** From 2026-09-15 `refine`
+covers a span's metadata as well as its extent (the contract's § *`refine` covers metadata as well as
+extent*), which is what makes *adding or adjusting span metadata* a `refine` rather than a new verb.
+The family scoping is untouched: a branch still `refine`s only a span of the family it proposes into,
+whichever of the two things it is correcting, and the open question below is unchanged by the
+widening.
+
 ## Deviations and counts are stored, and need no new `PROV_TYPE`
 
 | what | stored as |
@@ -80,7 +111,8 @@ decided.
 Nothing is added to the `PROV_TYPE` literal at `prov_store.py:17-31`.
 
 **`verb: "deviate"` will need admitting when contract piece 7 widens REPORT's assertion read by
-verb.** That is a forward statement, not a description: **REPORT reads no verb set today.**
+verb**, and that piece now names it. That is a forward statement, not a description: **REPORT reads
+no verb set today.**
 `report.py:1123-1128` filters by branch and `prov_type` and drops every assertion whose branch is not
 AIRWAY; the only verb tests in the file are hard-coded literals — `== "label"` at `:196` and
 `!= "label"` at `:327`.
