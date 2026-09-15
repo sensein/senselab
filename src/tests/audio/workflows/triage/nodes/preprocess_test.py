@@ -2245,7 +2245,7 @@ class TestThePosteriorgramAndPraatBlocks:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Forty small numbers need no sidecar; a non-finite one is null rather than NaN."""
+        """Forty-five small numbers need no sidecar; a non-finite one is null rather than NaN."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1))
         preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
@@ -2259,6 +2259,8 @@ class TestThePosteriorgramAndPraatBlocks:
         assert attrs["n_features"] == len(attrs["features"])
         assert attrs["n_features"] > 0
         assert "path" not in attrs
+        for key in ("pitch_floor", "pitch_ceiling", "pitch_frames", "pitch_failed", "pitch_range_fell_back"):
+            assert key in attrs["features"], f"{key} must be on the measurement, not only in the call"
         for name, value in attrs["features"].items():
             assert value is None or not isinstance(value, float) or np.isfinite(value), name
 

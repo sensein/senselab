@@ -1365,7 +1365,10 @@ def extract_praat_parselmouth_features_from_audios(
 
     Returns:
         list[dict[str, Any]]: A list of JSON-like dictionaries with extracted features
-            structured under "praat_parselmouth".
+            structured under "praat_parselmouth". Each carries the five keys
+            :func:`extract_pitch_values` returned — ``pitch_floor``, ``pitch_ceiling``,
+            ``pitch_frames``, ``pitch_failed`` and ``pitch_range_fell_back`` — under those
+            names, alongside the scalars they conditioned.
 
     """
 
@@ -1488,7 +1491,7 @@ def extract_praat_parselmouth_features_from_audios(
 
         # collect outputs
         unit_l = pitch_unit.lower()
-        feature_data: Dict[str, Any] = {}
+        feature_data: Dict[str, Any] = dict(pitch_values_out)
 
         if duration and audio_duration_out is not None:
             feature_data["duration"] = audio_duration_out["duration"]
