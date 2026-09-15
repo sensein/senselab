@@ -811,18 +811,39 @@ Move it to PREPROCESS, whole-file, in the same shape as the PPG extension:
   so `not_consulted`) becomes a question about the shared derivative. This is a behaviour change to a
   shipped branch, not a pure addition.
 
-**The stream is `enhanced`, decided by the owner on 2026-09-15. No pilot is owed.**
+**The streams are `enhanced` and `residual`, decided by the owner on 2026-09-15. No pilot is owed,
+and the question that would have needed one does not arise.**
 
-The consideration that had held it open is real and was weighed: the derivative's headline
-justification is catching a quiet background talker, and enhancement suppresses exactly that — which
-is why this project's standing conclusion for *off-target speaker detection* in `audio_analysis` is
-that it runs on raw. That conclusion belongs to a different question and does not carry here. The
-owner's direction is `enhanced`, matching the PPG, which reads `enhanced` by the same owner's
-decision and for the same reason: many of these recordings carry background noise a model trained on
-clean speech handles worse on the unprocessed stream.
+The objection that held this open was that the derivative exists to catch a quiet background talker
+and enhancement suppresses exactly that. The owner's resolution: **enhancement does not destroy that
+talker, it partitions the recording.** If the background voice is suppressed, then `enhanced` holds a
+single speaker and the suppressed voice is in `residual` — where it can be analysed directly. Nothing
+is lost, so there is nothing to trade off and nothing to pilot.
 
-The stream is a config key rather than a literal, so the comparison remains a config change for
-anyone who later wants to make it — but it is not owed, and nothing here is pending it.
+This costs no new plumbing, because `residual` is already first-class: `residual = plain - g*enhanced`,
+lag-aligned and gain-fitted (`../../src/senselab/audio/workflows/triage/nodes/preprocess.py:2323`),
+written with its own stream entity whenever that block runs (`:2393-2402`), already classified as
+`residual_yamnet_scores` / `residual_ast_scores` / `residual_hear_scores`, and already read by the
+ruleset — `airway.breath` is `[residual, energy_fraction]` (`data/config/default.yaml:270`) and
+`residual|yamnet` sits in `peak_streams` at `:246`.
+
+The two halves answer different questions and both are wanted:
+
+| stream | what its speaker count answers |
+| --- | --- |
+| `enhanced` | how many voices survive enhancement — one, for a single-participant protocol |
+| `residual` | whether a voice was *removed*, which is the evidence a background talker was there |
+
+So the config key is a **list** of streams, not one value, and the measurement records a count per
+stream rather than a single number. They must not be summed: a disagreement between the two halves is
+itself the finding. An empty `residual` diarization is the expected, ordinary result and reads as a
+typed absence, not a failure.
+
+This also settles why `enhanced` rather than raw for the surviving-voice half: it matches the PPG,
+which reads `enhanced` by the same owner's decision and for the same reason — many of these
+recordings carry background noise that a model trained on clean speech handles worse on the
+unprocessed stream. The `audio_analysis` conclusion that off-target speaker detection runs on raw
+belongs to a different question and does not carry here.
 
 The claim that pyannote is reliable at the single/multi-speaker distinction is **uncited** and is not
 relied on here; `benchmarks/diarization.md` and `benchmarks/glides-diarization.md` are in this tree
