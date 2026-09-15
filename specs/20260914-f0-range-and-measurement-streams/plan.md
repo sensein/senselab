@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Derive each recording's F0 range from the recording — replace the binary sex-typed F0 range with a per-recording narrowing, make a failed pitch analysis distinguishable from a genuine absence, and give the extend driver a way to re-derive the forty Praat scalars the retired range made stale.
+**Goal:** Derive each recording's F0 range from the recording — replace the binary sex-typed F0 range with a per-recording narrowing, make a failed pitch analysis distinguishable from a genuine absence, and give the extend driver a way to re-derive the forty-five Praat scalars the retired range made stale.
 
 **Architecture:** `extract_pitch_values` picked one of two hardcoded (floor, ceiling) pairs from a threshold on trimmed mean F0, so every measure downstream of `derive_f0_range` carried a step discontinuity at a sex-typed boundary. The fix is one function replacement, plus a re-run path in the extend driver that currently skips every store already holding the measurements.
 
@@ -63,7 +63,7 @@ The reasoning for both is in the audit, at steps 1 and 1b. **Tasks 5 and 6 are w
 
 ### What does not need changing, and why
 
-**No routing changes.** No configured gate reads a Praat scalar: `routing_analysis/features.py:725-726` carries the forty scalars into the feature record, and no `gates:` entry in `data/config/default.yaml:227-271` names one. The four gates that read the posteriorgram — `airway.ppg_silent_fraction`, `ddk.ppg_segment_rate_per_s` and their features — are untouched, because the posteriorgram is untouched. So this plan changes forty numbers and **not which branch runs on any recording**.
+**No routing changes.** No configured gate reads a Praat scalar: `routing_analysis/features.py:725-726` carries the forty-five scalars into the feature record, and no `gates:` entry in `data/config/default.yaml:227-271` names one. The four gates that read the posteriorgram — `airway.ppg_silent_fraction`, `ddk.ppg_segment_rate_per_s` and their features — are untouched, because the posteriorgram is untouched. So this plan changes forty-five numbers and **not which branch runs on any recording**.
 
 `routing_analysis_test.py:949` hardcodes `"signal": "enhanced"` in the **`praat_features`** fixture. An earlier version of this plan had Task 6 Step 5 change it to `"plain"` for accuracy; with Task 5 withdrawn it is **already accurate and stays as it is**. `live_evidence_test.py:216` and `routing_analysis_test.py:959` are **`ppg_posteriorgram`** fixtures and are likewise correct — leave all three alone.
 
@@ -88,7 +88,7 @@ The reasoning for both is in the audit, at steps 1 and 1b. **Tasks 5 and 6 are w
 
 **The narrowing must not be able to exclude the speaker's F0, and a single pass can.** Measured on a synthesised **120 Hz voice with a 60 Hz hum at ~−22 dB**: the wide search locks to the subharmonic across the whole contour and a one-pass narrowing returns **`[50.0, 90.0]`** — a range the speaker's F0 never enters. Every measure downstream is then computed over a range that excludes the voice.
 
-**The bin was accidentally robust here**: a 60 Hz trimmed mean selects `(60, 250)`, which still contains 120 Hz. So a one-pass narrowing would be a **regression** on this configuration — and 60 Hz mains against a ~120 Hz male voice, or 50 Hz against ~100 Hz, is a common clinical recording. **An earlier version added that it interacts adversely with Task 5** — *"FRCRN suppresses stationary low-frequency noise and `plain` does not, so moving to `plain` makes the hum case more frequent in the same pass that introduces the vulnerability."* **Void with Task 5's withdrawal**: the forty scalars keep reading `enhanced`. The hum case is live where `derive_f0_range` already reads `plain` — `preprocess.py:954` and `voice.py:71` — and always was.
+**The bin was accidentally robust here**: a 60 Hz trimmed mean selects `(60, 250)`, which still contains 120 Hz. So a one-pass narrowing would be a **regression** on this configuration — and 60 Hz mains against a ~120 Hz male voice, or 50 Hz against ~100 Hz, is a common clinical recording. **An earlier version added that it interacts adversely with Task 5** — *"FRCRN suppresses stationary low-frequency noise and `plain` does not, so moving to `plain` makes the hum case more frequent in the same pass that introduces the vulnerability."* **Void with Task 5's withdrawal**: the forty-five scalars keep reading `enhanced`. The hum case is live where `derive_f0_range` already reads `plain` — `preprocess.py:954` and `voice.py:71` — and always was.
 
 **An earlier draft of this plan proposed a second-pass median comparison, and it cannot fire.** Re-running at the narrowed range and widening back when the two medians differ by an octave is unreachable by construction: the narrowed range is `[p5/1.5, p95·1.5]` with the first median near its centre, so **the second median can deviate by at most a factor of 1.5, which is 0.585 octave.** Measured with Task 1 implemented, it **fired in 0 of 120 conditions**, and it cannot fire at all when `p95 < 2·search_floor/1.5` — **66.7 Hz at the current floor, which both mains frequencies sit below.** Any threshold small enough to catch the hum case would be a fitted operating point, so "introduces no fitted value" and "closes the regression" cannot both hold with that mechanism. It is recorded here so it is not re-proposed.
 
@@ -880,7 +880,7 @@ nothing on all 62,547 stores. The *shape* of the override and the *reason* for t
   one dict, `retiring: dict[int, str]`, filled under `force` from `find_measurement(store, PRAAT_MEASUREMENT)`
   read **before** the override and carried to the second loop by position.
 - **The checksum-integrity argument was entirely the posteriorgram's, and it is gone.** `praat_features`
-  writes **no sidecar** — the forty scalars are attributes of the measurement (`preprocess.py:862-864`,
+  writes **no sidecar** — the forty-five scalars are attributes of the measurement (`preprocess.py:862-864`,
   with `"path" not in attrs` asserted at `preprocess_test.py:2235`) — so nothing is overwritten in place
   and no stored entity is ever invalid.
 - **Supersession is still required, on the weaker and more ordinary ground:** the store is append-only, so
