@@ -282,6 +282,7 @@ performance to its instruction.
 | Q6 cross-branch contradiction | **not built**; in remit, not yet specifiable |
 | Q7 SQUIM description | **not built**; must stratify and must not conclude |
 | Q8 capture-chain signature | **not built, and unowned** — see below |
+| Q9 multiple voices | **not built**; the placement is already right, the input does not exist — see below |
 
 ### Q8 — AGC and noise-suppression signature (**not built; currently owned by nobody**)
 
@@ -297,13 +298,66 @@ speech level, the pause noise spectrum against the in-speech one, level steps at
 which reduces the number of parameters without removing them. "Very low variance" and "a level step"
 are cuts, and whatever implements this declares them. **Owed.**
 
+### Q9 — Multiple voices in the recording (**not built; placement right, input missing**)
+
+**Owner decision, 2026-09-15.** The owner asked whether multiple voices in a recording are evaluated
+here, after each branch has evaluated and refined its task-specific spans. **The answer is yes, and
+the structure already supports it** — what is missing is one PREPROCESS derivative, not a place to
+put the check.
+
+**Question.** Does this recording carry more than one voice?
+
+**Why here, and not in a branch.** QUALITY is dispatched unconditionally after the branch loop
+(`run.py:310`), so every branch has already written whatever it was going to write
+(`quality.py:3-6`), and it already reads PREPROCESS's spans together with the measurements behind
+them — Q1 is the worked example: *"the spans say what was asserted, the measurement says what the
+samples were"* (`quality.py:10-12`). *How many voices are in this recording* is a fact about the
+recording rather than about the performance, which is this node's remit (§ *QUALITY is not a
+branch*). **A speaker *identity* question stays with SPEECH** — whose voice this is, matched against
+an enrollment — by the owner's earlier decision; S6's enrollment path is where that lives.
+
+**The division.** **PREPROCESS measures** — diarization as a shared whole-file derivative;
+**the branches refine** their own task spans; **QUALITY judges** multi-voice against the refined
+spans, after every branch has run.
+
+**What it would read, and what does not exist.** The diarization derivative PREPROCESS is owed:
+pyannote over each `enhanced` file, one whole-file measurement of whether the recording holds one
+speaker or more, shaped like `ppg_posteriorgram`, with an `extend_*` driver for finished runs.
+**There is no diarization derivative today** — `diariz` and `pyannote` appear nowhere in
+`nodes/preprocess.py` — and the graph's only diarization is SPEECH's, scoped to
+`[first word start, last word end]`, which is S5's *scoped wrong* finding: a voice before the
+participant starts, after they stop, or in a pause is invisible to it
+([`branch-speech.md`](branch-speech.md) § S5). **Owed a code change** at PREPROCESS; recorded in
+[`preprocess.md`](preprocess.md) § *Derivatives* and in [`dag.md`](dag.md) steps 2 and 5e. Nothing
+here needs the waveform, which is why the derivative belongs there and the judgement belongs here.
+
+**Which stream it runs on is open, and it is not this document's call.**
+[`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md)
+§ *Whole-file diarization as a shared derivative* owes the same whole-file block and holds **raw
+against enhanced undecided pending a pilot**, because
+enhancement suppresses the quiet background talker the derivative exists to catch; the owner's
+instruction names `enhanced`. Q9 reads whatever that block writes and is indifferent to the answer.
+
+**What it would emit.** A `counts` measurement, `{found, declared}` against the declaration's
+`targeted_speaker_count`, on the Q5 and S5 pattern. **Whether a second voice is additionally a
+`deviation` is unresolved**: the owner's phrasing calls it one, and § *What QUALITY does not emit*
+rules that QUALITY writes no deviations because it holds no task declaration. Either the declaration
+reaches this node or VERDICT names the departure from the count. Named in § *Unresolved*.
+
+**Parameter-free?** The count is the diarizer's. What is not parameter-free is *when a count above
+one is a finding*: diarization over-splits on within-speaker voice-quality change, which several of
+these tasks explicitly instruct ([`branch-speech.md`](branch-speech.md) § S5), so a count alone is
+not evidence of a second person. Whatever implements this reports the count and the pairwise
+embedding similarity beside it rather than declaring a cut.
+
 ## What the node emits
 
 ```
 assertions   contest, one per contradicted clip span (Q1)
              label over a background span, once gaps are typed background (Q3)
              contest across branches, if Q6 is ever specified
-measurements effective bandwidth, file-level, with its declared conventions (Q2)
+measurements voices in the recording as counts {found, declared} (Q9)
+             effective bandwidth, file-level, with its declared conventions (Q2)
              capture-chain signature, file-level (Q8)
              acquisition comparison as counts {declared, found} (Q5)
              SQUIM distribution, stratified by span family (Q7)
@@ -338,4 +392,7 @@ Withdrawing another node's reading. Any threshold fitted against declared famili
 ## Unresolved
 
 - Q6's contradiction pairs.
+- **Q9's output type**: a `counts` measurement, or a `deviation` — which needs the declaration this
+  node does not hold. And whether the count above one is reported by QUALITY or named as a departure
+  by VERDICT.
 - `vocabulary.py:29`'s docstring still calls QUALITY terminal — a code follow-up.

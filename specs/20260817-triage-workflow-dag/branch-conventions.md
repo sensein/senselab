@@ -65,8 +65,10 @@ and the candidate it would label for VOICE is an `amplitude` span — `voice.sus
 `refine` only a span of the family it proposes into, so a label alone does not make that span
 refinable. Either the label sets the span's `family`, which is a writer touching a span PREPROCESS
 minted, or the scoping widens for the four annotating verbs while staying for `propose`.
-**Unresolved**; it is one of the costs weighed at
-[`branch-voice.md`](branch-voice.md) § *The span source is one of three options*.
+**Unresolved**, and it is now the *only* thing open in VOICE's span source: the owner settled the
+rest on 2026-09-15, at [`branch-voice.md`](branch-voice.md) § *The subject is the spans the ruleset
+labelled, and VOICE refines them*, which names this section as where the family question is
+decided.
 
 ## Deviations and counts are stored, and need no new `PROV_TYPE`
 
