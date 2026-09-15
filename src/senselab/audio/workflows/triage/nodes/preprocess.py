@@ -97,6 +97,7 @@ from senselab.audio.workflows.triage.label_membership import (
 )
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
+    cpps_settings,
     describe_exception,
     f0_range_parameters,
     live_entities,
@@ -859,10 +860,10 @@ def _praat_scalar(value: Any) -> Any:  # noqa: ANN401 — Praat's own value, of 
 def praat_features(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
     """Praat/Parselmouth's whole-file feature set over the ``enhanced`` stream.
 
-    Every scalar is an attribute of the measurement: forty-five numbers — the forty descriptors and
-    the five keys naming the F0 range they were measured under — small enough that a
-    sidecar would only add an indirection. A non-finite scalar is recorded as null, JSON's only
-    representation of a number Praat could not place.
+    Every scalar is an attribute of the measurement: the descriptors, the five keys naming the F0
+    range they were measured under and the frame count the cepstral peak prominence rests on —
+    small enough that a sidecar would only add an indirection. A non-finite scalar is recorded as
+    null, JSON's only representation of a number Praat could not place.
 
     Args:
         store: The provenance store.
@@ -876,10 +877,12 @@ def praat_features(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
         LookupError: If no live ``enhanced`` stream is in the store.
     """
     f0_range = f0_range_parameters(config)
+    cpps = cpps_settings(config)
     parameters: dict[str, Any] = {
         "time_step_s": float(config.require("praat_features.time_step_s")),
         "window_length_s": float(config.require("praat_features.window_length_s")),
         **f0_range,
+        **{f"cpps_{name}": value for name, value in asdict(cpps).items()},
     }
     enhanced_id, audio = resolve_stream(store, run_dir, "enhanced")
     software = software_agent(store)
@@ -895,6 +898,7 @@ def praat_features(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
         pitch_pinned_percentile=f0_range["pitch_pinned_percentile"],
         pitch_excursion_multiplier=f0_range["pitch_excursion_multiplier"],
         pitch_pinned_octave_ratio=f0_range["pitch_pinned_octave_ratio"],
+        cpps=cpps,
     )
     scalars = {name: _praat_scalar(value) for name, value in sorted(features.items())}
     return _measurement(
