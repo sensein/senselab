@@ -158,6 +158,22 @@ praat_features:
   pitch_pinned_percentile: 95.0        # the percentile both the branch and the excursion term read
   pitch_excursion_multiplier: 1.5      # multiplies that percentile in the ceiling's second term
   pitch_pinned_octave_ratio: 2.0       # multiple of the search floor it must clear to narrow at all
+  # Every setting the smoothed cepstral peak prominence is computed under. CPPS is measured
+  # frame-wise over the whole recording — no voicing gate, no value cut — so all of these, and
+  # nothing about the recording's own F0, decide the number.
+  cpps:
+    pitch_floor_hz: 60.0               # sets the analysis window; three of its periods, Gaussian, doubled
+    time_step_s: 0.002                 # hop between cepstrogram frames
+    max_frequency_hz: 5000.0           # the analysed band; the signal is resampled to twice it
+    preemphasis_from_hz: 50.0          # pre-emphasis corner applied before framing
+    time_averaging_s: 0.01             # first smoothing, across frames; the first S in CPPS
+    quefrency_averaging_s: 0.001       # second smoothing, across quefrency; the second S
+    peak_search_range_hz: [60.0, 700.0]  # F0 band the peak is searched in; 700 clears untrained falsetto
+    trend_range_s: [0.001, 0.0]        # quefrency range the trend is fitted over; 0.0 is the end of the axis
+    robust_tolerance: 0.05             # relative slope change below which the reweighting has converged
+    subtract_tilt_before_smoothing: false  # declared for provenance; any other value is refused
+    tilt_line_type: straight           # declared for provenance; any other value is refused
+    peak_interpolation: parabolic      # declared for provenance; any other value is refused
 
 # VOICE's F0 ranges and task-duration expectations. f0_search_range_hz is also read by PREPROCESS:
 # it is the wide search each recording's own [floor, ceiling] is narrowed from, not a fixed range.

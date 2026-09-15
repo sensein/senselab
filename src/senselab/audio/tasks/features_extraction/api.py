@@ -378,6 +378,7 @@ def extract_features_from_audios(
             'spectral_tilt': -0.004414961849917737,
             'cepstral_peak_prominence_mean': 7.0388038514346825,
             'cepstral_peak_prominence_std': 1.5672438573255245,
+            'cepstral_peak_prominence_frames': 2411.0,
             'mean_f1_loc': 613.4664268420964,
             'std_f1_loc': 303.98235579059883,
             'mean_b1_loc': 401.96960219300837,

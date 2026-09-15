@@ -728,6 +728,118 @@ returned key names (`mean_f0_hertz`), so making it configurable would make the m
 attribute names depend on the config, and every consumer would have to read the config to know what
 to look up.
 
+### praat_features.cpps
+
+The twelve keys under `praat_features.cpps` are every setting the smoothed cepstral peak prominence
+is computed under. They exist because `extract_cpp_descriptors` stopped calling Praat's `Get CPPS...`
+and now computes the measure directly — log-power spectrum, cepstrum, robust trend fit, peak
+prominence, frame by frame, with the two smoothing windows that are the *S* — so every number Praat
+used to hold inside that one call is now a number this repo chose and has to declare. The rule the
+implementation follows and the defects it replaces are in `praat-instrument-audit.md` step 4; what
+is here is where each value came from. The triage path reads them through `cpps_settings`
+(`nodes/common.py`), which builds the `CppsSettings` the extractor takes, and PREPROCESS stamps every
+field into the `praat_features` measurement's own parameters under a `cpps_` prefix — so a stored
+scalar names the settings it was taken at, which is the whole point of moving them out of the
+function body.
+
+**Two of the twelve are inherited rather than derived, and that has to be said rather than dressed
+up.** `time_averaging_s` 0.01 and `quefrency_averaging_s` 0.001 are the literals the retired wrapper
+passed, and they depart from Praat's own form defaults (0.02 and 0.0005) and from Hillenbrand's.
+Carrying them forward is continuity — it keeps the new implementation comparable to the values
+already in the corpus, which is the only thing being held constant across a change that alters
+everything else — but most published CPPS was collected under different windows, so a value here is
+not interchangeable with a published one. That is finding 11's trap stated in advance: a derivation
+is evidence a decision was recorded, not that it was correct. Neither has been swept.
+
+praat_features.cpps.peak_search_range_hz [60.0, 700.0] -- the F0 band the cepstral peak is searched
+in, and the one value here that is a correction rather than a carry-forward. The retired code
+hardcoded 60--330 regardless of the caller's ceiling (finding 4), penalising a 420 Hz voice by
+3.8 dB -- roughly the whole normal-to-dysphonic span. 500 was considered and rejected in step 4:
+untrained falsetto routinely exceeds 700 Hz, so an upward glide's endpoint sits above it and the
+truncation is moved rather than removed. Measured here on a 420 Hz harmonic buzz: 23.53 dB at
+60--700 against 18.98 dB at 60--330, a 4.55 dB penalty, which is the same defect finding 4 measured
+at 3.8 dB on a different source. **This band is 100 Hz above `voice.f0_search_range_hz`'s ceiling of
+600**, and that tension is owed rather than settled -- step 4 records it, and the honest statement
+is that if falsetto above 700 Hz is real enough to move this band then finding 4's logic applies at
+600 too. A second non-comparability is owed with it: at 700 Hz the peak quefrency is 1.43 ms, only
+0.4 ms above the trend fit's 1 ms origin, where source and filter quefrencies are not separable, so
+a CPPS at F0 700 is not the same quantity as one at F0 120.
+
+**The band is fixed across recordings, not derived from each one.** An earlier draft of step 4 said
+"from the recording's own derived F0", and that fails three ways: `derive_f0_range` *raises* on a
+type-3 voice (`phonation/api.py`), so a derived band is unavailable on exactly the population this
+reimplementation exists to serve; a prominence is measured against a regression over a quefrency
+range, so a per-recording range would change the value and destroy the cross-recording comparability
+`branch-conventions.md` requires of a per-measure band; and the published convention is a fixed wide
+search.
+
+praat_features.cpps.trend_range_s [0.001, 0.0] -- the quefrency range the trend line is fitted
+over, and **a different thing from the peak-search band**. Conflating them is the error step 4
+names: an earlier version read "declare 60--500 Hz" as the regression range, and fitting the trend
+over 2--16.7 ms instead of 1 ms-to-end changes every value. 0.001 s is Praat's own fit origin and
+the retired wrapper's; 0.0 is Praat's spelling for "to the end of the quefrency axis", not a
+measurement of zero. The axis ends at 51.2 ms with the packaged `max_frequency_hz` and window, so
+the fit spans 1--51.2 ms and the peak band 1.43--16.67 ms sits inside it.
+
+praat_features.cpps.time_averaging_s 0.01 and praat_features.cpps.quefrency_averaging_s 0.001 --
+the two smoothing windows, in that order: first a moving average across frames, then one across
+quefrency within a frame. They are what makes the measure CPP**S** rather than CPP, and an earlier
+version of step 4 omitted both, which would have shipped a differently-named quantity. Inherited,
+not derived; see the paragraph above.
+
+praat_features.cpps.max_frequency_hz 5000.0 -- the upper edge of the analysed band; the signal is
+resampled to twice it before framing. The retired wrapper's value, and **this is finding 7's defect
+declared rather than fixed**: 5 kHz was an unnamed Praat default that band-limits the spectral
+moments too. Changing it is a separate decision with its own re-derivation, and it is a key here so
+that the decision is visible instead of buried in a positional argument.
+
+praat_features.cpps.pitch_floor_hz 60.0 -- sets the analysis window rather than the peak search;
+the two were the same number in the retired code and are separate keys now because they answer
+different questions. The window's effective width is three periods of this floor and its physical
+Gaussian duration twice that, which is Praat's rule and stays a module constant
+(`CPPS_WINDOW_PERIODS`, `CPPS_GAUSSIAN_WIDTH_FACTOR`) by the same criterion the three pitch
+percentiles do: it names how the window is *shaped*, not how far a value is moved. At 60 Hz that is
+a 100 ms window, which is why a recording under 100 ms places no frame and reports
+`cpp_frames = 0.0` rather than a number.
+
+praat_features.cpps.time_step_s 0.002 -- the hop between cepstrogram frames, the retired wrapper's
+value. Not the same as `praat_features.time_step_s` (0.005), which is the frame shift for the pitch,
+intensity, harmonicity and formant tracks: those are pooled per frame of a different analysis, and
+the two are not required to agree. It is also the denominator of the time-averaging window, so the
+first smoothing spans five frames at the packaged pair.
+
+praat_features.cpps.preemphasis_from_hz 50.0 -- the pre-emphasis corner applied before framing, the
+retired wrapper's value and Praat's form default.
+
+praat_features.cpps.robust_tolerance 0.05 -- the relative slope change below which the trend fit's
+reweighting has converged. The retired wrapper's value, passed to Praat's own robust fit; **the
+direct implementation's fit is a Huber M-estimator, which is not Praat's**, so the number is carried
+across a change of estimator and means "converged" rather than reproducing Praat's arithmetic. The
+Huber tuning constant 1.345 (95% efficiency at the Gaussian) and the 50-iteration cap are module
+constants for the same reason the window shape is: they name which estimator, not how far a value
+moves. Validation that the whole chain is right rather than merely self-consistent: on
+`src/tests/data_for_testing/audio_48khz_mono_16bits.wav` the direct implementation reads 5.376 dB
+against Praat's own `Get CPPS...` 5.063 dB over the identical settings and band, a 0.31 dB
+difference attributable to the estimator and the edge handling of the moving averages, and it places
+2411 frames where Praat's cepstrogram places 2411.
+
+praat_features.cpps.subtract_tilt_before_smoothing false, praat_features.cpps.tilt_line_type
+straight, praat_features.cpps.peak_interpolation parabolic -- the retired wrapper's three values,
+all previously unmentioned and all value-setting. `tilt_line_type` is worth naming twice: Praat's
+CPPS convention is an exponential decay and this has always been a straight line, so the incumbent
+was already not computing Praat's default CPPS. **The implementation supports only the declared
+value of each and raises on any other**, which is deliberate: these are keys so that a stored scalar
+names what it was computed under, and a setting that a run silently ignores is worse in a provenance
+record than a setting that is absent. Implementing the alternatives is a separate decision, and each
+would owe its own re-derivation.
+
+Two things that are deliberately **not** keys. The voicing gate is gone rather than configurable:
+the retired code computed CPPS per voiced interval, which is why it returned nothing on the
+aperiodic voices the measure was promoted to find, and reintroducing the gate behind a flag would
+reintroduce the defect. And there is no minimum value: the retired `> 4` cut deleted the dysphonic
+range outright (finding 2), and a configurable floor is the same selection on the dependent variable
+with a knob on it.
+
 ## voice
 
 VOICE's F0 ranges and task-duration expectations.

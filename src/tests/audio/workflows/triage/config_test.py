@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,12 @@ import senselab.audio.tasks
 from senselab.audio.tasks.phonation import derive_f0_range
 from senselab.audio.workflows.triage import config as config_module
 from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.nodes.common import F0_RANGE_PARAMETER_NAMES, f0_range_parameters
+from senselab.audio.workflows.triage.nodes.common import (
+    CPPS_SCALAR_KEYS,
+    F0_RANGE_PARAMETER_NAMES,
+    cpps_settings,
+    f0_range_parameters,
+)
 from senselab.text.tasks.pii_detection.api import default_detectors
 
 _MAX_VALUE_CHARS = 80
@@ -369,6 +375,52 @@ class TestTheV2OpenKeys:
             for name, parameter in inspect.signature(derive_f0_range).parameters.items()
             if name in required
         ), "derive_f0_range is the triage-facing wrapper; no default may stand in for a config key"
+
+
+class TestEverySettingCppsIsComputedUnderIsAKey:
+    """CPPS has no coefficient left in code: a value that moves the number moves a config key.
+
+    Their derivations are in ``specs/20260817-triage-workflow-dag/config-derivations.md``.
+    """
+
+    def test_every_field_of_the_settings_resolves_to_a_key(self) -> None:
+        """A field added without a key would silently take the library default on every run."""
+        settings = cpps_settings(load_triage_config())
+        packaged = load_triage_config().require("praat_features.cpps")
+        named = set(CPPS_SCALAR_KEYS) | {
+            "peak_search_range_hz",
+            "trend_range_s",
+            "subtract_tilt_before_smoothing",
+            "tilt_line_type",
+            "peak_interpolation",
+        }
+        assert set(packaged) == named, "a cpps key nothing reads, or a field with no key"
+        assert len({field.name for field in fields(settings)}) == len(named) + 2, (
+            "the two range keys become four fields; any other count means a field lost its key"
+        )
+
+    def test_the_packaged_values_are_the_ones_step_4_declares(self) -> None:
+        """The band is 60-700, the two smoothing windows are the incumbent's, and nothing is derived."""
+        settings = cpps_settings(load_triage_config())
+        assert (settings.peak_search_floor_hz, settings.peak_search_ceiling_hz) == (60.0, 700.0)
+        assert (settings.time_averaging_s, settings.quefrency_averaging_s) == (0.01, 0.001)
+        assert (settings.trend_start_s, settings.trend_end_s) == (0.001, 0.0)
+        assert settings.max_frequency_hz == 5000.0
+        assert settings.robust_tolerance == 0.05
+        assert settings.subtract_tilt_before_smoothing is False
+        assert (settings.tilt_line_type, settings.peak_interpolation) == ("straight", "parabolic")
+
+    def test_an_override_reaches_the_settings(self, tmp_path: Path) -> None:
+        """The helper reads the merged mapping, so an override is what the extractor gets."""
+        override = tmp_path / "cpps.yaml"
+        override.write_text("praat_features:\n  cpps:\n    peak_search_range_hz: [60.0, 500.0]\n")
+        assert cpps_settings(load_triage_config(override)).peak_search_ceiling_hz == 500.0
+
+    def test_the_trend_range_and_the_peak_band_are_separate_keys(self) -> None:
+        """Conflating them is the error step 4 names: the fit range is not the search band."""
+        settings = cpps_settings(load_triage_config())
+        assert settings.trend_start_s < 1.0 / settings.peak_search_ceiling_hz
+        assert settings.trend_end_s == 0.0, "the fit runs to the end of the axis, past the peak band"
 
 
 class TestTheHashNamesParametersOnly:
