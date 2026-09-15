@@ -113,7 +113,7 @@ than V1 refusing to propose — the same discipline as the rest of the inversion
 
 **But the covariate and the value it qualifies are currently computed on different signals**, which
 undermines the pairing. `phonation_tracks` runs `f0_track` on **pre-emphasised**, `formant_track` on
-**plain**, and derives the range on **plain** (`preprocess.py:954`) — while every V4 value comes from
+**plain**, and derives the range on **plain** (`preprocess.py:955`) — while every V4 value comes from
 **enhanced** (finding 0). A steadiness qualifier measured on one signal cannot certify a perturbation
 value measured on another.
 
@@ -287,16 +287,21 @@ hold values that drift. The rule, its measurement and what it does not reach are
   `pitch_range_fell_back` says so. That is a larger population than the low-frequency-hum capture it
   was designed for: at a 50 Hz floor it is every voice whose p95 is under 100 Hz. Those recordings
   lose the octave-error robustness narrowing buys.
-- **The range is still derived twice, independently** — `preprocess.py:954` and `voice.py:71`. They
+- **The range is still derived twice, independently** — `preprocess.py:955` and `voice.py:71`. They
   now read one set of coefficients, but they run on separate calls over the same stream, so they
   agree by construction of the rule rather than by sharing a result.
-- **On a glide the sweep still decides its own analysis ceiling**, now through `2.5 × q3` and
-  `1.5 × p95` rather than through a bin — so V3's "did F0 reach the derived limit" flag is **partly
-  circular on exactly the 3,150 glide recordings this capability serves**. The audit's step 2 records
-  the same conflict from the other side: narrowing buys octave-error robustness on stationary
-  material and is actively wrong on a sweep, which makes the narrowing task-conditioned rather than
-  universal. **That is this capability's live open item**, and it replaces the bin as V3's instrument
-  problem.
+- **On a glide the derived ceiling is near-vacuous rather than circular — corrected 2026-09-14
+  against a measurement.** This bullet read that the sweep decides its own analysis ceiling, making
+  V3's conformance flag *partly circular*, and that the audit records narrowing as *actively wrong on
+  a sweep*. **Measured, narrowing does not clip a glide**: an exponential 100→400 Hz sweep derives
+  `[72.8, 600.0]` against produced extremes of 102 and 392 Hz
+  (`src/tests/audio/tasks/features_extraction_test.py:373-381`), and the retired bin capped a
+  low-binned upward glide at 250 Hz, so this is strictly better than what it replaced. What
+  degenerates is **the flag**: "did F0 reach the derived limit" can now only fire when the margin
+  pushes past the 50/600 clamps, so on the 3,150 glide recordings it is **near-vacuous**. **That is
+  this capability's live open item** — a defect in the flag, not a reason to condition the range on
+  the task, which the measurement does not support. See the audit's step 2, corrected on the same
+  date.
 
 **The conformance flag therefore needs three levels**, not two: the F0 extremum coincided with the
 **derived limit**, with the **outer search bound**, or with neither. Report which, and report the
@@ -770,7 +775,9 @@ when the range was inadequate rather than assuming one from an inferred demograp
 
 **So there is no longer a defect here to fix.** `voice.f0_range_by_population` being null is the
 correct state, and `derive_f0_range` no longer supplies a prior behind it. What survives as owed is
-V3's glide item — narrowing is task-conditioned — and the search bound the narrowing sits inside.
+V3's glide item — **the conformance flag is near-vacuous on a sweep**, corrected 2026-09-14 from
+"narrowing is task-conditioned", which a measurement did not support — and the search bound the
+narrowing sits inside.
 
 **`population` is not a field the contract's declaration defines** — see Unresolved.
 
@@ -853,7 +860,7 @@ The residue: a phonation too quiet to clear the envelope threshold still yields 
 | --- | --- |
 | V1 propose the attempt | **not built** — the branch has no subject; reads a linear envelope on `plain`, so **`spans.k_db` is owed a re-derivation**; `min_duration_ms` transfers; stationarity qualifiers required |
 | V2 maximum phonation time | not built; previously specified as a longest voiced run |
-| V3 F0 trajectory | 22 detectors held; branch consumption not built; `derive_f0_range` narrows per recording since 2026-09-14, so **the binding constraint is now the 600 Hz search bound** and the narrowing is **owed a task condition** — it is wrong on a glide |
+| V3 F0 trajectory | 22 detectors held; branch consumption not built; `derive_f0_range` narrows per recording since 2026-09-14, so **the binding constraint is now the 600 Hz search bound**. Measured, the narrowing **brackets a glide rather than clipping it**, so no task condition is owed; what is owed is **the conformance flag**, which the clamps leave near-vacuous on a sweep |
 | V4 voice quality | **every Praat scalar is computed on FRCRN-enhanced audio** (audit finding 0); **CPPS, jitter, shimmer and HNR all withheld** — see the descriptor table above |
 | V4a vocal tremor | **not built**; largest missing capability; nearly free once DDK D1 exists |
 | V5 composite severity | **moved** to [`corpus-level-node.md`](corpus-level-node.md) C2, session-level; the protocol is unsatisfiable here |
