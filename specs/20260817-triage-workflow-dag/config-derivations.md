@@ -1278,6 +1278,55 @@ branch.label_sets
   [airway](#airway) -- and it is a data mapping (`DATA_MAP_PATHS`) so a campaign can add a set
   without editing the installed package. Whether HeAR's `Baby Cough` and `Throat Clear` belong in
   the cough set is a question this split does not answer and does not pretend to.
+
+branch.ddk_interval_tolerance: 3.0
+  A SEGMENTATION parameter, not a classifier threshold. It bounds how far one inter-onset interval
+  may sit from its stretch's running median before the stretch is cut, and its whole job is to stop
+  a degenerate stretch -- two onsets two seconds apart and one a tenth of a second later -- being
+  reported as one train. **It separates nothing.** Measured on the b2ai corpus at
+  `/orcd/scratch/bcs/002/satra/clipfix_20260913` on 2026-09-16 over 597 declared-DDK recordings
+  across the five DDK families against connected-speech and non-speech controls: interval jitter
+  does not distinguish the two populations at all (DDK 0.16-0.17, connected speech 0.15-0.18), so no
+  value of this key would. What does distinguish them is the rate (DDK 2.94-4.54 Hz, connected
+  speech 0.92-1.37 Hz), and the branch reports that rate rather than cutting on it. **Corpus-
+  informed**: 3.0 is the value that, on that corpus, left the regularity term nearly inert, which is
+  what a segmentation guard should be. Say so rather than presenting it as reasoned from physics.
+
+branch.ddk_min_repetitions: 4
+  The floor for calling a contiguous stretch a repetition train. Three onsets are two intervals,
+  which is the fewest a median and a deviation are defined over but too few for either to mean
+  anything; four onsets are three intervals. From the arithmetic of the statistic, not from a fit.
+
+branch.ddk_stop_places:
+  labial [p, b], alveolar [t, d], velar [k, g]
+  Read off the task definition, not fitted. The DDK stimuli across all five families are stop plus
+  mid or back vowel -- /pa/ /ta/ /ka/ /pataka/ and buttercup's /b^t3rk^p/ -- so which phonemes open a
+  DDK syllable follows from what the instruction asks for. The voiced partner of each stop is in the
+  set because the posteriorgram's argmax confuses the voicing contrast far more readily than the
+  place one, and losing a syllable to /b/-for-/p/ costs a repetition while keeping it costs nothing:
+  both map to the same place. The place vocabulary is deliberately the one
+  `branch.place_centroid_bands_hz` and `Expectation.sequence` already use, so the two place
+  instruments and the expectation table compare without a translation layer. A data mapping
+  (`DATA_MAP_PATHS`), so a campaign may add a place without editing the installed package. The stop
+  SET the CV walk reads is this mapping's union; there is no second key spelling it.
+
+branch.ddk_vowel_phonemes: [aa, ah, ao, ow, uh, uw]
+  The mid and back vowels, read off the same task definition. Any member satisfies the nucleus, which
+  is how the phonemic variation across /pa/, /pah/, /paw/ and /puh/ is tolerated rather than
+  penalised -- the instruction fixes the consonant and leaves the vowel's realisation to the speaker
+  and the argmax. Not fitted.
+
+NOT SHIPPED, and why -- the DDK rate plausibility band:
+  An earlier draft of this instrument carried `branch.ddk_rate_band_hz: [1.5, 8.0]` as an acceptance
+  gate: a train outside the band was not a train. It ships in no section. **A plausibility judgement
+  is a decision, and a branch does not decide** -- the same contract that moved `min_contrast_db`,
+  `tilt_max_db_per_octave` and `level_min_dbfs` out of `branch:` into `verdict:` on 2026-09-16. It
+  is not in `verdict:` either: DDK rate norms are age-, sex- and disorder-dependent and no derivation
+  for a clinical cutoff exists, and a number with no derivation is what this file exists to prevent.
+  A rate-plausibility band is therefore a **verdict-level decision awaiting a derivation**. The
+  2026-09-16 corpus reading (DDK families 2.94-4.54 Hz, connected speech 0.92-1.37 Hz) is descriptive
+  context for whoever derives it, not the derivation. Until then the branch measures the rate, names
+  the instrument that took it, and stops.
 ```
 
 `p_normalise` has NO key. It is a function, not a number, so a config key naming one would be a
