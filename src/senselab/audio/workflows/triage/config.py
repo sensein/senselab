@@ -45,6 +45,7 @@ configuration constraint rather than a presentation preference.
 DATA_MAP_PATHS = frozenset(
     {
         "airway.corroboration_overrides",
+        "branch.label_sets",
         "routing.hint_branch_map",
         "voice.f0_range_by_population",
         "voice.task_duration_ranges",
