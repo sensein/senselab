@@ -375,6 +375,38 @@ def _seed_two_distance_spans(store: ProvStore, tmp_path: Path, duration_s: float
 # --------------------------------------------------------------------------------------
 
 
+def _run_spans(store: ProvStore) -> list[Entity]:
+    """The branch's own corroborated speech runs, which carry the per-span votes and measurements.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The live spans whose role is one of this branch's word runs, in write order.
+    """
+    return [
+        entity
+        for entity in live_entities(store, "span")
+        if str(entity.attributes.get("role", "")).startswith("speech_run_")
+    ]
+
+
+def _turn_spans(store: ProvStore) -> list[Entity]:
+    """The aggregated spans that carry the speaker attribution, in write order.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The live spans whose role is one of this branch's speaker turns.
+    """
+    return [
+        entity
+        for entity in live_entities(store, "span")
+        if str(entity.attributes.get("role", "")).startswith("speaker_turn_")
+    ]
+
+
 def _verdict_entity(store: ProvStore, node: str) -> Entity:
     """The latest live verdict entity one node wrote.
 
@@ -673,7 +705,7 @@ class TestItReadsTheConsensusAndReFusesNothing:
         _seed_speech_store(store, tmp_path, words=["hello", "[COUGH]", "[BREATH]"])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert _verdict_entity(store, "SPEECH").attributes["words_n"] == 1
-        [span] = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        [span] = _run_spans(store)
         assert span.attributes["words_n"] == 1
         hello = next(w for w in live_entities(store, "word") if w.attributes["text"] == "hello")
         assert span.extent == hello.extent
@@ -777,7 +809,7 @@ class TestTheSpeechFamilyIsAConfigKey:
         _seed_speech_store(store, tmp_path, words=["hello", "world"], yamnet_labels=[["Music"]] * 11)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        spans = _run_spans(store)
         assert spans and all(span.attributes["yamnet_vote"] == "unavailable" for span in spans)
         assert all(span.attributes["yamnet_coverage"] is None for span in spans)
         flags = _verdict_entity(store, "SPEECH").attributes["flags"]
@@ -791,7 +823,7 @@ class TestTheSpeechFamilyIsAConfigKey:
         _seed_speech_store(store, tmp_path, words=["hello", "world"], yamnet_labels=[["Narration, monologue"]] * 11)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        spans = _run_spans(store)
         assert spans and all(span.attributes["yamnet_vote"] == "confirm" for span in spans)
         assert all(span.attributes["yamnet_coverage"] == 1.0 for span in spans)
 
@@ -803,7 +835,7 @@ class TestTheSpeechFamilyIsAConfigKey:
         _seed_speech_store(store, tmp_path, words=["hello", "world"], yamnet_labels=[["Music"]] * 11)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        spans = _run_spans(store)
         assert spans and all(span.attributes["yamnet_vote"] == "disconfirm" for span in spans)
         assert all(span.attributes["yamnet_coverage"] == 0.0 for span in spans)
         assert result.verdict.outcome is Outcome.FLAG
@@ -817,7 +849,7 @@ class TestTheSpeechFamilyIsAConfigKey:
         _seed_speech_store(store, tmp_path, words=["hello", "world"], yamnet_labels=[])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        spans = _run_spans(store)
         assert spans and all(span.attributes["yamnet_vote"] == "not_evaluated" for span in spans)
 
     def test_the_activity_records_the_family_it_voted_with(
@@ -926,9 +958,10 @@ class TestTheDiarizersClockIsTheRecordings:
         _seed_speech_store(store, tmp_path, words=["one", "two"], word_extents=[(2.0, 2.3), (2.4, 2.8)])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        attributions = [e for e in live_entities(store, "assertion") if e.attributes.get("verb") == "attribute"]
-        assert attributions and all(e.attributes["speaker"] == "SPEAKER_00" for e in attributions)
-        assert all(e.attributes["note"] is None for e in attributions), "no word is left unassigned"
+        (turn,) = _turn_spans(store)
+        assert turn.attributes["speaker"] == "SPEAKER_00"
+        assert turn.attributes["note"] is None, "no word is left unassigned"
+        assert turn.attributes["words_n"] == 2, "one aggregated span, not one assertion per word"
 
     def test_a_word_straddling_a_boundary_is_marked_not_assigned(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -937,9 +970,43 @@ class TestTheDiarizersClockIsTheRecordings:
         _seed_speech_store(store, tmp_path, words=["one"], word_extents=[(1.0, 1.4)])
         _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        (attribution,) = [e for e in live_entities(store, "assertion") if e.attributes.get("verb") == "attribute"]
-        assert attribution.attributes["speaker"] is None
-        assert attribution.attributes["note"] == "straddles"
+        (turn,) = _turn_spans(store)
+        assert turn.attributes["speaker"] is None
+        assert turn.attributes["note"] == "straddles"
+
+    def test_no_assertion_carries_a_verb_outside_the_contract(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`attribute` was the highest-volume verb in the store and was never one of the five."""
+        _seed_speech_store(store, tmp_path, words=["one", "two"], word_extents=[(2.0, 2.3), (2.4, 2.8)])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        verbs = {entity.attributes.get("verb") for entity in live_entities(store, "assertion")}
+        assert "attribute" not in verbs
+        assert verbs <= {"label", "deviate", "contest", "refine", "flag", None}
+
+    def test_the_aggregated_span_names_the_words_and_the_segment_it_came_from(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An aggregated span is a propose: it derives from what it aggregates and edits none of it."""
+        _seed_speech_store(store, tmp_path, words=["one", "two"], word_extents=[(2.0, 2.3), (2.4, 2.8)])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        (turn,) = _turn_spans(store)
+        sources = set(store.derived_from(turn.id))
+        assert {word.id for word in live_entities(store, "word")} <= sources
+        assert {segment.id for segment in live_entities(store, "speaker")} <= sources
+        assert not [entity for entity in live_entities(store, "word") if store.is_invalidated(entity.id)]
+
+    def test_a_speaker_change_splits_the_run(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One span per contiguous run of one speaker's words, so two speakers give two spans."""
+        _seed_speech_store(store, tmp_path, words=["one", "two", "three", "four"], speakers=2)
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        turns = _turn_spans(store)
+        assert [turn.attributes["speaker"] for turn in turns] == ["SPEAKER_00", "SPEAKER_01"]
 
 
 class TestTheClampTolerance:
@@ -1264,7 +1331,7 @@ class TestPiiOnTheConsensus:
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         verdict = _verdict_entity(store, "SPEECH")
         assert verdict.attributes["words_n"] == 4
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        spans = _run_spans(store)
         assert sum(int(span.attributes["words_n"]) for span in spans) == 4
         um = next(w for w in live_entities(store, "word") if w.attributes["text"] == "[UM]")
         assert um.extent is not None
@@ -1541,7 +1608,7 @@ class TestSquimIsInertWhileItsFloorsAreNull:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert result.verdict.outcome is Outcome.PASS, "quality is reported, never gating"
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        spans = _run_spans(store)
         assert spans and all(span.attributes["squim_vote"] == "not_evaluated" for span in spans)
         readings = find_measurements(store, "squim")
         assert readings and all(reading.attributes["stream"] == _stream_id(store, "plain") for reading in readings)
@@ -1675,7 +1742,7 @@ class TestWhatTheBranchRecordsAboutItsOwnReads:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         overlapping, untouched = [e.id for e in live_entities(store, "span") if "peak_over_floor_db" in e.attributes]
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        speech_spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        speech_spans = _run_spans(store)
         assert speech_spans
         refined = [span for span in speech_spans if overlapping in store.derived_from(span.id)]
         assert len(refined) == 1

@@ -495,6 +495,42 @@ def _decide_pii(
     return reasons
 
 
+@dataclass(frozen=True)
+class _SpeakerRun:
+    """One contiguous run of consensus words the diarization gives to the same speaker.
+
+    Attributes:
+        speaker: The diarizer's own label, or None where no single segment carries the run.
+        note: Why the speaker is None — ``straddles`` or ``unassigned`` — or None.
+        words: The ``word`` entities in the run, in stream order.
+    """
+
+    speaker: str | None
+    note: str | None
+    words: list[Entity]
+
+
+def _speaker_runs(words: list[Entity], speakers: list[str | None], notes: list[str | None]) -> list[_SpeakerRun]:
+    """Group the consensus words into the runs one speaker holds.
+
+    Args:
+        words: The consensus words, in stream order.
+        speakers: The speaker each word was attributed to, in the same order.
+        notes: The note each word carries, in the same order.
+
+    Returns:
+        The runs, in stream order. A word whose speaker could not be resolved joins the run of
+        words beside it that could not either, so the aggregate says which case it is.
+    """
+    runs: list[_SpeakerRun] = []
+    for word, speaker, note in zip(words, speakers, notes):
+        if runs and runs[-1].speaker == speaker and runs[-1].note == note:
+            runs[-1].words.append(word)
+        else:
+            runs.append(_SpeakerRun(speaker=speaker, note=note, words=[word]))
+    return runs
+
+
 def _flag_before_measuring(store: ProvStore, why: str) -> NodeResult:
     """Flag on a caller input this branch cannot act on, before any measurement is taken.
 
@@ -1525,10 +1561,14 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             store.was_derived_from(stream_id, plain_id)
             view.append(stream_id)
 
-    # Step 6 — identify: words to speakers by timing, and the target by enrollment.
+    # Step 6 — identify: words to speakers by timing, and the target by enrollment. Resolving
+    # across speakers produces an aggregated span — one per contiguous run of words the diarization
+    # gives to the same speaker — proposed in this branch's own family and leaving every word
+    # untouched. There is no per-word assertion: `attribute` was never one of the contract's verbs.
     identify = store.activity(node=NODE, step="identify", parameters={})
     store.was_associated_with(identify, software)
     word_speakers: list[str | None] = []
+    word_notes: list[str | None] = []
     for word in words:
         extent = word.extent or (0.0, 0.0)
         overlapping = [entry for entry in speaker_segments if _overlaps(extent, entry[2])]
@@ -1541,15 +1581,36 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         else:
             speaker, note = None, "unassigned"
         word_speakers.append(speaker)
-        attribution_id = store.entity(
-            prov_type="assertion",
-            extent=extent,
-            attributes={"verb": "attribute", "speaker": speaker, "note": note, "stream": plain_id},
+        word_notes.append(note)
+
+    turn_proposals: list[Proposal] = []
+    for position, run in enumerate(_speaker_runs(words, word_speakers, word_notes)):
+        run_extent = clamp_extent(
+            (
+                min(word.extent or (0.0, 0.0) for word in run.words)[0],
+                max((word.extent or (0.0, 0.0))[1] for word in run.words),
+            ),
+            plain,
         )
-        store.was_generated_by(attribution_id, identify)
-        store.was_attributed_to(attribution_id, software)
-        store.was_derived_from(attribution_id, word.id)
-        view.append(attribution_id)
+        if run_extent[1] <= run_extent[0]:
+            flags.append(f"a run of {len(run.words)} word(s) attributed to {run.speaker} names no extent")
+            continue
+        sources = [
+            segment_id for segment_id, speaker_label, extent in speaker_segments if _overlaps(run_extent, extent)
+        ]
+        turn_proposals.append(
+            MINT(
+                f"speaker_turn_{position}",
+                run_extent,
+                *(word.id for word in run.words),
+                *sources,
+                speaker=run.speaker,
+                note=run.note,
+                words_n=len(run.words),
+                stream=plain_id,
+            )
+        )
+    view.extend(propose_spans(store, identify, software, turn_proposals))
 
     enrollment_id: str | None = None
     target_speaker: str | None = None
