@@ -55,7 +55,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     read_continuity_track,
     read_phonation_tracks,
     semitones,
-    stream_extent,
+    stream_entity,
     touches_edge,
     trace_slice,
     track_slice,
@@ -114,6 +114,7 @@ class Evidence:
         tracks_id: The ``phonation_tracks`` measurement's id, or None when it is absent.
         continuity_id: The ``continuity_trace`` measurement's id, or None when it is absent.
         file_extent: The recording's own extent, or None when no stream carries one.
+        file_id: The recording stream's id, or None when no stream carries an extent.
     """
 
     spans: list[Entity]
@@ -123,6 +124,7 @@ class Evidence:
     tracks_id: str | None
     continuity_id: str | None
     file_extent: tuple[float, float] | None
+    file_id: str | None
 
     def derivations(self, *ids: str | None) -> tuple[str, ...]:
         """The evidence ids that exist, in the order given.
@@ -175,6 +177,7 @@ def read_evidence(store: ProvStore, run_dir: Path) -> Evidence:
     Returns:
         The record. An absent derivative is None rather than an error.
     """
+    recording = stream_entity(store)
     tracks_measurement = find_measurement(store, PHONATION_TRACKS)
     continuity_measurement = find_measurement(store, CONTINUITY_TRACE)
     return Evidence(
@@ -184,7 +187,8 @@ def read_evidence(store: ProvStore, run_dir: Path) -> Evidence:
         continuity=read_continuity_track(store, run_dir),
         tracks_id=None if tracks_measurement is None else tracks_measurement.id,
         continuity_id=None if continuity_measurement is None else continuity_measurement.id,
-        file_extent=stream_extent(store),
+        file_extent=None if recording is None else recording.extent,
+        file_id=None if recording is None else recording.id,
     )
 
 
@@ -442,6 +446,7 @@ def _voice_sustained(
                 "declared_duration_s",
                 round(duration(evidence.file_extent), 2),
                 expectation.declared_duration_s,
+                *evidence.derivations(evidence.file_id),
             )
         )
     return Result(count_in_found, components, findings)
