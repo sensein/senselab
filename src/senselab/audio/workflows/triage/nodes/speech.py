@@ -17,9 +17,9 @@ Every parameter's derivation is in ``data/config/default.yaml``; the design is i
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import numpy as np
 import torch
@@ -36,10 +36,56 @@ from senselab.audio.tasks.speaker_diarization.api import diarize_audios
 from senselab.audio.tasks.speaker_embeddings.api import extract_speaker_embeddings_from_audios
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
+from senselab.audio.workflows.triage.nodes.branches import (
+    BRANCH_FAMILY,
+    PARAM_KEYS,
+    PARAM_SECTION,
+    PROPOSERS,
+    SPEECH_EXPECTATIONS,
+    UNDETERMINED,
+    BranchParams,
+    Done,
+    Expectation,
+    Finding,
+    Pattern,
+    Proposal,
+    Result,
+    asr_spans,
+    branch_params,
+    content_coverage,
+    contest,
+    count,
+    declared_duration_count,
+    deviation,
+    dispatch,
+    duration,
+    group_by_breaks,
+    hull,
+    inter_word_gaps,
+    lexical_runs,
+    measured,
+    merge,
+    mode_of,
+    ngram_echo_fraction,
+    off_task,
+    ordered_run,
+    overlaps,
+    propose_spans,
+    stream_extent,
+    touches_edge,
+    unviable,
+    unviable_findings,
+    word_extent,
+    word_text,
+    write_findings,
+)
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     clamp_extent,
+    consensus_words,
     find_measurement,
+    find_measurements,
+    lexical_words,
     live_entities,
     path_attributes,
     resolve_stream,
@@ -47,6 +93,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_stream,
     write_verdict,
 )
+from senselab.audio.workflows.triage.stimulus import LexicalWord, StimulusAlignment, align_stimulus
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
 from senselab.utils.data_structures import HFModel, PyannoteAudioModel, SpeechBrainModel
@@ -59,6 +106,8 @@ CLEARVOICE_ORG = "alibabasglab"
 UNASDIFF_BACKEND = "unasdiff"
 SEPARABLE_SOURCES = 2
 NONTARGET_LEGS = ("level_db", "tilt_db_per_octave", "d_to_r_db")
+REPETITION_ALLOWED_CATEGORIES = ("Letters", "Numbers")
+"""The `random-item-generation` categories whose own instruction permits repeating an item."""
 
 
 def _diarization_model() -> PyannoteAudioModel:
@@ -472,6 +521,698 @@ def _flag_before_measuring(store: ProvStore, why: str) -> NodeResult:
     return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)
 
 
+# --------------------------------------------------------------------- the two modes
+
+MINT = PROPOSERS[NODE]
+"""SPEECH's own minting function. It proposes into ``family: "speech"`` and can reach no other."""
+
+BREATH_TOKEN = "[breath]"
+"""The one bracketed token that is never a filler: a breath in a passage reading is structure."""
+
+UNMEASURED_POINTS = "unmeasured_operating_points"
+"""The measurement naming every ``branch.*`` key an evaluation asked for and nobody has measured."""
+
+STIMULUS_MEASUREMENT = "stimulus_alignment"
+"""PREPROCESS's derivative the fully-specified families are evaluated against."""
+
+
+@dataclass
+class _Points:
+    """The ``branch.*`` operating points one evaluation asked for, and the ones nobody measured.
+
+    Attributes:
+        params: The operating points.
+        missing: The keys that were read while null, in first-read order.
+    """
+
+    params: BranchParams
+    missing: list[str] = field(default_factory=list)
+
+    def __call__(self, key: str) -> Any:  # noqa: ANN401 — each key's own type; several are not floats
+        """One operating point, or None when nobody has measured it.
+
+        Args:
+            key: The key's name inside the ``branch`` section.
+
+        Returns:
+            The value, through :class:`BranchParams`' own property, or None.
+
+        Raises:
+            KeyError: If the name is not a ``branch`` key, so a typo fails here rather than reading
+                as one more unmeasured point.
+        """
+        if key not in PARAM_KEYS:
+            raise KeyError(f"{PARAM_SECTION}.{key} is not a branch operating point; check it against PARAM_KEYS")
+        if self.params.config.get(f"{PARAM_SECTION}.{key}") is None:
+            if key not in self.missing:
+                self.missing.append(key)
+            return None
+        return getattr(self.params, f"p_{key}")
+
+    def record(self) -> list[Finding]:
+        """What was asked for and could not be read, as one finding.
+
+        Returns:
+            One ``unmeasured_operating_points`` measurement, or nothing when every key was read.
+        """
+        if not self.missing:
+            return []
+        return [measured(UNMEASURED_POINTS, None, None, sorted(self.missing), section=PARAM_SECTION)]
+
+
+def _consensus_id(store: ProvStore) -> str | None:
+    """The live ``consensus_transcript`` measurement's id, which every proposal here derives from.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The id, or None when PREPROCESS wrote no consensus.
+    """
+    consensus = find_measurement(store, "consensus_transcript")
+    return None if consensus is None else consensus.id
+
+
+def _stimulus(store: ProvStore, hint: AudioHints | None, params: BranchParams) -> tuple[str, StimulusAlignment] | None:
+    """PREPROCESS's stimulus alignment, as the three projections a branch reads.
+
+    Args:
+        store: The provenance store.
+        hint: What the recording was declared to contain.
+        params: The operating points, read for ``stimulus.sentence_terminators``.
+
+    Returns:
+        The measurement's id and the alignment, or None when the derivative or the declaration is
+        absent.
+    """
+    measurement = find_measurement(store, STIMULUS_MEASUREMENT)
+    prompts = list(hint.expected_speech) if hint is not None else []
+    if measurement is None or not prompts:
+        return None
+    words = [
+        LexicalWord(
+            index=int(word.attributes["index"]),
+            text=word_text(word),
+            extent=word.extent,
+            agreement=float(word.attributes["agreement"]),
+        )
+        for word in lexical_words(store)
+    ]
+    terminators = str(params.config.require("stimulus.sentence_terminators"))
+    return measurement.id, align_stimulus(prompts, words, terminators=terminators)
+
+
+def _stimulus_agrees(store: ProvStore, alignment: StimulusAlignment) -> bool:
+    """Whether the rebuilt alignment carries the counts PREPROCESS recorded for the derivative.
+
+    Args:
+        store: The provenance store.
+        alignment: The rebuilt alignment.
+
+    Returns:
+        True when every count the measurement carries matches the rebuild, and when it carries none
+        to compare against.
+    """
+    measurement = find_measurement(store, STIMULUS_MEASUREMENT)
+    if measurement is None:
+        return True
+    keys = ("n_expected", "n_realised", "n_substituted", "n_absent", "n_unexpected")
+    recorded = {key: measurement.attributes[key] for key in keys if measurement.attributes.get(key) is not None}
+    return all(int(value) == int(alignment.provenance[key]) for key, value in recorded.items())
+
+
+def _anchor(alignment: StimulusAlignment, index: int) -> float | None:
+    """Where in the signal an omitted token should have been: the end of the last one before it.
+
+    Args:
+        alignment: The alignment.
+        index: The omitted token's index in the expected stream.
+
+    Returns:
+        The time, or None when nothing before it was realised.
+    """
+    ends = [token.extent[1] for token in alignment.expected if token.index < index and token.extent is not None]
+    return max(ends) if ends else None
+
+
+def _repeat_fraction(expected: Sequence[str], produced: Sequence[str]) -> float:
+    """What fraction of the expected keys the production realised more than once.
+
+    Args:
+        expected: The expected token keys, in order.
+        produced: The produced lexical keys, in order.
+
+    Returns:
+        The fraction, or 0.0 when nothing was expected.
+    """
+    wanted = set(expected)
+    if not wanted:
+        return 0.0
+    counts: dict[str, int] = {}
+    for key in produced:
+        if key in wanted:
+            counts[key] = counts.get(key, 0) + 1
+    return sum(1 for key in wanted if counts.get(key, 0) > 1) / len(wanted)
+
+
+def _breath_groups(store: ProvStore, points: _Points) -> list[tuple[float, float]]:
+    """The breath groups of a connected production, from the inter-word gaps and breath evidence.
+
+    Args:
+        store: The provenance store.
+        points: The operating points.
+
+    Returns:
+        One extent per group, or nothing when the gap that breaks a group is unmeasured or the
+        recording carries no lexical word.
+    """
+    words = lexical_words(store)
+    min_gap = points("breath_group_min_gap_s")
+    if not words or min_gap is None:
+        return []
+    breaks = list(inter_word_gaps(words, float(min_gap)))
+    score_min = points("score_min")
+    breath_labels = set(points.params.p_label_sets.get("breath", ())) if score_min is not None else set()
+    if breath_labels:
+        for window in find_measurements(store, "span_hear"):
+            scores = window.attributes.get("raw_scores") or {}
+            if window.extent is None:
+                continue
+            if any(float(scores.get(label, 0.0)) >= float(score_min) for label in breath_labels):
+                breaks.append(window.extent)
+    for word in consensus_words(store):
+        if word.attributes["bracketed"] and word_text(word) == BREATH_TOKEN and word.extent is not None:
+            breaks.append(word.extent)
+    return group_by_breaks(words, merge([extent for extent in breaks if extent[1] > extent[0]]))
+
+
+def _breath_group_components(store: ProvStore, points: _Points, evidence: Sequence[str]) -> list[Proposal]:
+    """One proposed span per breath group of a connected production.
+
+    Args:
+        store: The provenance store.
+        points: The operating points.
+        evidence: The entity ids every group derives from.
+
+    Returns:
+        The proposals, in time order. Empty when no evidence can be named.
+    """
+    if not evidence:
+        return []
+    return [
+        MINT(f"breath_group_{index}", extent, *evidence, group_index=index)
+        for index, extent in enumerate(_breath_groups(store, points))
+        if extent[1] > extent[0]
+    ]
+
+
+def _off_task(components: Sequence[Proposal], store: ProvStore, points: _Points) -> list[Finding]:
+    """The gaps no proposed span covers, once the shortest one reported has been measured.
+
+    Args:
+        components: The spans this evaluation proposed.
+        store: The provenance store.
+        points: The operating points.
+
+    Returns:
+        The findings, or nothing while ``branch.gap_off_task_min_s`` is unmeasured.
+    """
+    cut = points("gap_off_task_min_s")
+    if cut is None:
+        return []
+    return off_task(components, live_entities(store, "span"), float(cut))
+
+
+def _speech_ordered(  # noqa: C901 — the two token sources and the five departures, in order
+    expectation: Expectation, store: ProvStore, hint: AudioHints | None, params: BranchParams
+) -> Result:
+    """A task whose instruction prescribes a token sequence: was it produced, and how?
+
+    Proposes ``task_extent``, one span per realised structure unit the alignment yields — a CAPE-V
+    sentence, a Rainbow sentence — and the breath groups where the family is connected. No span per
+    token: a realised token already has a ``word`` entity carrying its own extent, its agreement and
+    its per-source timings.
+
+    Args:
+        expectation: The row for this family.
+        store: The provenance store.
+        hint: What the recording was declared to contain.
+        params: The operating points.
+
+    Returns:
+        Whether the prescribed sequence was produced, the spans, and the deviations.
+    """
+    points = _Points(params)
+    consensus_id = _consensus_id(store)
+    words = lexical_words(store)
+    if consensus_id is None:
+        return Result(UNDETERMINED, [], [unviable("expected_token_sequence", "no consensus_transcript in the store")])
+
+    substitutions: list[tuple[str, Entity]] = []
+    omissions: list[tuple[int, str, float | None]] = []
+    structure: list[tuple[int, tuple[float, float], dict[str, Any]]] = []
+    repeat_fraction: float | None = None
+    evidence: list[str] = [consensus_id]
+    alignment: StimulusAlignment | None = None
+    if expectation.tokens is not None:
+        matched, omitted = ordered_run(list(expectation.tokens), words, params.p_normalise)
+        omissions = [(index, token, None) for index, token in enumerate(omitted)]
+        matched_ids = {word.id for _, word in matched}
+        insertions = [word for word in words if word.id not in matched_ids]
+    else:
+        read = _stimulus(store, hint, params)
+        if read is None:
+            # The derivative is absent and the expectation is per recording, so no extent can be
+            # placed: propose nothing rather than a span whose boundaries are guessed.
+            return Result(
+                UNDETERMINED,
+                [],
+                [
+                    unviable(
+                        "expected_token_sequence",
+                        f"{STIMULUS_MEASUREMENT} is absent; the transcript alone cannot say what was expected",
+                    )
+                ],
+            )
+        stimulus_id, alignment = read
+        evidence = [stimulus_id, consensus_id]
+        by_index = {int(word.attributes["index"]): word for word in words}
+        matched = [
+            (token.text, by_index[token.word_index])
+            for token in alignment.expected
+            if token.realisation == "realised" and token.word_index in by_index
+        ]
+        substitutions = [
+            (token.text, by_index[token.word_index])
+            for token in alignment.substitutions
+            if token.word_index in by_index
+        ]
+        omissions = [(token.index, token.text, _anchor(alignment, token.index)) for token in alignment.omissions]
+        insertions = [by_index[word.index] for word in alignment.unexpected if word.index in by_index]
+        structure = [
+            (
+                unit.index,
+                unit.extent,
+                {
+                    "expected_n": len(unit.token_indices),
+                    "realised_n": unit.n_realised,
+                    "substituted_n": unit.n_substituted,
+                },
+            )
+            for unit in alignment.structure_spans()
+            if unit.extent is not None and unit.extent[1] > unit.extent[0]
+        ]
+        repeat_fraction = _repeat_fraction(
+            [token.key for token in alignment.expected], [params.p_normalise(word_text(word)) for word in words]
+        )
+
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    if alignment is not None and not _stimulus_agrees(store, alignment):
+        findings.append(measured("stimulus_alignment_rebuild_agrees", None, None, False, of_measurement=evidence[0]))
+    if matched:
+        read_extent = (word_extent(matched[0][1])[0], word_extent(matched[-1][1])[1])
+        if read_extent[1] > read_extent[0]:
+            components.append(
+                MINT(
+                    "task_extent",
+                    read_extent,
+                    *evidence,
+                    *(word.id for _, word in matched),
+                    words_n=len(matched),
+                    expected_n=len(matched) + len(substitutions) + len(omissions),
+                )
+            )
+            recording = stream_extent(store)
+            if recording is not None and touches_edge(read_extent, recording):
+                findings.append(deviation("truncation", read_extent[0], read_extent[1]))
+            if repeat_fraction is not None:
+                findings.append(measured("expected_sequence_repeat_fraction", None, None, round(repeat_fraction, 3)))
+                cut = points("repeat_overlap_min")
+                if cut is not None and repeat_fraction >= float(cut):
+                    findings.append(
+                        deviation("repeat_reading", read_extent[0], read_extent[1], overlap=round(repeat_fraction, 3))
+                    )
+        for index, extent, counts in structure:
+            components.append(MINT(f"structure_{index}", extent, *evidence, structure_index=index, **counts))
+
+    for expected_text, word in substitutions:
+        start, end = word_extent(word)
+        findings.append(
+            deviation(
+                "stimulus_mismatch",
+                start,
+                end,
+                expected=expected_text,
+                read=word_text(word),
+                agreement=word.attributes.get("agreement"),
+                variants=word.attributes.get("variants"),
+            )
+        )
+    for word in insertions:
+        start, end = word_extent(word)
+        findings.append(
+            deviation(
+                "stimulus_mismatch",
+                start,
+                end,
+                expected=None,
+                read=word_text(word),
+                agreement=word.attributes.get("agreement"),
+            )
+        )
+    score_max = points("omission_score_max")
+    for index, token, anchor in omissions:
+        # An omission has no extent of its own — a skip-arc-free aligner assigns every stimulus word
+        # an interval whether or not it was spoken — so it is placed where it should have been.
+        findings.append(
+            deviation(
+                "omission",
+                anchor,
+                anchor,
+                expected=token,
+                expected_index=index,
+                acoustic_score_max=score_max,
+            )
+        )
+
+    if expectation.emit_filler:
+        for word in consensus_words(store):
+            if word.attributes["bracketed"] and word_text(word) != BREATH_TOKEN:
+                start, end = word_extent(word)
+                findings.append(deviation("filler", start, end, text=word_text(word)))
+
+    if expectation.connected:
+        components.extend(_breath_group_components(store, points, evidence))
+
+    if expectation.expected_event_count is not None:
+        findings.append(count("expected_event_count", len(matched), expectation.expected_event_count))
+    findings.extend(unviable_findings(expectation))
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(_off_task(components, store, points))
+    findings.extend(points.record())
+    return Result(bool(matched) and not omissions, components, findings)
+
+
+def _speech_free_response(  # noqa: C901 — the response, the connected measures and the anti-pattern
+    expectation: Expectation, store: ProvStore, hint: AudioHints | None, params: BranchParams
+) -> Result:
+    """A task prescribing no words: was there a response, and how was it produced?
+
+    Proposes ``task_extent`` over the hull of PREPROCESS's ASR spans, plus one span per breath group
+    where the family is connected. A family carrying no ``stimulus_text`` — every
+    ``picture-description`` and every ``cinderella-story`` in the corpus — expects nothing lexical,
+    so every lexical word is the response rather than a departure from one.
+
+    Args:
+        expectation: The row for this family.
+        store: The provenance store.
+        hint: What the recording was declared to contain.
+        params: The operating points.
+
+    Returns:
+        Whether a response was produced, the spans, and the findings.
+    """
+    points = _Points(params)
+    runs = asr_spans(live_entities(store, "span"))
+    words = lexical_words(store)
+    response = hull([span.extent for span in runs if span.extent is not None])
+    consensus_id = _consensus_id(store)
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    if response is not None and response[1] > response[0]:
+        components.append(MINT("task_extent", response, *(span.id for span in runs), words_n=len(words)))
+    minimum = points("response_min_s")
+    done: Done = UNDETERMINED if minimum is None else (response is not None and duration(response) >= float(minimum))
+
+    if expectation.connected and response is not None and duration(response) > 0.0:
+        evidence = [entity_id for entity_id in (consensus_id,) if entity_id is not None]
+        groups = _breath_groups(store, points)
+        components.extend(_breath_group_components(store, points, evidence))
+        # Named for their measurement convention, never `rate`: the name says what was counted.
+        findings.append(
+            measured(
+                "speech_rate_from_consensus_words_per_s",
+                response[0],
+                response[1],
+                round(len(words) / duration(response), 3),
+                support_words=len(words),
+            )
+        )
+        pause_min = points("pause_min_s")
+        if pause_min is not None:
+            pauses = inter_word_gaps(words, float(pause_min))
+            findings.append(
+                measured(
+                    "pause_fraction_of_response",
+                    response[0],
+                    response[1],
+                    round(sum(duration(pause) for pause in pauses) / duration(response), 3),
+                    support_pauses=len(pauses),
+                )
+            )
+        findings.append(count("breath_groups", len(groups), None))
+
+    if expectation.anti_pattern is not None:
+        read = _stimulus(store, hint, params)
+        ngram_n = points("echo_ngram_n")
+        cut = points("echo_overlap_max" if expectation.anti_pattern == "verbatim_prompt" else "verbatim_overlap_max")
+        if read is None:
+            findings.append(unviable(f"anti_pattern_{expectation.anti_pattern}", f"{STIMULUS_MEASUREMENT} is absent"))
+            done = UNDETERMINED
+        elif ngram_n is None:
+            done = UNDETERMINED
+        else:
+            _, alignment = read
+            source = [token.key for token in alignment.expected]
+            produced = [params.p_normalise(word_text(word)) for word in words]
+            echo = ngram_echo_fraction(source, produced, int(ngram_n))
+            findings.append(measured("verbatim_overlap_fraction", None, None, round(echo, 3), n=int(ngram_n)))
+            if cut is not None and echo > float(cut):
+                findings.append(
+                    deviation(
+                        "stimulus_mismatch",
+                        response[0] if response is not None else None,
+                        response[1] if response is not None else None,
+                        reading=expectation.anti_pattern,
+                        overlap=round(echo, 3),
+                    )
+                )
+            if expectation.anti_pattern == "verbatim_source":
+                # "Recall in your own words": semantic coverage is expected and verbatim
+                # reproduction is the deviation, so coverage is what `done` reads.
+                covered = content_coverage(source, produced)
+                findings.append(measured("source_content_coverage", None, None, round(covered, 3)))
+                coverage_min = points("coverage_min")
+                done = UNDETERMINED if coverage_min is None else covered >= float(coverage_min)
+
+    findings.extend(unviable_findings(expectation))
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(_off_task(components, store, points))
+    findings.extend(points.record())
+    return Result(done, components, findings)
+
+
+def _speech_item_list(
+    expectation: Expectation, store: ProvStore, hint: AudioHints | None, params: BranchParams
+) -> Result:
+    """A task asking for a list of items: how many, and was one repeated where none may be?
+
+    Proposes ``task_extent`` only. An item is one ``word`` entity with its own extent, so a per-item
+    span would duplicate ground and carry no measurement of its own; the repetition finding is a
+    deviation over that word's extent.
+
+    Args:
+        expectation: The row for this family.
+        store: The provenance store.
+        hint: What the recording was declared to contain.
+        params: The operating points.
+
+    Returns:
+        Whether any item was produced, the span, and the findings.
+    """
+    points = _Points(params)
+    if expectation.repetition_from_category:
+        # Eight of ten categories say "Do not repeat any item"; `Letters` and `Numbers` allow it. A
+        # family-scoped rule inverts the instruction on those, so an unreadable category concludes
+        # nothing rather than guessing which of the two rules applies.
+        category = (hint.metadata or {}).get("category") if hint is not None else None
+        if category is None:
+            return Result(
+                UNDETERMINED,
+                [],
+                [
+                    unviable(
+                        "repetition_rule",
+                        "the category lives only in `instructions`; no grain above the recording carries it",
+                    )
+                ],
+            )
+        repetition_allowed = str(category) in REPETITION_ALLOWED_CATEGORIES
+    else:
+        repetition_allowed = bool(expectation.repetition_allowed)
+
+    items = lexical_words(store)
+    consensus_id = _consensus_id(store)
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    first_seen: dict[str, float] = {}
+    for word in items:
+        key = params.p_normalise(word_text(word))
+        start, end = word_extent(word)
+        if key in first_seen and not repetition_allowed:
+            findings.append(deviation("repeated_item", start, end, first_at=first_seen[key], text=word_text(word)))
+        first_seen.setdefault(key, start)
+
+    extent = hull([word_extent(word) for word in items])
+    if extent is not None and extent[1] > extent[0] and consensus_id is not None:
+        components.append(
+            MINT(
+                "task_extent",
+                extent,
+                consensus_id,
+                *(word.id for word in items),
+                items_n=len(items),
+                repetition_allowed=repetition_allowed,
+            )
+        )
+    findings.append(count("items", len(items), None))
+    findings.append(count("repetition_allowed", repetition_allowed, None))
+    findings.extend(unviable_findings(expectation))
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(_off_task(components, store, points))
+    findings.extend(points.record())
+    return Result(len(items) > 0, components, findings)
+
+
+def _speech_no_lexical(store: ProvStore, params: BranchParams) -> Result:
+    """A syllable-repetition task, in family for SPEECH, whose expectation is no lexical content.
+
+    Proposes **no** span, and that is the finding. ``/pa/`` is not lexical and ASR mostly declines
+    it, so near-zero lexical content is the correct observation rather than a miss, and a branch
+    proposing a speech span here would assert the opposite of what it measured.
+
+    Args:
+        store: The provenance store.
+        params: The operating points.
+
+    Returns:
+        Whether the recording stayed non-lexical, no spans, and one deviation per lexical word.
+    """
+    points = _Points(params)
+    produced = lexical_words(store)
+    findings: list[Finding] = []
+    for word in produced:
+        start, end = word_extent(word)
+        findings.append(
+            deviation(
+                "off_task_extent",
+                start,
+                end,
+                text=word_text(word),
+                agreement=word.attributes.get("agreement"),
+                measure="lexical",
+            )
+        )
+    findings.append(count("lexical_words", len(produced), 0))
+    tolerated = points("expected_lexical_max")
+    findings.extend(points.record())
+    done: Done = UNDETERMINED if tolerated is None else len(produced) <= int(tolerated)
+    return Result(done, [], findings)
+
+
+def align_speech(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
+    """Evaluate a declared speech task against what its own instruction asked for.
+
+    Args:
+        task_family: The declared family, which is a key of ``SPEECH_EXPECTATIONS``.
+        store: The provenance store.
+        hint: What the recording was declared to contain.
+        params: The operating points.
+
+    Returns:
+        Whether the expected patterns were found, the spans proposed, and the deviations.
+
+    Raises:
+        KeyError: If the family is not a SPEECH family, which is the caller owing detect_speech.
+        NotImplementedError: If the row names a pattern this branch serves no body for.
+    """
+    expectation = SPEECH_EXPECTATIONS.get(task_family)
+    if expectation is None:
+        raise KeyError(f"{task_family} is not a SPEECH family; the caller owes detect_speech")
+    if expectation.pattern is Pattern.ORDERED_TOKENS:
+        return _speech_ordered(expectation, store, hint, params)
+    if expectation.pattern is Pattern.FREE_RESPONSE:
+        return _speech_free_response(expectation, store, hint, params)
+    if expectation.pattern is Pattern.ITEM_LIST:
+        return _speech_item_list(expectation, store, hint, params)
+    if expectation.pattern is Pattern.NO_LEXICAL:
+        return _speech_no_lexical(store, params)
+    raise NotImplementedError(f"{task_family}: SPEECH serves no body for {expectation.pattern}")
+
+
+def detect_speech(store: ProvStore, params: BranchParams) -> Result:
+    """Find lexical speech on a recording of another branch's kind, and evaluate no task.
+
+    Needs no alignment at all: nothing lexical is expected of a breath, a cough or a held vowel, so
+    every lexical word is the finding. This is the successor to both a lexical-intrusion detector
+    and a count-in detector — on a ``prolonged-vowel`` recording it proposes a span over
+    ``one two three``, and ``align_voice``, for which that family is in family, is what decides
+    whether the prescribed count-in happened.
+
+    Args:
+        store: The provenance store.
+        params: The operating points.
+
+    Returns:
+        A result whose ``done`` is ``UNDETERMINED``, one span per run of lexical words, and the
+        findings.
+    """
+    points = _Points(params)
+    words = lexical_words(store)
+    consensus_id = _consensus_id(store)
+    gap = points("run_gap_max_s")
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    # Not `merge` over the word extents: `merge` joins only what touches and ordinary speech has a
+    # gap between every pair of words, so it would propose one span per word.
+    runs = [] if gap is None or consensus_id is None else lexical_runs(words, float(gap))
+    for index, extent in enumerate(runs):
+        if extent[1] <= extent[0] or consensus_id is None:
+            continue
+        inside = [word for word in words if overlaps(word_extent(word), extent)]
+        agreements = [
+            float(word.attributes["agreement"]) for word in inside if word.attributes.get("agreement") is not None
+        ]
+        components.append(
+            MINT(
+                f"lexical_run_{index}",
+                extent,
+                consensus_id,
+                *(word.id for word in inside),
+                words_n=len(inside),
+                text=" ".join(word_text(word) for word in inside),
+                agreement=min(agreements) if agreements else None,
+                evaluates_no_task=True,
+            )
+        )
+    for span in live_entities(store, "span"):
+        # Only somebody else's claim of speech: contesting this pass's own proposals would have the
+        # branch argue with itself, and a span it has not yet written cannot be read here anyway.
+        if span.attributes.get("family") != BRANCH_FAMILY[NODE] or span.extent is None:
+            continue
+        if _author_node(store, span.id) == NODE:
+            continue
+        if not any(overlaps(span.extent, extent) for extent in runs):
+            findings.append(contest(span.id, span.extent, "speech", "no_consensus_word_inside"))
+    findings.append(count("lexical_words", len(words), None))
+    findings.extend(points.record())
+    return Result(UNDETERMINED, components, findings)
+
+
+# --------------------------------------------------------------------- the node
+
+
 def speech(  # noqa: C901 — the branch's nine steps, in design order
     store: ProvStore,
     source: str,
@@ -568,11 +1309,23 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     if single_source:
         flags.append(f"{len(single_source)} single-recognizer word(s) survive as fabrication candidates")
 
-    # Step 2 — speech spans from the lexical words' timings, in memory until corroborated.
+    # Step 2 — speech spans from the lexical words' timings, in memory until corroborated. A run
+    # the consensus places at one instant is dropped rather than proposed: a span of no duration
+    # names no region, and `propose_span` refuses one.
     word_extents = [word.extent or (0.0, 0.0) for word in lexical]
-    grouped = group_extents_into_runs(word_extents)
+    all_grouped = group_extents_into_runs(word_extents)
+    grouped = [
+        (start, end, members)
+        for start, end, members in all_grouped
+        if clamp_extent((start, end), plain)[1] > clamp_extent((start, end), plain)[0]
+    ]
+    if len(grouped) < len(all_grouped):
+        flags.append(f"{len(all_grouped) - len(grouped)} run(s) of words placed at one instant name no extent")
     span_extents = [clamp_extent((start, end), plain) for start, end, _ in grouped]
     speech_s = sum(end - start for start, end in span_extents)
+    word_hull_extent = clamp_extent(
+        (min(start for start, _ in word_extents), max(end for _, end in word_extents)), plain
+    )
 
     # Step 3 — corroborate: the classifier's retained Speech label set, and SQUIM as the speech test.
     prior_spans: list[Entity] = [
@@ -639,10 +1392,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         corroboration.append({"yamnet_coverage": coverage, "yamnet_vote": yamnet_vote, "squim_vote": squim_vote})
 
     # Step 4 — diarize over [first word start, last word end] only; every segment counts.
-    interval = clamp_extent(
-        (min(start for start, _, _ in grouped), max(end for _, end, _ in grouped)),
-        plain,
-    )
+    interval = word_hull_extent
     diarizer = _diarization_model()
     diarize_act = store.activity(
         node=NODE, step="diarize", parameters={"interval": list(interval), "model": str(diarizer.path_or_uri)}
@@ -655,14 +1405,14 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     store.was_attributed_to(interval_id, software)
     view.append(interval_id)
 
-    count: int | None
+    speaker_count: int | None
     diarization_state: str
     cropped: Audio | None = None
     speaker_segments: list[tuple[str, str, tuple[float, float]]] = []  # (entity_id, speaker, extent)
     try:
         (cropped,) = extract_segments([(plain, [interval])])[0]
     except ValueError as error:
-        count = None
+        speaker_count = None
         diarization_state = "interval_selects_no_samples"
         flags.append(f"the diarization interval selects no samples: {error}")
     else:
@@ -678,13 +1428,13 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             store.was_attributed_to(speaker_id, diarizer_agent)
             view.append(speaker_id)
             speaker_segments.append((speaker_id, str(segment.speaker), extent))
-        count = len({speaker for _, speaker, _ in speaker_segments})
+        speaker_count = len({speaker for _, speaker, _ in speaker_segments})
         diarization_state = "diarized"
 
     second = config.get("speech.second_diarizer")
     second_record: Any = "not_consulted"
-    if count is not None and count != 1:
-        flags.append(f"speaker count {count} != 1")
+    if speaker_count is not None and speaker_count != 1:
+        flags.append(f"speaker count {speaker_count} != 1")
         if second is not None and cropped is not None:
             second_model = _second_diarizer_model(str(second))
             second_agent = store.agent(
@@ -697,24 +1447,28 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             store.used(second_act, interval_id)
             [second_segments] = diarize_audios([cropped], model=second_model)
             second_count = len({segment.speaker for segment in second_segments})
-            second_record = {"model": str(second), "count": second_count, "agrees": second_count == count}
-            if second_count != count:
-                flags.append(f"second diarizer counts {second_count} speakers against {count}")
+            second_record = {
+                "model": str(second),
+                "count": second_count,
+                "agrees": second_count == speaker_count,
+            }
+            if second_count != speaker_count:
+                flags.append(f"second diarizer counts {second_count} speakers against {speaker_count}")
 
     # Step 5 — separation: measurement-gated, and neither backend is selected by default.
     backend = config.get("speech.separation_backend")
     sound_class = config.get("speech.separation_sound_class")
     separation_state: Any
     separated: list[Audio] = []
-    if count is None or cropped is None:
+    if speaker_count is None or cropped is None:
         separation_state = "no_speaker_count"
-    elif count < SEPARABLE_SOURCES:
+    elif speaker_count < SEPARABLE_SOURCES:
         separation_state = "not_needed"
     elif backend is None:
         separation_state = "not_selected"
-    elif count > SEPARABLE_SOURCES:
-        separation_state = f"count_{count}_exceeds_backend"
-        flags.append(f"separation cannot serve {count} speakers; the checkpoints separate exactly 2")
+    elif speaker_count > SEPARABLE_SOURCES:
+        separation_state = f"count_{speaker_count}_exceeds_backend"
+        flags.append(f"separation cannot serve {speaker_count} speakers; the checkpoints separate exactly 2")
     elif str(backend) == UNASDIFF_BACKEND and sound_class is None:
         separation_state = "unconditioned_sound_slot_unavailable"
         flags.append(
@@ -871,31 +1625,43 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             else:
                 flags.append("an enrollment was given and no speaker matches it")
 
-    # The span elements, carrying every conclusion drawn over them. Nothing here is invalidated.
-    span_ids: list[str] = []
+    # The expectation: one mode or the other, chosen from the declared family and nothing else. It
+    # runs before this branch proposes anything, so neither mode reads a span this pass authored.
+    params = branch_params(config)
+    mode, declared_family = mode_of(NODE, store, hint)
+    expect = store.activity(
+        node=NODE, step="expect", parameters={"mode": mode, "task_family": declared_family, "stream": source}
+    )
+    store.was_associated_with(expect, software)
+    store.used(expect, consensus.id)
+    result = dispatch(NODE, store, params, hint, align=align_speech, detect=detect_speech)
+    view.extend(propose_spans(store, expect, software, result.components))
+    view.extend(write_findings(store, expect, software, result.deviations, signal=source))
+
+    # The span elements, proposed rather than written: a branch mints into its own family, naming
+    # what each extent came from, and never edits a span another node proposed.
+    run_proposals: list[Proposal] = []
     for position, ((start, end), (_, _, members)) in enumerate(zip(span_extents, grouped)):
         owners = {word_speakers[lexical_index[index]] for index in members}
         attributed_to = owners.pop() if len(owners) == 1 else None
-        span_id = store.entity(
-            prov_type="span",
-            extent=(start, end),
-            attributes={
-                "family": "speech",
-                "words_n": len(members),
-                "attributed_to": attributed_to,
-                "nontarget": None
-                if target_speaker is None or attributed_to is None
-                else attributed_to != target_speaker,
+        priors = [
+            prior.id for prior in prior_spans if prior.extent is not None and _overlaps((start, end), prior.extent)
+        ]
+        run_proposals.append(
+            MINT(
+                f"speech_run_{position}",
+                (start, end),
+                consensus.id,
+                *(lexical[index].id for index in members),
+                *priors,
+                words_n=len(members),
+                attributed_to=attributed_to,
+                nontarget=None if target_speaker is None or attributed_to is None else attributed_to != target_speaker,
                 **corroboration[position],
-            },
+            )
         )
-        store.was_generated_by(span_id, corroborate)
-        store.was_attributed_to(span_id, software)
-        for prior in prior_spans:
-            if prior.extent is not None and _overlaps((start, end), prior.extent):
-                store.was_derived_from(span_id, prior.id)
-        span_ids.append(span_id)
-        view.append(span_id)
+    span_ids = propose_spans(store, corroborate, software, run_proposals)
+    view.extend(span_ids)
 
     # Step 7 — PII: one scan over the consensus transcript and each recognizer's own transcript.
     haystacks: list[tuple[str, str, list[int]]] = [("consensus", transcript_text, list(range(len(words))))]
@@ -932,7 +1698,9 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     continue
                 recorded.add((str(finding.category), first, last))
                 covered = list(range(first, last + 1))
-                extent = (span_extents[0][0], span_extents[-1][1]) if not located else _timings_hull(words, covered)
+                # A finding nothing in the transcript places covers the whole of it: the redaction
+                # that reads this must not be narrower than the text the detector was given.
+                extent = _timings_hull(words, list(range(len(words)))) if not located else _timings_hull(words, covered)
                 sources = sorted({str(name) for index in covered for name in words[index].attributes["sources"]})
                 speakers = {word_speakers[index] for index in covered}
                 resolved = len(speakers) == 1 and None not in speakers
@@ -1072,8 +1840,15 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
 
     # Outcome — fail only from the no-words row above; flag from the accumulated reasons; else pass.
     detail: dict[str, Any] = {
-        "speaker_count": count,
+        "speaker_count": speaker_count,
         "diarization": diarization_state,
+        "expectation": {
+            "mode": mode,
+            "task_family": declared_family,
+            "done": result.done,
+            "spans_n": len(result.components),
+            "findings_n": len(result.deviations),
+        },
         "words_n": len(lexical),
         "speech_s": speech_s,
         "nontarget_speech_s": nontarget_speech_s,
