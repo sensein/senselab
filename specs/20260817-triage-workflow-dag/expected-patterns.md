@@ -102,7 +102,7 @@ what makes it one function per branch rather than one per (branch, family) pair.
 this document gave SPEECH's row over the AIRWAY families `done = (no lexical word was found)` —
 reading the absence of lexical content as *"the negative pattern held"*. Under the two-mode rule
 that is wrong: an AIRWAY-declared recording is not SPEECH's task, so SPEECH has no *"was it done"*
-to answer on it. The lexical intrusion is still found, still extented and still handed to AIRWAY,
+to answer on it. The lexical intrusion is still found, still given an extent and still handed to AIRWAY,
 which owns the deviation ([`branch-airway.md:164-165`](branch-airway.md)); what changes is that
 SPEECH no longer renders it as a verdict of its own.
 
@@ -930,6 +930,7 @@ wrong is a separate question, and 2,020 sidecars declare under a second. Its hom
 ### The operating points, all of them
 
 ```python
+@dataclass(frozen=True)
 class Params:
     """Every operating point these bodies owe. No number appears here or in any body."""
 
@@ -1283,7 +1284,8 @@ def longest_monotone_run(values: np.ndarray, tolerance: float) -> tuple[int, int
     return best
 
 
-def band_power(spectrogram_block, sampling_rate: float, extent: tuple[float, float], lo_hz: float, hi_hz: float) -> float:
+def band_power(spectrogram_block, sampling_rate: float, extent: tuple[float, float],
+               lo_hz: float, hi_hz: float) -> float:
     power = np.asarray(spectrogram_block.spectrogram, dtype=float)
     freqs = np.fft.rfftfreq(int(spectrogram_block.n_fft), d=1.0 / sampling_rate)
     bins = (freqs >= lo_hz) & (freqs < hi_hz)
@@ -2924,7 +2926,8 @@ def detect_quality(store, params: Params) -> Result:
     extent = store.stream_extent
     rolloff_hz = getattr(store.band_profile, "rolloff_hz", None)                          # D3 †
     if rolloff_hz is None:
-        findings.append(unviable("occluded_microphone", "`band_profile` (D3) is absent; the tilt half has no reference"))
+        findings.append(unviable("occluded_microphone",
+                                 "`band_profile` (D3) is absent; the tilt half has no reference"))
     else:
         balance = spectral_balance_db(
             store.spectrogram_wideband, store.sampling_rate, extent, params.p_effort_split_hz
