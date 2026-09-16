@@ -1075,7 +1075,7 @@ measurement of their own, so each does.
 | branch | task | spans proposed | what each extent is derived from |
 | --- | --- | --- | --- |
 | VOICE | `prolonged-vowel` | **2** — `count_in`, `task_extent` | `count_in` from the consensus `word` extents of the matched `one two three`; `task_extent` from the first and last voiced frame of `phonation_tracks` inside the qualifying amplitude span. **Two, because only the second is the voice measurement**: today every Praat scalar is taken over count-in plus silence plus vowel, which is the defect the split removes. `count_in` carries `excluded_from_measurement=True` |
-| VOICE | `maximum-phonation-time` | **1** — `task_extent` | the voiced run, as above. The v1 inhale gets **no VOICE span**: under propose-only a branch mints only in its own family and an inhale is airway evidence, so `align_voice` records `inhale_expected_in_file` as a count and `detect_airway` — which runs on the same recording, AIRWAY being routed to 46% of this family — is what proposes the span over it |
+| VOICE | `maximum-phonation-time` | **1** — `task_extent` | the voiced run, as above. The v1 inhale gets **no VOICE span**: under propose-only a branch mints only in its own family and an inhale is airway evidence, so `align_voice` records `inhale_expected_in_file` as a count and `detect_airway` — which runs on the same recording — is what proposes the span over it. Whether routing in fact selects AIRWAY on this family often enough for the hand-off to be routine is a routing-share question this document does not measure |
 | VOICE | `maximum-phonation-time-v2` | **1** — `task_extent` | as v1, and no inhale is expected at all |
 | VOICE | `glides-*`, `high-to-low` | **1** — `task_extent` | the tolerant-monotone run over `semitones(f0_hz)`, which is the sweep itself rather than the carrier span |
 | VOICE | `cape-v-sentences`, `-v2` *(pending declaration)* | **n + 1** — one per sentence, plus `task_extent` | each sentence from `stimulus_alignment.structure_spans()`. **One per sentence because pooling across the six discards the instrument's design** — each loads a different phonatory condition, and today's whole-file `praat_features` is exactly that pooling |
@@ -1638,7 +1638,7 @@ def _voice_sustained(expectation: Expectation, store, hints, params: Params) -> 
         # v1 places the deep inhale before the record tap is mentioned, so an audible inhale may be
         # inside the file. VOICE proposes NO span for it: under propose-only a branch mints only in
         # its own family, and an inhale is airway evidence. `detect_airway` runs on this same
-        # recording — AIRWAY is routed to 46% of `maximum-phonation-time` — and proposes it there.
+        # recording, wherever routing selects it — and proposes it there.
         findings.append(count("inhale_expected_in_file", True, None))
 
     if expectation.forbid_lexical:
@@ -2835,8 +2835,9 @@ def detect_ddk(store, params: Params) -> Result:
     whose `min_pause = 0.3 s` (`praat_parselmouth.py:228`) exceeds an entire DDK cycle, and not
     from the PPG. Repetition occurs in ordinary speech — a stutter, a false start, a repeated
     word — so the branch measures what it finds and says what it is; it does not assert that a
-    Harvard sentence failed to be a DDK task (`branch-ddk.md:66-70`). DDK routes on 87% of
-    `free-speech`, so this is the mode that dominates its corpus.
+    Harvard sentence failed to be a DDK task (`branch-ddk.md:66-70`). DDK routes 22,363
+    recordings against the 7,989 that declare a DDK family, 14,878 of them declaring none
+    (`branch-ddk.md:20`), so this is the mode that dominates its corpus.
     """
     components: list[Proposal] = []
     findings: list[Finding] = []
@@ -3089,8 +3090,8 @@ span PREPROCESS wrote. What remains owed is the *decision* —
 **Spans proposed: one**, `task_extent`, over the voiced run. **The v1 inhale gets no VOICE span** —
 under propose-only a branch mints only in its own family, and an inhale is airway evidence, so
 `align_voice` records `inhale_expected_in_file` as a count and `detect_airway`, running on the same
-recording, is what proposes the span over it. AIRWAY is routed to 46% of this family, so that is not
-a hypothetical hand-off.
+recording, is what proposes the span over it — a hand-off that is real wherever routing selects
+AIRWAY on this family, which this document does not measure.
 
 **Notes.** Duration of the qualified extent is V2's maximum phonation time, and it is a
 norm-bearing scalar: `branch-conventions.md` requires the name to carry its convention. Two
@@ -3934,9 +3935,10 @@ exceeds an entire DDK cycle, and not from the PPG.
 
 Repetition occurs in ordinary speech — a stutter, a false start, a repeated word — so the branch
 measures what it finds and says what it is; it does not assert that a Harvard sentence failed to be
-a DDK task ([`branch-ddk.md:66-70`](branch-ddk.md)). DDK routes on 87% of `free-speech` and on
-22,363 recordings against the 7,989 that declare a DDK family, so this mode is almost the whole of
-what a built DDK branch would do. DDK is a declared branch with no node: `run.py:304-305` marks it
+a DDK task ([`branch-ddk.md:66-70`](branch-ddk.md)). DDK routes **22,363 recordings against the
+7,989 that declare a DDK family, 14,878 of them declaring none**
+([`branch-ddk.md:20`](branch-ddk.md)), so this mode is almost the whole of what a built DDK
+branch would do. DDK is a declared branch with no node: `run.py:304-305` marks it
 `SKIPPED` with `NO_NODE`, selected or not.
 
 ---

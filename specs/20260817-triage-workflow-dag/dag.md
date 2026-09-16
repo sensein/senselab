@@ -2200,8 +2200,9 @@ its own extent, which needs no span.
 
 **What routing hands each mode.** Two gates route DDK — `ddk.lexical_repetition >= 3`
 (`default.yaml:301-304`, threshold **UNMEASURED**) and `ddk.ppg_segment_rate_per_s >= 10`. DDK is
-routed to **22,363 recordings against the 7,989 that declare a DDK family**, and on 87% of
-`free-speech`, so `detect_ddk` is almost the whole of what a built branch would do: it proposes a
+routed to **22,363 recordings against the 7,989 that declare a DDK family, 14,878 of them
+declaring none** ([`branch-ddk.md:20`](branch-ddk.md)), so `detect_ddk` is almost the whole of
+what a built branch would do: it proposes a
 `family: "ddk"` span over every rapid repetition train it finds — acoustically from the envelope
 modulation spectrum, lexically over any token repeated often enough — and asserts nothing about the
 task, because repetition occurs in ordinary speech as a stutter, a false start or a repeated word.
