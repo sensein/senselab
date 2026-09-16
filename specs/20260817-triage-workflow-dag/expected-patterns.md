@@ -4064,7 +4064,7 @@ owed.**
 
 Verified present in the store as of `9fec73c8`. Anything not on this list does not exist. The same
 inventory, spelled as a function signature spells it and with the fields a body may read, is in
-[§ The detection functions](#the-detection-functions); this table is the consumer's view of it.
+[§ The code](#the-code-two-entry-points-per-branch); this table is the consumer's view of it.
 
 | measurement / entity | granularity | what a pattern match uses it for |
 | --- | --- | --- |
