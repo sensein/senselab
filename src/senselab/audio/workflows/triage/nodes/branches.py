@@ -1634,7 +1634,8 @@ def boxcar(x: np.ndarray, width: int) -> np.ndarray:
 
     Args:
         x: The values.
-        width: The window, in samples. One or less is a no-op.
+        width: The window, in samples. One or less is a no-op. An even width is raised to the next
+            odd one, so the average stays centred on a sample.
 
     Returns:
         The smoothed values.
@@ -1642,6 +1643,8 @@ def boxcar(x: np.ndarray, width: int) -> np.ndarray:
     if width <= 1 or x.size == 0:
         return x
     width = min(width, x.size)
+    if width % 2 == 0:
+        width = min(width + 1, x.size)
     return np.convolve(x, np.ones(width, dtype=float) / float(width), mode="same")
 
 
