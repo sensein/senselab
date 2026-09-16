@@ -1,0 +1,13 @@
+{
+ "may_contain": [
+  "sustained-vowel",
+  "phonation",
+  "voice"
+ ],
+ "metadata": {
+  "task_token": "Prolonged-vowel",
+  "speech_type": "non-lexical",
+  "task_id": "adult.prolonged-vowel",
+  "registry": "b2aiprep@ebc2a14e task_registry v1"
+ }
+}

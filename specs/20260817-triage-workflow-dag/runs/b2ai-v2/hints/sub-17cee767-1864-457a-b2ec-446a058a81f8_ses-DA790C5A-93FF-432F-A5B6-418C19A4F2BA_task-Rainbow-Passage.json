@@ -1,0 +1,12 @@
+{
+ "may_contain": [
+  "read-speech",
+  "speech"
+ ],
+ "metadata": {
+  "task_token": "Rainbow-Passage",
+  "speech_type": "read",
+  "task_id": "adult.rainbow-passage",
+  "registry": "b2aiprep@ebc2a14e task_registry v1"
+ }
+}

@@ -23,7 +23,7 @@ from senselab.utils.data_structures import DeviceType
 from senselab.utils.data_structures.logging import logger
 
 from .opensmile import extract_opensmile_features_from_audios
-from .ppg import extract_ppgs_from_audios
+from .ppg import extract_ppgs_from_audios, require_posteriorgram
 from .praat_parselmouth import extract_praat_parselmouth_features_from_audios
 from .sparc import SparcFeatureExtractor
 from .torchaudio import extract_torchaudio_features_from_audios
@@ -372,14 +372,13 @@ def extract_features_from_audios(
             'mean_intensity_db': 69.76277128148347,
             'std_intensity_db': 58.54414165935646,
             'range_ratio_intensity_db': -0.25736445047981316,
-            'pitch_floor': 60.0,
-            'pitch_ceiling': 250.0,
             'mean_hnr_db': 3.3285614070654375,
             'std_hnr_db': 3.36490968797237,
             'spectral_slope': -13.982306776816046,
             'spectral_tilt': -0.004414961849917737,
             'cepstral_peak_prominence_mean': 7.0388038514346825,
             'cepstral_peak_prominence_std': 1.5672438573255245,
+            'cepstral_peak_prominence_frames': 2411.0,
             'mean_f1_loc': 613.4664268420964,
             'std_f1_loc': 303.98235579059883,
             'mean_b1_loc': 401.96960219300837,
@@ -569,7 +568,7 @@ def extract_features_from_audios(
         if use_sparc:
             out["sparc"] = SparcFeatureExtractor.extract_sparc_features([a], device=device, resample=True)[0]
         if use_ppgs:
-            out["ppgs"] = extract_ppgs_from_audios([a], device=device)[0]
+            out["ppgs"] = require_posteriorgram(extract_ppgs_from_audios([a], device=device)[0])
         return out
 
     # Cache

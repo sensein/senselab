@@ -1,0 +1,12 @@
+{
+ "may_contain": [
+  "breathe",
+  "airway"
+ ],
+ "metadata": {
+  "task_token": "Respiration-and-cough-FiveBreaths-4",
+  "speech_type": "non-lexical",
+  "task_id": "adult.respiration-and-cough.v2",
+  "registry": "b2aiprep@ebc2a14e task_registry v1"
+ }
+}

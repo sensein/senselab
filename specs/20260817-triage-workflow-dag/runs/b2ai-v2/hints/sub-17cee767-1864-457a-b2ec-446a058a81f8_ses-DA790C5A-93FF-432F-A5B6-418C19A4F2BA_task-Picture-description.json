@@ -1,0 +1,11 @@
+{
+ "may_contain": [
+  "speech"
+ ],
+ "metadata": {
+  "task_token": "Picture-description",
+  "speech_type": "elicited",
+  "task_id": "adult.picture-description",
+  "registry": "b2aiprep@ebc2a14e task_registry v1"
+ }
+}

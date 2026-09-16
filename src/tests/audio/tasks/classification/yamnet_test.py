@@ -23,8 +23,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.yamnet import (
+    YAMNET_WINDOW_SECONDS,
+    SpanTooShortForYAMNet,
+    span_yamnet_input,
     write_worker_wav,
 )
 from senselab.utils.portable_audio_io import LOSSLESS_WAV_SUBTYPE
@@ -116,3 +121,44 @@ def test_multichannel_input_is_collapsed_to_mono(tmp_path: Path) -> None:
     back, _ = sf.read(tmp_path / "m.wav", dtype="float32")
     assert back.ndim == 1
     assert _rms_dbfs(back) == pytest.approx(-40.0, abs=0.5)
+
+
+class TestSpanFrameGate:
+    """A span shorter than YAMNet's native frame is never classified directly.
+
+    See ``specs/20260817-triage-workflow-dag/benchmarks/span-fill-recovery-2026-09-08.md`` for the
+    measurement behind removing the periodic fill this replaced. The caller attributes a short span
+    from covering whole-file windows instead (:func:`~senselab.audio.workflows.triage.nodes.
+    preprocess._covering_window_attribution`); this module only slices the native, at-or-over-frame
+    case and refuses the rest.
+    """
+
+    @staticmethod
+    def _recording(seconds: float = 5.0, rate: int = 16000) -> Audio:
+        t = torch.arange(int(seconds * rate), dtype=torch.float32) / rate
+        return Audio(waveform=torch.sin(2 * torch.pi * 60.0 * t).unsqueeze(0) * 0.1, sampling_rate=rate)
+
+    def test_a_long_span_is_passed_through_untouched(self) -> None:
+        """At or over the frame, YAMNet's own grid applies and nothing should be added."""
+        audio = self._recording()
+        out = span_yamnet_input(audio, (1.0, 3.0))
+        assert out.waveform.shape[-1] == 2 * audio.sampling_rate
+
+    def test_a_span_exactly_one_frame_long_is_passed_through(self) -> None:
+        """The boundary itself is native, not short."""
+        audio = self._recording()
+        rate = audio.sampling_rate
+        out = span_yamnet_input(audio, (1.0, 1.0 + YAMNET_WINDOW_SECONDS))
+        assert out.waveform.shape[-1] == int(round(YAMNET_WINDOW_SECONDS * rate))
+
+    def test_a_short_span_is_refused(self) -> None:
+        """Shorter than the frame: the caller must attribute it, not classify it directly."""
+        audio = self._recording()
+        with pytest.raises(SpanTooShortForYAMNet):
+            span_yamnet_input(audio, (1.0, 1.1))
+
+    def test_an_empty_span_is_refused(self) -> None:
+        """A zero-length span is the shortest possible short span."""
+        audio = self._recording()
+        with pytest.raises(SpanTooShortForYAMNet):
+            span_yamnet_input(audio, (1.0, 1.0))

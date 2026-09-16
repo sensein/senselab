@@ -53,7 +53,7 @@ src/senselab/
 │   └── workflows/        # Composite pipelines (e.g., health_measurements)
 ├── video/           # Video processing
 │   ├── data_structures/  # Video, Pose
-│   └── tasks/            # pose_estimation, input_output
+│   └── tasks/            # pose_estimation, target_speaker_extraction, input_output
 ├── text/            # Text processing
 │   └── tasks/            # embeddings_extraction
 ├── utils/           # Shared utilities

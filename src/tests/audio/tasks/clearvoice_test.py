@@ -1,4 +1,4 @@
-"""ClearVoice through the three audio task APIs: dispatch, output contracts, provenance, WAV subtype.
+"""ClearerVoice through the three audio task APIs: dispatch, output contracts, provenance, WAV subtype.
 
 The worker itself is never launched. What is exercised is everything on the host side of it — the
 ``Audio`` round trip, the files handed over, the device and ceiling in the payload, and the contracts
@@ -95,7 +95,7 @@ def _model(name: str) -> HFModel:
 def test_enhance_audios_dispatches_to_clearvoice_by_model_id(
     offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio
 ) -> None:
-    """Naming a ClearVoice enhancement checkpoint must reach ClearVoice, not SpeechBrain."""
+    """Naming a ClearerVoice enhancement checkpoint must reach ClearerVoice, not SpeechBrain."""
     enhanced = enhance_audios([mono_audio_sample], model=_model("FRCRN_SE_16K"))
     assert len(enhanced) == 1
     assert worker["payload"]["model_name"] == "FRCRN_SE_16K"
@@ -184,7 +184,7 @@ def test_mps_is_refused_at_the_task_boundary(
 def test_a_backend_parameter_reaches_the_worker(
     offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio
 ) -> None:
-    """timeout_s is ClearVoice's one tunable, and it must actually arrive."""
+    """timeout_s is ClearerVoice's one tunable, and it must actually arrive."""
     enhance_audios([mono_audio_sample], model=_model("FRCRN_SE_16K"), parameters={"timeout_s": 123.0})
     assert worker["timeout"] == 123.0
 
@@ -212,7 +212,7 @@ def test_a_misspelled_parameter_raises_instead_of_running_the_default(
 def test_a_parameter_belonging_to_another_backend_raises(
     offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio
 ) -> None:
-    """DriftSE's ``variant`` means nothing to ClearVoice and must not be quietly dropped."""
+    """DriftSE's ``variant`` means nothing to ClearerVoice and must not be quietly dropped."""
     with pytest.raises(ValueError, match="Unknown parameter"):
         enhance_audios([mono_audio_sample], model=_model("FRCRN_SE_16K"), parameters={"variant": "x"})
 

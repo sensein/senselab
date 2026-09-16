@@ -1,0 +1,40 @@
+# b2ai-28 run override -- every value below is an ADMITTED GUESS, not a measurement.
+# The packaged config leaves these null with written reasons; this run supplies them because a
+# screening run needs the nodes to execute. Each guess is a candidate for replacement by a
+# benchmark (specs/20260817-triage-workflow-dag/benchmarks/open.md). The merged config's hash is
+# stamped into every artifact, so results under these guesses are distinguishable from results
+# under measured values.
+#
+# GUESS speech.word_gap_ms 500: a pause longer than half a second splits word runs into separate
+#   speech spans. Chosen as a round conversational-pause figure; nothing was fitted.
+# GUESS phonation.f0_min_hz 75 / f0_max_hz 500: Praat's default adult analysis range; covers low
+#   male through high female phonation. Nothing about this corpus was measured. NOTE: a run is
+#   flagged ambiguous when f0*2 <= f0_max OR f0/2 >= f0_min, so the band that is NOT flagged is
+#   (f0_max/2, 2*f0_min), which is non-empty iff f0_max < 4*f0_min -- a range narrower than TWO
+#   octaves, not one. At 75/500 the range is 6.67x, the unflagged band (250, 150) is empty, and
+#   100% of clean phonation flags: ambiguous_runs_n carries no information under this guess --
+#   expected, accepted for screening.
+# GUESS phonation.hnr_floor_db 5: ordinary voiced speech measured a median 8.12 dB harmonicity on
+#   the reference recording (CLAUDE.md); 5 dB sits below that median so ordinary voicing passes.
+#   Not fitted to any verdict set.
+# GUESS phonation.rms_floor 0.001: about -60 dBFS on a full-scale-normalised frame; quiet phonation
+#   passes, silence does not. Not fitted.
+# GUESS redaction.padding_ms 200: must exceed the worst alignment edge error, which remains
+#   unquantified; 200 ms is a generous cover for word-level ASR timing error. Not measured.
+# GUESS taxonomy.min_families 1: under the packaged null, presence needs unanimity across three
+#   families and family B needs a bracketed non-lexical ASR token, so nearly every real recording
+#   reads undecided (final review M5). One family voting present is accepted as presence for this
+#   screening run; absence still needs unanimity.
+speech:
+  word_gap_ms: 500
+phonation:
+  f0_min_hz: 75
+  f0_max_hz: 500
+  hnr_floor_db: 5
+  rms_floor: 0.001
+redaction:
+  padding_ms: 200
+taxonomy:
+  min_families:
+    airway: 1
+    speech: 1

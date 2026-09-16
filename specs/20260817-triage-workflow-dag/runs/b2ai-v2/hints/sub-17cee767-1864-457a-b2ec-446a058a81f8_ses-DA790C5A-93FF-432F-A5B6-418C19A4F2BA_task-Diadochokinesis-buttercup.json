@@ -1,0 +1,12 @@
+{
+ "may_contain": [
+  "speech",
+  "voice"
+ ],
+ "metadata": {
+  "task_token": "Diadochokinesis-buttercup",
+  "speech_type": "non-lexical",
+  "task_id": "adult.diadochokinesis.v2",
+  "registry": "b2aiprep@ebc2a14e task_registry v1"
+ }
+}

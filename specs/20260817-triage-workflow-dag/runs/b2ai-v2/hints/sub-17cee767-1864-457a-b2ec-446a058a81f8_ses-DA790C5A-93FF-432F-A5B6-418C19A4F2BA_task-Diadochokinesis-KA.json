@@ -1,0 +1,11 @@
+{
+ "may_contain": [
+  "voice"
+ ],
+ "metadata": {
+  "task_token": "Diadochokinesis-KA",
+  "speech_type": "non-lexical",
+  "task_id": "adult.diadochokinesis.v2",
+  "registry": "b2aiprep@ebc2a14e task_registry v1"
+ }
+}

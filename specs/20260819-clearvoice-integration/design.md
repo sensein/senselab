@@ -12,7 +12,7 @@ the README's prose, which is looser than the code.
 
 Three components:
 
-1. **ClearVoice** — the inference platform, on PyPI. Four tasks, six checkpoints:
+1. **ClearerVoice** — the inference platform, on PyPI. Four tasks, six checkpoints:
 
    | Upstream task | Model | Rate | Outputs |
    |---|---|---|---|
@@ -35,7 +35,7 @@ Three components:
 3. **train/** — training and finetuning recipes. The README advertises target-speaker extraction
    "conditioned on a reference speech (8 kHz)", "on body gestures", and "neuro-steered on EEG", and
    those are real, but they are `train/target_speaker_extraction/config/*.yaml` recipes with no
-   ClearVoice inference entry point and no released checkpoint reachable through it. senselab
+   ClearerVoice inference entry point and no released checkpoint reachable through it. senselab
    integrates inference, so they are out of scope; they are recorded here so a later reader does not
    mistake their absence for an oversight.
 
@@ -58,7 +58,7 @@ The SpeechBrain precedent is the governing one: senselab exposes SpeechBrain fro
 | Enhancement | `audio/tasks/speech_enhancement/clearvoice.py` | Existing package, existing entry point, two existing backends (SpeechBrain, DriftSE). A third belongs beside them. |
 | Separation | `audio/tasks/source_separation/clearvoice.py` | Existing package (unasdiff). Reinforced by PR #569: `enhance_audios` structurally cannot return N sources, so a 2-source checkpoint cannot live in enhancement even as a special case. |
 | Super-resolution | **new** `audio/tasks/speech_super_resolution/` | D-2 |
-| AV target-speaker extraction | **new** `audio/tasks/target_speaker_extraction/` | D-4 |
+| AV target-speaker extraction | **new** `video/tasks/target_speaker_extraction/` | D-4, reversed 2026-09-06 |
 | SpeechScore | `audio/tasks/features_extraction/clearvoice_speechscore.py` | D-5 |
 | Shared machinery | `utils/clearvoice.py` + `audio/tasks/clearvoice.py` | D-6 |
 
@@ -91,10 +91,23 @@ Four things had to be true, and all four are:
 3. **ffmpeg.** Required, and already required by other senselab paths.
 4. **The face detector's weights.** These are the problem, and D-8 is the answer.
 
-So it lands in `audio/tasks/target_speaker_extraction/`, under **audio** rather than **video**,
-because the capability's output is audio: the visual stream is a conditioning cue, and a caller
-looking for "extract this speaker" will look where the other extraction and separation capabilities
-are. `video/tasks/` holds capabilities whose *output* is visual (`pose_estimation`).
+**Reversed by the owner on 2026-09-06: it lands in `video/tasks/target_speaker_extraction/`.**
+The original placement and its reasoning are kept below, because the argument was coherent and the
+reversal is a change of criterion rather than a correction of a mistake.
+
+*Placed under `video/` because a capability is classified by what it consumes and what it keys on,
+not by what it emits.* This one requires a video **file** — a frames-only `Video` will not do — and
+its cue is lip motion; without the visual stream it cannot run at all. That it returns `Audio` is
+the shape of the answer, not the nature of the task. The rule this sets, for the next capability
+that spans two modalities: **classify by input modality and conditioning cue.** Under the old
+output-based rule, a hypothetical audio-driven face animator would have landed in `video/` while
+this lands in `audio/`, which is the wrong way round for anyone looking for either.
+
+*Superseded, retained for the record:* it originally landed in
+`audio/tasks/target_speaker_extraction/`, under **audio** rather than **video**, because the
+capability's output is audio: the visual stream is a conditioning cue, and a caller looking for
+"extract this speaker" will look where the other extraction and separation capabilities are.
+`video/tasks/` holds capabilities whose *output* is visual (`pose_estimation`).
 
 Not verified end to end: no talking-face recording with a known ground truth was available on this
 host, so the extractor's numerical output is untested here. What is tested is dispatch, validation,
@@ -228,7 +241,7 @@ other task uses.
 
 ### D-9: `decode()`, not the tensor-to-tensor path
 
-`ClearVoice.__call__` accepts a numpy array and routes to `decode_one_audio_batch`. That path is
+`ClearerVoice.__call__` accepts a numpy array and routes to `decode_one_audio_batch`. That path is
 broken for the super-resolution model with a single mono input: `decode_one_audio_mossformer2_sr_48k`
 in `decode_batch.py` ends the short-audio branch with `outputs = generator_output.squeeze()`, which
 for `b == 1` yields a 1-D array, and then indexes it as `outputs_pred[batch_idx, :]` → `IndexError`.
@@ -347,7 +360,7 @@ From a comparison against six human-verified events on a real recording (prior w
 recorded here because it is capability information absent from upstream's documentation, and it is
 what a caller needs in order to choose a checkpoint):
 
-- Every ClearVoice model **conserves energy**: output never exceeds input (−12.2 to −0.0 dB), in
+- Every ClearerVoice model **conserves energy**: output never exceeds input (−12.2 to −0.0 dB), in
   phase at zero lag, and clean speech is left essentially untouched. Every SepFormer checkpoint
   tested failed that check. Independently reproduced here: `FRCRN_SE_16K` on clean 16 kHz
   conversational speech returned −0.01 dB RMS with r = 1.0000 and peak 0.63.

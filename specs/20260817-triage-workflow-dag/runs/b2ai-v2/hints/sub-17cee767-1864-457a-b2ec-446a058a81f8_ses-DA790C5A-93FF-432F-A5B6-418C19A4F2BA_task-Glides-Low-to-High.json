@@ -1,0 +1,12 @@
+{
+ "may_contain": [
+  "phonation",
+  "voice"
+ ],
+ "metadata": {
+  "task_token": "Glides-Low-to-High",
+  "speech_type": "non-lexical",
+  "task_id": "adult.glides",
+  "registry": "b2aiprep@ebc2a14e task_registry v1"
+ }
+}

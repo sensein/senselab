@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import sys
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any
 
 from senselab.text.tasks.pii_detection.api import (
@@ -233,7 +233,7 @@ def detect_pii_in_pass(
         for per_model in spans_by_asr.values():
             seen_in_model: set[tuple[str, str]] = set()
             for s in per_model:
-                key = (s.category, s.text.strip().lower())
+                key = (s.category, (s.text or "").strip().lower())
                 if key in seen_in_model:
                     continue
                 seen_in_model.add(key)
@@ -272,6 +272,6 @@ def report_to_dict(report: PiiPassReport) -> dict[str, Any]:
         "categories": report.categories,
         "detector_used": report.detector_used,
         "detection_confidence": report.detection_confidence,
-        "spans": [{**asdict(s), "perturbation": report.perturbation} for s in report.spans],
+        "spans": [{**s.model_dump(exclude_none=True), "perturbation": report.perturbation} for s in report.spans],
         "failures": report.failures,
     }

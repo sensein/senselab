@@ -103,7 +103,7 @@ class SpeakerEmbeddingProvenance(BaseModel):
         """
         if v is None:
             return v
-        if not _SHA_RE.match(v):
+        if not _SHA_RE.fullmatch(v):
             raise ValueError(f"model_commit_sha must be a resolved 40-hex commit, got {v!r}")
         return v
 

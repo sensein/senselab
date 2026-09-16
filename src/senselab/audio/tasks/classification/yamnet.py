@@ -225,3 +225,35 @@ class YAMNetClassifier:
                 all_results.append(timestamped)
 
             return all_results
+
+
+YAMNET_WINDOW_SECONDS = YAMNetClassifier.WINDOW_SECONDS
+"""YAMNet's native frame. An input shorter than this is zero-padded to it inside the model."""
+
+
+class SpanTooShortForYAMNet(ValueError):
+    """A span shorter than YAMNet's native frame; attribute it from covering whole-file windows instead."""
+
+
+def span_yamnet_input(audio: Audio, extent: tuple[float, float]) -> Audio:
+    """Slice a span at least :data:`YAMNET_WINDOW_SECONDS` long, ready for YAMNet's own windowing.
+
+    Args:
+        audio: The recording the span was proposed over.
+        extent: The span's ``(start, end)`` in seconds.
+
+    Returns:
+        The span's own samples, unchanged.
+
+    Raises:
+        SpanTooShortForYAMNet: The span is shorter than YAMNet's native frame.
+    """
+    start, end = extent
+    rate = audio.sampling_rate
+    first = int(round(start * rate))
+    last = int(round(end * rate))
+    span = audio.waveform[..., first:last]
+    frame = int(round(YAMNET_WINDOW_SECONDS * rate))
+    if span.shape[-1] < frame:
+        raise SpanTooShortForYAMNet(f"{span.shape[-1]} samples, need at least {frame}")
+    return Audio(waveform=span.clone(), sampling_rate=rate)

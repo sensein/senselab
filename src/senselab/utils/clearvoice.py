@@ -1,4 +1,4 @@
-"""Machinery shared by every senselab task that exposes ClearerVoice-Studio (ClearVoice).
+"""Machinery shared by every senselab task that exposes ClearerVoice-Studio.
 
 One pip distribution, one isolated venv, one checkpoint-pinning rule, one device contract, one
 timeout derivation, one worker. No capability lives here, and nothing here imports
@@ -15,7 +15,7 @@ Upstream task                    Model                       Rate     senselab h
 ``speech_enhancement``           ``MossFormer2_SE_48K``      48 kHz   ``audio/tasks/speech_enhancement``
 ``speech_separation``            ``MossFormer2_SS_16K``      16 kHz   ``audio/tasks/source_separation``
 ``speech_super_resolution``      ``MossFormer2_SR_48K``      48 kHz   ``audio/tasks/speech_super_resolution``
-``target_speaker_extraction``    ``AV_MossFormer2_TSE_16K``  16 kHz   ``audio/tasks/target_speaker_extraction``
+``target_speaker_extraction``    ``AV_MossFormer2_TSE_16K``  16 kHz   ``video/tasks/target_speaker_extraction``
 ===============================  ==========================  =======  ===========================================
 
 SpeechScore, upstream's fifth component, is not reachable from here: it has no pip distribution and a
@@ -53,7 +53,7 @@ from senselab.utils.subprocess_venv import (
 )
 
 CLEARVOICE_HF_ORG = "alibabasglab"
-"""Every ClearVoice checkpoint repository lives under this HuggingFace organisation."""
+"""Every ClearerVoice checkpoint repository lives under this HuggingFace organisation."""
 
 CLEARVOICE_VENV = "clearvoice"
 CLEARVOICE_PYTHON = "3.11"
@@ -122,7 +122,7 @@ _TSE_TIMEOUT_FLOOR_S = 1800.0
 
 @dataclass(frozen=True)
 class ClearVoiceModelSpec:
-    """One ClearVoice checkpoint and everything senselab needs in order to run it.
+    """One ClearerVoice checkpoint and everything senselab needs in order to run it.
 
     Attributes:
         name: Upstream model name. Doubles as the HuggingFace repository name under
@@ -177,12 +177,12 @@ _TASK_OWNERS = {
     "speech_enhancement": "senselab.audio.tasks.speech_enhancement.enhance_audios",
     "speech_separation": "senselab.audio.tasks.source_separation.separate_audios",
     "speech_super_resolution": "senselab.audio.tasks.speech_super_resolution.super_resolve_audios",
-    "target_speaker_extraction": ("senselab.audio.tasks.target_speaker_extraction.extract_target_speakers_from_videos"),
+    "target_speaker_extraction": ("senselab.video.tasks.target_speaker_extraction.extract_target_speakers_from_videos"),
 }
 
 
 def is_clearvoice_model_id(model_id: str) -> bool:
-    """Whether ``model_id`` names a ClearVoice checkpoint.
+    """Whether ``model_id`` names a ClearerVoice checkpoint.
 
     Args:
         model_id: A HuggingFace-style model id.
@@ -213,7 +213,7 @@ def clearvoice_model_spec(model_id: str, *, expected_task: Optional[str] = None)
     spec = CLEARVOICE_MODELS.get(name)
     if spec is None:
         raise ValueError(
-            f"{model_id!r} is not a ClearVoice checkpoint. clearvoice=={CLEARVOICE_VERSION} ships "
+            f"{model_id!r} is not a ClearerVoice checkpoint. clearvoice=={CLEARVOICE_VERSION} ships "
             f"exactly six: {', '.join(sorted(CLEARVOICE_MODELS))}."
         )
     if expected_task is not None and spec.upstream_task != expected_task:
@@ -226,7 +226,7 @@ def clearvoice_model_spec(model_id: str, *, expected_task: Optional[str] = None)
 
 
 def clearvoice_models_for_task(upstream_task: str) -> List[ClearVoiceModelSpec]:
-    """Return every ClearVoice checkpoint for one upstream task, in table order.
+    """Return every ClearerVoice checkpoint for one upstream task, in table order.
 
     Args:
         upstream_task: One of the four ``task`` strings ``clearvoice.ClearVoice`` accepts.
@@ -299,7 +299,7 @@ def stage_s3fd_weights() -> Path:
     with SharedFileLock(root, timeout=600):
         if weights.is_file():
             return weights
-        logger.info(f"ClearVoice: fetching S3FD face-detector weights at commit {_S3FD_COMMIT[:12]}")
+        logger.info(f"ClearerVoice: fetching S3FD face-detector weights at commit {_S3FD_COMMIT[:12]}")
         digest = hashlib.sha256()
         with tempfile.NamedTemporaryFile(dir=str(root), delete=False, suffix=".part") as tmp:
             tmp_path = Path(tmp.name)
@@ -616,7 +616,7 @@ def run_clearvoice_audio(
     effective_timeout_s = default_audio_timeout_s(total_audio_s) if timeout_s is None else timeout_s
 
     logger.info(
-        "ClearVoice %s (%s): %d input(s), %.10gs of audio, commit %s, device=%s, timeout=%.10gs",
+        "ClearerVoice %s (%s): %d input(s), %.10gs of audio, commit %s, device=%s, timeout=%.10gs",
         spec.name,
         spec.capability,
         len(in_paths),
@@ -642,7 +642,7 @@ def run_clearvoice_audio(
                 "out_dir": out_dir,
             },
             timeout_s=effective_timeout_s,
-            label=f"ClearVoice {spec.name}",
+            label=f"ClearerVoice {spec.name}",
             on_timeout=f"{total_audio_s:.10g}s of audio over {len(in_paths)} input(s)",
         )
     return output["output_paths"], output["input_norm_scalars"], sha
@@ -687,7 +687,7 @@ def run_clearvoice_tse(
     effective_timeout_s = default_tse_timeout_s(total_video_s) if timeout_s is None else timeout_s
 
     logger.info(
-        "ClearVoice %s (%s): %d video(s), %.10gs of video, commit %s, device=%s, timeout=%.10gs",
+        "ClearerVoice %s (%s): %d video(s), %.10gs of video, commit %s, device=%s, timeout=%.10gs",
         spec.name,
         spec.capability,
         len(video_paths),
@@ -713,7 +713,7 @@ def run_clearvoice_tse(
                 "output_dir": output_dir,
             },
             timeout_s=effective_timeout_s,
-            label=f"ClearVoice {spec.name}",
+            label=f"ClearerVoice {spec.name}",
             on_timeout=f"{total_video_s:.10g}s of video over {len(video_paths)} file(s)",
         )
     return output["output_paths"], sha
