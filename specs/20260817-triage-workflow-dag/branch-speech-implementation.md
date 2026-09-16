@@ -104,6 +104,13 @@ before it was realised. The stronger claim loses nothing and the weaker one is i
 `expected_index` is carried on the deviation because the store's entity ids are content digests:
 two omissions of the same token text at the same anchor would otherwise collapse into one entity.
 
+**On the literal-token path `expected_index` is the position among the omissions, not among the
+expected tokens.** `ordered_run` returns the omitted token *texts* and not their positions, and
+recovering them is ambiguous where the instruction repeats a token — which is every family that
+takes this path (`("buttercup",) * 10`, `("hey", "hey", "hey")`). Recomputing the greedy walk inside
+the branch to recover them would duplicate `ordered_run`; widening `ordered_run`'s return is a
+foundation change. On the alignment path the index is the expected token's own.
+
 ## D-S6. Breath groups read `span_hear`, not `hear_scores`
 
 `breath_group_extents` reads `store.hear_scores` — the whole-file HeAR windows, which live in
