@@ -923,13 +923,22 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
             )
             recording = stream_extent(store)
             if recording is not None and touches_edge(read_extent, recording):
-                findings.append(deviation("truncation", read_extent[0], read_extent[1]))
+                findings.append(
+                    deviation("truncation", read_extent[0], read_extent[1], *(word.id for _, word in matched))
+                )
             if repeat_fraction is not None:
                 findings.append(measured("expected_sequence_repeat_fraction", None, None, round(repeat_fraction, 3)))
                 cut = points.point("repeat_overlap_min")
                 if cut is not None and repeat_fraction >= float(cut):
                     findings.append(
-                        deviation("repeat_reading", read_extent[0], read_extent[1], overlap=round(repeat_fraction, 3))
+                        deviation(
+                            "repeat_reading",
+                            read_extent[0],
+                            read_extent[1],
+                            *evidence,
+                            *(word.id for _, word in matched),
+                            overlap=round(repeat_fraction, 3),
+                        )
                     )
         for index, extent, counts in structure:
             components.append(MINT(f"structure_{index}", extent, *evidence, structure_index=index, **counts))
@@ -941,6 +950,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
                 "stimulus_mismatch",
                 start,
                 end,
+                word.id,
                 expected=expected_text,
                 read=word_text(word),
                 agreement=word.attributes.get("agreement"),
@@ -954,6 +964,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
                 "stimulus_mismatch",
                 start,
                 end,
+                word.id,
                 expected=None,
                 read=word_text(word),
                 agreement=word.attributes.get("agreement"),
@@ -971,13 +982,20 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
         for word in consensus_words(store):
             if word.attributes["bracketed"] and word_text(word) != BREATH_TOKEN:
                 start, end = word_extent(word)
-                findings.append(deviation("filler", start, end, text=word_text(word)))
+                findings.append(deviation("filler", start, end, word.id, text=word_text(word)))
 
     if expectation.connected:
         components.extend(_breath_group_components(store, points, evidence))
 
     if expectation.expected_event_count is not None:
-        findings.append(count("expected_event_count", len(matched), expectation.expected_event_count))
+        findings.append(
+            count(
+                "expected_event_count",
+                len(matched),
+                expectation.expected_event_count,
+                *(word.id for _, word in matched),
+            )
+        )
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
     findings.extend(_off_task(components, store, points))
@@ -1031,6 +1049,8 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                 response[0],
                 response[1],
                 round(len(words) / duration(response), 3),
+                *(span.id for span in runs),
+                *(word.id for word in words),
                 support_words=len(words),
             )
         )
@@ -1043,10 +1063,12 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                     response[0],
                     response[1],
                     round(sum(duration(pause) for pause in pauses) / duration(response), 3),
+                    *(span.id for span in runs),
+                    *(word.id for word in words),
                     support_pauses=len(pauses),
                 )
             )
-        findings.append(count("breath_groups", len(groups), None))
+        findings.append(count("breath_groups", len(groups), None, *evidence))
 
     if expectation.anti_pattern is not None:
         read = _stimulus(store, hint, params)
@@ -1071,6 +1093,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                         "stimulus_mismatch",
                         response[0] if response is not None else None,
                         response[1] if response is not None else None,
+                        *(span.id for span in runs),
                         reading=expectation.anti_pattern,
                         overlap=round(echo, 3),
                     )
@@ -1138,7 +1161,9 @@ def _speech_item_list(
         key = params.p_normalise(word_text(word))
         start, end = word_extent(word)
         if key in first_seen and not repetition_allowed:
-            findings.append(deviation("repeated_item", start, end, first_at=first_seen[key], text=word_text(word)))
+            findings.append(
+                deviation("repeated_item", start, end, word.id, first_at=first_seen[key], text=word_text(word))
+            )
         first_seen.setdefault(key, start)
 
     extent = hull([word_extent(word) for word in items])
@@ -1153,7 +1178,7 @@ def _speech_item_list(
                 repetition_allowed=repetition_allowed,
             )
         )
-    findings.append(count("items", len(items), None))
+    findings.append(count("items", len(items), None, *(word.id for word in items)))
     findings.append(count("repetition_allowed", repetition_allowed, None))
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
@@ -1186,12 +1211,13 @@ def _speech_no_lexical(store: ProvStore, params: BranchParams) -> Result:
                 "off_task_extent",
                 start,
                 end,
+                word.id,
                 text=word_text(word),
                 agreement=word.attributes.get("agreement"),
                 measure="lexical",
             )
         )
-    findings.append(count("lexical_words", len(produced), 0))
+    findings.append(count("lexical_words", len(produced), 0, *(word.id for word in produced)))
     tolerated = points.point("expected_lexical_max")
     findings.extend(points.record())
     done: Done = UNDETERMINED if tolerated is None else len(produced) <= int(tolerated)
@@ -1282,7 +1308,7 @@ def detect_speech(store: ProvStore, params: BranchParams) -> Result:
             continue
         if not any(overlaps(span.extent, extent) for extent in runs):
             findings.append(contest(span.id, span.extent, "speech", "no_consensus_word_inside"))
-    findings.append(count("lexical_words", len(words), None))
+    findings.append(count("lexical_words", len(words), None, *(word.id for word in words)))
     findings.extend(points.record())
     return Result(UNDETERMINED, components, findings)
 

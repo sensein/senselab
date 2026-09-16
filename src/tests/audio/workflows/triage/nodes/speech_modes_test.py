@@ -683,7 +683,8 @@ class TestDetectSpeechNeedsNoAlignmentAndGroupsByGap:
         span_id = store.entity(prov_type="span", extent=(8.0, 9.0), attributes={"family": "speech", "role": "x"})
         result = detect_speech(store, branch_params(_config(tmp_path, {"run_gap_max_s": 0.3})))
         [contested] = _of_kind(result, "contest", "speech")
-        assert contested.evidence == {"of_span": span_id, "reason": "no_consensus_word_inside"}
+        assert contested.evidence == {"reason": "no_consensus_word_inside"}
+        assert contested.derived_from == (span_id,), "the contested span is the edge, not an attribute"
 
 
 class TestOnlySpeechsOwnFamilyIsProposedInto:
