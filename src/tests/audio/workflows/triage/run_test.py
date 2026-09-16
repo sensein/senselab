@@ -527,6 +527,7 @@ class TestConditionalExecution:
         concluded = [e for e in store.entities("verdict") if e.attributes["node"] == "DDK"]
         assert len(concluded) == 1
         assert concluded[0].attributes["kind"] == "ddk"
+        assert not any(reason.node == "DDK" and "never ran" in reason.why for reason in result.file_verdict.reasons)
 
     def test_a_branch_with_no_node_is_still_recorded_rather_than_crashing(
         self,
