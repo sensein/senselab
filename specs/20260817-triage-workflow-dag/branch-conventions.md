@@ -7,6 +7,13 @@ Rules shared by [`branch-airway.md`](branch-airway.md), [`branch-speech.md`](bra
 The contract itself is
 [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md).
 
+> **Superseded in one respect, 2026-09-16: a branch no longer concludes an `Outcome`.** It writes a
+> `branch_report` carrying task conformance, typed deviations and what it could not measure, and
+> proposes spans; VERDICT takes every decision. A branch also never raises over an unmeasured
+> operating point. Every rule below still holds except where it names an outcome — see
+> [`verdict.md`](verdict.md) § *A branch reports; this fold decides*, and § *A branch `FAIL` is an
+> absence of detected content* below, which records what became of that outcome.
+
 ## Span family is lowercase
 
 A branch that proposes a span writes `family: "airway"`, `"speech"`, `"voice"` or `"ddk"`.
@@ -382,10 +389,13 @@ An unavailable measurement is an **absence**, never a negative. Gate evidence is
 (`runs/ruleset-score-20260912/ruleset_score.json`, `totals.unavailable` — the file sits beside this
 document under `runs/`).
 
-## A branch `FAIL` is an absence of detected content
+## A branch `FAIL` was an absence of detected content — and is now no span at all
 
-`Outcome.FAIL` from a branch means **this branch's detector found nothing**, not that the recording
-lacks the content and never that the speaker failed to produce it.
+**Retired 2026-09-16, and the hazard it named is what retired it.** `Outcome.FAIL` from a branch
+meant **this branch's detector found nothing**, not that the recording lacked the content and never
+that the speaker failed to produce it. The reading a branch now reports is the spans it proposed —
+none of them — and VERDICT reads `findings: absent` off that. The paragraph below is why the
+replacement is an improvement rather than a rename, so it is kept.
 
 This matters at corpus scale and in one direction. VOICE's `FAIL` says "no phonation found" and DDK's
 says "no train found" — and a detector keyed on voicing or on regular repetition fails most often on
@@ -397,6 +407,10 @@ VOICE V1 and DDK D1 are specified to propose from the energy envelope and *quali
 repetition, rather than defining the event by them, which removes most of the cause. The residue is
 named in both documents.
 
-**`Outcome.FAIL`'s own wording is a hazard** — `no_content_found` would carry the meaning better —
-but `Outcome` is a closed vocabulary with readers, so this is recorded as unresolved rather than
-changed.
+**`Outcome.FAIL`'s own wording was a hazard** — `no_content_found` would have carried the meaning
+better — and it was recorded here as unresolved because `Outcome` was a closed vocabulary with
+readers. The 2026-09-16 change resolved it by removing the vocabulary from the branch rather than
+renaming a member: there is no branch outcome to be misread, and "no span proposed in this branch's
+own family" says exactly what the old `FAIL` was trying to say. The population risk the paragraphs
+above name is unchanged by that — a detector keyed on voicing still finds fewer spans on disordered
+phonation — so the residue stays named in `branch-voice.md` and `branch-ddk.md`.

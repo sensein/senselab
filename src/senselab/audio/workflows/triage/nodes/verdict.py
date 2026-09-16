@@ -116,6 +116,7 @@ def _branch_report_from_entity(entity: Entity) -> BranchReport:
         conformance=_conformance_of_entity(entity),
         conformance_of=str(attributes.get("conformance_of")),
         deviations=tuple(str(name) for name in attributes.get("deviations") or ()),
+        unmeasured=tuple(str(name) for name in attributes.get("unmeasured") or ()),
         in_family=bool(attributes.get("in_family")),
     )
 

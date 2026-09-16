@@ -589,3 +589,81 @@ class TestTheBranchSectionShipsValues:
         for key in ("min_contrast_db", "tilt_max_db_per_octave", "level_min_dbfs"):
             assert key not in values[PARAM_SECTION], f"branch.{key} judges the recording"
             assert key in values["verdict"], f"verdict.{key} is where it belongs"
+
+
+class TestTheReportSurvivesTheStore:
+    """Every other test here builds a ``BranchReport``; the pipeline reads one back off an entity.
+
+    A field the writer stores and the reader drops is invisible to a constructed report, so the two
+    fields the fold reads that no other test round-trips are pinned here.
+    """
+
+    @staticmethod
+    def _round_trip(**written: Any) -> BranchReport:  # noqa: ANN401 — the writer's own kwargs
+        """One report through ``write_report`` and back out through VERDICT's own reader."""
+        from senselab.audio.workflows.triage.nodes.common import software_agent
+        from senselab.audio.workflows.triage.nodes.verdict import _branch_reports
+        from senselab.utils.prov_store import ProvStore
+
+        store = ProvStore(run_id="round-trip")
+        agent = software_agent(store)
+        activity = store.activity(node=written["node"], step="branch", parameters={})
+        write_report(store, activity, agent, detail={}, **written)
+        pairs = _branch_reports(store)
+        assert len(pairs) == 1
+        return pairs[0][1]
+
+    def test_unmeasured_reaches_the_fold(self) -> None:
+        """Every branch passes ``params.missing``; dropping it here silences the flag entirely."""
+        report = self._round_trip(
+            node="SPEECH",
+            kind="speech",
+            conformance=UNDETERMINED,
+            conformance_of=TASK,
+            deviations=(),
+            unmeasured=("branch.target_match_cosine",),
+        )
+        assert report.unmeasured == ("branch.target_match_cosine",)
+        folded = _fold([report], spans={"SPEECH": 0}, routes={"SPEECH": ROUTED})
+        assert folded.triage is Triage.FLAG
+        assert folded.unmeasured["SPEECH"] == ["branch.target_match_cosine"]
+
+    def test_in_family_reaches_the_fold(self) -> None:
+        """The DDK asymmetry reads this off the entity, so the store is where it has to survive."""
+        report = self._round_trip(
+            node="DDK",
+            kind="ddk",
+            conformance=False,
+            conformance_of=TASK,
+            deviations=(),
+            in_family=False,
+        )
+        assert report.in_family is False
+        folded = _fold(
+            [report],
+            spans={"DDK": 1},
+            routes={"DDK": ROUTED},
+            declared_family="rainbow-passage",
+        )
+        assert "DDK" in folded.detector_covariates
+        assert folded.triage is Triage.PASS
+
+    def test_in_family_is_not_hardcoded_at_the_writer(self) -> None:
+        """The align mode has to survive too, or the asymmetry exempts every DDK run."""
+        report = self._round_trip(
+            node="DDK",
+            kind="ddk",
+            conformance=False,
+            conformance_of=TASK,
+            deviations=(),
+            in_family=True,
+        )
+        assert report.in_family is True
+        folded = _fold(
+            [report],
+            spans={"DDK": 1},
+            routes={"DDK": ROUTED},
+            declared_family="ddk-pataka",
+        )
+        assert "DDK" not in folded.detector_covariates
+        assert folded.triage is Triage.FLAG
