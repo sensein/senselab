@@ -907,7 +907,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
     components: list[Proposal] = []
     findings: list[Finding] = []
     if alignment is not None and not _stimulus_agrees(store, alignment):
-        findings.append(measured("stimulus_alignment_rebuild_agrees", None, None, False, of_measurement=evidence[0]))
+        findings.append(measured("stimulus_alignment_rebuild_agrees", None, None, False, evidence[0]))
     if matched:
         read_extent = (word_extent(matched[0][1])[0], word_extent(matched[-1][1])[1])
         if read_extent[1] > read_extent[0]:
@@ -927,7 +927,9 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
                     deviation("truncation", read_extent[0], read_extent[1], *(word.id for _, word in matched))
                 )
             if repeat_fraction is not None:
-                findings.append(measured("expected_sequence_repeat_fraction", None, None, round(repeat_fraction, 3)))
+                findings.append(
+                    measured("expected_sequence_repeat_fraction", None, None, round(repeat_fraction, 3), *evidence)
+                )
                 cut = points.point("repeat_overlap_min")
                 if cut is not None and repeat_fraction >= float(cut):
                     findings.append(
@@ -976,7 +978,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
         # `acoustic_score_max` covariate this used to carry named `branch.omission_score_max`, a cut
         # on an acoustic score no derivative in the graph produces; the key and the covariate were
         # removed together rather than the key being given a default it could not be reasoned into.
-        findings.append(deviation("omission", anchor, anchor, expected=token, expected_index=index))
+        findings.append(deviation("omission", anchor, anchor, *evidence, expected=token, expected_index=index))
 
     if expectation.emit_filler:
         for word in consensus_words(store):
@@ -1082,11 +1084,16 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
         elif ngram_n is None:
             done = UNDETERMINED
         else:
-            _, alignment = read
+            stimulus_id, alignment = read
             source = [token.key for token in alignment.expected]
             produced = [params.p_normalise(word_text(word)) for word in words]
             echo = ngram_echo_fraction(source, produced, int(ngram_n))
-            findings.append(measured("verbatim_overlap_fraction", None, None, round(echo, 3), n=int(ngram_n)))
+            word_ids = tuple(word.id for word in words)
+            findings.append(
+                measured(
+                    "verbatim_overlap_fraction", None, None, round(echo, 3), stimulus_id, *word_ids, n=int(ngram_n)
+                )
+            )
             if cut is not None and echo > float(cut):
                 findings.append(
                     deviation(
@@ -1102,7 +1109,9 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                 # "Recall in your own words": semantic coverage is expected and verbatim
                 # reproduction is the deviation, so coverage is what `done` reads.
                 covered = content_coverage(source, produced)
-                findings.append(measured("source_content_coverage", None, None, round(covered, 3)))
+                findings.append(
+                    measured("source_content_coverage", None, None, round(covered, 3), stimulus_id, *word_ids)
+                )
                 coverage_min = points.point("coverage_min")
                 done = UNDETERMINED if coverage_min is None else covered >= float(coverage_min)
 
