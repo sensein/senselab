@@ -553,6 +553,20 @@ class TestEveryProposalNamesItsEvidence:
         count_in = [span for span in voice_spans(store) if span.attributes["role"] == COUNT_IN]
         assert count_in and len(store.derived_from(count_in[0].id)) == 3
 
+    def test_the_declared_duration_count_names_the_recording_stream(self, tmp_path: Path) -> None:
+        """The count is read off the recording's extent, so the stream it came from is its evidence."""
+        store, ids = seed(
+            tmp_path,
+            stem=PROLONGED_STEM,
+            duration_s=20.0,
+            amplitude=((6.0, 18.0),),
+            tracks=_tracks(20.0, [(6.0, 18.0)]),
+            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
+        )
+        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
+        declared = [finding for finding in result.deviations if finding.name == "declared_duration_s"]
+        assert [finding.derived_from for finding in declared] == [(ids["recording"],)]
+
     def test_no_proposal_is_written_without_a_derivation(self, tmp_path: Path) -> None:
         """``propose_span`` is the only writer and it refuses one; this pins the branch's side."""
         store, _ = seed(tmp_path)
