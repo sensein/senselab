@@ -763,6 +763,16 @@ decision enables; no code is changed by this document.**
 it, so both remain available to either mode — `contest` is the one verb in this document with live
 emitters today (`airway.py:310`, `quality.py:291`).
 
+**One line of the contract's verb table widens.** `design.md:570` gives `propose` as writing a
+`span`, `family: "<branch>"`, `wasDerivedFrom` its evidence — and says it carries *"a region
+PREPROCESS did not find"*. Under propose-only a branch mints **whether or not PREPROCESS found the
+region**, because minting is now the only way it has of saying anything about an extent. The verb,
+the family and the derivation are unchanged; what goes is the novelty precondition, which was the
+half that made `refine` necessary. `branch-conventions.md:20-23`'s family scoping already permits
+this — a `family: "<branch>"` span collides with no `family is None` reader — and its three stated
+consequences (a branch measures over its own span; covariates describe the same extent; nothing is
+left unreconciled) are exactly what the decision generalises.
+
 ### What every entry point returns
 
 **Every entry point returns the same triple**, which is what the DAG's verbs read:
