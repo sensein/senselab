@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from senselab.audio.data_structures import AudioHints
+from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.branches import (
     UNDETERMINED,
@@ -25,14 +26,22 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     CYCLES_OR_SYLLABLES_PER_S,
     KIND,
     NO_INSTRUMENT,
+    NO_PPG,
     NODE,
+    PPG_EXPECTED_PLACE,
+    PPG_PLACE_AGREEMENT,
+    PPG_RATE,
+    PPG_UNITS,
     RATE,
     SYLLABLES_PER_S,
+    Posteriorgram,
+    PpgReading,
     align_ddk,
     ddk,
     detect_ddk,
     dispersion,
     dispersion_by_position,
+    ppg_reading,
     read_ddk,
     trend,
 )
@@ -54,6 +63,52 @@ SILENT_DBFS = -70.0
 
 CYCLE = ("labial", "alveolar", "velar")
 BANDS = {"labial": (0.0, 1500.0), "velar": (1500.0, 3500.0), "alveolar": (3500.0, 8000.0)}
+
+FRAME_S = 0.01
+"""The posteriorgram's frame period in these fixtures. ppgs' own is near this; nothing reads it."""
+
+STOP_OF = {"labial": "p", "alveolar": "t", "velar": "k"}
+"""One stop per place, to write a raster whose expected places are known by construction."""
+
+
+def _raster(syllables: Sequence[tuple[str, float]]) -> np.ndarray:
+    """A one-hot argmax raster over a phoneme sequence with per-phoneme durations.
+
+    Args:
+        syllables: ``(phoneme, seconds)`` in order. A phoneme repeated back to back would collapse
+            into one run, so a caller that wants two runs of one phoneme separates them.
+
+    Returns:
+        The posteriorgram, ``(frame, phoneme)``, one-hot on the named phoneme.
+    """
+    indices: list[int] = []
+    for label, seconds in syllables:
+        indices.extend([PHONEME_LABELS.index(label)] * max(1, int(round(seconds / FRAME_S))))
+    frames = np.zeros((len(indices), len(PHONEME_LABELS)), dtype=float)
+    frames[np.arange(len(indices)), indices] = 1.0
+    return frames
+
+
+def _cv_raster(
+    places: Sequence[str], intervals: Sequence[float], *, lead_s: float = 0.2, stop_s: float = 0.05
+) -> np.ndarray:
+    """A raster of consonant-vowel syllables whose onsets are separated by given intervals.
+
+    Args:
+        places: One place of articulation per syllable; its stop opens that syllable.
+        intervals: The interval from each onset to the next; one shorter than ``places``.
+        lead_s: Silence before the first onset, so the train does not start at frame zero.
+        stop_s: How long each stop run is; the vowel fills the rest of its interval.
+
+    Returns:
+        The raster.
+    """
+    sequence: list[tuple[str, float]] = [("<silent>", lead_s)]
+    for index, place in enumerate(places):
+        gap = intervals[index] if index < len(intervals) else stop_s + 0.2
+        sequence.append((STOP_OF[place], stop_s))
+        sequence.append(("aa", max(FRAME_S, gap - stop_s)))
+    return _raster(sequence)
 
 
 @pytest.fixture
@@ -194,6 +249,8 @@ def seed_ddk_store(tmp_path: Path) -> Callable[..., dict[str, str]]:
         spans: Sequence[tuple[float, float]] = (),
         words: Sequence[tuple[str, tuple[float, float]]] = (),
         wideband: np.ndarray | None = None,
+        posteriorgram: np.ndarray | None = None,
+        seconds_per_frame: float = FRAME_S,
     ) -> dict[str, str]:
         """Seed one store; returns the ids it wrote, keyed by what they are."""
         (tmp_path / "derivatives").mkdir(exist_ok=True)
@@ -243,6 +300,29 @@ def seed_ddk_store(tmp_path: Path) -> Callable[..., dict[str, str]]:
                     "n_fft": int(SR * 0.005),
                     "hop_length": int(SR * 0.005),
                     "win_length": int(SR * 0.005),
+                },
+            )
+        if posteriorgram is not None:
+            np.savez(
+                tmp_path / "derivatives" / "ppg_posteriorgram.npz",
+                posteriorgram=posteriorgram.astype(np.float16),
+                phonemes=np.asarray(PHONEME_LABELS, dtype=np.str_),
+                seconds_per_frame=np.float64(seconds_per_frame),
+                duration_s=np.float64(posteriorgram.shape[0] * seconds_per_frame),
+                sampling_rate=np.int64(SR),
+            )
+            ids["ppg_posteriorgram"] = _write(
+                "measurement",
+                (0.0, posteriorgram.shape[0] * seconds_per_frame),
+                {
+                    "name": "ppg_posteriorgram",
+                    "signal": "enhanced",
+                    "path": "derivatives/ppg_posteriorgram.npz",
+                    "frames": int(posteriorgram.shape[0]),
+                    "n_phonemes": int(posteriorgram.shape[1]),
+                    "phonemes": list(PHONEME_LABELS),
+                    "seconds_per_frame": seconds_per_frame,
+                    "layout": "frames_by_phonemes",
                 },
             )
         for index, (start, end) in enumerate(spans):
@@ -639,7 +719,7 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
     def test_an_absent_envelope_makes_align_undetermined(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """The envelope is DDK's only rate instrument; without it no task was evaluated."""
+        """Neither rate instrument is present, so each says so and no task was evaluated."""
         seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pa", spans=[(1.0, 5.0)])
         result = align_ddk(
             "diadochokinesis-pa", store, None, branch_params(ddk_config), reads=read_ddk(store, tmp_path, "plain")
@@ -647,7 +727,8 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
         assert result.done == UNDETERMINED
         assert result.components == []
         assert [(f.name, f.evidence.get("unavailable")) for f in result.deviations if f.kind == "measure"] == [
-            (RATE, "energy_envelope")
+            (RATE, "energy_envelope"),
+            (PPG_RATE, "ppg_posteriorgram"),
         ]
 
     def test_an_absent_envelope_notes_rather_than_failing(
@@ -803,3 +884,199 @@ class TestTheNodeRunsRatherThanBeingRecordedNoNode:
             route_state="routed",
         )
         assert any(reason.node == "DDK" and "never ran" in reason.why for reason in folded.reasons)
+
+
+def _reading(frames: np.ndarray, config: TriageConfig) -> PpgReading:
+    """The CV walk over one raster, at the packaged segmentation points."""
+    ppg = Posteriorgram(frames=frames, phonemes=PHONEME_LABELS, seconds_per_frame=FRAME_S)
+    found = ppg_reading(ppg, branch_params(config))
+    assert found is not None
+    return found
+
+
+class TestThePosteriorgramCvWalk:
+    """The instrument itself: runs, units, trains. Task-agnostic — nothing here reads a family."""
+
+    def test_a_clean_four_hertz_train_reads_its_period_and_rate(self, ddk_config: TriageConfig) -> None:
+        """Eight onsets a quarter second apart are one train at 4 Hz with no jitter."""
+        reading = _reading(_cv_raster(["labial"] * 8, [0.25] * 7), ddk_config)
+        assert len(reading.units) == 8
+        assert reading.train is not None
+        assert reading.train.repetitions == 8
+        assert reading.train.period_s == pytest.approx(0.25, abs=0.005)
+        assert reading.train.rate_hz == pytest.approx(4.0, abs=0.05)
+        assert reading.train.jitter == pytest.approx(0.0, abs=0.01)
+
+    def test_connected_speech_like_onsets_are_not_one_train(self, ddk_config: TriageConfig) -> None:
+        """Stops occur in ordinary speech; what does not occur is their intervals staying regular."""
+        reading = _reading(
+            _cv_raster(
+                ["labial", "alveolar", "labial", "velar", "labial", "alveolar", "labial"],
+                [0.2, 0.9, 0.25, 1.5, 0.2, 0.35],
+            ),
+            ddk_config,
+        )
+        assert len(reading.units) == 7
+        assert reading.train is None
+
+    def test_a_stop_free_raster_yields_no_cv_units(self, ddk_config: TriageConfig) -> None:
+        """Sustained phonation, a glide, a breath: no stop, so no CV unit, structurally."""
+        reading = _reading(_raster([("<silent>", 0.2), ("aa", 2.0), ("s", 0.3), ("aa", 1.0)]), ddk_config)
+        assert reading.units == ()
+        assert reading.train is None
+
+    def test_a_slow_train_is_reported_with_its_rate_and_nothing_flags_it(self, ddk_config: TriageConfig) -> None:
+        """0.9 Hz is implausibly slow for DDK and the branch says so by measuring it, not by judging."""
+        reading = _reading(_cv_raster(["labial"] * 5, [1.11] * 4), ddk_config)
+        assert reading.train is not None
+        assert reading.train.rate_hz == pytest.approx(0.9, abs=0.02)
+        assert reading.train.repetitions == 5
+
+    def test_the_scan_stops_at_the_next_consonant_rather_than_pairing_across_it(self, ddk_config: TriageConfig) -> None:
+        """``/p/ /t/ /aa/`` is one syllable, not two: the /p/ has no nucleus of its own."""
+        reading = _reading(_raster([("<silent>", 0.2), ("p", 0.05), ("t", 0.05), ("aa", 0.2)]), ddk_config)
+        assert [(unit.consonant, unit.vowel) for unit in reading.units] == [("t", "aa")]
+
+    def test_vowel_variation_does_not_cost_a_unit(self, ddk_config: TriageConfig) -> None:
+        """/pa/, /paw/ and /puh/ are the same syllable for this instrument; only the stop is fixed."""
+        raster = _raster(
+            [
+                ("<silent>", 0.2),
+                ("p", 0.05),
+                ("aa", 0.2),
+                ("p", 0.05),
+                ("ao", 0.2),
+                ("p", 0.05),
+                ("uh", 0.2),
+                ("p", 0.05),
+                ("uw", 0.2),
+            ]
+        )
+        reading = _reading(raster, ddk_config)
+        assert [unit.vowel for unit in reading.units] == ["aa", "ao", "uh", "uw"]
+        assert reading.train is not None
+        assert reading.train.repetitions == 4
+
+
+class TestThePosteriorgramAnswersTheDeclaredTask:
+    """The instrument is task-agnostic; the comparison is against the declared expectation."""
+
+    def test_a_declared_sequence_scores_full_per_position_accuracy(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """/pa-ta-ka/ produced as asked reads 1.0 overall and 1.0 at each of the three positions."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cv_raster(list(CYCLE) * 4, [0.2] * 11),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        [place] = _measurements(store, PPG_EXPECTED_PLACE)
+        assert place.attributes["value"] == pytest.approx(1.0)
+        assert place.attributes["by_position"] == {"0": 1.0, "1": 1.0, "2": 1.0}
+        assert place.attributes["expected_sequence"] == list(CYCLE)
+
+    def test_a_collapsed_sequence_scores_low_without_failing_conformance(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """/pa-pa-pa/ for /pa-ta-ka/ is the clinically meaningful finding, not a task not performed."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cv_raster(["labial"] * 12, [0.2] * 11),
+        )
+        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        [place] = _measurements(store, PPG_EXPECTED_PLACE)
+        assert place.attributes["value"] == pytest.approx(1.0 / 3.0, abs=0.01)
+        assert place.attributes["by_position"] == {"0": 1.0, "1": 0.0, "2": 0.0}
+        assert result.report.conformance is True
+
+    def test_a_single_syllable_family_reads_the_place_its_own_instruction_names(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """/ta/ expects alveolar; a train of /pa/ under that instruction scores zero, not one."""
+        seed_ddk_store(
+            store, stem="sub-a_ses-1_task-diadochokinesis-ta", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-ta"}))
+        [place] = _measurements(store, PPG_EXPECTED_PLACE)
+        assert place.attributes["expected_sequence"] == ["alveolar"]
+        assert place.attributes["value"] == pytest.approx(0.0)
+
+    def test_the_train_span_names_the_posteriorgram_as_its_evidence(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Under propose-only the derivation is the whole record of where the extent came from."""
+        ids = seed_ddk_store(
+            store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        [span] = [proposed for proposed in _spans_of(store) if proposed.attributes["role"] == "ppg_train"]
+        assert span.attributes["production"] == "syllable_train_from_ppg"
+        assert span.attributes["repetitions"] == 8
+        assert store.derived_from(span.id) == [ids["ppg_posteriorgram"]]
+
+    def test_the_two_place_instruments_are_compared_when_the_spectrogram_is_present(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The agreement is the only thing that can settle which place reading to trust."""
+        onsets = [0.2 + 0.2 * index for index in range(12)]
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cv_raster(list(CYCLE) * 4, [0.2] * 11),
+            wideband=_wideband(4.0, [((onset, onset + 0.05), CYCLE[index % 3]) for index, onset in enumerate(onsets)]),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        [agreement] = _measurements(store, PPG_PLACE_AGREEMENT)
+        assert agreement.attributes["support_onsets"] == 12
+        assert agreement.attributes["value"] == pytest.approx(1.0)
+        assert "not the place decision" in agreement.attributes["reading"]
+
+    def test_a_declared_task_with_no_train_is_a_non_conformance_not_an_open_question(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The instruction asked for a train and the content holds none; that is an answer."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_raster([("<silent>", 0.5), ("aa", 3.0)]),
+        )
+        result = align_ddk(
+            "diadochokinesis-pa", store, None, branch_params(ddk_config), reads=read_ddk(store, tmp_path, "plain")
+        )
+        assert result.done is False
+        assert result.components == []
+        assert [f.evidence["found"] for f in result.deviations if f.name == PPG_UNITS] == [0]
+
+    def test_a_readable_posteriorgram_answers_a_task_the_envelope_could_not(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """No envelope is not no train. The same store without the raster reads UNDETERMINED."""
+        seed_ddk_store(
+            store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
+        )
+        result = align_ddk(
+            "diadochokinesis-pa", store, None, branch_params(ddk_config), reads=read_ddk(store, tmp_path, "plain")
+        )
+        assert result.done is True
+        [rate] = [f for f in result.deviations if f.name == PPG_RATE and f.kind == "measure"]
+        assert rate.evidence["value"] == pytest.approx(4.0, abs=0.05)
+        assert rate.evidence["unit"] == SYLLABLES_PER_S
+        assert rate.evidence["repetitions"] == 8
+
+    def test_an_absent_posteriorgram_is_noted_rather_than_raised(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """An absent instrument is an absence; a branch never refuses over one."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
+            spans=[(1.0, 5.0)],
+        )
+        _run(store, ddk_config, tmp_path)
+        assert NO_PPG in _report(store).attributes["notes"]
+        [absent] = _measurements(store, PPG_RATE)
+        assert absent.attributes["unavailable"] == "ppg_posteriorgram"
+        assert absent.attributes["value"] is None

@@ -647,7 +647,7 @@ class TestEveryOperatingPointIsAConfigKey:
         """The design fitted every key; none may still ship null, and ``point`` never raises for one."""
         config = load_triage_config()
         numeric = [key for key in PARAM_KEYS if key != "label_sets"]
-        assert len(numeric) == 34
+        assert len(numeric) == 38
         params = branch_params(config)
         for key in numeric:
             assert config.values[PARAM_SECTION][key] is not None, key
