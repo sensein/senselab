@@ -280,6 +280,20 @@ branch:
   label_sets:
     cough: [Cough]
     breath: [Breathe]
+  # The posteriorgram CV instrument. Segmentation and vocabulary only: it reports a rate, it does
+  # not judge one. Derivations in specs/20260817-triage-workflow-dag/config-derivations.md.
+  ddk_interval_tolerance: 3.0          # factor an inter-onset interval may differ from its stretch's running median
+  ddk_min_repetitions: 4               # CV onsets a contiguous regular stretch needs before it is a train
+  # place of articulation -> the stop phonemes that ARE that place, in the posteriorgram's ARPAbet
+  # spelling. Data, not schema, and the one place vocabulary `place_centroid_bands_hz` and
+  # `Expectation.sequence` already use; the stop set the CV walk reads is this mapping's union.
+  ddk_stop_places:
+    labial: [p, b]
+    alveolar: [t, d]
+    velar: [k, g]
+  # the vowels a DDK syllable's nucleus may surface as; any member satisfies V, which is how
+  # phonemic variation across /pa/, /pah/, /paw/, /puh/ is tolerated rather than penalised.
+  ddk_vowel_phonemes: [aa, ah, ao, ow, uh, uw]
 
 # What VERDICT does with what the reporting nodes report. A branch reports and VERDICT decides, so
 # every threshold that turns a reading into a judgement about the recording is here and none is in

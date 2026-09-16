@@ -476,7 +476,8 @@ class Expectation:
         expected_event_count: How many events the instruction asks for, when it counts them.
         declared_duration_s: How long the instruction runs, when it is timed rather than counted.
         label_set: Which entry of ``branch.label_sets`` names this task's own sound.
-        sequence: The places of articulation a syllable sequence cycles through, in order.
+        sequence: The places of articulation the syllable train cycles through, in order. One place for a
+            single-syllable train, three for a sequential one; its length is the cycle.
         declared_direction: Which way a pitch sweep is asked to go.
         declared_route: Nose or mouth, where the instruction prescribes one.
         route_from_index: Whether the route is carried by the task's trailing index.
@@ -716,12 +717,16 @@ AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
 """AIRWAY's eleven in-family rows: ``AIRWAY_ELICITING``."""
 
 DDK_EXPECTATIONS: dict[str, Expectation] = {
-    "diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, expected_event_count=10),
-    "diadochokinesis-ta": Expectation(pattern=Pattern.SYLLABLE_TRAIN, expected_event_count=10),
-    "diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, expected_event_count=10),
-    "diadochokinesis-v2-puh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, declared_duration_s=5.0),
-    "diadochokinesis-v2-tuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, declared_duration_s=5.0),
-    "diadochokinesis-v2-kuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, declared_duration_s=5.0),
+    "diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("labial",), expected_event_count=10),
+    "diadochokinesis-ta": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("alveolar",), expected_event_count=10),
+    "diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("velar",), expected_event_count=10),
+    "diadochokinesis-v2-puh": Expectation(
+        pattern=Pattern.SYLLABLE_TRAIN, sequence=("labial",), declared_duration_s=5.0
+    ),
+    "diadochokinesis-v2-tuh": Expectation(
+        pattern=Pattern.SYLLABLE_TRAIN, sequence=("alveolar",), declared_duration_s=5.0
+    ),
+    "diadochokinesis-v2-kuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("velar",), declared_duration_s=5.0),
     "diadochokinesis-pataka": Expectation(
         pattern=Pattern.SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), expected_event_count=30
     ),
@@ -735,7 +740,12 @@ DDK_EXPECTATIONS: dict[str, Expectation] = {
         pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), declared_duration_s=5.0
     ),
 }
-"""DDK's ten in-family rows: ``SYLLABLE_REPETITION``."""
+"""DDK's ten in-family rows: ``SYLLABLE_REPETITION``.
+
+Every non-lexical row names the place its instruction asks for, so a one-syllable train and a
+sequential one are read by the same code with ``len(sequence)`` as the cycle. The two
+``buttercup`` rows name a word instead and take the lexical route.
+"""
 
 EXPECTATIONS: dict[str, dict[str, Expectation]] = {
     "AIRWAY": AIRWAY_EXPECTATIONS,
@@ -959,6 +969,18 @@ def _label_sets(value: Any) -> dict[str, tuple[str, ...]]:  # noqa: ANN401 — o
     return {str(name): tuple(str(label) for label in labels) for name, labels in value.items()}
 
 
+def _labels(value: Any) -> tuple[str, ...]:  # noqa: ANN401 — one config leaf
+    """A label list as a tuple of strings.
+
+    Args:
+        value: The leaf.
+
+    Returns:
+        The labels.
+    """
+    return tuple(str(label) for label in value)
+
+
 POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "smoothing_window_s": float,
     "peak_prominence_db": float,
@@ -995,6 +1017,10 @@ POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "effort_split_hz": float,
     "gap_off_task_min_s": float,
     "label_sets": _label_sets,
+    "ddk_interval_tolerance": float,
+    "ddk_min_repetitions": int,
+    "ddk_stop_places": _label_sets,
+    "ddk_vowel_phonemes": _labels,
 }
 """Every ``branch.*`` key, and the type its value is read as. The one declaration of both.
 
@@ -1140,6 +1166,10 @@ PARAM_KEYS = (
     "gap_off_task_min_s",
     "place_centroid_bands_hz",
     "label_sets",
+    "ddk_interval_tolerance",
+    "ddk_min_repetitions",
+    "ddk_stop_places",
+    "ddk_vowel_phonemes",
 )
 """Every key the ``branch`` config section holds, in the order the section declares them.
 
