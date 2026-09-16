@@ -1927,9 +1927,10 @@ handed.
 
 **The eleven in-family rows** are three `Pattern` kinds: `EVENT_SERIES` (eight families),
 `EVENT_ALTERNATION` (`voluntary-cough`, where material between coughs is matched as breath rather
-than scored off-task) and `SOUND_COVERAGE` (the two uncounted durational `-breath` families). Four
+than scored off-task) and `SOUND_COVERAGE` (the two uncounted durational `-breath` families). **Five**
 of them carry `unviable=(("route", …),)`, because the nasal-versus-oral determination is
-`NOT_SEPARABLE_BY_THIS_DESIGN`.
+`NOT_SEPARABLE_BY_THIS_DESIGN`, and a sixth — `v2-hardcough` — carries
+`unviable=(("effort_absolute", …),)` for the same reason `loudness` v1 does.
 
 **State: implemented and running.** Its per-capability status (A1–A7), the off-task flag's three
 owed changes, the selector widening A5 would need, and the 56,505-of-62,547 `unavailable` gate
