@@ -51,6 +51,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     read_envelope_track,
     read_spectrogram_block,
     stream_extent,
+    stream_ids,
     touches_edge,
     train_rate_hz,
     word_extent,
@@ -400,25 +401,28 @@ def align_ddk(
     sequence = expectation.sequence if expectation.pattern is Pattern.SYLLABLE_SEQUENCE else None
     unit = CYCLES_OR_SYLLABLES_PER_S if sequence else SYLLABLES_PER_S
 
+    carrier = _evidence(train.id, reads.envelope_id, reads.wideband_id)
     findings: list[Finding] = [
-        count("expected_event_count", len(onsets), expectation.expected_event_count),
+        count("expected_event_count", len(onsets), expectation.expected_event_count, *carrier),
         measured(
             RATE,
             extent[0],
             extent[1],
             rate_hz,
+            *carrier,
             unit=unit,
             onset_rate_hz=None if span_s <= 0.0 else round(len(onsets) / span_s, 3),
             support_syllables=len(onsets),
             **acquisition_covariates(store, extent),
         ),
-        count("inter_onset_interval_s", [round(value, 3) for value in intervals], None),
-        count("syllable_onset_s", starts, expectation.expected_event_count),
+        count("inter_onset_interval_s", [round(value, 3) for value in intervals], None, *carrier),
+        count("syllable_onset_s", starts, expectation.expected_event_count, *carrier),
         measured(
             "interval_dispersion",
             extent[0],
             extent[1],
             dispersion(intervals),
+            *carrier,
             support_intervals=len(intervals),
             trend_s_per_step=trend(intervals),
             by_position={} if sequence is None else dispersion_by_position(intervals, len(sequence)),
@@ -428,6 +432,8 @@ def align_ddk(
             extent[0],
             extent[1],
             None if recording_s <= 0.0 else round(span_s / recording_s, 3),
+            *carrier,
+            *stream_ids(store),
             train_s=round(span_s, 3),
             recording_s=round(recording_s, 3),
         ),
@@ -440,12 +446,14 @@ def align_ddk(
     if sequence is not None:
         places = ddk_places(onsets, params, reads.wideband)
         if reads.wideband is None:
-            findings.append(measured("syllable_place", extent[0], extent[1], None, unavailable=WIDEBAND))
+            findings.append(measured("syllable_place", extent[0], extent[1], None, *carrier, unavailable=WIDEBAND))
         for index, (onset, place) in enumerate(zip(onsets, places)):
             target = sequence[index % len(sequence)]
             if place not in (target, UNRESOLVED):
                 findings.append(
-                    deviation("syllable_sequence_mismatch", onset[0], onset[1], expected=target, measured=place)
+                    deviation(
+                        "syllable_sequence_mismatch", onset[0], onset[1], *carrier, expected=target, measured=place
+                    )
                 )
         resolved = [place for place in places if place != UNRESOLVED]
         cycles = sum(
@@ -461,25 +469,19 @@ def align_ddk(
                     extent[0],
                     extent[1],
                     round(resolved.count(dominant) / len(resolved), 3),
+                    *carrier,
                     dominant_place=dominant,
                     support_syllables=len(resolved),
                 )
             )
-        findings.append(count("realised_cycles", cycles, None))
+        findings.append(count("realised_cycles", cycles, None, *carrier))
         attributes.update(production="syllable_sequence", realised_cycles=cycles, resolved_n=len(resolved))
         done = bool(onsets) and cycles >= 1
 
-    components = [
-        ddk_span(
-            "task_extent",
-            extent,
-            *_evidence(train.id, reads.envelope_id, reads.wideband_id),
-            **attributes,
-        )
-    ]
+    components = [ddk_span("task_extent", extent, *carrier, **attributes)]
     recording_extent = stream_extent(store)
     if recording_extent is not None and touches_edge(extent, recording_extent):
-        findings.append(deviation("truncation", extent[0], extent[1]))
+        findings.append(deviation("truncation", extent[0], extent[1], *carrier, *stream_ids(store)))
     findings.extend(declared)
     return Result(done, components, findings)
 
@@ -507,7 +509,8 @@ def _repeated_word(expectation: Expectation, store: ProvStore, params: BranchPar
         raise ValueError("a DDK ordered-tokens row names the word its instruction asks for")
     target = params.p_normalise(expectation.tokens[0])
     hits = [word for word in lexical(consensus_words(store)) if params.p_normalise(word_text(word)) == target]
-    findings: list[Finding] = [count("expected_event_count", len(hits), expectation.expected_event_count)]
+    hit_ids = tuple(word.id for word in hits)
+    findings: list[Finding] = [count("expected_event_count", len(hits), expectation.expected_event_count, *hit_ids)]
     train = hull([word_extent(word) for word in hits])
     components: list[Proposal] = []
     if train is not None and train[1] > train[0]:
@@ -515,7 +518,7 @@ def _repeated_word(expectation: Expectation, store: ProvStore, params: BranchPar
             ddk_span(
                 "task_extent",
                 train,
-                *_evidence(reads.transcript_id, reads.envelope_id, *(word.id for word in hits)),
+                *_evidence(reads.transcript_id, reads.envelope_id, *hit_ids),
                 production="lexical_repetition",
                 token=target,
                 repeats_n=len(hits),
@@ -530,6 +533,7 @@ def _repeated_word(expectation: Expectation, store: ProvStore, params: BranchPar
                     train[0],
                     train[1],
                     train_rate_hz(reads.envelope, train, params),
+                    *_evidence(reads.transcript_id, reads.envelope_id, *hit_ids),
                     unit=SYLLABLES_PER_S,
                     support_words=len(hits),
                     **acquisition_covariates(store, train),
@@ -587,6 +591,7 @@ def detect_ddk(store: ProvStore, params: BranchParams, *, reads: DdkReads = DdkR
                     span.extent[0],
                     span.extent[1],
                     rate_hz,
+                    *_evidence(span.id, reads.envelope_id),
                     unit=CYCLES_OR_SYLLABLES_PER_S,
                     reading="acoustic_repetition_not_a_declared_ddk_task",
                     **acquisition_covariates(store, span.extent),
@@ -613,7 +618,16 @@ def detect_ddk(store: ProvStore, params: BranchParams, *, reads: DdkReads = DdkR
                 evaluates_no_task=True,
             )
         )
-        findings.append(measured("transcript_repeat", extent[0], extent[1], len(words), token=token))
+        findings.append(
+            measured(
+                "transcript_repeat",
+                extent[0],
+                extent[1],
+                len(words),
+                *_evidence(reads.transcript_id, *(word.id for word in words)),
+                token=token,
+            )
+        )
     return Result(UNDETERMINED, components, findings)
 
 
