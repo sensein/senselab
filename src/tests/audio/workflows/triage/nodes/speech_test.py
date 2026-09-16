@@ -1700,3 +1700,100 @@ class TestItDoesNotReadAirway:
         """Verifying what commit 8537a83f already removed, so a regression is caught here."""
         source = Path(speech_module.__file__).read_text()
         assert "AIRWAY" not in source
+
+
+class TestTheNodeRunsOneModeAndProposesWhatItFinds:
+    """The node's own seam: the declared family picks a mode, and every span is a proposal."""
+
+    HARVARD = "The birch canoe slid on the smooth planks."
+
+    def _declared(self, family: str, *, read: bool = True) -> AudioHints:
+        """A declaration naming the family through the carrier a hint provides.
+
+        Args:
+            family: The declared task family.
+            read: Whether the declaration also carries the text to be read.
+
+        Returns:
+            The hints.
+        """
+        return AudioHints(
+            metadata={"task_token": family},
+            expected_speech=[ExpectedSpeech(text=self.HARVARD)] if read else [],
+        )
+
+    def _stimulus(self, store: ProvStore) -> str:
+        """Write what PREPROCESS's stimulus alignment leaves in the store.
+
+        Args:
+            store: The store to write into.
+
+        Returns:
+            The measurement entity's id.
+        """
+        return store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": "stimulus_alignment",
+                "signal": "plain",
+                "path": "derivatives/stimulus_alignment.npz",
+            },
+        )
+
+    def test_a_declared_read_task_takes_the_align_mode(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The verdict records which mode ran and on what family, so a run can be read back."""
+        _seed_speech_store(store, tmp_path, words=self.HARVARD.split(), duration_s=12.0)
+        self._stimulus(store)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, self._declared("harvard-sentences-list"), run_dir=tmp_path)
+        expectation = _verdict_entity(store, "SPEECH").attributes["expectation"]
+        assert expectation["mode"] == "align"
+        assert expectation["task_family"] == "harvard-sentences-list"
+        assert expectation["done"] is True
+
+    def test_an_undeclared_recording_takes_the_detect_mode(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No carrier names a family, so the branch annotates its speciality and concludes nothing."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path)
+        expectation = _verdict_entity(store, "SPEECH").attributes["expectation"]
+        assert expectation["mode"] == "detect"
+        assert expectation["task_family"] is None
+        assert expectation["done"] == "UNDETERMINED"
+        assert expectation["spans_n"] == 0, "`branch.run_gap_max_s` ships null, so no run is grouped"
+
+    def test_every_span_this_branch_writes_carries_a_role_and_a_derivation(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Propose-only: the derivation is the whole record of where the extent came from."""
+        _seed_speech_store(store, tmp_path, words=self.HARVARD.split(), duration_s=12.0)
+        self._stimulus(store)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, self._declared("harvard-sentences-list"), run_dir=tmp_path)
+        mine = [entity for entity in live_entities(store, "span") if entity.attributes.get("family") == "speech"]
+        assert mine, "the branch proposed at least one span"
+        assert all(entity.attributes.get("role") for entity in mine)
+        assert all(store.derived_from(entity.id) for entity in mine)
+        assert {entity.attributes["role"] for entity in mine} >= {"speech_run_0", "task_extent"}
+
+    def test_the_pii_path_is_untouched_by_the_mode(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """REDACT reads the scan and the per-word marks; neither mode may cost it either."""
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")], only_where_present=True)
+        speech(store, "plain", speech_config, self._declared("harvard-sentences-list"), run_dir=tmp_path)
+        assert find_measurement(store, "pii_scan") is not None
+        assert live_entities(store, "pii")
+        marks = [
+            entity
+            for entity in live_entities(store, "assertion")
+            if entity.attributes.get("verb") == "label" and entity.attributes.get("label") == "pii"
+        ]
+        assert marks, "redact.py selects on exactly this verb and label pair"
