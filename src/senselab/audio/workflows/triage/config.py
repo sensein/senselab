@@ -11,9 +11,9 @@ live in that file, though, and the rule applies to one of them:
 * A **schema** mapping's keys are names the code reads — ``spans.k_db``,
   ``taxonomy.consolidation_floor``. A key the code never reads does nothing, so a new one is refused.
 * A **data** mapping's keys are values the caller supplies — a HeAR label, a hint tag, a vocal task,
-  a kind. Refusing a new one refuses the configuration's whole purpose: a campaign that wants
-  ``Sneeze`` corroborated by something other than the ontology's own subtree could not say so under
-  ``airway.corroboration_overrides`` without editing the installed package.
+  a kind, a task's trailing index. Refusing a new one refuses the configuration's whole purpose: a
+  campaign whose protocol numbers its breathing trials differently could not say so under
+  ``airway.route_by_task_index`` without editing the installed package.
 
 The data mappings are named explicitly in :data:`DATA_MAP_PATHS` rather than detected by shape. A
 structural rule — "a dict whose values are not dicts" — matches almost every leaf section in the
@@ -44,7 +44,7 @@ configuration constraint rather than a presentation preference.
 
 DATA_MAP_PATHS = frozenset(
     {
-        "airway.corroboration_overrides",
+        "airway.route_by_task_index",
         "branch.label_sets",
         "routing.hint_branch_map",
         "voice.f0_range_by_population",
