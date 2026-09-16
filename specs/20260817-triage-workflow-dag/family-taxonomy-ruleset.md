@@ -95,8 +95,8 @@ gates fires.
 | VOICE | `voice.glide` | YAMNet singing-union peak, plain stream | >= | 0.05 | 0.75 | 0.93 | 0.10 |
 | VOICE | `voice.chant` | YAMNet `Chant` peak, plain stream | >= | 0.02 | 0.83 | 0.94 | 0.14 |
 | AIRWAY | `airway.breath` | `residual.energy_fraction` | >= | 0.10 | 0.66 | 0.98 | 0.16 |
-| AIRWAY | `airway.cough` | `span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"]` | >= | 50.0 dB | **not re-measured** | — | — |
-| AIRWAY | `airway.bracketed_event` | `bracketed_types` over `taxonomy.airway_bracket_tokens` | >= | 1 token | ~0.710 | — | — |
+| AIRWAY | `airway.cough` ‡ | `span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"]` | >= | 50.0 dB | **not re-measured** | — | — |
+| AIRWAY | `airway.bracketed_event` ‡ | `bracketed_types` over `taxonomy.airway_bracket_tokens` | >= | 1 token | 0.722 | — | — |
 | AIRWAY | `airway.ppg_silent_fraction` | `ppg.silent_fraction` | >= | 0.757 | recall-first, not J | — | — |
 | DDK | `ddk.lexical_repetition` | max token repetition in `transcript` | >= | 3 | **not measured** | — | — |
 | DDK | `ddk.ppg_segment_rate_per_s` | `ppg.segment_rate_per_s` | >= | 10 /s | recall-first, not J | — | — |
@@ -126,22 +126,36 @@ And behind all of them, consulted only where none fired, one bypass:
 And after all of them, `QUALITY`: a node every recording reaches, gated by nothing. See "QUALITY is
 a graph edge, not a route" below.
 
-The SPEECH J above is `sens 0.954 + spec-excluding-DDK 0.855 - 1`; `airway.bracketed_event`'s comes
-off the capped transcript and is a lower bound. Both are derived in their own sections below, and
-neither is a max-Youden point over a swept grid — SPEECH's threshold sits on an artifact boundary
-and the bracket gate has not been re-measured from the extracted counts yet.
+**‡ marks a gate whose operating point was selected against a population smaller than the corpus it
+now runs on** — `airway.cough` within the 11 declared airway families, `airway.bracketed_event`
+against the lexical-speech families as its only negatives. See "A scoped selection is not a general
+detector" below for what each was scored against and what the full population says.
+
+The SPEECH J above is `sens 0.954 + spec-excluding-DDK 0.855 - 1`. `airway.bracketed_event`'s 0.722
+is its 2026-09-12 whole-corpus sweep against `declared_airway` off the extracted counts, replacing
+the ~0.710 estimate this document carried off the capped transcript; the derivation is in "A scoped
+selection is not a general detector" below. Neither is a max-Youden point over a grid this document
+chose — SPEECH's threshold sits on an artifact boundary, and the bracket gate's 1 token is a presence
+test that happens to be its swept optimum.
 
 "Max-family firing" is the highest per-family firing rate at that threshold, "median-family firing"
 the median across all 48. The pair is the spread the operating point was chosen against, and it is
 what says whether a J is carried by separation or by prevalence. Every VOICE and residual/span
-AIRWAY row above is the max-Youden operating point from the 62,547-recording corpus sweep.
+AIRWAY row above is the max-Youden operating point of its own selecting sweep — but "corpus J" names
+the corpus the sweep ran over, not the population it scored, and those are not the same for every
+row. `airway.cough`'s is over the airway families only, and `voice.glide`'s positives are the three
+glide families rather than the six VOICE is scored against. Both are unpicked in "A scoped selection
+is not a general detector" below.
 
 `voice.sustained`, `voice.glide` and `airway.breath` are unchanged: they sit at measured operating
 points and this restructure had no evidence against any of them. `airway.cough` no longer reads the
 blanket span statistic; see "The cough gate reads cough-labelled spans" below. Its 50 dB cut is
-carried over onto the conditioned population **unswept**, because the conditioned population is
-smaller and louder than the blanket one and no sweep over it exists. Re-fitting it from the corpus
-run is the first thing to do with that run.
+carried over onto the conditioned population, which is smaller and louder than the blanket one. One
+sweep over the conditioned feature does now exist, and it is **scoped to the declared airway families
+only** — 49.93 dB at J 0.7815 there, so the shipped 50.0 sits on a scoped optimum and has never been
+scored outside those families. Re-fitting it against the full population is the first thing to do
+with the corpus run, and it needs a reference standard that does not exist yet; see "A scoped
+selection is not a general detector" below.
 
 **One data point that the cut is too high here, measured 2026-09-15.** On a 13-recording b2ai v3.1
 run the gate's feature was UNAVAILABLE on 12, and on the one recording that had it — five deliberate
@@ -150,6 +164,216 @@ in the sample. One recording is not a sweep and this moves nothing; it is record
 population the re-fit is owed on now has a reading in it. The consequence for the branch is in
 [`branch-airway.md`](branch-airway.md) *The number that governs this branch*; the run is
 [`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § E.
+
+### A scoped selection is not a general detector
+
+**The rule.** A detector scored against a reference standard whose *population* is a subset of the
+corpus has been asked one question: how it separates inside that subset. It has not been asked
+whether it fires on the families outside it. Promoting it to a `branch_gates` entry asks the second
+question, because a routing gate is evaluated on every recording of all 48 families. The scoped
+score is not evidence about that, and a sweep table, a heatmap cell or a gate row carrying the
+scoped number without naming its population **overstates what was measured**.
+
+That is a statement about method. Whether a given gate *misbehaves* outside its selection scope is a
+separate question needing its own measurement. The three cases below come out three different ways,
+and the record must not blur them: `airway.cough` was selected scoped and the full population
+refutes it, `airway.bracketed_event` was selected scoped and the full population confirms it, and
+`voice.glide` — the case this audit was opened on — was never selected scoped at all.
+
+#### The scoped standards, read from `report.py`
+
+`REFERENCE_STANDARDS` (`routing_analysis/report.py:211-281`) is ten entries. `population` restricts
+which recordings are scored at all; `excluded_by_construction` drops families from that population
+rather than moving them across it (`report.py:569-577` and `report.py:616-622` are the two filters).
+Seven entries are over the whole corpus. Three are not:
+
+| standard | `report.py` | positives | negatives | scored population |
+| --- | --- | --- | --- | --- |
+| `declared_cough_vs_breath` | :256-264 | the 3 cough families | the 8 breath families **only** | the 11 declared airway families |
+| `declared_glide_within_voice` | :272-280 | the 3 glide families | the 3 sustained families **only** | the 6 declared voice families |
+| `declared_lexical_speech` | :226-234 | the 20 lexical-speech families | everything but lexical speech **and DDK** | the corpus less the 10 DDK families |
+
+The unscoped seven are `agreed_asr`, `declared_speech`, `declared_airway`, `declared_voice`,
+`declared_ddk` and `declared_glide` — each positives against the whole rest of the corpus — and
+`declared_lexical_speech` would be among them but for its exclusion.
+
+**Which standards a detector meets is decided by `Detector.kind` alone**, at `report.py:988-990`:
+`if reference.kind != detector.kind: continue`. So scoping is not a property of a sweep that a later
+sweep can widen; it is a property of the kind the detector was declared with. Over the 172 catalogue
+detectors:
+
+| kind | detectors | standards it can be scored against |
+| --- | --- | --- |
+| `cough` | 38 (+1 staged) | `declared_cough_vs_breath` **only** — scoped |
+| `glide` | 31 | `declared_glide` (corpus) and `declared_glide_within_voice` (scoped) |
+| `speech` | 29 | `agreed_asr`, `declared_speech` (corpus); `declared_lexical_speech` (DDK held out) |
+| `airway` | 39 | `declared_airway` (corpus) |
+| `voice` | 27 | `declared_voice` (corpus) |
+| `ddk` | 8 | `declared_ddk` (corpus) |
+
+**22% of the catalogue has never been scored over the whole corpus under its own kind**, and cannot
+be. That is the structural half of the finding: the re-fit `airway.cough` is owed cannot be run
+inside the catalogue as it stands, because no reference standard exists that would ask the question.
+It needs either a whole-corpus `cough` standard or an `airway`-kind twin of the detector, and
+neither is written.
+
+**`declared_lexical_speech` is now out of step with the shipped config.**
+`data/config/default.yaml:239-250` retired the exclusion on 2026-09-15 —
+`taxonomy.ruleset.reference_family_set.SPEECH` is `speech` and `excluded_by_construction` is null for
+every branch — but `report.py:232` still carries `excluded_by_construction=SYLLABLE_REPETITION`.
+Branch scoring and detector sweeps therefore disagree about whether the ten DDK families are in the
+SPEECH population. Owed: one of the two, and the config is the one the owner decided.
+
+#### Which shipped gate's operating point came from which population
+
+Traced by reading each selecting sweep, not by reading this document's own table back.
+
+| gate | selecting detector | standard | population | figure at the shipped cut | scoped |
+| --- | --- | --- | --- | --- | --- |
+| `speech.lexical` | `speech.words_lexical` | `declared_speech` | 62,547 | sens 0.9548 / spec 0.8549 at 2 | no |
+| `voice.sustained` | `voice.longest_amplitude_span` | `declared_voice` | 62,547 | J 0.6493 at 3.0 s | no |
+| `voice.glide` | `glide.yamnet_singing_union.plain` | `declared_glide` | 62,518 scored, 29 absent | J 0.7519 at 0.05 | no |
+| `voice.chant` | `voice.yamnet_chant_peak.plain` | `declared_voice` | 62,518 scored | J 0.8298 at 0.02 | no |
+| `airway.breath` | `airway.residual_energy_fraction` | `declared_airway` | 62,516 scored | J 0.6585 at 0.10 | no |
+| `airway.cough` | `cough.amplitude_peak_over_floor_db_max` | `declared_cough_vs_breath` | **12,741 airway recordings** | J 0.7946 at 50 dB | **yes** |
+| `airway.bracketed_event` | a hand count over the capped transcript | airway families against **lexical-speech families** | two family sets, not the corpus | J ~0.710 at 1 token | **yes** |
+| `airway.ppg_silent_fraction` | `airway.ppg_silent_fraction` | `declared_airway`, recall at a 10% budget | 62,547, 2,345 absent | recall 0.761 at 0.757 | no |
+| `ddk.ppg_segment_rate_per_s` | `ddk.ppg_segment_rate_per_s` | `declared_ddk`, recall at a 5% budget | 62,547, 2,345 absent | 351 of 855 recovered, 4.7% non-DDK firing, at 10 /s | no |
+| `ddk.lexical_repetition` | — | — | — | **none** | **untraceable** |
+| `speech.transcript_agreement` (flag) | — | — | — | **none** | **untraceable** |
+
+The sources are `specs/20260910-taxonomy-routing-evidence/measurements.md` and its `sweeps.json`,
+`specs/20260911-praat-ppg-detectors/design.md`, and the sweep tables under
+`/orcd/scratch/bcs/002/satra/routing_scratch/{full_out,deriv_out,glide_out}/summary.md`.
+
+**Two entries could not be traced, and are reported as untraced rather than guessed.**
+`ddk.lexical_repetition >= 3` has no sweep anywhere, which this document already states.
+`speech.transcript_agreement >= 3` routes nothing, but its 3 appears in no sweep either: the
+agreement feature was swept at 1, 2, 3 and 4 against three standards, its max-Youden points are 2
+(`declared_lexical_speech`, J 0.8226) and 4 (`declared_speech`, J 0.7416), and 3 is neither. It
+arrived when `speech.agreement >= 2` was renamed and demoted to a flag, and the change of cut is
+unrecorded.
+
+#### `airway.cough`: selected scoped, and the full population refutes it
+
+This is the case the rule is about, and it is one set of numbers read three ways. `span_stat
+amplitude.peak_over_floor_db_max` is declared three times in `detectors.py` — as
+`cough.amplitude_peak_over_floor_db_max`, `airway.amplitude_peak_over_floor_db_max` and
+`glide.amplitude_peak_over_floor_db_max` — one reader, three kinds, therefore three reference
+standards over the same corpus.
+
+| scoring | population | at 50 dB | J |
+| --- | --- | --- | --- |
+| `cough.…` vs `declared_cough_vs_breath` | 12,741 airway recordings, 2,783 positive | sens 0.8724 / spec 0.9222 | **0.7946** |
+| `airway.…` vs `declared_airway` | 61,721 corpus recordings, 12,741 positive | sens 0.2514 / spec 0.6088 | **−0.1398** |
+
+The first is what this document's gate table shipped as `airway.cough`'s **corpus J 0.79**, in a
+column headed "corpus J", for a gate that routes any of the 48 families to AIRWAY. The second is the
+same detector at the same cut asked the question the gate actually answers, and it is the **J −0.141**
+recorded in "The cough gate reads cough-labelled spans" below. The two differ in both the population
+and the positive set; both differences are consequences of the kind, and neither was visible in the
+row.
+
+The gate's feature has since changed to the cough-set-conditioned statistic and 50 dB was carried
+across. The conditioned feature has been swept once, on 2026-09-12, against
+`declared_cough_vs_breath` — scoped again, over 4,793 recordings, the feature absent on 8,224 of the
+12,741 airway recordings. Its max-Youden point there is 49.93 dB at J 0.7815, so the shipped 50.0
+sits essentially on a scoped optimum and has still never been scored outside the airway families.
+Sources: `/orcd/scratch/bcs/002/satra/routing_scratch/deriv_out/summary.md:2555` and `:4060`, and
+`…/glide_out/summary.md:5839`.
+
+**Owed: a re-scoring of `airway.cough` against the full population**, which needs a standard that
+does not exist. Until it does, the gate's J is quoted as *within the airway families* or not quoted.
+
+#### `airway.bracketed_event`: a scoped estimate, and the whole-corpus measurement is now in hand
+
+Its ~0.710 was sensitivity over the airway families and specificity over the **lexical-speech
+families only** — see "Bracket types are strongly separable" below, whose own table carries an
+`other` column that the J does not use. That is a scoped negative set, and "a different reference
+set" is what that section already says about it in passing.
+
+The re-measurement it calls for **has been run**. `airway.bracketed_airway_union`
+(`detectors.py:1254-1259`, `("bracketed_set", "breath", "cough", "throatclearing", "sniff")` — the
+same four types the shipped gate resolves out of `taxonomy.airway_bracket_tokens`) was swept on
+2026-09-12 against `declared_airway` over the whole corpus, off the extracted `bracketed_types`
+counts rather than the capped transcript. At 1 token: tp 9,920, fp 2,000, tn 47,509, fn 3,089 —
+sens 0.7625, spec 0.9596, **J 0.7221**, the max-Youden point of its grid. Source:
+`/orcd/scratch/bcs/002/satra/routing_scratch/glide_out/summary.md:6555`.
+
+The scoped estimate **holds**, marginally better than the estimate. That is the third outcome and the
+reason the rule is about method rather than about outcomes: the scoped figure was not evidence either
+way until someone ran the unscoped one.
+
+#### `voice.glide`: selected unscoped, and it does not misbehave
+
+The audit that produced this section was opened on the belief that `voice.glide` had been selected
+under `declared_glide_within_voice`. **It was not.** Its feature is `peak_set plain yamnet singing`,
+its selecting detector is `glide.yamnet_singing_union.plain`, and its standard is `declared_glide` —
+the 3 glide families against the whole rest of the corpus, 62,518 scored, 29 absent. At 0.05 that
+reads sens 0.8863 / spec 0.8656, **J 0.7519**: the max-Youden point of its grid and the 0.75 in the
+gate table above.
+
+The scoped companion exists, was computed in the same run, and says something else entirely:
+
+| scoring of `…yamnet_singing_union.plain` | population | at 0.05 | J |
+| --- | --- | --- | --- |
+| vs `declared_glide` — the selection | 62,518, 3,193 positive | sens 0.8863 / spec 0.8656 | **0.7519** |
+| vs `declared_glide_within_voice` | 8,304 voice recordings, 3,193 positive | sens 0.8863 / spec 0.0808 | **−0.0329** |
+| vs `declared_voice` — the branch it gates | 62,518, 8,304 positive | sens 0.9066 / spec 0.9396 | **0.8462** |
+
+The middle row is the correct reading of the scoped standard: the singing union cannot tell a glide
+from a held vowel at any threshold, its best point on the whole grid being J 0.0054. That is exactly
+why "A glide is a trajectory, and nothing could read one" below had to go looking for F0. The bottom
+row is the question the gate actually answers, and there the detector is **better** than the 0.75
+this document credits it with. `voice.glide` is under-reported, not over-reported, and its 0.75 is a
+`glide`-kind figure standing in for a VOICE gate. Source:
+`/orcd/scratch/bcs/002/satra/routing_scratch/deriv_out/summary.md:2156`, `:2252` and `:2276`.
+
+**Measured outside the glide families, 2026-09-15**, over the 16-shard feature shard at
+`/orcd/scratch/bcs/002/satra/gatematrix_20260915/evidence/features` (62,547 recordings; shard schemas
+differ, because a label column exists only where that label occurred, so the column lists must be
+intersected per shard):
+
+| group | n | `squim.all.stoi.max` | `span_stats.amplitude.duty_fraction` | singing-subtree peak present |
+| --- | ---: | --- | --- | ---: |
+| glide families | 3,193 | med 0.698, p90 0.886 | med 0.835 | 2,133 (67%) |
+| `cape-v*` | 3,594 | med 0.994, p90 0.988 | med 0.747 | **12 (0.3%)** |
+| `harvard*` | 13,705 | med 0.957, p90 0.992 | med 0.758 | 26 (0.2%) |
+
+67% against 0.3% and 0.2% is the singing union not firing on sentences, measured on families the
+selection never asked about. It is a fact now in hand; it is **not** a vindication of the method,
+because the sweep that shipped the gate could not have produced it and `airway.cough`'s scoped
+selection came out the other way on the same kind of check.
+
+Two of the three columns are worth reading for what they are not. SQUIM STOI separates in the
+**opposite** direction — glides low, because a sustained glide carries no intelligible words — so it
+is a separator but not one that says the gate is right. `amplitude_duty_fraction` barely separates at
+all, 0.835 against 0.747, and is **weak**; it should not be cited in either direction.
+
+#### What this means for the heatmap and the sweep tables
+
+A family × gate heatmap (`routing_analysis/gate_plot.py`) draws every gate across all 48 families. A
+gate selected inside one family subset renders identically to one selected against the corpus, and
+the picture then asserts a generality the selection never tested. The same is true of any sweep table
+printing a J without its population — which is how `airway.cough`'s scoped 0.79 travelled into a
+column headed "corpus J".
+
+Recommended; none of it is a code change made here.
+
+1. **The gate table carries the scope.** Done above: `airway.cough` and `airway.bracketed_event`
+   carry `‡`, and the legend names the population each was selected against.
+2. **The heatmap marks the column, not the cell.** Scope is a property of how the gate was chosen,
+   so it belongs on the gate label — a `‡` in the rotated label with the population in the caption —
+   not on the 48 cells, which are all equally untested by that selection.
+3. **A separate panel for the out-of-scope families would be wrong.** Those cells are not a second
+   measurement; they are the same measurement with no selection evidence behind it. Splitting them
+   out implies two readings exist. One mark and one caption line say the true thing.
+4. **A sweep row prints its population.** `ReferenceStandard.scored_population()`
+   (`report.py:183-190`) already returns the phrase and `summary.md` already prints it per section
+   ("over the declared airway families only"). What fails is the copy out of a sweep into prose. Any
+   J quoted in this document carries its population or it is not quoted.
+5. **`specs/20260915-gate-family-matrix/design.md`'s "Where each measurement is over, in one table"
+   is the right shape** and should gain a row per shipped gate rather than per document section.
 
 ### `voice.chant`, added: the best voice separator in the sweep, previously unused
 
@@ -592,8 +816,13 @@ asks after it has the recording, not a question the router asks to decide whethe
 The two jobs wanted the same number at different operating points, and only one of them is the
 router's.
 
-The 50 dB cut is **carried over unswept** onto a population that is smaller and louder than the one
-it was fitted on. It is the first thing the corpus run should re-fit.
+The 50 dB cut is **carried over** onto a population that is smaller and louder than the one it was
+fitted on. The conditioned feature has since been swept once, and only against
+`declared_cough_vs_breath` — inside the airway families again, max-Youden 49.93 dB at J 0.7815 — so
+the carry-over is corroborated only where the original selection already was. Both figures on this
+page are within-airway numbers for a gate that routes any of the 48 families, and re-fitting against
+the full population is the first thing the corpus run should do; see "A scoped selection is not a
+general detector" above for what that needs.
 
 ### The detectors added
 
@@ -814,9 +1043,11 @@ Counts over the corpus, taken from the consensus transcript — which is capped 
 | `[sniff]` | 100 | 82 | 17 | 1 |
 
 Breath, cough, throat-clearing and sniff brackets fire on **0.734** of airway families against
-**0.024** of lexical-speech ones: roughly sens 0.734 / spec 0.976, **J ~0.710**, which is better
-than the current best AIRWAY entry (`airway.cough` at J 0.79 is on a different reference set;
-against the same one this is the strongest bracket-derived reading available). `[uh]` and `[um]` go
+**0.024** of lexical-speech ones: roughly sens 0.734 / spec 0.976, **J ~0.710**. Both halves of that
+are scoped — the negatives are the lexical-speech families, not the corpus, so the `other` column
+above enters neither — and it is superseded by the whole-corpus sweep in "A scoped selection is not
+a general detector" above, which puts the gate at **J 0.7221**. `airway.cough`'s J 0.79 is likewise
+on a scoped reference set and is not comparable to either. `[uh]` and `[um]` go
 the other way entirely — they are fillers, they are speech, and they are **not** in the airway set.
 `[laughter]` splits 777/569 and is in neither set.
 
@@ -833,8 +1064,10 @@ recording with no brackets.
 
 Because it comes off the entities, it is not subject to the 300-character cap and it is not subject
 to whatever the transcript renderer did to the tokens. **The table above came from the capped
-transcript and is a lower bound; the gate must be re-measured from the extracted counts before its
-J is quoted as settled.** `detectors.py` carries the candidates that sweep does:
+transcript and is a lower bound.** The re-measurement it asked for has since been run — 2026-09-12,
+`airway.bracketed_airway_union` against `declared_airway` over the whole corpus, J 0.7221 at 1 token
+— and is recorded in "A scoped selection is not a general detector" above. `detectors.py` carries
+the candidates that sweep does:
 `airway.bracketed_breath`, `_cough`, `_throatclearing`, `_sniff`, `_laughter`, the union
 `airway.bracketed_airway_union`, and `speech.bracketed_uh`, `_um` and `_filler_union` on the other
 side, each over `COUNT_GRID`.
