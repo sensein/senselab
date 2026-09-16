@@ -141,7 +141,7 @@ class TestTheRulesetDecides:
             routing(store, None, load_triage_config(path), run_dir=tmp_path)
 
 
-class TestDDKIsRoutableAndHasNoNode:
+class TestDDKIsRoutable:
     """The ruleset routes a fourth branch; the vocabulary must carry it through routing intact."""
 
     def test_ddk_can_be_routed(
