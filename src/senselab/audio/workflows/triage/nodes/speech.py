@@ -1081,7 +1081,11 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
     if expectation.connected and response is not None and duration(response) > 0.0:
         evidence = [entity_id for entity_id in (consensus_id,) if entity_id is not None]
         groups = _breath_groups(store, points)
-        components.extend(_breath_group_components(store, points, evidence))
+        components.extend(
+            MINT(f"breath_group_{index}", extent, *evidence, group_index=index)
+            for index, extent in enumerate(groups)
+            if extent[1] > extent[0] and evidence
+        )
         # Named for their measurement convention, never `rate`: the name says what was counted.
         findings.append(
             measured(
