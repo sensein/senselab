@@ -27,6 +27,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     dispatch,
     merge,
     mode_of,
+    write_findings,
 )
 from senselab.audio.workflows.triage.nodes.speech import (
     align_speech,
@@ -308,6 +309,15 @@ class TestAFullySpecifiedFamilyAlignsAgainstTheDerivative:
         assert omission.evidence["expected"] == "smooth"
         assert omission.start == omission.end == 6.5, "the end of `the`, the last token realised before it"
         assert result.done is False, "a token nothing realised is the task not being done"
+        assert omission.derived_from, "an anchored omission carries an extent, so it names its evidence"
+        activity = store.activity(node="SPEECH", step=None, parameters={})
+        agent = store.agent(agent_type="software", version="test")
+        written = write_findings(store, activity, agent, result.deviations, signal="plain")
+        anchored = [
+            entity_id for entity_id in written if store.get_entity(entity_id).attributes.get("expected") == "smooth"
+        ]
+        assert anchored, "the anchored omission has to reach the store for the edge to be checkable"
+        assert store.derived_from(anchored[0]) == list(omission.derived_from)
 
     def test_the_declared_structure_becomes_one_span_per_sentence(self, tmp_path: Path) -> None:
         """One declared string carrying four terminators yields four structure spans, not one."""
