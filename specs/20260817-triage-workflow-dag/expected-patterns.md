@@ -952,6 +952,7 @@ class Params:
     p_dominant_segment_min_fraction: float
     p_response_min_s: float
     p_pause_min_s: float
+    p_run_gap_max_s: float
     p_breath_group_min_gap_s: float
     p_omission_score_max: float
     p_repeat_overlap_min: float
@@ -1435,6 +1436,23 @@ def content_coverage(source_tokens: Sequence[str], produced_tokens: Sequence[str
     if not source:
         return 0.0
     return len(source & set(produced_tokens)) / len(source)
+
+
+def lexical_runs(words: Sequence, max_gap_s: float) -> list[tuple[float, float]]:
+    """Consecutive lexical words separated by no more than `max_gap_s`, as one extent each.
+
+    NOT `merge` over the word extents: `merge` joins only touching or overlapping intervals, and
+    ordinary speech has a gap between every pair of words, so `merge` would return one extent per
+    word. This is the same grouping SPEECH already does today over the consensus word timings
+    (`group_extents_into_runs`, `speech.py:573`).
+    """
+    runs: list[tuple[float, float]] = []
+    for word in words:
+        if runs and word.extent[0] - runs[-1][1] <= max_gap_s:
+            runs[-1] = (runs[-1][0], max(runs[-1][1], word.extent[1]))
+        else:
+            runs.append((word.extent[0], word.extent[1]))
+    return runs
 
 
 def inter_word_gaps(words: Sequence, min_gap_s: float) -> list[tuple[float, float]]:
@@ -2265,7 +2283,7 @@ def detect_speech(store, params: Params) -> Result:
     whether the prescribed count-in happened. Two branches, two questions, one recording.
     """
     words = lexical(store.words)
-    runs = merge([w.extent for w in words])
+    runs = lexical_runs(words, params.p_run_gap_max_s)
     components: list[Proposal] = []
     findings: list[Finding] = []
     for index, extent in enumerate(runs):
