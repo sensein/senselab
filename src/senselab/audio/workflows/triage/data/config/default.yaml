@@ -133,10 +133,13 @@ stimulus:
 # read off the recording's own BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`
 # below, which is the graph's one family -> branch mapping. This block is the OPTIONAL second,
 # caller-supplied declaration source, and it is additive in the same direction: it adds routes and
-# removes none. Null, because populating it would invent a tag vocabulary nobody fitted; the
-# derivation is in `specs/20260817-triage-workflow-dag/config-derivations.md`.
+# removes none. Null, because populating it would invent a tag vocabulary nobody fitted. The second
+# key runs the other way: it names the branches for which the declaration is REQUIRED, so the ruleset
+# alone never routes them. Both derivations are in
+# `specs/20260817-triage-workflow-dag/config-derivations.md`.
 routing:
   hint_branch_map: null                # tag (and metadata.speech_type) -> branch; a tag matching nothing adds nothing
+  declaration_required: [DDK]          # branches that run ONLY when the declaration names them; the ruleset alone never routes them
 
 # AIRWAY's own vocabulary. `branch.label_sets` splits `labels_of_interest` by the kind each label
 # names, and the two modes read that split rather than these labels directly.

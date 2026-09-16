@@ -24,6 +24,13 @@ def _config(tmp_path: Path, entries: str) -> TriageConfig:
     return load_triage_config(path)
 
 
+def _gated(tmp_path: Path, required: str, entries: str = "    ddk: DDK\n") -> TriageConfig:
+    """The packaged config with a hint map and ``routing.declaration_required`` both supplied."""
+    path = tmp_path / "gated.yaml"
+    path.write_text(f"routing:\n  declaration_required: {required}\n  hint_branch_map:\n{entries}")
+    return load_triage_config(path)
+
+
 def _map(tmp_path: Path) -> TriageConfig:
     """The packaged config with a hint map supplied, covering tags and one speech_type value."""
     return _config(
@@ -143,16 +150,81 @@ class TestTheRulesetDecides:
             routing(store, None, load_triage_config(path), run_dir=tmp_path)
 
 
-class TestDDKIsRoutable:
-    """The ruleset routes a fourth branch; the vocabulary must carry it through routing intact."""
+class TestDDKRoutesOnTheDeclarationOnly:
+    """``routing.declaration_required`` ships ``[DDK]``: the declaration decides, in both directions."""
 
-    def test_ddk_can_be_routed(
+    def test_a_ruleset_route_alone_does_not_run_a_gated_branch(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """No kind line could ever have named it; a gate can."""
+        """Content analysis routed DDK and nothing declared it, so the branch does not run."""
         reads(_evaluation(["DDK"]))
-        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        result = routing(store, None, _gated(tmp_path, "[DDK]"), run_dir=tmp_path)
+        assert result.runs == ()
+        assert "DDK" in result.skipped
+
+    def test_the_withheld_route_records_what_the_ruleset_thought(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """``route_state`` is not overwritten, so the gate's decision stays separable from the reading."""
+        reads(_evaluation(["DDK"]))
+        routing(store, None, _gated(tmp_path, "[DDK]"), run_dir=tmp_path)
+        ddk = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "DDK")
+        assert ddk.attributes["route_state"] == "routed"
+        assert ddk.attributes["withheld_by_gate"] is True
+        assert ddk.attributes["will_run"] is False
+        assert ddk.attributes["why"] == "route_routed_withheld_pending_declaration"
+
+    def test_a_declared_family_runs_the_gated_branch_whatever_the_ruleset_thought(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """The other direction: the declaration is ground truth, so a declined reading does not stop it."""
+        reads(_evaluation([], declared=["DDK"], family="diadochokinesis"))
+        result = routing(store, None, _gated(tmp_path, "[DDK]"), run_dir=tmp_path)
         assert result.runs == ("DDK",)
+        ddk = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "DDK")
+        assert ddk.attributes["route_state"] == "declined"
+        assert ddk.attributes["withheld_by_gate"] is False
+        assert ddk.attributes["forced_by_declaration"] is True
+
+    def test_a_hint_tag_satisfies_the_gate_as_the_family_does(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """The gate reads ``by_declaration``, which is the family or a mapped tag, not the family alone."""
+        reads(_evaluation(["DDK"]))
+        hint = AudioHints(may_contain=["ddk"])
+        result = routing(store, None, _gated(tmp_path, "[DDK]"), hint, run_dir=tmp_path)
+        assert result.runs == ("DDK",)
+        ddk = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "DDK")
+        assert ddk.attributes["withheld_by_gate"] is False
+
+    def test_a_branch_the_key_does_not_name_keeps_the_additive_behaviour(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """Only the named branches change; AIRWAY still runs on the ruleset's route alone."""
+        reads(_evaluation(["AIRWAY", "DDK"]))
+        result = routing(store, None, _gated(tmp_path, "[DDK]"), run_dir=tmp_path)
+        assert result.runs == ("AIRWAY",)
+        airway = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "AIRWAY")
+        assert airway.attributes["withheld_by_gate"] is False
+        assert airway.attributes["declaration_required"] is False
+
+    def test_an_empty_key_restores_the_ungated_behaviour_everywhere(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """The gate is a membership list, so an empty one gates nothing."""
+        reads(_evaluation(["DDK"]))
+        result = routing(store, None, _gated(tmp_path, "[]"), run_dir=tmp_path)
+        assert result.runs == ("DDK",)
+
+    def test_a_configured_name_that_is_not_a_branch_is_recorded_on_every_decision(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A typo gates nothing and is otherwise silent, so it is carried the way a bad map value is."""
+        reads(_evaluation(["DDK"]))
+        result = routing(store, None, _gated(tmp_path, "[DDKK]"), run_dir=tmp_path)
+        assert result.runs == ("DDK",)
+        decisions = live_entities(store, "branch_decision")
+        assert all(e.attributes["bad_declaration_required"] == ["DDKK"] for e in decisions)
 
     def test_every_branch_gets_a_decision(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]

@@ -594,6 +594,39 @@ even when asked to. The key stays as the escape hatch for a caller whose tags ex
 family cannot, and it is additive in the same direction as the family route: a tag matching no entry
 adds nothing and is recorded as unmapped; a declaration only ever ADDS a branch.
 
+routing.declaration_required -- the branches that run ONLY when the declaration names them, whether
+by task family or by a hint tag the map resolves. Ships [DDK], and DDK alone. **This is the one key
+in the block that runs against the additive direction**: for a branch named here the ruleset's own
+route is withheld, so content analysis can never route the recording to it.
+
+The derivation is the same asymmetry fold_file_verdict already names under
+verdict.detection_is_evaluation, carried one step further. The other three branches detect evidence
+that occurs incidentally -- breath and cough happen in any recording, sustained phonation happens in
+any recording, lexical content happens in any recording -- so a content route to them is a reading
+worth having even when nothing declared them. A rapid alternating repetition train does not occur
+incidentally. A content-only route to DDK is therefore always a detector artefact rather than a
+participant having produced one, and the corpus says so directly: ddk.lexical_repetition >= 3 routes
+DDK on 99% of rainbow-passage, 98% of caterpillar-passage and 87% of free-speech, all of it ordinary
+function-word repetition (see fold_file_verdict and branch-ddk.md for the same measurement).
+
+The second half of the decision is what the gate buys. Because the route can no longer be created by
+content, the branch's own detector is free to run at maximum sensitivity: a false positive inside a
+declared DDK recording costs a span, where a false positive outside one used to cost a whole
+spurious branch run. The gate is what makes that sensitivity safe, so the two decisions are one.
+
+This is a membership list, not a threshold. Nothing here is fitted and nothing scales; it decides
+which of two rules a branch is under. A branch not named keeps the additive behaviour exactly.
+
+What the gate does NOT do is rewrite the reading. route_state on every branch_decision continues to
+record what the ruleset thought, and a withheld route is recorded beside it as withheld_by_gate, so
+a reader can see "the ruleset would have routed this, and the declaration gate withheld it" rather
+than a branch that merely declined. Overwriting route_state would have destroyed exactly the
+measurement the gate exists to argue about.
+
+An entry naming a branch this graph does not route to is a configuration fault, not a missing
+measurement, and is reported the way routing.hint_branch_map's bad values are -- see
+vocabulary.BAD_DECLARATION_REQUIRED.
+
 ## airway
 
 AIRWAY's own vocabulary: which labels are the branch's subject, and which route a task's trailing
