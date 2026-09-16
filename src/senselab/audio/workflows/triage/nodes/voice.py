@@ -1,167 +1,623 @@
-"""VOICE — the phonation spans in the store, measured. It measures; it does not classify.
+"""VOICE — sustained phonation, proposed from the evidence the branch already routes on.
 
-The subject is a store read: every live ``span`` whose ``family`` is ``phonation``, whichever node
-proposed it (TAXONOMY, currently — this branch does not care and reads by attribute value alone).
-Nothing another branch claimed is removed from it, and no span is refused for being unvoiced. The
-HNR, F0 and RMS tracks are measured once over the whole stream and sliced per span by time, each on
-its own frame grid; only the point process is queried per span, and it is absent outside voiced and
-mixed spans. The onset is a period where one exists and the offset is always a criterion, named
-apart in the span attributes; the criterion itself is the phonation detector's, reported verbatim.
-A span shorter than the window the point process needs has no marks measured and is counted in
-``marks_skipped_short_n``.
+Two entry points, selected by :func:`~senselab.audio.workflows.triage.nodes.branches.dispatch` from
+the declared task family. :func:`align_voice` evaluates a voice-eliciting task against what its
+instruction asked for; :func:`detect_voice` marks sustained phonation on a task of any other kind
+and evaluates nothing.
+
+Both write by ``propose`` only. The subject is PREPROCESS's ``amplitude`` spans qualified by
+``phonation_tracks`` and ``continuity_trace`` — the same evidence the route was decided on — and
+VOICE mints its own ``family: "voice"`` spans over what qualifies. It waits for no ``phonation``
+span and edits none.
+
+The design is ``specs/20260817-triage-workflow-dag/branch-voice.md``; what porting it decided is
+``specs/20260817-triage-workflow-dag/branch-voice-implementation.md``.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from senselab.audio.data_structures import Audio, AudioHints
-from senselab.audio.tasks.phonation import PeriodMark, derive_f0_range, hnr_track, period_marks
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.nodes.branches import (
+    UNDETERMINED,
+    VOICE_EXPECTATIONS,
+    BranchParams,
+    ContinuityTrack,
+    Expectation,
+    Finding,
+    Pattern,
+    PhonationTracks,
+    Proposal,
+    Result,
+    TrackSlice,
+    amplitude_spans,
+    branch_params,
+    contest,
+    count,
+    deviation,
+    dispatch,
+    duration,
+    lexical,
+    longest_monotone_run,
+    max_windowed_spread,
+    measured,
+    mode_of,
+    ordered_run,
+    overlaps,
+    propose_spans,
+    read_continuity_track,
+    read_phonation_tracks,
+    semitones,
+    stream_extent,
+    touches_edge,
+    trace_slice,
+    track_slice,
+    unviable,
+    voice_span,
+    voiced_extent,
+    word_extent,
+    word_text,
+    write_findings,
+)
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
-    clamp_extent,
-    f0_range_parameters,
+    consensus_words,
     find_measurement,
     live_entities,
-    path_attributes,
-    resolve_stream,
     software_agent,
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import ProvStore
+from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "VOICE"
 KIND = "voice"
-_PHONATION_FAMILY = "phonation"
-_MARK_PERIODS = 3.0  # Praat's point process needs this many periods of f0_min; its own limit, not a choice
-_MARKS_UNMEASURED = "shorter_than_mark_window"  # a vocabulary token for the skip, not a threshold
-_UNVOICED_SPAN = "unvoiced_span"  # the other reason nobody looked, told apart from the first
-_TASK_NOT_EVALUATED = "not_evaluated"
-_NO_TASK_DECLARED = "no_task_declared"
-_TASK_HAS_NO_RANGE = "task_has_no_declared_range"
+
+PHONATION_TRACKS = "phonation_tracks"
+"""PREPROCESS's per-frame F0 and voicing strength. Without it no boundary can be placed."""
+
+CONTINUITY_TRACE = "continuity_trace"
+"""PREPROCESS's spectral-stationarity trace, which is the qualifier separating a held vowel."""
+
+COUNT_IN = "count_in"
+"""The role of the lexical count-in span, excluded from the vowel's measurement window."""
+
+TASK_EXTENT = "task_extent"
+"""The role of the span the task's own production runs over."""
+
+PHONATION_ROLE = "phonation"
+"""The role :func:`detect_voice` mints under: sustained phonation, on nobody's declared task."""
+
+TRACKS_ABSENT = "phonation_tracks is absent; no phonation boundary can be placed"
+"""Why a mode could not look. An absent instrument is :data:`UNDETERMINED`, never a verdict."""
+
+_TRACKS_SIDECAR = "derivatives/phonation_tracks.npz"
+"""Where PREPROCESS writes the tracks when the measurement carries no ``path`` of its own."""
 
 
-def _f0_range(config: TriageConfig, hint: AudioHints | None, audio: Audio) -> tuple[float, float]:
-    """The F0 search range for this recording: the declared population's, else the derived one.
+@dataclass(frozen=True)
+class Evidence:
+    """Everything a VOICE mode reads, loaded once per node call.
+
+    Attributes:
+        spans: Every live span entity.
+        words: The consensus words, in index order.
+        tracks: F0 and its strength, or None when PREPROCESS wrote none.
+        continuity: The spectral-stationarity trace, or None when PREPROCESS wrote none.
+        tracks_id: The ``phonation_tracks`` measurement's id, or None when it is absent.
+        continuity_id: The ``continuity_trace`` measurement's id, or None when it is absent.
+        file_extent: The recording's own extent, or None when no stream carries one.
+    """
+
+    spans: list[Entity]
+    words: list[Entity]
+    tracks: PhonationTracks | None
+    continuity: ContinuityTrack | None
+    tracks_id: str | None
+    continuity_id: str | None
+    file_extent: tuple[float, float] | None
+
+    def derivations(self, *ids: str | None) -> tuple[str, ...]:
+        """The evidence ids that exist, in the order given.
+
+        Args:
+            *ids: Candidate entity ids, any of which may be None.
+
+        Returns:
+            The ones that are not None.
+        """
+        return tuple(entity_id for entity_id in ids if entity_id is not None)
+
+
+def read_tracks(store: ProvStore, run_dir: Path) -> PhonationTracks | None:
+    """The phonation tracks, by the measurement's ``path`` when it carries one.
 
     Args:
-        config: The triage configuration.
-        hint: The caller's hint; ``metadata["population"]`` selects a declared range.
-        audio: The stream the range is derived from when no population declares one.
+        store: The provenance store.
+        run_dir: The run directory sidecar paths are relative to.
 
     Returns:
-        ``(f0_min_hz, f0_max_hz)``.
-
-    Raises:
-        ValueError: If no range could be derived from the recording, or if ``f0_max / f0_min``
-            exceeds ``voice.f0_range_ratio_max`` — a period-doubling check over a range that wide
-            flags every recording, and a check that fires on everything reports nothing, so the
-            configuration is refused rather than run and flagged.
+        The tracks, or None when neither carrier yields them.
     """
-    declared = hint.metadata.get("population") if hint is not None else None
-    population = str(declared) if declared else None
-    by_population = config.get("voice.f0_range_by_population") or {}
-    raw = by_population.get(population) if population is not None else None
-    if raw is None:
-        f0_min_hz, f0_max_hz = derive_f0_range(audio, **f0_range_parameters(config))
-    else:
-        f0_min_hz, f0_max_hz = float(raw[0]), float(raw[1])
-    ratio_max = config.get("voice.f0_range_ratio_max")
-    if ratio_max is not None and f0_max_hz / f0_min_hz > float(ratio_max):
-        raise ValueError(
-            f"voice.f0_range_ratio_max is {float(ratio_max)} and the declared range "
-            f"[{f0_min_hz}, {f0_max_hz}] has ratio {f0_max_hz / f0_min_hz:.2f}; the period-doubling "
-            "check over that range flags every recording and is refused rather than run"
-        )
-    return f0_min_hz, f0_max_hz
-
-
-def _required(config: TriageConfig, hint: AudioHints | None, audio: Audio) -> dict[str, Any]:
-    """Resolve every ``require()`` key at entry, before the store is written to (N2).
-
-    Args:
-        config: The triage configuration.
-        hint: The caller's hint, which selects a declared population's F0 range.
-        audio: The stream the F0 range is derived from when no population declares one.
-
-    Returns:
-        The resolved analysis parameters and the period-doubling identity factor.
-
-    Raises:
-        ValueError: If any key read here is null, or if the resolved range is vacuous.
-    """
-    f0_min_hz, f0_max_hz = _f0_range(config, hint, audio)
-    return {
-        "f0_min_hz": f0_min_hz,
-        "f0_max_hz": f0_max_hz,
-        "hop_s": float(config.require("phonation.hop_s")),
-        "silence_threshold": float(config.require("phonation.silence_threshold")),
-        "periods_per_window": float(config.require("phonation.periods_per_window")),
-        "doubling": float(config.require("phonation.period_doubling_factor")),
-    }
-
-
-def _rms_track(x: np.ndarray, sr: int, times: np.ndarray, window_s: float) -> np.ndarray:
-    """Root-mean-square amplitude at each frame time, over a window centred on it.
-
-    ``window_s`` is ``periods_per_window / f0_min_hz`` — the window Praat's harmonicity uses, an
-    identity on existing config keys, so no new constant appears.
-    """
-    half = window_s / 2.0
-    out = np.empty(len(times))
-    for k, t in enumerate(times):
-        i0 = max(0, int((t - half) * sr))
-        i1 = min(len(x), int((t + half) * sr))
-        out[k] = float(np.sqrt(np.mean(np.square(x[i0:i1])))) if i1 > i0 else 0.0
-    return out
-
-
-def _alias_in_range(f0_median_hz: float, *, factor: float, f0_min_hz: float, f0_max_hz: float) -> bool:
-    """Whether the period-doubling alias of this F0 also lies inside the search range (N21)."""
-    return f0_median_hz * factor <= f0_max_hz or f0_median_hz / factor >= f0_min_hz
-
-
-def _task_range(
-    config: TriageConfig, hint: AudioHints | None, longest_span_s: float
-) -> tuple[str | dict[str, Any], str | None]:
-    """Read the longest span against the range its declared task expects.
-
-    Args:
-        config: The triage configuration.
-        hint: The caller's hint; ``metadata["task"]`` names the task.
-        longest_span_s: The duration to read against the range.
-
-    Returns:
-        The verdict's ``task_range`` value and the flag naming the declared range, or None. The value
-        is a vocabulary token whenever no reading was possible and the four-field row when one was.
-    """
-    ranges = config.get("voice.task_duration_ranges")
-    if ranges is None:
-        return _TASK_NOT_EVALUATED, None
-    declared = hint.metadata.get("task") if hint is not None else None
-    if not declared:
-        return _NO_TASK_DECLARED, None
-    task = str(declared)
-    raw = ranges.get(task)
-    if raw is None:
-        return _TASK_HAS_NO_RANGE, None
-    low, high = float(raw[0]), float(raw[1])
-    within = low <= longest_span_s <= high
-    row = {"task": task, "range": [low, high], "longest_span_s": longest_span_s, "within": within}
-    if within:
-        return row, None
-    return (
-        row,
-        f"task_duration_outside_range: {task} declares [{low}, {high}] and the longest span is {longest_span_s:.3f}s",
+    tracks = read_phonation_tracks(store, run_dir)
+    if tracks is not None:
+        return tracks
+    if find_measurement(store, PHONATION_TRACKS) is None:
+        return None
+    sidecar = run_dir / _TRACKS_SIDECAR
+    if not sidecar.is_file():
+        return None
+    with np.load(sidecar) as loaded:
+        arrays = {key: np.asarray(loaded[key]) for key in loaded.files}
+    if not {"times_s", "f0_hz", "strength"} <= set(arrays):
+        return None
+    return PhonationTracks(
+        times_s=np.asarray(arrays["times_s"], dtype=float),
+        f0_hz=np.asarray(arrays["f0_hz"], dtype=float),
+        strength=np.asarray(arrays["strength"], dtype=float),
     )
 
 
-def voice(  # noqa: C901 — the store read, the tracks and the per-span assembly, in order
+def read_evidence(store: ProvStore, run_dir: Path) -> Evidence:
+    """Load every derivative and store read the two modes share.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory sidecar paths are relative to.
+
+    Returns:
+        The record. An absent derivative is None rather than an error.
+    """
+    tracks_measurement = find_measurement(store, PHONATION_TRACKS)
+    continuity_measurement = find_measurement(store, CONTINUITY_TRACE)
+    return Evidence(
+        spans=live_entities(store, "span"),
+        words=consensus_words(store),
+        tracks=read_tracks(store, run_dir),
+        continuity=read_continuity_track(store, run_dir),
+        tracks_id=None if tracks_measurement is None else tracks_measurement.id,
+        continuity_id=None if continuity_measurement is None else continuity_measurement.id,
+        file_extent=stream_extent(store),
+    )
+
+
+@dataclass(frozen=True)
+class Carrier:
+    """One amplitude span that qualified as a phonation carrier, and why.
+
+    Attributes:
+        span: The amplitude span the production was found inside.
+        track: The phonation tracks over it, with voicing already decided.
+        voiced_fraction: How much of the carrier the tracker found F0 for.
+        f0_spread_semitones: The worst local F0 spread over it.
+        stationarity: The median spectral continuity over it.
+    """
+
+    span: Entity
+    track: TrackSlice
+    voiced_fraction: float
+    f0_spread_semitones: float
+    stationarity: float
+
+    def qualifiers(self) -> dict[str, Any]:
+        """The three properties every proposal and measurement carries.
+
+        Returns:
+            The qualifiers, rounded for the store.
+        """
+        return {
+            "voiced_fraction": round(self.voiced_fraction, 4),
+            "f0_spread_semitones": round(self.f0_spread_semitones, 3),
+            "stationarity": round(self.stationarity, 4),
+            "support_frames": int(self.track.voiced.sum()),
+        }
+
+
+def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: BranchParams) -> list[Carrier]:
+    """V1's stationarity qualifier, over PREPROCESS's amplitude spans. One body, three callers.
+
+    The subject is ``measure == "amplitude"``, not ``family == "phonation"``: VOICE reads the
+    amplitude spans as evidence and mints its own span over what qualifies.
+
+    Args:
+        evidence: The derivatives and store reads.
+        expectation: The row, whose ``lexical_separator`` excludes a count-in from the carriers.
+        params: The operating points.
+
+    Returns:
+        The qualifying carriers, in the order the spans were given.
+    """
+    if evidence.tracks is None:
+        return []
+    words = lexical(evidence.words)
+    out: list[Carrier] = []
+    for span in amplitude_spans(evidence.spans):
+        if span.extent is None or duration(span.extent) < params.p_production_min_s:
+            continue
+        if expectation.lexical_separator and any(overlaps(word_extent(word), span.extent) for word in words):
+            continue
+        track = track_slice(evidence.tracks, span.extent, params.p_voiced_strength_min)
+        if track.strength.size == 0:
+            continue
+        voiced_fraction = float(track.voiced.mean())
+        pitch = semitones(np.where(track.voiced, track.f0_hz, np.nan))
+        spread = max_windowed_spread(pitch, track.hop_s, params.p_f0_spread_window_s)
+        trace = (
+            np.empty(0, dtype=float) if evidence.continuity is None else trace_slice(evidence.continuity, span.extent)
+        )
+        stationarity = float(np.median(trace)) if trace.size else 0.0
+        if (
+            voiced_fraction >= params.p_voiced_fraction_min
+            and spread <= params.p_f0_spread_max_semitones
+            and stationarity >= params.p_continuity_min
+        ):
+            out.append(Carrier(span, track, voiced_fraction, spread, stationarity))
+    return out
+
+
+def align_voice(
+    task_family: str,
+    store: ProvStore,
+    hint: AudioHints | None,
+    params: BranchParams,
+    *,
+    run_dir: Path,
+) -> Result:
+    """Evaluate a voice-eliciting task against what its instruction asked for.
+
+    Args:
+        task_family: The declared family, which is a key of :data:`VOICE_EXPECTATIONS`.
+        store: The provenance store.
+        hint: What the recording was declared to contain.
+        params: The operating points.
+        run_dir: The run directory sidecar paths are relative to.
+
+    Returns:
+        Whether the expected patterns were found, the spans proposed, and the findings.
+
+    Raises:
+        KeyError: If ``task_family`` is not a VOICE family, which is the caller's error: the four
+            ``VOICE_EXPECTATIONS_PENDING_DECLARATION`` rows are out of family and take
+            :func:`detect_voice`.
+        NotImplementedError: If a row carries a pattern no reachable matcher serves.
+    """
+    expectation = VOICE_EXPECTATIONS[task_family]
+    evidence = read_evidence(store, run_dir)
+    if expectation.pattern is Pattern.SUSTAINED:
+        return _voice_sustained(expectation, evidence, hint, params)
+    if expectation.pattern is Pattern.GLIDE:
+        return _voice_glide(expectation, evidence, params)
+    raise NotImplementedError(
+        f"{task_family} carries pattern {expectation.pattern.value!r}; align_voice serves "
+        f"{Pattern.SUSTAINED.value!r} and {Pattern.GLIDE.value!r}, which is every pattern in "
+        "VOICE_EXPECTATIONS"
+    )
+
+
+def _count_in(
+    expectation: Expectation, evidence: Evidence, params: BranchParams
+) -> tuple[bool, list[Proposal], list[Finding]]:
+    """The lexical count-in the instruction prescribes, as its own span.
+
+    It gets one precisely because it must be excluded from the vowel's measurement window.
+
+    Args:
+        expectation: The row, whose ``tokens`` are the prescribed count-in.
+        evidence: The derivatives and store reads.
+        params: The operating points.
+
+    Returns:
+        Whether the count-in was realised, the span it proposes, and one ``omission`` per token
+        nothing realised.
+    """
+    if expectation.tokens is None:
+        return True, [], []
+    matched, omissions = ordered_run(expectation.tokens, lexical(evidence.words), params.p_normalise)
+    findings = [deviation("omission", None, None, expected=token) for token in omissions]
+    if not matched:
+        return False, [], findings
+    extent = (word_extent(matched[0][1])[0], word_extent(matched[-1][1])[1])
+    proposals = [
+        voice_span(
+            COUNT_IN,
+            extent,
+            *(word.id for _, word in matched),
+            tokens=[token for token, _ in matched],
+            excluded_from_measurement=True,
+        )
+    ]
+    return True, proposals, findings
+
+
+def _voice_sustained(
+    expectation: Expectation, evidence: Evidence, hint: AudioHints | None, params: BranchParams
+) -> Result:
+    """The held vowel: a ``count_in`` where the instruction prescribes one, and a ``task_extent``.
+
+    Args:
+        expectation: The row.
+        evidence: The derivatives and store reads.
+        hint: What the recording was declared to contain.
+        params: The operating points.
+
+    Returns:
+        The result. :data:`UNDETERMINED` when the tracks are absent, so no boundary can be placed.
+    """
+    count_in_found, components, findings = _count_in(expectation, evidence, params)
+    if evidence.tracks is None:
+        findings.append(unviable("phonation_extent", TRACKS_ABSENT))
+        return Result(UNDETERMINED, components, findings)
+
+    carriers = sorted(
+        qualifying_phonation(evidence, expectation, params),
+        key=lambda carrier: duration(carrier.span.extent),
+        reverse=True,
+    )
+    findings.append(count("attempt_count", len(carriers), expectation.expected_event_count))
+    if not carriers:
+        return Result(False, components, findings)
+
+    carrier = carriers[0]
+    assert carrier.span.extent is not None  # noqa: S101 — qualifying_phonation admits no other case
+    extent = voiced_extent(carrier.span.extent, carrier.track)
+    components.append(
+        voice_span(
+            TASK_EXTENT,
+            extent,
+            carrier.span.id,
+            *evidence.derivations(evidence.tracks_id, evidence.continuity_id),
+            production="sustained",
+            carrier_extent=list(carrier.span.extent),
+            **carrier.qualifiers(),
+        )
+    )
+    findings.append(
+        measured(
+            "phonation_onset_to_offset_s", extent[0], extent[1], round(duration(extent), 3), **carrier.qualifiers()
+        )
+    )
+    findings.append(
+        measured(
+            "voiced_duration_s",
+            extent[0],
+            extent[1],
+            round(float(carrier.track.voiced.sum()) * carrier.track.hop_s, 3),
+            **carrier.qualifiers(),
+        )
+    )
+    findings.extend(_interruptions(carrier))
+    if evidence.file_extent is not None and touches_edge(extent, evidence.file_extent):
+        findings.append(deviation("truncation", extent[0], extent[1], reading="right_censored"))
+    for extra in carriers[1:]:
+        assert extra.span.extent is not None  # noqa: S101 — as above
+        start, end = voiced_extent(extra.span.extent, extra.track)
+        findings.append(deviation("repeat_attempt", start, end, **extra.qualifiers()))
+
+    if expectation.expect_inhale:
+        findings.append(count("inhale_expected_in_file", True, None))
+    if expectation.forbid_lexical:
+        for word in lexical(evidence.words):
+            start, end = word_extent(word)
+            findings.append(deviation("lexical_content", start, end, text=word_text(word)))
+    if hint is not None:
+        token = (hint.metadata or {}).get("task_token")
+        if token is not None:
+            findings.append(count("task_index", str(token).rsplit("-", 1)[-1], None))
+    if expectation.declared_duration_s is not None:
+        findings.append(
+            count(
+                "declared_duration_s",
+                round(duration(evidence.file_extent), 2),
+                expectation.declared_duration_s,
+            )
+        )
+    return Result(count_in_found, components, findings)
+
+
+def _interruptions(carrier: Carrier) -> list[Finding]:
+    """The unvoiced intervals inside one attempt: their number, locations and total duration.
+
+    Args:
+        carrier: The qualifying carrier.
+
+    Returns:
+        One ``interruptions`` measurement over the attempt.
+    """
+    times, voiced, hop = carrier.track.times_s, carrier.track.voiced, carrier.track.hop_s
+    marks = np.flatnonzero(voiced)
+    intervals: list[tuple[float, float]] = []
+    start: float | None = None
+    for index in range(int(marks[0]), int(marks[-1]) + 1) if marks.size else ():
+        if not voiced[index] and start is None:
+            start = float(times[index])
+        elif voiced[index] and start is not None:
+            intervals.append((start, float(times[index])))
+            start = None
+    extent = voiced_extent(carrier.span.extent or (0.0, 0.0), carrier.track)
+    return [
+        measured(
+            "interruptions",
+            extent[0],
+            extent[1],
+            len(intervals),
+            total_s=round(sum(end - begin for begin, end in intervals), 3),
+            locations=[[round(begin, 3), round(end, 3)] for begin, end in intervals],
+            hop_s=round(hop, 4),
+        )
+    ]
+
+
+def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchParams) -> Result:
+    """The pitch sweep: one ``task_extent`` over the dominant monotone segment.
+
+    Args:
+        expectation: The row, whose ``declared_direction`` the measured one is read against.
+        evidence: The derivatives and store reads.
+        params: The operating points.
+
+    Returns:
+        The result. :data:`UNDETERMINED` when the tracks are absent, so no sweep can be placed.
+    """
+    if evidence.tracks is None:
+        return Result(UNDETERMINED, [], [unviable("sweep_extent", TRACKS_ABSENT)])
+
+    best: tuple[Entity, TrackSlice, int, float, tuple[float, float]] | None = None
+    for span in amplitude_spans(evidence.spans):
+        if span.extent is None or duration(span.extent) < params.p_production_min_s:
+            continue
+        track = track_slice(evidence.tracks, span.extent, params.p_voiced_strength_min)
+        if track.strength.size == 0 or float(track.voiced.mean()) < params.p_voiced_fraction_min:
+            continue
+        pitch = semitones(np.where(track.voiced, track.f0_hz, np.nan))
+        run = longest_monotone_run(pitch, params.p_monotone_tolerance_semitones)
+        if run is None:
+            continue
+        first, last, sign = run
+        sweep = (float(track.times_s[first]), float(track.times_s[last]) + track.hop_s)
+        if duration(sweep) / max(duration(span.extent), 1e-9) < params.p_dominant_segment_min_fraction:
+            continue
+        if best is None or duration(sweep) > duration(best[4]):
+            best = (span, track, sign, abs(float(pitch[last] - pitch[first])), sweep)
+
+    if best is None:
+        return Result(False, [], [count("sweep_found", False, True)])
+
+    span, track, sign, extent_semitones, sweep = best
+    direction = "up" if sign > 0 else "down"
+    components = [
+        voice_span(
+            TASK_EXTENT,
+            sweep,
+            span.id,
+            *evidence.derivations(evidence.tracks_id),
+            production="glide",
+            direction=direction,
+            support_frames=int(track.voiced.sum()),
+        )
+    ]
+    findings: list[Finding] = [
+        measured(
+            "glide_extent_semitones",
+            sweep[0],
+            sweep[1],
+            round(extent_semitones, 2),
+            direction=direction,
+            support_frames=int(track.voiced.sum()),
+        )
+    ]
+    if direction != expectation.declared_direction:
+        findings.append(
+            deviation(
+                "sweep_direction_mismatch",
+                sweep[0],
+                sweep[1],
+                declared=expectation.declared_direction,
+                measured=direction,
+                extent_semitones=round(extent_semitones, 2),
+            )
+        )
+    if evidence.file_extent is not None and touches_edge(sweep, evidence.file_extent):
+        findings.append(deviation("truncation", sweep[0], sweep[1], reading="right_censored"))
+    return Result(True, components, findings)
+
+
+def detect_voice(store: ProvStore, params: BranchParams, *, run_dir: Path) -> Result:
+    """Mark sustained phonation wherever it occurs, and evaluate no task.
+
+    Shares :func:`qualifying_phonation` with the in-family mode — the same qualifier, the same
+    amplitude spans, the same tracks. What differs is that no expectation is consulted and no task
+    is evaluated: ``done`` is :data:`UNDETERMINED`, always.
+
+    Args:
+        store: The provenance store.
+        params: The operating points.
+        run_dir: The run directory sidecar paths are relative to.
+
+    Returns:
+        A result whose ``done`` is :data:`UNDETERMINED`, one span per sustained region, and the
+        findings.
+    """
+    evidence = read_evidence(store, run_dir)
+    if evidence.tracks is None:
+        return Result(UNDETERMINED, [], [unviable("phonation_extent", TRACKS_ABSENT)])
+
+    neutral = Expectation(pattern=Pattern.SUSTAINED)
+    carriers = qualifying_phonation(evidence, neutral, params)
+    qualifying_ids = {carrier.span.id for carrier in carriers}
+
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    for carrier in carriers:
+        assert carrier.span.extent is not None  # noqa: S101 — qualifying_phonation admits no other case
+        extent = voiced_extent(carrier.span.extent, carrier.track)
+        components.append(
+            voice_span(
+                PHONATION_ROLE,
+                extent,
+                carrier.span.id,
+                *evidence.derivations(evidence.tracks_id, evidence.continuity_id),
+                production="sustained",
+                carrier_extent=list(carrier.span.extent),
+                evaluates_no_task=True,
+                **carrier.qualifiers(),
+            )
+        )
+        findings.append(
+            measured(
+                "phonation_onset_to_offset_s",
+                extent[0],
+                extent[1],
+                round(duration(extent), 3),
+                **carrier.qualifiers(),
+            )
+        )
+        findings.extend(_interruptions(carrier))
+    for span in evidence.spans:
+        if span.attributes.get("label") == PHONATION_ROLE and span.id not in qualifying_ids:
+            findings.append(
+                contest(
+                    span.id,
+                    span.extent or (0.0, 0.0),
+                    PHONATION_ROLE,
+                    "fails_the_stationarity_qualifier",
+                )
+            )
+    findings.append(count("phonation_spans", len(components), None))
+    return Result(UNDETERMINED, components, findings)
+
+
+def _outcome(components: list[Proposal], findings: list[Finding], tracks_absent: bool) -> tuple[Outcome, str]:
+    """What the branch concluded, and why, in controlled vocabulary.
+
+    ``FAIL`` is an absence of *detected content* — this branch looked and found no attempt — and it
+    is what VERDICT reads as the kind being absent. An absent instrument is not an absent voice, so
+    it reads as a flag rather than as a finding about the speaker.
+
+    Args:
+        components: The spans proposed.
+        findings: Every finding.
+        tracks_absent: Whether the phonation tracks were absent.
+
+    Returns:
+        The outcome and the reason.
+    """
+    deviations = [finding.name for finding in findings if finding.kind == "deviation"]
+    if components:
+        if deviations:
+            return Outcome.FLAG, "; ".join(sorted(set(deviations)))
+        return Outcome.PASS, "sustained phonation proposed; nothing contested"
+    if tracks_absent:
+        return Outcome.FLAG, TRACKS_ABSENT
+    return Outcome.FAIL, "no amplitude span cleared the stationarity qualifier; no attempt found"
+
+
+def voice(
     store: ProvStore,
     source: str,
     config: TriageConfig,
@@ -169,250 +625,84 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
     *,
     run_dir: Path,
 ) -> NodeResult:
-    """Measure the phonation spans in the store.
+    """Propose the sustained phonation in this recording, and evaluate the task when it declares one.
 
     Args:
-        store: The provenance store, holding PREPROCESS's streams and the phonation spans
-            whichever node proposed them.
-        source: The store-held stream name the audio is sliced from, ``"plain"``.
+        store: The provenance store, holding PREPROCESS's amplitude spans, its ``phonation_tracks``
+            and its ``continuity_trace``.
+        source: The store-held stream the findings are taken over, ``"plain"``.
         config: The triage configuration.
-        hint: What the recording was declared to contain; read for the population and the task. A
-            declaration this branch's measurements contradict is named by VERDICT's fold.
-        run_dir: The run directory sidecar paths are relative to; ``voice_tracks.npz`` goes under
-            ``derivatives/``.
+        hint: What the recording was declared to contain; it selects the mode and carries the task
+            index. A declaration this branch's measurements contradict is named by VERDICT's fold.
+        run_dir: The run directory sidecar paths are relative to.
 
     Returns:
-        The verdict, the view over the spans and measurements written, and the verdict entity id.
+        The verdict, the view over the spans, findings and measurements written, and the verdict id.
 
     Raises:
-        ValueError: If a key read at entry is null, or the resolved F0 range is vacuous (N2) —
-            raised before the store is written to.
-        LookupError: If the ``source`` stream is absent.
+        ValueError: If a ``branch.*`` key a reached body needs is unmeasured. The message names the
+            key, on the recording it was asked about.
     """
-    stream_id, plain = resolve_stream(store, run_dir, source)
-    params = _required(config, hint, plain)
-    hnr_interval = config.get("phonation.hnr_floor_interval_db")
-    rms_interval = config.get("phonation.rms_floor_interval")
-    if hnr_interval is not None and rms_interval is not None:
-        gate_interval = "measured"
-    elif hnr_interval is None and rms_interval is None:
-        gate_interval = "unmeasured"
-    else:
-        gate_interval = "partial"
-    f0_min_hz, f0_max_hz = params["f0_min_hz"], params["f0_max_hz"]
-    window_s = params["periods_per_window"] / f0_min_hz
-    min_marks_s = _MARK_PERIODS / f0_min_hz
-    sr = int(plain.sampling_rate)
+    params = branch_params(config)
+
+    def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
+        """Bind the run directory the mode contract does not carry. Names match ``AlignMode``."""
+        return align_voice(task_family, store, hint, params, run_dir=run_dir)
+
+    def detect(store: ProvStore, params: BranchParams) -> Result:
+        """Bind the run directory the mode contract does not carry. Names match ``DetectMode``."""
+        return detect_voice(store, params, run_dir=run_dir)
+
+    mode, declared = mode_of(NODE, store, hint)
+    result = dispatch(NODE, store, params, hint, align=align, detect=detect)
+    tracks_absent = find_measurement(store, PHONATION_TRACKS) is None or read_tracks(store, run_dir) is None
 
     software = software_agent(store)
     activity = store.activity(
         node=NODE,
-        step="analyze",
+        step="phonation",
         parameters={
-            "f0_range_hz": [f0_min_hz, f0_max_hz],
-            "hop_s": params["hop_s"],
-            "window_s": window_s,
-            "min_marks_s": min_marks_s,
-            "period_doubling_factor": params["doubling"],
-            "gate_interval": gate_interval,
+            "signal": source,
+            "mode": mode,
+            "declared_task_family": declared,
+            "phonation_tracks": not tracks_absent,
+            "continuity_trace": find_measurement(store, CONTINUITY_TRACE) is not None,
         },
     )
     store.was_associated_with(activity, software)
-    store.used(activity, stream_id)
-    for name in ("energy_envelope", "silence"):
+    for name in (PHONATION_TRACKS, CONTINUITY_TRACE):
         measurement = find_measurement(store, name)
         if measurement is not None:
             store.used(activity, measurement.id)
-
-    spans = [
-        entity
-        for entity in live_entities(store, "span")
-        if entity.attributes.get("family") == _PHONATION_FAMILY and entity.extent is not None
-    ]
-    spans.sort(key=lambda entity: entity.extent or (0.0, 0.0))
-    for span in spans:
+    for span in amplitude_spans(live_entities(store, "span")):
         store.used(activity, span.id)
-    if not spans:
-        why = (
-            "no phonation span in the store; the detector that proposed them was retired on "
-            "2026-09-04 and VOICE is pending a rework onto consensus_taxonomy"
-        )
-        outcome = Outcome.FAIL
-        verdict_id, verdict = write_verdict(
-            store,
-            activity,
-            software,
-            node=NODE,
-            outcome=outcome,
-            kind=KIND,
-            why=why,
-            detail={
-                "spans_n": 0,
-                "phonation_s": 0.0,
-                "longest_span_s": 0.0,
-                "longest_span_criterion": None,
-                "production": {"voiced": 0, "unvoiced": 0, "mixed": 0},
-                "ambiguous_spans_n": 0,
-                "marks_skipped_short_n": 0,
-                "task_range": _TASK_NOT_EVALUATED
-                if config.get("voice.task_duration_ranges") is None
-                else _NO_TASK_DECLARED,
-                "gate_interval": gate_interval,
-                "flags": [],
-            },
-        )
-        return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)
 
-    mono = plain.waveform.mean(dim=0).numpy().astype(np.float64)
-    stream_times, stream_hnr = hnr_track(
-        plain,
-        f0_min_hz=f0_min_hz,
-        hop_s=params["hop_s"],
-        silence_threshold=params["silence_threshold"],
-        periods_per_window=params["periods_per_window"],
-    )
-    stream_rms = _rms_track(mono, sr, stream_times, window_s)
-    tracks = find_measurement(store, "phonation_tracks")
-    if tracks is None:
-        raise LookupError("phonation_tracks is absent; PREPROCESS did not write the F0 track")
-    npz = np.load(run_dir / "derivatives" / "phonation_tracks.npz")
-    stream_f0_times, stream_f0, stream_strength = npz["times_s"], npz["f0_hz"], npz["strength"]
-    track_times: list[np.ndarray] = []
-    track_rms: list[np.ndarray] = []
-    track_hnr: list[np.ndarray] = []
-    f0_times: list[np.ndarray] = []
-    f0_values: list[np.ndarray] = []
-    f0_strengths: list[np.ndarray] = []
-    span_ids: list[str] = []
-    mark_ids: list[str] = []
-    all_periods: list[float] = []
-    flags: list[str] = []
-    production_counts = {"voiced": 0, "unvoiced": 0, "mixed": 0}
-    phonation_s = 0.0
-    longest_span_s = 0.0
-    longest_span_criterion: str | None = None
-    ambiguous_spans_n = 0
-    marks_skipped_short_n = 0
+    span_ids = propose_spans(store, activity, software, result.components)
+    finding_ids = write_findings(store, activity, software, result.deviations, signal=source)
 
-    for span in spans:
-        assert span.extent is not None  # noqa: S101 — the comprehension above admits no other case
-        start, end = clamp_extent(span.extent, plain)
-        frames = (stream_times >= start) & (stream_times < end)
-        track_times.append(stream_times[frames])
-        track_rms.append(stream_rms[frames])
-        track_hnr.append(stream_hnr[frames])
-        pitch_frames = (stream_f0_times >= start) & (stream_f0_times < end)
-        f0_times.append(stream_f0_times[pitch_frames])
-        f0_values.append(stream_f0[pitch_frames])
-        f0_strengths.append(stream_strength[pitch_frames])
-
-        duration_s = float(span.attributes["duration_s"])
-        phonation_s += duration_s
-        if duration_s > longest_span_s:
-            longest_span_s = duration_s
-            longest_span_criterion = str(span.attributes["offset_criterion"])
-        production = str(span.attributes["production"])
-        production_counts[production] = production_counts.get(production, 0) + 1
-
-        measurable_s = end - start
-        marks: list[PeriodMark] = []
-        marks_attributes: dict[str, Any] = {"name": "period_marks", "signal": source}
-        if production == "unvoiced":
-            marks_attributes["unmeasured"] = _UNVOICED_SPAN
-        elif measurable_s < min_marks_s:
-            marks_attributes["unmeasured"] = _MARKS_UNMEASURED
-            marks_skipped_short_n += 1
-        else:
-            marks = period_marks(plain, start, end, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz)
-            marks_attributes["n"] = len(marks)
-            marks_attributes["marks"] = [
-                {"time_s": m.time_s, "period_s": m.period_s, "amplitude": m.amplitude} for m in marks
-            ]
-
-        onset_s = float(marks[0].time_s) if marks else start
-        span_id = store.entity(
-            prov_type="span",
-            extent=(onset_s, end),
-            attributes={
-                "family": _PHONATION_FAMILY,
-                "member": str(span.attributes["member"]),
-                "production": production,
-                "duration_s": duration_s,
-                "onset_kind": "period" if marks else "criterion",
-                "offset_kind": "criterion",
-                "offset_criterion": str(span.attributes["offset_criterion"]),
-                "marks_n": len(marks) if "n" in marks_attributes else None,
-            },
-        )
-        store.was_generated_by(span_id, activity)
-        store.was_attributed_to(span_id, software)
-        store.was_derived_from(span_id, span.id)
-        span_ids.append(span_id)
-
-        marks_id = store.entity(prov_type="measurement", extent=(onset_s, end), attributes=marks_attributes)
-        store.was_generated_by(marks_id, activity)
-        store.was_attributed_to(marks_id, software)
-        store.was_derived_from(marks_id, span_id)
-        mark_ids.append(marks_id)
-
-        if marks:
-            periods = [m.period_s for m in marks]
-            all_periods.extend(periods)
-            span_f0 = float(1.0 / np.median(periods))
-            if _alias_in_range(span_f0, factor=params["doubling"], f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz):
-                ambiguous_spans_n += 1
-                flags.append(f"period_doubling_alias in range for span at {onset_s:.3f}s")
-
-    (run_dir / "derivatives").mkdir(parents=True, exist_ok=True)
-    tracks_path = "derivatives/voice_tracks.npz"
-    np.savez(
-        run_dir / tracks_path,
-        times_s=np.concatenate(track_times),
-        rms=np.concatenate(track_rms),
-        hnr_db=np.concatenate(track_hnr),
-        f0_times_s=np.concatenate(f0_times),
-        f0_hz=np.concatenate(f0_values),
-        f0_strength=np.concatenate(f0_strengths),
-    )
-    tracks_id = store.entity(
-        prov_type="measurement",
-        extent=None,
-        attributes={
-            "name": "voice_tracks",
+    extents = [(proposal.start, proposal.end) for proposal in result.components]
+    phonation_s = sum(end - start for start, end in extents)
+    longest_span_s = max((end - start for start, end in extents), default=0.0)
+    outcome, why = _outcome(result.components, result.deviations, tracks_absent)
+    verdict_id, verdict = write_verdict(
+        store,
+        activity,
+        software,
+        node=NODE,
+        outcome=outcome,
+        kind=KIND,
+        why=why,
+        detail={
             "signal": source,
-            **path_attributes(tracks_path, run_dir),
-            "hop_s": params["hop_s"],
+            "mode": mode,
+            "declared_task_family": declared,
+            "done": result.done,
+            "spans_n": len(result.components),
+            "phonation_s": round(phonation_s, 3),
+            "longest_span_s": round(longest_span_s, 3),
+            "roles": sorted({proposal.role for proposal in result.components}),
+            "phonation_tracks": not tracks_absent,
+            "deviations": sorted({finding.name for finding in result.deviations if finding.kind == "deviation"}),
         },
     )
-    store.was_generated_by(tracks_id, activity)
-    store.was_attributed_to(tracks_id, software)
-
-    task_range, task_flag = _task_range(config, hint, longest_span_s)
-    if task_flag is not None:
-        flags.append(task_flag)
-
-    if flags:
-        outcome, why = Outcome.FLAG, "; ".join(flags)
-    else:
-        outcome, why = Outcome.PASS, "phonation spans measured; nothing contested"
-
-    detail: dict[str, Any] = {
-        "spans_n": len(spans),
-        "phonation_s": phonation_s,
-        "longest_span_s": longest_span_s,
-        "longest_span_criterion": longest_span_criterion,
-        "production": production_counts,
-        "ambiguous_spans_n": ambiguous_spans_n,
-        "marks_skipped_short_n": marks_skipped_short_n,
-        "task_range": task_range,
-        "gate_interval": gate_interval,
-        "flags": flags,
-    }
-    if all_periods:
-        detail["f0_median_hz"] = float(1.0 / np.median(all_periods))
-        detail["f0_stream"] = source
-    verdict_id, verdict = write_verdict(
-        store, activity, software, node=NODE, outcome=outcome, kind=KIND, why=why, detail=detail
-    )
-    view = tuple(span_ids + mark_ids + [tracks_id, verdict_id])
-    return NodeResult(verdict=verdict, view=view, verdict_entity_id=verdict_id)
+    return NodeResult(verdict=verdict, view=(*span_ids, *finding_ids, verdict_id), verdict_entity_id=verdict_id)
