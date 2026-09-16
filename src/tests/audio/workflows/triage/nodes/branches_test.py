@@ -45,8 +45,11 @@ from senselab.audio.workflows.triage.nodes.branches import (
     SpectrogramBlock,
     branch_params,
     content_coverage,
+    contest,
+    count,
     declared_duration_count,
     declared_task_family,
+    deviation,
     dispatch,
     duration,
     envelope_slice,
@@ -59,6 +62,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     lexical_runs,
     longest_monotone_run,
     max_windowed_spread,
+    measured,
     merge,
     mode_of,
     ngram_echo_fraction,
@@ -290,6 +294,83 @@ class TestWhatTheProposedSpanCarries:
         assert [store.get_entity(each).extent for each in ids] == [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]
 
 
+class TestAFindingNamesTheEvidenceItWasReadOff:
+    """An extent beside an entity is coincidence; ``wasDerivedFrom`` is the edge a reader follows."""
+
+    def test_an_assertion_carries_one_edge_per_source(self) -> None:
+        """A deviation is written beside the region it was read off, not merely over the same seconds."""
+        store = _store()
+        activity = store.activity(node="SPEECH", step=None, parameters={})
+        agent = store.agent(agent_type="software", version="test")
+        [entity_id] = write_findings(
+            store, activity, agent, [deviation("filler", 1.0, 2.0, "word-7", "word-8", text="um")], signal="plain"
+        )
+        assert set(store.derived_from(entity_id)) == {"word-7", "word-8"}
+
+    def test_a_measurement_carries_one_edge_per_source(self) -> None:
+        """The measurement path writes the same edges as the assertion path, not fewer."""
+        store = _store()
+        activity = store.activity(node="VOICE", step=None, parameters={})
+        agent = store.agent(agent_type="software", version="test")
+        [entity_id] = write_findings(
+            store, activity, agent, [measured("voiced_duration_s", 0.5, 3.0, 2.5, "span-4", "tracks-1")], signal="plain"
+        )
+        assert set(store.derived_from(entity_id)) == {"span-4", "tracks-1"}
+
+    def test_the_contested_span_is_the_edge_rather_than_an_attribute(self) -> None:
+        """``of_span`` was a field a reader had to know to look for; the edge is the record."""
+        store = _store()
+        activity = store.activity(node="AIRWAY", step=None, parameters={})
+        agent = store.agent(agent_type="software", version="test")
+        [entity_id] = write_findings(
+            store, activity, agent, [contest("span-9", (3.0, 4.0), "cough", "no_event")], signal="plain"
+        )
+        assert store.derived_from(entity_id) == ["span-9"]
+        assert "of_span" not in store.get_entity(entity_id).attributes
+
+    def test_the_folded_counts_measurement_derives_from_the_union_of_its_entries(self) -> None:
+        """One entity stands for every entry, so every entry's evidence has to be reachable from it."""
+        store = _store()
+        activity = store.activity(node="DDK", step=None, parameters={})
+        agent = store.agent(agent_type="software", version="test")
+        findings = [
+            count("syllables", 12, 12, "span-1", "envelope-1"),
+            count("realised_cycles", 4, None, "span-1", "wideband-1"),
+        ]
+        [entity_id] = write_findings(store, activity, agent, findings, signal="plain")
+        assert store.derived_from(entity_id) == ["span-1", "envelope-1", "wideband-1"], "union, first-seen order"
+
+    def test_a_finding_over_an_extent_naming_no_source_is_refused(self) -> None:
+        """The same rule ``propose_span`` holds a proposal to: an unrecorded relationship is lost."""
+        store = _store()
+        activity = store.activity(node="SPEECH", step=None, parameters={})
+        agent = store.agent(agent_type="software", version="test")
+        with pytest.raises(ValueError, match="names its evidence"):
+            write_findings(store, activity, agent, [deviation("truncation", 1.0, 2.0)], signal="plain")
+
+    def test_a_measurement_over_an_extent_naming_no_source_is_refused_too(self) -> None:
+        """The check is on the extent, not on the kind, so the measurement path cannot slip past it."""
+        store = _store()
+        activity = store.activity(node="VOICE", step=None, parameters={})
+        agent = store.agent(agent_type="software", version="test")
+        with pytest.raises(ValueError, match="names its evidence"):
+            write_findings(store, activity, agent, [measured("glide_semitones", 0.0, 1.0, 4.0)], signal="plain")
+
+    def test_a_finding_with_no_extent_is_accepted_without_a_source(self) -> None:
+        """An omission claims something is absent; there is no region to point at, so none is demanded.
+
+        The count beside it names one, so the exemption is on the missing extent rather than on the
+        kind: a source-bearing count in the same batch still reaches the store as an edge.
+        """
+        store = _store()
+        activity = store.activity(node="SPEECH", step=None, parameters={})
+        agent = store.agent(agent_type="software", version="test")
+        findings = [deviation("omission", None, None, expected="rainbow"), count("items", 0, 3, "word-2")]
+        assertion_id, counts_id = write_findings(store, activity, agent, findings, signal="plain")
+        assert store.derived_from(assertion_id) == []
+        assert store.derived_from(counts_id) == ["word-2"]
+
+
 class TestFindingsAreWrittenBesideSpansNotOntoThem:
     """``deviate`` and ``contest`` are assertions; counts fold into one ``counts`` measurement."""
 
@@ -299,9 +380,9 @@ class TestFindingsAreWrittenBesideSpansNotOntoThem:
         activity = store.activity(node="AIRWAY", step=None, parameters={})
         agent = store.agent(agent_type="software", version="test")
         findings = [
-            Finding("deviation", "off_task_extent", 1.0, 2.0, {"measure": "gap"}),
-            Finding("contest", "cough", 3.0, 4.0, {"of_span": "span-1", "reason": "no_event"}),
-            Finding("measure", "event_rate_hz", 0.0, 5.0, {"value": 1.2, "uncalibrated": True}),
+            Finding("deviation", "off_task_extent", 1.0, 2.0, {"measure": "gap"}, ("gap-1",)),
+            Finding("contest", "cough", 3.0, 4.0, {"reason": "no_event"}, ("span-1",)),
+            Finding("measure", "event_rate_hz", 0.0, 5.0, {"value": 1.2, "uncalibrated": True}, ("span-1",)),
             Finding("count", "events", None, None, {"found": 4, "declared": 5}),
             Finding("count", "declared_duration_s", None, None, {"found": 20.0, "declared": 20.0}),
         ]

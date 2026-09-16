@@ -854,20 +854,24 @@ ddk_span = proposer("ddk")
 quality_span = proposer("quality")
 
 
-def deviation(name: str, start: float | None, end: float | None, **evidence: object) -> Finding:
-    return Finding("deviation", name, start, end, dict(evidence))
+def deviation(
+    name: str, start: float | None, end: float | None, /, *derived_from: str, **evidence: object
+) -> Finding:
+    return Finding("deviation", name, start, end, dict(evidence), tuple(derived_from))
 
 
 def contest(span_id: str, extent: tuple[float, float], claim: str, reason: str) -> Finding:
-    return Finding("contest", claim, extent[0], extent[1], {"of_span": span_id, "reason": reason})
+    return Finding("contest", claim, extent[0], extent[1], {"reason": reason}, (span_id,))
 
 
-def count(name: str, found: object, declared: object) -> Finding:
-    return Finding("count", name, None, None, {"found": found, "declared": declared})
+def count(name: str, found: object, declared: object, *derived_from: str) -> Finding:
+    return Finding("count", name, None, None, {"found": found, "declared": declared}, tuple(derived_from))
 
 
-def measured(name: str, start: float | None, end: float | None, value: object, **covariates: object) -> Finding:
-    return Finding("measure", name, start, end, {"value": value, **dict(covariates)})
+def measured(
+    name: str, start: float | None, end: float | None, value: object, /, *derived_from: str, **covariates: object
+) -> Finding:
+    return Finding("measure", name, start, end, {"value": value, **dict(covariates)}, tuple(derived_from))
 
 
 def unviable(name: str, why: str) -> Finding:

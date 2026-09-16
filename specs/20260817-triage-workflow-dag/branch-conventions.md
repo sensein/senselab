@@ -414,3 +414,42 @@ renaming a member: there is no branch outcome to be misread, and "no span propos
 own family" says exactly what the old `FAIL` was trying to say. The population risk the paragraphs
 above name is unchanged by that — a detector keyed on voicing still finds fewer spans on disordered
 phonation — so the residue stays named in `branch-voice.md` and `branch-ddk.md`.
+
+## A finding names the evidence it was read off
+
+**Added 2026-09-16.** `write_findings` used to write an assertion or a measurement with
+`wasGeneratedBy` and `wasAttributedTo` and no `wasDerivedFrom`. A deviation therefore sat beside the
+word or span it concerned by **extent coincidence only**: a reader looking at
+`off_task_extent (1.8, 1.9)` had to re-derive which word that was by comparing floats, and any
+re-segmentation upstream silently broke the association without breaking anything that would be
+noticed. This is the same class of defect as a field that never survived the store — the information
+existed at the call site and was discarded on the way in.
+
+`Finding` now carries `derived_from`, the four constructors take it as a varargs parameter in the
+style `proposer`/`Proposal` already use, and `write_findings` writes one edge per source on both the
+assertion and the measurement paths.
+
+**The rule is keyed on the extent, not on the kind.** A finding carrying both `start` and `end` must
+name at least one source and `write_findings` raises when it does not, exactly as `propose_span`
+raises for a proposal. A finding with no extent may name none, because there is no region to point
+at: a `count` is a tally, and a per-recording `deviation("omission", None, None, expected=token)`
+claims something is **absent** — the whole content of the finding is that no entity is there. Those
+still name sources where honest ones exist (a count names what it counted), but nothing demands it.
+
+**The folded `counts` measurement derives from the union of its entries' sources, in first-seen
+order.** One entity stands for every count in the batch, so every entry's evidence has to be
+reachable from it; any narrower choice — the first entry's sources, the last entry's — leaves some
+entries' evidence unreachable while the entity still claims to represent them.
+
+**Two attributes became edges.** `contest` buried the contested span in `of_span` and AIRWAY's
+`lexical_intrusions` buried the intruding word in `word_id`. Both were the derivation written as a
+field a reader had to know to look for. The attribute was removed in each case rather than kept
+beside the edge: pre-alpha, rename and replace outright.
+
+**What the constraint is at each call site: name only honest evidence.** The source is the entity
+the branch actually read that region off — the word span, the carrier span, the track measurement —
+never something that merely happens to be in scope. Where an extent is computed rather than read off
+an entity, the derivation is the nearest thing that *is* evidence: AIRWAY's `declared_relax_period`
+covers `(0.0, relax_s)`, bounds that come from the expectation table, and derives from the recording
+stream, because the claim is about the recording's own leading seconds. `stream_ids` exists for
+exactly that, beside `stream_extent`, so a whole-recording finding has a real entity to name.

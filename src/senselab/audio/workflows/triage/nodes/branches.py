@@ -6,8 +6,9 @@ task of any other kind and evaluates nothing. :func:`dispatch` picks between the
 task family and enforces what each mode may return.
 
 Both modes write by ``propose`` only: a branch mints spans in its own family and never edits a span
-another node proposed, so ``wasDerivedFrom`` is the whole record of where an extent came from and
-:func:`propose_span` refuses a proposal that carries none.
+another node proposed, so ``wasDerivedFrom`` is the whole record of where an extent came from.
+:func:`propose_span` refuses a proposal that carries none, and :func:`write_findings` refuses a
+finding that carries an extent and names none.
 
 The design, its measurements and what each operating point owes are in
 ``specs/20260817-triage-workflow-dag/expected-patterns.md``.
