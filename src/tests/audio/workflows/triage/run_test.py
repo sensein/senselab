@@ -491,15 +491,25 @@ class TestConditionalExecution:
         assert result.ran["AIRWAY"] is RunState.SKIPPED
         assert result.ran["SPEECH"] is RunState.COMPLETED
 
-    def test_a_branch_with_no_node_is_recorded_and_never_crashes_the_run(
+    def test_naming_ddk_in_an_execution_set_now_runs_the_node(
         self,
         graph: Callable[..., list[str]],
         config: TriageConfig,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Naming DDK in an execution set is a record, not a KeyError; the graph finishes around it."""
-        calls = graph(routed=("SPEECH",))
+        """DDK has a node, so routing naming it runs it and it concludes for itself.
+
+        This test used to pin the opposite — ``SKIPPED`` carrying ``NO_NODE`` — because
+        ``nodes/ddk.py`` did not exist and ``run.py``'s branch table named three of the four
+        branches the vocabulary declares. The table now names all four, so the ``call is None`` arm
+        is unreachable from :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES` and what is
+        left to pin is that the branch runs and that no note is recorded for it. The arm itself, and
+        :data:`~senselab.audio.workflows.triage.run.NO_NODE`, stay: a branch added to the vocabulary
+        ahead of its node is still a record rather than a ``KeyError``, which is what
+        ``test_every_branch_the_vocabulary_names_gets_an_outcome`` covers.
+        """
+        graph(routed=("SPEECH",))
         real = run_module.routing
 
         def _routes_ddk(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -508,12 +518,33 @@ class TestConditionalExecution:
 
         monkeypatch.setattr(run_module, "routing", _routes_ddk)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
-        assert "DDK" not in calls
-        assert result.ran["DDK"] is RunState.SKIPPED
-        assert result.nodes["DDK"].note == run_module.NO_NODE
+        assert result.ran["DDK"] is RunState.COMPLETED
+        assert result.nodes["DDK"].note is None
         assert result.file_verdict is not None
         log = json.loads((result.run_dir / "run.json").read_text())
-        assert log["notes"]["DDK"] == run_module.NO_NODE
+        assert log["notes"].get("DDK") is None
+        store = ProvStore.read_jsonl(result.store_path)
+        concluded = [e for e in store.entities("verdict") if e.attributes["node"] == "DDK"]
+        assert len(concluded) == 1
+        assert concluded[0].attributes["kind"] == "ddk"
+        assert not any(reason.node == "DDK" and "never ran" in reason.why for reason in result.file_verdict.reasons)
+
+    def test_a_branch_with_no_node_is_still_recorded_rather_than_crashing(
+        self,
+        graph: Callable[..., list[str]],
+        config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The ``NO_NODE`` arm survives its last real occupant: a fifth branch is a record."""
+        monkeypatch.setattr(run_module, "BRANCHES", (*BRANCHES, "FUTURE"))
+        graph(routed=("SPEECH",))
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.ran["FUTURE"] is RunState.SKIPPED
+        assert result.nodes["FUTURE"].note == run_module.NO_NODE
+        assert result.file_verdict is not None
+        log = json.loads((result.run_dir / "run.json").read_text())
+        assert log["notes"]["FUTURE"] == run_module.NO_NODE
 
     def test_every_branch_the_vocabulary_names_gets_an_outcome(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path

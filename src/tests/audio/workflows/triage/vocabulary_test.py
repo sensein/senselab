@@ -473,7 +473,13 @@ class TestABranchThatNeverRanIsNotOneThatFailed:
         assert any(reason.node == "SPEECH" for reason in folded.reasons)
 
     def test_a_routed_branch_with_no_node_is_reported_rather_than_ignored(self) -> None:
-        """DDK routes on content and no node implements it; the graph must say so, not pass quietly."""
+        """A routed branch that left no verdict flags the file, whatever silenced it.
+
+        DDK is the name here because it was the only branch with no node when this was written. It
+        has one now, so the state the fold is handed is the general one: the branch was asked to
+        run and concluded nothing — skipped, errored, or completed without a verdict. The fold must
+        say so rather than pass quietly, and that is what is pinned.
+        """
         folded = fold_file_verdict(
             [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
             branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED, DDK=ROUTED),
