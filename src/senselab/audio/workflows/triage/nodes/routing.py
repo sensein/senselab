@@ -3,7 +3,9 @@
 It measures nothing and classifies nothing. It evaluates the family taxonomy ruleset over the store
 as TAXONOMY left it, records that reading as the ``ruleset_routing`` measurement, and turns it into
 one ``branch_decision`` per branch. A declared task always adds a route to its own branch; the
-declaration never rewrites the reading, never removes a branch and never relaxes a threshold. Its
+declaration never rewrites the reading, never removes a branch and never relaxes a threshold. A
+branch named in ``routing.declaration_required`` runs only when the declaration names it, and the
+decision records the withheld ruleset route rather than overwriting it. Its
 verdict is always a ``pass``: this node reaches no conclusion about the recording, and an empty
 execution set is recorded on the decisions for VERDICT to read rather than flagged here.
 
@@ -141,17 +143,40 @@ def _route_states(attributes: dict[str, Any]) -> dict[str, str]:
     return states
 
 
-def _why(state: str, forced_by_declaration: bool) -> str:
+def _why(state: str, forced_by_declaration: bool, withheld_by_gate: bool) -> str:
     """One decision's reason, in controlled vocabulary.
 
     Args:
         state: The branch's route state, one of :data:`BRANCH_ROUTE_STATES`.
         forced_by_declaration: Whether the branch runs only because the declaration named it.
+        withheld_by_gate: Whether ``routing.declaration_required`` withheld the ruleset's route.
 
     Returns:
         The reason.
     """
+    if withheld_by_gate:
+        return f"route_{state}_withheld_pending_declaration"
     return f"route_{state}_forced_by_declaration" if forced_by_declaration else f"route_{state}"
+
+
+def _declaration_required(config: TriageConfig) -> tuple[frozenset[str], list[str]]:
+    """The branches the declaration gates, and the names in the key that are not branches.
+
+    Args:
+        config: The triage configuration, read for ``routing.declaration_required``.
+
+    Returns:
+        The gated branches, and the configured names this graph does not route to, in order and
+        each once.
+    """
+    gated: set[str] = set()
+    bad: dict[str, None] = {}
+    for name in config.get("routing.declaration_required") or ():
+        if str(name) in BRANCHES:
+            gated.add(str(name))
+        else:
+            bad.setdefault(str(name), None)
+    return frozenset(gated), list(bad)
 
 
 def routing(
@@ -169,6 +194,12 @@ def routing(
     it. The two sources are additive in one direction only: a declaration adds a route and removes
     none.
 
+    ``routing.declaration_required`` is the one exception, and it runs the other way: a branch it
+    names runs **only** when the declaration names that branch, so the ruleset alone never routes it.
+    The withheld route is recorded as ``withheld_by_gate`` beside an unaltered ``route_state``,
+    because what the ruleset thought is the measurement the gate exists to argue about. A branch the
+    key does not name keeps the additive behaviour exactly.
+
     ``route_state`` is a closed vocabulary: every value written is in
     :data:`~senselab.audio.workflows.triage.vocabulary.BRANCH_ROUTE_STATES`, and it describes the
     content reading alone — a declared route never rewrites it.
@@ -179,7 +210,8 @@ def routing(
             holds ADMIT's ``recording`` stream, whose path carries the declared task.
         source: The stream the pass is running over; ``None`` means the conditioned stream. Recorded
             on every decision so a second pass over another stream stays tellable apart.
-        config: The triage configuration, read for ``taxonomy.ruleset`` and ``routing.hint_branch_map``.
+        config: The triage configuration, read for ``taxonomy.ruleset``, ``routing.hint_branch_map``
+            and ``routing.declaration_required``.
         hint: What the recording was declared to contain, if anything.
         run_dir: The run directory the store's sidecar paths are relative to. ROUTING writes no
             sidecars of its own; the reader resolves the evidence's against it.
@@ -194,6 +226,7 @@ def routing(
     """
     stream = source or _STREAM
     tags_by_branch, unmapped, bad_values = _map_tags(_declared_tags(hint), config.get("routing.hint_branch_map") or {})
+    gated, bad_required = _declaration_required(config)
 
     software = software_agent(store)
     evaluation = store.activity(
@@ -227,7 +260,8 @@ def routing(
         by_ruleset = state == ROUTED
         by_declaration = branch in by_family or bool(hint_tags)
         forced_by_declaration = by_declaration and not by_ruleset
-        will_run = by_ruleset or forced_by_declaration
+        withheld_by_gate = branch in gated and not by_declaration and by_ruleset
+        will_run = by_declaration if branch in gated else (by_ruleset or forced_by_declaration)
 
         decision_id = store.entity(
             prov_type="branch_decision",
@@ -240,12 +274,15 @@ def routing(
                 "flag_gates": list((attributes.get("flags") or {}).get(branch) or ()),
                 "declared": by_declaration,
                 "forced_by_declaration": forced_by_declaration,
+                "withheld_by_gate": withheld_by_gate,
+                "declaration_required": branch in gated,
+                "bad_declaration_required": list(bad_required),
                 "declared_family": declared_family,
                 "declared_by_family": branch in by_family,
                 "hint_tags": hint_tags,
                 "unmapped_tags": unmapped,
                 "bad_map_values": bad_values,
-                "why": _why(state, forced_by_declaration),
+                "why": _why(state, forced_by_declaration, withheld_by_gate),
                 "stream": stream,
             },
         )

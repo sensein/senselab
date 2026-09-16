@@ -246,11 +246,15 @@ def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list
             will_run=bool(entity.attributes["will_run"]),
             route_state=str(entity.attributes["route_state"]),
             forced_by_declaration=bool(entity.attributes["forced_by_declaration"]),
+            withheld_by_gate=bool(entity.attributes.get("withheld_by_gate", False)),
             declared=bool(entity.attributes["declared"]),
             hint_tags=tuple(str(tag) for tag in entity.attributes.get("hint_tags") or ()),
             bad_map_values={
                 str(tag): str(value) for tag, value in (entity.attributes.get("bad_map_values") or {}).items()
             },
+            bad_declaration_required=tuple(
+                str(name) for name in entity.attributes.get("bad_declaration_required") or ()
+            ),
         )
         ids.append(entity.id)
     return decisions, ids

@@ -138,6 +138,7 @@ _VERDICT = "VERDICT"
 _ROUTING = "routing"
 
 BAD_MAP_VALUES = "routing.hint_branch_map names a branch this graph does not route to"
+BAD_DECLARATION_REQUIRED = "routing.declaration_required names a branch this graph does not route to"
 
 UNEXPLAINED_CONTENT = (
     "no branch routed and the recording was not measurably empty; the ruleset could not account for what is in it"
@@ -219,19 +220,27 @@ class BranchDecision:
             hint tag the map resolves. A claim, whether or not it changed the outcome.
         forced_by_declaration: Whether the declaration added it, which is ``declared`` and not
             content-routed. This is the route the declaration created; ``declared`` alone is not.
+        withheld_by_gate: Whether ``routing.declaration_required`` names this branch and nothing
+            declared it, so the ruleset's own route did not become a run. ``route_state`` still says
+            what the ruleset thought, so the two together read as "the ruleset would have routed
+            this, and the declaration gate withheld it".
         hint_tags: The declared tags naming this branch, when a hint supplied any the map resolves.
         bad_map_values: ``routing.hint_branch_map`` entries whose value is not a branch, as
             ``{tag: value}``. A property of the configuration, so every decision carries the same
             one.
+        bad_declaration_required: The ``routing.declaration_required`` names that are not branches.
+            A property of the configuration in the same way, so every decision carries the same one.
     """
 
     branch: str
     will_run: bool
     route_state: str
     forced_by_declaration: bool
+    withheld_by_gate: bool = False
     declared: bool = False
     hint_tags: tuple[str, ...] = ()
     bad_map_values: dict[str, str] = field(default_factory=dict)
+    bad_declaration_required: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -361,6 +370,8 @@ class FileVerdict:
         bad_map_values: ``routing.hint_branch_map`` entries whose value is not a branch. A
             one-character typo under-claims every file in a run, so it is named here rather than left
             in the decisions for a reader to notice.
+        bad_declaration_required: The ``routing.declaration_required`` names that are not branches,
+            surfaced here for the same reason: a typo there gates nothing and is otherwise silent.
     """
 
     triage: Triage
@@ -381,6 +392,7 @@ class FileVerdict:
     ran: dict[str, RunState] = field(default_factory=dict)
     branches: dict[str, dict[str, Any]] = field(default_factory=dict)
     bad_map_values: dict[str, str] = field(default_factory=dict)
+    bad_declaration_required: list[str] = field(default_factory=list)
 
 
 def _found(reported: bool, spans_n: int) -> str:
@@ -585,8 +597,11 @@ def fold_file_verdict(
     )
 
     bad_map_values: dict[str, str] = {}
+    bad_required: dict[str, None] = {}
     for recorded in branch_decisions.values():
         bad_map_values.update(recorded.bad_map_values)
+        for name in recorded.bad_declaration_required:
+            bad_required.setdefault(name, None)
 
     reasons = list(node_verdicts)
     if ran.get(_PREPROCESS) is RunState.ERRORED:
@@ -610,6 +625,9 @@ def fold_file_verdict(
     if bad_map_values:
         named = ", ".join(f"{tag}: {value}" for tag, value in sorted(bad_map_values.items()))
         reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{BAD_MAP_VALUES}: {named}"))
+    if bad_required:
+        named = ", ".join(sorted(bad_required))
+        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{BAD_DECLARATION_REQUIRED}: {named}"))
     if hint_claims is None:
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, UNREAD_DECLARATION))
     if route_state == UNEXPLAINED:
@@ -658,6 +676,7 @@ def fold_file_verdict(
         name: {
             "will_run": decision.will_run,
             "forced_by_declaration": decision.forced_by_declaration,
+            "withheld_by_gate": decision.withheld_by_gate,
             "route_state": decision.route_state,
             "conformance": by_branch[name].conformance if name in by_branch else None,
         }
@@ -697,4 +716,5 @@ def fold_file_verdict(
         ran=dict(ran),
         branches=branch_view,
         bad_map_values=bad_map_values,
+        bad_declaration_required=sorted(bad_required),
     )

@@ -11,6 +11,7 @@ from dataclasses import replace
 from typing import Sequence
 
 from senselab.audio.workflows.triage.vocabulary import (
+    BAD_DECLARATION_REQUIRED,
     BAD_MAP_VALUES,
     DECLINED,
     ROUTED,
@@ -651,6 +652,34 @@ class TestAConfigTypoIsNamedNotSwallowed:
         assert folded.discard_ground is None
         assert folded.bad_map_values == {"cough": "AIRWY"}
         assert any(BAD_MAP_VALUES in reason.why and "AIRWY" in reason.why for reason in folded.reasons)
+
+    def test_a_bad_declaration_required_name_flags_where_the_file_would_otherwise_discard(self) -> None:
+        """The same failure on the gate key: it gates nothing and is otherwise silent."""
+        decisions = _all_declined()
+        decisions["AIRWAY"] = replace(decisions["AIRWAY"], bad_declaration_required=("DDKK",))
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=decisions,
+            ran={},
+            hint_claims={},
+            route_state="empty",
+        )
+        assert folded.triage is Triage.FLAG
+        assert folded.discard_ground is None
+        assert folded.bad_declaration_required == ["DDKK"]
+        assert any(BAD_DECLARATION_REQUIRED in reason.why and "DDKK" in reason.why for reason in folded.reasons)
+
+    def test_a_well_formed_declaration_required_flags_nothing(self) -> None:
+        """The control: the same recording discards when the gate key is sound."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="empty",
+        )
+        assert folded.bad_declaration_required == []
+        assert folded.triage is Triage.DISCARD
 
     def test_a_well_formed_map_flags_nothing(self) -> None:
         """The control: the same recording discards when the map is sound."""
