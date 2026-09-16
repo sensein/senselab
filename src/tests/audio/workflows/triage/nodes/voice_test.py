@@ -1,12 +1,14 @@
-"""VOICE — the phonation spans PREPROCESS detected, measured. There is no residual.
+"""VOICE under propose-only: it mints its own spans from the evidence it routes on.
 
-Praat is faked here: this module's subject is what VOICE does with a span it was handed, and the
-phonation task's own tests own where Praat's refusals lie. The spans are seeded directly, which is
-now the only way they exist at all: the detector that used to propose them was retired on
-2026-09-04, so in production VOICE finds no span and says so.
+Nothing here loads a model or calls Praat. The store surface is built directly — amplitude spans,
+``phonation_tracks`` and ``continuity_trace`` — because that surface *is* the branch's subject, and
+building it by hand is what lets a test say which of the three qualifiers a recording failed.
+
+What is pinned: that a held vowel yields a ``task_extent`` span of family ``voice``; that the mode
+is selected by the declared family and both arms are reachable; that an absent instrument is
+``UNDETERMINED`` rather than a verdict about the speaker; that every proposal names its evidence;
+and that a genuinely aperiodic recording no longer errors the node.
 """
-
-from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -14,600 +16,888 @@ from typing import Any
 import numpy as np
 import pytest
 
-import senselab.audio.workflows.triage.nodes.voice as voice_module
-from senselab.audio.data_structures import Audio, AudioHints
-from senselab.audio.tasks.phonation import PeriodMark
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.nodes.common import PITCH_NARROWING_KEYS, find_measurements
-from senselab.audio.workflows.triage.nodes.routing import routing
-from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
-from senselab.audio.workflows.triage.nodes.voice import voice
+from senselab.audio.workflows.triage.nodes import voice as voice_module
+from senselab.audio.workflows.triage.nodes.branches import (
+    PARAM_SECTION,
+    UNDETERMINED,
+    Expectation,
+    Pattern,
+    branch_params,
+    mode_of,
+)
+from senselab.audio.workflows.triage.nodes.common import live_entities
+from senselab.audio.workflows.triage.nodes.voice import (
+    COUNT_IN,
+    PHONATION_ROLE,
+    TASK_EXTENT,
+    align_voice,
+    detect_voice,
+    qualifying_phonation,
+    read_evidence,
+    voice,
+)
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.nodes.conftest import seed_preprocess_store
+from senselab.utils.prov_store import ProvStore
 
-FAKE_F0 = 100.0
-"""The fake point process's rate. Chosen against the faked derived range so neither doubling alias
-lands inside it: 200 Hz is above its maximum and 50 Hz is below its minimum, which leaves the
-period-doubling row inert unless a test asks for a range that makes it fire."""
+HOP_S = 0.01
+"""PREPROCESS's own phonation-track hop, which the fixtures build their frame grid on."""
 
-_SEED_DURATION_S = 8.0
+CONTINUITY_RATE = 100.0
+"""The continuity trace's sampling rate in the fixtures, in Hz."""
 
+MPT_STEM = "sub-abc_ses-1_task-maximum-phonation-time"
+PROLONGED_STEM = "sub-abc_ses-1_task-prolonged-vowel"
+GLIDE_UP_STEM = "sub-abc_ses-1_task-glides-low-to-high"
+GLIDE_DOWN_STEM = "sub-abc_ses-1_task-glides-high-to-low"
+COUGH_STEM = "sub-abc_ses-1_task-voluntary-cough"
+LOUDNESS_STEM = "sub-abc_ses-1_task-loudness"
+CAPEV_STEM = "sub-abc_ses-1_task-cape-v-sentences"
+HARVARD_STEM = "sub-abc_ses-1_task-harvard-sentences-list"
 
-def _fake_hnr_track(
-    audio: Audio, *, f0_min_hz: float, hop_s: float, silence_threshold: float, periods_per_window: float
-) -> tuple[np.ndarray, np.ndarray]:
-    """A constant 20 dB HNR track on the hop grid, spanning the audio."""
-    n = int(round(audio.waveform.shape[-1] / audio.sampling_rate / hop_s))
-    times = (np.arange(n) + 0.5) * hop_s
-    return times, np.full(n, 20.0)
-
-
-def _seed_phonation_tracks(store: ProvStore, tmp_path: Path, *, hop_s: float, phonation: list[tuple[Any, ...]]) -> None:
-    """Write the ``phonation_tracks`` derivative VOICE reads instead of tracking F0 itself.
-
-    ``FAKE_F0`` at voiced strength inside the seeded phonation extents and nothing outside them, so
-    the track agrees with the spans this store already carries; a constant track over the whole file
-    would instead have TAXONOMY derive one span spanning the recording.
-    """
-    n = int(round(_SEED_DURATION_S / hop_s))
-    times = (np.arange(n) + 0.5) * hop_s
-    voiced = np.zeros(n, dtype=bool)
-    aperiodic = np.zeros(n, dtype=bool)
-    for entry in phonation:
-        start, end = float(entry[0]), float(entry[1])
-        frames = (times >= start) & (times < end)
-        # An "unvoiced" span carries no periodicity, so its frames sit below any strength floor
-        # rather than reading as voiced with an F0.
-        if len(entry) > 2 and str(entry[2]) == "unvoiced":
-            aperiodic |= frames
-        else:
-            voiced |= frames
-    (tmp_path / "derivatives").mkdir(parents=True, exist_ok=True)
-    # Formants are NaN throughout — PREPROCESS's own representation for "Praat placed none" — so a
-    # reader gets the full array shape without this fixture inventing formant values.
-    absent_formants = {f"f{order}_hz": np.full(n, np.nan) for order in (1, 2, 3, 4)}
-    absent_formants.update({f"f{order}_bw_hz": np.full(n, np.nan) for order in (1, 2, 3, 4)})
-    np.savez(
-        tmp_path / "derivatives" / "phonation_tracks.npz",
-        times_s=times,
-        f0_hz=np.where(voiced, FAKE_F0, np.nan),
-        strength=np.where(voiced, 0.9, np.where(aperiodic, 0.1, 0.0)),
-        formant_times_s=times,
-        **absent_formants,
-    )
-    agent = store.agent(agent_type="software", version="senselab test-seed")
-    activity = store.activity(node="PREPROCESS", step="phonation_tracks", parameters={"hop_s": hop_s})
-    store.was_associated_with(activity, agent)
-    entity_id = store.entity(
-        prov_type="measurement",
-        extent=None,
-        attributes={"name": "phonation_tracks", "signal": "preemphasised", "hop_s": hop_s},
-    )
-    store.was_generated_by(entity_id, activity)
-    store.was_attributed_to(entity_id, agent)
+MEASURED = {
+    "production_min_s": 0.5,
+    "voiced_strength_min": 0.5,
+    "voiced_fraction_min": 0.6,
+    "f0_spread_window_s": 1.0,
+    "f0_spread_max_semitones": 4.0,
+    "continuity_min": 0.8,
+    "monotone_tolerance_semitones": 1.0,
+    "dominant_segment_min_fraction": 0.5,
+}
+"""Operating points supplied by the fixture. The packaged ones are null by design."""
 
 
-def _fake_period_marks(
-    audio: Audio, start_s: float, end_s: float, *, f0_min_hz: float, f0_max_hz: float
-) -> list[PeriodMark]:
-    """Marks every ``1 / FAKE_F0`` seconds inside the queried extent."""
-    period = 1.0 / FAKE_F0
-    times = np.arange(start_s, end_s - period, period)
-    return [PeriodMark(time_s=float(t), period_s=period, amplitude=0.1) for t in times]
-
-
-FAKE_DERIVED_RANGE = (75.0, 190.0)
-"""What the faked derivation returns, standing in for what Praat narrows off the recording."""
-
-
-def _fake_derive_f0_range(
-    audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float, **coefficients: float
-) -> tuple[float, float]:
-    """The derivation, faked to one range so every assertion below has fixed numbers.
-
-    Pins the call shape: dropping the coefficients at the real call site, or misspelling one, fails
-    here rather than passing silently.
-    """
-    assert set(coefficients) == set(PITCH_NARROWING_KEYS), (
-        f"voice must pass every narrowing coefficient; got {sorted(coefficients)}"
-    )
-    return FAKE_DERIVED_RANGE
-
-
-@pytest.fixture(autouse=True)
-def praat_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Praat is deterministic but slow; the phonation task's tests own the real calls."""
-    monkeypatch.setattr(voice_module, "hnr_track", _fake_hnr_track)
-    monkeypatch.setattr(voice_module, "period_marks", _fake_period_marks)
-    monkeypatch.setattr(voice_module, "derive_f0_range", _fake_derive_f0_range)
-
-
-@pytest.fixture
-def voice_config(tmp_path: Path) -> TriageConfig:
-    """The packaged configuration. The F0 range is the recording's own, derived not declared."""
-    return load_triage_config()
-
-
-def _override(tmp_path: Path, text: str) -> TriageConfig:
-    """The packaged configuration with one partial YAML deep-merged over it.
+def params(**overrides: Any) -> Any:  # noqa: ANN401
+    """The operating points, over a configuration carrying fixture values.
 
     Args:
-        tmp_path: Where the override file is written.
-        text: The partial YAML.
+        **overrides: ``branch.*`` keys, spelled without the ``p_`` prefix.
 
     Returns:
-        The merged configuration.
+        The record.
     """
-    path = tmp_path / "voice-override.yaml"
-    path.write_text(text)
-    return load_triage_config(path)
+    return branch_params(config(**overrides))
 
 
-def _seed_voice_store(
-    store: ProvStore,
+def config(**overrides: Any) -> TriageConfig:  # noqa: ANN401
+    """A configuration whose ``branch`` section carries the fixture's measured values.
+
+    Args:
+        **overrides: ``branch.*`` keys to set or clear.
+
+    Returns:
+        The configuration.
+    """
+    packaged = load_triage_config()
+    merged = dict(packaged.values)
+    merged[PARAM_SECTION] = {**packaged.values[PARAM_SECTION], **MEASURED, **overrides}
+    return TriageConfig(packaged.name, packaged.version, packaged.config_hash, merged)
+
+
+def _tracks(
+    duration_s: float,
+    voiced: list[tuple[float, float]],
+    *,
+    f0_hz: float | list[tuple[float, float, float]] = 120.0,
+    strength: float = 0.9,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A phonation-track grid: zero strength everywhere but the voiced intervals.
+
+    Args:
+        duration_s: How long the grid runs.
+        voiced: The intervals the tracker found F0 inside.
+        f0_hz: A constant F0, or ``(start, end, hz)`` triples placing a ramp's endpoints.
+        strength: The pitch strength inside the voiced intervals.
+
+    Returns:
+        ``(times_s, f0_hz, strength)``.
+    """
+    times = np.arange(0.0, duration_s, HOP_S)
+    f0 = np.zeros(times.size)
+    power = np.zeros(times.size)
+    for start, end in voiced:
+        inside = (times >= start) & (times < end)
+        power[inside] = strength
+        f0[inside] = f0_hz if isinstance(f0_hz, float) else 0.0
+    if not isinstance(f0_hz, float):
+        for start, end, hz in f0_hz:
+            inside = (times >= start) & (times < end)
+            f0[inside] = np.linspace(hz, hz, int(inside.sum())) if inside.sum() else 0.0
+    return times, f0, power
+
+
+def _glide_tracks(
+    duration_s: float, extent: tuple[float, float], low_hz: float, high_hz: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A monotone F0 sweep from ``low_hz`` to ``high_hz`` across ``extent``.
+
+    Args:
+        duration_s: How long the grid runs.
+        extent: The interval the sweep occupies.
+        low_hz: F0 at the sweep's start.
+        high_hz: F0 at its end.
+
+    Returns:
+        ``(times_s, f0_hz, strength)``.
+    """
+    times = np.arange(0.0, duration_s, HOP_S)
+    f0 = np.zeros(times.size)
+    power = np.zeros(times.size)
+    inside = (times >= extent[0]) & (times < extent[1])
+    power[inside] = 0.9
+    f0[inside] = np.linspace(low_hz, high_hz, int(inside.sum()))
+    return times, f0, power
+
+
+def _wobble_tracks(
+    duration_s: float, extent: tuple[float, float], centre_hz: float, semitones_peak: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """An F0 oscillating by ``semitones_peak`` within every window, which is real instability.
+
+    A slow sweep is deliberately *not* this: ``max_windowed_spread`` takes the worst local spread so
+    a drift across a long production does not read as unsteady. Only fast variation does.
+
+    Args:
+        duration_s: How long the grid runs.
+        extent: The interval the phonation occupies.
+        centre_hz: The F0 the oscillation is centred on.
+        semitones_peak: The oscillation's amplitude, in semitones.
+
+    Returns:
+        ``(times_s, f0_hz, strength)``.
+    """
+    times = np.arange(0.0, duration_s, HOP_S)
+    f0 = np.zeros(times.size)
+    power = np.zeros(times.size)
+    inside = (times >= extent[0]) & (times < extent[1])
+    power[inside] = 0.9
+    wobble = semitones_peak * np.sin(2.0 * np.pi * 4.0 * times[inside])
+    f0[inside] = centre_hz * np.power(2.0, wobble / 12.0)
+    return times, f0, power
+
+
+def seed(
     tmp_path: Path,
     *,
-    phonation: list[tuple[Any, ...]],
-    speech_spans: list[tuple[float, float]] | None = None,
-    airway_labelled: list[tuple[float, float]] | None = None,
-    hop_s: float = 0.01,
-) -> None:
-    """Seed the store VOICE reads: PREPROCESS's streams and phonation spans, plus other branches' work.
-
-    The phonation spans go through the shared ``seed_preprocess_store``, so this module reads the one
-    span schema PREPROCESS actually writes rather than a private copy of it.
-
-    Args:
-        store: The store to seed.
-        tmp_path: Where the seeded stream and sidecars are written.
-        phonation: ``[(start, end, production), ...]`` or ``[(start, end, production, member), ...]``.
-        speech_spans: SPEECH's spans, written by a ``SPEECH`` activity. Present only so a test can
-            show that they remove nothing.
-        airway_labelled: Spans AIRWAY labelled, each with its ``label`` assertion. Same purpose.
-        hop_s: The analysis grid PREPROCESS stated these spans on. VOICE reads the same grid from
-            ``phonation_spans.hop_s``, so a value the packaged configuration does not declare would
-            describe a store the configuration contradicts.
-
-    Raises:
-        ValueError: If ``hop_s`` is not the grid ``phonation_spans.hop_s`` declares.
-    """
-    declared_hop_s = load_triage_config().require("phonation_spans.hop_s")
-    if hop_s != declared_hop_s:
-        raise ValueError(
-            f"hop_s {hop_s} is not phonation_spans.hop_s {declared_hop_s}; the store would be inconsistent"
-        )
-    seed_preprocess_store.__wrapped__(tmp_path)(store, duration_s=_SEED_DURATION_S, phonation=phonation)
-    _seed_phonation_tracks(store, tmp_path, hop_s=hop_s, phonation=phonation)
-
-    agent = store.agent(agent_type="software", version="senselab test-seed")
-    if speech_spans:
-        speech = store.activity(node="SPEECH", step="seed-voice", parameters={})
-        store.was_associated_with(speech, agent)
-        for start, end in speech_spans:
-            span_id = store.entity(prov_type="span", extent=(start, end), attributes={"source": "words"})
-            store.was_generated_by(span_id, speech)
-    if airway_labelled:
-        airway = store.activity(node="AIRWAY", step="seed-voice", parameters={})
-        store.was_associated_with(airway, agent)
-        for start, end in airway_labelled:
-            span_id = store.entity(
-                prov_type="span",
-                extent=(start, end),
-                attributes={"peak_over_floor_db": 30.0, "k_db": 18.0, "signal": "preemphasised", "merged_proposals": 1},
-            )
-            store.was_generated_by(span_id, airway)
-            label_id = store.entity(
-                prov_type="assertion", extent=(start, end), attributes={"verb": "label", "label": "Cough"}
-            )
-            store.was_generated_by(label_id, airway)
-            store.was_derived_from(label_id, span_id)
-
-
-def _stub_period_marks(
-    monkeypatch: pytest.MonkeyPatch, *, marks: int, rate_hz: float = FAKE_F0
-) -> list[tuple[float, float]]:
-    """Replace the point process with a recorder returning a fixed number of marks.
+    stem: str | None = MPT_STEM,
+    duration_s: float = 20.0,
+    amplitude: tuple[tuple[float, float], ...] = ((2.0, 18.0),),
+    tracks: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
+    continuity: float | None = 0.95,
+    write_tracks: bool = True,
+    tracks_path: bool = False,
+    words: tuple[tuple[str, float, float], ...] = (),
+    span_labels: tuple[tuple[float, float, str], ...] = (),
+) -> tuple[ProvStore, dict[str, Any]]:
+    """A store carrying exactly the surface the two VOICE modes read.
 
     Args:
-        monkeypatch: The test's patcher.
-        marks: How many marks each call returns.
-        rate_hz: The rate the marks are spaced at, which is the F0 the node reads back off them.
+        tmp_path: The run directory.
+        stem: The ``recording`` stream's BIDS stem, or None to omit the stream.
+        duration_s: The recording's duration.
+        amplitude: The extents PREPROCESS's ``amplitude`` spans cover.
+        tracks: ``(times_s, f0_hz, strength)``; None makes the whole of each amplitude span voiced.
+        continuity: The constant the continuity trace holds, or None to omit the derivative.
+        write_tracks: Whether to write the ``phonation_tracks`` measurement and its sidecar.
+        tracks_path: Whether that measurement carries a ``path`` attribute of its own.
+        words: The consensus words, as ``(text, start, end)``.
+        span_labels: Extra spans carrying a ruleset ``label``, as ``(start, end, label)``.
 
     Returns:
-        The list the recorder appends each call's ``(start_s, end_s)`` to.
+        The store and the ids it wrote.
     """
-    calls: list[tuple[float, float]] = []
-
-    def _marks(audio: Audio, start_s: float, end_s: float, *, f0_min_hz: float, f0_max_hz: float) -> list[PeriodMark]:
-        calls.append((start_s, end_s))
-        period = 1.0 / rate_hz
-        return [PeriodMark(time_s=start_s + k * period, period_s=period, amplitude=0.1) for k in range(marks)]
-
-    monkeypatch.setattr(voice_module, "period_marks", _marks)
-    return calls
-
-
-def _verdict_entity(store: ProvStore, node: str) -> Entity:
-    """The verdict entity one node wrote."""
-    return next(e for e in store.entities("verdict") if e.attributes.get("node") == node)
-
-
-def _voice_spans(store: ProvStore) -> list[Entity]:
-    """The spans VOICE itself wrote, in time order — told from PREPROCESS's by generating activity."""
-    out = []
-    for entity in store.entities("span"):
-        activity_id = store.generated_by(entity.id)
-        if activity_id is not None and store.get_activity(activity_id).node == "VOICE":
-            out.append(entity)
-    return sorted(out, key=lambda entity: entity.extent or (0.0, 0.0))
-
-
-class TestTheSubjectIsPreprocessesSpans:
-    """VOICE measures what PREPROCESS detected. Nothing is subtracted from anything."""
-
-    def test_the_spans_are_preprocesses_phonation_spans(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """spans_n is the count of phonation spans in the store, not of a residual."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced"), (2.0, 2.8, "voiced")])
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert _verdict_entity(store, "VOICE").attributes["spans_n"] == 2
-
-    def test_a_speech_span_removes_nothing(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
-        """branch-voice.md: 'Nothing another branch claimed is removed from this branch's subject'."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")], speech_spans=[(0.0, 1.5)])
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert _verdict_entity(store, "VOICE").attributes["spans_n"] == 1
-
-    def test_an_airway_label_removes_nothing(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """Nothing this branch measures is conditioned on what another branch concluded."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")], airway_labelled=[(0.0, 1.5)])
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert _verdict_entity(store, "VOICE").attributes["spans_n"] == 1
-
-    def test_the_module_computes_no_residual(self) -> None:
-        """The three residual helpers are deleted, not left unreachable."""
-        for name in ("_subtract_intervals", "_airway_labelled", "_speech_spans"):
-            assert not hasattr(voice_module, name)
-
-    def test_no_phonation_span_fails(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
-        """This path is reached only when a hint forced the branch, which routing gates on the same fact."""
-        _seed_voice_store(store, tmp_path, phonation=[])
-        assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.outcome is Outcome.FAIL
-
-    def test_the_kind_is_voice(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
-        """voice_no_words is gone; VERDICT joins branch to kind on this string."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
-        assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.kind == "voice"
-
-    def test_the_packaged_config_runs_on_the_derived_range(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """Nothing is declared by default, and the range the branch used is the recording's own."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
-        voice(store, "plain", config, run_dir=tmp_path)
-        analyze = next(a for a in store.activities("VOICE") if a.step == "analyze")
-        assert tuple(analyze.parameters["f0_range_hz"]) == FAKE_DERIVED_RANGE
-
-    def test_a_recording_no_range_derives_from_refuses_before_the_store_is_written(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An underivable range is an absence; the branch stops rather than inventing a population."""
-
-        def _no_range(
-            audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float, **coefficients: float
-        ) -> tuple[float, float]:
-            assert set(coefficients) == set(PITCH_NARROWING_KEYS)
-            raise ValueError("no F0 range could be derived from this recording")
-
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
-        monkeypatch.setattr(voice_module, "derive_f0_range", _no_range)
-        before = len(store.entities())
-        with pytest.raises(ValueError, match="no F0 range could be derived"):
-            voice(store, "plain", config, run_dir=tmp_path)
-        assert len(store.entities()) == before
-
-
-class TestProductionModes:
-    """Voiced, unvoiced and mixed are all measured; an unvoiced span is not a failure."""
-
-    def test_an_unvoiced_span_is_measured(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
-        """A disordered voice sustaining without periodicity is exactly what must be measured."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
-        result = voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert result.verdict.outcome is not Outcome.FAIL
-        assert _verdict_entity(store, "VOICE").attributes["production"]["unvoiced"] == 1
-
-    def test_an_unvoiced_span_carries_no_period_marks(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """Absent, not zero and not interpolated: its duration, formants and level are its measurement."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        marks = find_measurements(store, "period_marks")
-        assert marks and "n" not in marks[0].attributes
-        assert marks[0].attributes["unmeasured"] == "unvoiced_span"
-
-    def test_the_production_counts_are_reported(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """The verdict's production block is a count per mode, as branch-voice.md's product names it."""
-        _seed_voice_store(
-            store,
-            tmp_path,
-            phonation=[(0.0, 1.0, "voiced"), (2.0, 3.0, "unvoiced"), (4.0, 5.0, "mixed")],
+    store = ProvStore(run_id="voice-test")
+    (tmp_path / "derivatives").mkdir(parents=True, exist_ok=True)
+    ids: dict[str, Any] = {"amplitude": [], "labelled": []}
+    if stem is not None:
+        ids["recording"] = store.entity(
+            prov_type="stream",
+            extent=(0.0, duration_s),
+            attributes={"name": "recording", "path": f"{stem}.wav", "sampling_rate": 16000},
         )
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert _verdict_entity(store, "VOICE").attributes["production"] == {"voiced": 1, "unvoiced": 1, "mixed": 1}
+    for start, end in amplitude:
+        ids["amplitude"].append(
+            store.entity(
+                prov_type="span",
+                extent=(start, end),
+                attributes={"measure": "amplitude", "signal": "preemphasised"},
+            )
+        )
+    for start, end, label in span_labels:
+        ids["labelled"].append(
+            store.entity(
+                prov_type="span",
+                extent=(start, end),
+                attributes={"measure": "amplitude", "signal": "preemphasised", "label": label},
+            )
+        )
+    for index, (text, start, end) in enumerate(words):
+        store.entity(
+            prov_type="word",
+            extent=(start, end),
+            attributes={"index": index, "text": text, "bracketed": False},
+        )
+    if write_tracks:
+        times, f0, strength = tracks if tracks is not None else _tracks(duration_s, list(amplitude))
+        np.savez(
+            tmp_path / "derivatives" / "phonation_tracks.npz",
+            times_s=times,
+            f0_hz=f0,
+            strength=strength,
+        )
+        attributes: dict[str, Any] = {"name": "phonation_tracks", "signal": "preemphasised", "hop_s": HOP_S}
+        if tracks_path:
+            attributes["path"] = "derivatives/phonation_tracks.npz"
+        ids["tracks"] = store.entity(prov_type="measurement", extent=None, attributes=attributes)
+    if continuity is not None:
+        trace = np.full(int(duration_s * CONTINUITY_RATE), continuity)
+        np.savez(tmp_path / "derivatives" / "continuity_trace.npz", continuity=trace)
+        ids["continuity"] = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": "continuity_trace",
+                "signal": "preemphasised",
+                "path": "derivatives/continuity_trace.npz",
+                "sampling_rate": CONTINUITY_RATE,
+            },
+        )
+    return store, ids
 
-    def test_a_sustained_unvoiced_span_reaches_voice_without_marks(self, store: ProvStore, tmp_path: Path) -> None:
-        """VOICE measures aperiodic phonation rather than rejecting it, once routing has selected it."""
-        config = load_triage_config()
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        voice(store, "plain", config, run_dir=tmp_path)
-        assert find_measurements(store, "period_marks")[-1].attributes["unmeasured"] == "unvoiced_span"
+
+def voice_spans(store: ProvStore) -> list[Any]:
+    """Every span VOICE proposed, earliest first.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The ``family: "voice"`` spans.
+    """
+    found = [span for span in live_entities(store, "span") if span.attributes.get("family") == "voice"]
+    return sorted(found, key=lambda span: span.extent or (0.0, 0.0))
 
 
-class TestMptRecoverableProducts:
-    """longest_span_s and its criterion, so a task measurement is not reassembled from fragments."""
+def measurements(store: ProvStore, name: str) -> list[Any]:
+    """Every live measurement of one name.
 
-    def test_longest_span_s_is_a_first_class_product(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """The longest span's duration, reported directly."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.0, "voiced"), (2.0, 5.5, "voiced")])
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert _verdict_entity(store, "VOICE").attributes["longest_span_s"] == pytest.approx(3.5)
+    Args:
+        store: The provenance store.
+        name: The measurement's name.
 
-    def test_the_criterion_that_closed_it_travels_with_it(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """A duration without its offset criterion is not a maximum phonation time."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert _verdict_entity(store, "VOICE").attributes["longest_span_criterion"] == "f0_stability"
+    Returns:
+        The entities, in write order.
+    """
+    return [entity for entity in live_entities(store, "measurement") if entity.attributes.get("name") == name]
 
-    def test_phonation_s_totals_every_span(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
-        """The total is over the spans, whatever their production mode."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.0, "voiced"), (2.0, 2.5, "unvoiced")])
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert _verdict_entity(store, "VOICE").attributes["phonation_s"] == pytest.approx(1.5)
 
-    def test_a_declared_task_outside_its_range_flags_with_the_range_named(
-        self, store: ProvStore, tmp_path: Path
-    ) -> None:
-        """The task conditions how a duration is reported, never whether a span exists.
+def assertions(store: ProvStore, verb: str) -> list[Any]:
+    """Every live assertion of one verb.
 
-        The range is ``voice_config``'s, not a wide one: at ratio 6.67 the 100 Hz fake is also
-        period-doubling ambiguous, and the flag it raises would satisfy an outcome assertion that
-        the task check never caused.
+    Args:
+        store: The provenance store.
+        verb: ``deviate`` or ``contest``.
+
+    Returns:
+        The entities, in write order.
+    """
+    return [entity for entity in live_entities(store, "assertion") if entity.attributes.get("verb") == verb]
+
+
+class TestASustainedVowelYieldsTheHeldVowelSpan:
+    """The branch's foundational capability, and the thing it failed to do on every recording."""
+
+    def test_a_held_vowel_is_proposed_as_a_task_extent_of_family_voice(self, tmp_path: Path) -> None:
+        """Sixteen seconds of held phonation becomes one span, in VOICE's own family."""
+        store, _ = seed(tmp_path)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert [proposal.role for proposal in result.components] == [TASK_EXTENT]
+        assert {proposal.family for proposal in result.components} == {"voice"}
+
+    def test_the_extent_is_the_productions_own_voiced_boundaries(self, tmp_path: Path) -> None:
+        """Not the carrier span's: the first and last voiced frame inside it."""
+        store, _ = seed(tmp_path, amplitude=((2.0, 18.0),), tracks=_tracks(20.0, [(4.0, 15.0)]))
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        start, end = result.components[0].start, result.components[0].end
+        assert start == pytest.approx(4.0, abs=0.02)
+        assert end == pytest.approx(15.0, abs=0.02)
+
+    def test_the_carriers_own_extent_travels_on_the_span(self, tmp_path: Path) -> None:
+        """A reader needs the region the span was cut from, not only the cut."""
+        store, _ = seed(tmp_path, amplitude=((2.0, 18.0),), tracks=_tracks(20.0, [(4.0, 15.0)]))
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert result.components[0].attributes["carrier_extent"] == [2.0, 18.0]
+
+    def test_the_onset_to_offset_duration_is_measured_under_a_qualified_name(self, tmp_path: Path) -> None:
+        """Never ``maximum_phonation_time``: that name is read against published norms."""
+        store, _ = seed(tmp_path)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        names = {finding.name for finding in result.deviations if finding.kind == "measure"}
+        assert "phonation_onset_to_offset_s" in names
+        assert "maximum_phonation_time" not in names
+
+    def test_the_voiced_duration_is_reported_beside_the_extent(self, tmp_path: Path) -> None:
+        """The extent is an upper bound; the voiced total is the other half of V2's triple."""
+        store, _ = seed(tmp_path)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        names = {finding.name for finding in result.deviations if finding.kind == "measure"}
+        assert {"phonation_onset_to_offset_s", "voiced_duration_s", "interruptions"} <= names
+
+    def test_the_three_qualifiers_travel_on_the_span(self, tmp_path: Path) -> None:
+        """A type-3 voice is a finding about the voice, so the qualifiers are always carried."""
+        store, _ = seed(tmp_path)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        attributes = result.components[0].attributes
+        assert {"voiced_fraction", "f0_spread_semitones", "stationarity", "support_frames"} <= set(attributes)
+
+    def test_an_interruption_is_located_rather_than_only_counted(self, tmp_path: Path) -> None:
+        """V2's third item: the number, the locations and the total duration."""
+        store, _ = seed(tmp_path, amplitude=((2.0, 18.0),), tracks=_tracks(20.0, [(3.0, 8.0), (11.0, 17.0)]))
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        found = [finding for finding in result.deviations if finding.name == "interruptions"]
+        assert found and found[0].evidence["value"] == 1
+        assert found[0].evidence["locations"][0][0] == pytest.approx(8.0, abs=0.05)
+
+    def test_a_carrier_shorter_than_the_minimum_is_not_a_production(self, tmp_path: Path) -> None:
+        """``production_min_s`` is the shortest carrier a production may be found in."""
+        store, _ = seed(tmp_path, amplitude=((2.0, 2.2),), duration_s=5.0)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert result.components == []
+        assert result.done is False
+
+
+class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
+    """Without it V1 would propose attempts over runs of connected speech on 14,332 recordings."""
+
+    def test_a_wandering_f0_fails_the_spread_qualifier(self, tmp_path: Path) -> None:
+        """Connected speech has a high voiced fraction and a usable contour; it is not steady."""
+        store, _ = seed(tmp_path, tracks=_wobble_tracks(20.0, (2.0, 18.0), 120.0, 6.0))
+        assert (
+            qualifying_phonation(read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()) == []
+        )
+
+    def test_a_slow_sweep_is_not_read_as_instability(self, tmp_path: Path) -> None:
+        """The discriminating half: the worst *local* spread is the statistic, by design.
+
+        A 100-to-400 Hz drift across sixteen seconds is a sustained production, not a wobble.
         """
-        config = _override(
-            tmp_path,
-            "voice:\n  task_duration_ranges: {maximum_phonation_time: [10.0, 40.0]}\n",
+        store, _ = seed(tmp_path, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 400.0))
+        assert (
+            qualifying_phonation(read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()) != []
         )
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
-        hint = AudioHints(metadata={"task": "maximum_phonation_time"})
-        result = voice(store, "plain", config, hint, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
-        assert "10.0" in result.verdict.why and "40.0" in result.verdict.why
-        assert "period_doubling_alias" not in result.verdict.why
-        assert _verdict_entity(store, "VOICE").attributes["flags"] == [result.verdict.why]
 
-    def test_a_null_task_range_leaves_the_row_inert(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """Nobody derived a range, so no span is out of one."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
-        hint = AudioHints(metadata={"task": "maximum_phonation_time"})
-        result = voice(store, "plain", voice_config, hint, run_dir=tmp_path)
-        assert result.verdict.outcome is not Outcome.FLAG
-        assert _verdict_entity(store, "VOICE").attributes["task_range"] == "not_evaluated"
-
-
-class TestTheShortSpanGuardMatchesTheRealCall:
-    """The V20 half-frame tolerance is retired: it padded the guard but not the call it gated.
-
-    ``period_marks`` receives a span's clamped ``(start, end)`` verbatim, with no widening to match
-    any frame-centred reasoning. A span the old, padded guard let through on the strength of a
-    one-hop tolerance reached Praat's own point-process call one hop short of what it required and
-    raised ``parselmouth.PraatError`` instead of being recorded ``shorter_than_mark_window``. Measured
-    against a real campaign run: a 0.03 s span (exactly ``min_marks_s - hop_s`` at ``f0_min_hz=75``)
-    crossed the old guard and then failed Praat's own "minimum pitch must not be less than 100 Hz"
-    check, which is ``3 / 0.03``.
-    """
-
-    def test_a_span_of_exactly_min_marks_s_is_measured(
-        self,
-        store: ProvStore,
-        voice_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The real threshold is the literal span duration passed to period_marks, with no slack added."""
-        hop_s = 0.01
-        min_marks_s = 3.0 / 75.0
-        start, end = 1.0, 1.0 + min_marks_s
-        _seed_voice_store(store, tmp_path, phonation=[(start, end, "voiced")], hop_s=hop_s)
-        calls = _stub_period_marks(monkeypatch, marks=4)
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert calls, "a span of exactly min_marks_s must be measured"
-        assert _verdict_entity(store, "VOICE").attributes["marks_skipped_short_n"] == 0
-
-    def test_a_span_one_hop_shorter_is_skipped_not_crashed(
-        self,
-        store: ProvStore,
-        voice_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """This is exactly the duration the retired tolerance let through onto a call that could not take it."""
-        hop_s = 0.01
-        min_marks_s = 3.0 / 75.0
-        start, end = 1.0, 1.0 + min_marks_s - hop_s
-        _seed_voice_store(store, tmp_path, phonation=[(start, end, "voiced")], hop_s=hop_s)
-        calls = _stub_period_marks(monkeypatch, marks=4)
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert calls == []
-        marks = find_measurements(store, "period_marks")
-        assert marks[0].attributes["unmeasured"] == "shorter_than_mark_window"
-
-    def test_the_real_praat_call_never_sees_the_previously_dangerous_span(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """Regression, unstubbed: the real point-process call must never receive this duration again."""
-        hop_s = 0.01
-        min_marks_s = 3.0 / 75.0
-        start, end = 1.0, 1.0 + min_marks_s - hop_s
-        _seed_voice_store(store, tmp_path, phonation=[(start, end, "voiced")], hop_s=hop_s)
-        result = voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert result.verdict.outcome is not Outcome.FAIL
-        marks = find_measurements(store, "period_marks")
-        assert marks[0].attributes["unmeasured"] == "shorter_than_mark_window"
-
-
-class TestTheF0RangeServesAPopulation:
-    """The range is declared, overridable per population, and a vacuous ratio is refused at load."""
-
-    def test_a_population_override_replaces_the_range(self, store: ProvStore, tmp_path: Path) -> None:
-        """Age and sex move the range; the hint names which population."""
-        config = _override(
-            tmp_path,
-            "voice:\n  f0_range_by_population: {adult_male: [60, 250]}\n",
+    def test_a_low_continuity_recording_fails_the_stationarity_qualifier(self, tmp_path: Path) -> None:
+        """The spectral trace is the qualifier the F0 statistics cannot supply."""
+        store, _ = seed(tmp_path, continuity=0.1)
+        assert (
+            qualifying_phonation(read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()) == []
         )
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
-        hint = AudioHints(metadata={"population": "adult_male"})
-        voice(store, "plain", config, hint, run_dir=tmp_path)
-        analyze = next(a for a in store.activities("VOICE") if a.step == "analyze")
-        assert list(analyze.parameters["f0_range_hz"]) == [60.0, 250.0]
 
-    def test_a_vacuous_ratio_is_refused_before_the_store_is_written(self, store: ProvStore, tmp_path: Path) -> None:
-        """A check that flags everything reports nothing, so it is refused rather than run and flagged."""
-        config = _override(
-            tmp_path,
-            "voice:\n  f0_range_by_population: {wide: [50, 800]}\n  f0_range_ratio_max: 4.0\n",
+    def test_a_mostly_unvoiced_carrier_fails_the_voiced_fraction(self, tmp_path: Path) -> None:
+        """A carrier the tracker found almost no F0 in is not a phonation carrier."""
+        store, _ = seed(tmp_path, amplitude=((2.0, 18.0),), tracks=_tracks(20.0, [(2.0, 4.0)]))
+        assert (
+            qualifying_phonation(read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()) == []
         )
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
-        before = len(store.entities())
-        with pytest.raises(ValueError, match="f0_range_ratio_max"):
-            voice(store, "plain", config, AudioHints(metadata={"population": "wide"}), run_dir=tmp_path)
-        assert len(store.entities()) == before
 
-    def test_a_null_ratio_refuses_nothing(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
-        """Nobody fixed the bound, so no configuration exceeds it."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
-        assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.outcome is not Outcome.FAIL
+    def test_an_absent_continuity_trace_fails_the_qualifier_rather_than_passing_it(self, tmp_path: Path) -> None:
+        """An absent qualifier must not read as a satisfied one."""
+        store, _ = seed(tmp_path, continuity=None)
+        assert (
+            qualifying_phonation(read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()) == []
+        )
 
 
-class TestEdgesAreNamedApart:
-    """The onset is a period where one exists; the offset is always a criterion."""
+class TestTheModeIsSelectedByTheDeclaredFamily:
+    """Both arms, both ways, and no third arm."""
 
-    def test_a_span_with_marks_has_a_period_onset(
-        self,
-        store: ProvStore,
-        voice_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """An observed event, named as one."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
-        _stub_period_marks(monkeypatch, marks=6)
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        span = _voice_spans(store)[0]
-        assert span.attributes["onset_kind"] == "period"
-        assert span.attributes["offset_kind"] == "criterion"
+    def test_a_voice_family_reaches_the_align_arm(self, tmp_path: Path) -> None:
+        """``maximum-phonation-time`` is one of VOICE's six in-family rows."""
+        store, _ = seed(tmp_path, stem=MPT_STEM)
+        assert mode_of("VOICE", store) == ("align", "maximum-phonation-time")
 
-    def test_a_marked_span_reports_both_f0_keys(
-        self,
-        store: ProvStore,
-        voice_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Two F0 values from two streams are two measurements, so the stream travels with the value."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
-        _stub_period_marks(monkeypatch, marks=6)
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        detail = _verdict_entity(store, "VOICE").attributes
-        assert detail["f0_median_hz"] > 0.0
-        assert detail["f0_stream"] == "plain"
+    def test_another_branchs_family_reaches_the_detect_arm(self, tmp_path: Path) -> None:
+        """A cough task is AIRWAY's; VOICE marks its speciality and evaluates nothing."""
+        store, _ = seed(tmp_path, stem=COUGH_STEM)
+        assert mode_of("VOICE", store) == ("detect", "voluntary-cough")
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
+        assert result.verdict.node == "VOICE"
 
-    def test_an_unmarked_span_reports_neither(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """Absent for a span with no period marks, rather than estimated from one."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        detail = _verdict_entity(store, "VOICE").attributes
-        assert "f0_median_hz" not in detail
-        assert "f0_stream" not in detail
+    def test_the_detect_arm_evaluates_no_task(self, tmp_path: Path) -> None:
+        """``done`` is UNDETERMINED always, and ``dispatch`` refuses anything else."""
+        store, _ = seed(tmp_path, stem=COUGH_STEM)
+        result = detect_voice(store, params(), run_dir=tmp_path)
+        assert result.done == UNDETERMINED
 
+    def test_the_detect_arm_still_proposes_the_phonation_it_finds(self, tmp_path: Path) -> None:
+        """Sustained phonation occurs inside sentence reading and free speech; it is marked there."""
+        store, _ = seed(tmp_path, stem=HARVARD_STEM)
+        result = detect_voice(store, params(), run_dir=tmp_path)
+        assert [proposal.role for proposal in result.components] == [PHONATION_ROLE]
+        assert result.components[0].attributes["evaluates_no_task"] is True
 
-class TestThePeriodDoublingAlias:
-    """Whether a span's F0 could equally be its own double or half, inside the declared range (N21).
+    def test_no_derivable_task_family_takes_the_detect_arm(self, tmp_path: Path) -> None:
+        """A path that is not a BIDS stem names no family, and None is the safe arm."""
+        store, _ = seed(tmp_path, stem="not-a-bids-stem")
+        assert mode_of("VOICE", store) == ("detect", None)
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.PASS
+        assert voice_spans(store)[0].attributes["role"] == PHONATION_ROLE
 
-    One declared range throughout, and the point process's rate is what moves: the ambiguity is a
-    property of where a measured F0 sits in the range, not of the range being wide enough to catch
-    everything. ``voice_config``'s ``[75, 190]`` has ratio 2.53, so it does not.
-    """
-
-    def test_a_span_whose_alias_lands_in_the_range_is_ambiguous(
-        self,
-        store: ProvStore,
-        voice_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """90 Hz doubles to 180 Hz, which is inside [75, 190]: the two readings are not separable."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
-        _stub_period_marks(monkeypatch, marks=6, rate_hz=90.0)
-        result = voice(store, "plain", voice_config, run_dir=tmp_path)
-        detail = _verdict_entity(store, "VOICE").attributes
-        assert detail["ambiguous_spans_n"] == 1
-        assert any("period_doubling_alias" in flag for flag in detail["flags"])
-        assert result.verdict.outcome is Outcome.FLAG
-
-    def test_a_span_whose_aliases_both_fall_outside_the_range_is_not(
-        self,
-        store: ProvStore,
-        voice_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """100 Hz doubles to 200 Hz, above the maximum, and halves to 50 Hz, below the minimum."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
-        _stub_period_marks(monkeypatch, marks=6, rate_hz=100.0)
-        result = voice(store, "plain", voice_config, run_dir=tmp_path)
-        detail = _verdict_entity(store, "VOICE").attributes
-        assert detail["ambiguous_spans_n"] == 0
-        assert not any("period_doubling_alias" in flag for flag in detail["flags"])
+    def test_an_absent_recording_entity_takes_the_detect_arm(self, tmp_path: Path) -> None:
+        """No carrier at all is the same safe arm, not an error."""
+        store, _ = seed(tmp_path, stem=None)
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.PASS
 
+    def test_the_hint_carrier_selects_the_mode_before_the_path_does(self, tmp_path: Path) -> None:
+        """``task_token`` is the clean route and is read first."""
+        store, _ = seed(tmp_path, stem=COUGH_STEM)
+        hint = AudioHints(metadata={"task_token": "glides-low-to-high"})
+        assert mode_of("VOICE", store, hint) == ("align", "glides-low-to-high")
 
-class TestAHintDoesNotConditionTheAbsence:
-    """No span is a fail; the declaration it contradicts is named by the fold, not by this branch."""
 
-    def test_a_hint_declaring_phonation_leaves_the_absence_a_fail(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """A branch that flags reports its kind present, so an absent subject may not flag here."""
-        _seed_voice_store(store, tmp_path, phonation=[])
-        hint = AudioHints(may_contain=["phonation"])
-        result = voice(store, "plain", voice_config, hint, run_dir=tmp_path)
+class TestThePendingDeclarationRowsTakeTheDetectArm:
+    """``loudness`` and ``cape-v-sentences`` are LEXICAL_SPEECH, so out of family for VOICE."""
+
+    @pytest.mark.parametrize("stem", [LOUDNESS_STEM, CAPEV_STEM])
+    def test_a_pending_declaration_family_never_reaches_align(self, tmp_path: Path, stem: str) -> None:
+        """The four rows are deliberately out of EXPECTATIONS; changing that is a families decision."""
+        store, _ = seed(tmp_path, stem=stem)
+        mode, family = mode_of("VOICE", store)
+        assert mode == "detect"
+        assert family in {"loudness", "cape-v-sentences"}
+
+    def test_align_voice_refuses_a_family_it_has_no_row_for(self, tmp_path: Path) -> None:
+        """The caller owes detect_voice; reaching align is the caller's error, not a silent pass."""
+        store, _ = seed(tmp_path, stem=LOUDNESS_STEM)
+        with pytest.raises(KeyError):
+            align_voice("loudness", store, None, params(), run_dir=tmp_path)
+
+    def test_every_voice_row_is_served_by_a_reachable_matcher(self, tmp_path: Path) -> None:
+        """No row in the dispatch table may fall through to NotImplementedError."""
+        store, _ = seed(tmp_path)
+        for family in ("maximum-phonation-time", "maximum-phonation-time-v2", "prolonged-vowel"):
+            assert align_voice(family, store, None, params(), run_dir=tmp_path) is not None
+        for family in ("glides-low-to-high", "glides-high-to-low", "high-to-low"):
+            assert align_voice(family, store, None, params(), run_dir=tmp_path) is not None
+
+
+class TestAnAbsentInstrumentIsUndetermined:
+    """Boundaries that cannot be placed are not an absence of voice."""
+
+    def test_absent_tracks_make_the_sustained_arm_undetermined(self, tmp_path: Path) -> None:
+        """``UNDETERMINED`` is what a mode returns when its only instrument is absent."""
+        store, _ = seed(tmp_path, write_tracks=False)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert result.done == UNDETERMINED
+        assert result.components == []
+
+    def test_absent_tracks_make_the_glide_arm_undetermined(self, tmp_path: Path) -> None:
+        """The same rule on the other in-family matcher."""
+        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, write_tracks=False)
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        assert result.done == UNDETERMINED
+
+    def test_the_absence_is_recorded_as_unviable_rather_than_omitted(self, tmp_path: Path) -> None:
+        """A measurement that could not be taken is written, not silently dropped."""
+        store, _ = seed(tmp_path, write_tracks=False)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert [finding.name for finding in result.deviations] == ["phonation_extent"]
+        assert result.deviations[0].evidence["value"] == "NOT_SEPARABLE_BY_THIS_DESIGN"
+
+    def test_an_absent_instrument_does_not_read_as_an_absent_voice(self, tmp_path: Path) -> None:
+        """FAIL means this branch looked and found no attempt. It did not look.
+
+        The distinction is what keeps FAIL off the most impaired speakers at corpus scale.
+        """
+        store, _ = seed(tmp_path, write_tracks=False)
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
+        assert result.verdict.outcome is not Outcome.FAIL
+
+    def test_nothing_qualifying_is_a_fail_because_the_branch_did_look(self, tmp_path: Path) -> None:
+        """The instrument was there and no attempt cleared it; that is an absence of content."""
+        store, _ = seed(tmp_path, continuity=0.1)
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FAIL
-        assert "hint" not in result.verdict.why
-        assert _verdict_entity(store, "VOICE").attributes["flags"] == []
 
-    def test_a_hint_declaring_nothing_this_branch_screens_leaves_the_absence_a_fail(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """A hint is read against voice.hint_tags, so an unrelated tag does not contest the absence."""
-        _seed_voice_store(store, tmp_path, phonation=[])
-        hint = AudioHints(may_contain=["read-speech"])
-        result = voice(store, "plain", voice_config, hint, run_dir=tmp_path)
+
+class TestEveryProposalNamesItsEvidence:
+    """Under propose-only the derivation is the whole record of where an extent came from."""
+
+    def test_the_task_extent_is_derived_from_its_carrier_and_the_tracks(self, tmp_path: Path) -> None:
+        """The carrier is the region; the tracks are what placed the boundary inside it."""
+        store, ids = seed(tmp_path)
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        span = voice_spans(store)[0]
+        assert set(store.derived_from(span.id)) == {ids["amplitude"][0], ids["tracks"], ids["continuity"]}
+
+    def test_the_detect_arms_span_is_derived_from_the_same_evidence(self, tmp_path: Path) -> None:
+        """The two modes share the qualifier, so they share the derivation."""
+        store, ids = seed(tmp_path, stem=COUGH_STEM)
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        span = voice_spans(store)[0]
+        assert ids["amplitude"][0] in store.derived_from(span.id)
+
+    def test_the_count_in_is_derived_from_the_words_that_realised_it(self, tmp_path: Path) -> None:
+        """A count-in's evidence is lexical, so its derivation is the words."""
+        store, _ = seed(
+            tmp_path,
+            stem=PROLONGED_STEM,
+            amplitude=((6.0, 18.0),),
+            tracks=_tracks(20.0, [(6.0, 18.0)]),
+            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
+        )
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        count_in = [span for span in voice_spans(store) if span.attributes["role"] == COUNT_IN]
+        assert count_in and len(store.derived_from(count_in[0].id)) == 3
+
+    def test_no_proposal_is_written_without_a_derivation(self, tmp_path: Path) -> None:
+        """``propose_span`` is the only writer and it refuses one; this pins the branch's side."""
+        store, _ = seed(tmp_path)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert all(proposal.derived_from for proposal in result.components)
+
+
+class TestTheCountInIsItsOwnSpan:
+    """It gets one precisely because it must be excluded from the vowel's measurement window."""
+
+    def test_the_count_in_and_the_vowel_are_two_spans(self, tmp_path: Path) -> None:
+        """``prolonged-vowel`` prescribes a lexical count-in; MPT forbids lexical content."""
+        store, _ = seed(
+            tmp_path,
+            stem=PROLONGED_STEM,
+            amplitude=((6.0, 18.0),),
+            tracks=_tracks(20.0, [(6.0, 18.0)]),
+            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
+        )
+        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
+        assert [proposal.role for proposal in result.components] == [COUNT_IN, TASK_EXTENT]
+
+    def test_the_count_in_is_marked_excluded_from_measurement(self, tmp_path: Path) -> None:
+        """Every Praat scalar today is taken over count-in plus silence plus vowel."""
+        store, _ = seed(
+            tmp_path,
+            stem=PROLONGED_STEM,
+            amplitude=((6.0, 18.0),),
+            tracks=_tracks(20.0, [(6.0, 18.0)]),
+            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
+        )
+        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
+        assert result.components[0].attributes["excluded_from_measurement"] is True
+
+    def test_a_carrier_holding_the_count_in_is_not_the_vowel(self, tmp_path: Path) -> None:
+        """``lexical_separator`` excludes a carrier the count-in overlaps."""
+        store, _ = seed(
+            tmp_path,
+            stem=PROLONGED_STEM,
+            amplitude=((1.0, 3.0),),
+            tracks=_tracks(20.0, [(1.0, 3.0)]),
+            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
+        )
+        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
+        assert [proposal.role for proposal in result.components] == [COUNT_IN]
+
+    def test_a_missing_count_in_token_is_an_omission(self, tmp_path: Path) -> None:
+        """The instruction prescribes three; two realised leaves one omitted."""
+        store, _ = seed(
+            tmp_path,
+            stem=PROLONGED_STEM,
+            amplitude=((6.0, 18.0),),
+            tracks=_tracks(20.0, [(6.0, 18.0)]),
+            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0)),
+        )
+        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
+        omissions = [finding for finding in result.deviations if finding.name == "omission"]
+        assert [finding.evidence["expected"] for finding in omissions] == ["three"]
+
+    def test_no_count_in_at_all_leaves_the_task_not_done(self, tmp_path: Path) -> None:
+        """The instruction asked for one; ``done`` reads off the recording."""
+        store, _ = seed(tmp_path, stem=PROLONGED_STEM, amplitude=((6.0, 18.0),), tracks=_tracks(20.0, [(6.0, 18.0)]))
+        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
+        assert result.done is False
+
+    def test_a_family_prescribing_no_count_in_is_done_on_the_vowel_alone(self, tmp_path: Path) -> None:
+        """MPT declares no tokens, so nothing lexical is owed."""
+        store, _ = seed(tmp_path)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert result.done is True
+
+
+class TestTheGlideReadsTheSweepAgainstItsDeclaredDirection:
+    """V3: direction is measured, and the declaration is what it is read against."""
+
+    def test_an_upward_sweep_is_proposed_with_its_direction(self, tmp_path: Path) -> None:
+        """The dominant monotone segment, and which way it ran."""
+        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 300.0))
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        assert result.components[0].attributes["direction"] == "up"
+        assert result.components[0].attributes["production"] == "glide"
+
+    def test_a_sweep_running_the_wrong_way_is_a_deviation(self, tmp_path: Path) -> None:
+        """``sweep_direction_mismatch``, with both directions named."""
+        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 300.0, 100.0))
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        found = [finding for finding in result.deviations if finding.name == "sweep_direction_mismatch"]
+        assert found and found[0].evidence == {
+            "declared": "up",
+            "measured": "down",
+            "extent_semitones": found[0].evidence["extent_semitones"],
+        }
+
+    def test_a_downward_declaration_matched_by_a_downward_sweep_deviates_not_at_all(self, tmp_path: Path) -> None:
+        """The same recording against the other declaration."""
+        store, _ = seed(tmp_path, stem=GLIDE_DOWN_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 300.0, 100.0))
+        result = align_voice("glides-high-to-low", store, None, params(), run_dir=tmp_path)
+        assert [finding.name for finding in result.deviations if finding.kind == "deviation"] == []
+
+    def test_the_semitone_extent_is_measured(self, tmp_path: Path) -> None:
+        """An octave and a half in Hz is a semitone count, which is what a reader compares."""
+        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 200.0))
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        found = [finding for finding in result.deviations if finding.name == "glide_extent_semitones"]
+        assert found and found[0].evidence["value"] == pytest.approx(12.0, abs=0.5)
+
+    def test_no_monotone_segment_leaves_the_sweep_not_found(self, tmp_path: Path) -> None:
+        """A steady vowel is not a sweep, and the glide arm says so rather than inventing one."""
+        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, amplitude=((2.0, 3.0),), tracks=_tracks(20.0, [(2.0, 2.2)]))
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        assert result.done is False
+        assert result.components == []
+
+
+class TestTheDeviationsAreTheOnesTheDesignNames:
+    """Three types, and a deviation is not evidence of a bad recording."""
+
+    def test_an_attempt_running_to_the_boundary_is_truncated(self, tmp_path: Path) -> None:
+        """A truncated trial is right-censored and must never pool with complete ones."""
+        store, _ = seed(tmp_path, amplitude=((0.0, 20.0),), tracks=_tracks(20.0, [(0.0, 20.0)]))
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        found = [finding for finding in result.deviations if finding.name == "truncation"]
+        assert found and found[0].evidence["reading"] == "right_censored"
+
+    def test_an_attempt_inside_the_recording_is_not_truncated(self, tmp_path: Path) -> None:
+        """The discriminating half: the same code on a complete trial."""
+        store, _ = seed(tmp_path)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert [finding.name for finding in result.deviations if finding.name == "truncation"] == []
+
+    def test_a_second_attempt_is_a_repeat_attempt(self, tmp_path: Path) -> None:
+        """Taking a maximum silently discards false starts, so each is reported."""
+        store, _ = seed(
+            tmp_path,
+            amplitude=((2.0, 8.0), (11.0, 19.0)),
+            tracks=_tracks(20.0, [(2.0, 8.0), (11.0, 19.0)]),
+        )
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert len([finding for finding in result.deviations if finding.name == "repeat_attempt"]) == 1
+
+    def test_the_attempt_count_is_reported_rather_than_only_the_longest(self, tmp_path: Path) -> None:
+        """``attempt_count`` is a counts entry."""
+        store, _ = seed(
+            tmp_path,
+            amplitude=((2.0, 8.0), (11.0, 19.0)),
+            tracks=_tracks(20.0, [(2.0, 8.0), (11.0, 19.0)]),
+        )
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        found = [finding for finding in result.deviations if finding.name == "attempt_count"]
+        assert found and found[0].evidence["found"] == 2
+
+    def test_the_longest_attempt_is_the_one_proposed(self, tmp_path: Path) -> None:
+        """The others are deviations, not competing task extents."""
+        store, _ = seed(
+            tmp_path,
+            amplitude=((2.0, 8.0), (11.0, 19.0)),
+            tracks=_tracks(20.0, [(2.0, 8.0), (11.0, 19.0)]),
+        )
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert len(result.components) == 1
+        assert result.components[0].start == pytest.approx(11.0, abs=0.02)
+
+    def test_lexical_content_in_a_no_lexical_task_is_a_deviation(self, tmp_path: Path) -> None:
+        """MPT forbids lexical content; the deviation keys on positively identified words."""
+        store, _ = seed(tmp_path, words=(("hello", 1.0, 1.5),))
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        found = [finding for finding in result.deviations if finding.name == "lexical_content"]
+        assert found and found[0].evidence["text"] == "hello"
+
+    def test_the_inhale_is_counted_and_never_proposed(self, tmp_path: Path) -> None:
+        """An inhale is airway evidence; a branch mints only in its own family."""
+        store, _ = seed(tmp_path)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert [finding.name for finding in result.deviations if finding.name == "inhale_expected_in_file"]
+        assert {proposal.family for proposal in result.components} == {"voice"}
+
+    def test_the_v2_row_expects_no_inhale(self, tmp_path: Path) -> None:
+        """The discriminating half: v1 places the inhale before the record tap, v2 does not."""
+        store, _ = seed(tmp_path)
+        result = align_voice("maximum-phonation-time-v2", store, None, params(), run_dir=tmp_path)
+        assert [finding.name for finding in result.deviations if finding.name == "inhale_expected_in_file"] == []
+
+
+class TestTheAperiodicCaseNoLongerErrorsTheNode:
+    """A frankly aperiodic voice is a finding about the voice, not a crash."""
+
+    def test_the_node_no_longer_derives_an_f0_range_at_all(self, tmp_path: Path) -> None:
+        """``derive_f0_range`` raising ``F0RangeUnavailable`` used to error the whole node.
+
+        VOICE now reads the tracks PREPROCESS already computed, so it makes no such call. The probe
+        is behavioural: a ``derive_f0_range`` that raises on every input changes nothing here.
+        """
+        assert not hasattr(voice_module, "derive_f0_range")
+
+    def test_an_aperiodic_recording_completes_with_a_verdict(self, tmp_path: Path) -> None:
+        """Zero voiced frames throughout: no attempt found, and a verdict rather than a traceback."""
+        store, _ = seed(tmp_path, tracks=_tracks(20.0, []))
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FAIL
-        assert _verdict_entity(store, "VOICE").attributes["flags"] == []
+        assert result.verdict_entity_id
+
+    def test_an_aperiodic_recording_out_of_family_also_completes(self, tmp_path: Path) -> None:
+        """The detect arm carries the same property on the 14,332 out-of-family recordings."""
+        store, _ = seed(tmp_path, stem=COUGH_STEM, tracks=_tracks(20.0, []))
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FAIL
+
+
+class TestTheTracksAreFoundByEitherCarrier:
+    """The ``phonation_tracks`` measurement carries no ``path``, unlike every other derivative."""
+
+    def test_the_tracks_are_read_when_the_measurement_carries_a_path(self, tmp_path: Path) -> None:
+        """The clean route, which is what the foundation's loader alone supports."""
+        store, _ = seed(tmp_path, tracks_path=True)
+        assert read_evidence(store, tmp_path).tracks is not None
+
+    def test_the_tracks_are_read_when_it_carries_none(self, tmp_path: Path) -> None:
+        """What PREPROCESS actually writes today; the loader alone would return None."""
+        store, _ = seed(tmp_path, tracks_path=False)
+        assert read_evidence(store, tmp_path).tracks is not None
+
+    def test_no_measurement_at_all_reads_no_sidecar(self, tmp_path: Path) -> None:
+        """A stray sidecar with no measurement beside it is not evidence."""
+        store, _ = seed(tmp_path, write_tracks=True)
+        stripped, _ = seed(tmp_path, write_tracks=False)
+        assert read_evidence(stripped, tmp_path).tracks is None
+        assert read_evidence(store, tmp_path).tracks is not None
+
+
+class TestTheNodeWritesWhatItFound:
+    """The store side: spans, findings, the activity's reads and the verdict's own record."""
+
+    def test_the_proposed_span_reaches_the_store_with_its_family_and_role(self, tmp_path: Path) -> None:
+        """``propose_spans`` stamps both; a reader has only the store to go on."""
+        store, _ = seed(tmp_path)
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        span = voice_spans(store)[0]
+        assert span.attributes["family"] == "voice"
+        assert span.attributes["role"] == TASK_EXTENT
+
+    def test_the_measurements_reach_the_store(self, tmp_path: Path) -> None:
+        """A measure finding becomes its own measurement entity over its extent."""
+        store, _ = seed(tmp_path)
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        assert measurements(store, "phonation_onset_to_offset_s")
+
+    def test_the_counts_fold_into_one_measurement(self, tmp_path: Path) -> None:
+        """Every count becomes one ``counts`` entry carrying found beside declared."""
+        store, _ = seed(tmp_path)
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        counts = measurements(store, "counts")
+        assert len(counts) == 1
+        assert "attempt_count" in counts[0].attributes["entries"]
+
+    def test_a_deviation_becomes_an_assertion_beside_the_span(self, tmp_path: Path) -> None:
+        """Never an edit to one: the store is append-only and VOICE proposes only."""
+        store, _ = seed(tmp_path, amplitude=((0.0, 20.0),), tracks=_tracks(20.0, [(0.0, 20.0)]))
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        assert [entity.attributes["deviation_type"] for entity in assertions(store, "deviate")] == ["truncation"]
+
+    def test_the_activity_records_which_mode_ran_and_on_what(self, tmp_path: Path) -> None:
+        """A run has to be able to say which arm it took without re-deriving the family."""
+        store, _ = seed(tmp_path)
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        activity = [each for each in store.activities() if each.node == "VOICE"][-1]
+        assert activity.parameters["mode"] == "align"
+        assert activity.parameters["declared_task_family"] == "maximum-phonation-time"
+
+    def test_the_activity_used_the_carriers_it_read(self, tmp_path: Path) -> None:
+        """The amplitude spans are the subject, so the graph records that they were read."""
+        store, ids = seed(tmp_path)
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        activity = [each for each in store.activities() if each.node == "VOICE"][-1]
+        assert ids["amplitude"][0] in store.uses_of(activity.id)
+
+    def test_the_verdict_carries_the_keys_report_reads(self, tmp_path: Path) -> None:
+        """``report._BRANCH_MEASURES["VOICE"]`` names three, and a writer may not drop a reader's."""
+        store, _ = seed(tmp_path)
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        verdict = live_entities(store, "verdict")[-1].attributes
+        assert {"spans_n", "phonation_s", "longest_span_s"} <= set(verdict)
+
+    def test_the_verdict_names_the_mode_and_the_done_value(self, tmp_path: Path) -> None:
+        """``done`` is the branch's answer and belongs in the record, not only in the return."""
+        store, _ = seed(tmp_path, stem=COUGH_STEM)
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        verdict = live_entities(store, "verdict")[-1].attributes
+        assert verdict["mode"] == "detect"
+        assert verdict["done"] == UNDETERMINED
+
+    def test_a_found_attempt_reads_as_the_kind_being_present(self, tmp_path: Path) -> None:
+        """VERDICT reads FAIL as the kind absent, so anything else must mean it was found."""
+        store, _ = seed(tmp_path)
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.PASS
+        assert result.verdict.kind == "voice"
+
+    def test_a_deviation_flags_rather_than_fails(self, tmp_path: Path) -> None:
+        """A truncated attempt is still an attempt; FAIL is reserved for finding none."""
+        store, _ = seed(tmp_path, amplitude=((0.0, 20.0),), tracks=_tracks(20.0, [(0.0, 20.0)]))
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FLAG
+
+
+class TestARulesetLabelledSpanIsContestedNotRewritten:
+    """Contesting is an assertion beside a span, so propose-only does not touch that path."""
+
+    def test_a_labelled_span_failing_the_qualifier_is_contested(self, tmp_path: Path) -> None:
+        """The object of a contest is a PREPROCESS span, never VOICE's own proposal."""
+        store, _ = seed(
+            tmp_path,
+            stem=COUGH_STEM,
+            amplitude=(),
+            tracks=_tracks(20.0, []),
+            span_labels=((3.0, 6.0, "phonation"),),
+        )
+        result = detect_voice(store, params(), run_dir=tmp_path)
+        contested = [finding for finding in result.deviations if finding.kind == "contest"]
+        assert contested and contested[0].evidence["reason"] == "fails_the_stationarity_qualifier"
+
+    def test_a_labelled_span_that_qualifies_is_not_contested(self, tmp_path: Path) -> None:
+        """The discriminating half: it qualified, so there is nothing to contest."""
+        store, _ = seed(
+            tmp_path,
+            stem=COUGH_STEM,
+            amplitude=(),
+            tracks=_tracks(20.0, [(3.0, 15.0)]),
+            span_labels=((3.0, 15.0, "phonation"),),
+        )
+        result = detect_voice(store, params(), run_dir=tmp_path)
+        assert [finding for finding in result.deviations if finding.kind == "contest"] == []
+
+
+class TestAnUnmeasuredOperatingPointFailsNamingItself:
+    """No number in code: a key nobody has fitted is null, and reading it raises."""
+
+    def test_the_packaged_config_fails_naming_the_key_it_needed(self, tmp_path: Path) -> None:
+        """38 of the 39 branch keys ship null, which is intended rather than a gap to paper over."""
+        store, _ = seed(tmp_path)
+        with pytest.raises(ValueError, match="branch.production_min_s"):
+            voice(store, "plain", load_triage_config(), None, run_dir=tmp_path)
+
+    def test_one_null_key_does_not_fail_a_body_that_needs_another(self, tmp_path: Path) -> None:
+        """``BranchParams`` reads lazily; the glide arm never reads the sustained arm's keys."""
+        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 300.0))
+        result = align_voice("glides-low-to-high", store, None, params(f0_spread_max_semitones=None), run_dir=tmp_path)
+        assert result.components[0].attributes["direction"] == "up"
