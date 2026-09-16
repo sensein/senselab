@@ -63,6 +63,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     declared_duration_count,
     derivative_arrays,
     deviation,
+    deviation_names,
     dispatch,
     duration,
     group_by_breaks,
@@ -86,7 +87,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     write_findings,
 )
 from senselab.audio.workflows.triage.nodes.common import (
-    NodeResult,
+    BranchResult,
     clamp_extent,
     consensus_words,
     find_measurement,
@@ -96,11 +97,11 @@ from senselab.audio.workflows.triage.nodes.common import (
     path_attributes,
     resolve_stream,
     software_agent,
+    write_report,
     write_stream,
-    write_verdict,
 )
 from senselab.audio.workflows.triage.stimulus import LexicalWord, StimulusAlignment, align_stimulus
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
 from senselab.utils.data_structures import HFModel, SpeechBrainModel
 from senselab.utils.prov_store import Entity, ProvStore
@@ -259,16 +260,23 @@ def _embedding_model(model_id: str, revision: str) -> SpeechBrainModel:
     return SpeechBrainModel(path_or_uri=model_id, revision=revision)
 
 
-def _required(config: TriageConfig, enrollment: Enrollment | None) -> dict[str, Any]:
-    """Resolve every ``require()`` key at entry, so an unmeasured key precedes any measurement.
+def _required(params: BranchParams, enrollment: Enrollment | None) -> dict[str, Any]:
+    """Resolve the settings this branch reads, refusing none of them.
+
+    The first group are settings of other sections that ship values; a null in one is an override
+    error and ``require`` surfaces it. The enrollment group is nullable in the packaged file, so it
+    is read through :meth:`BranchParams.setting`, which records the ask and returns None rather
+    than stopping the branch — a refusal would be this branch deciding.
 
     Args:
-        config: The triage configuration.
-        enrollment: The caller's enrollment; one additionally requires the probe and the match cut.
+        params: The operating points, which also carry the configuration and the record of misses.
+        enrollment: The caller's enrollment; one additionally needs the probe and the match cut.
 
     Returns:
-        The resolved values, keyed by their short names.
+        The resolved values, keyed by their short names. An enrollment value nobody measured is
+        None and is recorded in ``params.missing``.
     """
+    config = params.config
     values: dict[str, Any] = {
         "coverage_threshold": float(config.require("yamnet.coverage_threshold")),
         "clip_headroom": float(config.require("disruptions.clip_headroom")),
@@ -279,10 +287,10 @@ def _required(config: TriageConfig, enrollment: Enrollment | None) -> dict[str, 
         "required_detectors": sorted(str(name) for name in config.require("pii.required_detectors")),
     }
     if enrollment is not None:
-        model = config.require("speech.enrollment_model")
-        values["enrollment_model_id"] = str(model["model_id"])
-        values["enrollment_revision"] = str(model["revision"])
-        values["target_match_cosine"] = float(config.require("speech.target_match_cosine"))
+        model = params.setting("speech.enrollment_model", dict)
+        values["enrollment_model_id"] = None if model is None else str(model["model_id"])
+        values["enrollment_revision"] = None if model is None else str(model["revision"])
+        values["target_match_cosine"] = params.setting("speech.target_match_cosine", float)
     return values
 
 
@@ -563,13 +571,13 @@ def _missing_detectors(required: list[str], scanned_by: set[str], failures: dict
     return sorted(set(required) - scanned_by - set(failures))
 
 
-def _decide_pii(
+def _pii_notes(
     findings: list[dict[str, Any]],
     failures: dict[str, str],
     missing: list[str],
     target_speaker: str | None,
 ) -> list[str]:
-    """This branch's own rule over ``scan_for_pii``'s evidence — not ``decide_pii``'s.
+    """What the PII scan could not establish, named. This branch decides nothing about it.
 
     Args:
         findings: One record per finding, carrying its category and its resolved speaker.
@@ -578,7 +586,9 @@ def _decide_pii(
         target_speaker: The diarized speaker the enrollment matched, or None.
 
     Returns:
-        The reasons this branch flags, in controlled vocabulary.
+        The observations, in controlled vocabulary, for the report's ``notes``. REDACT's gate is
+        the ``pii`` entities in the store (``run._speech_found_pii``) and not this list, so nothing
+        here suppresses or triggers a redaction.
     """
     reasons: list[str] = []
     for detector in missing:
@@ -634,89 +644,16 @@ def _speaker_runs(words: list[Entity], speakers: list[str | None], notes: list[s
     return runs
 
 
-def _flag_before_measuring(store: ProvStore, why: str) -> NodeResult:
-    """Flag on a caller input this branch cannot act on, before any measurement is taken.
-
-    Args:
-        store: The provenance store.
-        why: The refusal, in controlled vocabulary.
-
-    Returns:
-        The flag verdict and a view over it alone.
-    """
-    software = software_agent(store)
-    activity = store.activity(node=NODE, step="enrollment", parameters={})
-    store.was_associated_with(activity, software)
-    verdict_id, verdict = write_verdict(
-        store,
-        activity,
-        software,
-        node=NODE,
-        outcome=Outcome.FLAG,
-        kind="speech",
-        why=why,
-        detail={"flags": [why]},
-    )
-    return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)
-
-
 # --------------------------------------------------------------------- the two modes
 
 MINT = PROPOSERS[NODE]
 """SPEECH's own minting function. It proposes into ``family: "speech"`` and can reach no other."""
 
-BREATH_TOKEN = "[breath]"
-"""The one bracketed token that is never a filler: a breath in a passage reading is structure."""
-
-UNMEASURED_POINTS = "unmeasured_operating_points"
-"""The measurement naming every ``branch.*`` key an evaluation asked for and nobody has measured."""
-
 STIMULUS_MEASUREMENT = "stimulus_alignment"
 """PREPROCESS's derivative the fully-specified families are evaluated against."""
 
-
-@dataclass
-class _Points:
-    """The ``branch.*`` operating points one evaluation asked for, and the ones nobody measured.
-
-    Attributes:
-        params: The operating points.
-        missing: The keys that were read while null, in first-read order.
-    """
-
-    params: BranchParams
-    missing: list[str] = field(default_factory=list)
-
-    def __call__(self, key: str) -> Any:  # noqa: ANN401 — each key's own type; several are not floats
-        """One operating point, or None when nobody has measured it.
-
-        Args:
-            key: The key's name inside the ``branch`` section.
-
-        Returns:
-            The value, through :class:`BranchParams`' own property, or None.
-
-        Raises:
-            KeyError: If the name is not a ``branch`` key, so a typo fails here rather than reading
-                as one more unmeasured point.
-        """
-        if key not in PARAM_KEYS:
-            raise KeyError(f"{PARAM_SECTION}.{key} is not a branch operating point; check it against PARAM_KEYS")
-        if self.params.config.get(f"{PARAM_SECTION}.{key}") is None:
-            if key not in self.missing:
-                self.missing.append(key)
-            return None
-        return getattr(self.params, f"p_{key}")
-
-    def record(self) -> list[Finding]:
-        """What was asked for and could not be read, as one finding.
-
-        Returns:
-            One ``unmeasured_operating_points`` measurement, or nothing when every key was read.
-        """
-        if not self.missing:
-            return []
-        return [measured(UNMEASURED_POINTS, None, None, sorted(self.missing), section=PARAM_SECTION)]
+BREATH_TOKEN = "[breath]"
+"""The one bracketed token that is never a filler: a breath in a passage reading is structure."""
 
 
 def _consensus_id(store: ProvStore) -> str | None:
@@ -757,7 +694,9 @@ def _stimulus(store: ProvStore, hint: AudioHints | None, params: BranchParams) -
         )
         for word in lexical_words(store)
     ]
-    terminators = str(params.config.require("stimulus.sentence_terminators"))
+    terminators = params.setting("stimulus.sentence_terminators")
+    if terminators is None:
+        return None
     return measurement.id, align_stimulus(prompts, words, terminators=terminators)
 
 
@@ -814,7 +753,7 @@ def _repeat_fraction(expected: Sequence[str], produced: Sequence[str]) -> float:
     return sum(1 for key in wanted if counts.get(key, 0) > 1) / len(wanted)
 
 
-def _breath_groups(store: ProvStore, points: _Points) -> list[tuple[float, float]]:
+def _breath_groups(store: ProvStore, points: BranchParams) -> list[tuple[float, float]]:
     """The breath groups of a connected production, from the inter-word gaps and breath evidence.
 
     Args:
@@ -826,12 +765,12 @@ def _breath_groups(store: ProvStore, points: _Points) -> list[tuple[float, float
         recording carries no lexical word.
     """
     words = lexical_words(store)
-    min_gap = points("breath_group_min_gap_s")
+    min_gap = points.point("breath_group_min_gap_s")
     if not words or min_gap is None:
         return []
     breaks = list(inter_word_gaps(words, float(min_gap)))
-    score_min = points("score_min")
-    breath_labels = set(points.params.p_label_sets.get("breath", ())) if score_min is not None else set()
+    score_min = points.point("score_min")
+    breath_labels = set((points.point("label_sets") or {}).get("breath", ())) if score_min is not None else set()
     if breath_labels:
         for window in find_measurements(store, "span_hear"):
             scores = window.attributes.get("raw_scores") or {}
@@ -845,7 +784,7 @@ def _breath_groups(store: ProvStore, points: _Points) -> list[tuple[float, float
     return group_by_breaks(words, merge([extent for extent in breaks if extent[1] > extent[0]]))
 
 
-def _breath_group_components(store: ProvStore, points: _Points, evidence: Sequence[str]) -> list[Proposal]:
+def _breath_group_components(store: ProvStore, points: BranchParams, evidence: Sequence[str]) -> list[Proposal]:
     """One proposed span per breath group of a connected production.
 
     Args:
@@ -865,7 +804,7 @@ def _breath_group_components(store: ProvStore, points: _Points, evidence: Sequen
     ]
 
 
-def _off_task(components: Sequence[Proposal], store: ProvStore, points: _Points) -> list[Finding]:
+def _off_task(components: Sequence[Proposal], store: ProvStore, points: BranchParams) -> list[Finding]:
     """The gaps no proposed span covers, once the shortest one reported has been measured.
 
     Args:
@@ -876,7 +815,7 @@ def _off_task(components: Sequence[Proposal], store: ProvStore, points: _Points)
     Returns:
         The findings, or nothing while ``branch.gap_off_task_min_s`` is unmeasured.
     """
-    cut = points("gap_off_task_min_s")
+    cut = points.point("gap_off_task_min_s")
     if cut is None:
         return []
     return off_task(components, live_entities(store, "span"), float(cut))
@@ -901,7 +840,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
     Returns:
         Whether the prescribed sequence was produced, the spans, and the deviations.
     """
-    points = _Points(params)
+    points = params
     consensus_id = _consensus_id(store)
     words = lexical_words(store)
     if consensus_id is None:
@@ -987,7 +926,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
                 findings.append(deviation("truncation", read_extent[0], read_extent[1]))
             if repeat_fraction is not None:
                 findings.append(measured("expected_sequence_repeat_fraction", None, None, round(repeat_fraction, 3)))
-                cut = points("repeat_overlap_min")
+                cut = points.point("repeat_overlap_min")
                 if cut is not None and repeat_fraction >= float(cut):
                     findings.append(
                         deviation("repeat_reading", read_extent[0], read_extent[1], overlap=round(repeat_fraction, 3))
@@ -1020,20 +959,13 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
                 agreement=word.attributes.get("agreement"),
             )
         )
-    score_max = points("omission_score_max")
     for index, token, anchor in omissions:
         # An omission has no extent of its own — a skip-arc-free aligner assigns every stimulus word
-        # an interval whether or not it was spoken — so it is placed where it should have been.
-        findings.append(
-            deviation(
-                "omission",
-                anchor,
-                anchor,
-                expected=token,
-                expected_index=index,
-                acoustic_score_max=score_max,
-            )
-        )
+        # an interval whether or not it was spoken — so it is placed where it should have been. The
+        # `acoustic_score_max` covariate this used to carry named `branch.omission_score_max`, a cut
+        # on an acoustic score no derivative in the graph produces; the key and the covariate were
+        # removed together rather than the key being given a default it could not be reasoned into.
+        findings.append(deviation("omission", anchor, anchor, expected=token, expected_index=index))
 
     if expectation.emit_filler:
         for word in consensus_words(store):
@@ -1072,7 +1004,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
     Returns:
         Whether a response was produced, the spans, and the findings.
     """
-    points = _Points(params)
+    points = params
     runs = asr_spans(live_entities(store, "span"))
     words = lexical_words(store)
     response = hull([span.extent for span in runs if span.extent is not None])
@@ -1081,7 +1013,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
     findings: list[Finding] = []
     if response is not None and response[1] > response[0]:
         components.append(MINT("task_extent", response, *(span.id for span in runs), words_n=len(words)))
-    minimum = points("response_min_s")
+    minimum = points.point("response_min_s")
     done: Done = UNDETERMINED if minimum is None else (response is not None and duration(response) >= float(minimum))
 
     if expectation.connected and response is not None and duration(response) > 0.0:
@@ -1102,7 +1034,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                 support_words=len(words),
             )
         )
-        pause_min = points("pause_min_s")
+        pause_min = points.point("pause_min_s")
         if pause_min is not None:
             pauses = inter_word_gaps(words, float(pause_min))
             findings.append(
@@ -1118,8 +1050,10 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
 
     if expectation.anti_pattern is not None:
         read = _stimulus(store, hint, params)
-        ngram_n = points("echo_ngram_n")
-        cut = points("echo_overlap_max" if expectation.anti_pattern == "verbatim_prompt" else "verbatim_overlap_max")
+        ngram_n = points.point("echo_ngram_n")
+        cut = points.point(
+            "echo_overlap_max" if expectation.anti_pattern == "verbatim_prompt" else "verbatim_overlap_max"
+        )
         if read is None:
             findings.append(unviable(f"anti_pattern_{expectation.anti_pattern}", f"{STIMULUS_MEASUREMENT} is absent"))
             done = UNDETERMINED
@@ -1146,7 +1080,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                 # reproduction is the deviation, so coverage is what `done` reads.
                 covered = content_coverage(source, produced)
                 findings.append(measured("source_content_coverage", None, None, round(covered, 3)))
-                coverage_min = points("coverage_min")
+                coverage_min = points.point("coverage_min")
                 done = UNDETERMINED if coverage_min is None else covered >= float(coverage_min)
 
     findings.extend(unviable_findings(expectation))
@@ -1174,7 +1108,7 @@ def _speech_item_list(
     Returns:
         Whether any item was produced, the span, and the findings.
     """
-    points = _Points(params)
+    points = params
     if expectation.repetition_from_category:
         # Eight of ten categories say "Do not repeat any item"; `Letters` and `Numbers` allow it. A
         # family-scoped rule inverts the instruction on those, so an unreadable category concludes
@@ -1242,7 +1176,7 @@ def _speech_no_lexical(store: ProvStore, params: BranchParams) -> Result:
     Returns:
         Whether the recording stayed non-lexical, no spans, and one deviation per lexical word.
     """
-    points = _Points(params)
+    points = params
     produced = lexical_words(store)
     findings: list[Finding] = []
     for word in produced:
@@ -1258,7 +1192,7 @@ def _speech_no_lexical(store: ProvStore, params: BranchParams) -> Result:
             )
         )
     findings.append(count("lexical_words", len(produced), 0))
-    tolerated = points("expected_lexical_max")
+    tolerated = points.point("expected_lexical_max")
     findings.extend(points.record())
     done: Done = UNDETERMINED if tolerated is None else len(produced) <= int(tolerated)
     return Result(done, [], findings)
@@ -1311,10 +1245,10 @@ def detect_speech(store: ProvStore, params: BranchParams) -> Result:
         A result whose ``done`` is ``UNDETERMINED``, one span per run of lexical words, and the
         findings.
     """
-    points = _Points(params)
+    points = params
     words = lexical_words(store)
     consensus_id = _consensus_id(store)
-    gap = points("run_gap_max_s")
+    gap = points.point("run_gap_max_s")
     components: list[Proposal] = []
     findings: list[Finding] = []
     # Not `merge` over the word extents: `merge` joins only what touches and ordinary speech has a
@@ -1364,7 +1298,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     *,
     run_dir: Path,
     enrollment: Optional[Enrollment] = None,
-) -> NodeResult:
+) -> BranchResult:
     """Run the SPEECH branch over the store PREPROCESS left behind.
 
     Args:
@@ -1384,19 +1318,15 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         LookupError: If a stream this branch needs, or the consensus transcript, is absent.
         ValueError: If a key this branch requires has no value and no enrollment was supplied.
     """
-    try:
-        values = _required(config, enrollment)
-    except ValueError as error:
-        if enrollment is None:
-            raise
-        return _flag_before_measuring(store, f"{error}")
+    params = branch_params(config)
+    values = _required(params, enrollment)
 
     software = software_agent(store)
     plain_id, plain = resolve_stream(store, run_dir, source)
     recording_id, recording = resolve_stream(store, run_dir, ORIGINAL)
     sampling_rate = int(plain.sampling_rate)
     view: list[str] = []
-    flags: list[str] = []
+    notes: list[str] = []
 
     # Step 1 — the consensus transcript is the transcript; this branch reads it and re-fuses nothing.
     consensus = find_measurement(store, "consensus_transcript")
@@ -1418,39 +1348,66 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         store.used(transcript, word.id)
 
     if hint is not None and hint.target_speaker is not None:
-        flags.append(
+        notes.append(
             "this branch identifies the target by enrollment, not by hint.target_speaker, "
             "which was supplied and is not read"
         )
 
+    # The expectation: one mode or the other, chosen from the declared family and nothing else. It
+    # runs before this branch proposes anything, so neither mode reads a span this pass authored,
+    # and it runs *before* the no-lexical exit below rather than after it: a syllable-repetition
+    # recording with no lexical word is one `_speech_no_lexical` reads as conforming, and preempting
+    # both modes would report the opposite.
+    mode, declared_family = mode_of(NODE, store, hint)
+    expect = store.activity(
+        node=NODE, step="expect", parameters={"mode": mode, "task_family": declared_family, "stream": source}
+    )
+    store.was_associated_with(expect, software)
+    store.used(expect, consensus.id)
+    result = dispatch(NODE, store, params, hint, align=align_speech, detect=detect_speech)
+    expectation_findings = [*result.deviations, *params.record()]
+    view.extend(propose_spans(store, expect, software, result.components))
+    view.extend(write_findings(store, expect, software, expectation_findings, signal=source))
+
     if not lexical:
-        why = "no consensus word; this branch has no subject"
-        outcome = Outcome.FAIL
-        verdict_id, verdict = write_verdict(
+        # No lexical word is a reading, not a refusal: the mode above already said whether the
+        # instruction's own pattern was found, and this branch reports that beside the spans it
+        # proposed. VERDICT decides what it means for the file.
+        notes.append("no consensus word; this branch measured no lexical subject")
+        report_id, report = write_report(
             store,
             transcript,
             software,
             node=NODE,
-            outcome=outcome,
             kind="speech",
-            why=why,
+            conformance=result.done,
+            conformance_of=TASK,
+            deviations=deviation_names(expectation_findings),
+            unmeasured=tuple(params.missing),
             detail={
                 "speaker_count": None,
                 "diarization": "no_words",
+                "expectation": {
+                    "mode": mode,
+                    "task_family": declared_family,
+                    "spans_n": len(result.components),
+                    "findings_n": len(expectation_findings),
+                },
                 "words_n": 0,
                 "speech_s": 0.0,
                 "nontarget_speech_s": None,
                 "pii": {"categories": [], "n": 0, "scanned_by": [], "failed": [], "missing": []},
                 "second_diarizer": "not_consulted",
                 "separation": "no_speaker_count",
-                "flags": flags,
+                "notes": notes,
             },
         )
-        return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)
+        view.append(report_id)
+        return BranchResult(report=report, view=tuple(view), report_entity_id=report_id)
 
     single_source = [word.id for word in lexical if word.attributes["outcome"] == "insertion"]
     if single_source:
-        flags.append(f"{len(single_source)} single-recognizer word(s) survive as fabrication candidates")
+        notes.append(f"{len(single_source)} single-recognizer word(s) survive as fabrication candidates")
 
     # Step 2 — speech spans from the lexical words' timings, in memory until corroborated. A run
     # the consensus places at one instant is dropped rather than proposed: a span of no duration
@@ -1463,7 +1420,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         if clamp_extent((start, end), plain)[1] > clamp_extent((start, end), plain)[0]
     ]
     if len(grouped) < len(all_grouped):
-        flags.append(f"{len(all_grouped) - len(grouped)} run(s) of words placed at one instant name no extent")
+        notes.append(f"{len(all_grouped) - len(grouped)} run(s) of words placed at one instant name no extent")
     span_extents = [clamp_extent((start, end), plain) for start, end, _ in grouped]
     speech_s = sum(end - start for start, end in span_extents)
 
@@ -1519,14 +1476,14 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         else:
             yamnet_vote = "confirm" if coverage >= values["coverage_threshold"] else "disconfirm"
             if yamnet_vote == "disconfirm":
-                flags.append(f"the classifier disconfirms span {start:.2f}-{end:.2f}s (speech coverage {coverage:.2f})")
+                notes.append(f"the classifier disconfirms span {start:.2f}-{end:.2f}s (speech coverage {coverage:.2f})")
         if stoi_floor is None or si_sdr_floor is None or "unmeasured" in squim:
             squim_vote = "not_evaluated"
         else:
             squim_ok = squim["stoi"] >= float(stoi_floor) and squim["si_sdr"] >= float(si_sdr_floor)
             squim_vote = "confirm" if squim_ok else "disconfirm"
         if {yamnet_vote, squim_vote} <= {"confirm", "disconfirm"} and squim_vote != yamnet_vote:
-            flags.append(
+            notes.append(
                 f"instruments disagree on span {start:.2f}-{end:.2f}s: classifier {yamnet_vote}, squim {squim_vote}"
             )
         corroboration.append({"yamnet_coverage": coverage, "yamnet_vote": yamnet_vote, "squim_vote": squim_vote})
@@ -1548,7 +1505,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     if read is None:
         speaker_count = None
         diarization_state = "derivative_absent"
-        flags.append("no whole-file diarization derivative is in the store; this branch reads one and runs none")
+        notes.append("no whole-file diarization derivative is in the store; this branch reads one and runs none")
     else:
         store.used(diarize_act, read.measurement_id)
         for start, end, label in read.segments:
@@ -1574,12 +1531,12 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "n_segments": len(speaker_segments),
         }
         if read.n_speakers != speaker_count:
-            flags.append(f"the derivative records {read.n_speakers} speaker(s) and its segments carry {speaker_count}")
+            notes.append(f"the derivative records {read.n_speakers} speaker(s) and its segments carry {speaker_count}")
 
     second = config.get("speech.second_diarizer")
     second_record: Any = "not_consulted"
     if speaker_count is not None and speaker_count != 1:
-        flags.append(f"speaker count {speaker_count} != 1")
+        notes.append(f"speaker count {speaker_count} != 1")
         if second is not None and read is not None:
             second_model = _second_diarizer_model(str(second))
             second_agent = store.agent(
@@ -1604,7 +1561,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                 "agrees": second_count == speaker_count,
             }
             if second_count != speaker_count:
-                flags.append(f"second diarizer counts {second_count} speakers against {speaker_count}")
+                notes.append(f"second diarizer counts {second_count} speakers against {speaker_count}")
 
     # Step 5 — separation: measurement-gated, and neither backend is selected by default. It runs
     # over the whole stream, because the diarization that gates it is now a whole-file reading.
@@ -1621,10 +1578,10 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         separation_state = "not_selected"
     elif speaker_count > SEPARABLE_SOURCES:
         separation_state = f"count_{speaker_count}_exceeds_backend"
-        flags.append(f"separation cannot serve {speaker_count} speakers; the checkpoints separate exactly 2")
+        notes.append(f"separation cannot serve {speaker_count} speakers; the checkpoints separate exactly 2")
     elif str(backend) == UNASDIFF_BACKEND and sound_class is None:
         separation_state = "unconditioned_sound_slot_unavailable"
-        flags.append(
+        notes.append(
             "unasdiff speech_sound requires a conditioning class for its sound slot and "
             "speech.separation_sound_class is unmeasured"
         )
@@ -1655,7 +1612,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         for position, stream_audio in enumerate(separated):
             meta = dict(stream_audio.metadata.get("clearvoice") or {})
             index = int(meta.get("source_index", position))
-            path, report = write_stream(stream_audio, run_dir, f"separated_{index}")
+            path, written = write_stream(stream_audio, run_dir, f"separated_{index}")
             stream_id = store.entity(
                 prov_type="stream",
                 extent=stream_span,
@@ -1669,7 +1626,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     "input_norm_scalar": meta.get("input_norm_scalar"),
                     "separation_model": meta.get("model"),
                     "separation_commit": meta.get("commit"),
-                    "write_gain": report.gain,
+                    "write_gain": written.gain,
                 },
             )
             store.was_generated_by(stream_id, separate_act)
@@ -1709,7 +1666,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             plain,
         )
         if run_extent[1] <= run_extent[0]:
-            flags.append(f"a run of {len(run.words)} word(s) attributed to {run.speaker} names no extent")
+            notes.append(f"a run of {len(run.words)} word(s) attributed to {run.speaker} names no extent")
             continue
         sources = [
             segment_id for segment_id, speaker_label, extent in speaker_segments if _overlaps(run_extent, extent)
@@ -1751,11 +1708,22 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         store.was_attributed_to(enrollment_id, software)
         view.append(enrollment_id)
 
-        refusal = enrollment.refusal_against(values["enrollment_model_id"], values["enrollment_revision"])
-        if refusal is not None:
-            flags.append(refusal)
+        model_id, revision, cut = (
+            values["enrollment_model_id"],
+            values["enrollment_revision"],
+            values["target_match_cosine"],
+        )
+        unreadable = model_id is None or revision is None or cut is None
+        refusal = None if unreadable else enrollment.refusal_against(model_id, revision)
+        if unreadable:
+            notes.append(
+                "an enrollment was given and speech.enrollment_model or speech.target_match_cosine "
+                "is unmeasured, so no probe was embedded"
+            )
+        elif refusal is not None:
+            notes.append(refusal)
         elif speaker_segments:
-            probe = _embedding_model(values["enrollment_model_id"], values["enrollment_revision"])
+            probe = _embedding_model(str(model_id), str(revision))
             labels: list[str] = []
             audios: list[Audio] = []
             for label in sorted({speaker for _, speaker, _ in speaker_segments}):
@@ -1768,7 +1736,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     if int(end * sampling_rate) > int(start * sampling_rate)
                 ]
                 if not slices:
-                    flags.append(f"speaker {label} holds no audio alone, so no probe can be embedded for them")
+                    notes.append(f"speaker {label} holds no audio alone, so no probe can be embedded for them")
                     continue
                 labels.append(label)
                 audios.append(Audio(waveform=torch.cat(slices, dim=1), sampling_rate=sampling_rate))
@@ -1778,7 +1746,6 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             store.was_associated_with(identify, embedding_agent)
             embeddings = extract_speaker_embeddings_from_audios(audios, model=probe)
             enrolled = torch.tensor(enrollment.vector, dtype=torch.float32)
-            cut = float(values["target_match_cosine"])
             best: tuple[float, str] | None = None
             for label, embedding in zip(labels, embeddings):
                 similarity = _cosine(embedding, enrolled)
@@ -1806,20 +1773,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             if best is not None and best[0] >= cut:
                 target_speaker = best[1]
             else:
-                flags.append("an enrollment was given and no speaker matches it")
-
-    # The expectation: one mode or the other, chosen from the declared family and nothing else. It
-    # runs before this branch proposes anything, so neither mode reads a span this pass authored.
-    params = branch_params(config)
-    mode, declared_family = mode_of(NODE, store, hint)
-    expect = store.activity(
-        node=NODE, step="expect", parameters={"mode": mode, "task_family": declared_family, "stream": source}
-    )
-    store.was_associated_with(expect, software)
-    store.used(expect, consensus.id)
-    result = dispatch(NODE, store, params, hint, align=align_speech, detect=detect_speech)
-    view.extend(propose_spans(store, expect, software, result.components))
-    view.extend(write_findings(store, expect, software, result.deviations, signal=source))
+                notes.append("an enrollment was given and no speaker matches it")
 
     # The span elements, proposed rather than written: a branch mints into its own family, naming
     # what each extent came from, and never edits a span another node proposed.
@@ -1872,7 +1826,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             # Locate and mark every occurrence of this finding, not just its first (branch-speech.md §7).
             located = [(positions[first], positions[last]) for first, last in _locate(str(finding.text or ""), tokens)]
             if not located:
-                flags.append(f"pii_unlocated ({finding.category})")
+                notes.append(f"pii_unlocated ({finding.category})")
                 occurrences = [(0, len(words) - 1)]
             else:
                 occurrences = located
@@ -1923,7 +1877,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     }
                 )
     missing = _missing_detectors(values["required_detectors"], scanned_by, failures)
-    flags.extend(_decide_pii(findings, failures, missing, target_speaker))
+    notes.extend(_pii_notes(findings, failures, missing, target_speaker))
     scan_id = store.entity(
         prov_type="measurement",
         extent=None,
@@ -2021,16 +1975,16 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             )
         )
 
-    # Outcome — fail only from the no-words row above; flag from the accumulated reasons; else pass.
+    # The report: the spans are in the store, the conformance is the mode's, and the observations
+    # below are named rather than scored. No outcome is written here or anywhere in this branch.
     detail: dict[str, Any] = {
         "speaker_count": speaker_count,
         "diarization": diarization_state,
         "expectation": {
             "mode": mode,
             "task_family": declared_family,
-            "done": result.done,
             "spans_n": len(result.components),
-            "findings_n": len(result.deviations),
+            "findings_n": len(expectation_findings),
         },
         "words_n": len(lexical),
         "speech_s": speech_s,
@@ -2044,19 +1998,23 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         },
         "second_diarizer": second_record,
         "separation": separation_state,
-        "flags": flags,
+        "notes": notes,
     }
     if target_speaker is not None:
         detail["target_speaker"] = target_speaker
     if enrollment_id is not None:
         detail["enrollment_id"] = enrollment_id
-    if flags:
-        outcome, why = Outcome.FLAG, "; ".join(flags)
-    else:
-        outcome = Outcome.PASS
-        why = "words, spans, speakers and quality are in the store"
-    verdict_id, verdict = write_verdict(
-        store, proximity_act, software, node=NODE, outcome=outcome, kind="speech", why=why, detail=detail
+    report_id, report = write_report(
+        store,
+        proximity_act,
+        software,
+        node=NODE,
+        kind="speech",
+        conformance=result.done,
+        conformance_of=TASK,
+        deviations=deviation_names(expectation_findings),
+        unmeasured=tuple(params.missing),
+        detail=detail,
     )
-    view.append(verdict_id)
-    return NodeResult(verdict=verdict, view=tuple(view), verdict_entity_id=verdict_id)
+    view.append(report_id)
+    return BranchResult(report=report, view=tuple(view), report_entity_id=report_id)

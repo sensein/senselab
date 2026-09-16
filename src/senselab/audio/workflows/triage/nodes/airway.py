@@ -39,6 +39,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     count,
     declared_duration_count,
     deviation,
+    deviation_names,
     dispatch,
     duration,
     events_in_span,
@@ -46,7 +47,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     measured,
     merge,
     mode_of,
-    off_task,
+    off_task_findings,
     overlaps,
     peak_over_floor_db,
     propose_spans,
@@ -60,16 +61,16 @@ from senselab.audio.workflows.triage.nodes.branches import (
     write_findings,
 )
 from senselab.audio.workflows.triage.nodes.common import (
-    NodeResult,
+    BranchResult,
     find_measurement,
     find_measurements,
     lexical_words,
     live_entities,
     software_agent,
-    write_verdict,
+    write_report,
 )
 from senselab.audio.workflows.triage.routing_analysis.families import task_id_of
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "AIRWAY"
@@ -344,11 +345,14 @@ def airway_events(
     Returns:
         The events, earliest first.
     """
-    labels = params.p_label_sets[label_set]
+    labels = (params.point("label_sets") or {}).get(label_set)
+    minimum = params.point("score_min")
+    if labels is None or minimum is None:
+        return []
     events: list[Event] = []
     for span in spans:
         extent = span.extent
-        if extent is None or not sounds_like(span, windows, labels, params.p_score_min):
+        if extent is None or not sounds_like(span, windows, labels, minimum):
             continue
         resolved = events_in_span(envelope, span, params)
         if resolved:
@@ -454,7 +458,8 @@ def event_measurements(
     findings: list[Finding] = []
     for index, event in enumerate(events):
         extent = (event.start, event.end)
-        balance = None if block is None else rounded(spectral_balance_db(block, extent, params.p_effort_split_hz))
+        split_hz = params.point("effort_split_hz")
+        balance = None if block is None or split_hz is None else rounded(spectral_balance_db(block, extent, split_hz))
         findings.append(
             measured(
                 f"{label_set}_peak_over_floor_db",
@@ -635,13 +640,15 @@ def _airway_event_series(
     intervals = [round(later - earlier, 3) for earlier, later in zip(onsets, onsets[1:])]
     if expectation.timed_intervals:
         findings.append(count("inter_onset_interval_s", intervals, None))
-        findings.append(
-            count(
-                "intervals_over_p_interval_max_s",
-                sum(1 for value in intervals if value > params.p_interval_max_s),
-                0,
+        interval_max_s = params.point("interval_max_s")
+        if interval_max_s is not None:
+            findings.append(
+                count(
+                    "intervals_over_p_interval_max_s",
+                    sum(1 for value in intervals if value > interval_max_s),
+                    0,
+                )
             )
-        )
     findings.extend(event_measurements(events, kind, store=store, envelope=envelope, block=block, params=params))
 
     route, route_reported = route_findings(expectation, store, hint, params)
@@ -670,7 +677,7 @@ def _airway_event_series(
     findings.extend(lexical_intrusions(store))
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
-    findings.extend(off_task(components, spans, params.p_gap_off_task_min_s))
+    findings.extend(off_task_findings(components, spans, params))
     return Result(len(events) > 0, components, findings)
 
 
@@ -700,8 +707,13 @@ def _airway_alternation(expectation: Expectation, store: ProvStore, params: Bran
     graded = silence_windows(store)
 
     coughs = airway_events(kind, store, params, spans=spans, envelope=envelope, windows=windows)
-    breath_labels = params.p_label_sets[BREATH]
-    carriers = [span for span in spans if sounds_like(span, windows, breath_labels, params.p_score_min)]
+    breath_labels = (params.point("label_sets") or {}).get(BREATH) or ()
+    breath_minimum = params.point("score_min")
+    carriers = (
+        []
+        if breath_minimum is None
+        else [span for span in spans if sounds_like(span, windows, breath_labels, breath_minimum)]
+    )
     breaths = merge([span.extent for span in carriers if span.extent is not None])
 
     components = event_proposals(coughs, kind, store=store, evidence=evidence, graded=graded)
@@ -740,7 +752,7 @@ def _airway_alternation(expectation: Expectation, store: ProvStore, params: Bran
         )
     findings.extend(lexical_intrusions(store))
     findings.extend(unviable_findings(expectation))
-    findings.extend(off_task(components, spans, params.p_gap_off_task_min_s))
+    findings.extend(off_task_findings(components, spans, params))
     return Result(len(coughs) > 0, components, findings)
 
 
@@ -769,10 +781,14 @@ def _airway_coverage(
     if scored is None:
         return instrument_absent("hear_scores")
     kind = expectation.label_set
-    labels = params.p_label_sets[kind]
-    minimum = params.p_score_min
-    covered = merge(
-        [extent for extent, scores in scored if any(float(scores.get(label, 0.0)) >= minimum for label in labels)]
+    labels = (params.point("label_sets") or {}).get(kind) or ()
+    minimum = params.point("score_min")
+    covered = (
+        []
+        if minimum is None
+        else merge(
+            [extent for extent, scores in scored if any(float(scores.get(label, 0.0)) >= minimum for label in labels)]
+        )
     )
     total = sum(duration(extent) for extent in covered)
     whole = duration(stream_extent(store))
@@ -814,8 +830,9 @@ def _airway_coverage(
     findings.extend(lexical_intrusions(store))
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
-    findings.extend(off_task(components, candidate_spans(store), params.p_gap_off_task_min_s))
-    return Result(coverage >= params.p_breath_coverage_min, components, findings)
+    findings.extend(off_task_findings(components, candidate_spans(store), params))
+    coverage_min = params.point("breath_coverage_min")
+    return Result(UNDETERMINED if coverage_min is None else coverage >= coverage_min, components, findings)
 
 
 # --------------------------------------------------------------------- the two modes
@@ -889,7 +906,7 @@ def detect_airway(store: ProvStore, params: BranchParams, *, run_dir: Path | Non
     windows = classifier_windows(store)
     evidence = evidence_ids(store, *EVENT_SOURCES)
     graded = silence_windows(store)
-    label_sets = params.p_label_sets
+    label_sets = params.point("label_sets") or {}
 
     components: list[Proposal] = []
     findings: list[Finding] = []
@@ -924,8 +941,8 @@ def airway(
     hint: AudioHints | None = None,
     *,
     run_dir: Path,
-) -> NodeResult:
-    """Propose this branch's breath and cough spans, write its findings, and conclude.
+) -> BranchResult:
+    """Propose this branch's breath and cough spans, write its findings, and report.
 
     The declaration picks the mode and never supplies the answer: a declared airway family takes
     :func:`align_airway`; anything else — another branch's kind, an unreadable stem, no declaration
@@ -967,26 +984,28 @@ def airway(
         align=partial(align_airway, run_dir=run_dir),
         detect=partial(detect_airway, run_dir=run_dir),
     )
+    findings = [*result.deviations, *params.record()]
     span_ids = propose_spans(store, activity, software, result.components)
-    finding_ids = write_findings(store, activity, software, result.deviations, signal=source)
+    finding_ids = write_findings(store, activity, software, findings, signal=source)
 
-    outcome, why = _conclusion(store, result, mode)
-    verdict_id, verdict = write_verdict(
+    report_id, report = write_report(
         store,
         activity,
         software,
         node=NODE,
-        outcome=outcome,
         kind=KIND,
-        why=why,
-        detail={"mode": mode, "task_family": family, "done": result.done, **_detail(result, spans)},
+        conformance=result.done,
+        conformance_of=TASK,
+        deviations=deviation_names(findings),
+        unmeasured=tuple(params.missing),
+        detail={"mode": mode, "task_family": family, **_detail(result, spans, params)},
     )
-    view = [*(span.id for span in spans), *span_ids, *finding_ids, verdict_id]
-    return NodeResult(verdict=verdict, view=tuple(view), verdict_entity_id=verdict_id)
+    view = [*(span.id for span in spans), *span_ids, *finding_ids, report_id]
+    return BranchResult(report=report, view=tuple(view), report_entity_id=report_id)
 
 
-def _detail(result: Result, spans: Sequence[Entity]) -> dict[str, Any]:
-    """The verdict's design-named fields, read off what the mode returned.
+def _detail(result: Result, spans: Sequence[Entity], params: BranchParams) -> dict[str, Any]:
+    """The report's design-named observation fields, read off what the mode returned.
 
     ``labelled_n`` counts the events this branch proposed rather than the spans PREPROCESS merged
     them out of, which is the repair: a 4 s span holding three coughs used to count one.
@@ -994,10 +1013,11 @@ def _detail(result: Result, spans: Sequence[Entity]) -> dict[str, Any]:
     Args:
         result: What the selected mode returned.
         spans: The candidate spans, for the merge rate.
+        params: The operating points, read for what was asked for and could not be measured.
 
     Returns:
-        ``labelled_n``, ``by_label``, ``contested_n``, ``merged_n`` and ``flags``. ``flags`` is
-        always empty and is kept because REPORT reads the key; the branch has no FLAG path.
+        ``labelled_n``, ``by_label``, ``contested_n``, ``merged_n``, ``spans_n`` and ``notes``.
+        ``notes`` is what this branch could not measure, in controlled vocabulary; nothing folds it.
     """
     events = [proposal for proposal in result.components if proposal.role != TASK_EXTENT]
     by_label: dict[str, int] = {}
@@ -1005,37 +1025,17 @@ def _detail(result: Result, spans: Sequence[Entity]) -> dict[str, Any]:
         label = str(proposal.attributes.get("label") or KIND)
         by_label[label] = by_label.get(label, 0) + 1
     carriers = {source for proposal in events for source in proposal.derived_from}
+    absent = [
+        finding for finding in result.deviations if finding.kind == "measure" and finding.name == INSTRUMENT_ABSENT
+    ]
+    notes = [f"the {finding.evidence.get('absent')} derivative is absent" for finding in absent]
+    if params.missing:
+        notes.append(f"branch.* unmeasured: {', '.join(params.missing)}")
     return {
         "labelled_n": len(events),
         "by_label": by_label,
         "contested_n": sum(1 for finding in result.deviations if finding.kind == "contest"),
         "merged_n": sum(int(span.attributes.get("merged_proposals", 1)) for span in spans if span.id in carriers),
-        "flags": [],
+        "spans_n": len(result.components),
+        "notes": notes,
     }
-
-
-def _conclusion(store: ProvStore, result: Result, mode: str) -> tuple[Outcome, str]:
-    """The outcome and its reason, in controlled vocabulary.
-
-    A FAIL means this branch's detector found nothing, never that the recording lacks airway
-    content and never that the speaker failed to produce it.
-
-    Args:
-        store: The provenance store.
-        result: What the selected mode returned.
-        mode: ``"align"`` or ``"detect"``.
-
-    Returns:
-        The outcome and the reason.
-    """
-    if result.components:
-        return Outcome.PASS, f"{mode} proposed {len(result.components)} airway spans"
-    absent = [
-        finding for finding in result.deviations if finding.kind == "measure" and finding.name == INSTRUMENT_ABSENT
-    ]
-    if absent:
-        return Outcome.FAIL, f"the {absent[0].evidence.get('absent')} derivative is absent; no event could be read"
-    if not candidate_spans(store):
-        no_contrast = find_measurement(store, "spans_no_contrast")
-        return Outcome.FAIL, ("PREPROCESS reported no_contrast" if no_contrast is not None else "no span was proposed")
-    return Outcome.FAIL, "spans exist and none carries a label of interest"

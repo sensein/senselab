@@ -19,7 +19,12 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
-from senselab.audio.workflows.triage.nodes.common import NodeResult, capture_environments, describe_exception
+from senselab.audio.workflows.triage.nodes.common import (
+    BranchResult,
+    NodeResult,
+    capture_environments,
+    describe_exception,
+)
 from senselab.audio.workflows.triage.nodes.ddk import ddk
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
 from senselab.audio.workflows.triage.nodes.quality import quality
@@ -34,6 +39,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
     GRAPH_ORDER,
     QUALITY,
+    BranchReport,
     FileVerdict,
     NodeVerdict,
     Outcome,
@@ -59,7 +65,7 @@ _ENTITY_ORDER = ("sub-", "ses-")
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
 
-_R = TypeVar("_R", bound=NodeResult)
+_R = TypeVar("_R", bound="NodeResult | BranchResult")
 
 
 @dataclass(frozen=True)
@@ -68,8 +74,12 @@ class NodeOutcome:
 
     Attributes:
         node: The node's name.
-        state: Whether it completed, was skipped, or raised.
-        verdict: Its conclusion, or None when it did not conclude.
+        state: Whether it completed, was skipped, or raised. Operational fact, recorded here and
+            nowhere else, and untouched by the report/decide split: it says what the runner did, not
+            what the graph concluded.
+        verdict: Its conclusion, or None — which is every reporting node, since a branch and QUALITY
+            write no verdict.
+        report: What it reported, or None — which is every deciding node.
         error: The exception's type and message when it raised, else None. The runner's own record —
             never a store fact, because a crash is not a finding about the recording.
         note: Why the state is what it is, where the state alone does not say — a branch recorded
@@ -79,6 +89,7 @@ class NodeOutcome:
     node: str
     state: RunState
     verdict: NodeVerdict | None = None
+    report: BranchReport | None = None
     error: str | None = None
     note: str | None = None
 
@@ -214,17 +225,20 @@ def _attempt(outcomes: dict[str, NodeOutcome], node: str, call: Callable[[], _R]
         call: The node call, already bound to its arguments.
 
     Returns:
-        The node's result, or None when it raised or returned no result.
+        The node's result, or None when it raised or returned no result. The three states are
+        unchanged by the report/decide split: a node that reported is ``COMPLETED`` exactly as one
+        that decided is, and which of the two it was is carried beside the state rather than in it.
     """
     try:
         result = call()
         if result is None:
             raise RuntimeError(f"{node} returned no result")
-        node_verdict = result.verdict
+        concluded = result.verdict if isinstance(result, NodeResult) else None
+        reported = result.report if isinstance(result, BranchResult) else None
     except Exception as error:  # noqa: BLE001 — any failure is an operational fact about the run
         outcomes[node] = NodeOutcome(node=node, state=RunState.ERRORED, error=describe_exception(error))
         return None
-    outcomes[node] = NodeOutcome(node=node, state=RunState.COMPLETED, verdict=node_verdict)
+    outcomes[node] = NodeOutcome(node=node, state=RunState.COMPLETED, verdict=concluded, report=reported)
     return result
 
 
@@ -295,7 +309,7 @@ def _drive_branches(
     _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
     routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
     selected = set(routed.runs) if routed is not None else set()
-    branches: dict[str, Callable[[], NodeResult]] = {
+    branches: dict[str, Callable[[], BranchResult]] = {
         "AIRWAY": lambda: airway(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
         "SPEECH": lambda: speech(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir, enrollment=enrollment),
         "VOICE": lambda: voice(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),

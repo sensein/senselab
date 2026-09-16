@@ -234,49 +234,67 @@ speech:
 # them. `p_normalise` has no key -- it is a function, not a number, and resolves to
 # `consensus.vocabulary_key`, the normalisation the consensus and the stimulus alignment declare.
 branch:
-  smoothing_window_s: null             # boxcar width the energy envelope is smoothed over before the event walk
-  peak_prominence_db: null             # rise over the global floor, and over the flanking troughs, that makes a maximum an event
-  trough_return_db: null               # fall from a peak that closes its event, for the onset and offset walk
-  event_min_s: null                    # shortest extent the event walk reports
-  score_min: null                      # classifier raw score at or above which a label is present in a window
-  breath_coverage_min: null            # fraction of a declared breathing extent that must carry breath evidence
-  voiced_strength_min: null            # pitch strength at or above which a frame counts as voiced
-  voiced_fraction_min: null            # fraction of voiced frames a phonation carrier must reach
-  f0_spread_window_s: null             # window the worst local F0 spread is taken over
-  f0_spread_max_semitones: null        # largest local F0 spread a held vowel may show
-  continuity_min: null                 # median spectral continuity a stationary production must hold
-  production_min_s: null               # shortest carrier span a production may be found in
-  monotone_tolerance_semitones: null   # reversal a pitch sweep may contain and still count as monotone
-  dominant_segment_min_fraction: null  # fraction of a sweep one direction must hold to be the declared one
-  response_min_s: null                 # shortest extent that counts as a response at all
-  pause_min_s: null                    # gap between words that is a pause rather than coarticulation
-  run_gap_max_s: null                  # largest gap two lexical words may straddle and stay one run
-  breath_group_min_gap_s: null         # inter-word gap that breaks a breath group
-  omission_score_max: null             # alignment score at or below which an expected token counts as omitted
-  repeat_overlap_min: null             # overlap fraction at which an alignment covers the expected sequence twice
-  echo_ngram_n: null                   # n of the n-gram the prompt-echo overlap is measured over
-  echo_overlap_max: null               # prompt n-gram overlap above which a free response echoes its prompt
-  verbatim_overlap_max: null           # source content overlap above which a recall is verbatim
-  coverage_min: null                   # fraction of expected tokens a read text must realise
-  expected_lexical_max: null           # lexical words a no-lexical expectation tolerates
-  interval_max_s: null                 # largest inter-event interval a series the instruction calls quick may show
-  modulation_band_hz: null             # [lo, hi] band the envelope modulation peak is searched in
-  rate_prominence_min: null            # modulation peak over its own band mean that makes a rate readable
-  train_min_s: null                    # shortest carrier span that can hold a syllable train
-  repeat_min_occurrences: null         # occurrences of one token that make it a repetition
-  burst_window_ms: null                # window after a syllable onset the burst spectrum is taken over
-  place_centroid_bands_hz: null        # place of articulation -> [lo, hi] band its burst energy concentrates in
-  place_margin_db: null                # dB the leading place band must beat the next by to be resolved
-  effort_split_hz: null                # split the low and high spectral balance of an effort token is taken at
-  min_contrast_db: null                # spectral-balance difference two effort levels must differ by
-  tilt_max_db_per_octave: null         # spectral tilt below which a recording reads as occluded
-  level_min_dbfs: null                 # level below which a recording carries no production at all
-  gap_off_task_min_s: null             # shortest gap reported as off-task extent
-  # label-set name -> the classifier labels that ARE that sound. Data, not schema: a campaign may
-  # add a set. The two shipped sets are `airway.labels_of_interest` split by the kind each names.
+  # Detection and instrument settings only. A key that turned a reading into a judgement about the
+  # recording moved to `verdict:` on 2026-09-16. Every value here is a conventional starting point
+  # reasoned from the instrument's physics or from the task instruction, NOT fitted against the
+  # corpus; each one's reasoning is in specs/20260817-triage-workflow-dag/config-derivations.md.
+  smoothing_window_s: 0.05             # boxcar width the energy envelope is smoothed over before the event walk
+  peak_prominence_db: 6.0              # rise over the global floor, and over the flanking troughs, that makes a maximum an event
+  trough_return_db: 3.0                # fall from a peak that closes its event, for the onset and offset walk
+  event_min_s: 0.05                    # shortest extent the event walk reports
+  score_min: 0.2                       # classifier raw score at or above which a label is present in a window
+  breath_coverage_min: 0.5             # fraction of a declared breathing extent that must carry breath evidence
+  voiced_strength_min: 0.45            # pitch strength at or above which a frame counts as voiced
+  voiced_fraction_min: 0.5             # fraction of voiced frames a phonation carrier must reach
+  f0_spread_window_s: 0.5              # window the worst local F0 spread is taken over
+  f0_spread_max_semitones: 2.0         # largest local F0 spread a held vowel may show
+  continuity_min: 0.5                  # median spectral continuity a stationary production must hold
+  production_min_s: 0.5                # shortest carrier span a production may be found in
+  monotone_tolerance_semitones: 1.0    # reversal a pitch sweep may contain and still count as monotone
+  dominant_segment_min_fraction: 0.5   # fraction of a sweep one direction must hold to be the declared one
+  response_min_s: 0.5                  # shortest extent that counts as a response at all
+  pause_min_s: 0.25                    # gap between words that is a pause rather than coarticulation
+  run_gap_max_s: 0.5                   # largest gap two lexical words may straddle and stay one run
+  breath_group_min_gap_s: 0.5          # inter-word gap that breaks a breath group
+  repeat_overlap_min: 0.5              # overlap fraction at which an alignment covers the expected sequence twice
+  echo_ngram_n: 3                      # n of the n-gram the prompt-echo overlap is measured over
+  echo_overlap_max: 0.5                # prompt n-gram overlap above which a free response echoes its prompt
+  verbatim_overlap_max: 0.5            # source content overlap above which a recall is verbatim
+  coverage_min: 0.5                    # fraction of expected tokens a read text must realise
+  expected_lexical_max: 0              # lexical words a no-lexical expectation tolerates
+  interval_max_s: 2.0                  # largest inter-event interval a series the instruction calls quick may show
+  modulation_band_hz: [1.0, 10.0]      # [lo, hi] band the envelope modulation peak is searched in
+  rate_prominence_min: 2.0             # modulation peak over its own band mean that makes a rate readable
+  train_min_s: 1.0                     # shortest carrier span that can hold a syllable train
+  repeat_min_occurrences: 3            # occurrences of one token that make it a repetition
+  burst_window_ms: 20.0                # window after a syllable onset the burst spectrum is taken over
+  place_margin_db: 3.0                 # dB the leading place band must beat the next by to be resolved
+  effort_split_hz: 1000.0              # split the low and high spectral balance of an effort token is taken at
+  gap_off_task_min_s: 1.0              # shortest gap reported as off-task extent
+  # place of articulation -> [lo, hi] band its burst energy concentrates in. Data, not schema: a
+  # campaign may add a place. The three shipped entries are the classical burst templates.
+  place_centroid_bands_hz:
+    labial: [500.0, 1500.0]
+    velar: [1500.0, 3000.0]
+    alveolar: [3000.0, 8000.0]
   label_sets:
     cough: [Cough]
     breath: [Breathe]
+
+# What VERDICT does with what the reporting nodes report. A branch reports and VERDICT decides, so
+# every threshold that turns a reading into a judgement about the recording is here and none is in
+# `branch:`. Derivations in specs/20260817-triage-workflow-dag/config-derivations.md.
+verdict:
+  conformance_flags: true              # a reported non-conformance is a flag ground
+  undetermined_flags: false            # an unanswered conformance is not; detect_* answers UNDETERMINED by construction
+  deviation_flags: false               # a deviation is recorded and never a flag ground, until ground truth exists
+  unmeasured_points_flag: true         # a reporting node that could not read an operating point it wanted flags
+  # declared task family -> whether a non-conformance on it flags, overriding conformance_flags.
+  # Data, not schema: a campaign names its own families. Empty ships no family excepted.
+  conformance_flags_by_family: {}
+  min_contrast_db: null                # spectral-balance difference two effort levels must differ by to be a contrast
+  tilt_max_db_per_octave: null         # spectral tilt below which a recording reads as occluded
+  level_min_dbfs: null                 # level below which a recording carries no production at all
 
 # The label consolidation. TAXONOMY runs no models: it consolidates PREPROCESS's stored scores.
 taxonomy:

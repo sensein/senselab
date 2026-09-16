@@ -98,7 +98,7 @@ def run_quality(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str
         a live QUALITY verdict.
     """
     result = extend_quality(store, config, run_dir=run_dir)
-    return PRESENT if result is None else result.verdict.outcome.value
+    return PRESENT if result is None else str(result.report.conformance)
 
 
 def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
@@ -187,9 +187,9 @@ def run_slice(
     counts: dict[str, int] = {}
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
-    verdicts: dict[str, int] = {}
+    conformances: dict[str, int] = {}
     for record in log:
-        verdicts[str(record[QUALITY])] = verdicts.get(str(record[QUALITY]), 0) + 1
+        conformances[str(record[QUALITY])] = conformances.get(str(record[QUALITY]), 0) + 1
 
     slices_dir = log_dir / SLICES_SUBDIR
     slices_dir.mkdir(parents=True, exist_ok=True)
@@ -204,7 +204,7 @@ def run_slice(
         "config_hash": config.config_hash,
         "rows": len(mine),
         "counts": counts,
-        "verdicts": verdicts,
+        "conformances": conformances,
         "elapsed_s": time.time() - started,
         "log": str(log_path),
     }
@@ -219,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, or None to read ``sys.argv``.
 
     Returns:
-        0 when every recording in the shard reached a verdict or already had one, 1 when any row is
+        0 when every recording in the shard reached a report or already had one, 1 when any row is
         ``error`` — the other stores are written either way — and 2 when the arguments could not be
         resolved and nothing was read.
     """
@@ -244,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Log:     {summary['log']}")
     for status, number in sorted(summary["counts"].items()):
         print(f"  {status:<9} {number}")
-    for outcome, number in sorted(summary["verdicts"].items()):
+    for outcome, number in sorted(summary["conformances"].items()):
         print(f"  {QUALITY} {outcome:<9} {number}")
     return 1 if summary["counts"].get(ERROR) else 0
 

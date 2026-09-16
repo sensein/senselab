@@ -228,7 +228,8 @@ class RecordingFeatures:
         peaks: ``{peak_key: score}`` for every tracked label on every stream and classifier.
         classifier_streams: Which ``<stream>|<classifier>`` summaries were present at all.
         kind_state: TAXONOMY's own state per kind, so its current behaviour can be measured too.
-        verdicts: Each node's recorded outcome.
+        verdicts: Each node's own record — a deciding node's outcome, or a reporting node's
+            conformance, spelled ``conformance=<value>`` so the two are never mistaken for each other.
         n_entities: How many entity records the store held, as a parse sanity check.
     """
 
@@ -1097,6 +1098,8 @@ def extract_features(
             features.kind_state[str(attributes.get("kind"))] = str(attributes.get("state"))
         elif prov_type == "verdict":
             features.verdicts[str(attributes.get("node"))] = str(attributes.get("outcome"))
+        elif prov_type == "branch_report":
+            features.verdicts[str(attributes.get("node"))] = f"conformance={attributes.get('conformance')}"
         elif prov_type == "stream" and attributes.get("name") == "recording":
             extent = record.get("extent")
             if extent is not None:

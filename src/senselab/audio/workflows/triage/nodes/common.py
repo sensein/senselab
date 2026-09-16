@@ -1,4 +1,11 @@
-"""The shape every triage node shares: its result type and its store conventions."""
+"""The shapes a triage node returns, and its store conventions.
+
+There are two, because there are two kinds of node. A node that **decides** returns a
+:class:`NodeResult` and writes a ``verdict`` entity. A node that **reports** — the four branches and
+QUALITY — returns a :class:`BranchResult` and writes a ``branch_report`` entity carrying its task
+conformance and its deviations and no outcome. ``vocabulary.fold_file_verdict`` is where every
+decision about the recording is made.
+"""
 
 from __future__ import annotations
 
@@ -11,10 +18,23 @@ from typing import Any
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import CppsSettings
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Triage
+from senselab.audio.workflows.triage.vocabulary import (
+    CONFORMANCE_REFERENTS,
+    BranchReport,
+    Conformance,
+    NodeVerdict,
+    Outcome,
+    Triage,
+)
 from senselab.utils.portable_audio_io import NORMALIZE, AudioWriteReport
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore, file_attributes
 from senselab.utils.subprocess_venv import venv_environment
+
+RESERVED_REPORT_KEYS = frozenset(
+    {"node", "kind", "conformance", "conformance_of", "deviations", "unmeasured", "outcome"}
+)
+"""Attribute names a ``branch_report``'s detail may not carry. ``outcome`` is among them: a
+reporting node has none, and a reader finding one would fold a decision nobody made."""
 
 MESSAGE_CAP = 200
 """How much of an exception's message is recorded. The bound on what a message can leak."""
@@ -52,7 +72,7 @@ def describe_exception(error: BaseException) -> str:
 
 @dataclass(frozen=True)
 class NodeResult:
-    """What every node returns.
+    """What a node that decides returns.
 
     Attributes:
         verdict: The node's conclusion, in the graph's shared vocabulary.
@@ -63,6 +83,21 @@ class NodeResult:
     verdict: NodeVerdict
     view: tuple[str, ...]
     verdict_entity_id: str
+
+
+@dataclass(frozen=True)
+class BranchResult:
+    """What a node that reports returns. It carries no outcome.
+
+    Attributes:
+        report: What the node observed: its task conformance and its deviations.
+        view: Ids of the store entities this node wrote or asserted over, its spans included.
+        report_entity_id: The ``branch_report`` entity this node wrote to the store.
+    """
+
+    report: BranchReport
+    view: tuple[str, ...]
+    report_entity_id: str
 
 
 def software_agent(store: ProvStore) -> str:
@@ -163,6 +198,73 @@ def write_verdict(
     return entity_id, NodeVerdict(node=node, outcome=outcome, kind=kind, why=why)
 
 
+def write_report(
+    store: ProvStore,
+    activity_id: str,
+    agent_id: str,
+    *,
+    node: str,
+    kind: str | None,
+    conformance: Conformance,
+    conformance_of: str,
+    deviations: tuple[str, ...],
+    unmeasured: tuple[str, ...] = (),
+    detail: dict[str, Any],
+) -> tuple[str, BranchReport]:
+    """Write one reporting node's ``branch_report`` entity.
+
+    Args:
+        store: The provenance store.
+        activity_id: The activity that observed.
+        agent_id: The agent answerable for the report.
+        node: The node's name.
+        kind: The kind it reports on, or None.
+        conformance: Whether what was asked for happened.
+        conformance_of: What that conformance is about, one of
+            :data:`~senselab.audio.workflows.triage.vocabulary.CONFORMANCE_REFERENTS`.
+        deviations: The deviation type names found, sorted and deduplicated.
+        unmeasured: The config paths this node asked for and nobody has measured, in read order.
+        detail: The node's design-named observation fields.
+
+    Returns:
+        The report entity's id and the vocabulary report.
+
+    Raises:
+        ValueError: If ``conformance_of`` is not a known referent, or if ``detail`` carries any of
+            the reserved keys, which would let the stored attributes diverge from the returned
+            report. ``outcome`` is reserved too and carries no value a reporting node may write: a
+            branch has no outcome, and a reader finding one here would fold a decision nobody made.
+    """
+    if conformance_of not in CONFORMANCE_REFERENTS:
+        raise ValueError(f"conformance_of must be one of {list(CONFORMANCE_REFERENTS)}; got {conformance_of!r}")
+    shadowed = detail.keys() & RESERVED_REPORT_KEYS
+    if shadowed:
+        raise ValueError(f"detail must not shadow the reserved report keys: {sorted(shadowed)}")
+    entity_id = store.entity(
+        prov_type="branch_report",
+        extent=None,
+        attributes={
+            "node": node,
+            "kind": kind,
+            "conformance": conformance,
+            "conformance_of": conformance_of,
+            "deviations": list(deviations),
+            "unmeasured": list(unmeasured),
+            **detail,
+        },
+    )
+    store.was_generated_by(entity_id, activity_id)
+    store.was_attributed_to(entity_id, agent_id)
+    return entity_id, BranchReport(
+        node=node,
+        kind=kind,
+        conformance=conformance,
+        conformance_of=conformance_of,
+        deviations=tuple(deviations),
+        unmeasured=tuple(unmeasured),
+    )
+
+
 def write_measurement(
     store: ProvStore,
     activity_id: str,
@@ -255,6 +357,26 @@ def find_verdict(store: ProvStore, node: str) -> Entity | None:
     """
     found = [
         e for e in store.entities("verdict") if e.attributes.get("node") == node and not store.is_invalidated(e.id)
+    ]
+    return found[-1] if found else None
+
+
+def find_branch_report(store: ProvStore, node: str) -> Entity | None:
+    """The latest non-invalidated ``branch_report`` entity one node wrote, or None.
+
+    Reads by the store's shared rule, as :func:`find_verdict` does for verdicts.
+
+    Args:
+        store: The provenance store.
+        node: The node's name, as the report's ``node`` attribute carries it.
+
+    Returns:
+        The entity, or None when that node reported nothing that is still live.
+    """
+    found = [
+        e
+        for e in store.entities("branch_report")
+        if e.attributes.get("node") == node and not store.is_invalidated(e.id)
     ]
     return found[-1] if found else None
 

@@ -42,15 +42,15 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.nodes.common import (
-    NodeResult,
+    BranchResult,
     find_measurement,
     live_entities,
     software_agent,
-    write_verdict,
+    write_report,
 )
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import STORE_ASSERTIONS, UNDETERMINED, Conformance
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "QUALITY"
@@ -119,12 +119,15 @@ def preceded_by(store: ProvStore) -> list[str]:
         store: The provenance store.
 
     Returns:
-        The ``node`` of every live verdict entity other than QUALITY's own, sorted and deduplicated.
+        The ``node`` of every live verdict and every live branch report other than QUALITY's own,
+        sorted and deduplicated. Both types are read because the graph writes two: a node that
+        decides writes a ``verdict`` and a node that reports writes a ``branch_report``, and a
+        ``preceded_by`` reading only the first would say no branch had run.
     """
     return sorted(
         {
             str(entity.attributes["node"])
-            for entity in live_entities(store, "verdict")
+            for entity in (*live_entities(store, "verdict"), *live_entities(store, "branch_report"))
             if entity.attributes.get("node") != NODE
         }
     )
@@ -207,7 +210,7 @@ def quality(
     hint: AudioHints | None = None,
     *,
     run_dir: Path,
-) -> NodeResult:
+) -> BranchResult:
     """Read PREPROCESS's clip spans against its own amplitude reading, and contest the denied ones.
 
     A clip span's level is the peak absolute amplitude of the samples it covers, which PREPROCESS
@@ -236,7 +239,14 @@ def quality(
             clip-amplitude measurement to read them against.
     """
     del hint, run_dir
-    margin = float(config.require("quality.clip_contradiction_margin"))
+    # Read without refusing, on the same rule the branches follow: an unmeasured margin means the
+    # audit cannot be taken, which this node reports (UNDETERMINED, and the key named in
+    # `unmeasured`) rather than raising on. A misspelled key still raises, through UnknownConfigKey.
+    margin: float | None
+    try:
+        margin = float(config.require("quality.clip_contradiction_margin"))
+    except UnmeasuredConfigKey:
+        margin = None
     stream_id = _stream_id(store, source)
     preceded = preceded_by(store)
     software = software_agent(store)
@@ -265,10 +275,14 @@ def quality(
 
     levels = amplitudes.get(CLIP_LEVELS) or {}
     louder_counts = amplitudes.get(UNCLIPPED_LOUDER_N) or {}
-    measured = [(span, float(levels[span.id])) for span in spans if levels.get(span.id) is not None]
+    # An unmeasured margin leaves nothing checkable: the comparison IS the margin, so the checked
+    # set is empty rather than compared against a substituted number.
+    measured = (
+        [] if margin is None else [(span, float(levels[span.id])) for span in spans if levels.get(span.id) is not None]
+    )
     contradictions: list[_Contradiction] = []
     for span, clip_level in measured:
-        if peak is None or peak_time_s is None or float(peak) <= clip_level * (1.0 + margin):
+        if peak is None or peak_time_s is None or margin is None or float(peak) <= clip_level * (1.0 + margin):
             continue
         start_s, end_s = span.extent or (0.0, 0.0)
         contradictions.append(
@@ -301,29 +315,33 @@ def quality(
         store.was_derived_from(assertion_id, contradiction.span_id)
         assertion_ids.append(assertion_id)
 
-    flags: list[str] = []
+    notes: list[str] = []
     if contradictions:
         loudest = max(contradictions, key=lambda found: found.louder_amplitude)
-        flags.append(
+        notes.append(
             f"{CONTRADICTED_CLIP}: {len(contradictions)} of {len(measured)} clip spans sit below the "
             f"unclipped sample of amplitude {loudest.louder_amplitude:.4f} at {loudest.louder_time_s:.3f}s"
         )
 
-    if flags:
-        outcome, why = Outcome.FLAG, "; ".join(flags)
-    elif not measured:
-        outcome, why = Outcome.PASS, "no clip span over the recording; nothing to contradict"
-    else:
-        outcome, why = Outcome.PASS, "no clip span sits below an unclipped sample"
+    # Conformance, and what it is **about**. QUALITY has no route and no declared task, so there is
+    # no instruction for it to conform to; what it checks is whether the store's own assertions hold
+    # against the store's own measurements, which is why its referent is STORE_ASSERTIONS and not
+    # TASK. Nothing checkable reads UNDETERMINED rather than conforming: a recording with no clip
+    # span has not passed an audit, it has had none taken.
+    conformance: Conformance = UNDETERMINED if not measured else not contradictions
 
-    verdict_id, verdict = write_verdict(
+    report_id, report = write_report(
         store,
         activity,
         software,
         node=NODE,
-        outcome=outcome,
         kind=KIND,
-        why=why,
+        conformance=conformance,
+        conformance_of=STORE_ASSERTIONS,
+        deviations=(CONTRADICTED_CLIP,) if contradictions else (),
+        # QUALITY reads one config key and refuses nothing over it: an unmeasured margin is
+        # named here and leaves the audit untaken, which is what the UNDETERMINED above says.
+        unmeasured=() if margin is not None else ("quality.clip_contradiction_margin",),
         detail={
             "signal": source,
             "preceded_by": preceded,
@@ -337,7 +355,7 @@ def quality(
             "clip_contradiction_margin": margin,
             "clip_edge_guard_samples": guard,
             "contradictions": [contradiction.as_detail() for contradiction in contradictions],
-            "flags": flags,
+            "notes": notes,
         },
     )
-    return NodeResult(verdict=verdict, view=(*assertion_ids, verdict_id), verdict_entity_id=verdict_id)
+    return BranchResult(report=report, view=(*assertion_ids, report_id), report_entity_id=report_id)

@@ -41,6 +41,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     contest,
     count,
     deviation,
+    deviation_names,
     dispatch,
     duration,
     lexical,
@@ -66,14 +67,14 @@ from senselab.audio.workflows.triage.nodes.branches import (
     write_findings,
 )
 from senselab.audio.workflows.triage.nodes.common import (
-    NodeResult,
+    BranchResult,
     consensus_words,
     find_measurement,
     live_entities,
     software_agent,
-    write_verdict,
+    write_report,
 )
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "VOICE"
@@ -235,27 +236,38 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
     """
     if evidence.tracks is None:
         return []
+    minimum_s = params.point("production_min_s")
+    strength_min = params.point("voiced_strength_min")
+    if minimum_s is None or strength_min is None:
+        return []
+    fraction_min = params.point("voiced_fraction_min")
+    spread_window_s = params.point("f0_spread_window_s")
+    spread_max = params.point("f0_spread_max_semitones")
+    continuity_min = params.point("continuity_min")
     words = lexical(evidence.words)
     out: list[Carrier] = []
     for span in amplitude_spans(evidence.spans):
-        if span.extent is None or duration(span.extent) < params.p_production_min_s:
+        if span.extent is None or duration(span.extent) < minimum_s:
             continue
         if expectation.lexical_separator and any(overlaps(word_extent(word), span.extent) for word in words):
             continue
-        track = track_slice(evidence.tracks, span.extent, params.p_voiced_strength_min)
+        track = track_slice(evidence.tracks, span.extent, strength_min)
         if track.strength.size == 0:
             continue
         voiced_fraction = float(track.voiced.mean())
         pitch = semitones(np.where(track.voiced, track.f0_hz, np.nan))
-        spread = max_windowed_spread(pitch, track.hop_s, params.p_f0_spread_window_s)
+        spread = float("nan") if spread_window_s is None else max_windowed_spread(pitch, track.hop_s, spread_window_s)
         trace = (
             np.empty(0, dtype=float) if evidence.continuity is None else trace_slice(evidence.continuity, span.extent)
         )
         stationarity = float(np.median(trace)) if trace.size else 0.0
+        # A qualifier whose own boundary is unmeasured is not applied: it could neither admit nor
+        # reject this carrier, and rejecting on it would be this branch deciding for want of a
+        # number. The ask is recorded in `params.missing`.
         if (
-            voiced_fraction >= params.p_voiced_fraction_min
-            and spread <= params.p_f0_spread_max_semitones
-            and stationarity >= params.p_continuity_min
+            (fraction_min is None or voiced_fraction >= fraction_min)
+            and (spread_max is None or spread_window_s is None or spread <= spread_max)
+            and (continuity_min is None or stationarity >= continuity_min)
         ):
             out.append(Carrier(span, track, voiced_fraction, spread, stationarity))
     return out
@@ -467,20 +479,30 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
     if evidence.tracks is None:
         return Result(UNDETERMINED, [], [unviable("sweep_extent", TRACKS_ABSENT)])
 
+    minimum_s = params.point("production_min_s")
+    strength_min = params.point("voiced_strength_min")
+    tolerance = params.point("monotone_tolerance_semitones")
+    if minimum_s is None or strength_min is None or tolerance is None:
+        return Result(UNDETERMINED, [], params.record())
+    fraction_min = params.point("voiced_fraction_min")
+    dominant_min = params.point("dominant_segment_min_fraction")
+
     best: tuple[Entity, TrackSlice, int, float, tuple[float, float]] | None = None
     for span in amplitude_spans(evidence.spans):
-        if span.extent is None or duration(span.extent) < params.p_production_min_s:
+        if span.extent is None or duration(span.extent) < minimum_s:
             continue
-        track = track_slice(evidence.tracks, span.extent, params.p_voiced_strength_min)
-        if track.strength.size == 0 or float(track.voiced.mean()) < params.p_voiced_fraction_min:
+        track = track_slice(evidence.tracks, span.extent, strength_min)
+        if track.strength.size == 0:
+            continue
+        if fraction_min is not None and float(track.voiced.mean()) < fraction_min:
             continue
         pitch = semitones(np.where(track.voiced, track.f0_hz, np.nan))
-        run = longest_monotone_run(pitch, params.p_monotone_tolerance_semitones)
+        run = longest_monotone_run(pitch, tolerance)
         if run is None:
             continue
         first, last, sign = run
         sweep = (float(track.times_s[first]), float(track.times_s[last]) + track.hop_s)
-        if duration(sweep) / max(duration(span.extent), 1e-9) < params.p_dominant_segment_min_fraction:
+        if dominant_min is not None and duration(sweep) / max(duration(span.extent), 1e-9) < dominant_min:
             continue
         if best is None or duration(sweep) > duration(best[4]):
             best = (span, track, sign, abs(float(pitch[last] - pitch[first])), sweep)
@@ -592,31 +614,6 @@ def detect_voice(store: ProvStore, params: BranchParams, *, run_dir: Path) -> Re
     return Result(UNDETERMINED, components, findings)
 
 
-def _outcome(components: list[Proposal], findings: list[Finding], tracks_absent: bool) -> tuple[Outcome, str]:
-    """What the branch concluded, and why, in controlled vocabulary.
-
-    ``FAIL`` is an absence of *detected content* — this branch looked and found no attempt — and it
-    is what VERDICT reads as the kind being absent. An absent instrument is not an absent voice, so
-    it reads as a flag rather than as a finding about the speaker.
-
-    Args:
-        components: The spans proposed.
-        findings: Every finding.
-        tracks_absent: Whether the phonation tracks were absent.
-
-    Returns:
-        The outcome and the reason.
-    """
-    deviations = [finding.name for finding in findings if finding.kind == "deviation"]
-    if components:
-        if deviations:
-            return Outcome.FLAG, "; ".join(sorted(set(deviations)))
-        return Outcome.PASS, "sustained phonation proposed; nothing contested"
-    if tracks_absent:
-        return Outcome.FLAG, TRACKS_ABSENT
-    return Outcome.FAIL, "no amplitude span cleared the stationarity qualifier; no attempt found"
-
-
 def voice(
     store: ProvStore,
     source: str,
@@ -624,7 +621,7 @@ def voice(
     hint: AudioHints | None = None,
     *,
     run_dir: Path,
-) -> NodeResult:
+) -> BranchResult:
     """Propose the sustained phonation in this recording, and evaluate the task when it declares one.
 
     Args:
@@ -677,32 +674,38 @@ def voice(
     for span in amplitude_spans(live_entities(store, "span")):
         store.used(activity, span.id)
 
+    findings = [*result.deviations, *params.record()]
     span_ids = propose_spans(store, activity, software, result.components)
-    finding_ids = write_findings(store, activity, software, result.deviations, signal=source)
+    finding_ids = write_findings(store, activity, software, findings, signal=source)
 
     extents = [(proposal.start, proposal.end) for proposal in result.components]
     phonation_s = sum(end - start for start, end in extents)
     longest_span_s = max((end - start for start, end in extents), default=0.0)
-    outcome, why = _outcome(result.components, result.deviations, tracks_absent)
-    verdict_id, verdict = write_verdict(
+    notes: list[str] = []
+    if tracks_absent:
+        notes.append(TRACKS_ABSENT)
+    if params.missing:
+        notes.append(f"branch.* unmeasured: {', '.join(params.missing)}")
+    report_id, report = write_report(
         store,
         activity,
         software,
         node=NODE,
-        outcome=outcome,
         kind=KIND,
-        why=why,
+        conformance=result.done,
+        conformance_of=TASK,
+        deviations=deviation_names(findings),
+        unmeasured=tuple(params.missing),
         detail={
             "signal": source,
             "mode": mode,
             "declared_task_family": declared,
-            "done": result.done,
             "spans_n": len(result.components),
             "phonation_s": round(phonation_s, 3),
             "longest_span_s": round(longest_span_s, 3),
             "roles": sorted({proposal.role for proposal in result.components}),
             "phonation_tracks": not tracks_absent,
-            "deviations": sorted({finding.name for finding in result.deviations if finding.kind == "deviation"}),
+            "notes": notes,
         },
     )
-    return NodeResult(verdict=verdict, view=(*span_ids, *finding_ids, verdict_id), verdict_entity_id=verdict_id)
+    return BranchResult(report=report, view=(*span_ids, *finding_ids, report_id), report_entity_id=report_id)
