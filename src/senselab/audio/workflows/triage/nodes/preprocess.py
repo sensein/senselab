@@ -1490,6 +1490,7 @@ def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -
         name=PHONATION_TRACKS_MEASUREMENT,
         signal=sharp_signal,
         attributes={
+            **path_attributes(f"derivatives/{PHONATION_TRACKS_MEASUREMENT}.npz", run_dir),
             "hop_s": parameters["hop_s"],
             "f0_min_hz": f0_min_hz,
             "f0_max_hz": f0_max_hz,
