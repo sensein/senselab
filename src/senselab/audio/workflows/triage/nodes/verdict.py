@@ -1,8 +1,11 @@
 """The VERDICT node: the store's contents read into the vocabulary's fold, and the result recorded.
 
-The fold itself is ``vocabulary.fold_file_verdict``; this node maps store facts onto its inputs and
-writes its result back. The two axes it keeps apart — triage and release — and the tables it
-implements are in ``specs/20260817-triage-workflow-dag/verdict.md``.
+This is the graph's only decision about the recording. The branches and QUALITY write
+``branch_report`` entities — task conformance, typed deviations, no outcome — and propose spans; the
+deciding nodes write ``verdict`` entities; this node reads all three, adds the declared task and the
+routing decisions, and hands them to ``vocabulary.fold_file_verdict``. The two axes it keeps apart —
+triage and release — and the tables it implements are in
+``specs/20260817-triage-workflow-dag/verdict.md``.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from typing import Callable, Mapping, Sequence
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
+from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
@@ -23,8 +27,12 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
     RULESET_ROUTING,
+    UNDETERMINED,
     BranchDecision,
+    BranchReport,
+    Conformance,
     FileVerdict,
+    FoldPolicy,
     NodeVerdict,
     Outcome,
     RunState,
@@ -74,6 +82,43 @@ def _node_verdict_from_entity(entity: Entity) -> NodeVerdict:
     return NodeVerdict(node=node, outcome=outcome, kind=attributes.get("kind"), why=attributes["why"])
 
 
+def _conformance_of_entity(entity: Entity) -> Conformance:
+    """The conformance a ``branch_report`` entity carries.
+
+    Args:
+        entity: A ``branch_report`` entity.
+
+    Returns:
+        True, False, or :data:`UNDETERMINED`. A value that is neither a bool nor the
+        :data:`UNDETERMINED` token reads as :data:`UNDETERMINED`: a report nobody can interpret
+        answered no conformance question, and reading it as a False would flag on a value the fold
+        does not understand.
+    """
+    raw = entity.attributes.get("conformance")
+    return raw if isinstance(raw, bool) else UNDETERMINED
+
+
+def _branch_report_from_entity(entity: Entity) -> BranchReport:
+    """The vocabulary report a ``write_report`` entity carries.
+
+    Args:
+        entity: A ``branch_report`` entity.
+
+    Returns:
+        Its vocabulary report. ``conformance_of`` is read as written; an unknown referent is carried
+        through rather than corrected, and the fold treats anything but ``task`` as not being a
+        claim about a task.
+    """
+    attributes = entity.attributes
+    return BranchReport(
+        node=str(attributes["node"]),
+        kind=attributes.get("kind"),
+        conformance=_conformance_of_entity(entity),
+        conformance_of=str(attributes.get("conformance_of")),
+        deviations=tuple(str(name) for name in attributes.get("deviations") or ()),
+    )
+
+
 def _live_latest(store: ProvStore, prov_type: PROV_TYPE, key: Callable[[Entity], str]) -> list[Entity]:
     """Entities of one type under the store's shared rule, one per key.
 
@@ -116,6 +161,51 @@ def _node_verdicts_in_graph_order(store: ProvStore) -> list[tuple[Entity, NodeVe
         pairs,
         key=lambda pair: _GRAPH_ORDER.index(pair[1].node) if pair[1].node in _GRAPH_ORDER else len(_GRAPH_ORDER),
     )
+
+
+def _branch_reports(store: ProvStore) -> list[tuple[Entity, BranchReport]]:
+    """The reporting nodes' reports, one per node, under the store's shared rule.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        One ``(entity, report)`` pair per node that reported, in order of first appearance. A
+        withdrawn report does not vote and a superseded one is replaced, not added.
+    """
+    return [
+        (entity, _branch_report_from_entity(entity))
+        for entity in _live_latest(store, "branch_report", lambda e: str(e.attributes.get("node")))
+    ]
+
+
+def _spans_by_node(store: ProvStore) -> dict[str, int]:
+    """How many spans each reporting node proposed into its own family.
+
+    The count is taken from the store rather than from the report, because the spans *are* the
+    record: a count copied into the report would be a second one able to disagree with it. A span is
+    attributed to a node by the activity that generated it and is counted only in that node's own
+    family, so a node reaching into another's — which ``dispatch`` already refuses — could not
+    inflate its own found/not-found reading here either.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        Node name to live span count. A node that proposed none is absent.
+    """
+    counts: dict[str, int] = {}
+    for span in store.entities("span"):
+        if store.is_invalidated(span.id):
+            continue
+        activity_id = store.generated_by(span.id)
+        if activity_id is None:
+            continue
+        node = store.get_activity(activity_id).node
+        if span.attributes.get("family") != BRANCH_FAMILY.get(node):
+            continue
+        counts[node] = counts.get(node, 0) + 1
+    return counts
 
 
 def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:
@@ -191,18 +281,26 @@ def _hint_claims(
     return {decision.branch: True for decision in decisions.values() if decision.declared}
 
 
-def _derived_ran(store: ProvStore, verdicts: Sequence[NodeVerdict]) -> dict[str, RunState]:
+def _derived_ran(
+    store: ProvStore, verdicts: Sequence[NodeVerdict], reports: Sequence[BranchReport]
+) -> dict[str, RunState]:
     """Whether each graph node ran, as far as the store can say (N26).
+
+    Operational fact only, and unchanged by the report/decide split: the three states are what the
+    runner records and what this derivation falls back to. A node that *reported* counts as having
+    concluded exactly as one that decided does, which is what keeps a branch under the new contract
+    out of the ``errored`` column.
 
     Args:
         store: The provenance store, read for which nodes have an activity.
         verdicts: Every node verdict read from the store.
+        reports: Every branch report read from the store.
 
     Returns:
-        ``COMPLETED`` for a node carrying a verdict, ``ERRORED`` for one carrying an activity but no
-        live verdict, and ``SKIPPED`` for one carrying neither.
+        ``COMPLETED`` for a node carrying a verdict or a report, ``ERRORED`` for one carrying an
+        activity but neither, and ``SKIPPED`` for one carrying none of the three.
     """
-    concluded = {v.node for v in verdicts}
+    concluded = {v.node for v in verdicts} | {r.node for r in reports}
     attempted = {activity.node for activity in store.activities()}
     return {
         node: RunState.COMPLETED if node in concluded else RunState.ERRORED if node in attempted else RunState.SKIPPED
@@ -219,7 +317,7 @@ def verdict(
     run_dir: Path,
     ran: Mapping[str, RunState] | None = None,
 ) -> VerdictResult:
-    """Fold every node's verdict and ROUTING's decisions into one file verdict.
+    """Decide the file, from the reports, the verdicts, the spans, the routes and the declared task.
 
     Args:
         store: The provenance store, holding every node's ``verdict`` entity, ROUTING's
@@ -227,9 +325,10 @@ def verdict(
             ``recording`` stream, read only for whether the recording declares a task at all. This
             node reads nothing else.
         source: Accepted for the shared node shape; not read.
-        config: The triage configuration, named in the activity by its hash. VERDICT has no
-            thresholds and reads no key: the hint was already resolved by ROUTING, and this node
-            reads that resolution rather than repeating it.
+        config: The triage configuration, named in the activity by its hash and read for the
+            ``verdict.*`` section — which is where every threshold that turns a reading into a
+            judgement now lives, because a branch reports and this node decides. The hint was
+            already resolved by ROUTING and is read back rather than re-resolved.
         hint: What the recording was declared to contain. Read for branch mismatch only: a hint never
             resolves a finding and never turns a flag into a pass.
         run_dir: Accepted for the shared node shape; VERDICT writes no sidecars.
@@ -245,21 +344,30 @@ def verdict(
     """
     pairs = _node_verdicts_in_graph_order(store)
     node_verdicts = [node_verdict for _, node_verdict in pairs]
+    report_pairs = _branch_reports(store)
+    reports = [report for _, report in report_pairs]
     route_state, route_ids = _route_state(store)
     decisions, decision_ids = _branch_decisions(store)
-    resolved_ran = {**_derived_ran(store, node_verdicts), **(ran or {})}
+    resolved_ran = {**_derived_ran(store, node_verdicts, reports), **(ran or {})}
+    declared_family = declared_task(recording_stem(store))[1]
     file_verdict = fold_file_verdict(
         node_verdicts,
+        branch_reports=reports,
+        spans_by_node=_spans_by_node(store),
         branch_decisions=decisions,
         ran=resolved_ran,
-        hint_claims=_hint_claims(decisions, hint, declared_family=declared_task(recording_stem(store))[1]),
+        hint_claims=_hint_claims(decisions, hint, declared_family=declared_family),
         route_state=route_state,
+        declared_family=declared_family or None,
+        policy=FoldPolicy.from_config(config),
     )
 
     software = software_agent(store)
     activity = store.activity(node=NODE, step=None, parameters={"config_hash": config.config_hash})
     store.was_associated_with(activity, software)
-    folded_ids = [entity.id for entity, _ in pairs] + route_ids + decision_ids
+    folded_ids = (
+        [entity.id for entity, _ in pairs] + [entity.id for entity, _ in report_pairs] + route_ids + decision_ids
+    )
     for folded_id in folded_ids:
         store.used(activity, folded_id)
 
@@ -270,12 +378,19 @@ def verdict(
         node=NODE,
         outcome=file_verdict.triage,
         kind=None,
-        why=f"folded {len(node_verdicts)} node verdicts over {len(file_verdict.routes)} routed branches",
+        why=(
+            f"folded {len(node_verdicts)} node verdict(s) and {len(reports)} branch report(s) over "
+            f"{len(file_verdict.routes)} routed branches"
+        ),
         detail={
             "triage": file_verdict.triage.value,
             "release": file_verdict.release.value,
             "discard_ground": file_verdict.discard_ground,
+            "declared_family": file_verdict.declared_family,
             "findings": dict(file_verdict.findings),
+            "conformance": dict(file_verdict.conformance),
+            "conformance_of": dict(file_verdict.conformance_of),
+            "deviations": {node: list(names) for node, names in file_verdict.deviations.items()},
             "routes": dict(file_verdict.routes),
             "route_state": file_verdict.route_state,
             "agreement": dict(file_verdict.agreement),

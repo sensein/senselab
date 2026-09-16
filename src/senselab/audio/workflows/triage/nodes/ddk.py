@@ -39,6 +39,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     ddk_span,
     declared_duration_count,
     deviation,
+    deviation_names,
     dispatch,
     duration,
     events_in_span,
@@ -57,14 +58,14 @@ from senselab.audio.workflows.triage.nodes.branches import (
     write_findings,
 )
 from senselab.audio.workflows.triage.nodes.common import (
-    NodeResult,
+    BranchResult,
     consensus_words,
     find_measurement,
     live_entities,
     software_agent,
-    write_verdict,
+    write_report,
 )
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "DDK"
@@ -214,10 +215,11 @@ def ddk_carrier(store: ProvStore, params: BranchParams, envelope: EnvelopeTrack)
         ``(span, rate_hz)``, or ``(None, None)`` when no carrier clears the train minimum with a
         modulation peak that stands over its own band.
     """
+    minimum_s = params.point("train_min_s")
     best: Entity | None = None
     best_rate: float | None = None
     for span in amplitude_spans(live_entities(store, "span")):
-        if span.extent is None or duration(span.extent) < params.p_train_min_s:
+        if span.extent is None or minimum_s is None or duration(span.extent) < minimum_s:
             continue
         rate = train_rate_hz(envelope, span.extent, params)
         if rate is None:
@@ -240,14 +242,19 @@ def ddk_places(
     Returns:
         One place per onset, or :data:`UNRESOLVED` where the leading band did not beat the next by
         the declared margin — and for every onset when the spectrogram is absent, which reads the
-        keys not at all.
+        keys not at all, or when one of the three keys is unmeasured.
     """
     if wideband is None:
         return [UNRESOLVED] * len(onsets)
     places: list[str] = []
-    window_s = params.p_burst_window_ms / 1000.0
-    bands = params.p_place_centroid_bands_hz
-    margin = params.p_place_margin_db
+    burst_ms = params.point("burst_window_ms")
+    bands = params.point("place_centroid_bands_hz")
+    margin = params.point("place_margin_db")
+    if burst_ms is None or bands is None or margin is None:
+        # The same reading an absent spectrogram gets: the place could not be resolved. A branch
+        # does not refuse over an unmeasured point, and the ask is recorded in `params.missing`.
+        return [UNRESOLVED] * len(onsets)
+    window_s = burst_ms / 1000.0
     for start, _ in onsets:
         burst = (start, start + window_s)
         energies = {place: band_power(wideband, burst, lo, hi) for place, (lo, hi) in bands.items()}
@@ -543,11 +550,13 @@ def detect_ddk(store: ProvStore, params: BranchParams, *, reads: DdkReads = DdkR
     """
     components: list[Proposal] = []
     findings: list[Finding] = []
+    minimum_s = params.point("train_min_s")
+    minimum_occurrences = params.point("repeat_min_occurrences")
     if reads.envelope is None:
         findings.append(_absent(ENVELOPE))
     else:
         for span in amplitude_spans(live_entities(store, "span")):
-            if span.extent is None or duration(span.extent) < params.p_train_min_s:
+            if span.extent is None or minimum_s is None or duration(span.extent) < minimum_s:
                 continue
             rate_hz = train_rate_hz(reads.envelope, span.extent, params)
             if rate_hz is None:
@@ -578,7 +587,7 @@ def detect_ddk(store: ProvStore, params: BranchParams, *, reads: DdkReads = DdkR
     for word in lexical(consensus_words(store)):
         occurrences.setdefault(params.p_normalise(word_text(word)), []).append(word)
     for token, words in occurrences.items():
-        if len(words) < params.p_repeat_min_occurrences:
+        if minimum_occurrences is None or len(words) < minimum_occurrences:
             continue
         extent = hull([word_extent(word) for word in words])
         if extent is None or not extent[1] > extent[0]:
@@ -634,14 +643,14 @@ def _covariate(findings: Sequence[Finding], name: str, key: str) -> Any:  # noqa
     return None
 
 
-def _detail(result: Result, mode: str, task_family: str | None, flags: Sequence[str]) -> dict[str, Any]:
-    """The verdict's own fields, read back off what the mode returned.
+def _detail(result: Result, mode: str, task_family: str | None, notes: Sequence[str]) -> dict[str, Any]:
+    """The report's own observation fields, read back off what the mode returned.
 
     Args:
         result: What the mode returned.
         mode: ``"align"`` or ``"detect"``.
         task_family: The declared family, or None when nothing carried one.
-        flags: The reasons this branch flagged.
+        notes: What this branch could not measure, in controlled vocabulary. Nothing folds it.
 
     Returns:
         The detail mapping, carrying rates and regularity as measurements and no normative reading
@@ -659,38 +668,9 @@ def _detail(result: Result, mode: str, task_family: str | None, flags: Sequence[
         "interval_dispersion": _value(result.deviations, "interval_dispersion"),
         "interval_trend_s_per_step": _covariate(result.deviations, "interval_dispersion", "trend_s_per_step"),
         "lexical_repetitions_n": sum(1 for component in result.components if component.role == "lexical_repetition"),
-        "deviations": sorted({finding.name for finding in result.deviations if finding.kind == "deviation"}),
-        "flags": list(flags),
+        "spans_n": len(result.components),
+        "notes": list(notes),
     }
-
-
-def _conclude(result: Result, reads: DdkReads) -> tuple[Outcome, str, list[str]]:
-    """What the branch concluded, and why.
-
-    A ``FAIL`` is this detector having found no train, never the speaker having produced none, and
-    an absent instrument is neither: it flags, because reporting it as a fail would turn a missing
-    derivative into a negative reading.
-
-    Args:
-        result: What the mode returned.
-        reads: The derivatives the mode measured over.
-
-    Returns:
-        The outcome, the reason, and every flag reason.
-    """
-    trains = [component for component in result.components if component.role in TRAIN_ROLES]
-    flags: list[str] = []
-    if reads.envelope is None:
-        flags.append(NO_INSTRUMENT)
-    if not trains:
-        if reads.envelope is None:
-            return Outcome.FLAG, NO_INSTRUMENT, flags
-        return Outcome.FAIL, NO_TRAIN, flags
-    if result.done is False:
-        flags.append("a train was found and the expected pattern was not")
-    if flags:
-        return Outcome.FLAG, "; ".join(flags), flags
-    return Outcome.PASS, f"{len(trains)} repetition train(s) found with a readable rate", flags
 
 
 def ddk(
@@ -700,7 +680,7 @@ def ddk(
     hint: AudioHints | None = None,
     *,
     run_dir: Path,
-) -> NodeResult:
+) -> BranchResult:
     """Propose the repetition train, measure its rate and regularity, and conclude.
 
     The declared task family selects the mode and never supplies the answer: a DDK family takes
@@ -742,18 +722,25 @@ def ddk(
         return detect_ddk(store, params, reads=reads)
 
     result = dispatch(NODE, store, params, hint, align=_align, detect=_detect)
+    findings = [*result.deviations, *params.record()]
     span_ids = propose_spans(store, activity, software, result.components)
-    finding_ids = write_findings(store, activity, software, result.deviations, signal=source)
+    finding_ids = write_findings(store, activity, software, findings, signal=source)
 
-    outcome, why, flags = _conclude(result, reads)
-    verdict_id, verdict = write_verdict(
+    notes: list[str] = []
+    if reads.envelope is None:
+        notes.append(NO_INSTRUMENT)
+    if params.missing:
+        notes.append(f"branch.* unmeasured: {', '.join(params.missing)}")
+    report_id, report = write_report(
         store,
         activity,
         software,
         node=NODE,
-        outcome=outcome,
         kind=KIND,
-        why=why,
-        detail=_detail(result, mode, task_family, flags),
+        conformance=result.done,
+        conformance_of=TASK,
+        deviations=deviation_names(findings),
+        unmeasured=tuple(params.missing),
+        detail=_detail(result, mode, task_family, notes),
     )
-    return NodeResult(verdict=verdict, view=(*span_ids, *finding_ids, verdict_id), verdict_entity_id=verdict_id)
+    return BranchResult(report=report, view=(*span_ids, *finding_ids, report_id), report_entity_id=report_id)

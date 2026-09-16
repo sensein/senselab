@@ -24,12 +24,17 @@ PROV_TYPE = Literal[
     "stream",
     "pii",
     "verdict",
+    "branch_report",
     "assertion",
     "target_match",
     "branch_decision",
     "enrollment",
 ]
 """Every entity type the store understands.
+
+``branch_report`` is what a node that reports rather than decides writes: the four triage branches
+and QUALITY. It carries task conformance and deviations and no outcome, which is why it is not a
+``verdict``: a reader folding verdicts must not pick up a decision no branch made.
 
 ``kind`` is **historical**: TAXONOMY's evidence fold wrote it until 2026-09-13 and nothing writes it
 now. It stays here because this vocabulary is the *reader's*, and the store is append-only: a reader

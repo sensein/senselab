@@ -46,7 +46,9 @@ DATA_MAP_PATHS = frozenset(
     {
         "airway.route_by_task_index",
         "branch.label_sets",
+        "branch.place_centroid_bands_hz",
         "routing.hint_branch_map",
+        "verdict.conformance_flags_by_family",
         "voice.f0_range_by_population",
         "voice.task_duration_ranges",
         "windows.ast.label_thresholds",
@@ -60,6 +62,24 @@ Every other mapping is schema and an override may only change keys it already ha
 these paths without updating this set silently returns it to the schema rule; ``config_test`` pins
 each path's existence against the packaged file.
 """
+
+
+class UnknownConfigKey(ValueError):
+    """A path no packaged key spells. A typo in the calling code, never a missing measurement.
+
+    Kept distinguishable from :class:`UnmeasuredConfigKey` because the two have opposite handling: a
+    caller that may proceed without a value must still fail on a misspelled name, and one
+    ``ValueError`` for both makes ``branch.smooting_window_s`` read as an unmeasured point rather
+    than as the programming error it is.
+    """
+
+
+class UnmeasuredConfigKey(ValueError):
+    """A packaged key whose value is null because nobody has measured it.
+
+    A caller entitled to proceed without the value catches this and only this; everything else that
+    :meth:`TriageConfig.require` can raise is a fault in the caller.
+    """
 
 
 @dataclass(frozen=True)
@@ -101,17 +121,20 @@ class TriageConfig:
             The value.
 
         Raises:
-            ValueError: If the key does not exist (a typo), or if it is null because nobody has
-                measured it.
+            UnknownConfigKey: If no packaged key spells this path. A typo, and a ``ValueError``
+                subclass so an existing ``except ValueError`` still catches it.
+            UnmeasuredConfigKey: If the key exists and is null because nobody has measured it. Also
+                a ``ValueError`` subclass, and the only one a caller entitled to proceed without a
+                value may catch.
         """
         found = self._lookup(path)
         if found is _ABSENT:
-            raise ValueError(
+            raise UnknownConfigKey(
                 f"unknown configuration key {path!r} in {self.name}; check the spelling against "
                 "data/config/default.yaml"
             )
         if found is None:
-            raise ValueError(
+            raise UnmeasuredConfigKey(
                 f"{path} has no value in {self.name}. It is null because nobody has measured it — see "
                 f"{_OPEN_QUESTIONS} for what would settle it. Supply it with a config override rather "
                 "than defaulting it here."

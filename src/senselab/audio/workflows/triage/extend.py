@@ -41,10 +41,10 @@ from senselab.audio.workflows.triage.consensus import (
     word_from_attributes,
 )
 from senselab.audio.workflows.triage.nodes.common import (
-    NodeResult,
+    BranchResult,
     describe_exception,
+    find_branch_report,
     find_measurement,
-    find_verdict,
     live_entities,
     software_agent,
     write_measurement,
@@ -82,7 +82,7 @@ WORD_SUPERSEDED = "word_superseded"
 WITHDRAW_CLIPS = "withdraw_contradicted_clips"
 CLIP_SPAN_SUPERSEDED = "clip_span_superseded"
 CLIP_CONTEST_SUPERSEDED = "clip_contest_superseded"
-QUALITY_VERDICT_SUPERSEDED = "quality_verdict_superseded"
+QUALITY_REPORT_SUPERSEDED = "quality_report_superseded"
 PRAAT_MEASUREMENT_SUPERSEDED = "praat_features_superseded"
 DIARIZATION_MEASUREMENT_SUPERSEDED = "diarization_superseded"
 ONOMATOPOEIC_TOKENS_KEY = "words.onomatopoeic_tokens"
@@ -94,7 +94,7 @@ SOURCE_STREAM = "recording"
 _CLIP_SPAN_REASON = f"{CONTRADICTED_CLIP}: an unclipped sample is louder than this span's own level"
 _CLIP_AMPLITUDE_REASON = "its per-span levels name clip spans withdrawn as contradicted"
 _CLIP_CONTEST_REASON = "the clip span it contests was withdrawn; there is no span left to contest"
-_QUALITY_VERDICT_REASON = "it counts contests of clip spans that have since been withdrawn"
+_QUALITY_REPORT_REASON = "it counts contests of clip spans that have since been withdrawn"
 _WORD_REASON = "the token is in words.onomatopoeic_tokens; this reading spells it unbracketed"
 _TRANSCRIPT_REASON = "its words were re-flagged against words.onomatopoeic_tokens"
 
@@ -501,7 +501,7 @@ def rebracket_words(store: ProvStore, config: TriageConfig) -> str | None:
     return written
 
 
-def extend_quality(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> NodeResult | None:
+def extend_quality(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> BranchResult | None:
     """Run QUALITY over a finished run, whose graph pass never reached it.
 
     QUALITY reads stored outputs only, so the finished run holds every input it takes: PREPROCESS's
@@ -526,7 +526,7 @@ def extend_quality(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
         LookupError: If the store holds no live ``recording`` stream, or holds clip spans over it
             with no ``clip_amplitude`` measurement to read them against.
     """
-    if find_verdict(store, QUALITY) is not None:
+    if find_branch_report(store, QUALITY) is not None:
         return None
     return quality(store, SOURCE_STREAM, config, run_dir=run_dir)
 
@@ -559,14 +559,14 @@ def _retire_quality_findings(store: ProvStore, withdrawn: set[str], *, software:
             reason=_CLIP_CONTEST_REASON,
             software=software,
         )
-    verdict = find_verdict(store, QUALITY)
+    verdict = find_branch_report(store, QUALITY)
     if contests and verdict is not None:
         supersede(
             store,
             verdict.id,
             node=QUALITY,
-            step=QUALITY_VERDICT_SUPERSEDED,
-            reason=_QUALITY_VERDICT_REASON,
+            step=QUALITY_REPORT_SUPERSEDED,
+            reason=_QUALITY_REPORT_REASON,
             software=software,
         )
     return [contest.id for contest in contests]

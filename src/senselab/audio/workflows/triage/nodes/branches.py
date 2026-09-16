@@ -15,7 +15,7 @@ The design, its measurements and what each operating point owes are in
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Literal, NamedTuple, Protocol, Sequence
@@ -23,7 +23,7 @@ from typing import Any, Callable, Literal, NamedTuple, Protocol, Sequence
 import numpy as np
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities
 from senselab.audio.workflows.triage.routing_analysis.families import (
@@ -108,11 +108,16 @@ FINDING_KINDS = ("deviation", "count", "measure", "contest")
 
 
 class Result(NamedTuple):
-    """What every branch entry point returns.
+    """What every branch entry point returns: the three things a branch reports and nothing else.
+
+    There is no outcome here and there is no outcome downstream of it. ``done`` becomes the report's
+    task conformance, ``components`` become the spans, ``deviations`` become the findings, and
+    ``vocabulary.fold_file_verdict`` is the only place any of it is turned into a decision.
 
     Attributes:
-        done: Whether the expected patterns were found. ``detect_*`` always returns
-            :data:`UNDETERMINED`, because no pattern was expected of it.
+        done: Whether the expected patterns were found — the branch's task conformance.
+            ``detect_*`` always returns :data:`UNDETERMINED`, because no pattern was expected of it,
+            and a body that could not read the operating point its qualifier needed returns it too.
         components: The spans this branch proposes, each in its own family, each naming its
             evidence. An empty list is a result, not a failure.
         deviations: Every finding that is not a proposed span.
@@ -270,6 +275,18 @@ def measured(name: str, start: float | None, end: float | None, value: Any, **co
         The finding.
     """
     return Finding("measure", name, start, end, {"value": value, **dict(covariates)})
+
+
+def deviation_names(findings: Sequence[Finding]) -> tuple[str, ...]:
+    """The deviation types among these findings, sorted and deduplicated.
+
+    Args:
+        findings: A branch's findings.
+
+    Returns:
+        The names, for the report's ``deviations``.
+    """
+    return tuple(sorted({finding.name for finding in findings if finding.kind == "deviation"}))
 
 
 def unviable(name: str, why: str) -> Finding:
@@ -869,245 +886,175 @@ PARAM_SECTION = "branch"
 """The config section every operating point in :class:`BranchParams` is read from."""
 
 
-@dataclass(frozen=True)
-class BranchParams:
-    """Every operating point the branch bodies owe, read from the config on access.
+def _band(value: Any) -> tuple[float, float]:  # noqa: ANN401 — one config leaf, shape checked here
+    """A ``[lo, hi]`` config leaf as a pair of floats.
 
-    No number appears here. Each property is one ``branch.*`` key, and a key nobody has measured is
-    null in the packaged config, so reading it raises rather than returning a number nobody chose.
-    Reading is lazy for that reason: an eager record would fail every branch on the first null.
+    Args:
+        value: The leaf.
+
+    Returns:
+        ``(lo, hi)``.
+    """
+    lo, hi = value
+    return float(lo), float(hi)
+
+
+def _bands(value: Any) -> dict[str, tuple[float, float]]:  # noqa: ANN401 — one config leaf
+    """A name-to-``[lo, hi]`` config mapping as a mapping of pairs.
+
+    Args:
+        value: The leaf.
+
+    Returns:
+        Each name's band.
+    """
+    return {str(name): _band(band) for name, band in value.items()}
+
+
+def _label_sets(value: Any) -> dict[str, tuple[str, ...]]:  # noqa: ANN401 — one config leaf
+    """A label-set mapping as a mapping of tuples.
+
+    Args:
+        value: The leaf.
+
+    Returns:
+        Each set's labels.
+    """
+    return {str(name): tuple(str(label) for label in labels) for name, labels in value.items()}
+
+
+POINT_TYPES: dict[str, Callable[[Any], Any]] = {
+    "smoothing_window_s": float,
+    "peak_prominence_db": float,
+    "trough_return_db": float,
+    "event_min_s": float,
+    "score_min": float,
+    "breath_coverage_min": float,
+    "voiced_strength_min": float,
+    "voiced_fraction_min": float,
+    "f0_spread_window_s": float,
+    "f0_spread_max_semitones": float,
+    "continuity_min": float,
+    "production_min_s": float,
+    "monotone_tolerance_semitones": float,
+    "dominant_segment_min_fraction": float,
+    "response_min_s": float,
+    "pause_min_s": float,
+    "run_gap_max_s": float,
+    "breath_group_min_gap_s": float,
+    "repeat_overlap_min": float,
+    "echo_ngram_n": int,
+    "echo_overlap_max": float,
+    "verbatim_overlap_max": float,
+    "coverage_min": float,
+    "expected_lexical_max": int,
+    "interval_max_s": float,
+    "modulation_band_hz": _band,
+    "rate_prominence_min": float,
+    "train_min_s": float,
+    "repeat_min_occurrences": int,
+    "burst_window_ms": float,
+    "place_centroid_bands_hz": _bands,
+    "place_margin_db": float,
+    "effort_split_hz": float,
+    "gap_off_task_min_s": float,
+    "label_sets": _label_sets,
+}
+"""Every ``branch.*`` key, and the type its value is read as. The one declaration of both.
+
+An entry here is an operating point a body may ask for; :data:`PARAM_KEYS` is its key order and
+``config_test`` pins the pair against the packaged section.
+"""
+
+UNMEASURED_POINTS = "unmeasured_operating_points"
+"""The measurement naming every ``branch.*`` key a body asked for and nobody has measured."""
+
+
+@dataclass
+class BranchParams:
+    """Every operating point a branch body may ask for, read from the config and never refused.
+
+    **A branch does not decide, and a refusal is a decision.** So there is one accessor,
+    :meth:`point`, it returns None for a point nobody has measured, and it records what was asked
+    for so the branch can report it as a fact beside its spans. Nothing here raises for an
+    unmeasured value; :meth:`point` raises only for a key that is not a ``branch.*`` key at all,
+    which is a typo in the calling code and not a measurement the graph is missing.
+
+    Reading is lazy and the misses accumulate per instance, so what a report names is what *this*
+    recording's bodies actually asked for rather than the whole section.
 
     Attributes:
         config: The resolved triage configuration.
+        missing: The keys read while null, in first-read order.
     """
 
     config: TriageConfig
+    missing: list[str] = field(default_factory=list)
 
-    def _number(self, key: str) -> float:
-        """One measured ``branch.*`` key as a float.
-
-        Args:
-            key: The key's name inside the ``branch`` section.
-
-        Returns:
-            The value.
-
-        Raises:
-            ValueError: If the key is unknown or unmeasured.
-        """
-        return float(self.config.require(f"{PARAM_SECTION}.{key}"))
-
-    def _count(self, key: str) -> int:
-        """One measured ``branch.*`` key as an integer.
+    def point(self, key: str) -> Any:  # noqa: ANN401 — each key's own type; several are not floats
+        """One operating point, or None when nobody has measured it.
 
         Args:
             key: The key's name inside the ``branch`` section.
 
         Returns:
-            The value.
+            The value in the type :data:`POINT_TYPES` declares for it, or None when the packaged or
+            overridden value is null. A null is recorded in :attr:`missing` on first read.
 
         Raises:
-            ValueError: If the key is unknown or unmeasured.
+            KeyError: If the name is not a ``branch`` key. A typo in a body is a programming error,
+                not a measurement the graph is missing, so it surfaces here rather than reading as
+                one more unmeasured point.
+            UnknownConfigKey: If the name is a :data:`POINT_TYPES` key the packaged file does not
+                spell — a drift between the two, which the second guard catches because
+                :meth:`TriageConfig.require` tells an unspelled key apart from a null one and this
+                method catches only the null.
         """
-        return int(self.config.require(f"{PARAM_SECTION}.{key}"))
+        if key not in POINT_TYPES:
+            raise KeyError(f"{PARAM_SECTION}.{key} is not a branch operating point; check it against PARAM_KEYS")
+        try:
+            value = self.config.require(f"{PARAM_SECTION}.{key}")
+        except UnmeasuredConfigKey:
+            if key not in self.missing:
+                self.missing.append(key)
+            return None
+        return POINT_TYPES[key](value)
 
-    @property
-    def p_smoothing_window_s(self) -> float:
-        """Boxcar width the energy envelope is smoothed over before the event walk."""
-        return self._number("smoothing_window_s")
+    def setting(self, path: str, coerce: Callable[[Any], Any] = str) -> Any:  # noqa: ANN401 — one config leaf
+        """One config value outside the ``branch`` section, read without refusing.
 
-    @property
-    def p_peak_prominence_db(self) -> float:
-        """Rise over the global floor, and over the flanking troughs, that makes a maximum an event."""
-        return self._number("peak_prominence_db")
+        A body sometimes needs a setting another section owns — the stimulus aligner's sentence
+        terminators, for instance. Reading it with ``require`` would be a refusal by the branch, so
+        it is read here and a null is recorded beside the branch's own unmeasured points.
 
-    @property
-    def p_trough_return_db(self) -> float:
-        """Fall from a peak that closes its event, for the onset and offset walk."""
-        return self._number("trough_return_db")
+        Args:
+            path: The full dotted path.
+            coerce: How to read the value.
 
-    @property
-    def p_event_min_s(self) -> float:
-        """Shortest extent the event walk reports."""
-        return self._number("event_min_s")
+        Returns:
+            The value, or None when it is null.
 
-    @property
-    def p_score_min(self) -> float:
-        """Classifier raw score at or above which a label is present in a window."""
-        return self._number("score_min")
+        Raises:
+            UnknownConfigKey: If no packaged key spells the path, which is a typo in the body.
+        """
+        try:
+            return coerce(self.config.require(path))
+        except UnmeasuredConfigKey:
+            if path not in self.missing:
+                self.missing.append(path)
+            return None
 
-    @property
-    def p_breath_coverage_min(self) -> float:
-        """Fraction of a declared breathing extent that must carry breath evidence."""
-        return self._number("breath_coverage_min")
+    def record(self) -> list[Finding]:
+        """What was asked for and could not be read, as one finding.
 
-    @property
-    def p_voiced_strength_min(self) -> float:
-        """Pitch strength at or above which a frame counts as voiced."""
-        return self._number("voiced_strength_min")
-
-    @property
-    def p_voiced_fraction_min(self) -> float:
-        """Fraction of voiced frames a phonation carrier must reach."""
-        return self._number("voiced_fraction_min")
-
-    @property
-    def p_f0_spread_window_s(self) -> float:
-        """Window the worst local F0 spread is taken over."""
-        return self._number("f0_spread_window_s")
-
-    @property
-    def p_f0_spread_max_semitones(self) -> float:
-        """Largest local F0 spread a held vowel may show."""
-        return self._number("f0_spread_max_semitones")
-
-    @property
-    def p_continuity_min(self) -> float:
-        """Median spectral continuity a stationary production must hold."""
-        return self._number("continuity_min")
-
-    @property
-    def p_production_min_s(self) -> float:
-        """Shortest carrier span a production may be found in."""
-        return self._number("production_min_s")
-
-    @property
-    def p_monotone_tolerance_semitones(self) -> float:
-        """Reversal a pitch sweep may contain and still count as monotone."""
-        return self._number("monotone_tolerance_semitones")
-
-    @property
-    def p_dominant_segment_min_fraction(self) -> float:
-        """Fraction of a sweep one direction must hold to be the declared one."""
-        return self._number("dominant_segment_min_fraction")
-
-    @property
-    def p_response_min_s(self) -> float:
-        """Shortest extent that counts as a response at all."""
-        return self._number("response_min_s")
-
-    @property
-    def p_pause_min_s(self) -> float:
-        """Gap between words that is a pause rather than coarticulation."""
-        return self._number("pause_min_s")
-
-    @property
-    def p_run_gap_max_s(self) -> float:
-        """Largest gap two lexical words may straddle and stay one run."""
-        return self._number("run_gap_max_s")
-
-    @property
-    def p_breath_group_min_gap_s(self) -> float:
-        """Inter-word gap that breaks a breath group."""
-        return self._number("breath_group_min_gap_s")
-
-    @property
-    def p_omission_score_max(self) -> float:
-        """Alignment score at or below which an expected token counts as omitted."""
-        return self._number("omission_score_max")
-
-    @property
-    def p_repeat_overlap_min(self) -> float:
-        """Overlap fraction at which an alignment covers the expected sequence twice."""
-        return self._number("repeat_overlap_min")
-
-    @property
-    def p_echo_ngram_n(self) -> int:
-        """The n of the n-gram the prompt-echo overlap is measured over."""
-        return self._count("echo_ngram_n")
-
-    @property
-    def p_echo_overlap_max(self) -> float:
-        """Prompt n-gram overlap above which a free response echoes its prompt."""
-        return self._number("echo_overlap_max")
-
-    @property
-    def p_verbatim_overlap_max(self) -> float:
-        """Source content overlap above which a recall is verbatim rather than recalled."""
-        return self._number("verbatim_overlap_max")
-
-    @property
-    def p_coverage_min(self) -> float:
-        """Fraction of expected tokens a read text must realise."""
-        return self._number("coverage_min")
-
-    @property
-    def p_expected_lexical_max(self) -> int:
-        """Lexical words a no-lexical expectation tolerates."""
-        return self._count("expected_lexical_max")
-
-    @property
-    def p_interval_max_s(self) -> float:
-        """Largest inter-event interval a series the instruction calls quick may show."""
-        return self._number("interval_max_s")
-
-    @property
-    def p_modulation_band_hz(self) -> tuple[float, float]:
-        """The ``(lo, hi)`` band the envelope modulation peak is searched in."""
-        lo, hi = self.config.require(f"{PARAM_SECTION}.modulation_band_hz")
-        return float(lo), float(hi)
-
-    @property
-    def p_rate_prominence_min(self) -> float:
-        """Modulation peak over its own band mean that makes a rate readable."""
-        return self._number("rate_prominence_min")
-
-    @property
-    def p_train_min_s(self) -> float:
-        """Shortest carrier span that can hold a syllable train."""
-        return self._number("train_min_s")
-
-    @property
-    def p_repeat_min_occurrences(self) -> int:
-        """Occurrences of one token that make it a repetition."""
-        return self._count("repeat_min_occurrences")
-
-    @property
-    def p_burst_window_ms(self) -> float:
-        """Window after a syllable onset the burst spectrum is taken over, in milliseconds."""
-        return self._number("burst_window_ms")
-
-    @property
-    def p_place_centroid_bands_hz(self) -> dict[str, tuple[float, float]]:
-        """Place of articulation to the ``(lo, hi)`` band its burst energy concentrates in."""
-        bands = self.config.require(f"{PARAM_SECTION}.place_centroid_bands_hz")
-        return {str(place): (float(band[0]), float(band[1])) for place, band in bands.items()}
-
-    @property
-    def p_place_margin_db(self) -> float:
-        """The dB the leading place band must beat the next by for the place to be resolved."""
-        return self._number("place_margin_db")
-
-    @property
-    def p_effort_split_hz(self) -> float:
-        """Split the low and high spectral balance of an effort token is taken at."""
-        return self._number("effort_split_hz")
-
-    @property
-    def p_min_contrast_db(self) -> float:
-        """Spectral-balance difference two effort levels must differ by."""
-        return self._number("min_contrast_db")
-
-    @property
-    def p_tilt_max_db_per_octave(self) -> float:
-        """Spectral tilt below which a recording reads as occluded."""
-        return self._number("tilt_max_db_per_octave")
-
-    @property
-    def p_level_min_dbfs(self) -> float:
-        """Level below which a recording carries no production at all."""
-        return self._number("level_min_dbfs")
-
-    @property
-    def p_gap_off_task_min_s(self) -> float:
-        """Shortest gap reported as off-task extent."""
-        return self._number("gap_off_task_min_s")
-
-    @property
-    def p_label_sets(self) -> dict[str, tuple[str, ...]]:
-        """Label-set name to the classifier labels that are that sound."""
-        sets = self.config.require(f"{PARAM_SECTION}.label_sets")
-        return {str(name): tuple(str(label) for label in labels) for name, labels in sets.items()}
+        Returns:
+            One :data:`UNMEASURED_POINTS` measurement, or nothing when every key read had a value.
+            The list is in **read order**, not sorted: which point a body reached for first is what
+            says where the evaluation stopped being able to proceed.
+        """
+        if not self.missing:
+            return []
+        return [measured(UNMEASURED_POINTS, None, None, list(self.missing), section=PARAM_SECTION)]
 
     @property
     def p_normalise(self) -> Callable[[str], str]:
@@ -1140,7 +1087,6 @@ PARAM_KEYS = (
     "pause_min_s",
     "run_gap_max_s",
     "breath_group_min_gap_s",
-    "omission_score_max",
     "repeat_overlap_min",
     "echo_ngram_n",
     "echo_overlap_max",
@@ -1153,19 +1099,17 @@ PARAM_KEYS = (
     "train_min_s",
     "repeat_min_occurrences",
     "burst_window_ms",
-    "place_centroid_bands_hz",
     "place_margin_db",
     "effort_split_hz",
-    "min_contrast_db",
-    "tilt_max_db_per_octave",
-    "level_min_dbfs",
     "gap_off_task_min_s",
+    "place_centroid_bands_hz",
     "label_sets",
 )
 """Every key the ``branch`` config section holds, in the order the section declares them.
 
 ``p_normalise`` has no key: it is a function, and a config key naming one would be a plugin hook
-nobody has measured. Every other :class:`BranchParams` property is one entry here.
+nobody has measured. Every other entry is a key of :data:`POINT_TYPES` and of the packaged section,
+and ``config_test`` pins the three against each other.
 """
 
 
@@ -1176,8 +1120,8 @@ def branch_params(config: TriageConfig) -> BranchParams:
         config: The resolved triage configuration.
 
     Returns:
-        The record. Nothing is read until a property is accessed, so an unmeasured key fails the
-        body that needs it rather than every body.
+        The record. Nothing is read until :meth:`BranchParams.point` is called, and a fresh record
+        per node call is what makes its ``missing`` list this recording's own.
     """
     return BranchParams(config=config)
 
@@ -1388,6 +1332,23 @@ def off_task(components: Sequence[Proposal], spans: Sequence[Entity], p_gap_off_
             continue
         out.append(deviation("off_task_extent", extent[0], extent[1], measure="gap"))
     return out
+
+
+def off_task_findings(components: Sequence[Proposal], spans: Sequence[Entity], params: BranchParams) -> list[Finding]:
+    """:func:`off_task`, with the gap minimum read rather than passed.
+
+    Args:
+        components: The spans this branch proposed.
+        spans: The span entities.
+        params: The operating points.
+
+    Returns:
+        One ``off_task_extent`` deviation per uncovered gap, and nothing at all when the gap minimum
+        is unmeasured: without it no gap is long enough to matter or short enough not to be, and the
+        ask is recorded in ``params.missing``.
+    """
+    minimum = params.point("gap_off_task_min_s")
+    return [] if minimum is None else off_task(components, spans, minimum)
 
 
 def declared_duration_count(store: ProvStore, declared: float | None) -> list[Finding]:
@@ -1904,17 +1865,22 @@ def events_in_extent(
         params: The operating points.
 
     Returns:
-        The events, coalesced, earliest first.
+        The events, coalesced, earliest first. Empty when one of the walk's own operating points is
+        unmeasured: the walk cannot be taken without it, and a walk taken on a substituted number
+        would report events nobody's setting found. The ask is recorded in ``params.missing``.
     """
+    window_s = params.point("smoothing_window_s")
+    prominence = params.point("peak_prominence_db")
+    return_db = params.point("trough_return_db")
+    minimum_s = params.point("event_min_s")
+    if window_s is None or prominence is None or return_db is None or minimum_s is None:
+        return []
     rate = float(envelope.sampling_rate)
     raw, offset = envelope_slice(envelope, extent)
     if raw.size < 3:
         return []
-    smoothed = boxcar(raw, max(1, int(round(params.p_smoothing_window_s * rate))))
+    smoothed = boxcar(raw, max(1, int(round(window_s * rate))))
     floor_dbfs = float(envelope.floor_dbfs)
-    prominence = params.p_peak_prominence_db
-    return_db = params.p_trough_return_db
-    minimum_s = params.p_event_min_s
 
     events: list[tuple[float, float]] = []
     for index in range(1, smoothed.size - 1):
@@ -1997,9 +1963,14 @@ def train_rate_hz(envelope: EnvelopeTrack, extent: tuple[float, float], params: 
         params: The operating points.
 
     Returns:
-        The rate in Hz, or None when the extent is too short, the band selects nothing, or the peak
-        does not stand over its own band's mean.
+        The rate in Hz, or None when the extent is too short, the band selects nothing, the peak
+        does not stand over its own band's mean, or one of the two operating points the search
+        needs is unmeasured. The ask is recorded in ``params.missing``.
     """
+    band_hz = params.point("modulation_band_hz")
+    prominence_min = params.point("rate_prominence_min")
+    if band_hz is None or prominence_min is None:
+        return None
     rate = float(envelope.sampling_rate)
     values, _ = envelope_slice(envelope, extent)
     if values.size < 8:
@@ -2007,13 +1978,13 @@ def train_rate_hz(envelope: EnvelopeTrack, extent: tuple[float, float], params: 
     windowed = (values - values.mean()) * np.hanning(values.size)
     spectrum = np.abs(np.fft.rfft(windowed))
     freqs = np.fft.rfftfreq(values.size, d=1.0 / rate)
-    lo, hi = params.p_modulation_band_hz
+    lo, hi = band_hz
     band = (freqs >= lo) & (freqs <= hi)
     if not band.any():
         return None
     peak = int(np.argmax(np.where(band, spectrum, 0.0)))
     background = float(spectrum[band].mean())
-    if background <= 0.0 or float(spectrum[peak]) / background < params.p_rate_prominence_min:
+    if background <= 0.0 or float(spectrum[peak]) / background < prominence_min:
         return None
     return float(freqs[peak])
 

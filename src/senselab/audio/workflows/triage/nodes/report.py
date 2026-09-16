@@ -39,7 +39,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "REPORT"
 SUMMARY_STEM = "summary"
 FORMATS = ("png", "pdf")
-REPORT_SCHEMA_VERSION = "triage-summary/v4"
+REPORT_SCHEMA_VERSION = "triage-summary/v5"
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
@@ -750,13 +750,43 @@ def _verdict_entities(store: ProvStore) -> dict[str, Entity]:
         store: The provenance store.
 
     Returns:
-        ``{node: entity}`` over every node that concluded.
+        ``{node: entity}`` over every node that **decided**. A reporting node — a branch, or
+        QUALITY — is not here: it writes a ``branch_report``, read by :func:`_report_entities`.
     """
     latest: dict[str, Entity] = {}
     for entity in store.entities("verdict"):
         if not store.is_invalidated(entity.id):
             latest[str(entity.attributes.get("node"))] = entity
     return latest
+
+
+def _report_entities(store: ProvStore) -> dict[str, Entity]:
+    """The latest live ``branch_report`` entity per node, keyed by node name.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{node: entity}`` over every node that reported.
+    """
+    latest: dict[str, Entity] = {}
+    for entity in store.entities("branch_report"):
+        if not store.is_invalidated(entity.id):
+            latest[str(entity.attributes.get("node"))] = entity
+    return latest
+
+
+def _concluded_entities(store: ProvStore) -> dict[str, Entity]:
+    """Every node's own record, whichever of the two kinds it writes.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{node: entity}`` over every node that decided or reported. The two vocabularies are
+        disjoint by node, so nothing here can be shadowed.
+    """
+    return {**_verdict_entities(store), **_report_entities(store)}
 
 
 def _steps(store: ProvStore) -> dict[str, dict[str, Any]]:
@@ -766,14 +796,15 @@ def _steps(store: ProvStore) -> dict[str, dict[str, Any]]:
         store: The provenance store.
 
     Returns:
-        ``{step: {**verdict detail, "element_ids": [...]}}`` over every node that wrote a verdict.
+        ``{step: {**record detail, "element_ids": [...]}}`` over every node that wrote a verdict or a
+        branch report.
         The ids are the verdict entity itself and every **live** entity the node's activities
         generated, which is what makes any number in the summary traceable to the assertion that
         produced it. An invalidated entity is left out under the store's shared read rule: it is a
         join key to something the graph has withdrawn, and citing it would credit a claim to
         evidence that no longer stands.
     """
-    by_node = _verdict_entities(store)
+    by_node = _concluded_entities(store)
     generated: dict[str, list[str]] = {}
     for entity in store.entities():
         activity_id = store.generated_by(entity.id)
@@ -797,14 +828,16 @@ def _branches(store: ProvStore) -> dict[str, dict[str, Any]]:
         store: The provenance store.
 
     Returns:
-        ``{branch: {will_run, declared, forced_by_declaration, route_state, why, verdict, flags}}``.
-        Empty when ROUTING never ran, which is a graph in which no branch was ever asked.
+        ``{branch: {will_run, declared, forced_by_declaration, route_state, why, conformance,
+        deviations, notes}}``. There is no ``verdict`` key: a branch writes none, and what stands in
+        its place is the conformance it reported. Empty when ROUTING never ran, which is a graph in
+        which no branch was ever asked.
     """
     decisions: dict[str, Entity] = {}
     for entity in store.entities("branch_decision"):
         if not store.is_invalidated(entity.id):
             decisions[str(entity.attributes["branch"])] = entity
-    concluded = _verdict_entities(store)
+    concluded = _report_entities(store)
     branches: dict[str, dict[str, Any]] = {}
     for branch, decision in decisions.items():
         verdict_entity = concluded.get(branch)
@@ -817,8 +850,11 @@ def _branches(store: ProvStore) -> dict[str, dict[str, Any]]:
             "unavailable_gates": list(decision.attributes.get("unavailable_gates") or []),
             "flag_gates": list(decision.attributes.get("flag_gates") or []),
             "why": decision.attributes.get("why"),
-            "verdict": None if verdict_entity is None else verdict_entity.attributes.get("outcome"),
-            "flags": [] if verdict_entity is None else list(verdict_entity.attributes.get("flags") or []),
+            "conformance": None if verdict_entity is None else verdict_entity.attributes.get("conformance"),
+            "deviations": [] if verdict_entity is None else list(verdict_entity.attributes.get("deviations") or []),
+            "unmeasured": [] if verdict_entity is None else list(verdict_entity.attributes.get("unmeasured") or []),
+            "notes": [] if verdict_entity is None else list(verdict_entity.attributes.get("notes") or []),
+            "reported": verdict_entity is not None,
             "element_ids": sorted({decision.id} | ({verdict_entity.id} if verdict_entity is not None else set())),
         }
     return branches
@@ -998,8 +1034,8 @@ def _lane_absences(store: ProvStore, drawn: set[str]) -> list[tuple[str, str]]:
             out.append((lane, f"PREPROCESS/{derivative} {reading} [{raised}]"))
         elif branch is not None and branch in branches and not branches[branch]["will_run"]:
             out.append((lane, f"{branch} did not run: {branches[branch]['why']}"))
-        elif branch is not None and _verdict_entities(store).get(branch) is None:
-            out.append((lane, f"{branch} wrote no verdict"))
+        elif branch is not None and _report_entities(store).get(branch) is None:
+            out.append((lane, f"{branch} wrote no report"))
         else:
             out.append((lane, "nothing in the store for it"))
     return out
@@ -1020,8 +1056,12 @@ def _verdict(store: ProvStore) -> dict[str, Any]:
             "triage": None,
             "release": None,
             "discard_ground": None,
+            "declared_family": None,
             "reasons": [],
             "findings": {},
+            "conformance": {},
+            "conformance_of": {},
+            "deviations": {},
             "routes": {},
             "route_state": None,
             "agreement": {},
@@ -1252,6 +1292,10 @@ def _report_document(
             "routes": verdict.get("routes") or {},
             "route_state": verdict.get("route_state"),
             "findings": verdict.get("findings") or {},
+            "conformance": verdict.get("conformance") or {},
+            "conformance_of": verdict.get("conformance_of") or {},
+            "deviations": verdict.get("deviations") or {},
+            "declared_family": verdict.get("declared_family"),
             "agreement": verdict.get("agreement") or {},
             "ruleset": _ruleset_reading(store),
         },
@@ -1540,8 +1584,8 @@ def _lane_absences_from_document(document: dict[str, Any], drawn: set[str]) -> l
             out.append((lane, f"PREPROCESS/{derivative} {reading} [{raised}]"))
         elif branch is not None and branch in branches and not branches[branch]["will_run"]:
             out.append((lane, f"{branch} did not run: {branches[branch]['why']}"))
-        elif branch is not None and branches.get(branch, {}).get("verdict") is None:
-            out.append((lane, f"{branch} wrote no verdict"))
+        elif branch is not None and not branches.get(branch, {}).get("reported"):
+            out.append((lane, f"{branch} wrote no report"))
         else:
             out.append((lane, "nothing in the store for it"))
     return out
@@ -1584,12 +1628,16 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
             f"forced_by_declaration={decision['forced_by_declaration']} "
             f"route_state={decision['route_state']} why={decision['why']}"
         )
-        lines.append(f"    outcome: {_shown(decision['verdict'])}")
+        lines.append(f"    conformance: {_shown(decision['conformance'])}")
         measured = [f"{key}={_shown(detail[key])}" for key in _BRANCH_MEASURES.get(branch, ()) if key in detail]
         if measured:
             lines.append("    measured: " + "  ".join(measured))
-        for flag in decision["flags"]:
-            lines.append(f"    flag: {flag}")
+        for name in decision["deviations"]:
+            lines.append(f"    deviation: {name}")
+        for name in decision["unmeasured"]:
+            lines.append(f"    unmeasured: {name}")
+        for note in decision["notes"]:
+            lines.append(f"    note: {note}")
         items = document["evidence"]["branches"].get(branch) or []
         for item in items[:4]:
             timing = item.get("timing") or {}
@@ -1617,6 +1665,7 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
         lines.append(
             f"  {branch}: route={screening['routes'][branch]} "
             f"found={_shown(screening['findings'].get(branch))} "
+            f"conformance={_shown(screening['conformance'].get(branch))} "
             f"agreement={_shown(screening['agreement'].get(branch))} hint={_shown(hints.get(branch))}"
         )
 
@@ -1710,7 +1759,7 @@ def _decision_blocks(document: dict[str, Any]) -> list[str]:
     lines.append("  routes: " + (routes or "nothing routed"))
     for branch in sorted(routing, key=lambda name: BRANCHES.index(name) if name in BRANCHES else len(BRANCHES)):
         decision = routing[branch]
-        outcome = _shown(decision.get("verdict")) if decision["will_run"] else "not run"
+        outcome = _shown(decision.get("conformance")) if decision["will_run"] else "not run"
         lines.append(
             f"  {branch}: {outcome}; {decision['why']}"
             + ("; added by the declared task" if decision["forced_by_declaration"] else "")
