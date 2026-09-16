@@ -116,6 +116,7 @@ def _branch_report_from_entity(entity: Entity) -> BranchReport:
         conformance=_conformance_of_entity(entity),
         conformance_of=str(attributes.get("conformance_of")),
         deviations=tuple(str(name) for name in attributes.get("deviations") or ()),
+        in_family=bool(attributes.get("in_family")),
     )
 
 
@@ -391,6 +392,8 @@ def verdict(
             "conformance": dict(file_verdict.conformance),
             "conformance_of": dict(file_verdict.conformance_of),
             "deviations": {node: list(names) for node, names in file_verdict.deviations.items()},
+            "unmeasured": {node: list(names) for node, names in file_verdict.unmeasured.items()},
+            "detector_covariates": dict(file_verdict.detector_covariates),
             "routes": dict(file_verdict.routes),
             "route_state": file_verdict.route_state,
             "agreement": dict(file_verdict.agreement),

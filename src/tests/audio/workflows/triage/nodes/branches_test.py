@@ -24,11 +24,13 @@ from senselab.audio.workflows.triage.nodes.branches import (
     EXPECTATIONS,
     PARAM_KEYS,
     PARAM_SECTION,
+    POINT_TYPES,
     PROPOSERS,
     REFERENCE_FAMILY_SET,
     RESERVED_SPAN_ATTRIBUTES,
     SPEECH_EXPECTATIONS,
     UNDETERMINED,
+    UNMEASURED_POINTS,
     VOICE_EXPECTATIONS,
     VOICE_EXPECTATIONS_PENDING_DECLARATION,
     BranchParams,
@@ -151,10 +153,10 @@ def _span(span_id: str, measure: str, extent: tuple[float, float], **extra: Any)
 
 
 def _params(**values: Any) -> BranchParams:  # noqa: ANN401
-    """Operating points supplied by a fixture, since the packaged ones are null.
+    """The packaged operating points, with a fixture's own values overriding some of them.
 
     Args:
-        **values: ``branch.*`` keys, spelled without the ``p_`` prefix.
+        **values: ``branch.*`` keys to override, e.g. to set a null a test wants to read as missing.
 
     Returns:
         The record over a configuration carrying those values.
@@ -545,41 +547,59 @@ class TestTheModeSelector:
 
 
 class TestEveryOperatingPointIsAConfigKey:
-    """No number appears in the module. A value nobody measured is null and reading it raises."""
+    """A branch does not decide, and a refusal is a decision: ``point()`` never raises for a null."""
 
-    def test_every_param_property_has_a_key_and_every_key_a_property(self) -> None:
-        """A property with no key would take a literal; a key with no property is read by nothing."""
-        properties = {
+    def test_point_types_param_keys_and_the_packaged_section_all_match(self) -> None:
+        """A key in one but not the other two is a drift nothing else would catch."""
+        assert set(POINT_TYPES) == set(PARAM_KEYS) == set(load_triage_config().values[PARAM_SECTION])
+
+    def test_there_are_no_numeric_p_star_properties_any_more(self) -> None:
+        """The only accessor is ``point()``. ``p_normalise`` survives because it is a function."""
+        p_properties = {
             name[2:]
             for name in dir(BranchParams)
             if name.startswith("p_") and isinstance(getattr(BranchParams, name), property)
         }
-        assert properties == set(PARAM_KEYS) | {"normalise"}
-        assert set(load_triage_config().values[PARAM_SECTION]) == set(PARAM_KEYS)
+        assert p_properties == {"normalise"}
 
-    def test_every_numeric_key_ships_null_and_names_itself_when_read(self) -> None:
-        """The design is a method inventory: it fits none of these, so none may ship a value."""
+    def test_every_key_ships_a_value_and_point_reads_it_without_refusing(self) -> None:
+        """The design fitted every key; none may still ship null, and ``point`` never raises for one."""
         config = load_triage_config()
         numeric = [key for key in PARAM_KEYS if key != "label_sets"]
-        assert len(numeric) == 38
+        assert len(numeric) == 34
+        params = branch_params(config)
         for key in numeric:
-            path = f"{PARAM_SECTION}.{key}"
-            assert config.values[PARAM_SECTION][key] is None, path
-            with pytest.raises(ValueError, match="has no value") as raised:
-                config.require(path)
-            assert "unknown configuration key" not in str(raised.value), path
+            assert config.values[PARAM_SECTION][key] is not None, key
+            assert params.point(key) is not None, key
+        assert params.missing == []
 
-    def test_reading_one_null_does_not_fail_a_body_that_needs_another_key(self) -> None:
-        """Lazily, one key at a time: 38 nulls would otherwise fail every branch on every file."""
-        params = _params(score_min=0.3)
-        assert params.p_score_min == pytest.approx(0.3)
-        with pytest.raises(ValueError, match="branch.event_min_s has no value"):
-            params.p_event_min_s
+    def test_reading_a_null_point_records_it_and_returns_none(self) -> None:
+        """One overridden null must not fail a body that needs another key."""
+        params = _params(event_min_s=None)
+        assert params.point("event_min_s") is None
+        assert params.missing == ["event_min_s"]
+        assert params.point("score_min") == pytest.approx(0.2)
+
+    def test_point_raises_only_for_a_name_outside_point_types(self) -> None:
+        """A typo in the calling code is a programming error, not a measurement the graph is missing."""
+        with pytest.raises(KeyError, match="PARAM_KEYS"):
+            branch_params(load_triage_config()).point("not_a_branch_key")
+
+    def test_record_names_every_null_key_in_read_order(self) -> None:
+        """Which point a body reached for first is what says where the evaluation stopped."""
+        params = _params(peak_prominence_db=None, event_min_s=None, score_min=None)
+        params.point("event_min_s")
+        params.point("peak_prominence_db")
+        params.point("score_min")
+        [finding] = params.record()
+        assert finding.name == UNMEASURED_POINTS
+        assert finding.evidence["value"] == ["event_min_s", "peak_prominence_db", "score_min"]
+        assert finding.evidence["section"] == PARAM_SECTION
 
     def test_the_label_sets_ship_the_airway_decision_already_taken(self) -> None:
         """The one non-numeric key: set membership derived from ``airway.labels_of_interest``."""
         config = load_triage_config()
-        assert branch_params(config).p_label_sets == {"cough": ("Cough",), "breath": ("Breathe",)}
+        assert branch_params(config).point("label_sets") == {"cough": ("Cough",), "breath": ("Breathe",)}
         assert set(config.require("airway.labels_of_interest")) == {"Cough", "Breathe"}
 
     def test_a_campaign_may_add_a_label_set_without_editing_the_package(self) -> None:
@@ -595,15 +615,15 @@ class TestEveryOperatingPointIsAConfigKey:
 
     def test_a_tuple_valued_key_comes_back_as_a_tuple(self) -> None:
         """YAML gives a list; the body's arithmetic wants two floats."""
-        assert _params(modulation_band_hz=[1.5, 9.0]).p_modulation_band_hz == (1.5, 9.0)
-        assert _params(place_centroid_bands_hz={"labial": [200, 900]}).p_place_centroid_bands_hz == {
+        assert _params(modulation_band_hz=[1.5, 9.0]).point("modulation_band_hz") == (1.5, 9.0)
+        assert _params(place_centroid_bands_hz={"labial": [200, 900]}).point("place_centroid_bands_hz") == {
             "labial": (200.0, 900.0)
         }
 
     def test_a_count_key_comes_back_as_an_integer(self) -> None:
-        """``p_echo_ngram_n`` indexes a slice; a float there is a TypeError at the call site."""
-        assert isinstance(_params(echo_ngram_n=3).p_echo_ngram_n, int)
-        assert isinstance(_params(expected_lexical_max=0).p_expected_lexical_max, int)
+        """``point("echo_ngram_n")`` indexes a slice; a float there is a TypeError at the call site."""
+        assert isinstance(_params(echo_ngram_n=3).point("echo_ngram_n"), int)
+        assert isinstance(_params(expected_lexical_max=0).point("expected_lexical_max"), int)
 
 
 # --------------------------------------------------------------------- the shared helpers

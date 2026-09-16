@@ -28,7 +28,7 @@ from senselab.audio.workflows.triage.nodes.quality import (
     CONTRADICTED_CLIP,
     quality,
 )
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -196,9 +196,9 @@ class TestTheExtendPass:
 
         store = _store_of(roots[0])
         result = quality(store, "recording", config, run_dir=roots[0] / "run")
-        assert result.verdict.outcome is Outcome.FLAG
-        assert CONTRADICTED_CLIP in result.verdict.why
-        assert store.get_entity(result.verdict_entity_id).attributes["checked_n"] == 1
+        assert result.report.conformance is False
+        assert CONTRADICTED_CLIP in result.report.deviations
+        assert store.get_entity(result.report_entity_id).attributes["checked_n"] == 1
 
     def test_nothing_is_written_outside_the_recordings_own_run(
         self, corpus: Callable[..., tuple[Path, list[Path]]]
@@ -278,7 +278,7 @@ class TestARunWithNothingToMeasure:
         assert find_measurement(_store_of(roots[0]), CLIP_AMPLITUDE_MEASUREMENT) is None
         assert _log(tmp_path)[0]["status"] == "skipped"
         result = quality(_store_of(roots[0]), "recording", load_triage_config(), run_dir=roots[0] / "run")
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance == UNDETERMINED
 
 
 class TestOneBadRecording:

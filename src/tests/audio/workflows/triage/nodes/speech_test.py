@@ -23,12 +23,17 @@ from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes import speech as speech_module
-from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements, live_entities
+from senselab.audio.workflows.triage.nodes.common import (
+    find_branch_report,
+    find_measurement,
+    find_measurements,
+    live_entities,
+)
 from senselab.audio.workflows.triage.nodes.preprocess import (
     diarization_measurement as preprocess_diarization_measurement,
 )
 from senselab.audio.workflows.triage.nodes.speech import speech
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import Entity, ProvStore
@@ -419,19 +424,19 @@ def _turn_spans(store: ProvStore) -> list[Entity]:
     ]
 
 
-def _verdict_entity(store: ProvStore, node: str) -> Entity:
-    """The latest live verdict entity one node wrote.
+def _report_entity(store: ProvStore, node: str) -> Entity:
+    """The latest live ``branch_report`` entity one node wrote.
 
     Args:
         store: The provenance store.
         node: The node's name.
 
     Returns:
-        The verdict entity.
+        The report entity.
     """
-    found = [e for e in live_entities(store, "verdict") if e.attributes.get("node") == node]
-    assert found, f"no {node} verdict in the store"
-    return found[-1]
+    entity = find_branch_report(store, node)
+    assert entity is not None, f"no {node} branch_report in the store"
+    return entity
 
 
 def _stream_id(store: ProvStore, name: str) -> str:
@@ -791,8 +796,8 @@ class TestItReadsTheConsensusAndReFusesNothing:
         """words_n is the count of consensus word entities, not a re-fusion of the hypotheses."""
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert result.verdict.node == "SPEECH"
-        verdict = _verdict_entity(store, "SPEECH")
+        assert result.report.node == "SPEECH"
+        verdict = _report_entity(store, "SPEECH")
         assert verdict.attributes["words_n"] == 2
 
     def test_the_module_cannot_re_fuse(self) -> None:
@@ -806,7 +811,7 @@ class TestItReadsTheConsensusAndReFusesNothing:
         """Bracketed words count toward no word total and no span extent."""
         _seed_speech_store(store, tmp_path, words=["hello", "[COUGH]", "[BREATH]"])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert _verdict_entity(store, "SPEECH").attributes["words_n"] == 1
+        assert _report_entity(store, "SPEECH").attributes["words_n"] == 1
         [span] = _run_spans(store)
         assert span.attributes["words_n"] == 1
         hello = next(w for w in live_entities(store, "word") if w.attributes["text"] == "hello")
@@ -815,11 +820,17 @@ class TestItReadsTheConsensusAndReFusesNothing:
     def test_a_store_of_only_bracketed_words_has_no_subject(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """Test 27a: [COUGH] [UM] clears no guard; the branch fails as it does with no word at all."""
+        """Test 27a: [COUGH] [UM] clears no guard; the branch reports as it does with no word at all.
+
+        ``dispatch`` runs before the no-lexical exit, so the report carries the mode's own
+        conformance rather than a pinned fail — here `detect`, since no family is declared, so the
+        conformance is UNDETERMINED.
+        """
         _seed_speech_store(store, tmp_path, words=["[COUGH]", "[UM]"])
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert result.verdict.outcome is Outcome.FAIL
-        assert "no consensus word" in result.verdict.why
+        assert result.report.conformance == UNDETERMINED
+        report = _report_entity(store, "SPEECH")
+        assert any("no consensus word" in note for note in report.attributes["notes"])
         assert find_measurement(store, "pii_scan") is None
 
     def test_the_single_recognizer_flag_counts_lexical_insertions_only(
@@ -831,10 +842,8 @@ class TestItReadsTheConsensusAndReFusesNothing:
             store, tmp_path, words=["hello", {"text": "[UM]", "sources": ["asr_crisperwhisper"]}, "world"]
         )
         quiet = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert not [
-            flag for flag in _verdict_entity(store, "SPEECH").attributes["flags"] if "single-recognizer" in flag
-        ]
-        assert quiet.verdict.outcome is not Outcome.FAIL
+        assert not [flag for flag in _report_entity(store, "SPEECH").attributes["notes"] if "single-recognizer" in flag]
+        assert quiet.report.conformance == UNDETERMINED, "no family is declared, so detect's own answer stands"
 
         other = ProvStore(run_id="other")
         _seed_speech_store(
@@ -843,7 +852,7 @@ class TestItReadsTheConsensusAndReFusesNothing:
         speech(other, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert (
             "1 single-recognizer word(s) survive as fabrication candidates"
-            in _verdict_entity(other, "SPEECH").attributes["flags"]
+            in _report_entity(other, "SPEECH").attributes["notes"]
         )
 
     def test_no_consensus_word_fails_and_writes_no_pii_scan(
@@ -852,7 +861,7 @@ class TestItReadsTheConsensusAndReFusesNothing:
         """redact.md: a wordless recording has no PII scan, no REDACT verdict and no withheld release."""
         _seed_speech_store(store, tmp_path, words=[])
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert result.verdict.outcome is Outcome.FAIL
+        assert result.report.conformance == UNDETERMINED
         assert find_measurement(store, "pii_scan") is None
 
 
@@ -860,45 +869,44 @@ class TestTheUnmeasuredKeyAndTheHintThatContradictsTheFile:
     """F8i, F8j: an unmeasured key is a configuration error, and a contradicted hint outranks a fail."""
 
     def test_the_packaged_config_runs_now_that_the_word_gap_is_set(self, store: ProvStore, tmp_path: Path) -> None:
-        """``speech.word_gap_ms`` was the one key stopping this branch under the packaged config.
+        """Every ``branch.*`` key now ships a value, so an ordinary run completes.
 
-        It shipped null and was ``require``d here, so an ordinary run raised before measuring
-        anything — SPEECH errored on all 112 recordings of the stage-0 collection for this reason
-        alone. With the key set to 500 ms the branch reaches a verdict.
+        No family is declared, so the branch takes the out-of-family mode and reports the mode's
+        own conformance, UNDETERMINED, rather than raising over an unmeasured key.
         """
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
 
         result = speech(store, "plain", load_triage_config(), run_dir=tmp_path, enrollment=None)
 
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance == UNDETERMINED
 
     def test_a_hint_asserting_speech_this_branch_did_not_find_still_fails(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A wordless recording has no subject, whoever said otherwise; the fold names the mismatch."""
+        """A wordless recording carries no lexical subject, whoever said otherwise; VERDICT decides."""
         _seed_speech_store(store, tmp_path, words=[])
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow passage")])
         result = speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
-        assert result.verdict.outcome is Outcome.FAIL
-        assert "hint" not in result.verdict.why
+        assert result.report.conformance == UNDETERMINED
+        assert not any("hint" in note for note in _report_entity(store, "SPEECH").attributes["notes"])
 
     def test_a_hint_tag_leaves_the_absence_alone_the_same_way(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """speech.hint_tags reaches ROUTING and the fold; it does not reach this branch's outcome."""
+        """speech.hint_tags reaches ROUTING and the fold; it does not reach this branch's report."""
         _seed_speech_store(store, tmp_path, words=[])
         result = speech(
             store, "plain", speech_config, AudioHints(may_contain=["Read-Speech"]), run_dir=tmp_path, enrollment=None
         )
-        assert result.verdict.outcome is Outcome.FAIL
+        assert result.report.conformance == UNDETERMINED
 
     def test_a_wordless_recording_nobody_claimed_held_speech_simply_fails(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """The control: fail means this branch has no subject, and a cough recording is not an error."""
+        """The control: no subject means UNDETERMINED, and a cough recording is not an error."""
         _seed_speech_store(store, tmp_path, words=[])
         result = speech(store, "plain", speech_config, AudioHints(), run_dir=tmp_path, enrollment=None)
-        assert result.verdict.outcome is Outcome.FAIL
+        assert result.report.conformance == UNDETERMINED
 
 
 class TestTheSpeechFamilyIsAConfigKey:
@@ -914,7 +922,7 @@ class TestTheSpeechFamilyIsAConfigKey:
         spans = _run_spans(store)
         assert spans and all(span.attributes["yamnet_vote"] == "unavailable" for span in spans)
         assert all(span.attributes["yamnet_coverage"] is None for span in spans)
-        flags = _verdict_entity(store, "SPEECH").attributes["flags"]
+        flags = _report_entity(store, "SPEECH").attributes["notes"]
         assert not [flag for flag in flags if "disconfirm" in flag], "an unmeasured family disconfirms nothing"
 
     def test_the_family_the_config_names_is_the_family_that_votes(
@@ -932,7 +940,12 @@ class TestTheSpeechFamilyIsAConfigKey:
     def test_a_window_outside_the_family_disconfirms_and_flags(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The other half: coverage below the threshold is a flag carrying the measure (F8l)."""
+        """The other half: coverage below the threshold is a note carrying the measure (F8l).
+
+        Corroboration is downstream of the mode's own conformance, so a disconfirm changes nothing
+        the branch reports as conformance: reporting the observation is all a branch does; VERDICT
+        decides whether it flags.
+        """
         config = _override(tmp_path, "taxonomy:\n  speech_labels: [Speech, 'Narration, monologue']\n")
         _seed_speech_store(store, tmp_path, words=["hello", "world"], yamnet_labels=[["Music"]] * 11)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
@@ -940,8 +953,8 @@ class TestTheSpeechFamilyIsAConfigKey:
         spans = _run_spans(store)
         assert spans and all(span.attributes["yamnet_vote"] == "disconfirm" for span in spans)
         assert all(span.attributes["yamnet_coverage"] == 0.0 for span in spans)
-        assert result.verdict.outcome is Outcome.FLAG
-        assert [flag for flag in _verdict_entity(store, "SPEECH").attributes["flags"] if "speech coverage" in flag]
+        assert result.report.conformance == UNDETERMINED
+        assert [flag for flag in _report_entity(store, "SPEECH").attributes["notes"] if "speech coverage" in flag]
 
     def test_a_span_no_window_overlaps_is_not_evaluated_rather_than_disconfirmed(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -981,7 +994,7 @@ class TestTheSecondDiarizerIsConditional:
         calls = _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=2)
         speech(store, "plain", second_diarizer_config, run_dir=tmp_path, enrollment=None)
         assert calls == [], "the primary count is a read, so nothing is consulted at all"
-        assert _verdict_entity(store, "SPEECH").attributes["second_diarizer"] == "not_consulted"
+        assert _report_entity(store, "SPEECH").attributes["second_diarizer"] == "not_consulted"
 
     def test_a_count_of_two_consults_the_second(
         self,
@@ -995,9 +1008,9 @@ class TestTheSecondDiarizerIsConditional:
         calls = _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=3)
         speech(store, "plain", second_diarizer_config, run_dir=tmp_path, enrollment=None)
         assert calls == ["second"]
-        record = _verdict_entity(store, "SPEECH").attributes["second_diarizer"]
+        record = _report_entity(store, "SPEECH").attributes["second_diarizer"]
         assert record["count"] == 3 and record["agrees"] is False
-        assert _verdict_entity(store, "SPEECH").attributes["speaker_count"] == 2
+        assert _report_entity(store, "SPEECH").attributes["speaker_count"] == 2
 
     def test_a_count_of_zero_consults_the_second_too(
         self,
@@ -1019,8 +1032,8 @@ class TestTheSecondDiarizerIsConditional:
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         hint = AudioHints(targeted_speaker_count=4)
-        result = speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
-        assert "4" not in result.verdict.why
+        speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        assert not any("4" in note for note in _report_entity(store, "SPEECH").attributes["notes"])
 
 
 class TestTheDiarizationIsReadNotRerun:
@@ -1068,7 +1081,7 @@ class TestTheDiarizationIsReadNotRerun:
         )
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert _verdict_entity(store, "SPEECH").attributes["speaker_count"] == 2
+        assert _report_entity(store, "SPEECH").attributes["speaker_count"] == 2
         before = [entity for entity in live_entities(store, "speaker") if (entity.extent or (0.0, 0.0))[1] <= 1.0]
         assert before, "a voice before the first word is a segment the lexical hull excluded"
 
@@ -1079,7 +1092,7 @@ class TestTheDiarizationIsReadNotRerun:
         _seed_speech_store(store, tmp_path, words=["one", "two"], word_extents=[(2.0, 2.3), (2.4, 2.8)])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        read = _verdict_entity(store, "SPEECH").attributes["diarization"]
+        read = _report_entity(store, "SPEECH").attributes["diarization"]
         assert read["read"] == "enhanced_diarization"
         assert read["signal"] == "enhanced", "the stream changes from `plain` to `enhanced`"
         assert read["exclusive"] is False, "pyannote's overlapping view, which lets a word straddle"
@@ -1100,7 +1113,7 @@ class TestTheDiarizationIsReadNotRerun:
         _seed_speech_store(store, tmp_path, words=["one", "two"], diarization=False)
         calls = _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        verdict = _verdict_entity(store, "SPEECH")
+        verdict = _report_entity(store, "SPEECH")
         assert verdict.attributes["diarization"] == "derivative_absent"
         assert verdict.attributes["speaker_count"] is None
         assert calls == []
@@ -1114,7 +1127,7 @@ class TestTheDiarizationIsReadNotRerun:
         _seed_diarization(store, tmp_path, [(1.0, 2.0, "SPEAKER_00")], n_speakers=4)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        flags = _verdict_entity(store, "SPEECH").attributes["flags"]
+        flags = _report_entity(store, "SPEECH").attributes["notes"]
         assert any("records 4 speaker(s) and its segments carry 1" in flag for flag in flags)
 
     def test_a_word_is_attributed_through_the_read_segment(
@@ -1194,7 +1207,7 @@ class TestTheClampTolerance:
         )
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert result.verdict.outcome in (Outcome.PASS, Outcome.FLAG)
+        assert result.report.conformance == UNDETERMINED
         last = max(_run_spans(store), key=lambda entity: (entity.extent or (0.0, 0.0))[1])
         assert last.extent is not None
         assert last.extent[1] == duration_s, "the overshoot is clamped to the decode, not refused"
@@ -1224,11 +1237,11 @@ class TestTheDegenerateIntervalIsAFindingNotACrash:
         calls = _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert calls == []
-        verdict = _verdict_entity(store, "SPEECH")
+        verdict = _report_entity(store, "SPEECH")
         assert verdict.attributes["diarization"]["read"] == "enhanced_diarization"
         assert _run_spans(store) == [], "a span of no duration names no region"
-        assert any("one instant" in flag for flag in verdict.attributes["flags"])
-        assert result.verdict.outcome is Outcome.FLAG
+        assert any("one instant" in flag for flag in verdict.attributes["notes"])
+        assert result.report.conformance == UNDETERMINED
 
     def test_the_branch_still_writes_the_scan_redact_would_read(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1250,7 +1263,7 @@ class TestEnrollment:
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert "target_speaker" not in _verdict_entity(store, "SPEECH").attributes
+        assert "target_speaker" not in _report_entity(store, "SPEECH").attributes
 
     def test_a_probe_is_embedded_over_the_audio_its_speaker_holds_alone(
         self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1272,14 +1285,15 @@ class TestEnrollment:
     def test_an_enrollment_without_a_commit_is_refused(
         self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No embedder runs; the branch flags with the refusal."""
+        """No embedder runs; the branch reports the refusal as a note, and decides nothing over it."""
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         embedder = _stub_embedder(monkeypatch)
         result = speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment(commit=None))
         assert embedder == []
-        assert result.verdict.outcome is Outcome.FLAG
-        assert "resolved model commit" in result.verdict.why
+        assert result.report.conformance == UNDETERMINED
+        notes = _report_entity(store, "SPEECH").attributes["notes"]
+        assert any("resolved model commit" in note for note in notes)
 
     def test_an_enrollment_from_another_model_is_refused(
         self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1287,14 +1301,15 @@ class TestEnrollment:
         """A similarity between two models' spaces is not a similarity."""
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
-        result = speech(
+        speech(
             store,
             "plain",
             enrollment_config,
             run_dir=tmp_path,
             enrollment=_enrollment(model="pyannote/embedding"),
         )
-        assert "not the probe" in result.verdict.why
+        notes = _report_entity(store, "SPEECH").attributes["notes"]
+        assert any("not the probe" in note for note in notes)
 
     def test_an_enrollment_at_another_commit_of_the_same_model_is_refused(
         self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1305,8 +1320,9 @@ class TestEnrollment:
         embedder = _stub_embedder(monkeypatch)
         result = speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment(commit="b" * 40))
         assert embedder == [], "no probe runs against an enrollment it cannot be compared with"
-        assert result.verdict.outcome is Outcome.FLAG
-        assert "two commits of one model are not comparable" in result.verdict.why
+        assert result.report.conformance == UNDETERMINED
+        notes = _report_entity(store, "SPEECH").attributes["notes"]
+        assert any("two commits of one model are not comparable" in note for note in notes)
         assert not live_entities(store, "target_match"), "no comparison happened"
 
     def test_a_null_enrollment_model_key_refuses_before_the_branch_measures_anything(
@@ -1314,19 +1330,22 @@ class TestEnrollment:
     ) -> None:
         """speech.enrollment_model is null on the packaged config; nothing invents a probe.
 
-        The refusal does write: a caller-input problem is a finding about the run, so it gets a
-        verdict rather than an exception. What it must not write is any measurement, span or
-        finding, because none was taken.
+        A branch never refuses: it proceeds with everything else it can measure — the PII scan, the
+        spans, the speakers — and names the two unreadable keys in ``unmeasured`` and a note, rather
+        than stopping short of measuring anything.
         """
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=_enrollment())
-        assert result.verdict.outcome is Outcome.FLAG
-        assert "speech.enrollment_model" in result.verdict.why
-        assert find_measurement(store, "pii_scan") is None
-        assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
-        assert not live_entities(store, "speaker") and not live_entities(store, "pii")
-        assert result.view == (result.verdict_entity_id,), "the view is the refusal and nothing else"
+        assert result.report.conformance == UNDETERMINED
+        report = _report_entity(store, "SPEECH")
+        assert "speech.enrollment_model" in report.attributes["unmeasured"]
+        assert "speech.target_match_cosine" in report.attributes["unmeasured"]
+        assert any("speech.enrollment_model" in note for note in report.attributes["notes"])
+        assert find_measurement(store, "pii_scan") is not None, "the branch proceeds; it does not refuse"
+        assert [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        assert live_entities(store, "speaker")
+        assert "target_speaker" not in report.attributes, "no probe was embedded, so no match was made"
 
     def test_the_enrollment_element_names_every_source(
         self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1361,8 +1380,9 @@ class TestEnrollment:
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         hint = AudioHints(target_speaker=_target_speaker_embedding())
-        result = speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
-        assert "identifies the target by enrollment" in result.verdict.why
+        speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        notes = _report_entity(store, "SPEECH").attributes["notes"]
+        assert any("identifies the target by enrollment" in note for note in notes)
 
 
 class TestSeparationIsMeasurementGated:
@@ -1377,7 +1397,7 @@ class TestSeparationIsMeasurementGated:
         separator = _stub_separator(monkeypatch)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert separator == []
-        assert _verdict_entity(store, "SPEECH").attributes["separation"] == "not_selected"
+        assert _report_entity(store, "SPEECH").attributes["separation"] == "not_selected"
 
     def test_mossformer_is_reachable_by_config(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1402,7 +1422,7 @@ class TestSeparationIsMeasurementGated:
         separator = _stub_separator(monkeypatch)
         speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
         assert separator == []
-        assert _verdict_entity(store, "SPEECH").attributes["separation"] == "unconditioned_sound_slot_unavailable"
+        assert _report_entity(store, "SPEECH").attributes["separation"] == "unconditioned_sound_slot_unavailable"
 
     def test_unasdiff_runs_in_speech_sound_mode_when_a_class_is_named(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1424,9 +1444,10 @@ class TestSeparationIsMeasurementGated:
         _seed_speech_store(store, tmp_path, words=["hello", "world"], diarized=3)
         _stub_diarizers(monkeypatch, primary_speakers=3, second_speakers=3)
         separator = _stub_separator(monkeypatch)
-        result = speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
         assert separator == []
-        assert "cannot serve 3" in result.verdict.why
+        notes = _report_entity(store, "SPEECH").attributes["notes"]
+        assert any("cannot serve 3" in note for note in notes)
 
 
 class TestPiiOnTheConsensus:
@@ -1453,7 +1474,7 @@ class TestPiiOnTheConsensus:
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert len(live_entities(store, "pii")) == 1
-        assert _verdict_entity(store, "SPEECH").attributes["pii"]["n"] == 1
+        assert _report_entity(store, "SPEECH").attributes["pii"]["n"] == 1
         assert live_entities(store, "pii")[0].attributes["haystack"] == "consensus"
 
     def test_a_name_only_one_recognizer_heard_is_located_and_marked(
@@ -1486,7 +1507,7 @@ class TestPiiOnTheConsensus:
         variant = next(w for w in live_entities(store, "word") if w.attributes["text"] == "alyssa")
         marks = [e for e in live_entities(store, "assertion") if e.attributes.get("label") == "pii"]
         assert [store.derived_from(m.id) for m in marks] == [[variant.id]]
-        assert "pii_unlocated" not in " ".join(_verdict_entity(store, "SPEECH").attributes["flags"])
+        assert "pii_unlocated" not in " ".join(_report_entity(store, "SPEECH").attributes["notes"])
 
     def test_the_finding_extent_is_the_hull_of_the_sources_timings(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1518,7 +1539,7 @@ class TestPiiOnTheConsensus:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        verdict = _verdict_entity(store, "SPEECH")
+        verdict = _report_entity(store, "SPEECH")
         assert verdict.attributes["words_n"] == 4
         spans = _run_spans(store)
         assert sum(int(span.attributes["words_n"]) for span in spans) == 4
@@ -1535,16 +1556,16 @@ class TestPiiOnTheConsensus:
     def test_a_finding_carries_category_and_extent_never_text(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The verdict and the element both refuse to carry the matched text."""
+        """The report and the element both refuse to carry the matched text."""
         _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
-        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         finding = live_entities(store, "pii")[0]
         assert finding.attributes["category"] == "PERSON"
         assert finding.extent is not None
         assert "alice" not in str(finding.attributes)
-        assert "alice" not in result.verdict.why
+        assert "alice" not in str(_report_entity(store, "SPEECH").attributes)
 
     def test_a_finding_names_the_sources_behind_the_words_it_rests_on(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1592,7 +1613,7 @@ class TestPiiOnTheConsensus:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert _verdict_entity(store, "SPEECH").attributes["pii"]["n"] == 2
+        assert _report_entity(store, "SPEECH").attributes["pii"]["n"] == 2
         assert len(live_entities(store, "pii")) == 2
         marked = [
             store.derived_from(e.id)[0] for e in live_entities(store, "assertion") if e.attributes.get("label") == "pii"
@@ -1609,7 +1630,7 @@ class TestPiiOnTheConsensus:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[("PERSON", "ada lovelace")])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert _verdict_entity(store, "SPEECH").attributes["pii"]["n"] == 2
+        assert _report_entity(store, "SPEECH").attributes["pii"]["n"] == 2
         marks = [e for e in live_entities(store, "assertion") if e.attributes.get("label") == "pii"]
         assert len(marks) == 4
 
@@ -1621,7 +1642,7 @@ class TestPiiOnTheConsensus:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[], detectors_used=["rules"])
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.report.conformance == UNDETERMINED
         scan = find_measurement(store, "pii_scan")
         assert scan is not None and scan.attributes["missing"] == ["gliner", "presidio"]
 
@@ -1638,9 +1659,9 @@ class TestPiiOnTheConsensus:
         _stub_embedder(monkeypatch, similarity=0.99, target_label="SPEAKER_00")
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment())
-        verdict = _verdict_entity(store, "SPEECH")
+        verdict = _report_entity(store, "SPEECH")
         assert verdict.attributes["pii"]["n"] == 1
-        assert not [flag for flag in verdict.attributes["flags"] if "target speaker's speech" in flag]
+        assert not [flag for flag in verdict.attributes["notes"] if "target speaker's speech" in flag]
 
 
 class TestTheNonTargetAxis:
@@ -1665,7 +1686,7 @@ class TestTheNonTargetAxis:
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert _verdict_entity(store, "SPEECH").attributes["nontarget_speech_s"] is None
+        assert _report_entity(store, "SPEECH").attributes["nontarget_speech_s"] is None
 
     def test_the_product_appears_once_every_threshold_is_supplied(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1678,7 +1699,7 @@ class TestTheNonTargetAxis:
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
-        assert isinstance(_verdict_entity(store, "SPEECH").attributes["nontarget_speech_s"], float)
+        assert isinstance(_report_entity(store, "SPEECH").attributes["nontarget_speech_s"], float)
 
     def test_every_leg_is_compared_in_the_direction_the_spec_states(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1711,7 +1732,7 @@ class TestTheNonTargetAxis:
         second = ProvStore(run_id="second")
         _seed_two_distance_spans(second, tmp_path)
         speech(second, "plain", config, run_dir=tmp_path, enrollment=None)
-        assert _verdict_entity(second, "SPEECH").attributes["nontarget_speech_s"] == pytest.approx(1.1, abs=1e-3)
+        assert _report_entity(second, "SPEECH").attributes["nontarget_speech_s"] == pytest.approx(1.1, abs=1e-3)
 
     def test_no_span_is_excluded_on_this_evidence(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1737,22 +1758,26 @@ class TestTheVerdictHangsOffTheStepThatConcluded:
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        concluding = store.generated_by(result.verdict_entity_id)
+        concluding = store.generated_by(result.report_entity_id)
         assert concluding is not None
         assert store.get_activity(concluding).step == "proximity"
         opened = [activity.id for activity in store.activities("SPEECH")]
         assert opened[-1] == concluding, "the concluding step is the last one this branch opened"
-        assert "nontarget_speech_s" in _verdict_entity(store, "SPEECH").attributes
+        assert "nontarget_speech_s" in _report_entity(store, "SPEECH").attributes
 
     def test_the_wordless_verdict_hangs_off_the_step_that_concluded_there(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """That path concludes at the transcript, because it is the only step that ran."""
+        """That path's report still hangs off the transcript step, though it is no longer the last one opened.
+
+        ``dispatch`` runs before the no-lexical exit, so ``expect`` opens after ``transcript`` even
+        though the report is written by (and generated by) the earlier step.
+        """
         _seed_speech_store(store, tmp_path, words=[])
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        concluding = store.generated_by(result.verdict_entity_id)
+        concluding = store.generated_by(result.report_entity_id)
         assert concluding is not None and store.get_activity(concluding).step == "transcript"
-        assert [activity.id for activity in store.activities("SPEECH")][-1] == concluding
+        assert [activity.step for activity in store.activities("SPEECH")] == ["transcript", "expect"]
 
 
 class TestQualityAndTheStreamsItNames:
@@ -1796,7 +1821,7 @@ class TestSquimIsInertWhileItsFloorsAreNull:
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert result.verdict.outcome is Outcome.PASS, "quality is reported, never gating"
+        assert result.report.conformance == UNDETERMINED, "quality is reported, never gating"
         spans = _run_spans(store)
         assert spans and all(span.attributes["squim_vote"] == "not_evaluated" for span in spans)
         readings = find_measurements(store, "squim")
@@ -1830,10 +1855,10 @@ class TestWhatAPiiFailureMayCarry:
         _stub_embedder(monkeypatch, similarity=0.99, target_label="SPEAKER_00")
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         result = speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment())
-        verdict = _verdict_entity(store, "SPEECH")
+        verdict = _report_entity(store, "SPEECH")
         assert verdict.attributes["target_speaker"] == "SPEAKER_00", "a target is known"
-        assert result.verdict.outcome is Outcome.FLAG
-        assert [flag for flag in verdict.attributes["flags"] if "cannot be resolved" in flag]
+        assert result.report.conformance == UNDETERMINED
+        assert [flag for flag in verdict.attributes["notes"] if "cannot be resolved" in flag]
 
     def test_a_detector_failure_message_never_reaches_the_store_or_the_verdict(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1855,11 +1880,10 @@ class TestWhatAPiiFailureMayCarry:
         monkeypatch.setattr(speech_module, "scan_for_pii", _fake)
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
-        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         dumped = json.dumps([(e.prov_type, e.attributes) for e in store.entities()], default=str)
-        assert sentinel not in dumped, "no entity carries a detector's failure message"
-        assert sentinel not in result.verdict.why
-        flags = _verdict_entity(store, "SPEECH").attributes["flags"]
+        assert sentinel not in dumped, "no entity carries a detector's failure message, the branch_report included"
+        flags = _report_entity(store, "SPEECH").attributes["notes"]
         assert [flag for flag in flags if "gliner" in flag and "ValueError" in flag], "detector and type remain"
 
     def test_a_narrower_required_set_makes_the_same_scan_complete(
@@ -1871,7 +1895,7 @@ class TestWhatAPiiFailureMayCarry:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[], detectors_used=["presidio", "rules"])
         result = speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance == UNDETERMINED
         scan = find_measurement(store, "pii_scan")
         assert scan is not None and scan.attributes["missing"] == []
 
@@ -1915,7 +1939,7 @@ class TestWhatTheBranchRecordsAboutItsOwnReads:
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert result.verdict_entity_id in result.view
+        assert result.report_entity_id in result.view
         speech_activities = {activity.id for activity in store.activities("SPEECH")}
         for prov_type in ("span", "speaker"):
             authored = {e.id for e in live_entities(store, prov_type) if store.generated_by(e.id) in speech_activities}
@@ -1949,7 +1973,7 @@ class TestItDoesNotReadAirway:
         _seed_speech_store(store, tmp_path, words=["hello", "world"], airway_labelled=[(0.4, 0.6)])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert _verdict_entity(store, "SPEECH").attributes["speaker_count"] == 1
+        assert _report_entity(store, "SPEECH").attributes["speaker_count"] == 1
         assert not [e for e in store.entities("speaker") if store.is_invalidated(e.id)]
 
     def test_the_module_reads_no_airway_activity(self) -> None:
@@ -2005,10 +2029,11 @@ class TestTheNodeRunsOneModeAndProposesWhatItFinds:
         self._stimulus(store)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, self._declared("harvard-sentences-list"), run_dir=tmp_path)
-        expectation = _verdict_entity(store, "SPEECH").attributes["expectation"]
+        report = _report_entity(store, "SPEECH")
+        expectation = report.attributes["expectation"]
         assert expectation["mode"] == "align"
         assert expectation["task_family"] == "harvard-sentences-list"
-        assert expectation["done"] is True
+        assert report.attributes["conformance"] is True
 
     def test_an_undeclared_recording_takes_the_detect_mode(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2017,11 +2042,12 @@ class TestTheNodeRunsOneModeAndProposesWhatItFinds:
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path)
-        expectation = _verdict_entity(store, "SPEECH").attributes["expectation"]
+        report = _report_entity(store, "SPEECH")
+        expectation = report.attributes["expectation"]
         assert expectation["mode"] == "detect"
         assert expectation["task_family"] is None
-        assert expectation["done"] == "UNDETERMINED"
-        assert expectation["spans_n"] == 0, "`branch.run_gap_max_s` ships null, so no run is grouped"
+        assert report.attributes["conformance"] == UNDETERMINED
+        assert expectation["spans_n"] == 1, "the two touching words fall inside one `branch.run_gap_max_s` run"
 
     def test_every_span_this_branch_writes_carries_a_role_and_a_derivation(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

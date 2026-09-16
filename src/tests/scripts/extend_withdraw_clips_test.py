@@ -25,8 +25,8 @@ from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.extend import withdraw_contradicted_clips
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import (
+    find_branch_report,
     find_measurement,
-    find_verdict,
     live_entities,
     software_agent,
     write_measurement,
@@ -47,7 +47,7 @@ from senselab.audio.workflows.triage.nodes.quality import (
     clip_spans,
     quality,
 )
-from senselab.audio.workflows.triage.vocabulary import QUALITY, Outcome
+from senselab.audio.workflows.triage.vocabulary import QUALITY
 from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -690,8 +690,8 @@ class TestARunWhereOnlySomeClipSpansFall:
 
         store = _store_of(roots[0])
         result = quality(store, "recording", load_triage_config(), run_dir=roots[0] / "run")
-        assert result.verdict.outcome is Outcome.PASS
-        assert store.get_entity(result.verdict_entity_id).attributes["checked_n"] == 1
+        assert result.report.conformance is True
+        assert store.get_entity(result.report_entity_id).attributes["checked_n"] == 1
 
 
 class TestQualitysOwnFindingsAboutAWithdrawnSpan:
@@ -730,16 +730,16 @@ class TestQualitysOwnFindingsAboutAWithdrawnSpan:
         assert {entity.attributes.get("verb") for entity in pointing} == {WITHDRAW_VERB}
         assert {entity.attributes.get("reason") for entity in pointing} == {CONTRADICTED_CLIP}
 
-    def test_no_quality_verdict_survives_the_withdrawal(self, corpus: Callable[..., tuple[Path, list[Path]]]) -> None:
-        """A verdict counting contests of spans that are gone is a conclusion about nothing."""
+    def test_no_quality_report_survives_the_withdrawal(self, corpus: Callable[..., tuple[Path, list[Path]]]) -> None:
+        """A report counting contests of spans that are gone is a conclusion about nothing."""
         manifest, roots = corpus(1, contested=True)
-        seeded = find_verdict(_store_of(roots[0]), QUALITY)
-        assert seeded is not None and seeded.attributes["outcome"] == Outcome.FLAG.value
+        seeded = find_branch_report(_store_of(roots[0]), QUALITY)
+        assert seeded is not None and seeded.attributes["conformance"] is False
 
         _run(manifest)
 
         store = _store_of(roots[0])
-        assert find_verdict(store, QUALITY) is None
+        assert find_branch_report(store, QUALITY) is None
         assert store.is_invalidated(seeded.id)
 
     def test_the_surviving_span_is_untouched_by_the_retirement(
@@ -756,4 +756,4 @@ class TestQualitysOwnFindingsAboutAWithdrawnSpan:
         store = _store_of(roots[0])
         assert [span.id for span in clip_spans(store, "recording")] == [survivor]
         assert [e for e in live_entities(store, "assertion") if e.attributes.get("verb") == CONTEST_VERB] == []
-        assert find_verdict(store, QUALITY) is None
+        assert find_branch_report(store, QUALITY) is None

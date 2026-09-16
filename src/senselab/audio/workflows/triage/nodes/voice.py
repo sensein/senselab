@@ -366,6 +366,12 @@ def _voice_sustained(
         findings.append(unviable("phonation_extent", TRACKS_ABSENT))
         return Result(UNDETERMINED, components, findings)
 
+    # The two points the carrier search cannot proceed without are read before it, because an empty
+    # carrier list has two causes and they are not the same report: "no span cleared the qualifier"
+    # is a reading of the recording, "the qualifier's own boundary is unmeasured" is a reading of the
+    # configuration. Folding the second as `False` would claim the task was not performed on the
+    # strength of a number nobody chose.
+    unmeasured_gate = params.point("production_min_s") is None or params.point("voiced_strength_min") is None
     carriers = sorted(
         qualifying_phonation(evidence, expectation, params),
         key=lambda carrier: duration(carrier.span.extent),
@@ -373,7 +379,7 @@ def _voice_sustained(
     )
     findings.append(count("attempt_count", len(carriers), expectation.expected_event_count))
     if not carriers:
-        return Result(False, components, findings)
+        return Result(UNDETERMINED if unmeasured_gate else False, components, findings)
 
     carrier = carriers[0]
     assert carrier.span.extent is not None  # noqa: S101 — qualifying_phonation admits no other case
@@ -696,6 +702,7 @@ def voice(
         conformance_of=TASK,
         deviations=deviation_names(findings),
         unmeasured=tuple(params.missing),
+        in_family=mode == "align",
         detail={
             "signal": source,
             "mode": mode,

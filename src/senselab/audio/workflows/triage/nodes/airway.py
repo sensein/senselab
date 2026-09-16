@@ -24,6 +24,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     NOT_SEPARABLE_BY_THIS_DESIGN,
     UNDETERMINED,
     BranchParams,
+    Done,
     EnvelopeTrack,
     Expectation,
     Finding,
@@ -581,6 +582,23 @@ def route_findings(
 # --------------------------------------------------------------------- the three in-family patterns
 
 
+def _events_reading(events: Sequence[Event], params: BranchParams) -> Done:
+    """Whether the instruction's own pattern was found, or no answer where the cut is unmeasured.
+
+    Args:
+        events: The events the walk reported.
+        params: The operating points, read for whether the label cut was measurable.
+
+    Returns:
+        True with an event in hand; :data:`UNDETERMINED` where the label search's own cut is
+        unmeasured, because no window could have cleared it and a False would claim the recording
+        carried nothing; False otherwise.
+    """
+    if events:
+        return True
+    return UNDETERMINED if params.point("score_min") is None else False
+
+
 def instrument_absent(name: str) -> Result:
     """A result for a mode whose only instrument never reached the store.
 
@@ -678,7 +696,10 @@ def _airway_event_series(
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
     findings.extend(off_task_findings(components, spans, params))
-    return Result(len(events) > 0, components, findings)
+    # No event has two causes and they are not the same report: nothing in the recording carried a
+    # label of interest, or the classifier cut the label search needs is unmeasured and no window
+    # could have carried one. Only the first answers the conformance question.
+    return Result(_events_reading(events, params), components, findings)
 
 
 def _airway_alternation(expectation: Expectation, store: ProvStore, params: BranchParams, run_dir: Path) -> Result:
@@ -753,7 +774,7 @@ def _airway_alternation(expectation: Expectation, store: ProvStore, params: Bran
     findings.extend(lexical_intrusions(store))
     findings.extend(unviable_findings(expectation))
     findings.extend(off_task_findings(components, spans, params))
-    return Result(len(coughs) > 0, components, findings)
+    return Result(_events_reading(coughs, params), components, findings)
 
 
 def _airway_coverage(
@@ -998,6 +1019,7 @@ def airway(
         conformance_of=TASK,
         deviations=deviation_names(findings),
         unmeasured=tuple(params.missing),
+        in_family=mode == "align",
         detail={"mode": mode, "task_family": family, **_detail(result, spans, params)},
     )
     view = [*(span.id for span in spans), *span_ids, *finding_ids, report_id]

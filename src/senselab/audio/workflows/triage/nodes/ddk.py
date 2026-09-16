@@ -381,7 +381,15 @@ def align_ddk(
 
     train, rate_hz = ddk_carrier(store, params, reads.envelope)
     if train is None or train.extent is None:
-        return Result(False, [], [count("expected_event_count", 0, expectation.expected_event_count), *declared])
+        # No carrier has two causes and they are not the same report: no span held a readable train,
+        # or the length guard's own boundary is unmeasured and no span could clear it. Only the
+        # first is a reading of the recording, so only the first answers the conformance question.
+        unmeasured_gate = params.point("train_min_s") is None
+        return Result(
+            UNDETERMINED if unmeasured_gate else False,
+            [],
+            [count("expected_event_count", 0, expectation.expected_event_count), *declared],
+        )
 
     onsets = events_in_span(reads.envelope, train, params)
     extent = hull(onsets) or train.extent
@@ -426,7 +434,9 @@ def align_ddk(
     ]
 
     attributes: dict[str, Any] = {"syllables_n": len(onsets), "production": "syllable_train"}
-    done: Done = rate_hz is not None and len(onsets) > 0
+    # `ddk_carrier` only returns a span whose rate was readable, so a `rate_hz is not None` clause
+    # here would be vacuous; the syllable count is the whole condition.
+    done: Done = len(onsets) > 0
     if sequence is not None:
         places = ddk_places(onsets, params, reads.wideband)
         if reads.wideband is None:
@@ -741,6 +751,7 @@ def ddk(
         conformance_of=TASK,
         deviations=deviation_names(findings),
         unmeasured=tuple(params.missing),
+        in_family=mode == "align",
         detail=_detail(result, mode, task_family, notes),
     )
     return BranchResult(report=report, view=(*span_ids, *finding_ids, report_id), report_entity_id=report_id)

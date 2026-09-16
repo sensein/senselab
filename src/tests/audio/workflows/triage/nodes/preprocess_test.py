@@ -39,7 +39,7 @@ from senselab.audio.workflows.triage.nodes.preprocess import (
     speaker_activity,
 )
 from senselab.audio.workflows.triage.nodes.quality import quality
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import UNDETERMINED, Outcome
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import (
@@ -646,11 +646,16 @@ class TestClipCandidateRejection:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """QUALITY is kept and unchanged; on a store the detector cleaned it has nothing to contest."""
+        """QUALITY is kept and unchanged; on a store the detector cleaned it has nothing to contest.
+
+        The withdrawn candidate leaves no clip span in the store, so QUALITY has nothing checkable —
+        its conformance is UNDETERMINED, not a pass, per ``vocabulary.BranchReport``.
+        """
         _seed_admit(store, tmp_path, wav_writer, samples=_plateau_under_a_louder_sample())
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), spans_config, run_dir=tmp_path)
-        assert quality(store, "recording", spans_config, run_dir=tmp_path).verdict.outcome is Outcome.PASS
+        report = quality(store, "recording", spans_config, run_dir=tmp_path).report
+        assert report is not None and report.conformance is UNDETERMINED
 
     @pytest.mark.parametrize("scale", [1.0, 0.25])
     def test_a_genuine_clip_is_written_however_far_the_recording_was_turned_down(

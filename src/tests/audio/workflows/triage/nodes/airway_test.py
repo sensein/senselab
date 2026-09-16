@@ -335,17 +335,17 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
     return ids
 
 
-def _verdict_entity(store: ProvStore, node: str) -> Entity:
-    """The verdict one node wrote.
+def _report_entity(store: ProvStore, node: str) -> Entity:
+    """The ``branch_report`` one reporting node wrote.
 
     Args:
         store: The provenance store.
         node: The node's name.
 
     Returns:
-        Its verdict entity.
+        Its report entity.
     """
-    return next(e for e in live_entities(store, "verdict") if e.attributes["node"] == node)
+    return next(e for e in live_entities(store, "branch_report") if e.attributes["node"] == node)
 
 
 def _proposed(store: ProvStore, role: str | None = None) -> list[Entity]:
@@ -473,7 +473,7 @@ class TestTheModeComesFromTheDeclaration:
         """A reader must be able to tell an evaluated task from an annotated one."""
         _five_coughs(store, tmp_path)
         airway(store, "plain", airway_config, run_dir=tmp_path)
-        recorded = _verdict_entity(store, "AIRWAY").attributes
+        recorded = _report_entity(store, "AIRWAY").attributes
         assert (recorded["mode"], recorded["task_family"]) == ("align", "respiration-and-cough-cough")
 
     def test_align_refuses_a_family_that_is_not_its_own(
@@ -541,7 +541,7 @@ class TestACountedCoughFamilyProposesOneSpanPerEvent:
         """``labelled_n`` was a count of spans carrying a label; it is now a count of events."""
         _five_coughs(store, tmp_path)
         airway(store, "plain", airway_config, run_dir=tmp_path)
-        recorded = _verdict_entity(store, "AIRWAY").attributes
+        recorded = _report_entity(store, "AIRWAY").attributes
         assert (recorded["labelled_n"], recorded["by_label"]) == (5, {"cough": 5})
 
     def test_every_event_names_its_carrier_and_the_derivatives_behind_it(
@@ -683,7 +683,7 @@ class TestAFlatToppedEventTakesItsCarriersExtent:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _events(store) == []
-        assert result.verdict.outcome is Outcome.FAIL
+        assert result.report.conformance is False
 
 
 class TestTheBreathFamiliesCountCyclesAndTimeThem:
@@ -853,7 +853,7 @@ class TestTheCoverageFamiliesReadRawHearWindows:
         [coverage] = find_measurements(store, "breath_coverage_fraction")
         assert coverage.attributes["value"] == pytest.approx(0.6)
         assert coverage.attributes["covered_s"] == pytest.approx(6.0)
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance is True
 
     def test_the_declared_duration_is_counted_beside_the_measured_one(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -882,7 +882,7 @@ class TestTheCoverageFamiliesReadRawHearWindows:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _proposed(store) == []
-        assert result.verdict.outcome is Outcome.FAIL
+        assert result.report.conformance is False
 
 
 class TestTheAlternationFamilyMatchesBreathBetweenCoughs:
@@ -947,8 +947,8 @@ class TestDetectAnnotatesWithoutEvaluating:
         assert inhale.attributes["label"] == "breath"
         assert inhale.attributes["evaluates_no_task"] is True
         assert inhale.extent is not None and 0.2 <= inhale.extent[0] < 1.2
-        assert result.verdict.outcome is Outcome.PASS
-        assert _verdict_entity(store, "AIRWAY").attributes["done"] == UNDETERMINED
+        assert result.report.conformance == UNDETERMINED
+        assert _report_entity(store, "AIRWAY").attributes["conformance"] == UNDETERMINED
 
     def test_a_cough_inside_a_sentence_reading_carries_no_penalty_for_the_words(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1018,7 +1018,7 @@ class TestDetectAnnotatesWithoutEvaluating:
         assert contested.attributes["claim"] == "cough"
         assert contested.attributes["of_span"] == ids["spans"][0]
         assert contested.attributes["reason"] == "no_raw_score_over_p_score_min"
-        assert _verdict_entity(store, "AIRWAY").attributes["contested_n"] == 1
+        assert _report_entity(store, "AIRWAY").attributes["contested_n"] == 1
 
     def test_a_decided_label_the_branch_did_propose_over_is_not_contested(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1071,7 +1071,7 @@ class TestBothClassifiersAreOneEvidenceSet:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _events(store) == []
-        assert result.verdict.outcome is Outcome.FAIL
+        assert result.report.conformance is False
 
     def test_an_absent_span_hear_pass_is_an_absence_not_a_zero(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1086,8 +1086,8 @@ class TestBothClassifiersAreOneEvidenceSet:
             envelope=bump(500, (250,)),
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FAIL
-        assert "none carries a label of interest" in result.verdict.why
+        assert _events(store) == []
+        assert result.report.conformance is False
 
 
 class TestLexicalIntrusionIsALocatedDeviationConditionedOnTheDeclaration:
@@ -1204,16 +1204,16 @@ class TestWhatTheRestructuringKeptFromTheOldBranch:
         """A carrier covering several proposals must stay legible as one."""
         _five_coughs(store, tmp_path, merged=3)
         airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert _verdict_entity(store, "AIRWAY").attributes["merged_n"] == 3, "one carrier, five events"
+        assert _report_entity(store, "AIRWAY").attributes["merged_n"] == 3, "one carrier, five events"
 
-    def test_no_span_at_all_is_a_fail_naming_no_contrast(
+    def test_no_span_at_all_reports_non_conformance(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """PREPROCESS's own reason travels into the verdict rather than being restated."""
+        """A branch reports; it does not restate PREPROCESS's own reason as an explanation."""
         _seed(store, tmp_path, task="respiration-and-cough-cough", no_contrast=True, envelope=bump(500, (250,)))
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FAIL
-        assert "no_contrast" in result.verdict.why
+        assert result.report.conformance is False
+        assert _proposed(store) == []
 
     def test_a_hint_changes_nothing_about_what_was_found(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1221,19 +1221,18 @@ class TestWhatTheRestructuringKeptFromTheOldBranch:
         """A declaration does not supply an absence, and it does not supply a presence either."""
         _seed(store, tmp_path, task="respiration-and-cough-cough", no_contrast=True, envelope=bump(500, (250,)))
         result = airway(store, "plain", airway_config, hint=AudioHints(may_contain=["cough"]), run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FAIL
-        assert "hint" not in result.verdict.why
-        assert _verdict_entity(store, "AIRWAY").attributes["flags"] == []
+        assert result.report.conformance is False
+        assert result.report.deviations == ()
 
-    def test_the_branch_raises_no_flag_at_all(
+    def test_the_branch_writes_no_flag_verb_at_all(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """``lexical_contamination`` was the only reachable flag and it is now a deviation."""
         _five_coughs(store, tmp_path, words=[("Marisol", (1.8, 1.9))])
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance is True
+        assert result.report.deviations == ("off_task_extent",)
         assert _assertions(store, "flag") == []
-        assert _verdict_entity(store, "AIRWAY").attributes["flags"] == []
 
 
 class TestTheOtherFindingsEachModeOwes:
@@ -1352,8 +1351,10 @@ class TestAnAbsentInstrumentIsAnAbsence:
             scores=[{"Cough": 0.9}],
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert _verdict_entity(store, "AIRWAY").attributes["done"] == UNDETERMINED
-        assert "energy_envelope" in result.verdict.why
+        assert result.report.conformance == UNDETERMINED
+        recorded = _report_entity(store, "AIRWAY").attributes
+        assert recorded["conformance"] == UNDETERMINED
+        assert "energy_envelope" in " ".join(recorded["notes"])
         [absence] = find_measurements(store, "event_instrument")
         assert absence.attributes["absent"] == "energy_envelope"
 
@@ -1363,7 +1364,9 @@ class TestAnAbsentInstrumentIsAnAbsence:
         """The coverage pattern's only instrument is the raw HeAR grid."""
         _seed(store, tmp_path, task="respiration-and-cough-breath")
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert "hear_scores" in result.verdict.why
+        assert result.report.conformance == UNDETERMINED
+        notes = _report_entity(store, "AIRWAY").attributes["notes"]
+        assert "hear_scores" in " ".join(notes)
 
     def test_a_moved_run_directory_is_not_an_envelope_of_silence(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1372,13 +1375,20 @@ class TestAnAbsentInstrumentIsAnAbsence:
         _five_coughs(store, tmp_path)
         (tmp_path / "derivatives" / "energy_envelope.npz").unlink()
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert "energy_envelope" in result.verdict.why
+        assert result.report.conformance == UNDETERMINED
+        notes = _report_entity(store, "AIRWAY").attributes["notes"]
+        assert "energy_envelope" in " ".join(notes)
 
-    def test_an_unmeasured_operating_point_raises_naming_its_key(self, store: ProvStore, tmp_path: Path) -> None:
-        """The packaged config ships every numeric branch key null, and reading one must raise."""
+    def test_an_unmeasured_score_min_is_reported_and_proposes_no_event(self, store: ProvStore, tmp_path: Path) -> None:
+        """A branch never refuses: the qualifier is skipped, the key is named, no event is proposed."""
         _five_coughs(store, tmp_path)
-        with pytest.raises(ValueError, match="branch.score_min"):
-            airway(store, "plain", load_triage_config(), run_dir=tmp_path)
+        config = _override(tmp_path, "branch:\n  score_min: null\n", name="null-score-min")
+        result = airway(store, "plain", config, run_dir=tmp_path)
+        assert _events(store) == []
+        assert result.report.unmeasured == ("score_min",)
+        # UNDETERMINED, not False: an unmeasured qualifier could neither admit nor reject, so
+        # claiming the instruction was not met would rest on a number nobody chose.
+        assert result.report.conformance == UNDETERMINED
 
 
 class TestTheProposeOnlyRules:
@@ -1460,7 +1470,7 @@ class TestTheProposeOnlyRules:
         """Three steps became one, and its ``step`` is the mode that ran."""
         _five_coughs(store, tmp_path)
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        concluding = store.generated_by(result.verdict_entity_id)
+        concluding = store.generated_by(result.report_entity_id)
         assert concluding is not None
         assert store.get_activity(concluding).step == "align"
 
@@ -1504,7 +1514,7 @@ class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
         self._empty_reading(monkeypatch)
         routing(store, "plain", hint_config, hint, run_dir=tmp_path)
         branch = airway(store, "plain", hint_config, hint, run_dir=tmp_path)
-        assert branch.verdict.outcome is Outcome.FAIL
+        assert branch.report.conformance is False
 
         folded = verdict(store, None, hint_config, hint, run_dir=tmp_path).file_verdict
         assert folded.triage is Triage.FLAG
@@ -1518,11 +1528,16 @@ class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
     def test_the_same_file_with_no_declaration_discards_as_acoustically_empty(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The control: nothing routed, nothing claimed, and the bypass called the recording empty."""
+        """The control: nothing routed, nothing claimed, and the bypass called the recording empty.
+
+        Unlike the declared case above, AIRWAY is not run here: ROUTING declined it (nothing routed
+        and nothing declared it), so ``run.py`` would skip it, and a branch that never reports
+        cannot supply the ``conformance is False`` flag ground that a reported non-conformance now
+        is. Running it anyway would flag the file on that ground alone, whatever the route state.
+        """
         _seed(store, tmp_path, task="respiration-and-cough-cough", no_contrast=True, envelope=bump(500, (250,)))
         self._empty_reading(monkeypatch)
         routing(store, "plain", airway_config, None, run_dir=tmp_path)
-        airway(store, "plain", airway_config, None, run_dir=tmp_path)
 
         folded = verdict(store, None, airway_config, None, run_dir=tmp_path).file_verdict
         assert folded.triage is Triage.DISCARD

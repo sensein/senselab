@@ -33,7 +33,7 @@ from senselab.audio.workflows.triage.nodes.quality import (
     UNCLIPPED_LOUDER_N,
     quality,
 )
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import STORE_ASSERTIONS, UNDETERMINED
 from senselab.utils.prov_store import Entity, ProvStore
 
 SR = 16000
@@ -196,30 +196,31 @@ class TestAClipNothingContradicts:
         clipped = _plateau(samples, 16000, 16400, 0.98)
         _seed(store, tmp_path, wav_writer, samples, [clipped])
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance is True
         assert _contests(store) == []
 
-    def test_a_recording_with_no_clip_span_is_a_clean_no_op(
+    def test_a_recording_with_no_clip_span_is_undetermined_not_passed(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
     ) -> None:
-        """Nothing was asserted, so there is nothing to contradict and nothing to write."""
+        """A recording with no clip span has not passed an audit, it has had none taken."""
         _seed(store, tmp_path, wav_writer, _bed(), [])
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
-        assert "no clip span" in result.verdict.why
+        assert result.report.conformance == UNDETERMINED
         assert _contests(store) == []
-        verdict = store.get_entity(result.verdict_entity_id)
-        assert verdict.attributes["clip_spans_n"] == 0
-        assert verdict.attributes["contradicted_n"] == 0
+        report = store.get_entity(result.report_entity_id)
+        assert report.attributes["clip_spans_n"] == 0
+        assert report.attributes["checked_n"] == 0
+        assert report.attributes["contradicted_n"] == 0
 
-    def test_the_verdict_belongs_to_no_kind(
+    def test_the_report_belongs_to_no_kind(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
     ) -> None:
         """QUALITY is a graph edge, not a branch: it is the authority on no kind at all."""
         _seed(store, tmp_path, wav_writer, _bed(), [])
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.node == "QUALITY"
-        assert result.verdict.kind is None
+        assert result.report.node == "QUALITY"
+        assert result.report.kind is None
+        assert result.report.conformance_of == STORE_ASSERTIONS
 
 
 class TestAClipAnUnclippedSampleDenies:
@@ -234,11 +235,11 @@ class TestAClipAnUnclippedSampleDenies:
         samples[24000] = np.float32(0.9)
         _seed(store, tmp_path, wav_writer, samples, [clipped])
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
-        assert CONTRADICTED_CLIP in result.verdict.why
-        verdict = store.get_entity(result.verdict_entity_id)
-        assert verdict.attributes["contradicted_n"] == 1
-        assert verdict.attributes["checked_n"] == 1
+        assert result.report.conformance is False
+        assert CONTRADICTED_CLIP in result.report.deviations
+        report = store.get_entity(result.report_entity_id)
+        assert report.attributes["contradicted_n"] == 1
+        assert report.attributes["checked_n"] == 1
 
     def test_the_offending_sample_is_named_with_its_time_and_amplitude(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
@@ -258,7 +259,8 @@ class TestAClipAnUnclippedSampleDenies:
         assert contest[0].attributes["louder_time_s"] == pytest.approx(24000 / SR)
         assert contest[0].attributes["louder_samples_n"] == 1
         assert contest[0].extent == (8000 / SR, 8400 / SR)
-        assert f"{24000 / SR:.3f}s" in result.verdict.why
+        notes = store.get_entity(result.report_entity_id).attributes["notes"]
+        assert any(f"{24000 / SR:.3f}s" in note for note in notes)
 
     def test_the_contested_span_is_kept_and_the_finding_is_derived_from_it(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
@@ -285,11 +287,11 @@ class TestAClipAnUnclippedSampleDenies:
         samples[24000] = np.float32(0.9)
         _seed(store, tmp_path, wav_writer, samples, [loud, quiet])
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.report.conformance is False
         contest = _contests(store)
         assert len(contest) == 1
         assert contest[0].extent == (12000 / SR, 12400 / SR)
-        assert store.get_entity(result.verdict_entity_id).attributes["checked_n"] == 2
+        assert store.get_entity(result.report_entity_id).attributes["checked_n"] == 2
 
     def test_a_contradiction_is_recorded_rather_than_raised(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
@@ -300,7 +302,7 @@ class TestAClipAnUnclippedSampleDenies:
         samples[24000] = np.float32(0.9)
         _seed(store, tmp_path, wav_writer, samples, [clipped])
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict_entity_id in result.view
+        assert result.report_entity_id in result.view
         assert _contests(store)[0].id in result.view
 
 
@@ -316,7 +318,7 @@ class TestTheMargin:
         samples[24000] = np.float32(0.502)
         _seed(store, tmp_path, wav_writer, samples, [clipped])
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance is True
         assert _contests(store) == []
 
     def test_a_sample_beyond_the_margin_is_a_contradiction(
@@ -328,7 +330,7 @@ class TestTheMargin:
         samples[24000] = np.float32(0.504)
         _seed(store, tmp_path, wav_writer, samples, [clipped])
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.report.conformance is False
         assert len(_contests(store)) == 1
 
     def test_the_margin_is_read_from_the_configuration(
@@ -341,19 +343,23 @@ class TestTheMargin:
         _seed(store, tmp_path, wav_writer, samples, [clipped])
         widened = _override(tmp_path, "quality:\n  clip_contradiction_margin: 0.05\n")
         result = quality(store, "recording", widened, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance is True
 
-    def test_an_unmeasured_margin_raises_before_anything_is_written(
+    def test_an_unmeasured_margin_leaves_nothing_checkable_rather_than_raising(
         self, store: ProvStore, tmp_path: Path, wav_writer: Callable[..., Path]
     ) -> None:
-        """A null threshold is a decision nobody took, and a guessed one would be worse."""
+        """A null threshold means the audit cannot be taken, not that it may be guessed."""
         samples = _bed()
         clipped = _plateau(samples, 8000, 8400, 0.5)
         _seed(store, tmp_path, wav_writer, samples, [clipped])
         unset = _override(tmp_path, "quality:\n  clip_contradiction_margin: null\n")
-        with pytest.raises(ValueError, match="quality.clip_contradiction_margin"):
-            quality(store, "recording", unset, run_dir=tmp_path)
-        assert store.activities(node="QUALITY") == []
+        result = quality(store, "recording", unset, run_dir=tmp_path)
+        assert result.report.conformance == UNDETERMINED
+        assert "quality.clip_contradiction_margin" in result.report.unmeasured
+        assert _contests(store) == []
+        report = store.get_entity(result.report_entity_id)
+        assert report.attributes["checked_n"] == 0
+        assert store.activities(node="QUALITY") != []
 
 
 class TestTheEdgeGuard:
@@ -369,7 +375,7 @@ class TestTheEdgeGuard:
         samples[4401] = np.float32(0.9)
         _seed(store, tmp_path, wav_writer, samples, [loud, quiet])
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance is True
         assert _contests(store) == []
 
     def test_without_the_guard_the_same_sample_contradicts(
@@ -387,9 +393,9 @@ class TestTheEdgeGuard:
         unguarded = _override(tmp_path, "quality:\n  clip_edge_guard_samples: 0\n")
         _seed(store, tmp_path, wav_writer, samples, [loud, quiet], unguarded)
         result = quality(store, "recording", unguarded, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.report.conformance is False
         assert _contests(store)[0].extent == (12000 / SR, 12400 / SR)
-        assert store.get_entity(result.verdict_entity_id).attributes["clip_edge_guard_samples"] == 0
+        assert store.get_entity(result.report_entity_id).attributes["clip_edge_guard_samples"] == 0
 
 
 class TestTheStreamItReads:
@@ -411,8 +417,8 @@ class TestTheStreamItReads:
         elsewhere = [span for span in live_entities(store, "span")][0]
         elsewhere.attributes["signal"] = "plain"
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
-        assert store.get_entity(result.verdict_entity_id).attributes["clip_spans_n"] == 0
+        assert result.report.conformance == UNDETERMINED
+        assert store.get_entity(result.report_entity_id).attributes["clip_spans_n"] == 0
 
 
 class TestWhatItMayRead:
@@ -429,7 +435,7 @@ class TestWhatItMayRead:
         for stream in [path, *(tmp_path / "streams").glob("*")]:
             stream.unlink()
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.report.conformance is False
         assert _contests(store)[0].attributes["louder_amplitude"] == pytest.approx(0.9, abs=QUANTISATION)
 
     def test_clip_spans_with_no_amplitude_measurement_refuse(
@@ -458,7 +464,7 @@ class TestWhatItMayRead:
         ][0]
         store.was_invalidated_by(measurement.id, store.activity(node="TEST", step="drop", parameters={}))
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance == UNDETERMINED
 
 
 class TestAStoreTheMeasurementWasAppendedTo:
@@ -483,13 +489,13 @@ class TestAStoreTheMeasurementWasAppendedTo:
         assert extend_clip_amplitudes(store, config, run_dir=tmp_path) is not None
 
         result = quality(store, "recording", config, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.report.conformance is False
         contest = _contests(store)
         assert len(contest) == 1
         assert contest[0].attributes["clip_level"] == pytest.approx(0.5, abs=QUANTISATION)
         assert contest[0].attributes["louder_amplitude"] == pytest.approx(0.9, abs=QUANTISATION)
         assert contest[0].attributes["louder_samples_n"] == 1
-        assert store.get_entity(result.verdict_entity_id).attributes["checked_n"] == 1
+        assert store.get_entity(result.report_entity_id).attributes["checked_n"] == 1
 
     def test_the_appended_measurement_keys_every_level_by_span_id(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
@@ -559,7 +565,7 @@ class TestAStoreTheMeasurementWasAppendedTo:
         """Nothing was asserted, so there is nothing to measure and QUALITY refuses nothing."""
         _seed_bare(store, tmp_path, wav_writer, _bed(), [])
         assert extend_clip_amplitudes(store, config, run_dir=tmp_path) is None
-        assert quality(store, "recording", config, run_dir=tmp_path).verdict.outcome is Outcome.PASS
+        assert quality(store, "recording", config, run_dir=tmp_path).report.conformance == UNDETERMINED
 
     def test_a_recording_whose_bytes_changed_is_refused_rather_than_measured(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
