@@ -122,6 +122,13 @@ words:
   # `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`.
   onomatopoeic_tokens: [cough, coughs, coughing, 咳, 呵, ahem, hack, khh, kof, cof]
 
+# The consensus word stream aligned against what the recording declared it expected
+# (`hints.expected_speech`). One key: where a declared prompt is divided into structure units.
+# The alignment itself needs no cut -- realised, substituted and absent are the aligner's own
+# outcomes -- and every operating point the consumers want is a branch decision over this output.
+stimulus:
+  sentence_terminators: ".?!"          # characters closing a structure unit inside one prompt; orthographic, not fitted
+
 # Which declared hint tags force which branch.
 routing:
   hint_branch_map: null                # tag (and metadata.speech_type) -> branch; a tag matching nothing forces nothing
