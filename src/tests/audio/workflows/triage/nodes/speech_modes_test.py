@@ -293,6 +293,8 @@ class TestAFullySpecifiedFamilyAlignsAgainstTheDerivative:
         store, hint = self._read(spoken)
         result = align_speech("harvard-sentences-list", store, hint, branch_params(_config(tmp_path)))
         [mismatch] = _of_kind(result, "deviation", "stimulus_mismatch")
+        [task_extent] = [proposal for proposal in result.components if proposal.role == "task_extent"]
+        assert task_extent.attributes == {"words_n": 7, "expected_n": 8}, "a substitution realised no token"
         assert mismatch.evidence["expected"] == "canoe"
         assert mismatch.evidence["read"] == "canoes"
         assert (mismatch.start, mismatch.end) == (3.0, 3.5)
@@ -611,6 +613,7 @@ class TestASyllableFamilyExpectsNoLexicalContent:
         )
         [off_task] = _of_kind(result, "deviation", "off_task_extent")
         assert (off_task.start, off_task.end) == (2.0, 2.6)
+        assert result.components == [], "a speech span here would assert the opposite of the measure"
         assert result.done is False
 
 

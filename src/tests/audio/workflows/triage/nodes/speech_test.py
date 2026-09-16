@@ -601,7 +601,13 @@ def _stub_embedder(
     calls: list[dict[str, Any]] = []
 
     def _fake(audios: list[Audio], model: Any = None, device: Any = None) -> list[torch.Tensor]:  # noqa: ANN401
-        calls.append({"n": len(audios), "model": str(getattr(model, "path_or_uri", ""))})
+        calls.append(
+            {
+                "n": len(audios),
+                "model": str(getattr(model, "path_or_uri", "")),
+                "durations_s": [round(audio.waveform.shape[-1] / audio.sampling_rate, 4) for audio in audios],
+            }
+        )
         target_index = int(target_label.rsplit("_", 1)[-1])
         orthogonal = math.sqrt(max(0.0, 1.0 - similarity**2))
         return [
@@ -1245,6 +1251,23 @@ class TestEnrollment:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert "target_speaker" not in _verdict_entity(store, "SPEECH").attributes
+
+    def test_a_probe_is_embedded_over_the_audio_its_speaker_holds_alone(
+        self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`diarization.exclusive: false` overlaps segments, and an overlap carries two voices.
+
+        SPEAKER_00 holds 1.0-3.0 and SPEAKER_01 holds 2.0-4.0, so each has 1 s alone and they share
+        1 s. A probe built from the whole of a speaker's segments would be 2 s of which half is the
+        other speaker; taking only what the speaker holds alone is 1 s.
+        """
+        _seed_speech_store(store, tmp_path, words=["one", "two"], word_extents=[(1.2, 1.6), (3.2, 3.6)])
+        _seed_diarization(store, tmp_path, [(1.0, 3.0, "SPEAKER_00"), (2.0, 4.0, "SPEAKER_01")])
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        embedder = _stub_embedder(monkeypatch)
+        speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment())
+        (call,) = embedder
+        assert call["durations_s"] == [1.0, 1.0], "the 1 s both speakers hold is in neither probe"
 
     def test_an_enrollment_without_a_commit_is_refused(
         self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
