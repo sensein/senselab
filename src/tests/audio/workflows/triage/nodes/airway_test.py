@@ -141,6 +141,7 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
     envelope: np.ndarray | None = None,
     hear_scores: Sequence[tuple[tuple[float, float], dict[str, float]]] | None = None,
     gaps: Sequence[tuple[float, float]] = (),
+    foreign_spans: Sequence[tuple[tuple[float, float], str, dict[str, float]]] = (),
     words: Sequence[tuple[str, tuple[float, float]]] = (),
     bracketed_words: Sequence[tuple[str, tuple[float, float]]] = (),
     silence_windows: Sequence[dict[str, Any]] | None = None,
@@ -164,6 +165,8 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
         envelope: The energy envelope, in dBFS at :data:`_ENVELOPE_RATE`. None writes none.
         hear_scores: The raw whole-file HeAR windows, for the coverage pattern.
         gaps: ``[(start, end), ...]`` gap spans, which is where off-task material is looked for.
+        foreign_spans: ``[(extent, family, raw_scores), ...]`` spans another branch already minted,
+            each with its own ``span_hear``. AIRWAY must not read one, whatever it scores.
         words: ``[(text, (start, end)), ...]`` lexical consensus words.
         bracketed_words: The same for bracketed words, indexed after ``words``.
         silence_windows: YAMNet's graded windows, as ``{start, end, score, is_silence}`` dicts.
@@ -214,6 +217,23 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
         )
     for start, end in gaps:
         ids["gaps"].append(_write("span", (start, end), {"measure": "gap", "signal": "plain"}))
+    for extent, family, raw_scores in foreign_spans:
+        foreign_id = _write("span", extent, {"family": family, "role": "task_extent"})
+        ids.setdefault("foreign", []).append(foreign_id)
+        ids["span_hear"].append(
+            _write(
+                "measurement",
+                extent,
+                {
+                    "name": "span_hear",
+                    "classifier": "hear",
+                    "signal": "plain",
+                    "span_id": foreign_id,
+                    "raw_scores": dict(raw_scores),
+                    "labelled": False,
+                },
+            )
+        )
 
     for index, span_id in enumerate(ids["spans"]):
         raw = scores[index] if index < len(scores) else None
@@ -1379,6 +1399,52 @@ class TestTheProposeOnlyRules:
         _five_coughs(store, tmp_path)
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert all(store.derived_from(span.id) for span in _proposed(store))
+
+    def test_another_branchs_span_is_not_this_branchs_evidence(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The selector is ``family is None or family == "airway"``, and the widening matters.
+
+        A branch that read every family would count a span SPEECH or VOICE already minted over the
+        same ground as a second event, and would do it silently. The out-of-family mode is where
+        this bites: ``align`` reaches its carriers through ``amplitude_spans``, which a
+        branch-minted span does not pass, and ``detect`` reads the selector directly.
+        """
+        _seed(
+            store,
+            tmp_path,
+            task="harvard-sentences-list",
+            spans=[(0.0, 2.0)],
+            scores=[{"Cough": 0.9}],
+            foreign_spans=[((3.0, 4.5), "speech", {"Cough": 0.9})],
+            envelope=bump(500, (100, 380)),
+        )
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        events = _events(store)
+        assert len(events) == 1
+        assert events[0].extent is not None and events[0].extent[1] <= 2.0
+
+    def test_a_reading_the_envelope_cannot_take_is_absent_rather_than_nan(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """NaN survives ``json.dumps`` as a token no other reader parses; None is the absence.
+
+        The carrier here lies past the end of the envelope derivative, which is what a truncated
+        or re-conditioned sidecar looks like from inside the branch.
+        """
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-cough",
+            spans=[(6.0, 8.0)],
+            scores=[{"Cough": 0.9}],
+            envelope=bump(500, (250,)),
+            duration_s=10.0,
+        )
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        [peak] = find_measurements(store, "cough_peak_over_floor_db")
+        assert peak.attributes["value"] is None
+        assert "NaN" not in json.dumps(peak.attributes)
 
     def test_preprocesss_own_spans_are_never_edited(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path

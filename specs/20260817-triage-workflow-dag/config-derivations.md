@@ -596,23 +596,36 @@ adds nothing and is recorded as unmapped; a declaration only ever ADDS a branch.
 
 ## airway
 
-AIRWAY's labels of interest and what may confirm or contest them.
+AIRWAY's own vocabulary: which labels are the branch's subject, and which route a task's trailing
+index declares. Two keys, both data, both with a derivation; no threshold lives here.
 
-Airway labels_of_interest {Cough, Breathe} -- branch-airway.md's default, from HeAR's eight. The
-confirmation map Cough -> {Cough}, Breathe -> {Breathing, Sigh, Gasp} is branch-airway.md's step 2
-table: which AudioSet labels corroborate each HeAR label. Vocabulary, not thresholds.
+airway.labels_of_interest {Cough, Breathe} -- branch-airway.md's default, from HeAR's eight.
+Vocabulary, not thresholds. `branch.label_sets` is this list split by the kind each label names
+(`cough: [Cough]`, `breath: [Breathe]`), and the two modes read that split rather than this list,
+so widening one without the other changes nothing.
 
-airway v2 -- branch-airway.md. airway.k_db, airway.k_db_by_task and airway.k_margin_db are retired
-this session: they matched spans by a stored k_db attribute value, which PREPROCESS's spans no
-longer carry uniformly (continuity and ASR spans carry none at all) and which no longer means
-"the threshold this branch's own candidates were proposed at" now that PREPROCESS proposes one
-general span set at one shared spans.k_db for every reader. AIRWAY now takes that general span set
-directly and reads PREPROCESS's own per-span span_hear/span_yamnet measurements rather than
-re-running HeAR itself at a second, separately-configured gate -- removing a redundant model pass
-along with the stale threshold. airway.contest_labels is the declared set of YAMNet labels that may
-contest a HeAR label; it is null and, when supplied, is refused at load if it intersects
-the airway evidence set derived from taxonomy.airway_ontology_roots -- a label cannot be both
-airway evidence and a contest of airway evidence.
+airway.route_by_task_index {1: nose, 2: mouth, 3: nose, 4: mouth} -- the v1
+`respiration-and-cough-fivebreaths` protocol's index assignment, measured as an exact
+1,778 / 1,778 within-session split in `expected-patterns.md`'s family table: index -1 and -3 are
+nose with the mouth closed, -2 and -4 are mouth, and the family name carries neither because
+`task_family` strips every trailing numeric segment (`families.py:143`). A data mapping
+(`DATA_MAP_PATHS`), so a campaign numbering its trials differently supplies its own without editing
+the package. It decides only what is *reported* as declared: the route itself is
+`NOT_SEPARABLE_BY_THIS_DESIGN` and no branch measures against this value.
+
+airway v2 -- branch-airway.md. airway.k_db, airway.k_db_by_task and airway.k_margin_db were retired
+earlier: they matched spans by a stored k_db attribute value, which PREPROCESS's spans no longer
+carry uniformly (continuity and ASR spans carry none at all) and which no longer means "the
+threshold this branch's own candidates were proposed at" now that PREPROCESS proposes one general
+span set at one shared spans.k_db for every reader.
+
+airway.contest_labels and airway.corroboration_overrides are **deleted**, not left null. Both served
+capabilities the two-mode restructuring removed: the presence test reads `span_hear` and
+`span_yamnet` `raw_scores` together through one `branch.score_min`, so there is no separate
+corroboration step for an override to redirect, and the contest is now the threshold-free definition
+-- a span whose decided label no raw score supports -- which needs no declared list. A key nothing
+reads is worse than a missing one, because a campaign can set it and see no effect. What that costs
+is recorded in `airway-implementation.md`.
 
 ## phonation
 
