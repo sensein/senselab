@@ -1773,12 +1773,70 @@ Four things hold for all five and are stated once rather than five times:
   `family` key, `preprocess.py:1588-1596`), `family == "phonation"` (VOICE), `family == "clip"` with
   a matching `signal` (QUALITY). SPEECH tests no family: it mints `family: "speech"` from the
   consensus word timings. Clip spans carry `family: "clip"` (`preprocess.py:705-709`), which is what
-  holds them out of AIRWAY's set.
+  holds them out of AIRWAY's set. **The owner's propose-only decision of 2026-09-16 replaces the
+  family test with a family *mint*** — a branch reads the live spans as evidence and proposes its
+  own `family: "<branch>"` span — which is what unblocks VOICE, whose test selects a family nothing
+  produces. That is intended, not built; see § *The two modes* below.
 - **`hint` reaches every branch and decides nothing in any of them.** AIRWAY never reads it and
   QUALITY deletes it (`quality.py:238`); SPEECH reads `target_speaker` only to flag that it is *not*
   read as evidence (`speech.py:536-540`); VOICE reads `metadata["population"]` and
   `metadata["task"]`, and both land on null config keys, so both paths fall through to the derived
   range and to `not_evaluated`.
+
+### The two modes, and how to read what follows — intended, not built
+
+Each subsection below now has two parts, and they are labelled rather than merged.
+
+- **Present** — what the branch's module does today, read off the code, exactly as before.
+- **Intended** — the structure the owner settled on 2026-09-15 and 2026-09-16, which none of the
+  four branches has yet. **Nothing below is implemented.**
+
+**The intended structure, stated once.** A branch has **exactly two entry points**, and which one
+runs is one membership test against the branch's reference family set (`default.yaml:239-243`):
+
+| mode | entry point | when | answers | `done` |
+| --- | --- | --- | --- | --- |
+| **in family** | `align_<branch>(task_family, store, hints, params)` | the recording's declared family is one this branch owns | *were the expected patterns found, where, and what deviates* | `True` / `False` / `UNDETERMINED` |
+| **out of family** | `detect_<branch>(store, params)` | the branch was routed here and the family is not its kind | *where is the evidence of this branch's own speciality* | **always `UNDETERMINED`** |
+
+The per-task variation is **data**: one `Expectation` row per in-family (branch, family) pair, 58
+rows over 48 declared families, dispatched over 13 `Pattern` kinds. The rows, the matchers and the
+bodies are in [`expected-patterns.md`](expected-patterns.md) § *The code*.
+
+**Both modes write by `propose` only** (the owner, 2026-09-16): a branch mints spans in its own
+family, `wasDerivedFrom` the PREPROCESS spans and measurements the extent came from, and **never
+edits a span another node proposed**. `label` and `contest` are assertions written *beside* a span,
+so both survive unchanged; `refine` is not used by either mode, and `task_extent` becomes a proposed
+span with `role: "task_extent"` rather than a `trim` payload.
+
+**What routing hands each mode: one bit, and not the family.** `run.py:302-309` passes `will_run`
+implicitly — the branch is called or it is not — plus `(store, "plain", config, hint)`. **No branch
+reads its own `branch_decision`, and nothing hands a branch its declared task.** The mode test is
+therefore the branch's own, and the declared family reaches it two ways:
+
+- **available today.** ADMIT writes the resolved source path onto the `recording` stream entity
+  (`admit.py:101`), and `task_family(task_id_of(stem))` is exported from `routing_analysis`
+  (`__init__.py:19`; `families.py:121`, `:134`). A branch can compute its mode from a filename —
+  which puts BIDS-stem parsing inside a branch, the thing `AudioHints` exists to prevent.
+- **the clean route, and unavailable.** `hints.metadata["task_token"]` is the only carrier of the
+  declared task; it is written only by `runs/b2ai-v2/make_hints.py:381` and **read by nothing in
+  `src/senselab`**. `AudioHints` has no `task_family` field (`audio_hints.py:149-154`).
+
+Neither route recovers the trailing index, which `task_family` strips (`families.py:144`).
+
+```mermaid
+graph TD
+  ROUTE["ROUTING: will_run<br/>(routing.py:216-220)"] --> CALL
+  STREAMPATH["recording stream .path<br/>(admit.py:101)"] -.->|"task_family(task_id_of(stem))"| MODE
+  HINTTOK["hints.metadata['task_token']<br/>written by make_hints.py, read by nothing"] -.->|"the clean route, unavailable"| MODE
+  CALL["run.py calls the branch<br/>(store, 'plain', config, hint)"] --> MODE
+  MODE{"declared family in<br/>the branch's reference set?"}
+  MODE -->|yes| ALIGN["align_&lt;branch&gt;(task_family, ...)<br/>Expectation row -> Pattern matcher"]
+  MODE -->|"no, or unknown"| DETECT["detect_&lt;branch&gt;(store, params)<br/>task-agnostic, done = UNDETERMINED"]
+  ALIGN --> OUT["(done, components, deviations)<br/>components are PROPOSED spans"]
+  DETECT --> OUT
+  OUT --> VERDICT["the branch's verdict"]
+```
 
 ### AIRWAY's own DAG
 
@@ -1795,6 +1853,8 @@ graph TD
   LEXICAL["3 lexical<br/>hull of the labelled spans"] --> VERDICT_A
   VERDICT_A["4 verdict<br/>labelled_n, by_label, contested_n, merged_n, flags"]
 ```
+
+#### Present — what the module does today
 
 **What it reads.** PREPROCESS's `span_hear` measurements keyed by `span_id` (`airway.py:242-245`),
 its whole-file `yamnet_window` measurements by overlap (`_windows_covering`, `:51-66`, used `:295`),
@@ -1825,6 +1885,52 @@ named `airway_labelled_interval` (`:353-355`); **no measurement and no sidecar**
 [`branch-airway.md`](branch-airway.md) § *What exists today* carries the owed `confirm` → `label`
 migration.
 
+#### Intended: `align_airway` and `detect_airway` — not built
+
+```mermaid
+graph TD
+  FAM{"declared family in<br/>AIRWAY_ELICITING (11)?"}
+  FAM -->|yes| AL["align_airway(task_family, ...)<br/>11 Expectation rows"]
+  FAM -->|no| DE["detect_airway(store, params)<br/>task-agnostic"]
+  SPANS2["span: measure == 'amplitude'"] --> EV
+  SH["span_hear / span_yamnet raw_scores"] --> EV
+  EE["energy_envelope + its global floor"] --> EV
+  EV["sounds_like -> events_in_span<br/>peak prominence, trough-return walk"] --> AL
+  EV --> DE
+  AL --> ALOUT["one PROPOSED span per event<br/>+ task_extent; counts vs expected_event_count;<br/>route = NOT_SEPARABLE_BY_THIS_DESIGN"]
+  DE --> DEOUT["one PROPOSED span per event, wherever it occurs<br/>+ contest of any labelled span with no raw score<br/>done = UNDETERMINED"]
+```
+
+**Where the two modes sit relative to what the branch does today.** Today's `classify` step is the
+ancestor of `detect_airway`: it already reads per-span HeAR labels over `family is None` spans and
+emits one `label` per (span, label). Three differences.
+
+1. **It counts spans, not events.** `by_label[label] = by_label.get(label, 0) + 1` (`airway.py:280`)
+   increments once per (span, label) pair, so a 4 s span holding three coughs counts **1**.
+   `events_in_span` — a peak-prominence and trough-return walk over `energy_envelope` with its one
+   global floor — is what separates them, and both modes call it.
+2. **It proposes no span.** Today AIRWAY *"mints no span and writes none of `refine`, `trim` or
+   `propose`"*. Under propose-only both modes mint `family: "airway"` spans, one per event, each
+   `wasDerivedFrom` its carrier span plus `energy_envelope`, `span_hear` and `span_yamnet`.
+3. **It has no in-family mode at all.** Nothing today reads the declared family, so a
+   `respiration-and-cough-cough` recording and a `harvard-sentences-list` recording take the same
+   path. `align_airway` is what compares five found events against the instruction's declared five.
+
+**What routing hands each mode.** Its ROUTING decision is `routed` when any of `airway.breath`,
+`airway.cough`, `airway.bracketed_event` or `airway.ppg_silent_fraction` fired — and **its gate
+evidence is `unavailable` on 56,505 of 62,547 recordings**, so `detect_airway` is the mode that
+actually meets the corpus. Neither mode may read `airway.cough` as evidence of a cough: that gate
+was selected under a scoped reference and reads **J −0.1398** against `declared_airway` over 61,721
+recordings ([`family-taxonomy-ruleset.md:265-268`](family-taxonomy-ruleset.md)), so at its 50 dB cut
+it is a loudness detector over an arbitrary recording — which is precisely what `detect_airway` is
+handed.
+
+**The eleven in-family rows** are three `Pattern` kinds: `EVENT_SERIES` (eight families),
+`EVENT_ALTERNATION` (`voluntary-cough`, where material between coughs is matched as breath rather
+than scored off-task) and `SOUND_COVERAGE` (the two uncounted durational `-breath` families). Four
+of them carry `unviable=(("route", …),)`, because the nasal-versus-oral determination is
+`NOT_SEPARABLE_BY_THIS_DESIGN`.
+
 **State: implemented and running.** Its per-capability status (A1–A7), the off-task flag's three
 owed changes, the selector widening A5 would need, and the 56,505-of-62,547 `unavailable` gate
 figure are in [`branch-airway.md`](branch-airway.md).
@@ -1851,6 +1957,8 @@ graph TD
   VERDICT_S["verdict<br/>speaker_count, pii, flags, ..."]
   S7 -.->|"live PII found"| REDACT_S["REDACT (run.py:311)"]
 ```
+
+#### Present — what the module does today
 
 **What it reads.** The `consensus_transcript` measurement and the live `word` entities it lists
 (`speech.py:518-527`), each source's own `asr_hypothesis` transcript (`_hypotheses`, `:256`), the
@@ -1880,6 +1988,48 @@ runs. Its verdict carries `{speaker_count, diarization, words_n, speech_s, nonta
 second_diarizer, separation, flags}`. `attribute` is the highest-volume verb in the store and is not
 one of the contract's five ([`branch-speech.md`](branch-speech.md) § S6).
 
+#### Intended: `align_speech` and `detect_speech` — not built
+
+```mermaid
+graph TD
+  FAM{"declared family in<br/>LEXICAL_SPEECH + SYLLABLE_REPETITION (31)?"}
+  FAM -->|yes| AL["align_speech(task_family, ...)<br/>31 Expectation rows"]
+  FAM -->|no| DE["detect_speech(store, params)<br/>task-agnostic, no alignment needed"]
+  CONS2["consensus_transcript + word entities"] --> AL
+  CONS2 --> DE
+  D1["stimulus_alignment (D1) — ABSENT"] -.->|"UNDETERMINED without it"| AL
+  AL --> ALOUT["PROPOSED task_extent + structure_* + breath groups;<br/>stimulus_mismatch, omission, filler, repeat_reading"]
+  DE --> DEOUT["one PROPOSED span per lexical run<br/>done = UNDETERMINED"]
+```
+
+**Where the two modes sit relative to the nine steps.** Steps 1–2 — read the consensus, group the
+lexical word timings into runs — are the shared input of both modes, and the `family: "speech"` span
+SPEECH already mints at `speech.py:879-891` is already a propose in its own family, so **SPEECH is
+the branch closest to the intended shape**. What is missing is everything after the extent: nothing
+compares the transcript against what was asked. Steps 3–9 (corroborate, diarize, separate, identify,
+PII, quality, proximity) are orthogonal to the two modes and run under both.
+
+- **`align_speech`** adds the comparison. Its 31 rows are four `Pattern` kinds: `ORDERED_TOKENS`
+  (read text, passages, Stroop, the `hey` families, both `buttercup` families), `FREE_RESPONSE`
+  (`free-speech*`, `story-recall*`, `cinderella-story`, `productive-vocabulary`,
+  `picture-description*`, `open-response-questions`), `ITEM_LIST` (`animal-fluency`, both
+  `random-item-generation`), and `NO_LEXICAL` for the eight non-`buttercup` syllable-repetition
+  families — where the expectation is that **nothing lexical occurs**, so the correct output is
+  **no proposed span at all**.
+- **`detect_speech`** is what runs on an AIRWAY- or VOICE-declared recording. It needs **no
+  alignment**: nothing lexical is expected, so every lexical word is the finding. It proposes a
+  `family: "speech"` span per lexical run and returns `UNDETERMINED`.
+
+**One function disappears rather than moving.** The earlier design had a `detect_count_in` for
+SPEECH's row over `prolonged-vowel`. `prolonged-vowel` is `VOICE_ELICITING`, so SPEECH is out of
+family there and `detect_speech` marks `one two three` as a lexical run like any other; the
+*evaluation* of the prescribed count-in belongs to `align_voice`, through that row's `tokens` field.
+
+**What routing hands each mode.** `routed` when `speech.lexical` fired;
+`speech.transcript_agreement` is a flag gate and annotates without routing. The reference set is
+`reference_family_set.SPEECH: speech` = `lexical_speech | syllable_repetition` (`default.yaml:241`),
+which is the membership test both modes read.
+
 **State: implemented and running**, and the only branch carrying two of the three goals. What it
 measures and does not conclude on — S3's stimulus conformance, S4's connected-speech measures, S5's
 hull-scoped speaker count, the null-gated non-target axis and the never-selected separation — is in
@@ -1900,6 +2050,8 @@ graph TD
   OUTV["second span at the period onset<br/>+ period_marks + voice_tracks.npz"] -.-> VERDICT_V
   VERDICT_V["verdict<br/>spans_n, phonation_s, longest_span_s, flags"]
 ```
+
+#### Present — what the module does today
 
 **What it reads.** Every live `span` whose `family` is `phonation` (`voice.py:227-231`,
 `_PHONATION_FAMILY` at `:40`) — **and nothing proposes one**, so the subject is empty on every
@@ -1927,7 +2079,62 @@ of the no-span return: a second `span` per input span, re-keyed to the period-al
 `derivatives/voice_tracks.npz` (`:366-388`), and a verdict carrying `{spans_n, phonation_s,
 longest_span_s, longest_span_criterion, production, ambiguous_spans_n, marks_skipped_short_n,
 task_range, gate_interval, flags}`. It writes **no assertion at all** — no verb of the contract's
-five — and the re-mint at `:333-346` is precisely what the contract replaces with a `refine`.
+five — and the re-mint at `:333-346` was read, until 2026-09-16, as precisely what the contract
+replaces with a `refine`. Under the owner's propose-only decision it is instead the shape that
+survives: a branch minting its own span and naming what it came from. See § *Intended* below.
+
+#### Intended: `align_voice` and `detect_voice` — not built, and the mode that unblocks the branch
+
+```mermaid
+graph TD
+  FAM{"declared family in<br/>VOICE_ELICITING (6)?"}
+  FAM -->|yes| AL["align_voice(task_family, ...)<br/>6 Expectation rows"]
+  FAM -->|no| DE["detect_voice(store, params)<br/>task-agnostic"]
+  AMP["span: measure == 'amplitude'<br/>(evidence, NOT a subject test)"] --> Q
+  PT["phonation_tracks: f0_hz, strength"] --> Q
+  CT["continuity_trace (a stationarity trace already)"] --> Q
+  Q["qualifying_phonation — V1<br/>voiced fraction, F0 spread, stationarity"] --> AL
+  Q --> DE
+  AL --> ALOUT["PROPOSED family:'voice' spans:<br/>count_in + task_extent (prolonged-vowel),<br/>task_extent alone (MPT, glides)"]
+  DE --> DEOUT["one PROPOSED span per sustained voiced region<br/>+ contest of a labelled phonation span that fails V1<br/>done = UNDETERMINED"]
+```
+
+**This is the change that makes VOICE implementable at all.** Today the branch selects
+`family == "phonation"` spans (`voice.py:227-231`), **nothing proposes one** since the detector was
+retired on 2026-09-04, and every recording therefore takes the no-span `FAIL` at `:235-264` — while
+the gate that routed it there, `voice.sustained`, read the longest **`amplitude`** span. Under
+propose-only the amplitude spans stop being a subject test and become **evidence**:
+`qualifying_phonation` reads them plus `phonation_tracks` and `continuity_trace`, and VOICE mints
+its own `family: "voice"` span over what qualifies, naming the carrier in `wasDerivedFrom`. The
+selector problem, the label-stamping question of `branch-conventions.md:61-71` and the refinability
+question all dissolve at once.
+
+**The re-mint at `voice.py:333-346` is the closest thing in the tree to today's intended shape** —
+a second `span` entity, same family, start moved to the first period mark — and it carries no verb
+at all. Under propose-only that becomes a `family: "voice"` propose, and the two populations are
+then distinguished by family rather than by `onset_kind`, which is why
+`report.py:291`'s `_spans_of_family(..., voice=...)` split and its four call sites (`:673`, `:715`,
+`:1153-1154`) become unnecessary.
+
+**What each mode proposes.** `align_voice` on `prolonged-vowel` proposes **two** spans — `count_in`
+over the matched `one two three`, carrying `excluded_from_measurement=True`, and `task_extent` over
+the voiced run — because only the second is the voice measurement, and today every Praat scalar is
+taken over count-in plus silence plus vowel. On `maximum-phonation-time` it proposes **one**: the v1
+inhale is airway evidence, so VOICE records `inhale_expected_in_file` as a count and `detect_airway`,
+which runs on the same recording, proposes the span over it.
+
+**What routing hands each mode.** `routed` when `voice.sustained`, `voice.glide` or `voice.chant`
+fired. VOICE is routed to **22,277 recordings against 8,306 declaring a voice family**, so
+`detect_voice` is the mode that meets 73% of its own corpus — and it shares `qualifying_phonation`
+with the in-family mode rather than being a placeholder beside it.
+
+**Six families, not ten.** `VOICE_ELICITING` is `glides-high-to-low`, `glides-low-to-high`,
+`high-to-low`, `maximum-phonation-time`, `maximum-phonation-time-v2`, `prolonged-vowel`
+(`families.py:78-87`). **`cape-v-sentences`, `-v2`, `loudness` and `loudness-v2` are
+`LEXICAL_SPEECH`** (`families.py:31-55`), so the corpus's one deliberate voice-quality instrument and
+its cheapest effort measure are **out of family for VOICE today** and reach it only through
+`detect_voice`, which evaluates no task. Their rows are written and held in
+`VOICE_EXPECTATIONS_PENDING_DECLARATION`; moving them is a `families.py` decision, not a branch one.
 
 **State: implemented and failing on every recording**, and one state worse on pitchless audio, where
 `F0RangeUnavailable` leaves the node before any record exists and the runner renders the most
@@ -1946,12 +2153,57 @@ graph TD
   FOLD["fold: 'DDK was asked to run and never ran'<br/>(vocabulary.py:398-401)"]
 ```
 
+#### Present — what the module does today
+
 **What it reads: nothing.** There is no `nodes/ddk.py`, no `DDK` in `GRAPH_ORDER` and no entry in
 the dispatch table (`run.py:297-301`); `DDK` is in `BRANCHES` (`vocabulary.py:31`) and in
 `taxonomy.ruleset`, which is the whole of its existence. **Its internal steps: none.** **What it
 writes: nothing** — not an entity, not a measurement, not a verdict. Its only record is the runner's
 `NodeOutcome(state=SKIPPED, note=NO_NODE)` and, downstream of that, one `FLAG` reason in the file
 fold.
+
+#### Intended: `align_ddk` and `detect_ddk` — not built, and neither is the branch
+
+```mermaid
+graph TD
+  FAM{"declared family in<br/>SYLLABLE_REPETITION (10)?"}
+  FAM -->|yes| AL["align_ddk(task_family, ...)<br/>10 Expectation rows"]
+  FAM -->|no| DE["detect_ddk(store, params)<br/>task-agnostic"]
+  EE2["energy_envelope"] --> TR
+  TR["train_rate_hz — modulation spectrum<br/>NOT Praat extract_speech_rate"] --> AL
+  TR --> DE
+  SW["spectrogram_wideband, 5 ms window / 5 ms hop"] -->|"burst place, /p/ /t/ /k/"| AL
+  CONS3["consensus words (buttercup only)"] --> AL
+  CONS3 --> DE
+  AL --> ALOUT["ONE PROPOSED span: the train, role task_extent;<br/>onsets as counts, place errors as deviations"]
+  DE --> DEOUT["one PROPOSED span per repetition train,<br/>acoustic and lexical; done = UNDETERMINED"]
+```
+
+**There is nothing to sit these beside.** DDK reads nothing, has no internal steps and writes
+nothing; `run.py:304-305` marks it `SKIPPED` with `NO_NODE` whether or not routing selected it,
+because the `call is None` arm precedes the `in selected` test. Both modes below are therefore
+entirely intended.
+
+**The ten in-family rows** are three `Pattern` kinds: `SYLLABLE_TRAIN` (the six single-syllable
+families), `SYLLABLE_SEQUENCE` (`pataka` and `puhtuhkuh`, whose expected cycle
+`("labial", "alveolar", "velar")` is **data**, so a four-place train would be a row and not a
+rewrite) and `ORDERED_TOKENS` (both `buttercup` families, the only DDK rows with a lexical pattern —
+dispatched to the same token matcher SPEECH uses).
+
+**One span per recording, not one per syllable.** `align_ddk` proposes the **train** as
+`role: "task_extent"`; rate, inter-onset interval variability and sequence collapse are statistics
+over the onset series, and one span per syllable would add roughly 30 per recording over 7,989
+recordings carrying no measurement of their own. The onsets travel as a `counts` entry; a syllable
+that is not the one the sequence expected travels as a `syllable_sequence_mismatch` deviation with
+its own extent, which needs no span.
+
+**What routing hands each mode.** Two gates route DDK — `ddk.lexical_repetition >= 3`
+(`default.yaml:301-304`, threshold **UNMEASURED**) and `ddk.ppg_segment_rate_per_s >= 10`. DDK is
+routed to **22,363 recordings against the 7,989 that declare a DDK family**, and on 87% of
+`free-speech`, so `detect_ddk` is almost the whole of what a built branch would do: it proposes a
+`family: "ddk"` span over every rapid repetition train it finds — acoustically from the envelope
+modulation spectrum, lexically over any token repeated often enough — and asserts nothing about the
+task, because repetition occurs in ordinary speech as a stutter, a false start or a repeated word.
 
 **State: no node**, and routed on content since ruleset stage 2. What a node would need, what the
 flag costs and the 5-of-13 / 22,363-of-corpus scope readings are in step 5d above and in
@@ -1971,6 +2223,8 @@ graph TD
   VERDS["live verdicts of every other node"] -->|"preceded_by"| VERDICT_Q
   VERDICT_Q["verdict<br/>FLAG on a contradiction, else PASS with two reasons"]
 ```
+
+#### Present — what the module does today
 
 **What it reads: stored records only.** The `recording` stream entity's id without loading it
 (`_stream_id`, `quality.py:133-153`), PREPROCESS's live `clip` spans over that signal (`clip_spans`,
@@ -1993,6 +2247,42 @@ verdict. **No span, no measurement, no sidecar**, and it never invalidates PREPR
 verdict is `FLAG` with the contradiction count, or `PASS` with one of two distinguishable reasons;
 on a fresh store the expected count is zero, because `_clip_spans` applies the same comparison at
 detection.
+
+#### Intended: `detect_quality` — one mode, and it is the out-of-family one
+
+**QUALITY has no `align_quality`, and cannot have one.** It is not in `BRANCHES`
+(`vocabulary.py:31`); `vocabulary.py:29` calls it *"the terminal node every recording reaches,
+whatever routed. A graph edge, never a branch."* It has **no `branch_decision`**, no entry in
+`branch_gates`, and the runner calls it unconditionally at `run.py:310` — after the branch loop at
+`:302`, over the **`recording`** stream rather than `plain`. Its `KIND` is `None`
+(`quality.py:57`), so the file-level fold never joins its verdict to a branch (`vocabulary.py:335`
+filters on `verdict.kind is not None`), and it deletes the hint it is handed (`quality.py:238`).
+
+**So QUALITY is never handed a task and can never be in family.** Its single entry point is the
+*out-of-family* mode by construction: task-agnostic, `done = UNDETERMINED`, marking what it is expert
+in wherever it occurs. Giving it an in-family mode would need a family whose declared expectation is
+a quality property, and no such family exists — the closest thing in the corpus is
+`respiration-and-cough-v2-hardcough`'s hygiene clause, *"do not cover your mouth or place your hand
+between your mouth and the microphone"*, which is an expectation **about the recording** attached to
+an AIRWAY task.
+
+```mermaid
+graph TD
+  ALL["every recording, unconditionally<br/>(run.py:310, 'recording' stream)"] --> DQ
+  CLIPQ["span: family == 'clip' + clip_amplitude"] --> DQ
+  LVLQ["level, spectrogram_wideband, band_profile (D3, ABSENT)"] --> DQ
+  DQ["detect_quality(store, params)"] --> C1["contest per clip contradiction<br/>(built today, quality.py:266-302)"]
+  DQ --> C2["occluded_microphone deviation + one PROPOSED span<br/>(the hygiene clause; needs D3)"]
+  DQ --> C3["declared_duration_s count — Q5<br/>a sidecar-consistency check, not task completion"]
+```
+
+**What changes relative to today: two additions and no removals.** The clip-consistency check stays
+exactly as built, and it **proposes nothing** — it contests PREPROCESS's own reading, which is an
+assertion beside a span rather than an edit to it. Added: the hygiene clause's level-and-tilt
+finding, which proposes at most **one** `family: "quality"` span and only when it fires; and the
+`declared_duration_s` count, whose natural home Q5 is and which several tasks in
+[`expected-patterns.md`](expected-patterns.md) want. The hygiene clause needs `band_profile` (D3),
+which nothing writes, so it emits `NOT_SEPARABLE_BY_THIS_DESIGN` until that exists.
 
 **State: implemented and running**, one capability of the nine its document now lists. Q1 is built;
 Q2, Q3, Q5–Q9 are not and Q4 moved to the corpus-level node. Three of the unbuilt ones wait on a
