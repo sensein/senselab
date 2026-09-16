@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 import torch
 
-from senselab.audio.data_structures import Audio
+from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.data_structures.audio_hints import ExpectedSpeech
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
 from senselab.audio.tasks.classification.yamnet import YAMNET_WINDOW_SECONDS
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS, PpgsPosteriorgramUnavailable
@@ -29,6 +30,7 @@ from senselab.audio.workflows.triage.nodes.preprocess import (
     PPG_MEASUREMENT,
     PRAAT_MEASUREMENT,
     QWEN_ID,
+    STIMULUS_MEASUREMENT,
     diarization_measurement,
     diarization_model,
     diarization_streams,
@@ -993,6 +995,10 @@ class TestThePackagedConfigStillRunsEveryClassifier:
         never ran at all under the packaged config and V3 held for one classifier out of three.
         ``phonation_tracks`` was absent here for the same reason until the F0 range became a
         per-recording derivation rather than a null the caller had to supply.
+
+        ``stimulus_alignment`` is absent for a different reason again: this call supplies no hint, so
+        nothing was declared for it to align against. That is an absent *input*, not a null config
+        value, and it is the state most of the corpus is in until the hints carry `stimulus_text`.
         """
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(
@@ -1023,6 +1029,7 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "praat_features",
             "enhanced_diarization",
             "residual_diarization",
+            "stimulus_alignment",
         }
         for name in ("span_hear", "span_yamnet"):
             windows = find_measurements(store, name)
@@ -2342,6 +2349,226 @@ class TestThePosteriorgramAndPraatBlocks:
         assert PRAAT_MEASUREMENT in result.absent
         for name in (PPG_MEASUREMENT, PRAAT_MEASUREMENT):
             assert "enhanced" in _absent_map(store)[name]
+
+
+class TestTheStimulusAlignmentBlock:
+    """One alignment of the consensus stream against the declared utterance, to one npz sidecar."""
+
+    def test_the_alignment_is_a_sidecar_the_entity_names_by_digest(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The npz lands under ``derivatives/`` and the entity carries counts, not tables."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello world.")])
+        preprocess(store, _audio(tmp_path), config, hint, run_dir=tmp_path)
+
+        measurement = find_measurement(store, STIMULUS_MEASUREMENT)
+        assert measurement is not None
+        attrs = measurement.attributes
+        assert attrs["path"] == f"derivatives/{STIMULUS_MEASUREMENT}.npz"
+        assert len(attrs["checksum_sha256"]) == 64
+        assert attrs["size_bytes"] > 0
+        assert attrs["signal"] == "plain"
+        assert attrs["n_expected"] == 2
+        assert attrs["n_realised"] == 2
+        assert attrs["n_unexpected"] == 0
+        assert attrs["realised_fraction"] == 1.0
+        assert attrs["sentence_terminators"] == config.require("stimulus.sentence_terminators")
+        for table in ("expected", "units", "unexpected"):
+            assert table not in attrs
+
+        payload = np.load(tmp_path / attrs["path"])
+        assert list(payload["expected_text"]) == ["Hello", "world."]
+        assert list(payload["realisation"]) == ["realised", "realised"]
+        assert list(payload["expected_read"]) == ["hello", "world"]
+        assert list(payload["unit_text"]) == ["Hello world."]
+
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        assert store.derived_from(measurement.id) == [consensus.id]
+        assert measurement.extent == (float(payload["expected_start"][0]), float(payload["expected_end"][1]))
+
+    def test_a_substitution_an_omission_and_an_insertion_all_reach_the_sidecar(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Three departures in one reading, each typed and each carrying what the consumer reads."""
+        _seed_admit(store, tmp_path, wav_writer)
+        read = "the pencils have bean used quite"
+        _stub_models(monkeypatch, crisper=_line(read), qwen=_line(read))
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="The pencils have all been used.")])
+        preprocess(store, _audio(tmp_path), config, hint, run_dir=tmp_path)
+
+        measurement = find_measurement(store, STIMULUS_MEASUREMENT)
+        assert measurement is not None
+        payload = np.load(tmp_path / measurement.attributes["path"])
+        outcome = dict(zip(payload["expected_text"], payload["realisation"]))
+        assert outcome == {
+            "The": "realised",
+            "pencils": "realised",
+            "have": "realised",
+            "all": "substituted",
+            "been": "absent",
+            "used.": "realised",
+        }
+        substituted = list(payload["expected_text"]).index("all")
+        assert payload["expected_read"][substituted] == "bean"
+        assert payload["expected_agreement"][substituted] == 1.0
+        omitted = list(payload["expected_text"]).index("been")
+        assert payload["expected_word_index"][omitted] == -1
+        assert payload["expected_read"][omitted] == ""
+        assert np.isnan(payload["expected_start"][omitted])
+        assert np.isnan(payload["expected_agreement"][omitted])
+        assert list(payload["unexpected_text"]) == ["quite"]
+        assert list(payload["unexpected_after"]) == [5]
+        assert measurement.attributes["n_absent"] == 1
+        assert measurement.attributes["n_substituted"] == 1
+        assert measurement.attributes["n_unexpected"] == 1
+        assert measurement.attributes["n_realised"] == 4
+
+    def test_a_declared_empty_expectation_is_measured_as_the_lexical_complement(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The picture-description shape: a prompt declared, no words in it, every word unexpected."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("a boy is falling"), qwen=_line("a boy is falling"))
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="")])
+        result = preprocess(store, _audio(tmp_path), config, hint, run_dir=tmp_path)
+
+        assert STIMULUS_MEASUREMENT not in result.absent
+        measurement = find_measurement(store, STIMULUS_MEASUREMENT)
+        assert measurement is not None
+        assert measurement.attributes["n_expected"] == 0
+        assert measurement.attributes["n_units"] == 0
+        assert measurement.attributes["n_unexpected"] == 4
+        assert measurement.attributes["realised_fraction"] is None
+        assert measurement.extent is None
+        payload = np.load(tmp_path / measurement.attributes["path"])
+        assert list(payload["unexpected_text"]) == ["a", "boy", "is", "falling"]
+        assert payload["expected_text"].size == 0
+
+    def test_no_expectation_at_all_is_a_named_absence_and_writes_nothing(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A recording whose hints were never populated: a soft absence, and the node still passes."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+
+        assert STIMULUS_MEASUREMENT in result.absent
+        assert find_measurement(store, STIMULUS_MEASUREMENT) is None
+        assert not (tmp_path / "derivatives" / f"{STIMULUS_MEASUREMENT}.npz").exists()
+        reason = _absent_map(store)[STIMULUS_MEASUREMENT]
+        assert "StimulusExpectationUnavailable" in reason
+        assert "expected_speech" in reason
+        assert find_measurement(store, "consensus_transcript") is not None
+        assert result.verdict.outcome is Outcome.PASS
+
+    def test_a_family_whose_stimulus_text_is_empty_by_design_is_the_same_absence(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``cinderella-story`` carries ``stimulus_text: ''``; a populator that skips it declares nothing."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("once upon a time"), qwen=_line("once upon a time"))
+        hint = AudioHints(may_contain=["read-speech"], metadata={"task_name": "cinderella-story", "stimulus_text": ""})
+        result = preprocess(store, _audio(tmp_path), config, hint, run_dir=tmp_path)
+
+        assert STIMULUS_MEASUREMENT in result.absent
+        assert "StimulusExpectationUnavailable" in _absent_map(store)[STIMULUS_MEASUREMENT]
+        assert find_measurement(store, STIMULUS_MEASUREMENT) is None
+
+    def test_no_consensus_transcript_is_a_cascading_absence(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One recognizer is not a consensus, so the alignment has no word stream to read."""
+        _seed_admit(store, tmp_path, wav_writer)
+
+        def _only_crisper(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
+            if str(model.path_or_uri) == QWEN_ID:
+                raise ValueError("this host could not run the recognizer")
+            return [_line("hello world")]
+
+        _stub_models(monkeypatch, crisper=_line("hello world"))
+        monkeypatch.setattr(preprocess_module, "transcribe_audios", _only_crisper)
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello world.")])
+        result = preprocess(store, _audio(tmp_path), config, hint, run_dir=tmp_path)
+
+        assert "consensus_transcript" in result.absent
+        assert STIMULUS_MEASUREMENT in result.absent
+        assert "consensus_transcript" in _absent_map(store)[STIMULUS_MEASUREMENT]
+        assert find_measurement(store, STIMULUS_MEASUREMENT) is None
+
+    def test_an_unmeasured_terminator_set_makes_the_derivative_absent_not_the_node_fail(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A null config value is a cascading absence, like every other unmeasured key."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+        override = tmp_path / "no-terminators.yaml"
+        override.write_text("residual:\n  enabled: false\nstimulus:\n  sentence_terminators: null\n")
+        config = load_triage_config(override)
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello world.")])
+        result = preprocess(store, _audio(tmp_path), config, hint, run_dir=tmp_path)
+
+        assert STIMULUS_MEASUREMENT in result.absent
+        assert "stimulus.sentence_terminators" in _absent_map(store)[STIMULUS_MEASUREMENT]
+
+    def test_the_block_reads_the_words_back_out_of_the_store(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Bracketed words are set aside, so the complement is lexical and an extend pass agrees."""
+        _seed_admit(store, tmp_path, wav_writer)
+        read = "hello [BREATH] world"
+        _stub_models(monkeypatch, crisper=_line(read), qwen=_line(read))
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello world.")])
+        preprocess(store, _audio(tmp_path), config, hint, run_dir=tmp_path)
+
+        _, prompts, words = preprocess_module.stimulus_input(store, hint)
+        assert [word.text for word in words] == ["hello", "world"]
+        assert [prompt.text for prompt in prompts] == ["Hello world."]
+        measurement = find_measurement(store, STIMULUS_MEASUREMENT)
+        assert measurement is not None
+        assert measurement.attributes["n_lexical_words"] == 2
+        assert measurement.attributes["n_unexpected"] == 0
 
 
 ENHANCED_DIARIZATION = diarization_measurement("enhanced")

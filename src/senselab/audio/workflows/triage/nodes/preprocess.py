@@ -28,6 +28,7 @@ import numpy as np
 import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.data_structures.audio_hints import ExpectedSpeech
 from senselab.audio.tasks.classification.api import classify_audios
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.tasks.classification.yamnet import SpanTooShortForYAMNet, span_yamnet_input
@@ -102,6 +103,8 @@ from senselab.audio.workflows.triage.nodes.common import (
     cpps_settings,
     describe_exception,
     f0_range_parameters,
+    find_measurement,
+    lexical_words,
     live_entities,
     path_attributes,
     resolve_stream,
@@ -120,6 +123,17 @@ from senselab.audio.workflows.triage.nodes.quality import (
     UNCLIPPED_LOUDER_N,
     clip_spans,
 )
+from senselab.audio.workflows.triage.stimulus import (
+    ALGORITHM as STIMULUS_ALGORITHM,
+)
+from senselab.audio.workflows.triage.stimulus import (
+    ROUTINE as STIMULUS_ROUTINE,
+)
+from senselab.audio.workflows.triage.stimulus import (
+    LexicalWord,
+    StimulusAlignment,
+    align_stimulus,
+)
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine
 from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, Entity, ProvStore, file_digest
@@ -134,6 +148,7 @@ FRCRN_ID = "alibabasglab/FRCRN_SE_16K"
 PPGS_MODEL_ID = "interactiveaudiolab/ppgs"
 PPG_MEASUREMENT = "ppg_posteriorgram"
 PRAAT_MEASUREMENT = "praat_features"
+STIMULUS_MEASUREMENT = "stimulus_alignment"
 DIARIZATION_DERIVATIVE = "diarization"
 """The derivative name. One measurement per stream is written, each ``<stream>_diarization``."""
 DIARIZATION_SAMPLE_RATE = 16000
@@ -855,6 +870,162 @@ def ppg_posteriorgram(store: ProvStore, *, run_dir: Path) -> str:
     )
 
 
+class StimulusExpectationUnavailable(ValueError):
+    """No utterance was declared for this recording; record it as an absence.
+
+    A ``ValueError`` so the block runner files it beside every other cascading absence rather than
+    as a node failure: a recording whose family declares no text, or whose hints were never
+    populated, has not found a bug, it has nothing to be measured against.
+    """
+
+
+def stimulus_input(store: ProvStore, hint: AudioHints | None) -> tuple[str, list[ExpectedSpeech], list[LexicalWord]]:
+    """The declared utterance and the lexical consensus stream the alignment reads.
+
+    Args:
+        store: The provenance store, read for the consensus measurement and its words.
+        hint: What the recording was declared to contain.
+
+    Returns:
+        The ``consensus_transcript`` entity's id, the declared prompts, and the lexical words in
+        stream order.
+
+    Raises:
+        LookupError: If no live ``consensus_transcript`` measurement is in the store.
+        StimulusExpectationUnavailable: If no utterance was declared.
+    """
+    prompts = list(hint.expected_speech) if hint is not None else []
+    if not prompts:
+        raise StimulusExpectationUnavailable(
+            "no expected_speech was declared for this recording; there is nothing to align against"
+        )
+    consensus = find_measurement(store, "consensus_transcript")
+    if consensus is None:
+        raise LookupError("no live consensus_transcript measurement; the stimulus alignment has no word stream")
+    words = [
+        LexicalWord(
+            index=int(word.attributes["index"]),
+            text=str(word.attributes["text"]),
+            extent=(float(word.extent[0]), float(word.extent[1])) if word.extent is not None else None,
+            agreement=float(word.attributes["agreement"]),
+        )
+        for word in lexical_words(store)
+    ]
+    return consensus.id, prompts, words
+
+
+def _column(values: Sequence[Any], dtype: Any) -> np.ndarray:  # noqa: ANN401 — numpy's own dtype argument
+    """One sidecar column, typed even when the table is empty."""
+    return np.asarray(list(values), dtype=dtype)
+
+
+def write_stimulus_alignment(
+    store: ProvStore,
+    *,
+    run_dir: Path,
+    consensus_id: str,
+    alignment: StimulusAlignment,
+    terminators: str,
+) -> str:
+    """Persist one stimulus alignment beside the run and register the measurement that names it.
+
+    Three parallel-column tables in one ``.npz`` -- the expected tokens, the declared structure and
+    the lexical complement. The entity carries the counts a consumer reads to answer "was this read
+    at all" without opening the file, and the path, digest and size of the table that grows with the
+    stimulus.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory the sidecar is written under.
+        consensus_id: The ``consensus_transcript`` measurement the word stream came from.
+        alignment: The alignment to persist.
+        terminators: The unit-closing characters the alignment was split on, as the activity
+            records them.
+
+    Returns:
+        The measurement entity's id.
+    """
+    software = software_agent(store)
+    activity = _activity(
+        store,
+        STIMULUS_MEASUREMENT,
+        {"routine": STIMULUS_ROUTINE, "algorithm": STIMULUS_ALGORITHM, "sentence_terminators": terminators},
+        (consensus_id,),
+        software,
+    )
+    relative = f"derivatives/{STIMULUS_MEASUREMENT}.npz"
+    (run_dir / "derivatives").mkdir(parents=True, exist_ok=True)
+    expected, units, unexpected = alignment.expected, alignment.units, alignment.unexpected
+    np.savez(
+        run_dir / relative,
+        expected_index=_column([t.index for t in expected], np.int64),
+        expected_unit=_column([t.unit for t in expected], np.int64),
+        expected_text=_column([t.text for t in expected], np.str_),
+        expected_key=_column([t.key for t in expected], np.str_),
+        realisation=_column([t.realisation for t in expected], np.str_),
+        expected_word_index=_column([-1 if t.word_index is None else t.word_index for t in expected], np.int64),
+        expected_read=_column([t.read or "" for t in expected], np.str_),
+        expected_start=_column([np.nan if t.extent is None else t.extent[0] for t in expected], np.float64),
+        expected_end=_column([np.nan if t.extent is None else t.extent[1] for t in expected], np.float64),
+        expected_agreement=_column([np.nan if t.agreement is None else t.agreement for t in expected], np.float64),
+        unit_index=_column([u.index for u in units], np.int64),
+        unit_prompt=_column([u.prompt for u in units], np.int64),
+        unit_text=_column([u.text for u in units], np.str_),
+        unit_n_realised=_column([u.n_realised for u in units], np.int64),
+        unit_n_substituted=_column([u.n_substituted for u in units], np.int64),
+        unit_n_expected=_column([len(u.token_indices) for u in units], np.int64),
+        unit_start=_column([np.nan if u.extent is None else u.extent[0] for u in units], np.float64),
+        unit_end=_column([np.nan if u.extent is None else u.extent[1] for u in units], np.float64),
+        unexpected_word_index=_column([w.index for w in unexpected], np.int64),
+        unexpected_text=_column([w.text for w in unexpected], np.str_),
+        unexpected_after=_column([w.after for w in unexpected], np.int64),
+        unexpected_start=_column([np.nan if w.extent is None else w.extent[0] for w in unexpected], np.float64),
+        unexpected_end=_column([np.nan if w.extent is None else w.extent[1] for w in unexpected], np.float64),
+        unexpected_agreement=_column([w.agreement for w in unexpected], np.float64),
+    )
+    realised = [t.extent for t in expected if t.extent is not None]
+    extent = (min(s for s, _ in realised), max(e for _, e in realised)) if realised else None
+    return _measurement(
+        store,
+        activity,
+        software,
+        name=STIMULUS_MEASUREMENT,
+        signal="plain",
+        extent=extent,
+        attributes={
+            **path_attributes(relative, run_dir),
+            **alignment.provenance,
+            "layout": "three_tables_by_row",
+        },
+        derived_from=(consensus_id,),
+    )
+
+
+def stimulus_alignment(store: ProvStore, config: TriageConfig, *, run_dir: Path, hint: AudioHints | None) -> str:
+    """The consensus word stream aligned against the declared utterance, to one npz sidecar.
+
+    Args:
+        store: The provenance store.
+        config: The triage configuration, read for ``stimulus.sentence_terminators``.
+        run_dir: The run directory the sidecar is written under.
+        hint: What the recording was declared to contain.
+
+    Returns:
+        The measurement entity's id.
+
+    Raises:
+        LookupError: If no live ``consensus_transcript`` measurement is in the store.
+        StimulusExpectationUnavailable: If no utterance was declared for this recording.
+        ValueError: If ``stimulus.sentence_terminators`` is unmeasured.
+    """
+    consensus_id, prompts, words = stimulus_input(store, hint)
+    terminators = str(config.require("stimulus.sentence_terminators"))
+    alignment = align_stimulus(prompts, words, terminators=terminators)
+    return write_stimulus_alignment(
+        store, run_dir=run_dir, consensus_id=consensus_id, alignment=alignment, terminators=terminators
+    )
+
+
 class SpeakerDiarizationUnavailable(ValueError):
     """The diarizer could not be obtained or could not run on this host; record it as an absence.
 
@@ -1419,7 +1590,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         store: The provenance store, already holding ADMIT's ``recording`` stream.
         source: The audio ADMIT returned, as supplied.
         config: The triage configuration.
-        hint: Accepted for the shared node shape; not read.
+        hint: What the recording was declared to contain; ``expected_speech`` is what the
+            stimulus alignment is measured against.
         run_dir: Where the streams and sidecars are written.
 
     Returns:
@@ -2473,6 +2645,18 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.extend(word_ids)
         state.update(consensus=consensus.words, consensus_id=entity_id)
 
+    def _stimulus_alignment() -> None:
+        """The consensus word stream aligned against the declared utterance, to one npz sidecar.
+
+        Reads the words back out of the store rather than out of ``state``, so an extend pass over a
+        finished run aligns the same stream this pass did. A recording that declared no utterance is
+        this derivative's own absence, not a failure: the expectation is an input, and an absent
+        input is not an absent measurement.
+        """
+        entity_id = stimulus_alignment(store, config, run_dir=run_dir, hint=hint)
+        derivatives[STIMULUS_MEASUREMENT] = entity_id
+        view.append(entity_id)
+
     def _phonation_tracks() -> None:
         """F0 and formant tracks over the whole stream — measured once, localised nowhere.
 
@@ -2959,6 +3143,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             lambda: _asr("asr_qwen", _qwen_model, "bundled_aligner", QWEN_TIMESTAMP_MODEL, return_timestamps=True),
         ),
         ("consensus_transcript", _consensus),
+        (STIMULUS_MEASUREMENT, _stimulus_alignment),
         (PHONATION_TRACKS_MEASUREMENT, _phonation_tracks),
         ("energy_envelope", _envelope),
         ("normalized_envelope", _normalized_envelope),
