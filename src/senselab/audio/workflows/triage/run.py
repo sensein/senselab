@@ -20,6 +20,7 @@ from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
 from senselab.audio.workflows.triage.nodes.common import NodeResult, capture_environments, describe_exception
+from senselab.audio.workflows.triage.nodes.ddk import ddk
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
 from senselab.audio.workflows.triage.nodes.quality import quality
 from senselab.audio.workflows.triage.nodes.redact import redact
@@ -298,6 +299,7 @@ def _drive_branches(
         "AIRWAY": lambda: airway(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
         "SPEECH": lambda: speech(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir, enrollment=enrollment),
         "VOICE": lambda: voice(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
+        "DDK": lambda: ddk(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
     }
     for branch in BRANCHES:
         call = branches.get(branch)
