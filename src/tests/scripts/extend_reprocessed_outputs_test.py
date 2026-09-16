@@ -480,7 +480,19 @@ class TestThePhonationTracks:
     def test_the_tracks_agree_with_what_a_fresh_pass_would_have_written(
         self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
     ) -> None:
-        """Both paths read the streams out of the store, so both mint the same entity id."""
+        """Both paths read the streams out of the store, so both measure the same thing.
+
+        Compared on everything but ``mtime_ns``. Since 2026-09-16 this measurement records its
+        sidecar's ``path_attributes`` like the other three npz derivatives, so that the branch
+        loaders can find the file at all -- and `mtime_ns` is when the file was written, not what
+        was measured, so two passes cannot agree on it. The checksum is the identity that matters
+        and is compared.
+
+        The consequence worth knowing: entity ids are content-addressed over attributes
+        (`utils/prov_store.py`), so **no derivative that writes a sidecar can converge** -- a
+        re-derivation always mints a new id. ``praat_features`` converges only because it writes no
+        sidecar and keeps its forty-five scalars in attributes.
+        """
         manifest, roots = corpus(1)
         _run(manifest)
         extended = find_measurement(_store_of(roots[0]), PHONATION_TRACKS)
@@ -491,7 +503,11 @@ class TestThePhonationTracks:
         fresh = find_measurement(_store_of(fresh_root), PHONATION_TRACKS)
 
         assert extended is not None and fresh is not None
-        assert extended.attributes == fresh.attributes
+        volatile = {"mtime_ns"}
+        assert {k: v for k, v in extended.attributes.items() if k not in volatile} == {
+            k: v for k, v in fresh.attributes.items() if k not in volatile
+        }
+        assert extended.attributes["checksum_sha256"] == fresh.attributes["checksum_sha256"]
 
     def test_a_run_with_no_conditioned_stream_is_an_outcome_not_a_crash(
         self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
