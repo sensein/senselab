@@ -1819,10 +1819,10 @@ therefore the branch's own, and the declared family reaches it two ways:
   (`__init__.py:19`; `families.py:121`, `:134`). A branch can compute its mode from a filename —
   which puts BIDS-stem parsing inside a branch, the thing `AudioHints` exists to prevent.
 - **the clean route, and unavailable.** `hints.metadata["task_token"]` is the only carrier of the
-  declared task; it is written only by `runs/b2ai-v2/make_hints.py:381` and **read by nothing in
-  `src/senselab`**. `AudioHints` has no `task_family` field (`audio_hints.py:149-154`).
+  declared task; it is written only by `make_hints.py:381` under this spec's own
+  `runs/b2ai-v2/`, and **read by nothing in `src/senselab`**. `AudioHints` has no `task_family` field (`audio_hints.py:149-154`).
 
-Neither route recovers the trailing index, which `task_family` strips (`families.py:144`).
+Neither route recovers the trailing index, which `task_family` strips (`families.py:143`).
 
 ```mermaid
 graph TD
@@ -2114,8 +2114,9 @@ question all dissolve at once.
 a second `span` entity, same family, start moved to the first period mark — and it carries no verb
 at all. Under propose-only that becomes a `family: "voice"` propose, and the two populations are
 then distinguished by family rather than by `onset_kind`, which is why
-`report.py:291`'s `_spans_of_family(..., voice=...)` split and its four call sites (`:673`, `:715`,
-`:1153-1154`) become unnecessary.
+`report.py:291`'s `_spans_of_family(..., voice=...)` split becomes unnecessary. It has five call
+sites — `:673`, `:688`, `:715`, `:1153`, `:1154` — of which three pass `voice=` (`:673`
+`voice=False`, `:715` and `:1154` `voice=True`).
 
 **What each mode proposes.** `align_voice` on `prolonged-vowel` proposes **two** spans — `count_in`
 over the matched `one two three`, carrying `excluded_from_measurement=True`, and `task_extent` over
@@ -2125,8 +2126,9 @@ inhale is airway evidence, so VOICE records `inhale_expected_in_file` as a count
 which runs on the same recording, proposes the span over it.
 
 **What routing hands each mode.** `routed` when `voice.sustained`, `voice.glide` or `voice.chant`
-fired. VOICE is routed to **22,277 recordings against 8,306 declaring a voice family**, so
-`detect_voice` is the mode that meets 73% of its own corpus — and it shares `qualifying_phonation`
+fired. VOICE is routed to **22,277 recordings against 8,306 declaring a voice family, 14,332 of them
+declaring none** (`runs/ruleset-score-20260912/ruleset_score.json`, `extra.VOICE`), so `detect_voice`
+is the mode that meets **64%** of its own corpus — and it shares `qualifying_phonation`
 with the in-family mode rather than being a placeholder beside it.
 
 **Six families, not ten.** `VOICE_ELICITING` is `glides-high-to-low`, `glides-low-to-high`,

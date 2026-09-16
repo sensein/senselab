@@ -156,12 +156,13 @@ family, and the declared family reaches it two ways:
   therefore compute its own mode from a filename. **Implementable today**, and it puts BIDS-stem
   parsing inside a branch, which is the thing `AudioHints` exists to prevent.
 - **the clean route, and `‡`.** `hints.metadata["task_token"]` is the only carrier of the declared
-  task, it is written only by the campaign's own builder
-  (`runs/b2ai-v2/make_hints.py:381`, `:397`) and **it is read by nothing in `src/senselab`**.
+  task, it is written only by the campaign's own builder — `make_hints.py:381`, `:397`, under **this
+  spec's own** [`runs/b2ai-v2/`](runs/b2ai-v2/make_hints.py), not under the repo root — and **it is
+  read by nothing in `src/senselab`**.
   `AudioHints` has no `task_family` field at all (`audio_hints.py:149-154`).
 
 **Neither route recovers the trailing index**, because `task_family` strips every trailing numeric
-segment (`families.py:144`, `_TRAILING_INDEX = re.compile(r"(?:-\d+)+$")` at `:13`). That is the
+segment (`families.py:143`, `_TRAILING_INDEX = re.compile(r"(?:-\d+)+$")` at `:13`). That is the
 same loss the `fivebreaths` route and the `maximum-phonation-time-v2` effort escalation both take,
 and it is now a loss in the *mode selector's own input* rather than only in a per-family rule.
 
@@ -755,8 +756,11 @@ helper asserts on it rather than trusting the author.
 `_spans_of_family(store, family, *, voice=...)` exists only because VOICE re-minted a second
 phonation span from an existing one and `onset_kind` was the only thing telling the two populations
 apart (its own docstring says so). Under propose-only they are different families —
-`family: "voice"` against whatever proposed the evidence — so the `voice=` split and its four call
-sites (`report.py:673`, `:715`, `:1153-1154`) become unnecessary. **Recorded as a simplification the
+`family: "voice"` against whatever proposed the evidence — so the `voice=` split becomes
+unnecessary. `_spans_of_family` has **five** call sites (`report.py:673`, `:688`, `:715`, `:1153`,
+`:1154`) and **three** pass `voice=`: `:673` `voice=False`, `:715` `voice=True`, `:1154`
+`voice=True`. Those three are what the decision simplifies; the other two already read one family
+and are untouched. **Recorded as a simplification the
 decision enables; no code is changed by this document.**
 
 **`label` and `contest` are unaffected.** Both are assertions written *beside* a span, not edits to
@@ -910,10 +914,10 @@ Verified against `src/senselab/audio/workflows/triage/nodes/preprocess.py` at th
 
 | name in a body | what it is | fields a body may read |
 | --- | --- | --- |
-| `words` | the `word` entities `consensus_transcript` names (entity at `preprocess.py:2437`; attributes at `consensus.py:391-416`) | `text`, `bracketed`, `outcome`, `sources`, `readings`, `timings` (per source), `onset_spread_s`, `offset_spread_s`, `temporal_uncertainty_s`, `variants`, `agreement`, `index`, and the entity's own `extent` |
+| `words` | the `word` entities `consensus_transcript` names (entity at `preprocess.py:2436`; attributes at `consensus.py:391-416`) | `text`, `bracketed`, `outcome`, `sources`, `readings`, `timings` (per source), `onset_spread_s`, `offset_spread_s`, `temporal_uncertainty_s`, `variants`, `agreement`, `index`, and the entity's own `extent` |
 | `consensus_transcript` | the whole-file stream (block `_consensus` at `:2409`, measurement at `:2456`, name at `:2460`) | `text`, `sources` (model id + resolved commit per source), `word_ids`, `role` |
 | `spans` | the `span` entities — the amplitude/continuity/ASR loop at `preprocess.py:1875-1891`, the `gap` entity loop at `:1905-1920` | always `extent`, `signal`, `measure ∈ {amplitude, continuity, asr, gap}`, `merged_proposals`, `contains_clip`. **`peak_over_floor_db` and `k_db` exist only on `measure == "amplitude"`** and `continuity_cut_percentile` only on `continuity` (`_measure_fields`, `:1782-1787`); `corroborated_by` only when a later proposer overlapped |
-| `energy_envelope` | `derivatives/energy_envelope.npz` (block `:1591`, savez `:1612`, name `:1621`) | npz `envelope_dbfs`, `floor_dbfs` — **one global value, `np.full_like`-broadcast, not a local floor**; entity attribute `sampling_rate` |
+| `energy_envelope` | `derivatives/energy_envelope.npz` (`_envelope` at `:1590`, savez `:1612`, name `:1621`) | npz `envelope_dbfs`, `floor_dbfs` — **one global value, `np.full_like`-broadcast, not a local floor**; entity attribute `sampling_rate` |
 | `normalized_envelope` | the AGC'd envelope (savez `:1705`, name `:1714`) | the same two arrays |
 | `continuity_trace` | `derivatives/continuity_trace.npz` (block `:2522`, savez `:2549`, name `:2554`) | npz **`continuity` only**, per sample in `[0, 1]`; entity attributes `sampling_rate`, `cut_level`, `cut_percentile`. **This is a spectral-stationarity trace already** — cosine similarity between consecutive log-magnitude spectra (`spectral_continuity/api.py:10`), fed the narrowband magnitude |
 | `phonation_tracks` | `derivatives/phonation_tracks.npz` (fn `:1255`, savez `:1300`), hop 10 ms | `times_s`, `f0_hz`, `strength`, `formant_times_s`, `f1..f4_hz`, `f1..f4_bw_hz`. F0 on the pre-emphasised stream, formants on `plain` (`:1288-1291`) |
@@ -921,15 +925,15 @@ Verified against `src/senselab/audio/workflows/triage/nodes/preprocess.py` at th
 | `gammatone` | `derivatives/gammatone.npz` (block `:2568`, savez `:2584`) | `centre_frequencies_hz` (40 channels, 80–7800 Hz), `energy_db`; attribute `hop_s` = 0.005. **Read by no body here**: it is an ERB rebinning of the same short-time spectrum the two spectrograms carry |
 | `ppg_posteriorgram` | writer `:774`, relative path `:803`, on `enhanced` | `posteriorgram[frame, phoneme]`, `phonemes` (40 ARPAbet incl. `<silent>`), `seconds_per_frame`. **Whole file only**, and read by no body here |
 | `praat_features` | ~40 whole-file scalars on `enhanced` (fn `:1179`, measurement `:1223-1231`) | **the scalars are nested under one attribute, `features`**, beside `n_features` and the parameter set. Not re-poolable over an extent |
-| `level` | whole-file, on `plain` (block `:2087`, name `:2099`) | `peak_dbfs`, `rms_dbfs`, `lufs`. **Uncalibrated** — no SPL reference exists anywhere in the graph |
-| `silence` | YAMNet `Silence` per window (block `:2059`, name `:2080`) | `windows[{start, end, score, is_silence}]`, `threshold` |
+| `level` | whole-file, on `plain` (block `:2087`, name `:2098`) | `peak_dbfs`, `rms_dbfs`, `lufs`. **Uncalibrated** — no SPL reference exists anywhere in the graph |
+| `silence` | YAMNet `Silence` per window (block `:2059`, name `:2079`) | `windows[{start, end, score, is_silence}]`, `threshold` |
 | `span_hear` / `span_yamnet` | per-span classifier windows (`:2186`, `:2250`; attributes built at `:314-358`) | `span_id`, the window's own `extent`, `raw_scores`, `default_threshold`, `label_top_k`, `labelled`, `isolated_span`, and `labels` / `scores` when a membership rule exists. A refusal becomes an assertion carrying `unmeasured` (`_mark_unmeasured`, `:2174`) |
 | `hear_scores` / `yamnet_scores` / `ast_scores` | the classifier's verbatim whole-file windows (`_scores` at `:1926`) | `start`, `end`, `label_scores` (every label, raw), `win_length`, `hop_length`. HeAR's eight labels are `Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear, Laugh, Speech` (`hear.py:133-142`); HeAR windows 2.0 s non-overlapping, YAMNet 0.96 s on a 0.48 s hop (`yamnet.py:142-143`), AST 10.24 s non-overlapping |
-| `hear_windows` / `yamnet_windows` / `ast_windows` | the fold of a membership rule over those scores (`_windows` at `:1952`) | **all three are absent under the shipped config.** `load_label_membership` (`label_membership.py:55`) `config.require`s all three of `label_top_k`, `default_threshold` and `label_thresholds` (`:68-74`), and `label_thresholds` is **null for yamnet, ast and hear alike** (`default.yaml:94`, `:98`, `:105`) — `ast` fails on two nulls. `_windows` calls it at `:1957`, the block runner catches the `ValueError` and records the block absent (`:2989-2993`). `optional_label_membership` (`:78-101`) tolerates the null, which is why `span_hear` / `span_yamnet` *are* labelled and these are not. **No body below reads a `*_windows` derivative** |
-| `enhanced_hear_scores` / `residual_hear_scores` (and `_yamnet_`, `_ast_`) | the same per stream (`_stream_classifier_scores` at `:2814`, measurement `:2837-2851`, `_stream_hear` `:2930`) | per-window scores plus `speech_overlap`, and the `_summary_all` / `_summary_speech_free` roll-ups (`:2858-2888`) |
+| `hear_windows` / `yamnet_windows` / `ast_windows` | the fold of a membership rule over those scores (`_windows` at `:1952`) | **all three are absent under the shipped config.** `load_label_membership` (`label_membership.py:55`) `config.require`s all three of `label_top_k`, `default_threshold` and `label_thresholds` — at `:70`, `:71` and `:73`, inside the return at `:69-75` — and `label_thresholds` is **null for yamnet, ast and hear alike** (`default.yaml:94`, `:98`, `:105`), so `ast` fails on two nulls. `_windows` calls it at `:1957`; the block runner catches `(ValueError, LookupError)` at `preprocess.py:2991` and records the block absent at `:2994`. `optional_label_membership` (`:78-102`) reads the same key with `config.get` and tolerates the null, which is why `span_hear` / `span_yamnet` *are* labelled and these are not. **No body below reads a `*_windows` derivative** |
+| `enhanced_hear_scores` / `residual_hear_scores` (and `_yamnet_`, `_ast_`) | the same per stream (`_stream_classifier_scores` at `:2814`, measurement `:2837-2851`, `_stream_hear` `:2930`) | per-window scores plus `speech_overlap`, and the `_summary_all` / `_summary_speech_free` roll-ups (`_stream_classifier_summaries` at `:2859-2888`) |
 | `enhanced_diarization` / `residual_diarization` | one measurement per stream in `diarization.streams` (`:2617`, blocks `:2630`, spliced `:2985`) — **shipped** | `speakers`, `n_speakers`, `n_segments`, `per_speaker_s`, `speech_s`, `overlap_s`, `max_concurrent_speakers`, and `derivatives/<stream>_diarization.npz` carrying `starts`/`ends`/`speakers`/`streams`. The two streams' counts are never summed |
 | `residual` | the FRCRN subtraction (block `:2667`, name `:2778`) | `energy_fraction`, `enhanced_energy_fraction`, `gain_db`, `bands`, `speech_present`, `speech_coverage_fraction`, `n_consensus_words` |
-| `squim` | one **assertion** per span, `verb: "measure"` (`_squim_for` at `:2133`, written `:2172-2174`) | `stoi`, `pesq`, `si_sdr` over the span's extent — **or `unmeasured` and no scores at all** when SQUIM refuses (`:2160`). A body reading it must handle that |
+| `squim` | one **assertion** per span, `verb: "measure"` (`_squim_for` at `:2133`, the assertion written at `:2162-2166`, invoked by `_squim` at `:2172`) | `stoi`, `pesq`, `si_sdr` over the span's extent — **or `unmeasured` and no scores at all** when SQUIM refuses (`:2160`). A body reading it must handle that |
 | `disruptions_file` | on the **un-resampled** `recording` stream (block `:2106`, name `:2125`) | clipped runs, dropouts, discontinuities, DC, zero-crossing rate, `sampling_rate` |
 | `clip_spans` | `span` entities with `family: CLIP_FAMILY` (`:712-715`, block `:1519`) | `extent`, `family`, `signal`, and one `clip_amplitude` measurement beside them (`:621`, attributes `:666-674`) carrying `unclipped_peak`, `unclipped_peak_time_s`, `unclipped_samples_n`, `edge_guard_samples`, `clip_spans_n` and the per-span levels |
 | `hints` | `AudioHints` (`audio_hints.py:129`), handed to every branch | `may_contain` (`:149`), `targeted_speaker_count` (`:150`), `environment` (`:151`), `expected_speech`‡ (`:152`), `target_speaker` (`:153`), `metadata` (`:154`, a `dict[str, Any]`). **`metadata["task_token"]` is a key, not a field, and appears nowhere in `src/senselab`**‡ |
@@ -3672,7 +3676,7 @@ cycles in one file.
 
 **Spans proposed: one per breath cycle, plus `task_extent`.** `route_from_index=True` is the one
 field that reads the trailing task index, and it is the field where the collapse bites: the route is
-per recording, the index carries it, and `task_family` strips it (`families.py:144`). The route
+per recording, the index carries it, and `task_family` strips it (`families.py:143`). The route
 itself is reported `NOT_SEPARABLE_BY_THIS_DESIGN` with `band_profile†`'s content band beside it, so
 a negative is attributable to a measured band limit rather than recorded as *"not yet fitted"*.
 
@@ -3690,7 +3694,7 @@ of the same short-time spectrum the two spectrograms already carry, and carries 
 they lack. D3's job is to make a
 negative *attributable* — a contrast that fails on files whose content stops at 4 kHz failed for a
 written-down reason — not to make the route measurable. The route index itself is discarded before
-any branch sees it, because `task_family` collapses the trailing segment (`families.py:134-144`).
+any branch sees it, because `task_family` collapses the trailing segment (`families.py:134-143`).
 
 ### `respiration-and-cough-v2-threebreathsnose` (699), `-threebreathsmouth` (699) — AIRWAY and SPEECH
 
@@ -3937,8 +3941,9 @@ sustained voiced region it finds**, each derived from its carrier span plus `pho
 `phonation` that fails the qualifier.
 
 `done` is `UNDETERMINED` always. This is the mode that runs on most of what VOICE is handed —
-**22,277 routed recordings against 8,306 declaring a voice family** — so a placeholder here would
-mean VOICE doing nothing on 73% of its own corpus.
+**22,277 routed recordings, 14,332 of which declare no voice family**
+(`runs/ruleset-score-20260912/ruleset_score.json`, `extra.VOICE`) — so a placeholder here would mean
+VOICE doing nothing on **64%** of its own corpus.
 
 **Requires (AIRWAY):** `spans` · `span_hear` · `span_yamnet` · `hear_scores` · `energy_envelope`.
 **Absent:** nothing.
@@ -4288,9 +4293,10 @@ between documents to reconcile, and no branch waits on them:
 `report.py:291`'s `_spans_of_family(store, family, *, voice=...)` exists only because VOICE re-minted
 a second phonation span from an existing one, and `onset_kind` — which VOICE writes and the retired
 proposer did not — was the only thing telling the two populations apart. Its own docstring says so.
-Under propose-only they are different **families**, so the `voice=` parameter and its four call sites
-(`report.py:673`, `:715`, `:1153-1154`) become unnecessary. **Recorded, not done: this document
-changes no code.**
+Under propose-only they are different **families**, so the `voice=` parameter becomes unnecessary.
+`_spans_of_family` has five call sites — `report.py:673`, `:688`, `:715`, `:1153`, `:1154` — of
+which three pass `voice=` (`:673` `voice=False`, `:715` and `:1154` `voice=True`); those three are
+the ones the decision simplifies. **Recorded, not done: this document changes no code.**
 
 ## Appendix — the instruction per family, verbatim
 
