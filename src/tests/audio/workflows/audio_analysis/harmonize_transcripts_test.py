@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis.harmonize import TranscriptSlot, _align_pair, harmonize_transcripts
+from senselab.audio.workflows.audio_analysis.harmonize import TranscriptSlot, align_pair, harmonize_transcripts
 
 
 def _w(pairs: list[tuple[float, float, str]]) -> list[tuple[float, float, str]]:
@@ -240,10 +240,10 @@ def test_a_repetition_against_one_token_aligns_its_last_copy() -> None:
 
 
 def test_without_timings_a_repetition_still_aligns_its_last_copy() -> None:
-    """``_align_pair`` with no timings is the untouched rule: last copy, earlier token on a substitution tie."""
-    assert _align_pair(["the", "the", "the"], ["the"]) == [(0, None), (1, None), (2, 0)]
-    assert _align_pair(["the"], ["the", "the", "the"]) == [(None, 0), (None, 1), (0, 2)]
-    assert _align_pair(["i", "uh", "think"], ["i", "thing"]) == [(0, 0), (1, 1), (2, None)]
+    """``align_pair`` with no timings is the untouched rule: last copy, earlier token on a substitution tie."""
+    assert align_pair(["the", "the", "the"], ["the"]) == [(0, None), (1, None), (2, 0)]
+    assert align_pair(["the"], ["the", "the", "the"]) == [(None, 0), (None, 1), (0, 2)]
+    assert align_pair(["i", "uh", "think"], ["i", "thing"]) == [(0, 0), (1, 1), (2, None)]
 
 
 def test_the_gets_case_pairs_the_temporally_coincident_first_copy() -> None:
@@ -296,9 +296,9 @@ def test_time_never_buys_a_costlier_path() -> None:
     """
     a, a_times = ["the", "the"], [(0.0, 0.4), (5.0, 5.4)]
     b, b_times = ["the", "cat"], [(5.0, 5.4), (5.5, 5.9)]
-    timed = _align_pair(a, b, a_times, b_times)
-    assert timed == [(0, 0), (1, 1)] == _align_pair(a, b)
-    assert _align_pair(a, b, a_times, b_times) == timed, "deterministic on repeat"
+    timed = align_pair(a, b, a_times, b_times)
+    assert timed == [(0, 0), (1, 1)] == align_pair(a, b)
+    assert align_pair(a, b, a_times, b_times) == timed, "deterministic on repeat"
 
 
 def test_time_breaks_a_substitution_position_tie_when_the_spans_separate_the_tokens() -> None:
@@ -319,4 +319,4 @@ def test_time_breaks_a_substitution_position_tie_when_the_spans_separate_the_tok
 def test_timings_must_be_one_span_per_token() -> None:
     """A timing list of the wrong length is refused rather than silently misread."""
     with pytest.raises(ValueError, match="one span per token"):
-        _align_pair(["a", "b"], ["a"], [(0.0, 0.1)], [(0.0, 0.1)])
+        align_pair(["a", "b"], ["a"], [(0.0, 0.1)], [(0.0, 0.1)])

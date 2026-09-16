@@ -540,6 +540,41 @@ already-bracketed tokens become bracketed words, and an onomatopoeic rendering i
 lexical word -- which is the honest state, not a safe default. A token in the vocabulary becomes a
 bracketed word (`khh` -> `[KHH]`) with the raw token kept in the word's `readings`.
 
+## stimulus
+
+The consensus word stream aligned against what the recording declared it expected.
+
+stimulus.sentence_terminators `".?!"` -- the characters that close a structure unit inside one
+declared prompt. Orthographic, not fitted to any corpus: these are the three sentence-final marks of
+the Latin-script orthographies the corpus records (the 4.0-release adult tree carries `language`
+`en` and `es`), and the value is a declaration about writing systems, not a threshold over a
+measurement. It is not null, because a null here would make the whole derivative absent on every
+recording rather than making one projection unavailable; and it is not a threshold, because nothing
+about it was chosen to separate two populations.
+
+`AudioHints.expected_speech` is already a *list*, and its docstring says why -- "Ordered and
+separate rather than one concatenated string, because 'which sentence was skipped' is a different
+question from 'how close was the whole thing'". A caller who declares six sentences as six entries
+therefore gets six units with no splitting at all. The terminator split exists so a caller who
+declares one multi-sentence passage as one entry gets the same units: measured on the 4.0-release
+adult tree, `rainbow-passage` carries all four of its sentences in one recording-grain
+`stimulus_text`, and `caterpillar-passage` more than ten. Without the split those are one unit and
+the per-sentence boundaries the VOICE consumer wants do not exist.
+
+**No other key was added, and that is the finding, not an omission.** The alignment's three
+outcomes -- realised, substituted, absent -- are the aligner's own path, not a cut over a score, so
+no operating point separates them. Every number the consumers named in
+`expected-patterns.md` (`p_omission_score_max`, `p_repeat_overlap_min`, `p_echo_overlap_max`,
+`p_verbatim_overlap_max`) is a branch decision over this derivative's output, and belongs to the
+branch that makes it. Inventing a PREPROCESS cut here would have been an unmeasured decision with a
+public interface.
+
+The edit costs the alignment runs under are not new either: it reuses `align_pair`
+(`audio_analysis/harmonize.py`), whose sclite costs (match 0, substitution 4, indel 3) are derived
+in `transcript-alignment.md`. They were designed for exactly the reference-against-hypothesis case
+this derivative is, which is a weaker assumption than the ASR-against-ASR case they are already
+serving.
+
 ## routing
 
 Which declared tags force which kind's branch.

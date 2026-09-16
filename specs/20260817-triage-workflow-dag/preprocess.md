@@ -72,6 +72,7 @@ recording (as supplied) --> resample-+
 | `asr_crisperwhisper` | an `asr_hypothesis`: transcript and word timings | plain | one source of the consensus; SPEECH's PII scan reads its transcript |
 | `asr_qwen` | an `asr_hypothesis`: transcript and word timings | plain | one source of the consensus; SPEECH's PII scan reads its transcript |
 | `consensus_transcript` | the consensus text stream: one `word` per aligned column, each source's reading and timing verbatim, a monotone derived extent | plain | SPEECH's PII scan and spans; REDACT; TAXONOMY's lexical evidence; the figure and the report |
+| `stimulus_alignment` | the consensus `word` stream aligned against the declared utterance (`hints.expected_speech`): per expected token its realisation (`realised`/`substituted`/`absent`) and extent, the declared structure's boundaries, and the lexical complement | plain | SPEECH's read-text diff; VOICE's per-sentence extents; AIRWAY's `off_task` lexical complement. Absent when nothing was declared |
 | `spectrogram_wb` | 5 ms window, 5 ms hop | pre-emph | onsets, transients, glottal pulses |
 | `spectrogram_nb` | 20 ms window, 5 ms hop | pre-emph | harmonics, F0 by spacing, rendering |
 | `gammatone` | 40 ERB channels, 80–7800 Hz, 5 ms hop | pre-emph | short-transient detection |
@@ -232,6 +233,29 @@ absence of `consensus_transcript`. The design, the owner's rulings and the measu
 
 **The consensus transcript is the text every downstream text consumer reads.** SPEECH's PII scan
 reads it and each recognizer's own transcript; [`REDACT`](redact.md) reads it and nothing else.
+
+## `stimulus_alignment`
+
+The one place the store relates the transcript to what the recording was *declared* to expect. It
+reads two things that already exist: the lexical `word` entities `consensus_transcript` names, and
+`AudioHints.expected_speech`, which `run_triage` has always delivered to every node and which
+nothing read until this derivative. It costs no model pass and no audio -- `align_pair`
+(`audio_analysis/harmonize.py`), the same weighted Levenshtein path the consensus itself runs on,
+over two token lists, one of which carries no timings.
+
+It is in PREPROCESS rather than in SPEECH because three branches want three different projections
+of one alignment and no branch reads another's output: SPEECH the per-token diff, VOICE the declared
+structure's boundaries as selectable extents, AIRWAY the complement -- lexical material where none
+was expected.
+
+**An absent expectation is a typed outcome.** `StimulusExpectationUnavailable` is a `ValueError`, so
+the block runner files it as a soft absence beside `PpgsPosteriorgramUnavailable`; a *declared but
+empty* expectation is different and is a real alignment with zero expected tokens, in which every
+lexical word falls into the complement. Populating the hint from a corpus is a precondition and not
+part of this derivative.
+
+The design, the corpus measurements behind it, and the one config key it adds are in
+[`stimulus-alignment.md`](stimulus-alignment.md).
 
 ## Words are bracket-aware
 

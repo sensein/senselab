@@ -57,6 +57,13 @@ Three. Ranked by how many expected patterns they unblock.
 
 ### D1 — `stimulus_alignment`: the consensus word stream aligned against the declared utterance
 
+**Built.** `src/senselab/audio/workflows/triage/stimulus.py` and the `stimulus_alignment`
+block in `nodes/preprocess.py`; design, corpus measurements and the one config key in
+[`stimulus-alignment.md`](stimulus-alignment.md). Two claims below were wrong when checked
+against the 4.0-release adult tree and are corrected there: `prolonged-vowel` and `loudness`
+carry an empty `stimulus_text` (their count-in and token are prescribed in `instructions`), and
+CAPE-V carries **one** sentence per recording rather than six.
+
 **What it measures.** One alignment between the `consensus_transcript`'s `word` stream and the
 ordered tokens the recording was declared to expect (`AudioHints.expected_speech`). Per expected
 token: which consensus column realised it, that column's extent, its `outcome` and its `agreement`,
