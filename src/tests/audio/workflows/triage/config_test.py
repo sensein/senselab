@@ -156,34 +156,26 @@ class TestOverrides:
 class TestOverridesMayExtendADataMap:
     """A schema key is a name the code reads; a data-map key is a value the data supplies."""
 
-    def test_a_new_corroboration_override_entry_is_accepted(self, tmp_path: Path) -> None:
-        """A campaign wanting its own corroboration for Sneeze must not have to edit the package."""
+    def test_a_new_route_index_entry_is_accepted(self, tmp_path: Path) -> None:
+        """A campaign numbering its breathing trials differently must not have to edit the package."""
         override = tmp_path / "o.yaml"
-        override.write_text("airway:\n  corroboration_overrides:\n    Sneeze: [Sneeze]\n")
+        override.write_text("airway:\n  route_by_task_index:\n    5: nose\n")
         cfg = load_triage_config(override)
-        assert cfg.require("airway.corroboration_overrides")["Sneeze"] == ["Sneeze"]
+        assert cfg.require("airway.route_by_task_index")[5] == "nose"
 
-    def test_the_packaged_entries_of_a_non_null_data_map_survive_the_addition(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_the_packaged_entries_of_a_non_null_data_map_survive_the_addition(self, tmp_path: Path) -> None:
         """An additive override that silently dropped a packaged entry would disable it."""
-        packaged = tmp_path / "packaged.yaml"
-        packaged.write_text(
-            (Path(config_module.__file__).parent / "data" / "config" / "default.yaml").read_text()
-            + "\n".join(("", "airway:", "  corroboration_overrides:", "    Cough: [Cough]", ""))
-        )
-        monkeypatch.setattr(config_module, "_DEFAULT", packaged)
         override = tmp_path / "o.yaml"
-        override.write_text("airway:\n  corroboration_overrides:\n    Sneeze: [Sneeze]\n")
-        resolved = load_triage_config(override).require("airway.corroboration_overrides")
-        assert resolved == {"Cough": ["Cough"], "Sneeze": ["Sneeze"]}
+        override.write_text("airway:\n  route_by_task_index:\n    5: nose\n")
+        resolved = load_triage_config(override).require("airway.route_by_task_index")
+        assert resolved == {1: "nose", 2: "mouth", 3: "nose", 4: "mouth", 5: "nose"}
 
     def test_an_existing_entry_is_replaced_not_merged(self, tmp_path: Path) -> None:
-        """The value under a data-map key is data; two lists do not deep-merge into one."""
+        """The value under a data-map key is data; the override replaces what it names."""
         override = tmp_path / "o.yaml"
-        override.write_text("airway:\n  corroboration_overrides:\n    Breathe: [Breathing]\n")
-        resolved = load_triage_config(override).require("airway.corroboration_overrides")
-        assert resolved == {"Breathe": ["Breathing"]}
+        override.write_text("airway:\n  route_by_task_index:\n    1: mouth\n")
+        resolved = load_triage_config(override).require("airway.route_by_task_index")
+        assert resolved[1] == "mouth"
 
     def test_a_null_data_map_still_takes_a_whole_mapping(self, tmp_path: Path) -> None:
         """The control: the paths that ship null must keep accepting the mapping that fills them."""
@@ -260,7 +252,6 @@ class TestTheV2OpenKeys:
         "windows.hear.label_thresholds",
         "taxonomy.speech_labels",
         "routing.hint_branch_map",
-        "airway.contest_labels",
         "speech.enrollment_model",
         "speech.separation_backend",
         "speech.separation_sound_class",
@@ -302,6 +293,8 @@ class TestTheV2OpenKeys:
             "taxonomy.voice_uncertain_duration_s",
             "routing.hint_kind_map",
             "hear.label_floor",
+            "airway.contest_labels",
+            "airway.corroboration_overrides",
         ):
             with pytest.raises(ValueError, match="unknown configuration key"):
                 config.require(path)

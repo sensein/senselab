@@ -138,16 +138,17 @@ stimulus:
 routing:
   hint_branch_map: null                # tag (and metadata.speech_type) -> branch; a tag matching nothing adds nothing
 
-# AIRWAY's labels of interest, and what may confirm or contest them. Corroboration is no longer a
-# hand-written string map: it comes from the classifier-ontology profile in
-# `data/classifier_ontology/`, where every HeAR label resolves to an AudioSet node and is
-# corroborated by that node or any descendant of it. Six of HeAR's eight labels had no entry in the
-# hand map and could never be corroborated; see
-# `specs/20260910-classifier-ontology-mapping/design.md`.
+# AIRWAY's own vocabulary. `branch.label_sets` splits `labels_of_interest` by the kind each label
+# names, and the two modes read that split rather than these labels directly.
 airway:
   labels_of_interest: [Cough, Breathe]  # the HeAR labels this branch acts on
-  corroboration_overrides: null         # HeAR label -> AudioSet class names, REPLACING that label's derived set
-  contest_labels: null                  # YAMNet labels that may contest a HeAR label; refused if it intersects the airway evidence set derived from taxonomy.airway_ontology_roots
+  # a task's trailing index -> the route its instruction prescribes. Data, not schema: a campaign
+  # with another protocol supplies its own map.
+  route_by_task_index:
+    1: nose
+    2: mouth
+    3: nose
+    4: mouth
 
 # Praat's harmonicity and pitch settings for the whole-stream F0/formant tracks.
 phonation:
