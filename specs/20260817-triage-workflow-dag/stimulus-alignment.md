@@ -184,3 +184,55 @@ measurement.
 The in-memory `StimulusAlignment` carries the projections the consumer bodies are written against:
 `substitutions`, `omissions`, `unexpected`, `structure_spans()`, and `run_for(keys)` for an ordered
 sub-run (`detect_count_in`, `detect_loudness_token`).
+
+## 9. Measured on six b2ai recordings
+
+PREPROCESS run end to end (`residual.enabled: false`) over six recordings of
+`bids_adult_2026_09_04`, the hints built from each recording's own sidecar. The consensus is the
+shipped one: CrisperWhisper 2.0 turbo and Qwen3-ASR-1.7B, aligned by `align_sources`.
+
+| recording | declared from | expected | realised | substituted | absent | unexpected | units |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `harvard-sentences-list-16-10` | `stimulus_text` | 9 | 9 | 0 | 0 | 0 | 1 |
+| `harvard-sentences-list-16-1` | `stimulus_text` | 8 | 7 | 1 | 0 | 0 | 1 |
+| `cape-v-sentences-v2-1` | `stimulus_text` | 8 | 8 | 0 | 0 | 0 | 1 |
+| `rainbow-passage` | `stimulus_text` | 64 | 64 | 0 | 0 | 1 | 4 |
+| `prolonged-vowel` | `stimulus_text` (`''`) | 0 | 0 | 0 | 0 | 0 | 0 |
+| `prolonged-vowel` | no hint | — | — | — | — | — | absent |
+| `prolonged-vowel` | `instructions` (`"1, 2, 3 aah"`) | 4 | 0 | 0 | 4 | 0 | 1 |
+| `picture-description` | `stimulus_text` (`''`) | 0 | 0 | 0 | 0 | 85 | 0 |
+| `picture-description` | no hint | — | — | — | — | — | absent |
+
+Four things in that table are the point.
+
+**The substitution is real, not a fixture.** `harvard-sentences-list-16-1` declares *"The empty
+flask stood on the tin tray."*; the consensus reads *"The empty flash stood on the tin tray."*. The
+token is reported `substituted` at 1.21–1.61 s with `expected="flask"`, `read="flash"` — SPEECH's
+`stimulus_mismatch` deviation, with its extent, from one alignment.
+
+**The structure boundaries fall out of a single declared string.** `rainbow-passage` declares all
+four sentences as one `stimulus_text`; the four units come back at 1.59–7.38, 8.10–12.50,
+13.28–21.78 and 22.08–26.48 s. Unit 2 keeps *"with its path high above, and its two ends…"* even
+though the transcript puts a sentence break after *"arch."* — the units are the *declared*
+structure, not the recogniser's punctuation, which is what makes them usable as the per-sentence
+extents VOICE wants.
+
+**The complement is a real false start.** The one unexpected word on `rainbow-passage` is `raind-`
+at 2.74–3.28 s, the participant's own cut-off restart before *"raindrops"*. On
+`picture-description` the complement is all 85 lexical words with extents — AIRWAY's projection,
+from a prompt declared with no words in it.
+
+**The count-in did not fall out, and the reason is in the transcript, not in the alignment.** On the
+`prolonged-vowel` recording measured, neither recogniser transcribed the count-in at all:
+CrisperWhisper returned `[UH]` (4.92–5.52 s) and Qwen `Uh` (4.88–12.08 s), so the consensus is one
+bracketed word and the lexical stream is empty. All four expected tokens are reported `absent` and
+the unit carries no extent. The token-list fallback `expected-patterns.md` proposes for
+`detect_count_in` — an ordered-run match over `lexical(words)` — has the same input and would
+return the same nothing. This is an ASR-coverage limit on non-lexical-task recordings, not an
+alignment limit, and it is worth measuring at corpus scale before any consumer is written against
+the count-in.
+
+**One observation a consumer should know.** `[laughter].` appears in `picture-description`'s
+complement. The consensus's own `is_bracketed` requires the token to end with `]`, so a bracketed
+marker carrying trailing punctuation is a lexical word before this derivative ever sees it. The
+complement inherits whatever `lexical_words(store)` calls lexical; it does not re-decide.
