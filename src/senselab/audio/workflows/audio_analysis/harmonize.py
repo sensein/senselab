@@ -34,6 +34,7 @@ from senselab.audio.workflows.audio_analysis.statistics import confidence, entro
 __all__ = [
     "TranscriptHarmonization",
     "TranscriptSlot",
+    "align_pair",
     "harmonize_transcripts",
     "normalise_token",
     "SpeakerHarmonization",
@@ -442,7 +443,7 @@ def _span_gap_ms(a_span: tuple[float, float], b_span: tuple[float, float]) -> in
     return max(0, int(round(gap_s * 1000.0)))
 
 
-def _align_pair(
+def align_pair(
     a: Sequence[str],
     b: Sequence[str],
     a_times: Optional[Sequence[tuple[float, float]]] = None,
@@ -538,7 +539,7 @@ def harmonize_transcripts(
     consumer can see which one was privileged.
 
     Each pairwise alignment is decided by edit cost; each model's own spans break ties among paths
-    of equal cost toward the pairing closest in time (see :func:`_align_pair`).
+    of equal cost toward the pairing closest in time (see :func:`align_pair`).
 
     Args:
         by_model: ``{model → [(start_s, end_s, text), ...]}`` in time order.
@@ -569,7 +570,7 @@ def harmonize_transcripts(
             continue
         pending = 0
         last_ref = -1
-        path = _align_pair(
+        path = align_pair(
             tokens[reference],
             tokens[model],
             [(s, e) for s, e, _ in words[reference]],
