@@ -14,7 +14,7 @@ import soundfile as sf
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
+from senselab.audio.workflows.triage.nodes.common import software_agent, write_report, write_verdict
 from senselab.audio.workflows.triage.nodes.report import (
     ReportRenderError,
     _consensus_word_color,
@@ -25,7 +25,7 @@ from senselab.audio.workflows.triage.nodes.report import (
     report,
 )
 from senselab.audio.workflows.triage.nodes.verdict import verdict as fold_verdict
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import TASK, Outcome
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import SEED_SOURCES, word_attributes
 
@@ -339,6 +339,11 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
     classify = store.activity(node="AIRWAY", step="classify", parameters={})
     store.was_associated_with(classify, software)
     for extent in airway_labelled:
+        # AIRWAY's own family span — what VERDICT's fold reads as "found", per its own activity
+        # rather than PREPROCESS's envelope span the label assertion above is derived from.
+        own_span_id = store.entity(prov_type="span", extent=(extent[0], extent[1]), attributes={"family": "airway"})
+        store.was_generated_by(own_span_id, classify)
+        store.was_attributed_to(own_span_id, software)
         label_id = store.entity(
             prov_type="assertion",
             extent=(extent[0], extent[1]),
@@ -359,15 +364,16 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         store.was_generated_by(foreign, elsewhere)
         store.was_attributed_to(foreign, software)
         store.was_derived_from(foreign, target)
-    write_verdict(
+    write_report(
         store,
         classify,
         software,
         node="AIRWAY",
-        outcome=Outcome.PASS,
         kind="airway",
-        why="a span carries a label of interest",
-        detail={"labelled_n": len(airway_labelled), "by_label": {"Cough": len(airway_labelled)}, "flags": []},
+        conformance=True,
+        conformance_of=TASK,
+        deviations=(),
+        detail={"labelled_n": len(airway_labelled), "by_label": {"Cough": len(airway_labelled)}, "notes": []},
     )
 
     consensus = store.activity(node="PREPROCESS", step="consensus", parameters={})
@@ -427,19 +433,20 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
                 "missing": [],
             },
         )
-    write_verdict(
+    write_report(
         store,
         speech,
         software,
         node="SPEECH",
-        outcome=Outcome.PASS,
         kind="speech",
-        why="words, spans, speakers and quality are in the store",
+        conformance=True,
+        conformance_of=TASK,
+        deviations=(),
         detail={
             "speaker_count": 1,
             "words_n": len(every_word),
             "pii": {"categories": sorted({category for _, category in marked_words}), "n": len(marked_words)},
-            "flags": [],
+            "notes": [],
         },
     )
 
@@ -464,15 +471,16 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
             "marks_n": 12,
         },
     )
-    write_verdict(
+    write_report(
         store,
         voice,
         software,
         node="VOICE",
-        outcome=Outcome.PASS,
         kind="voice",
-        why="phonation spans measured; nothing contested",
-        detail={"spans_n": 1, "phonation_s": 0.8, "gate_interval": "unmeasured", "flags": []},
+        conformance=True,
+        conformance_of=TASK,
+        deviations=(),
+        detail={"spans_n": 1, "phonation_s": 0.8, "gate_interval": "unmeasured", "notes": []},
     )
 
     plan = store.activity(node="REDACT", step="plan", parameters={})
@@ -569,7 +577,7 @@ class TestTheStructuredJsonCompanion:
         artifacts = report(store, tmp_path / "summary", pdf_config)
         payload = json.loads(artifacts["json"].read_text())
         assert artifacts["summary"].exists() and artifacts["json"].exists()
-        assert payload["schema_version"] == "triage-summary/v4"
+        assert payload["schema_version"] == "triage-summary/v5"
         assert payload["decisions"]["file_triage"] == payload["verdict"]["triage"]
         assert payload["decisions"]["release"] == payload["verdict"]["release"]
         assert payload["artifacts"]["summary"]["path"] == artifacts["summary"].name
@@ -581,7 +589,11 @@ class TestTheStructuredJsonCompanion:
         payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
         assert {"recording", "screening", "routing", "evidence"} <= set(payload)
         assert payload["recording"]["run_label"]
-        assert payload["routing"]["SPEECH"]["verdict"] is not None
+        assert payload["routing"]["SPEECH"]["conformance"] is True
+        assert payload["routing"]["SPEECH"]["reported"] is True
+        assert payload["routing"]["SPEECH"]["deviations"] == []
+        assert payload["routing"]["SPEECH"]["unmeasured"] == []
+        assert payload["routing"]["SPEECH"]["notes"] == []
         speech_items = payload["evidence"]["branches"]["SPEECH"]
         assert any(item["timing"] and item["provenance"]["node"] for item in speech_items)
         token = payload["evidence"]["consensus_transcript_tokens"][0]
@@ -1178,7 +1190,7 @@ class TestTheHintReadingIsOnThePage:
         _seed_report_store(store, tmp_path, full=True)
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
-        assert "AIRWAY: route=routed found=present agreement=agree hint=found_unclaimed" in blocks
+        assert "AIRWAY: route=routed found=present conformance=True agreement=agree hint=found_unclaimed" in blocks
 
     def test_a_declared_branch_that_found_nothing_reads_claimed_not_found(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1212,21 +1224,27 @@ class TestTheHintReadingIsOnThePage:
         store.was_generated_by(decision, supersede)
         refuted = store.activity(node="AIRWAY", step="reclassify", parameters={})
         store.was_associated_with(refuted, software)
-        write_verdict(
+        # Withdraw the base seed's own AIRWAY span: this scenario is AIRWAY finding nothing, so
+        # VERDICT's fold must read zero live spans in the branch's family, not the base seed's one.
+        for span in store.entities("span"):
+            if span.attributes.get("family") == "airway" and not store.is_invalidated(span.id):
+                store.was_invalidated_by(span.id, refuted)
+        write_report(
             store,
             refuted,
             software,
             node="AIRWAY",
-            outcome=Outcome.FAIL,
             kind="airway",
-            why="spans exist but none carries a label of interest",
+            conformance=False,
+            conformance_of=TASK,
+            deviations=(),
             detail={},
         )
         fold_verdict(store, None, load_triage_config(), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
 
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
-        assert "AIRWAY: route=routed found=absent agreement=mismatch hint=claimed_not_found" in blocks
+        assert "AIRWAY: route=routed found=absent conformance=False agreement=mismatch hint=claimed_not_found" in blocks
 
     def test_a_lane_the_page_did_not_draw_is_named_with_its_reason(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

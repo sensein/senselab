@@ -31,7 +31,7 @@ from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore, file_attribu
 from senselab.utils.subprocess_venv import venv_environment
 
 RESERVED_REPORT_KEYS = frozenset(
-    {"node", "kind", "conformance", "conformance_of", "deviations", "unmeasured", "outcome"}
+    {"node", "kind", "conformance", "conformance_of", "deviations", "unmeasured", "in_family", "outcome"}
 )
 """Attribute names a ``branch_report``'s detail may not carry. ``outcome`` is among them: a
 reporting node has none, and a reader finding one would fold a decision nobody made."""
@@ -209,6 +209,7 @@ def write_report(
     conformance_of: str,
     deviations: tuple[str, ...],
     unmeasured: tuple[str, ...] = (),
+    in_family: bool = False,
     detail: dict[str, Any],
 ) -> tuple[str, BranchReport]:
     """Write one reporting node's ``branch_report`` entity.
@@ -224,6 +225,7 @@ def write_report(
             :data:`~senselab.audio.workflows.triage.vocabulary.CONFORMANCE_REFERENTS`.
         deviations: The deviation type names found, sorted and deduplicated.
         unmeasured: The config paths this node asked for and nobody has measured, in read order.
+        in_family: Whether the node evaluated a declared task of its own kind.
         detail: The node's design-named observation fields.
 
     Returns:
@@ -250,6 +252,7 @@ def write_report(
             "conformance_of": conformance_of,
             "deviations": list(deviations),
             "unmeasured": list(unmeasured),
+            "in_family": in_family,
             **detail,
         },
     )
@@ -262,6 +265,7 @@ def write_report(
         conformance_of=conformance_of,
         deviations=tuple(deviations),
         unmeasured=tuple(unmeasured),
+        in_family=in_family,
     )
 
 

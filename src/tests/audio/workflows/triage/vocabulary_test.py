@@ -1,4 +1,9 @@
-"""The file-level fold: pass, flag, discard, and each branch authority over its own subject."""
+"""The file-level fold: pass, flag, discard, and each branch authority over its own subject.
+
+A branch reports and this fold decides, so a branch enters through ``branch_reports`` and
+``spans_by_node`` rather than through ``node_verdicts``: what it *found* is the spans it proposed and
+what it *claims* is its conformance. ``node_verdicts`` now carries only the nodes that decide.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +14,16 @@ from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     DECLINED,
     ROUTED,
+    TASK,
     UNAVAILABLE,
+    UNDETERMINED,
     UNEXPLAINED_CONTENT,
     UNREAD_DECLARATION,
     BranchDecision,
+    BranchReport,
+    Conformance,
     FileVerdict,
+    FoldPolicy,
     NodeVerdict,
     Outcome,
     Release,
@@ -21,6 +31,32 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
     fold_file_verdict,
 )
+
+
+def _report(node: str, kind: str, *, conformance: Conformance = UNDETERMINED) -> BranchReport:
+    """One branch's report, as a branch writes it: a conformance and no outcome.
+
+    Args:
+        node: The branch's name.
+        kind: The kind it reports on.
+        conformance: Whether what the instruction asked for happened.
+
+    Returns:
+        The report.
+    """
+    return BranchReport(node=node, kind=kind, conformance=conformance, conformance_of=TASK)
+
+
+def _found(*nodes: str) -> dict[str, int]:
+    """One proposed span per named node, which is what the fold reads as ``present``.
+
+    Args:
+        *nodes: The nodes that proposed a span.
+
+    Returns:
+        The span counts, for ``spans_by_node``.
+    """
+    return {node: 1 for node in nodes}
 
 
 def _decisions(forced: Sequence[str] = (), **routes: str) -> dict[str, BranchDecision]:
@@ -57,23 +93,25 @@ def _all_declined(forced: Sequence[str] = ()) -> dict[str, BranchDecision]:
     return _decisions(forced, AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED)
 
 
-def _with_redact(redact: Outcome, *, speech: Outcome | None = None, speech_route: str = DECLINED) -> FileVerdict:
+def _with_redact(redact: Outcome, *, speech: bool | None = None, speech_route: str = DECLINED) -> FileVerdict:
     """A fold whose only interesting node is REDACT, optionally with a SPEECH branch beside it.
 
     Args:
         redact: What REDACT concluded.
-        speech: What SPEECH concluded, or None when the branch never ran.
+        speech: True when the SPEECH branch reported a conforming, span-bearing reading, or None
+            when the branch never ran. REDACT is a deciding node and keeps its ``Outcome``; SPEECH
+            is a reporting node and has none.
         speech_route: What the ruleset made of SPEECH.
 
     Returns:
         The folded file verdict.
     """
     node_verdicts = [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")]
-    if speech is not None:
-        node_verdicts.append(NodeVerdict("SPEECH", speech, "speech", "words in the store"))
     node_verdicts.append(NodeVerdict("REDACT", redact, None, "the scan concluded"))
     return fold_file_verdict(
         node_verdicts,
+        branch_reports=[] if speech is None else [_report("SPEECH", "speech", conformance=True)],
+        spans_by_node={} if speech is None else _found("SPEECH"),
         branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=speech_route, VOICE=DECLINED),
         ran={},
         hint_claims={},
@@ -155,7 +193,9 @@ class TestDiscardIsNarrow:
     def test_a_pass_carries_no_ground(self) -> None:
         """``discard_ground`` describes a discard and nothing else."""
         folded = fold_file_verdict(
-            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok"), NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled")],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
             branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -228,10 +268,9 @@ class TestBranchAuthorityIsScoped:
     def test_speech_resolves_speech_and_touches_nothing_else(self) -> None:
         """It refutes neither AIRWAY nor VOICE, and it does not settle them either."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("SPEECH", Outcome.PASS, "speech", "words in the store"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
             branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -241,29 +280,27 @@ class TestBranchAuthorityIsScoped:
         assert folded.findings["AIRWAY"] == "uncertain"
         assert folded.findings["VOICE"] == "uncertain"
 
-    def test_a_flagged_branch_still_resolves_its_subject(self) -> None:
-        """The flag travels beside the resolution and is not a reason to withhold it."""
+    def test_a_non_conforming_branch_still_resolves_its_subject(self) -> None:
+        """The flag the fold raises travels beside the resolution and does not withhold it."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("VOICE", Outcome.FLAG, "voice", "a declared range is not met"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("VOICE", "voice", conformance=False)],
+            spans_by_node=_found("VOICE"),
             branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=ROUTED),
             ran={},
             hint_claims={},
             route_state=ROUTED,
         )
         assert folded.findings["VOICE"] == "present"
+        assert folded.conformance["VOICE"] is False
         assert folded.triage is Triage.FLAG
 
-    def test_a_failed_branch_resolves_its_subject_absent(self) -> None:
-        """A branch with no subject is authority for that too."""
+    def test_a_branch_that_proposed_no_span_resolves_its_subject_absent(self) -> None:
+        """A branch with no subject is authority for that too, and the spans are what say so."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("SPEECH", Outcome.FAIL, "speech", "no consensus word"),
-                NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech"), _report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
             branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=ROUTED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -271,14 +308,12 @@ class TestBranchAuthorityIsScoped:
         )
         assert folded.findings["SPEECH"] == "absent"
 
-    def test_a_failing_branch_does_not_carry_its_absence_onto_a_sibling(self) -> None:
+    def test_an_empty_handed_branch_does_not_carry_its_absence_onto_a_sibling(self) -> None:
         """SPEECH found no subject; that says nothing about the airway AIRWAY found."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("SPEECH", Outcome.FAIL, "speech", "no consensus word"),
-                NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech"), _report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
             branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=ROUTED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -294,10 +329,9 @@ class TestTheRoutingIsReportedBeside:
     def test_routes_and_findings_are_both_present(self) -> None:
         """Keeping both is what makes agreement checkable rather than asserted."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("SPEECH", Outcome.PASS, "speech", "words"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
             branch_decisions=_decisions(["SPEECH"], AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -310,10 +344,9 @@ class TestTheRoutingIsReportedBeside:
     def test_a_declined_branch_that_found_its_subject_is_a_mismatch_and_flags(self) -> None:
         """The ruleset missed it; the mismatch is the product, and it never overrides either side."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("SPEECH", Outcome.PASS, "speech", "words"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
             branch_decisions=_decisions(["SPEECH"], AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -325,10 +358,9 @@ class TestTheRoutingIsReportedBeside:
     def test_a_routed_branch_that_found_nothing_is_a_mismatch(self) -> None:
         """The other direction of the same row: the ruleset over-routed."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("SPEECH", Outcome.FAIL, "speech", "no consensus word"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech")],
+            spans_by_node={},
             branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -339,10 +371,9 @@ class TestTheRoutingIsReportedBeside:
     def test_an_unreadable_route_is_resolved_not_mismatched(self) -> None:
         """A branch whose gates could not be read made no claim to disagree with."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("SPEECH", Outcome.PASS, "speech", "words"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
             branch_decisions=_decisions(["SPEECH"], AIRWAY=DECLINED, SPEECH=UNAVAILABLE, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -354,11 +385,9 @@ class TestTheRoutingIsReportedBeside:
     def test_agreeing_branches_are_recorded_as_agreeing(self) -> None:
         """``agree`` is a value a reader can see, not the absence of a mismatch."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled"),
-                NodeVerdict("SPEECH", Outcome.FAIL, "speech", "no consensus word"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True), _report("SPEECH", "speech")],
+            spans_by_node=_found("AIRWAY"),
             branch_decisions=_decisions(["SPEECH"], AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -371,10 +400,9 @@ class TestTheRoutingIsReportedBeside:
     def test_the_route_is_never_rewritten_by_the_branch(self) -> None:
         """``routes`` reports what the ruleset made of the branch even where the branch overruled it."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("AIRWAY", Outcome.FAIL, "airway", "no span carries a label"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway")],
+            spans_by_node={},
             branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -421,10 +449,9 @@ class TestABranchThatNeverRanIsNotOneThatFailed:
     def test_declined_and_unforced_is_expected(self) -> None:
         """The graph declined to look, and said why."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
             branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -490,20 +517,19 @@ class TestABranchThatNeverRanIsNotOneThatFailed:
         assert folded.triage is Triage.FLAG
         assert any(reason.node == "DDK" and "never ran" in reason.why for reason in folded.reasons)
 
-    def test_the_branches_map_joins_the_decision_to_the_verdict(self) -> None:
-        """A skipped branch carries the reason it was skipped, beside a branch that concluded."""
+    def test_the_branches_map_joins_the_decision_to_the_reported_conformance(self) -> None:
+        """A skipped branch carries the reason it was skipped, beside a branch that reported."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
             branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
             ran={},
             hint_claims={},
             route_state=ROUTED,
         )
-        assert folded.branches["AIRWAY"]["verdict"] == "pass"
-        assert folded.branches["SPEECH"]["verdict"] is None
+        assert folded.branches["AIRWAY"]["conformance"] is True
+        assert folded.branches["SPEECH"]["conformance"] is None
         assert folded.branches["SPEECH"]["will_run"] is False
         assert folded.branches["SPEECH"]["route_state"] == DECLINED
 
@@ -529,10 +555,9 @@ class TestHintsForMismatchOnly:
     def test_a_hinted_branch_that_found_its_subject_is_an_agreement(self) -> None:
         """The declaration and the measurement said the same thing; nothing is owed a human."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
             branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
             ran={},
             hint_claims={"AIRWAY": True},
@@ -544,10 +569,9 @@ class TestHintsForMismatchOnly:
     def test_a_subject_found_that_no_hint_claimed_is_recorded_not_flagged(self) -> None:
         """Recorded; not a flag on its own."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled"),
-            ],
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
             branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
             ran={},
             hint_claims={},
@@ -674,18 +698,18 @@ class TestARedactNonPassIsVisibleWithoutFlippingTriage:
 
     def test_a_surviving_finding_does_not_move_triage(self) -> None:
         """A release problem is not a measurement problem."""
-        folded = _with_redact(Outcome.FAIL, speech=Outcome.PASS, speech_route=ROUTED)
+        folded = _with_redact(Outcome.FAIL, speech=True, speech_route=ROUTED)
         assert folded.triage is Triage.PASS
         assert folded.release is Release.WITHHELD
 
     def test_it_appears_in_reasons_regardless(self) -> None:
         """A consumer filtering on triage == pass sees the release axis in the same record."""
-        folded = _with_redact(Outcome.FAIL, speech=Outcome.PASS, speech_route=ROUTED)
+        folded = _with_redact(Outcome.FAIL, speech=True, speech_route=ROUTED)
         assert any(reason.node == "REDACT" for reason in folded.reasons)
 
     def test_an_incomplete_verification_still_flags(self) -> None:
         """REDACT's ``flag`` is a node flag like any other: verification that did not finish."""
-        folded = _with_redact(Outcome.FLAG, speech=Outcome.PASS, speech_route=ROUTED)
+        folded = _with_redact(Outcome.FLAG, speech=True, speech_route=ROUTED)
         assert folded.triage is Triage.FLAG
         assert folded.release is Release.WITHHELD
 
@@ -693,14 +717,15 @@ class TestARedactNonPassIsVisibleWithoutFlippingTriage:
 class TestReasonsCarryEveryContribution:
     """A flag naming one cause hides the others."""
 
-    def test_two_flagging_branches_both_appear(self) -> None:
+    def test_two_non_conforming_branches_both_appear(self) -> None:
         """Not only the first, and not only the deciding one."""
         folded = fold_file_verdict(
-            [
-                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
-                NodeVerdict("AIRWAY", Outcome.FLAG, "airway", "a labelled span is short"),
-                NodeVerdict("VOICE", Outcome.FLAG, "voice", "a declared range is not met"),
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[
+                _report("AIRWAY", "airway", conformance=False),
+                _report("VOICE", "voice", conformance=False),
             ],
+            spans_by_node=_found("AIRWAY", "VOICE"),
             branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=ROUTED),
             ran={},
             hint_claims={},

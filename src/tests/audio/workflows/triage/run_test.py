@@ -24,7 +24,14 @@ from senselab.audio.workflows.triage import run as run_module
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes.admit import AdmitResult
-from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
+from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
+from senselab.audio.workflows.triage.nodes.common import (
+    BranchResult,
+    NodeResult,
+    software_agent,
+    write_report,
+    write_verdict,
+)
 from senselab.audio.workflows.triage.nodes.preprocess import PreprocessResult, write_clip_spans
 from senselab.audio.workflows.triage.nodes.redact import RedactResult
 from senselab.audio.workflows.triage.nodes.report import ReportRenderError
@@ -34,6 +41,9 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome
 from senselab.audio.workflows.triage.run import entity_subdir, prepare_run_layout, run_triage
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
+    TASK,
+    UNDETERMINED,
+    BranchReport,
     FileVerdict,
     NodeVerdict,
     Outcome,
@@ -76,6 +86,41 @@ def _conclude(store: ProvStore, node: str, outcome: Outcome, kind: str | None) -
     store.was_associated_with(activity, agent)
     return write_verdict(
         store, activity, agent, node=node, outcome=outcome, kind=kind, why="a fake node concluded", detail={}
+    )
+
+
+def _report(store: ProvStore, node: str, kind: str | None, *, found: bool = True) -> tuple[str, BranchReport]:
+    """Write one fake branch's ``branch_report`` entity so the real VERDICT can fold it.
+
+    Args:
+        store: The provenance store.
+        node: The branch's name.
+        kind: The kind it reports on, or None.
+        found: Whether to also propose one span in the branch's own family, standing in for what a
+            real branch would write on detecting its subject. VERDICT's ``_found`` reads spans, not
+            an outcome, so a fake branch that proposes none reads ``absent`` regardless of
+            ``conformance`` — this is what keeps a routed, conforming fake branch from reading as a
+            route/finding mismatch.
+    """
+    activity = store.activity(node=node, step=None, parameters={})
+    agent = software_agent(store)
+    store.was_associated_with(activity, agent)
+    if found:
+        family = BRANCH_FAMILY.get(node)
+        if family is not None:
+            span_id = store.entity(prov_type="span", extent=(0.0, 1.0), attributes={"family": family})
+            store.was_generated_by(span_id, activity)
+            store.was_attributed_to(span_id, agent)
+    return write_report(
+        store,
+        activity,
+        agent,
+        node=node,
+        kind=kind,
+        conformance=True,
+        conformance_of=TASK,
+        deviations=(),
+        detail={},
     )
 
 
@@ -198,10 +243,10 @@ def _fakes(
 
     def _airway(
         store: ProvStore, source: str, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
-    ) -> NodeResult:
+    ) -> BranchResult:
         _record("AIRWAY")
-        entity_id, verdict = _conclude(store, "AIRWAY", Outcome.PASS, "airway")
-        return NodeResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id)
+        entity_id, report = _report(store, "AIRWAY", "airway")
+        return BranchResult(report=report, view=(entity_id,), report_entity_id=entity_id)
 
     def _speech(
         store: ProvStore,
@@ -211,21 +256,21 @@ def _fakes(
         *,
         run_dir: Path,
         enrollment: Any = None,  # noqa: ANN401
-    ) -> NodeResult:
+    ) -> BranchResult:
         _record("SPEECH")
         if pii:
             scan = store.activity(node="SPEECH", step="pii", parameters={})
             finding = store.entity(prov_type="pii", extent=(0.0, 1.0), attributes={"category": "name"})
             store.was_generated_by(finding, scan)
-        entity_id, verdict = _conclude(store, "SPEECH", Outcome.PASS, "speech")
-        return NodeResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id)
+        entity_id, report = _report(store, "SPEECH", "speech")
+        return BranchResult(report=report, view=(entity_id,), report_entity_id=entity_id)
 
     def _voice(
         store: ProvStore, source: str, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
-    ) -> NodeResult:
+    ) -> BranchResult:
         _record("VOICE")
-        entity_id, verdict = _conclude(store, "VOICE", Outcome.PASS, "voice")
-        return NodeResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id)
+        entity_id, report = _report(store, "VOICE", "voice")
+        return BranchResult(report=report, view=(entity_id,), report_entity_id=entity_id)
 
     def _redact(
         store: ProvStore,
@@ -321,17 +366,18 @@ class TestHappyPath:
     def test_the_terminal_node_concludes_over_the_source_recording(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """QUALITY runs for real on every path PREPROCESS completed, and writes its own verdict."""
+        """QUALITY runs for real on every path PREPROCESS completed, and writes its own report."""
         graph()
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.ran["QUALITY"] is RunState.COMPLETED
         store = ProvStore.read_jsonl(result.store_path)
-        concluded = [e for e in store.entities("verdict") if e.attributes["node"] == "QUALITY"]
+        concluded = [e for e in store.entities("branch_report") if e.attributes["node"] == "QUALITY"]
         assert len(concluded) == 1
-        assert concluded[0].attributes["outcome"] == Outcome.PASS.value
         assert concluded[0].attributes["kind"] is None
         assert concluded[0].attributes["signal"] == "recording"
         assert concluded[0].attributes["clip_spans_n"] == 0
+        # No clip span was ever proposed, so there is nothing checkable: UNDETERMINED, not a pass.
+        assert concluded[0].attributes["conformance"] == UNDETERMINED
 
     def test_a_contradicted_clip_flags_the_file_and_the_report_still_renders(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
@@ -344,9 +390,12 @@ class TestHappyPath:
         assert result.file_verdict is not None
         assert result.file_verdict.triage is Triage.FLAG
         assert any(
-            reason.node == "QUALITY" and "clip_above_unclipped_sample" in reason.why
-            for reason in result.file_verdict.reasons
+            reason.node == "QUALITY" and reason.outcome is Outcome.FLAG for reason in result.file_verdict.reasons
         )
+        quality_report = result.nodes["QUALITY"].report
+        assert quality_report is not None
+        assert quality_report.conformance is False
+        assert "clip_above_unclipped_sample" in quality_report.deviations
 
     def test_the_layout_is_written_and_the_release_dir_is_disjoint(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
@@ -524,9 +573,11 @@ class TestConditionalExecution:
         log = json.loads((result.run_dir / "run.json").read_text())
         assert log["notes"].get("DDK") is None
         store = ProvStore.read_jsonl(result.store_path)
-        concluded = [e for e in store.entities("verdict") if e.attributes["node"] == "DDK"]
-        assert len(concluded) == 1
-        assert concluded[0].attributes["kind"] == "ddk"
+        # DDK reports rather than decides: it writes a branch_report, not a verdict.
+        assert not [e for e in store.entities("verdict") if e.attributes["node"] == "DDK"]
+        reported = [e for e in store.entities("branch_report") if e.attributes["node"] == "DDK"]
+        assert len(reported) == 1
+        assert reported[0].attributes["kind"] == "ddk"
         assert not any(reason.node == "DDK" and "never ran" in reason.why for reason in result.file_verdict.reasons)
 
     def test_a_branch_with_no_node_is_still_recorded_rather_than_crashing(
@@ -648,8 +699,10 @@ class TestNodeErrorsAreCaptured:
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         reread = ProvStore.read_jsonl(result.store_path)
         concluded = {entity.attributes["node"] for entity in reread.entities("verdict")}
-        assert "VOICE" not in concluded
-        assert {"ADMIT", "PREPROCESS", "TAXONOMY", "AIRWAY", "SPEECH", "QUALITY", "REDACT", "VERDICT"} <= concluded
+        reported = {entity.attributes["node"] for entity in reread.entities("branch_report")}
+        assert "VOICE" not in concluded and "VOICE" not in reported
+        assert {"ADMIT", "PREPROCESS", "TAXONOMY", "REDACT", "VERDICT"} <= concluded
+        assert {"AIRWAY", "SPEECH", "QUALITY"} <= reported
 
     def test_the_errored_state_reaches_the_folded_verdict(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path

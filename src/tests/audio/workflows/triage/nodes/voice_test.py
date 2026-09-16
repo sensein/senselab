@@ -27,7 +27,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     branch_params,
     mode_of,
 )
-from senselab.audio.workflows.triage.nodes.common import live_entities
+from senselab.audio.workflows.triage.nodes.common import find_branch_report, live_entities
 from senselab.audio.workflows.triage.nodes.voice import (
     COUNT_IN,
     PHONATION_ROLE,
@@ -38,7 +38,6 @@ from senselab.audio.workflows.triage.nodes.voice import (
     read_evidence,
     voice,
 )
-from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
 
 HOP_S = 0.01
@@ -66,7 +65,7 @@ MEASURED = {
     "monotone_tolerance_semitones": 1.0,
     "dominant_segment_min_fraction": 0.5,
 }
-"""Operating points supplied by the fixture. The packaged ones are null by design."""
+"""Operating points supplied by the fixture, overriding the packaged ones for the test signals."""
 
 
 def params(**overrides: Any) -> Any:  # noqa: ANN401
@@ -423,7 +422,7 @@ class TestTheModeIsSelectedByTheDeclaredFamily:
         store, _ = seed(tmp_path, stem=COUGH_STEM)
         assert mode_of("VOICE", store) == ("detect", "voluntary-cough")
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.verdict.node == "VOICE"
+        assert result.report.node == "VOICE"
 
     def test_the_detect_arm_evaluates_no_task(self, tmp_path: Path) -> None:
         """``done`` is UNDETERMINED always, and ``dispatch`` refuses anything else."""
@@ -443,14 +442,14 @@ class TestTheModeIsSelectedByTheDeclaredFamily:
         store, _ = seed(tmp_path, stem="not-a-bids-stem")
         assert mode_of("VOICE", store) == ("detect", None)
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance == UNDETERMINED
         assert voice_spans(store)[0].attributes["role"] == PHONATION_ROLE
 
     def test_an_absent_recording_entity_takes_the_detect_arm(self, tmp_path: Path) -> None:
         """No carrier at all is the same safe arm, not an error."""
         store, _ = seed(tmp_path, stem=None)
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance == UNDETERMINED
 
     def test_the_hint_carrier_selects_the_mode_before_the_path_does(self, tmp_path: Path) -> None:
         """``task_token`` is the clean route and is read first."""
@@ -509,19 +508,19 @@ class TestAnAbsentInstrumentIsUndetermined:
         assert result.deviations[0].evidence["value"] == "NOT_SEPARABLE_BY_THIS_DESIGN"
 
     def test_an_absent_instrument_does_not_read_as_an_absent_voice(self, tmp_path: Path) -> None:
-        """FAIL means this branch looked and found no attempt. It did not look.
+        """``conformance is False`` means this branch looked and found no attempt. It did not look.
 
-        The distinction is what keeps FAIL off the most impaired speakers at corpus scale.
+        The distinction is what keeps a non-conformance off the most impaired speakers at scale.
         """
         store, _ = seed(tmp_path, write_tracks=False)
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.verdict.outcome is not Outcome.FAIL
+        assert result.report.conformance == UNDETERMINED
 
-    def test_nothing_qualifying_is_a_fail_because_the_branch_did_look(self, tmp_path: Path) -> None:
+    def test_nothing_qualifying_is_a_non_conformance_because_the_branch_did_look(self, tmp_path: Path) -> None:
         """The instrument was there and no attempt cleared it; that is an absence of content."""
         store, _ = seed(tmp_path, continuity=0.1)
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FAIL
+        assert result.report.conformance is False
 
 
 class TestEveryProposalNamesItsEvidence:
@@ -748,18 +747,18 @@ class TestTheAperiodicCaseNoLongerErrorsTheNode:
         """
         assert not hasattr(voice_module, "derive_f0_range")
 
-    def test_an_aperiodic_recording_completes_with_a_verdict(self, tmp_path: Path) -> None:
-        """Zero voiced frames throughout: no attempt found, and a verdict rather than a traceback."""
+    def test_an_aperiodic_recording_completes_with_a_report(self, tmp_path: Path) -> None:
+        """Zero voiced frames throughout: no attempt found, and a report rather than a traceback."""
         store, _ = seed(tmp_path, tracks=_tracks(20.0, []))
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FAIL
-        assert result.verdict_entity_id
+        assert result.report.conformance is False
+        assert result.report_entity_id
 
     def test_an_aperiodic_recording_out_of_family_also_completes(self, tmp_path: Path) -> None:
         """The detect arm carries the same property on the 14,332 out-of-family recordings."""
         store, _ = seed(tmp_path, stem=COUGH_STEM, tracks=_tracks(20.0, []))
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FAIL
+        assert result.report.conformance == UNDETERMINED
 
 
 class TestTheTracksAreFoundByEitherCarrier:
@@ -829,33 +828,36 @@ class TestTheNodeWritesWhatItFound:
         activity = [each for each in store.activities() if each.node == "VOICE"][-1]
         assert ids["amplitude"][0] in store.uses_of(activity.id)
 
-    def test_the_verdict_carries_the_keys_report_reads(self, tmp_path: Path) -> None:
+    def test_the_report_carries_the_keys_the_summary_reads(self, tmp_path: Path) -> None:
         """``report._BRANCH_MEASURES["VOICE"]`` names three, and a writer may not drop a reader's."""
         store, _ = seed(tmp_path)
         voice(store, "plain", config(), None, run_dir=tmp_path)
-        verdict = live_entities(store, "verdict")[-1].attributes
-        assert {"spans_n", "phonation_s", "longest_span_s"} <= set(verdict)
+        report = find_branch_report(store, "VOICE")
+        assert report is not None
+        assert {"spans_n", "phonation_s", "longest_span_s"} <= set(report.attributes)
 
-    def test_the_verdict_names_the_mode_and_the_done_value(self, tmp_path: Path) -> None:
-        """``done`` is the branch's answer and belongs in the record, not only in the return."""
+    def test_the_report_names_the_mode_and_the_conformance_value(self, tmp_path: Path) -> None:
+        """Conformance is the branch's answer and belongs in the record, not only in the return."""
         store, _ = seed(tmp_path, stem=COUGH_STEM)
         voice(store, "plain", config(), None, run_dir=tmp_path)
-        verdict = live_entities(store, "verdict")[-1].attributes
-        assert verdict["mode"] == "detect"
-        assert verdict["done"] == UNDETERMINED
+        report = find_branch_report(store, "VOICE")
+        assert report is not None
+        assert report.attributes["mode"] == "detect"
+        assert report.attributes["conformance"] == UNDETERMINED
 
     def test_a_found_attempt_reads_as_the_kind_being_present(self, tmp_path: Path) -> None:
-        """VERDICT reads FAIL as the kind absent, so anything else must mean it was found."""
+        """VERDICT reads a false conformance as the kind absent, so anything else means it was found."""
         store, _ = seed(tmp_path)
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
-        assert result.verdict.kind == "voice"
+        assert result.report.conformance is True
+        assert result.report.kind == "voice"
 
-    def test_a_deviation_flags_rather_than_fails(self, tmp_path: Path) -> None:
-        """A truncated attempt is still an attempt; FAIL is reserved for finding none."""
+    def test_a_deviation_is_recorded_rather_than_read_as_a_non_conformance(self, tmp_path: Path) -> None:
+        """A truncated attempt is still an attempt; ``conformance is False`` is reserved for none."""
         store, _ = seed(tmp_path, amplitude=((0.0, 20.0),), tracks=_tracks(20.0, [(0.0, 20.0)]))
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.report.conformance is True
+        assert "truncation" in result.report.deviations
 
 
 class TestARulesetLabelledSpanIsContestedNotRewritten:
@@ -887,14 +889,23 @@ class TestARulesetLabelledSpanIsContestedNotRewritten:
         assert [finding for finding in result.deviations if finding.kind == "contest"] == []
 
 
-class TestAnUnmeasuredOperatingPointFailsNamingItself:
-    """No number in code: a key nobody has fitted is null, and reading it raises."""
+class TestAnUnmeasuredOperatingPointIsRecordedRatherThanRaised:
+    """No number in code: every ``branch.*`` key is read, never a literal — and none is refused.
 
-    def test_the_packaged_config_fails_naming_the_key_it_needed(self, tmp_path: Path) -> None:
-        """38 of the 39 branch keys ship null, which is intended rather than a gap to paper over."""
+    The packaged file now ships a reasoned value for every key VOICE reads, so the packaged config
+    alone no longer raises. What is still pinned is that clearing a key by override does not raise
+    either: the qualifier it gated is skipped, the key is named in the report's ``unmeasured``, and
+    the dependent conformance is ``False`` here because an unqualified carrier search finds none.
+    """
+
+    def test_an_unmeasured_operating_point_is_recorded_rather_than_raised(self, tmp_path: Path) -> None:
+        """``production_min_s`` cleared by override: no carrier ever qualifies, and the ask is named."""
         store, _ = seed(tmp_path)
-        with pytest.raises(ValueError, match="branch.production_min_s"):
-            voice(store, "plain", load_triage_config(), None, run_dir=tmp_path)
+        result = voice(store, "plain", config(production_min_s=None), None, run_dir=tmp_path)
+        # UNDETERMINED, not False: an unmeasured qualifier could neither admit nor reject, so
+        # claiming the instruction was not met would rest on a number nobody chose.
+        assert result.report.conformance == UNDETERMINED
+        assert "production_min_s" in result.report.unmeasured
 
     def test_one_null_key_does_not_fail_a_body_that_needs_another(self, tmp_path: Path) -> None:
         """``BranchParams`` reads lazily; the glide arm never reads the sustained arm's keys."""

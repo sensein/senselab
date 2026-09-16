@@ -1,15 +1,115 @@
 # The file-level verdict
 
-The last fold. Reads the [element store](store.md) — every node's verdict, the branch decisions
-[`routing.md`](routing.md) wrote, and the `ruleset_routing` measurement behind them — and answers what
-the graph concluded about the recording.
+The last fold, and **the graph's only decision about the recording**. Reads the
+[element store](store.md) — the deciding nodes' verdicts, the reporting nodes' `branch_report`
+entities, the spans those nodes proposed, the branch decisions [`routing.md`](routing.md) wrote, and
+the `ruleset_routing` measurement behind them — and answers what the graph concluded.
+
+## A branch reports; this fold decides — owner decision, 2026-09-16
+
+> "branches should just return branch spans, task conformance/deviation, and then downstream verdict
+> can aggregate across branches (including quality) for decisions."
+> "a refusal is a decision. a branch does not decide. it's an authority on task/branch specific
+> detection."
+
+Until 2026-09-16 every branch returned an `Outcome` — `pass` / `flag` / `fail` — and this fold then
+decided *about that decision*: `_agreement` scored each branch outcome against its route, and
+`_resolved` mapped every non-`FAIL` outcome to `present`. That double layer is gone.
+
+A branch now returns exactly three things, and `QUALITY` returns them too:
+
+| what | where it goes |
+| --- | --- |
+| **branch spans** | proposed into the branch's own family, in the store. `findings` is read off them |
+| **task conformance** | `true` \| `false` \| `UNDETERMINED`, on the `branch_report` entity |
+| **deviations** | typed and located, on the same entity. Recorded; never a flag ground |
+
+A branch writes **no `Outcome`** and **no `why`**. It also **never raises over an unmeasured
+operating point**: it names the point in the report's `unmeasured` and leaves the dependent
+conformance `UNDETERMINED`, because a refusal is a decision. A misspelled key still raises
+(`UnknownConfigKey`), as does an absent store entity the code assumed — neither is a detection.
+
+`Outcome` survives for the nodes that *do* decide: ADMIT, PREPROCESS, TAXONOMY, `routing`, REDACT.
+
+## What each input contributes
+
+| input | what it contributes | flags? |
+| --- | --- | --- |
+| conformance `false` | the one claim a branch makes about the recording against what the instruction asked for | yes, gated on the referent and the declared family |
+| conformance `true` | nothing | no |
+| conformance `UNDETERMINED` | nothing | no, unless `verdict.undetermined_flags` |
+| the proposed spans | `findings`: `present` with one or more, `absent` where the branch reported and proposed none, `uncertain` where it left no report | only through a route mismatch |
+| the route | `agreement`, against the spans | a `mismatch` flags |
+| deviations | recorded in `deviations`, per node | **no** — see the ground-truth rule below |
+| `unmeasured` | recorded per node | yes, under `verdict.unmeasured_points_flag` |
+| the declared task family | the key every conformance ground is read against | — |
+
+**Deviations are recorded and are not folded into the flag column until ground truth exists.**
+`specs/20260913-branch-contract-and-hints/design.md` states that `filler` and `stimulus_mismatch` are
+expected on ordinary read speech, so routing them in would flag the corpus. The constraint survived
+this change and is now a declared switch — `verdict.deviation_flags`, shipping `false` — rather than
+an implicit rule in the code, so that flipping it is a visible decision with a derivation.
+
+**Every threshold that turns a reading into a judgement is in the `verdict:` config section**, not in
+`branch:`. Three keys moved there on the same day for that reason: `min_contrast_db`,
+`tilt_max_db_per_octave` and `level_min_dbfs`, all three whole-recording judgements and all three
+still unset. `config-derivations.md` § verdict carries every value's derivation.
+
+## The fold is task-aware
+
+> "verdict has to evaluate based on all branches and the task it is assessing."
+
+What a missing conformance *means* is not the same question on a prolonged vowel as on a story
+recall. The fold therefore takes the declared task family — resolved by `declared_task` off ADMIT's
+recorded path, the same resolution ROUTING wrote onto each decision — and reads every conformance
+ground against it. `verdict.conformance_flags_by_family` excepts a family by name; it ships empty,
+because excepting one is a claim about that family's expectation row and no such claim is measured.
+
+### DDK is not symmetric with the other three
+
+> "the ddk branch has a specific purpose to detect ddk. the likelihood of a ddk existing by chance is
+> close to 0. hence ddk is the one branch where 99.999999% of the time its evaluation is on task."
+
+The other three detect evidence that occurs **incidentally**: breath and cough happen in any
+recording, sustained phonation happens in any recording, lexical content happens in any recording. So
+for them the in-family and out-of-family modes ask genuinely different questions. A rapid alternating
+repetition train does not occur incidentally — for DDK, **finding the subject is evaluating the
+task**, and the two-mode symmetry invites reading all four alike.
+
+So for a branch in `verdict.detection_is_evaluation` (`[DDK]`), an **out-of-family** result
+contributes no flag ground at all — neither its conformance nor a route mismatch — and is recorded in
+`detector_covariates` instead: a fact about the detector's behaviour over the corpus, not a reading of
+this recording. In-family it folds exactly like the other three.
+
+The corpus supplies the mechanism, not a number: `ddk.lexical_repetition >= 3` — the gate with no
+sweep anywhere — routes DDK on 99% of `rainbow-passage`, 98% of `caterpillar-passage` and 87% of
+`free-speech`, all ordinary function-word repetition, while `ddk.ppg_segment_rate_per_s` separated the
+two real DDK recordings from every speech recording in the 13-recording sample without overlap.
+**Nothing here is a weight or a prior.** A per-branch, per-mode prior over the corpus is *owed*; a
+number invented to express "much less likely" would be a fit nobody took.
+
+## QUALITY is in the aggregation, and its conformance is about something else
+
+QUALITY is not a routed branch — `run.py` calls it unconditionally on every path PREPROCESS
+completed, it has only the out-of-family mode, and it is not in `BRANCHES`. So it has no route, no
+`findings` row, no `agreement` row and no `hints` row. What it contributes is a **conformance about
+the store's own assertions** (`conformance_of: store_assertions`): `false` when a stored clip
+assertion is contradicted by a measurement in the same store, `true` when every checkable clip span
+is consistent, and `UNDETERMINED` when nothing was checkable — a recording with no clip span has not
+passed an audit, it has had none taken.
+
+That referent is why it always flags on `false`, with no task key and no switch governing it: a
+recording whose store contradicts itself is inconsistent whichever task it carries, and no corpus
+measurement could make an unclipped sample quieter than a clip ceiling. It is the one conformance in
+the graph that owes no ground truth, because both halves of the comparison are the pipeline's own.
 
 **The fold is keyed by branch.** It was keyed by kind until 2026-09-13, when TAXONOMY's kind
 classification was deleted; the replacement emits a route state per branch, DDK has no kind at all,
 and inventing a second branch-to-kind map to keep the old key would be the parallel vocabulary the
-change removed. A branch's own verdict joins to its decision by node name — `NodeVerdict.node` **is**
-the branch name — and only when the verdict names a `kind`, which keeps a synthesised "outcome nobody
-can act on" flag from being folded as a finding.
+change removed. A branch's own report joins to its decision by node name — `BranchReport.node` **is**
+the branch name. The 2026-09-13 rule that a branch verdict with no `kind` was not folded is gone with
+the verdict: a report has nothing for a reader to synthesise, because it carries no outcome to be
+unreadable.
 
 ## Signature
 
@@ -17,8 +117,9 @@ can act on" flag from being folded as a finding.
 verdict(store, hint?) -> file_verdict
 ```
 
-Writes one element. Decides nothing a branch has already decided about its own subject — it
-**combines**, and where the graph disagrees with itself it says so.
+Writes one element, and it is where every decision about the recording is taken. A branch has
+decided nothing for it to defer to: it **combines** what was reported, and where the graph disagrees
+with itself it says so rather than resolving the disagreement by precedence.
 
 ## Two axes, because they answer different questions
 
@@ -61,19 +162,21 @@ one.
 **A branch is the authority on its own subject and on nothing else.** It is the more precise
 instrument for what it measures; it is not an instrument for the others.
 
-| the branch's conclusion | its reach |
+| the branch's detection | its reach |
 | --- | --- |
 | SPEECH | lexical speech only. It refutes neither AIRWAY's subject nor VOICE's |
 | AIRWAY | airway events only |
 | VOICE | phonation only |
+| DDK | the repetition train only |
 
-A branch's conclusion stands in the `findings` map, whatever the ruleset routed, and whether the
-branch passed, flagged or failed. A branch that reached no conclusion reads `uncertain` there: not
-routed is not a measurement of absence. The resolution axis is
-found/not-found, not the outcome's severity: a branch flags only with a subject in hand, so a flag
-resolves its subject `present` and the flag travels beside the resolution; a `fail` is the branch
-reporting no subject and always resolves `absent`. A branch therefore never raises its own absence
-to a flag over a declaration — that mismatch is the fold's to name, from the `hints` table below.
+A branch's detection stands in the `findings` map, whatever the ruleset routed. **`findings` is read
+off the spans the branch proposed**, not off any conclusion of its own: `present` with one or more,
+`absent` where the branch reported and proposed none, `uncertain` where it left no report — not
+routed is not a measurement of absence. That is the substantive change of 2026-09-16: `_resolved`
+mapped every non-`FAIL` *outcome* to `present`, which let a branch's severity decide its
+found/not-found reading; `_found` reads the spans, which are the record. A branch therefore never
+raises its own absence to a flag over a declaration — that mismatch is the fold's to name, from the
+`hints` table below.
 
 ## The route is reported beside the branches, never over them
 
@@ -83,14 +186,19 @@ TAXONOMY's classification against the branch's conclusion, and it now compares t
 it — which is the quantity the ruleset work cares about, countable per branch over a corpus without a
 join.
 
-| route | branch conclusion | recorded | triage | what it means |
+| route | branch found a span | recorded | triage | what it means |
 | --- | --- | --- | --- | --- |
-| routed | found | `agree` | — | — |
-| routed | not found | `mismatch` | `flag` | over-routing |
-| declined | found | `mismatch` | `flag` | a miss — the branch ran only because a hint forced it |
-| declined | not found | `agree` | — | — |
+| routed | yes | `agree` | — | — |
+| routed | no | `mismatch` | `flag` | over-routing |
+| declined | yes | `mismatch` | `flag` | a miss — the branch ran only because a hint forced it |
+| declined | no | `agree` | — | — |
 | unavailable | either | `resolved` | — | a branch nothing could judge made no claim to agree with |
-| any | branch did not conclude | `not_run` — see the branch-decision rows below | — | — |
+| any | branch left no report | `not_run` — see the branch-decision rows below | — | — |
+
+The table is unchanged; only its branch-side input is. It scored the branch's `Outcome`, which was
+the branch deciding; it now scores what the branch *found*. Neither side is a judgement, so the
+disagreement between them is this fold's to name. The one exception is a branch in
+`detection_is_evaluation` run out of family — see the DDK section above.
 
 **A mismatch flags; it never overrides.** The routing cannot overturn a branch on its own subject,
 and the branch does not rewrite the decision: both stay in the store and both appear in the product,
@@ -100,16 +208,17 @@ so the disagreement is visible rather than resolved by precedence.
 
 `routing.md`'s `branch_decision` elements are what distinguish the two:
 
-| branch decision | branch verdict | reading |
+| branch decision | branch report | reading |
 | --- | --- | --- |
 | `will_run: false`, route `declined`, not forced | none | **expected.** The graph declined to look, and said why |
 | `will_run: true` | present | folded as above |
 | `will_run: true` | absent | **flag** — the branch was asked and left no answer; the reason names `errored without a verdict`, `completed without a verdict` or `never ran` |
 | every branch `will_run: false` | none | the empty execution set — see `discard` above |
 
-**DDK falls in the third row by construction.** The ruleset routes it, no node implements it, so a
-recording whose DDK gates fire flags with "DDK was asked to run and never ran". That is honest and
-scoped to recordings with DDK content, and it is the standing argument for building the branch.
+The operational states behind that third row — `completed`, `errored`, `skipped` — are the **runner's**
+record and are untouched by the report/decide split. `run.py::_attempt` records the first two,
+`_drive_branches` the third, and a node that *reported* is `completed` exactly as one that decided is.
+They say what the runner did, not what the graph concluded, and nothing in this fold rewrites them.
 
 ## Hints are read here, for branch mismatch
 
@@ -160,9 +269,15 @@ Evaluated in order; the first that applies wins.
 | order | condition | `triage` |
 | --- | --- | --- |
 | 1 | ADMIT failed | `discard` — unmeasurable |
-| 2 | any node returned `flag`, any mismatch row above fired, the ruleset read `unexplained`, or a branch that was asked to run left no verdict | `flag` |
+| 2 | any **deciding** node returned `flag`; any reporting node's conformance was `false` and the policy flags it for this task; any mismatch row above fired; a reporting node named an unmeasured point; the ruleset read `unexplained`; or a branch that was asked to run left no report | `flag` |
 | 3 | the ruleset read `empty`, and no hint claims otherwise | `discard` — acoustically empty |
 | 4 | otherwise | `pass` |
+
+**With every `branch.*` key shipping a value since 2026-09-16, row 2's conformance ground is
+reachable on the packaged config** — it was not while 38 of 39 keys were null and the branches
+answered `UNDETERMINED` or raised. An all-`UNDETERMINED` fold is still a sane state and still reads
+`pass` on row 4: a question nobody answered is not a finding, and flagging it would flag every
+recording no branch was in-family for.
 
 **The graph's stated goal is to be accurate about `pass` and `discard` and to minimise `flag`.** A
 fold that flags everything transports no information; a reason that fires on nearly every file is a
@@ -209,8 +324,14 @@ release:  releasable | withheld | not_assessed
 discard_ground: "unmeasurable" | "acoustically_empty" | null
 reasons:  [ { node, outcome, kind?, why } ]        # every contributing verdict, in order
 ran:      { node: "completed" | "skipped" | "errored" }
-branches: { branch: { will_run, forced_by_declaration, route_state, verdict? } }
-findings: { branch: "present" | "absent" | "uncertain" }        # what each branch found
+branches: { branch: { will_run, forced_by_declaration, route_state, conformance? } }
+findings: { branch: "present" | "absent" | "uncertain" }        # read off the spans it proposed
+conformance: { node: true | false | "UNDETERMINED" }            # every reporting node, QUALITY included
+conformance_of: { node: "task" | "store_assertions" }           # what each conformance is about
+deviations: { node: [type, ...] }                               # recorded; folded by nothing
+unmeasured: { node: [config path, ...] }                        # what it asked for and nobody measured
+detector_covariates: { branch: {conformance, spans_n, route} }  # out-of-family, detection_is_evaluation
+declared_family: "prolonged-vowel" | null                       # what every conformance was read against
 routes:   { branch: "routed" | "declined" | "unavailable" }     # what the ruleset made of it
 route_state: "routed" | "empty" | "unexplained" | null          # what it made of the recording
 agreement:{ branch: "agree" | "mismatch" | "resolved" | "not_run" }

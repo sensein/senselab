@@ -22,10 +22,15 @@ import soundfile as sf
 
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
-from senselab.audio.workflows.triage.nodes.common import find_verdict, live_entities, software_agent, write_verdict
+from senselab.audio.workflows.triage.nodes.common import (
+    find_branch_report,
+    live_entities,
+    software_agent,
+    write_verdict,
+)
 from senselab.audio.workflows.triage.nodes.preprocess import write_clip_spans
 from senselab.audio.workflows.triage.nodes.quality import CLIP_FAMILY, CONTRADICTED_CLIP
-from senselab.audio.workflows.triage.vocabulary import QUALITY, Outcome
+from senselab.audio.workflows.triage.vocabulary import QUALITY, UNDETERMINED, Outcome
 from senselab.utils.prov_store import ProvStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -228,33 +233,33 @@ class TestTheVerdictAFinishedRunGains:
     ) -> None:
         """A clip span below an unclipped sample is contested, and the flag reaches the store."""
         manifest, roots = corpus(2)
-        assert find_verdict(_store_of(roots[0]), QUALITY) is None
+        assert find_branch_report(_store_of(roots[0]), QUALITY) is None
 
         assert _run(manifest) == 0
 
         for root in roots:
             store = _store_of(root)
-            verdict = find_verdict(store, QUALITY)
-            assert verdict is not None
-            assert verdict.attributes["outcome"] == Outcome.FLAG.value
-            assert CONTRADICTED_CLIP in verdict.attributes["why"]
-            assert verdict.attributes["contradicted_n"] == 1
+            report = find_branch_report(store, QUALITY)
+            assert report is not None
+            assert report.attributes["conformance"] is False
+            assert CONTRADICTED_CLIP in report.attributes["deviations"]
+            assert report.attributes["contradicted_n"] == 1
             assert len(_contests(store)) == 1
         assert [record["status"] for record in _log(tmp_path)] == ["ok", "ok"]
-        assert [record[QUALITY] for record in _log(tmp_path)] == ["flag", "flag"]
+        assert [record[QUALITY] for record in _log(tmp_path)] == ["False", "False"]
 
-    def test_the_verdict_names_what_had_concluded_when_it_ran(
+    def test_the_report_names_what_had_concluded_when_it_ran(
         self, corpus: Callable[..., tuple[Path, list[Path]]]
     ) -> None:
-        """The branches never ran on this store, and the verdict says which nodes did."""
+        """The branches never ran on this store, and the report says which nodes did."""
         manifest, roots = corpus(1)
 
         _run(manifest)
 
-        verdict = find_verdict(_store_of(roots[0]), QUALITY)
-        assert verdict is not None
-        assert verdict.attributes["preceded_by"] == ["ADMIT", "PREPROCESS"]
-        assert QUALITY not in verdict.attributes["preceded_by"]
+        report = find_branch_report(_store_of(roots[0]), QUALITY)
+        assert report is not None
+        assert report.attributes["preceded_by"] == ["ADMIT", "PREPROCESS"]
+        assert QUALITY not in report.attributes["preceded_by"]
 
     def test_the_clip_span_is_kept_and_the_contest_is_derived_from_it(
         self, corpus: Callable[..., tuple[Path, list[Path]]]
@@ -287,9 +292,9 @@ class TestTheVerdictAFinishedRunGains:
 
         io_graph = json.loads((roots[0] / "prov" / "prov-triage_io.json").read_text())
         entity_ids = {node["Id"] for key in ("Files", "prov:Entity") for node in io_graph.get(key, [])}
-        verdict = find_verdict(_store_of(roots[0]), QUALITY)
-        assert verdict is not None
-        assert any(verdict.id in identifier for identifier in entity_ids), verdict.id
+        report = find_branch_report(_store_of(roots[0]), QUALITY)
+        assert report is not None
+        assert any(report.id in identifier for identifier in entity_ids), report.id
 
     def test_the_host_environment_is_recorded(self, corpus: Callable[..., tuple[Path, list[Path]]]) -> None:
         """The pass ran somewhere, and the store says where; no venv is involved in this one."""
@@ -315,7 +320,8 @@ class TestASecondPass:
         for root in roots:
             assert (root / "run" / "store.jsonl").read_bytes() == after_first[root]
             assert _store_of(root).fingerprint() == fingerprints[root]
-            assert len([e for e in live_entities(_store_of(root), "verdict") if e.attributes["node"] == QUALITY]) == 1
+            reports = [e for e in live_entities(_store_of(root), "branch_report") if e.attributes["node"] == QUALITY]
+            assert len(reports) == 1
         assert [record["status"] for record in _log(tmp_path)] == ["skipped", "skipped"]
         assert [record[QUALITY] for record in _log(tmp_path)] == ["present", "present"]
 
@@ -323,23 +329,23 @@ class TestASecondPass:
 class TestARunWithNothingToContradict:
     """No clip span is not a refusal: nothing was asserted, so nothing can contradict it."""
 
-    def test_a_run_with_no_clip_span_passes_rather_than_refusing(
+    def test_a_run_with_no_clip_span_is_undetermined_rather_than_refusing(
         self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
     ) -> None:
-        """The verdict is the one a fresh run would have reached, and nothing is contested."""
+        """The report is the one a fresh run would have reached: nothing checkable, nothing contested."""
         manifest, roots = corpus(1, spans=False)
 
         assert _run(manifest) == 0
 
         store = _store_of(roots[0])
-        verdict = find_verdict(store, QUALITY)
-        assert verdict is not None
-        assert verdict.attributes["outcome"] == Outcome.PASS.value
-        assert "no clip span" in verdict.attributes["why"]
-        assert verdict.attributes["clip_spans_n"] == 0
+        report = find_branch_report(store, QUALITY)
+        assert report is not None
+        assert report.attributes["conformance"] == UNDETERMINED
+        assert report.attributes["clip_spans_n"] == 0
+        assert report.attributes["checked_n"] == 0
         assert _contests(store) == []
         assert _log(tmp_path)[0]["status"] == "ok"
-        assert _log(tmp_path)[0][QUALITY] == "pass"
+        assert _log(tmp_path)[0][QUALITY] == "UNDETERMINED"
 
     def test_a_clip_nothing_is_louder_than_passes(
         self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
@@ -350,10 +356,10 @@ class TestARunWithNothingToContradict:
         assert _run(manifest) == 0
 
         store = _store_of(roots[0])
-        verdict = find_verdict(store, QUALITY)
-        assert verdict is not None
-        assert verdict.attributes["outcome"] == Outcome.PASS.value
-        assert verdict.attributes["checked_n"] == 1
+        report = find_branch_report(store, QUALITY)
+        assert report is not None
+        assert report.attributes["conformance"] is True
+        assert report.attributes["checked_n"] == 1
         assert _contests(store) == []
 
 
@@ -370,12 +376,12 @@ class TestARunQualityCannotRead:
         assert _run(manifest) == 1
 
         assert (roots[0] / "run" / "store.jsonl").read_bytes() == before
-        assert find_verdict(_store_of(roots[0]), QUALITY) is None
+        assert find_branch_report(_store_of(roots[0]), QUALITY) is None
         record = _log(tmp_path)[0]
         assert record["status"] == "error"
         assert "clip_amplitude" in str(record[QUALITY])
 
-    def test_a_run_with_no_store_is_recorded_and_the_others_still_reach_a_verdict(
+    def test_a_run_with_no_store_is_recorded_and_the_others_still_reach_a_report(
         self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
     ) -> None:
         """A missing store is this recording's error; its neighbours are unaffected."""
@@ -384,7 +390,7 @@ class TestARunQualityCannotRead:
 
         assert _run(manifest) == 1
 
-        assert find_verdict(_store_of(roots[1]), QUALITY) is not None
+        assert find_branch_report(_store_of(roots[1]), QUALITY) is not None
         assert [record["status"] for record in _log(tmp_path)] == ["error", "ok"]
 
     def test_a_manifest_row_naming_no_run_root_is_refused_rather_than_guessed(self) -> None:

@@ -19,6 +19,7 @@ from senselab.audio.workflows.triage.config import TriageConfig, load_triage_con
 from senselab.audio.workflows.triage.nodes.branches import (
     SPEECH_EXPECTATIONS,
     UNDETERMINED,
+    UNMEASURED_POINTS,
     Finding,
     Proposal,
     Result,
@@ -28,7 +29,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     mode_of,
 )
 from senselab.audio.workflows.triage.nodes.speech import (
-    UNMEASURED_POINTS,
     align_speech,
     detect_speech,
 )
@@ -404,8 +404,9 @@ class TestADesignedEmptyFamilyScoresNothingAsADeparture:
         assert rate.evidence == {"value": 1.047, "support_words": 9}
 
     def test_an_unmeasured_operating_point_is_named_rather_than_defaulted(self, tmp_path: Path) -> None:
-        """Every numeric `branch` key ships null, so what an evaluation wanted is recorded."""
-        result = align_speech("picture-description", self._described(), None, branch_params(_config(tmp_path)))
+        """Every `branch` key now ships a value; nulling one is still named rather than defaulted."""
+        params = branch_params(_config(tmp_path, {"response_min_s": None, "breath_group_min_gap_s": None}))
+        result = align_speech("picture-description", self._described(), None, params)
         assert result.done == UNDETERMINED
         assert "response_min_s" in _unmeasured(result)
         assert "breath_group_min_gap_s" in _unmeasured(result)
@@ -664,8 +665,9 @@ class TestDetectSpeechNeedsNoAlignmentAndGroupsByGap:
         assert [proposal.derived_from for proposal in result.components][0][0].startswith("measurement-")
 
     def test_an_unmeasured_gap_proposes_nothing_rather_than_one_span_per_word(self, tmp_path: Path) -> None:
-        """`branch.run_gap_max_s` ships null; falling back to adjacency is the defect, not the fix."""
-        result = detect_speech(self._store_with_words(), branch_params(_config(tmp_path)))
+        """A nulled `branch.run_gap_max_s`; falling back to adjacency is the defect, not the fix."""
+        params = branch_params(_config(tmp_path, {"run_gap_max_s": None}))
+        result = detect_speech(self._store_with_words(), params)
         assert result.components == []
         assert _unmeasured(result) == ["run_gap_max_s"]
 

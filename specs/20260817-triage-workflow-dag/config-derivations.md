@@ -1085,54 +1085,200 @@ fitted; extended by override.
 
 ## branch
 
-The operating points the four branches' expectation matching reads, shared across AIRWAY, SPEECH,
-VOICE and DDK.
+The operating points the four branches' detection and expectation matching read, shared across
+AIRWAY, SPEECH, VOICE and DDK.
 
-**Every numeric key in this section is null, and that is the whole derivation.**
-`specs/20260817-triage-workflow-dag/expected-patterns.md` is a method inventory, not a threshold
-fit: its own opening says no number in it is fitted, and its executable section states that no
-number appears in any body. Each `p_*` there names a boundary a method needs and does not say where
-it falls. Shipping a value chosen to make a branch run would be an unmeasured decision with a
-public interface -- the same failure the 70 per-knob flags were removed for -- so the keys exist,
-carry `null`, and reading one raises with the key named. A branch body that needs an unmeasured
-boundary therefore fails loudly on the recording it was asked about rather than returning a verdict
-computed from a number nobody chose.
+**Every key in this section now ships a value, and every value is a conventional starting point —
+reasoned from the instrument's own physics or from the task instruction, and NOT fitted against the
+corpus.** This reverses the 2026-09-04 position recorded below, on the owner's instruction of
+2026-09-16: *"any branch keys should reflect any parameters/thresholds in the branch and should
+contain defaults."* What the reversal does not license is a number chosen to make a branch run: each
+value below says what it was reasoned from, and where nothing could be reasoned the key was removed
+rather than guessed.
 
-The keys are read lazily, one at a time, through `BranchParams`' properties rather than eagerly
-into a record at construction. Eager reading would make the first null fail every branch on every
-recording, including the bodies that need none of the nulls; lazy reading fails only the body that
-needs the key. That is a consequence of shipping 38 nulls at once and is worth naming, because an
-eager `Params` dataclass is what the design document writes.
+**What the section no longer contains.** Three keys judged the recording rather than configuring a
+detector, so they moved to [verdict](#verdict) with the fold that reads them:
+`min_contrast_db` ("the difference two effort levels must differ by to *be* a contrast"),
+`tilt_max_db_per_octave` ("the tilt below which a recording *reads as* occluded") and
+`level_min_dbfs` ("the level below which a recording *carries no production at all*"). All three are
+whole-recording judgements; a branch reports and VERDICT decides, so a threshold that turns a
+reading into a judgement is VERDICT's. None of the three is read by any code, so the move is a
+relocation of a declaration and not a behaviour change.
 
-What each one would take to settle is a measurement over the corpus the method is for, and none has
-been taken. The four the design flags as the hardest are recorded here so they are not mistaken for
-oversights:
+**One key was removed rather than defaulted.** `branch.omission_score_max` named "the acoustic score
+at or below which an expected token counts as omitted". There is no acoustic score: the omission
+comes from `harmonize._align_pair`'s lexical alignment, and the key's only use was as a decorative
+`acoustic_score_max` covariate on the `omission` deviation. A default here would be a boundary on an
+instrument that does not exist, so the key, the property and the covariate went together.
 
-  branch.place_centroid_bands_hz, branch.place_margin_db: the /p/, /t/, /k/ burst-spectrum contrast.
-    The design states the instrument (`spectrogram_wideband`, a 5 ms window at a 5 ms hop, the
-    classical resolution) and that all three places sit inside the 8 kHz ceiling. What it does not
-    state is where the three bands are or what margin resolves a place, and a band triple read off
-    a textbook is not a fit on this corpus's microphones.
-  branch.score_min: one score minimum for HeAR and YAMNet alike, read against `raw_scores` rather
-    than against `labels`. The shipped `windows.*.label_thresholds` are null for all three
-    classifiers, which is why `raw_scores` is the subject at all; a single cut across two
-    classifiers whose score scales were never compared is exactly the kind of value that must be
-    measured rather than assumed.
-  branch.min_contrast_db, branch.effort_split_hz: the within-recording effort contrast. `level` is
-    uncalibrated and no SPL reference exists anywhere in the graph, so the absolute reading is
-    `NOT_SEPARABLE_BY_THIS_DESIGN` and only the contrast is available. Where the split falls and how
-    far two effort levels must differ are both unmeasured.
-  branch.tilt_max_db_per_octave: QUALITY's occlusion reading. The design names `band_profile` as an
-    owed derivative (D3), so the instrument this cut would be taken on does not exist yet.
+### The values, and what each was reasoned from
 
-branch.label_sets -- the one key here that is not a number, and the one that ships with a value. It
-maps a label-set name to the classifier labels that ARE that sound, and the two shipped entries are
-`airway.labels_of_interest` (`[Cough, Breathe]`) split by which kind each label names: `cough:
-[Cough]`, `breath: [Breathe]`. No new decision is taken -- the set membership is the one already
-derived under [airway](#airway) -- and it is a data mapping (`DATA_MAP_PATHS`) so a campaign can add
-a set without editing the installed package. Whether HeAR's `Baby Cough` and `Throat Clear` belong
-in the cough set is a question this split does not answer and does not pretend to: adding either
-would widen the evidence for every counted cough family at once, which is a measurement.
+Two conventions recur and are named once here rather than repeated. **A majority (0.5)** is used
+where the instruction asks for something to hold *throughout* and the weakest defensible reading of
+"it happened" is "for more of the extent than not"; it is a convention, not a measured operating
+point, and every one of them is a candidate for the first corpus fit anyone takes.
+**A factor of two (6 dB in amplitude, 3 dB in power, 2× in a linear ratio)** is the conventional
+"clearly above its surround" step throughout audio engineering.
+
+```
+branch.smoothing_window_s: 0.05
+  The boxcar the energy envelope is smoothed over before the event walk. Set equal to
+  `event_min_s`: a smoother wider than the shortest event the walk is allowed to report would
+  erase that event before the walk could find it, so the two are one decision.
+
+branch.peak_prominence_db: 6.0
+  A factor of two in amplitude. The conventional "a peak, not the surround" step.
+
+branch.trough_return_db: 3.0
+  Half the prominence, so an event closes at the half-amplitude point of the rise that opened it.
+  Derived from `peak_prominence_db` rather than chosen beside it.
+
+branch.event_min_s: 0.05
+  50 ms. A cough burst or a glottal release is a transient of a few tens of milliseconds; below
+  50 ms an "event" is not separable from a click, and the envelope at the shipped hop cannot
+  resolve one either.
+
+branch.score_min: 0.2
+  The same value the owner already directed for the same question: `windows.yamnet.default_threshold`
+  and `windows.hear.default_threshold` are both 0.2, "score a label needs to join a window's set".
+  `sounds_like` asks that question of the same `raw_scores`, and every classifier in the graph is
+  applied through a sigmoid head (`function_to_apply="sigmoid"`, `preprocess.py:2217,3110`; YAMNet's
+  own output is per-class sigmoid), so the scores are comparably scaled in [0, 1]. Shipping a
+  different number here would be two answers to one question. The 2026-09-04 objection — that one cut
+  across two classifiers whose scales were never compared must be measured — stands as an owed
+  measurement; what changes is that the graph now answers it the same way in both places instead of
+  refusing to answer in one.
+
+branch.breath_coverage_min: 0.5
+  A majority. A breathing task asks for breathing throughout the extent.
+
+branch.voiced_strength_min: 0.45
+  Praat's own default for the voicing threshold in `To Pitch`. A published convention of the
+  instrument this branch reads, not a value chosen for this corpus.
+
+branch.voiced_fraction_min: 0.5
+  A majority: a sustained phonation carrier is voiced for more of its frames than not.
+
+branch.f0_spread_window_s: 0.5
+  Long enough to hold many pitch periods at any adult F0 (40 periods at 80 Hz) and short enough
+  that a deliberate glide is not averaged into a steady reading. From the task instruction on both
+  sides: a held vowel is asked to be steady, a glide is asked not to be.
+
+branch.f0_spread_max_semitones: 2.0
+  A whole tone: the smallest interval a listener names as a pitch change in speech rather than as
+  vibrato or tracker noise.
+
+branch.continuity_min: 0.5
+  A majority, on the spectral continuity trace.
+
+branch.production_min_s: 0.5
+  From the word "sustained": a production shorter than half a second is not sustained in the
+  instruction's own sense.
+
+branch.monotone_tolerance_semitones: 1.0
+  One semitone, the smallest conventional pitch unit. A reversal smaller than one semitone is
+  within the F0 tracker's own resolution and is not evidence that the sweep turned.
+
+branch.dominant_segment_min_fraction: 0.5
+  A majority: the declared direction holds for more of the sweep than not.
+
+branch.response_min_s: 0.5
+  Half a second holds at most one short word, so it is the shortest extent that can be a response
+  to an instruction asking for one.
+
+branch.pause_min_s: 0.25
+  250 ms, the conventional boundary for a perceptible pause in the speech-timing literature, and
+  well clear of the ~50 ms of an ordinary stop closure, which is the thing it must not count.
+
+branch.run_gap_max_s: 0.5
+  Twice `pause_min_s`: one pause does not break a run of words, two consecutive ones do. Derived
+  from that key rather than chosen beside it.
+
+branch.breath_group_min_gap_s: 0.5
+  A breath takes about half a second, so a gap that could hold one is where a breath group can end.
+  Respiratory physiology, not a corpus reading.
+
+branch.repeat_overlap_min: 0.5
+  A majority: an alignment covering more than half the expected sequence twice has covered it twice.
+
+branch.echo_ngram_n: 3
+  A trigram. The conventional n of the lexical-overlap measures (BLEU-3/4, ROUGE-3) and the
+  smallest n at which word *order* rather than word choice is being compared, which is what
+  distinguishes an echo of the prompt from a response using its vocabulary.
+
+branch.echo_overlap_max: 0.5
+  A majority: more than half the prompt's trigrams reproduced is an echo of it.
+
+branch.verbatim_overlap_max: 0.5
+  The same convention on the same measure, for source content rather than prompt.
+
+branch.coverage_min: 0.5
+  A majority of the expected tokens realised.
+
+branch.expected_lexical_max: 0
+  Exact, not conventional, and the one value here that follows from the expectation itself: a
+  `NO_LEXICAL` expectation forbids lexical content, so it tolerates none.
+
+branch.interval_max_s: 2.0
+  From the instruction's own word. A series a speaker is told to produce *quickly* does not pause
+  for more than about two seconds between events without the instruction having been abandoned.
+
+branch.modulation_band_hz: [1.0, 10.0]
+  Brackets the clinically reported DDK rates (4-8 syllables/s for /pataka/, up to ~7/s for a single
+  syllable) with margin on both sides, and excludes both the breath-group rate below 1 Hz and
+  anything approaching the pitch range above. Task physiology, not a fit.
+
+branch.rate_prominence_min: 2.0
+  A factor of two over the band's own mean: the conventional "a peak, not the noise floor"
+  criterion, on a linear spectrum rather than in dB.
+
+branch.train_min_s: 1.0
+  At the slowest clinically reported DDK rate (~3 syllables/s), a span worth calling a train holds
+  at least three syllables, which is one second.
+
+branch.repeat_min_occurrences: 3
+  From the word: two occurrences are a pair, three are a series, and a repetition *train* needs a
+  series. Note that this is the same threshold the `ddk.lexical_repetition` routing gate uses, and
+  that gate over-routes DDK on 99% of `rainbow-passage` — which is an argument about that gate's
+  evidence rather than about this count, and is why VERDICT now folds an out-of-family DDK result as
+  a detector covariate (see [verdict](#verdict)).
+
+branch.burst_window_ms: 20.0
+  The stop burst and its aspiration occupy the first 10-25 ms after release (Blumstein & Stevens,
+  1979), and 20 ms is the conventional burst-analysis window. Published convention.
+
+branch.place_centroid_bands_hz:
+  labial [500, 1500], velar [1500, 3000], alveolar [3000, 8000]
+  The classical three burst-spectrum templates: labial diffuse-falling with energy concentrated
+  low, velar compact mid-frequency, alveolar diffuse-rising with energy concentrated high
+  (Blumstein & Stevens, 1979). 8000 is the graph's own sampling ceiling, not a band edge anyone
+  measured. **This is a textbook triple and explicitly not a fit on this corpus's microphones** —
+  the 2026-09-04 note saying so is still correct, and the change is that a conventional triple now
+  ships instead of a null, so the measurement is testable against something. A data mapping
+  (`DATA_MAP_PATHS`), so a campaign may add a place without editing the installed package.
+
+branch.place_margin_db: 3.0
+  A factor of two in power: the conventional "distinguishable" step between the leading band and
+  the next.
+
+branch.effort_split_hz: 1000.0
+  The 1 kHz division of the published spectral-balance measures — the alpha ratio and the
+  Hammarberg index both take it there. A published convention. The *judgement* built on this
+  measurement, how far two effort levels must differ, moved to `verdict.min_contrast_db` and is
+  still unset, because nothing in the instrument's physics says how far is enough.
+
+branch.gap_off_task_min_s: 1.0
+  Shorter than a second, a gap is a breath or a pause within the task; a full second of nothing is
+  a region that did not serve it.
+
+branch.label_sets
+  Unchanged: it maps a label-set name to the classifier labels that ARE that sound, and the two
+  shipped entries are `airway.labels_of_interest` (`[Cough, Breathe]`) split by which kind each
+  label names. No new decision is taken -- the set membership is the one already derived under
+  [airway](#airway) -- and it is a data mapping (`DATA_MAP_PATHS`) so a campaign can add a set
+  without editing the installed package. Whether HeAR's `Baby Cough` and `Throat Clear` belong in
+  the cough set is a question this split does not answer and does not pretend to.
+```
 
 `p_normalise` has NO key. It is a function, not a number, so a config key naming one would be a
 plugin hook nobody has measured, and a second normalisation spelling would compare tokens against a
@@ -1140,6 +1286,145 @@ transcript normalised another way. `BranchParams.p_normalise` resolves to
 `senselab.audio.workflows.triage.consensus.vocabulary_key`, which is the normalisation the consensus
 (`consensus.py:42`) and the stimulus alignment (`stimulus.py:35`) both declare as "casefold; keep
 alphanumerics and apostrophe".
+
+### How the section is read, and why nothing here can refuse
+
+`BranchParams.point(key)` is the only accessor. It returns the typed value, or `None` for a null,
+and records the key in `params.missing` in read order; the branch then reports what it could not
+measure as a fact beside its spans (`unmeasured` on the `branch_report`, and one
+`unmeasured_operating_points` measurement) and leaves the dependent conformance `UNDETERMINED`.
+**Nothing in a branch raises for an unmeasured value**, on the owner's rule of 2026-09-16:
+*"a refusal is a decision. a branch does not decide."*
+
+The distinction that makes this safe rather than silent is in `TriageConfig.require`, which now
+raises two distinguishable subclasses of `ValueError`: `UnknownConfigKey` for a path no packaged key
+spells, and `UnmeasuredConfigKey` for a packaged key whose value is null. `point` catches only the
+second. One `ValueError` for both — which is what shipped until 2026-09-16 — would have made
+`branch.smooting_window_s` read as a quiet `UNDETERMINED` instead of a test failure. `point` also
+refuses a name outside `POINT_TYPES` with a `KeyError` before it reaches the config at all. **That is
+where the line between "I could not measure this" and "this code is wrong" is drawn**: a missing
+*measurement* is reported, a missing *name* raises, and so does an absent store entity the code
+assumed or a malformed sidecar, because none of those is a detection.
+
+The lazy read survives for the reason it was introduced: a `missing` list accumulated per node call
+names what *this* recording's bodies actually asked for, rather than the whole section.
+
+The earlier version of this section is preserved in the git history of this file; it argued that
+shipping any value would be "an unmeasured decision with a public interface". That argument was
+right about a *fitted* value presented as measured and wrong about a *conventional* value presented
+as conventional, which is the distinction the owner drew.
+
+## verdict
+
+What VERDICT does with what the reporting nodes report. **A branch reports and VERDICT decides**
+(owner, 2026-09-16), so every threshold that turns a reading into a judgement about the recording is
+here and none is in `branch:`.
+
+```
+verdict.conformance_flags: true
+  Whether a reported non-conformance about a task is a flag ground. True: a located,
+  task-conditioned "the instruction asked for this and it did not happen" is the one substantive
+  claim the branch contract entitles a branch to make, and it is the reason the branch ran. Not a
+  threshold and not fitted -- a switch, whose off position exists for a campaign that does not yet
+  trust its own expectation table.
+
+verdict.undetermined_flags: false
+  Whether an unanswered conformance is a flag ground. False, and load-bearing rather than lenient:
+  `detect_*` evaluates no task and answers UNDETERMINED by construction, so every recording no
+  branch was in-family for would flag. A reason that fires on nearly every file transports no
+  information -- verdict.md's own rule.
+
+verdict.deviation_flags: false
+  Whether a reported deviation is a flag ground. False **until ground truth exists**, which is the
+  standing constraint from `specs/20260913-branch-contract-and-hints/design.md`: `filler` and
+  `stimulus_mismatch` are expected on ordinary read speech, so folding them into the flag column
+  would flag the corpus. The key exists so that the "until" is a declared switch with a derivation
+  rather than an implicit rule in the fold, and so that flipping it is a visible decision.
+
+verdict.unmeasured_points_flag: true
+  Whether a reporting node that could not read an operating point it wanted is a flag ground. True:
+  with the `branch:` section carrying a value for every key, this fires only where an override
+  removed one or where a non-branch section a body reads is null, which is a configuration fault
+  worth seeing on the recording it affected. It would have been false while the section shipped 38
+  nulls; it is true because it no longer does.
+
+verdict.conformance_flags_by_family: {}
+  Declared task family -> whether a non-conformance on it flags, overriding `conformance_flags`.
+  **This is what makes the fold task-aware** (owner: "verdict has to evaluate based on all branches
+  and the task it is assessing"): what a missing conformance *means* is not the same question on a
+  prolonged vowel as on a story recall, and a family whose expectation row nobody trusts yet is
+  excepted here by name rather than by the branch declining to report one. Ships empty -- no family
+  excepted -- because excepting one is a claim about that family's expectation row and no such claim
+  has been measured. A data mapping (`DATA_MAP_PATHS`), so a campaign names its own families.
+
+verdict.detection_is_evaluation: [DDK]
+  The branches for which finding the subject IS evaluating the task, so an out-of-family result is
+  recorded as a covariate on the detector rather than folded as a reading of the recording.
+
+  DDK only, and the asymmetry is structural rather than numeric. The other three branches detect
+  evidence that occurs incidentally -- breath and cough happen in any recording, sustained phonation
+  happens in any recording, lexical content happens in any recording -- so for them the two modes
+  ask genuinely different questions. A rapid alternating repetition train does not occur
+  incidentally (owner, 2026-09-16: "the likelihood of a ddk existing by chance is close to 0"), so
+  an out-of-family train is far more likely the detector firing than the participant having produced
+  one.
+
+  The corpus supports the mechanism rather than supplying a number: `ddk.lexical_repetition >= 3` --
+  the gate with no sweep anywhere and untraceable provenance -- routes DDK on 99% of
+  `rainbow-passage`, 98% of `caterpillar-passage` and 87% of `free-speech`, all of it ordinary
+  function-word repetition; while `ddk.ppg_segment_rate_per_s` separated the two real DDK recordings
+  from every speech recording in the 13-recording sample without overlap (12.33 and 14.70 /s against
+  a maximum of 8.89). So the over-routing is one gate's doing and a `detect_ddk` that fires on those
+  recordings is reporting the artefact.
+
+  **Deliberately not a weight and not a prior.** A numeric expression of "much less likely" would be
+  a fit nobody has taken; what is encoded is which of two records the out-of-family result goes into.
+  The fitted alternative -- a per-branch, per-mode prior over the corpus -- is **owed**, and is what
+  would let an out-of-family DDK train be read as evidence rather than set aside.
+
+verdict.min_contrast_db: null
+  Moved from `branch.min_contrast_db` on 2026-09-16: "the spectral-balance difference two effort
+  levels must differ by" is a judgement about whether the task was performed, not a setting of the
+  instrument that measures the balance (that is `branch.effort_split_hz`, which now ships 1000.0).
+  Still unset, and this is the one key nothing could be reasoned for: `level` is uncalibrated and no
+  SPL reference exists anywhere in the graph, so the absolute reading is
+  NOT_SEPARABLE_BY_THIS_DESIGN and only the contrast is available -- but nothing in the physics says
+  how far two deliberate effort levels must differ to count as a contrast. The just-noticeable
+  difference for loudness (~1 dB) is a floor on perceptibility, not a boundary on compliance. Read
+  by no code.
+
+verdict.tilt_max_db_per_octave: null
+  Moved from `branch.tilt_max_db_per_octave`: "the tilt below which a recording *reads as* occluded"
+  is a judgement about the recording. Still unset for the reason recorded on 2026-09-04: the design
+  names `band_profile` as an owed derivative (D3), so the instrument this cut would be taken on does
+  not exist yet. A default on a nonexistent instrument would be worse than a null. Read by no code.
+
+verdict.level_min_dbfs: null
+  Moved from `branch.level_min_dbfs`: "the level below which a recording carries no production at
+  all" is a whole-recording judgement, and the live reading of it is the ruleset's own
+  `emptiness.peak_floor`, which the fold already consumes as the `empty` route state. Left unset
+  rather than defaulted so that the two do not become two answers to one question. Read by no code.
+```
+
+### What the fold does with each input
+
+One table, because the contributions are easy to conflate:
+
+| input | where it comes from | what it contributes |
+| --- | --- | --- |
+| conformance `False` | the branch's own expectation match | a flag ground, gated on the referent and the declared family |
+| conformance `True` | the same | nothing |
+| conformance `UNDETERMINED` | `detect_*`, or an unmeasured point | nothing, unless `undetermined_flags` |
+| the proposed spans | the store, by generating activity and family | `findings` present/absent/uncertain -- the branch side of the agreement table |
+| the route | ROUTING's `branch_decision` | `agreement`; a mismatch flags, and it is the only way the route reaches triage |
+| deviations | the branch's typed findings | recorded in `deviations`; never a flag ground |
+| `unmeasured` | `params.missing` | a flag ground under `unmeasured_points_flag` |
+| the declared family | ADMIT's recorded path, via `declared_task` | the key every conformance ground is read against |
+| QUALITY's conformance | the store's own assertions | always a flag ground when `False`; no route, no finding, no hint row |
+
+`findings` being read off the spans rather than off an outcome is the substantive change: `_resolved`
+mapped every non-`FAIL` outcome to `present`, which meant a branch's *severity* decided its
+found/not-found reading. `_found` reads the spans, which are the record.
 
 ## taxonomy
 
@@ -1404,3 +1689,16 @@ UNSET, and why -- benchmarks/open.md carries each of these:
   quality.stoi_floor, quality.pesq_floor, quality.disruption_*: no labelled quality verdicts exist,
     so SPEECH's quality fail is unreachable by design until they do. Reserved: read by nothing yet;
     SPEECH step 8 reports without gating until these are measured AND wired.
+  verdict.min_contrast_db: how far two deliberate effort levels must differ to be a contrast. The
+    one key in the branch/verdict split that nothing could be reasoned for -- see [verdict](#verdict).
+  verdict.tilt_max_db_per_octave: the occlusion reading. The instrument it would be taken on,
+    `band_profile`, is itself owed (D3).
+  verdict.level_min_dbfs: duplicated by the ruleset's live `emptiness.peak_floor`; left unset so the
+    two do not become two answers to one question.
+
+RETIRED rather than left null, 2026-09-16:
+  branch.omission_score_max named a cut on an acoustic score no derivative in the graph produces.
+    Under the owner's instruction that every branch key carry a reasoned default, a key whose
+    instrument does not exist cannot have one, so the key, its property and its `acoustic_score_max`
+    covariate on the `omission` deviation were removed together. What it would take to bring it back
+    is an acoustic confidence per expected token, which the lexical aligner does not emit.

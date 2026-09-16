@@ -1384,6 +1384,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             conformance_of=TASK,
             deviations=deviation_names(expectation_findings),
             unmeasured=tuple(params.missing),
+            in_family=mode == "align",
             detail={
                 "speaker_count": None,
                 "diarization": "no_words",
@@ -2014,6 +2015,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         conformance_of=TASK,
         deviations=deviation_names(expectation_findings),
         unmeasured=tuple(params.missing),
+        in_family=mode == "align",
         detail=detail,
     )
     view.append(report_id)

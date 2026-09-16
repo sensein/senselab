@@ -1,8 +1,10 @@
 """DDK: the train it proposes, the task it evaluates, and the corpus it evaluates nothing on.
 
-Every operating point DDK reads is null in the packaged configuration, so each test that reaches a
-body supplies them through the override mechanism a campaign would use. They are fixture values,
-not fits: what is pinned is that the body reads the key, not where the key falls.
+Most tests still override every operating point DDK reads through the mechanism a campaign would
+use, so the numbers are fixture values, not fits: what is pinned is that the body reads the key,
+not where the key falls. The packaged configuration now ships a reasoned value for each of them, so
+a body no longer refuses over the packaged file alone — that case is exercised separately, by
+clearing a key with an explicit override.
 """
 
 from pathlib import Path
@@ -18,10 +20,11 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Result,
     branch_params,
 )
-from senselab.audio.workflows.triage.nodes.common import NodeResult, live_entities
+from senselab.audio.workflows.triage.nodes.common import BranchResult, find_branch_report, live_entities
 from senselab.audio.workflows.triage.nodes.ddk import (
     CYCLES_OR_SYLLABLES_PER_S,
     KIND,
+    NO_INSTRUMENT,
     NODE,
     RATE,
     SYLLABLES_PER_S,
@@ -36,8 +39,6 @@ from senselab.audio.workflows.triage.nodes.ddk import (
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
     BranchDecision,
-    NodeVerdict,
-    Outcome,
     RunState,
     fold_file_verdict,
 )
@@ -59,8 +60,8 @@ BANDS = {"labial": (0.0, 1500.0), "velar": (1500.0, 3500.0), "alveolar": (3500.0
 def ddk_config(tmp_path: Path) -> TriageConfig:
     """The packaged config with every ``branch`` key DDK's two modes read supplied.
 
-    The packaged file leaves all of them null, so a body that needs one raises naming it. These are
-    the values this suite measures against and nothing else: no number here is a fit on any corpus.
+    The packaged file now ships a reasoned value for each of them, but these fixture values are what
+    this suite measures against — chosen for the test signals, not fits on any corpus.
 
     ``smoothing_window_s`` is 0.011 rather than 0.010 for one reason, pinned by
     :class:`TestTheEventWalkIsSensitiveToTheSmoothingWindowsParity`: an even width in samples makes
@@ -274,14 +275,14 @@ def _measurements(store: ProvStore, name: str) -> list[Entity]:
     return [e for e in live_entities(store, "measurement") if e.attributes.get("name") == name]
 
 
-def _verdict(store: ProvStore) -> Entity:
-    """DDK's own verdict entity."""
-    found = [e for e in live_entities(store, "verdict") if e.attributes.get("node") == NODE]
-    assert len(found) == 1
-    return found[0]
+def _report(store: ProvStore) -> Entity:
+    """DDK's own branch report entity."""
+    found = find_branch_report(store, NODE)
+    assert found is not None
+    return found
 
 
-def _run(store: ProvStore, config: TriageConfig, tmp_path: Path, hint: AudioHints | None = None) -> NodeResult:
+def _run(store: ProvStore, config: TriageConfig, tmp_path: Path, hint: AudioHints | None = None) -> BranchResult:
     """Call the node the way the runner does."""
     return ddk(store, "plain", config, hint, run_dir=tmp_path)
 
@@ -305,8 +306,8 @@ class TestARealTrainProposesOneSpanWithARate:
         assert spans[0].attributes["role"] == "task_extent"
         assert spans[0].attributes["production"] == "syllable_train"
         assert spans[0].attributes["syllables_n"] > 1
-        assert result.verdict.outcome is Outcome.PASS
-        assert result.verdict.kind == KIND
+        assert result.report.conformance is True
+        assert result.report.kind == KIND
 
     def test_the_rate_is_the_modulation_peak_and_states_its_unit(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -365,7 +366,7 @@ class TestARealTrainProposesOneSpanWithARate:
         assert span.attributes["realised_cycles"] >= 1
         [rate] = _measurements(store, RATE)
         assert rate.attributes["unit"] == CYCLES_OR_SYLLABLES_PER_S
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance is True
 
     def test_a_collapsed_sequence_deviates_rather_than_failing(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -387,7 +388,7 @@ class TestARealTrainProposesOneSpanWithARate:
         assert collapse.attributes["value"] == pytest.approx(1.0)
         assert collapse.attributes["dominant_place"] == "labial"
         assert _spans_of(store)[0].attributes["realised_cycles"] == 0
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.report.conformance is False
 
 
 class TestTheEventWalkNoLongerDependsOnTheSmoothingWindowsParity:
@@ -477,7 +478,7 @@ class TestButtercupIsServedByTheConsensusWords:
         assert span.extent == pytest.approx((1.0, 4.9))
         [counts] = _measurements(store, "counts")
         assert counts.attributes["entries"]["expected_event_count"] == {"found": 10, "declared": 10}
-        assert result.verdict.outcome is Outcome.PASS
+        assert result.report.conformance is True
 
     def test_the_word_nobody_said_is_a_fail_and_not_a_span(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -492,7 +493,7 @@ class TestButtercupIsServedByTheConsensusWords:
         )
         result = _run(store, ddk_config, tmp_path)
         assert _spans_of(store) == []
-        assert result.verdict.outcome is Outcome.FAIL
+        assert result.report.conformance is False
 
 
 class TestConnectedSpeechRoutedByTheLexicalGateFindsNoTrain:
@@ -515,9 +516,8 @@ class TestConnectedSpeechRoutedByTheLexicalGateFindsNoTrain:
         assert "repetition" not in roles
         assert "task_extent" not in roles
         assert roles == ["lexical_repetition"]
-        assert _verdict(store).attributes["trains_n"] == 0
-        assert result.verdict.outcome is Outcome.FAIL
-        assert result.verdict.why == "no syllable train was found"
+        assert _report(store).attributes["trains_n"] == 0
+        assert result.report.conformance == UNDETERMINED
 
     def test_a_long_carrier_with_no_modulation_proposes_no_train(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -531,7 +531,7 @@ class TestConnectedSpeechRoutedByTheLexicalGateFindsNoTrain:
         )
         result = _run(store, ddk_config, tmp_path)
         assert _spans_of(store) == []
-        assert result.verdict.outcome is Outcome.FAIL
+        assert result.report.conformance == UNDETERMINED
 
     def test_an_acoustic_train_out_of_family_is_annotated_and_evaluates_no_task(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -550,8 +550,8 @@ class TestConnectedSpeechRoutedByTheLexicalGateFindsNoTrain:
         assert span.attributes["production"] == "acoustic_repetition"
         [rate] = _measurements(store, RATE)
         assert rate.attributes["reading"] == "acoustic_repetition_not_a_declared_ddk_task"
-        assert _verdict(store).attributes["mode"] == "detect"
-        assert result.verdict.outcome is Outcome.PASS
+        assert _report(store).attributes["mode"] == "detect"
+        assert result.report.conformance == UNDETERMINED
 
 
 class TestTheDispatchGoesBothWays:
@@ -568,9 +568,9 @@ class TestTheDispatchGoesBothWays:
             spans=[(1.0, 5.0)],
         )
         _run(store, ddk_config, tmp_path)
-        verdict = _verdict(store)
-        assert verdict.attributes["mode"] == "align"
-        assert verdict.attributes["task_family"] == "diadochokinesis-ka"
+        report = _report(store)
+        assert report.attributes["mode"] == "align"
+        assert report.attributes["task_family"] == "diadochokinesis-ka"
         assert _spans_of(store)[0].attributes["role"] == "task_extent"
 
     def test_another_branchs_family_takes_detect(
@@ -584,9 +584,9 @@ class TestTheDispatchGoesBothWays:
             spans=[(1.0, 5.0)],
         )
         _run(store, ddk_config, tmp_path)
-        verdict = _verdict(store)
-        assert verdict.attributes["mode"] == "detect"
-        assert verdict.attributes["task_family"] == "prolonged-vowel"
+        report = _report(store)
+        assert report.attributes["mode"] == "detect"
+        assert report.attributes["task_family"] == "prolonged-vowel"
         assert _spans_of(store)[0].attributes["role"] == "repetition"
 
     def test_no_derivable_task_family_takes_detect(
@@ -595,9 +595,9 @@ class TestTheDispatchGoesBothWays:
         """A path that is not a BIDS stem names no family, and the safe arm evaluates no task."""
         seed_ddk_store(store, stem="whatever", envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1), spans=[(1.0, 5.0)])
         _run(store, ddk_config, tmp_path)
-        verdict = _verdict(store)
-        assert verdict.attributes["mode"] == "detect"
-        assert verdict.attributes["task_family"] is None
+        report = _report(store)
+        assert report.attributes["mode"] == "detect"
+        assert report.attributes["task_family"] is None
 
     def test_the_hint_task_token_selects_align_over_the_path(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -605,7 +605,7 @@ class TestTheDispatchGoesBothWays:
         """The clean carrier wins: a hint naming a DDK task puts an unnamed path into align.
 
         Asserted on the span role, which only align mints, and not only on the recorded ``mode``.
-        The verdict's ``mode`` comes from ``mode_of`` while the branch that ran comes from
+        The report's ``mode`` comes from ``mode_of`` while the branch that ran comes from
         ``dispatch``; both derive it from ``declared_task_family(store, hint)``, so they agree only
         while both are handed the same hint. Dropping the hint from the ``dispatch`` call alone
         leaves the recorded mode saying ``align`` over a result ``detect_ddk`` produced, and a test
@@ -617,8 +617,8 @@ class TestTheDispatchGoesBothWays:
         [span] = _spans_of(store)
         assert span.attributes["role"] == "task_extent"
         assert span.attributes["production"] == "syllable_train"
-        assert _verdict(store).attributes["mode"] == "align"
-        assert _verdict(store).attributes["task_family"] == "diadochokinesis-ta"
+        assert _report(store).attributes["mode"] == "align"
+        assert _report(store).attributes["task_family"] == "diadochokinesis-ta"
 
     def test_detect_never_concludes_about_a_task(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -650,14 +650,14 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
             (RATE, "energy_envelope")
         ]
 
-    def test_an_absent_envelope_flags_rather_than_failing(
+    def test_an_absent_envelope_notes_rather_than_failing(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """A missing derivative must not be reported as the speaker having produced no train."""
         seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pa", spans=[(1.0, 5.0)])
         result = _run(store, ddk_config, tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
-        assert "energy envelope is absent" in result.verdict.why
+        assert result.report.conformance == UNDETERMINED
+        assert NO_INSTRUMENT in _report(store).attributes["notes"]
 
     def test_an_absent_spectrogram_leaves_every_place_unresolved(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -679,28 +679,47 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
 
 
 class TestEveryOperatingPointComesFromTheConfig:
-    """No number in the body: an unmeasured key fails the recording it was asked about."""
+    """No number in the body: a body reads every threshold from ``branch.*``, never a literal.
 
-    def test_the_packaged_config_raises_naming_the_key(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    The packaged file now ships a reasoned value for every key DDK reads, so a body never refuses
+    on the packaged config alone. What is still pinned is that clearing a key by override does not
+    raise: the qualifier it would have gated is skipped, the key is named in the report's
+    ``unmeasured``, and the dependent conformance is what the body's own control flow produces —
+    for DDK that is ``False`` when the carrier search itself is gated (``train_min_s``), because an
+    ungated carrier search finds none, and :data:`UNDETERMINED` when only the lexical loop is gated
+    (``repeat_min_occurrences``), because ``detect_ddk`` never answers anything else.
+    """
+
+    def test_an_unmeasured_train_minimum_is_recorded_rather_than_raised(
+        self, store: ProvStore, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """``branch.train_min_s`` is null as shipped, so the carrier search refuses to guess."""
+        """``train_min_s`` cleared by override: no carrier ever qualifies, and the ask is named."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pa",
             envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
             spans=[(1.0, 5.0)],
         )
-        with pytest.raises(ValueError, match="branch.train_min_s has no value"):
-            _run(store, config, tmp_path)
+        override = tmp_path / "null_train_min.yaml"
+        override.write_text("branch:\n  train_min_s: null\n")
+        result = _run(store, load_triage_config(override), tmp_path)
+        # UNDETERMINED, not False: an unmeasured qualifier could neither admit nor reject, so
+        # claiming the instruction was not met would rest on a number nobody chose.
+        assert result.report.conformance == UNDETERMINED
+        assert "train_min_s" in result.report.unmeasured
+        assert _spans_of(store) == []
 
-    def test_the_repetition_minimum_is_read_from_the_config(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    def test_an_unmeasured_repetition_minimum_is_recorded_rather_than_raised(
+        self, store: ProvStore, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """The lexical loop's own key is null too, and names itself when a transcript exists."""
+        """The lexical loop's own key, cleared the same way: no repetition is minted."""
         seed_ddk_store(store, stem="whatever", words=[("the", (1.0, 1.2)), ("the", (1.5, 1.7))])
-        with pytest.raises(ValueError, match="branch.repeat_min_occurrences has no value"):
-            _run(store, config, tmp_path)
+        override = tmp_path / "null_repeat_min.yaml"
+        override.write_text("branch:\n  repeat_min_occurrences: null\n")
+        result = _run(store, load_triage_config(override), tmp_path)
+        assert result.report.conformance == UNDETERMINED
+        assert "repeat_min_occurrences" in result.report.unmeasured
+        assert _spans_of(store) == []
 
 
 class TestTheRegularityStatisticsAreParameterFree:
@@ -746,10 +765,10 @@ class TestTheNodeRunsRatherThanBeingRecordedNoNode:
         assert '"DDK": lambda: ddk(' in source
         assert set(BRANCHES) == {"AIRWAY", "SPEECH", "VOICE", "DDK"}
 
-    def test_a_ddk_verdict_stops_the_asked_to_run_and_never_ran_flag(
+    def test_a_ddk_report_stops_the_asked_to_run_and_never_ran_flag(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """The node writes a verdict carrying a kind, which is what the fold joins the decision to."""
+        """The node writes a report carrying a kind, which is what the fold joins the decision to."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pa",
@@ -758,7 +777,9 @@ class TestTheNodeRunsRatherThanBeingRecordedNoNode:
         )
         result = _run(store, ddk_config, tmp_path)
         folded = fold_file_verdict(
-            [result.verdict],
+            [],
+            branch_reports=(result.report,),
+            spans_by_node={"DDK": len(_spans_of(store))},
             branch_decisions={
                 "DDK": BranchDecision(branch="DDK", will_run=True, route_state="routed", forced_by_declaration=False)
             },
@@ -770,10 +791,10 @@ class TestTheNodeRunsRatherThanBeingRecordedNoNode:
         assert folded.findings["DDK"] == "present"
         assert folded.agreement["DDK"] == "agree"
 
-    def test_without_a_verdict_the_flag_still_fires(self) -> None:
-        """The flag is not wrong and is not edited: a routed branch that concluded nothing flags."""
+    def test_without_a_report_the_flag_still_fires(self) -> None:
+        """The flag is not wrong and is not edited: a routed branch that reported nothing flags."""
         folded = fold_file_verdict(
-            [NodeVerdict("DDK", Outcome.PASS, None, "concluded about no kind")],
+            [],
             branch_decisions={
                 "DDK": BranchDecision(branch="DDK", will_run=True, route_state="routed", forced_by_declaration=False)
             },
