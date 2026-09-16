@@ -2976,6 +2976,15 @@ Each is an `Expectation.unviable` entry or a literal in a body, and **each emits
 saying the determination cannot be made, with its reason** — so a reader can tell *not separable by
 this design* from *nobody has written it yet*. None of the ten is reopened here.
 
+**Ten sites, twelve `unviable` entries**, and the difference is only that one site can span several
+families: `route` is one determination carried by **five** AIRWAY rows (`fivebreaths`, both
+`v2-threebreaths{nose,mouth}`, `v2-breath`, `breath-sounds`, grouped as rows 1–4 below);
+`category_membership` is one carried by **three** SPEECH rows; `effort_absolute` is one
+determination reached twice, by `v2-hardcough` and by `loudness` v1, and is listed twice because the
+two reach it from different directions. Nine of the ten are `unviable` entries; the tenth, the
+sub-second recording, is not — it is every matcher returning `False` correctly and
+uninformatively, which no entry can express.
+
 | # | site | where it fires | why it stays unviable |
 | --- | --- | --- | --- |
 | 1 | `route` | `align_airway`, `fivebreaths` (`route_from_index`) | discriminating band above the 8 kHz ceiling; the residual tilt confounded one-for-one with mouth-to-microphone geometry, which changes *with the route by construction* |
