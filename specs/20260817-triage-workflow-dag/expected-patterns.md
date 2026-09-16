@@ -883,7 +883,10 @@ def unviable(name: str, why: str) -> Finding:
 | `p_*` | an operating point. **No number appears in any body.** Every `p_*` is unfitted and belongs in `data/` with a written derivation, per the project rule |
 
 D1 is named as a protocol rather than left as a word, so that "what D1 must supply" is a signature
-rather than a description:
+rather than a description. **Its four `...` bodies are the only ellipses in this section, and they
+are the Python idiom for a `Protocol` rather than an unwritten body** — D1 does not exist, so there
+is nothing to write; what the protocol fixes is the interface every body below calls it through, and
+every one of those call sites handles `store.stimulus_alignment is None`:
 
 ```python
 class Alignment(Protocol):
