@@ -1228,17 +1228,18 @@ carries the measurement, step `None` carries the decisions and the verdict. Ever
 `wasDerivedFrom` the measurement (`:241`) and the decision activity `used` it (`:207`), so the join
 from any decision back to the gate outcomes behind it is in the store rather than inferred.
 
-**The rule.** `by_ruleset = route_state == routed`; `forced_by_hint` is true only when a hint named
-the branch **and** the ruleset did not already route it; `will_run` is the disjunction
-(`routing.py:216-220`). That is the whole selection: there is no second opinion and no state that
-runs a branch for want of evidence. `_route_states` (`:117`) turns the evaluation into one of three
-per branch:
+**The rule.** `by_ruleset = route_state == routed`; `by_declaration` is true when the recording's
+declared task family names the branch, or a hint tag the map resolves does; `forced_by_declaration`
+is true only when `by_declaration` holds **and** the ruleset did not already route it; `will_run` is
+the disjunction. That is the whole selection: two additive sources, no second opinion, and no state
+that runs a branch for want of evidence. `_route_states` turns the evaluation into one of three per
+branch, from the content gates alone:
 
 | branch route state | when | does it run |
 | --- | --- | --- |
 | `routed` | one of that branch's gates fired | yes |
-| `unavailable` | none fired **and** at least one of its gates could not be read | no |
-| `declined` | none fired and every gate was readable | no |
+| `unavailable` | none fired **and** at least one of its gates could not be read | no, unless declared |
+| `declined` | none fired and every gate was readable | no, unless declared |
 
 **`unavailable` does not run the branch, and that is the deliberate reversal.** The deleted path ran
 a branch on anything that was not `absent`, which is how a graph that could never read its floors
@@ -1261,13 +1262,16 @@ What each decision entity carries (`routing.py:225-237`):
 | `route_state` | `routed` / `declined` / `unavailable` |
 | `unavailable_gates` | that branch's gates whose feature could not be read |
 | `flag_gates` | that branch's flag gates that fired — annotation, never routing |
-| `forced_by_hint`, `hint_tags`, `unmapped_tags`, `bad_map_values` | the hint layer's record of itself |
-| `why` | `route_<state>` or `route_<state>_forced_by_hint`, a closed vocabulary |
+| `declared` | the declaration named this branch, however the branch ran |
+| `forced_by_declaration` | declared **and** not content-routed: the route the declaration added |
+| `declared_family`, `declared_by_family` | which source declared it — the stem's task family, or a hint tag |
+| `hint_tags`, `unmapped_tags`, `bad_map_values` | the hint layer's record of itself |
+| `why` | `route_<state>` or `route_<state>_forced_by_declaration`, a closed vocabulary |
 | `stream` | the stream this pass ran over |
 
-`RoutingResult` carries `runs`, `skipped`, `forced`, `empty_set` and `route_state` — the file-level
-`routed` / `empty` / `unexplained`. The stage-1 pair `ruleset_runs` / `ruleset_state` is gone with
-the second selection.
+`RoutingResult` carries `runs`, `skipped`, `forced`, `declared`, `empty_set` and `route_state` — the
+file-level `routed` / `empty` / `unexplained`. The stage-1 pair `ruleset_runs` / `ruleset_state` is
+gone with the second selection.
 
 **A failure to evaluate now fails the node.** `evaluate_live_routes` and `load_ruleset` are called
 unguarded (`routing.py:197`). Stage 1 wrapped them, because a reading that decided nothing must not

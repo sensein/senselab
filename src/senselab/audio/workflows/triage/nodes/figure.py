@@ -670,7 +670,7 @@ def _summary_sections(store: ProvStore, style: FigureStyle) -> tuple[list[list[s
         branch = str(entity.attributes.get("branch"))
         state = str(entity.attributes.get("route_state"))
         run = "runs" if entity.attributes.get("will_run") else "withheld"
-        forced = " (forced by hint)" if entity.attributes.get("forced_by_hint") else ""
+        forced = " (added by declaration)" if entity.attributes.get("forced_by_declaration") else ""
         route_lines.append(f"  {branch:<8} {state:<12} {run}{forced}")
         for name in sorted(entity.attributes.get("unavailable_gates") or ()):
             route_lines.append(f"      {name:<28} unavailable")

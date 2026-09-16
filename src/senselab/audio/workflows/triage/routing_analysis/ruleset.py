@@ -1,9 +1,11 @@
 """The family taxonomy ruleset: which branches a recording's own content routes it to.
 
-Every branch's gates are evaluated on every recording. The task instruction routes nothing: it is
-read through the family sets in :mod:`~senselab.audio.workflows.triage.routing_analysis.families`
-into :attr:`RouteEvaluation.declared`, which is the reference standard the routed set is scored
-against and never a filter on which gates run.
+Every branch's gates are evaluated on every recording. The task instruction is read through the
+family sets in :mod:`~senselab.audio.workflows.triage.routing_analysis.families` into
+:attr:`RouteEvaluation.declared`, which is both the reference standard :attr:`RouteEvaluation.routed`
+is scored against and — in the graph, where ROUTING turns this evaluation into an execution set —
+the second, additive route source. It is never a filter on which gates run: ``routed`` here is the
+content reading alone, and the two stay separable in every consumer.
 
 Every gate is one feature path, one comparison and one threshold, all of them read from
 ``taxonomy.ruleset`` in ``data/config/default.yaml``. A gate either routes a branch or flags it:
@@ -129,8 +131,9 @@ class Ruleset:
         branch_gates: Branch to its gates, any one of which routes it on any recording.
         branch_flags: Branch to the gates that annotate it. A flag gate is evaluated and reported
             and never routes: it is read after a branch is entered, not to enter it.
-        reference_family_set: Branch to the :data:`FAMILY_SETS` entry it is scored against. This
-            mapping is a reference standard, not a router: no gate is skipped because of it.
+        reference_family_set: Branch to the :data:`FAMILY_SETS` entry it is scored against, which
+            is also the mapping a declared task routes through in the graph. No gate is skipped
+            because of it and no route state is rewritten by it.
         excluded_by_construction: Branch to the :data:`FAMILY_SETS` entry its reference set leaves
             out although the content is what the branch is for. Those families are neither
             positives nor negatives: scoring holds them out of the population rather than charging
@@ -183,7 +186,8 @@ class RouteEvaluation:
         stem: The recording's BIDS stem.
         family: The task family its stem collapses into.
         routed: The branches a gate fired for, from content alone, in branch order.
-        declared: The branches the family is a reference positive for, for comparison only.
+        declared: The branches the family is a reference positive for. The comparison standard for
+            the offline analysis, and the additive route source ROUTING reads in the graph.
         agreed: ``routed`` and ``declared`` both.
         missed: Declared and not routed.
         extra: Routed and not declared.

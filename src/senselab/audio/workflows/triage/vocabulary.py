@@ -149,10 +149,13 @@ class BranchDecision:
     Attributes:
         branch: The branch's name, which is also the name its own verdict is written under.
         will_run: Whether routing selected it.
-        route_state: What the ruleset made of this branch, one of :data:`BRANCH_ROUTE_STATES`.
-        forced_by_hint: Whether a hint added it.
-        hint_tags: The declared tags naming this branch. Non-empty is a claim, whether or not it
-            changed the outcome.
+        route_state: What the ruleset made of this branch, one of :data:`BRANCH_ROUTE_STATES`. The
+            content reading alone; a declared route never rewrites it.
+        declared: Whether the recording's declaration named this branch — its task family, or a
+            hint tag the map resolves. A claim, whether or not it changed the outcome.
+        forced_by_declaration: Whether the declaration added it, which is ``declared`` and not
+            content-routed. This is the route the declaration created; ``declared`` alone is not.
+        hint_tags: The declared tags naming this branch, when a hint supplied any the map resolves.
         bad_map_values: ``routing.hint_branch_map`` entries whose value is not a branch, as
             ``{tag: value}``. A property of the configuration, so every decision carries the same
             one.
@@ -161,7 +164,8 @@ class BranchDecision:
     branch: str
     will_run: bool
     route_state: str
-    forced_by_hint: bool
+    forced_by_declaration: bool
+    declared: bool = False
     hint_tags: tuple[str, ...] = ()
     bad_map_values: dict[str, str] = field(default_factory=dict)
 
@@ -183,7 +187,8 @@ class FileVerdict:
         route_state: What it made of the whole recording, one of :data:`FILE_ROUTE_STATES`, or None
             when ``routing`` wrote no evaluation.
         agreement: ``agree`` | ``mismatch`` | ``resolved`` | ``not_run`` per branch.
-        hints: ``claimed_and_found`` | ``claimed_not_found`` | ``found_unclaimed`` | ``no_claim``.
+        hints: ``claimed_and_found`` | ``claimed_not_found`` | ``found_unclaimed`` | ``no_claim``
+            per branch, read against the recording's declaration as ROUTING resolved it.
         reasons: Every contributing verdict, in order — not only the deciding one.
         ran: Whether each node ran.
         branches: The routing decision joined to the branch verdict.
@@ -407,7 +412,7 @@ def fold_file_verdict(
     branch_view = {
         name: {
             "will_run": decision.will_run,
-            "forced_by_hint": decision.forced_by_hint,
+            "forced_by_declaration": decision.forced_by_declaration,
             "route_state": decision.route_state,
             "verdict": by_branch[name].outcome.value if name in by_branch else None,
         }

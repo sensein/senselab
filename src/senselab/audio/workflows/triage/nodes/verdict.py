@@ -13,6 +13,7 @@ from typing import Callable, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
@@ -152,7 +153,8 @@ def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list
             branch=branch,
             will_run=bool(entity.attributes["will_run"]),
             route_state=str(entity.attributes["route_state"]),
-            forced_by_hint=bool(entity.attributes["forced_by_hint"]),
+            forced_by_declaration=bool(entity.attributes["forced_by_declaration"]),
+            declared=bool(entity.attributes["declared"]),
             hint_tags=tuple(str(tag) for tag in entity.attributes.get("hint_tags") or ()),
             bad_map_values={
                 str(tag): str(value) for tag, value in (entity.attributes.get("bad_map_values") or {}).items()
@@ -162,26 +164,31 @@ def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list
     return decisions, ids
 
 
-def _hint_claims(decisions: Mapping[str, BranchDecision], hint: AudioHints | None) -> dict[str, bool] | None:
-    """Which branches the caller's declaration claimed, read off ROUTING's own record of reading it.
+def _hint_claims(
+    decisions: Mapping[str, BranchDecision], hint: AudioHints | None, *, declared_family: str
+) -> dict[str, bool] | None:
+    """Which branches the recording's declaration claimed, read off ROUTING's own record of reading it.
 
-    ROUTING resolved the declaration against ``routing.hint_branch_map`` and wrote the tags naming
-    each branch onto that branch's decision. Reading them back is what makes the tag that forced a
-    branch the same tag that names a mismatch: a second resolution here could disagree with the first
+    ROUTING resolved the declaration — the stem's own task family through the ruleset's reference
+    family sets, and any hint tag ``routing.hint_branch_map`` maps — and wrote the result onto each
+    branch's decision. Reading it back is what makes the declaration that added a route the same
+    declaration that names a mismatch: a second resolution here could disagree with the first
     whenever the config or the hint handed to the two nodes differ.
 
     Args:
         decisions: ROUTING's decisions, as read from the store.
         hint: What the recording was declared to contain, if anything.
+        declared_family: The task family the recording's own stem declares, empty when it declares
+            none. Tested for existence only; what it claims is ROUTING's to say.
 
     Returns:
-        True per claimed branch; a branch no declared tag reached is simply absent. None when a
-        declaration was supplied and no decision survived to say what ROUTING made of it — the claims
+        True per claimed branch; a branch the declaration did not name is simply absent. None when a
+        declaration existed and no decision survived to say what ROUTING made of it — the claims
         are then unknown, which is not the same as no claim.
     """
-    if hint is not None and not decisions:
+    if (hint is not None or declared_family) and not decisions:
         return None
-    return {decision.branch: True for decision in decisions.values() if decision.hint_tags}
+    return {decision.branch: True for decision in decisions.values() if decision.declared}
 
 
 def _derived_ran(store: ProvStore, verdicts: Sequence[NodeVerdict]) -> dict[str, RunState]:
@@ -216,8 +223,9 @@ def verdict(
 
     Args:
         store: The provenance store, holding every node's ``verdict`` entity, ROUTING's
-            ``branch_decision`` entities and its ``ruleset_routing`` measurement. This node reads
-            nothing else.
+            ``branch_decision`` entities, its ``ruleset_routing`` measurement, and ADMIT's
+            ``recording`` stream, read only for whether the recording declares a task at all. This
+            node reads nothing else.
         source: Accepted for the shared node shape; not read.
         config: The triage configuration, named in the activity by its hash. VERDICT has no
             thresholds and reads no key: the hint was already resolved by ROUTING, and this node
@@ -244,7 +252,7 @@ def verdict(
         node_verdicts,
         branch_decisions=decisions,
         ran=resolved_ran,
-        hint_claims=_hint_claims(decisions, hint),
+        hint_claims=_hint_claims(decisions, hint, declared_family=declared_task(recording_stem(store))[1]),
         route_state=route_state,
     )
 
