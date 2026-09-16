@@ -307,15 +307,18 @@ airway.
 
 ## What exists today
 
+The branch is now the two modes, and [`airway-implementation.md`](airway-implementation.md)
+records what the port decided and what it cost. Statuses as of that change:
+
 | capability | status |
 | --- | --- |
-| A1 label | built; `labels_of_interest` **is derived** (`config-derivations.md:555-557`, *"Vocabulary, not thresholds"*); vocabulary too narrow |
-| A2 corroborate | built; `confirm` → `label` migration owed |
-| A3 contest | gated behind null config, structurally dead; replace rather than fit |
-| A4 off-task content | built as an unconditional file-level flag; **three changes owed** — condition on the declaration, migrate to a deviation, and add the voicing channel with its label exclusion |
-| A5 cycle count | not built; detection operating points owed |
-| A6 cough descriptors | not built |
-| A7 route | not built; separability unmeasured |
+| A1 label | the label is an attribute of the span the branch proposes, not an assertion beside it; `labels_of_interest` **is derived**; vocabulary still too narrow, and REPORT still reads the retired assertion |
+| A2 corroborate | **retired.** `sounds_like` reads `span_hear` and `span_yamnet` `raw_scores` together against one `branch.score_min`, so there is no second opinion to `confirm` and nothing to `abstain` from. The cost: YAMNet's own breath labels are outside `branch.label_sets` and so no longer count |
+| A3 contest | **replaced, not fitted.** `detect_airway` contests a span whose decided label no raw score over `branch.score_min` supports. Its firing rate is still uncounted |
+| A4 off-task content | built as one located `off_task_extent` deviation per lexical word, reached only from the in-family mode. The voicing channel is still owed. AIRWAY now raises **no flag at all** |
+| A5 cycle count | built: one proposed span per envelope-segmented event, typed by the stored scores, with the count beside the instruction's own. The operating points are still null, so both modes raise until they are fitted |
+| A6 cough descriptors | peak over floor and spectral balance per event, with the extent's covariates. Rise time, voiced phase, and the epoch-versus-event convention still owed |
+| A7 route | `NOT_SEPARABLE_BY_THIS_DESIGN`, with `band_profile` carried as an absent covariate so the negative is attributable |
 
 **The branch runs no model.** It reads PREPROCESS's `span_hear` and `yamnet_window` measurements
 (`airway.py:166-176`).
@@ -345,28 +348,43 @@ more weight here than anywhere else in the graph. See
 ## What the branch emits
 
 ```
-spans        A5 would propose family: "airway" cycle spans
-assertions   label (A1), label with yamnet_* attributes (A2 corroboration),
-             contest (A3, once replaced), abstain, deviate/off_task_extent (A4)
-interval     airway_labelled_interval, the hull of the labelled spans
-measurements A5 breath-event durations and inter-event intervals, with the
-             inspiratory:expiratory duration measure present only where both
-             phases were detected; A6 cough descriptors — each with its
-             extent's covariates and support count
-counts       expected_event_count {found, declared} (A5)
-verdict      { labelled_n, by_label, contested_n, merged_n, flags }
+spans        family: "airway", role "<kind>_event" one per event and "<kind>_run"
+             one per merged scoring window, each carrying label, index,
+             boundaries, in_certified_silence and overlaps_transcript; plus one
+             role: "task_extent" over their hull, in the in-family mode only.
+             The label is an attribute of the span, not an assertion beside it
+assertions   deviate/off_task_extent (A4, one per lexical word, plus the
+             declared relax period and every uncovered gap), deviate/truncation,
+             contest (A3's replacement, in the out-of-family mode)
+measurements <kind>_peak_over_floor_db per event, with its spectral balance and
+             its extent's acquisition covariates; breath_coverage_fraction;
+             measured_route and every `unviable` row the expectation names;
+             event_instrument when the derivative a mode needs is absent
+counts       expected_event_count {found, declared}, events_with_carrier_boundaries,
+             inter_onset_interval_s and intervals_over_p_interval_max_s on the
+             timed families, cough_then_breathe_cycles on the alternation,
+             declared_route, declared_duration_s, <kind>_events and airway_events
+verdict      { mode, task_family, done, labelled_n, by_label, contested_n,
+               merged_n, flags }
 ```
 
-**The verdict's basis, exactly** (`airway.py:376-383`, detail at `:393-398`):
+`airway_labelled_interval` is **gone**: the hull of the labelled spans is now
+`role: "task_extent"`, a span the branch proposes, because under propose-only the extent is a span
+and not an interval entity beside one. The inspiratory-to-expiratory measure is still owed and
+still conditional on both phases being detected.
 
-- `FAIL` when no span was proposed at all or PREPROCESS reported `no_contrast`
-  (`airway.py:203-211`), or when spans exist and none carries a label of interest.
-- `FLAG` when any flag accumulated.
-- `PASS` otherwise.
+**The verdict's basis, exactly:**
 
-**After A4's migration the FLAG path is empty** until A3's replacement lands, because
-`lexical_contamination` is currently the only reachable flag. The verdict becomes `FAIL` or `PASS`
-only, and the document says so rather than listing a flag that cannot fire.
+- `FAIL` when the mode proposed no span — because PREPROCESS proposed none (its own `no_contrast`
+  reason travels into `why`), because no span carries a label of interest, or because the
+  derivative the mode needs is absent, which `done = UNDETERMINED` and an `event_instrument`
+  measurement distinguish from the other two.
+- `PASS` when it proposed at least one.
+
+**There is no FLAG path.** `lexical_contamination` was the only flag this branch could raise and
+A4's migration made it a deviation, so `flags` is an empty list kept only because `report.py` reads
+the key. `done` is `UNDETERMINED` on every out-of-family recording as a rule, and the outcome is
+driven by what was proposed rather than by `done`.
 
 ## Out of scope
 
