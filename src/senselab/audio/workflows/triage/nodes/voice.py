@@ -377,7 +377,9 @@ def _voice_sustained(
         key=lambda carrier: duration(carrier.span.extent),
         reverse=True,
     )
-    findings.append(count("attempt_count", len(carriers), expectation.expected_event_count))
+    findings.append(
+        count("attempt_count", len(carriers), expectation.expected_event_count, *(each.span.id for each in carriers))
+    )
     if not carriers:
         return Result(UNDETERMINED if unmeasured_gate else False, components, findings)
 
@@ -395,9 +397,15 @@ def _voice_sustained(
             **carrier.qualifiers(),
         )
     )
+    read_off = (carrier.span.id, *evidence.derivations(evidence.tracks_id))
     findings.append(
         measured(
-            "phonation_onset_to_offset_s", extent[0], extent[1], round(duration(extent), 3), **carrier.qualifiers()
+            "phonation_onset_to_offset_s",
+            extent[0],
+            extent[1],
+            round(duration(extent), 3),
+            *read_off,
+            **carrier.qualifiers(),
         )
     )
     findings.append(
@@ -406,23 +414,24 @@ def _voice_sustained(
             extent[0],
             extent[1],
             round(float(carrier.track.voiced.sum()) * carrier.track.hop_s, 3),
+            *read_off,
             **carrier.qualifiers(),
         )
     )
-    findings.extend(_interruptions(carrier))
+    findings.extend(_interruptions(carrier, *read_off))
     if evidence.file_extent is not None and touches_edge(extent, evidence.file_extent):
-        findings.append(deviation("truncation", extent[0], extent[1], reading="right_censored"))
+        findings.append(deviation("truncation", extent[0], extent[1], carrier.span.id, reading="right_censored"))
     for extra in carriers[1:]:
         assert extra.span.extent is not None  # noqa: S101 — as above
         start, end = voiced_extent(extra.span.extent, extra.track)
-        findings.append(deviation("repeat_attempt", start, end, **extra.qualifiers()))
+        findings.append(deviation("repeat_attempt", start, end, extra.span.id, **extra.qualifiers()))
 
     if expectation.expect_inhale:
         findings.append(count("inhale_expected_in_file", True, None))
     if expectation.forbid_lexical:
         for word in lexical(evidence.words):
             start, end = word_extent(word)
-            findings.append(deviation("lexical_content", start, end, text=word_text(word)))
+            findings.append(deviation("lexical_content", start, end, word.id, text=word_text(word)))
     if hint is not None:
         token = (hint.metadata or {}).get("task_token")
         if token is not None:
@@ -438,11 +447,12 @@ def _voice_sustained(
     return Result(count_in_found, components, findings)
 
 
-def _interruptions(carrier: Carrier) -> list[Finding]:
+def _interruptions(carrier: Carrier, *derived_from: str) -> list[Finding]:
     """The unvoiced intervals inside one attempt: their number, locations and total duration.
 
     Args:
         carrier: The qualifying carrier.
+        *derived_from: The entity ids the attempt was read off.
 
     Returns:
         One ``interruptions`` measurement over the attempt.
@@ -464,6 +474,7 @@ def _interruptions(carrier: Carrier) -> list[Finding]:
             extent[0],
             extent[1],
             len(intervals),
+            *derived_from,
             total_s=round(sum(end - begin for begin, end in intervals), 3),
             locations=[[round(begin, 3), round(end, 3)] for begin, end in intervals],
             hop_s=round(hop, 4),
@@ -529,12 +540,14 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
             support_frames=int(track.voiced.sum()),
         )
     ]
+    read_off = (span.id, *evidence.derivations(evidence.tracks_id))
     findings: list[Finding] = [
         measured(
             "glide_extent_semitones",
             sweep[0],
             sweep[1],
             round(extent_semitones, 2),
+            *read_off,
             direction=direction,
             support_frames=int(track.voiced.sum()),
         )
@@ -545,13 +558,14 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
                 "sweep_direction_mismatch",
                 sweep[0],
                 sweep[1],
+                *read_off,
                 declared=expectation.declared_direction,
                 measured=direction,
                 extent_semitones=round(extent_semitones, 2),
             )
         )
     if evidence.file_extent is not None and touches_edge(sweep, evidence.file_extent):
-        findings.append(deviation("truncation", sweep[0], sweep[1], reading="right_censored"))
+        findings.append(deviation("truncation", sweep[0], sweep[1], span.id, reading="right_censored"))
     return Result(True, components, findings)
 
 
@@ -596,16 +610,18 @@ def detect_voice(store: ProvStore, params: BranchParams, *, run_dir: Path) -> Re
                 **carrier.qualifiers(),
             )
         )
+        read_off = (carrier.span.id, *evidence.derivations(evidence.tracks_id))
         findings.append(
             measured(
                 "phonation_onset_to_offset_s",
                 extent[0],
                 extent[1],
                 round(duration(extent), 3),
+                *read_off,
                 **carrier.qualifiers(),
             )
         )
-        findings.extend(_interruptions(carrier))
+        findings.extend(_interruptions(carrier, *read_off))
     for span in evidence.spans:
         if span.attributes.get("label") == PHONATION_ROLE and span.id not in qualifying_ids:
             findings.append(
@@ -616,7 +632,7 @@ def detect_voice(store: ProvStore, params: BranchParams, *, run_dir: Path) -> Re
                     "fails_the_stationarity_qualifier",
                 )
             )
-    findings.append(count("phonation_spans", len(components), None))
+    findings.append(count("phonation_spans", len(components), None, *(carrier.span.id for carrier in carriers)))
     return Result(UNDETERMINED, components, findings)
 
 
