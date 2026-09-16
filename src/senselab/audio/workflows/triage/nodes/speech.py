@@ -29,7 +29,6 @@ from senselab.audio.tasks.disruptions.api import detect_disruptions
 from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
 )
-from senselab.audio.tasks.preprocessing.preprocessing import extract_segments
 from senselab.audio.tasks.source_separation.api import separate_audios
 from senselab.audio.tasks.spans.api import group_extents_into_runs
 from senselab.audio.tasks.speaker_diarization.api import diarize_audios
@@ -56,6 +55,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     contest,
     count,
     declared_duration_count,
+    derivative_arrays,
     deviation,
     dispatch,
     duration,
@@ -96,12 +96,13 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.stimulus import LexicalWord, StimulusAlignment, align_stimulus
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
-from senselab.utils.data_structures import HFModel, PyannoteAudioModel, SpeechBrainModel
+from senselab.utils.data_structures import HFModel, SpeechBrainModel
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "SPEECH"
 ORIGINAL = "recording"  # the stream disruptions are measured on: as captured, unnormalised, unresampled
-DIARIZER_ID = "pyannote/speaker-diarization-community-1"
+DIARIZATION_DERIVATIVE = "diarization"
+"""The stem of PREPROCESS's per-stream diarization measurement, ``<stream>_diarization``."""
 CLEARVOICE_ORG = "alibabasglab"
 UNASDIFF_BACKEND = "unasdiff"
 SEPARABLE_SOURCES = 2
@@ -110,13 +111,109 @@ REPETITION_ALLOWED_CATEGORIES = ("Letters", "Numbers")
 """The `random-item-generation` categories whose own instruction permits repeating an item."""
 
 
-def _diarization_model() -> PyannoteAudioModel:
-    """The diarizer's model spec; its commit resolves at construction.
+def diarization_measurement(stream: str) -> str:
+    """The measurement name one stream's whole-file diarization is written under.
+
+    The same spelling ``preprocess.diarization_measurement`` writes. It is repeated here rather
+    than imported, because importing PREPROCESS into a branch would put the whole of PREPROCESS's
+    model imports on a branch's import path; ``speech_test`` pins the two against each other.
+
+    Args:
+        stream: The stream's name.
 
     Returns:
-        The model spec.
+        The measurement's name.
     """
-    return PyannoteAudioModel(path_or_uri=DIARIZER_ID, revision="main")
+    return f"{stream}_{DIARIZATION_DERIVATIVE}"
+
+
+@dataclass(frozen=True)
+class _Diarization:
+    """One stream's whole-file diarization, as this branch reads it back.
+
+    Attributes:
+        measurement: The measurement's name.
+        measurement_id: Its entity id, which every speaker entity derives from.
+        signal: The stream it was measured on.
+        model: The diarizer that produced it.
+        exclusive: Whether the exclusive partition was taken. False keeps pyannote's overlapping
+            view, under which one word can straddle two speakers' segments.
+        n_speakers: The count the measurement itself records.
+        segments: ``(start, end, speaker)`` per segment, in time order.
+    """
+
+    measurement: str
+    measurement_id: str
+    signal: str
+    model: str
+    exclusive: bool
+    n_speakers: int
+    segments: list[tuple[float, float, str]]
+
+
+def _read_diarization(store: ProvStore, run_dir: Path, config: TriageConfig) -> _Diarization | None:
+    """PREPROCESS's whole-file diarization of the first configured stream that has one.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory the sidecar path is relative to.
+        config: The triage configuration, read for ``diarization.streams``.
+
+    Returns:
+        The reading, or None when no configured stream has a live measurement whose sidecar is
+        readable.
+    """
+    for stream in config.get("diarization.streams") or ():
+        name = diarization_measurement(str(stream))
+        measurement = find_measurement(store, name)
+        arrays = derivative_arrays(store, run_dir, name)
+        if measurement is None or arrays is None:
+            continue
+        segments = sorted(
+            (float(start), float(end), str(speaker))
+            for start, end, speaker in zip(arrays["starts"], arrays["ends"], arrays["speakers"])
+        )
+        return _Diarization(
+            measurement=name,
+            measurement_id=measurement.id,
+            signal=str(measurement.attributes.get("signal", stream)),
+            model=str(measurement.attributes.get("model", "")),
+            exclusive=bool(measurement.attributes.get("exclusive")),
+            n_speakers=int(measurement.attributes.get("n_speakers", 0)),
+            segments=segments,
+        )
+    return None
+
+
+def _exclusive_slices(label: str, segments: list[tuple[str, str, tuple[float, float]]]) -> list[tuple[float, float]]:
+    """One speaker's segments with every region another speaker also holds removed.
+
+    Under ``diarization.exclusive: false`` two speakers' segments can overlap, so a speaker's
+    concatenated audio would otherwise carry the other's voice wherever they spoke at once. The
+    old in-branch pass took the exclusive partition and could not produce that; this keeps the
+    property without asking for a threshold.
+
+    Args:
+        label: The speaker whose audio is wanted.
+        segments: ``(entity id, speaker, extent)`` per segment.
+
+    Returns:
+        The extents, earliest first, with the overlapped regions cut out.
+    """
+    mine = merge([extent for _, speaker, extent in segments if speaker == label])
+    theirs = merge([extent for _, speaker, extent in segments if speaker != label])
+    kept: list[tuple[float, float]] = []
+    for start, end in mine:
+        cursor = start
+        for other_start, other_end in theirs:
+            if other_end <= cursor or other_start >= end:
+                continue
+            if other_start > cursor:
+                kept.append((cursor, other_start))
+            cursor = max(cursor, other_end)
+        if end > cursor:
+            kept.append((cursor, end))
+    return kept
 
 
 def _second_diarizer_model(model_id: str) -> HFModel:
@@ -1359,9 +1456,6 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         flags.append(f"{len(all_grouped) - len(grouped)} run(s) of words placed at one instant name no extent")
     span_extents = [clamp_extent((start, end), plain) for start, end, _ in grouped]
     speech_s = sum(end - start for start, end in span_extents)
-    word_hull_extent = clamp_extent(
-        (min(start for start, _ in word_extents), max(end for _, end in word_extents)), plain
-    )
 
     # Step 3 — corroborate: the classifier's retained Speech label set, and SQUIM as the speech test.
     prior_spans: list[Entity] = [
@@ -1427,61 +1521,72 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             )
         corroboration.append({"yamnet_coverage": coverage, "yamnet_vote": yamnet_vote, "squim_vote": squim_vote})
 
-    # Step 4 — diarize over [first word start, last word end] only; every segment counts.
-    interval = word_hull_extent
-    diarizer = _diarization_model()
+    # Step 4 — the speakers are PREPROCESS's whole-file derivative, read rather than re-measured.
+    # This branch's own pass ran pyannote over the lexical word hull, so a voice outside it — before
+    # the participant started, after they stopped, or inside a pause — could not be seen at all.
+    read = _read_diarization(store, run_dir, config)
     diarize_act = store.activity(
-        node=NODE, step="diarize", parameters={"interval": list(interval), "model": str(diarizer.path_or_uri)}
+        node=NODE,
+        step="diarize",
+        parameters={"read": None if read is None else read.measurement, "rerun": False},
     )
-    diarizer_agent = store.agent(agent_type="model", model_id=str(diarizer.path_or_uri), commit_sha=diarizer.commit_sha)
-    store.was_associated_with(diarize_act, diarizer_agent)
-    store.used(diarize_act, plain_id)
-    interval_id = store.entity(prov_type="interval", extent=interval, attributes={"name": "diarization_interval"})
-    store.was_generated_by(interval_id, diarize_act)
-    store.was_attributed_to(interval_id, software)
-    view.append(interval_id)
+    store.was_associated_with(diarize_act, software)
 
     speaker_count: int | None
-    diarization_state: str
-    cropped: Audio | None = None
+    diarization_state: Any
     speaker_segments: list[tuple[str, str, tuple[float, float]]] = []  # (entity_id, speaker, extent)
-    try:
-        (cropped,) = extract_segments([(plain, [interval])])[0]
-    except ValueError as error:
+    if read is None:
         speaker_count = None
-        diarization_state = "interval_selects_no_samples"
-        flags.append(f"the diarization interval selects no samples: {error}")
+        diarization_state = "derivative_absent"
+        flags.append("no whole-file diarization derivative is in the store; this branch reads one and runs none")
     else:
-        [segments] = diarize_audios([cropped], model=diarizer)
-        for segment in segments:
-            extent = (float(segment.start or 0.0) + interval[0], float(segment.end or 0.0) + interval[0])
+        store.used(diarize_act, read.measurement_id)
+        for start, end, label in read.segments:
+            extent = clamp_extent((start, end), plain)
+            if extent[1] <= extent[0]:
+                continue
             speaker_id = store.entity(
                 prov_type="speaker",
                 extent=extent,
-                attributes={"speaker": segment.speaker, "diarizer": str(diarizer.path_or_uri)},
+                attributes={"speaker": label, "diarizer": read.model, "signal": read.signal},
             )
             store.was_generated_by(speaker_id, diarize_act)
-            store.was_attributed_to(speaker_id, diarizer_agent)
+            store.was_attributed_to(speaker_id, software)
+            store.was_derived_from(speaker_id, read.measurement_id)
             view.append(speaker_id)
-            speaker_segments.append((speaker_id, str(segment.speaker), extent))
+            speaker_segments.append((speaker_id, label, extent))
         speaker_count = len({speaker for _, speaker, _ in speaker_segments})
-        diarization_state = "diarized"
+        diarization_state = {
+            "read": read.measurement,
+            "signal": read.signal,
+            "model": read.model,
+            "exclusive": read.exclusive,
+            "n_segments": len(speaker_segments),
+        }
+        if read.n_speakers != speaker_count:
+            flags.append(f"the derivative records {read.n_speakers} speaker(s) and its segments carry {speaker_count}")
 
     second = config.get("speech.second_diarizer")
     second_record: Any = "not_consulted"
     if speaker_count is not None and speaker_count != 1:
         flags.append(f"speaker count {speaker_count} != 1")
-        if second is not None and cropped is not None:
+        if second is not None and read is not None:
             second_model = _second_diarizer_model(str(second))
             second_agent = store.agent(
                 agent_type="model", model_id=str(second_model.path_or_uri), commit_sha=second_model.commit_sha
             )
             second_act = store.activity(
-                node=NODE, step="second_diarizer", parameters={"model": str(second_model.path_or_uri)}
+                node=NODE,
+                step="second_diarizer",
+                parameters={"model": str(second_model.path_or_uri), "signal": read.signal},
             )
             store.was_associated_with(second_act, second_agent)
-            store.used(second_act, interval_id)
-            [second_segments] = diarize_audios([cropped], model=second_model)
+            store.used(second_act, read.measurement_id)
+            # The corroborator reads the signal the derivative was measured on, not this branch's
+            # own stream: two counts over two different signals corroborate nothing.
+            second_stream_id, second_audio = resolve_stream(store, run_dir, read.signal)
+            store.used(second_act, second_stream_id)
+            [second_segments] = diarize_audios([second_audio], model=second_model)
             second_count = len({segment.speaker for segment in second_segments})
             second_record = {
                 "model": str(second),
@@ -1491,12 +1596,14 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             if second_count != speaker_count:
                 flags.append(f"second diarizer counts {second_count} speakers against {speaker_count}")
 
-    # Step 5 — separation: measurement-gated, and neither backend is selected by default.
+    # Step 5 — separation: measurement-gated, and neither backend is selected by default. It runs
+    # over the whole stream, because the diarization that gates it is now a whole-file reading.
     backend = config.get("speech.separation_backend")
     sound_class = config.get("speech.separation_sound_class")
     separation_state: Any
     separated: list[Audio] = []
-    if speaker_count is None or cropped is None:
+    stream_span = (0.0, plain.waveform.shape[-1] / sampling_rate)
+    if speaker_count is None:
         separation_state = "no_speaker_count"
     elif speaker_count < SEPARABLE_SOURCES:
         separation_state = "not_needed"
@@ -1518,7 +1625,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "source_classes": [str(sound_class)],
         }
         separated = separate_audios(
-            [cropped],
+            [plain],
             model=None,
             n_sources=SEPARABLE_SOURCES,
             mode="speech_sound",
@@ -1527,22 +1634,21 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     else:
         separator = _clearvoice_model(f"{CLEARVOICE_ORG}/{backend}")
         separation_state = {"backend": str(backend), "n_sources": SEPARABLE_SOURCES}
-        separated = separate_audios([cropped], model=separator, n_sources=SEPARABLE_SOURCES)[0]
+        separated = separate_audios([plain], model=separator, n_sources=SEPARABLE_SOURCES)[0]
 
     if separated:
         separate_act = store.activity(
-            node=NODE, step="separate", parameters={"backend": str(backend), "interval": list(interval)}
+            node=NODE, step="separate", parameters={"backend": str(backend), "extent": list(stream_span)}
         )
         store.was_associated_with(separate_act, software)
         store.used(separate_act, plain_id)
-        store.used(separate_act, interval_id)
         for position, stream_audio in enumerate(separated):
             meta = dict(stream_audio.metadata.get("clearvoice") or {})
             index = int(meta.get("source_index", position))
             path, report = write_stream(stream_audio, run_dir, f"separated_{index}")
             stream_id = store.entity(
                 prov_type="stream",
-                extent=interval,
+                extent=stream_span,
                 attributes={
                     "name": f"separated_{index}",
                     **path_attributes(path, run_dir),
@@ -1640,15 +1746,21 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             flags.append(refusal)
         elif speaker_segments:
             probe = _embedding_model(values["enrollment_model_id"], values["enrollment_revision"])
-            labels = sorted({speaker for _, speaker, _ in speaker_segments})
+            labels: list[str] = []
             audios: list[Audio] = []
-            for label in labels:
+            for label in sorted({speaker for _, speaker, _ in speaker_segments}):
+                # Only the audio this speaker holds alone: the shared derivative keeps pyannote's
+                # overlapping view, so an overlapped region carries two voices and belongs to the
+                # probe of neither.
                 slices = [
-                    plain.waveform[:, int(s * sampling_rate) : int(e * sampling_rate)]
-                    for _, speaker, extent in speaker_segments
-                    if speaker == label
-                    for s, e in [clamp_extent(extent, plain)]
+                    plain.waveform[:, int(start * sampling_rate) : int(end * sampling_rate)]
+                    for start, end in _exclusive_slices(label, speaker_segments)
+                    if int(end * sampling_rate) > int(start * sampling_rate)
                 ]
+                if not slices:
+                    flags.append(f"speaker {label} holds no audio alone, so no probe can be embedded for them")
+                    continue
+                labels.append(label)
                 audios.append(Audio(waveform=torch.cat(slices, dim=1), sampling_rate=sampling_rate))
             embedding_agent = store.agent(
                 agent_type="model", model_id=str(probe.path_or_uri), commit_sha=probe.commit_sha
