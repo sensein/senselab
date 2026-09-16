@@ -390,7 +390,7 @@ class TestARealTrainProposesOneSpanWithARate:
         assert result.verdict.outcome is Outcome.FLAG
 
 
-class TestTheEventWalkIsSensitiveToTheSmoothingWindowsParity:
+class TestTheEventWalkNoLongerDependsOnTheSmoothingWindowsParity:
     """A property of the ported instrument, measured here because DDK's count depends on it.
 
     ``events_in_extent`` requires a maximum to stand over a trough on *both* sides. ``boxcar`` is
@@ -409,9 +409,9 @@ class TestTheEventWalkIsSensitiveToTheSmoothingWindowsParity:
 
     @pytest.mark.parametrize(
         ("window_s", "complete"),
-        [(0.009, True), (0.010, False), (0.011, True), (0.012, False), (0.015, True)],
+        [(0.009, True), (0.010, True), (0.011, True), (0.012, True), (0.015, True)],
     )
-    def test_the_same_twenty_syllable_train_counts_differently_by_parity(
+    def test_the_same_twenty_syllable_train_counts_the_same_at_every_width(
         self,
         store: ProvStore,
         tmp_path: Path,
@@ -419,11 +419,16 @@ class TestTheEventWalkIsSensitiveToTheSmoothingWindowsParity:
         window_s: float,
         complete: bool,
     ) -> None:
-        """One signal, five widths: the odd ones find every syllable and the even ones do not.
+        """One signal, five widths, twenty syllables each — the defect this class found is fixed.
 
-        How many an even width loses is not asserted. Whether a given maximum ties is decided in
-        the last bit of the cosine, so the surviving count moves with an algebraically irrelevant
-        reordering of the fixture's own arithmetic; that it is not twenty does not.
+        It was found here and fixed in ``branches.boxcar`` on 2026-09-16: an even width made
+        ``np.convolve(..., mode="same")`` centre between samples, so every smooth maximum returned
+        as two equal values and the strict-maximum test found neither. The packaged
+        ``smoothing_window_s`` of 0.01 s is 160 samples at 16 kHz -- even -- and lost 12 of these
+        20. ``boxcar`` now raises an even width to the next odd one, so parity decides nothing.
+        This class is kept as the regression guard, since the failure was silent and directional:
+        a halved onset series doubles the intervals it does find, inflating dispersion at the
+        highest rates.
         """
         override = tmp_path / "parity.yaml"
         override.write_text(
@@ -755,7 +760,7 @@ class TestTheNodeRunsRatherThanBeingRecordedNoNode:
         folded = fold_file_verdict(
             [result.verdict],
             branch_decisions={
-                "DDK": BranchDecision(branch="DDK", will_run=True, route_state="routed", forced_by_hint=False)
+                "DDK": BranchDecision(branch="DDK", will_run=True, route_state="routed", forced_by_declaration=False)
             },
             ran={"DDK": RunState.COMPLETED},
             hint_claims={},
@@ -770,7 +775,7 @@ class TestTheNodeRunsRatherThanBeingRecordedNoNode:
         folded = fold_file_verdict(
             [NodeVerdict("DDK", Outcome.PASS, None, "concluded about no kind")],
             branch_decisions={
-                "DDK": BranchDecision(branch="DDK", will_run=True, route_state="routed", forced_by_hint=False)
+                "DDK": BranchDecision(branch="DDK", will_run=True, route_state="routed", forced_by_declaration=False)
             },
             ran={"DDK": RunState.SKIPPED},
             hint_claims={},
