@@ -797,8 +797,8 @@ def _branches(store: ProvStore) -> dict[str, dict[str, Any]]:
         store: The provenance store.
 
     Returns:
-        ``{branch: {will_run, forced_by_hint, route_state, why, verdict, flags}}``. Empty when
-        ROUTING never ran, which is a graph in which no branch was ever asked.
+        ``{branch: {will_run, declared, forced_by_declaration, route_state, why, verdict, flags}}``.
+        Empty when ROUTING never ran, which is a graph in which no branch was ever asked.
     """
     decisions: dict[str, Entity] = {}
     for entity in store.entities("branch_decision"):
@@ -810,7 +810,9 @@ def _branches(store: ProvStore) -> dict[str, dict[str, Any]]:
         verdict_entity = concluded.get(branch)
         branches[branch] = {
             "will_run": bool(decision.attributes.get("will_run")),
-            "forced_by_hint": bool(decision.attributes.get("forced_by_hint")),
+            "declared": bool(decision.attributes.get("declared")),
+            "forced_by_declaration": bool(decision.attributes.get("forced_by_declaration")),
+            "declared_family": decision.attributes.get("declared_family") or "",
             "route_state": decision.attributes.get("route_state"),
             "unavailable_gates": list(decision.attributes.get("unavailable_gates") or []),
             "flag_gates": list(decision.attributes.get("flag_gates") or []),
@@ -1578,7 +1580,8 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
     for branch in sorted(branches, key=lambda name: BRANCHES.index(name) if name in BRANCHES else len(BRANCHES)):
         decision, detail = branches[branch], steps.get(branch, {})
         lines.append(
-            f"  {branch}: will_run={decision['will_run']} forced_by_hint={decision['forced_by_hint']} "
+            f"  {branch}: will_run={decision['will_run']} declared={decision['declared']} "
+            f"forced_by_declaration={decision['forced_by_declaration']} "
             f"route_state={decision['route_state']} why={decision['why']}"
         )
         lines.append(f"    outcome: {_shown(decision['verdict'])}")
@@ -1710,7 +1713,7 @@ def _decision_blocks(document: dict[str, Any]) -> list[str]:
         outcome = _shown(decision.get("verdict")) if decision["will_run"] else "not run"
         lines.append(
             f"  {branch}: {outcome}; {decision['why']}"
-            + ("; forced by task hint" if decision["forced_by_hint"] else "")
+            + ("; added by the declared task" if decision["forced_by_declaration"] else "")
         )
 
     ruleset = screening.get("ruleset") or {}

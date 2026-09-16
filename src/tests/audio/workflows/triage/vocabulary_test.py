@@ -27,7 +27,7 @@ def _decisions(forced: Sequence[str] = (), **routes: str) -> dict[str, BranchDec
     """One decision per named branch, as ROUTING writes them.
 
     Args:
-        forced: Branches a hint added although the ruleset did not route them.
+        forced: Branches the declaration added although the ruleset did not route them.
         **routes: Branch name to its route state.
 
     Returns:
@@ -38,7 +38,8 @@ def _decisions(forced: Sequence[str] = (), **routes: str) -> dict[str, BranchDec
             branch=branch,
             will_run=state == ROUTED or branch in forced,
             route_state=state,
-            forced_by_hint=branch in forced,
+            forced_by_declaration=branch in forced,
+            declared=branch in forced,
         )
         for branch, state in routes.items()
     }
@@ -48,7 +49,7 @@ def _all_declined(forced: Sequence[str] = ()) -> dict[str, BranchDecision]:
     """The empty execution set: every branch declined.
 
     Args:
-        forced: Branches a hint added anyway.
+        forced: Branches the declaration added anyway.
 
     Returns:
         The three decisions.

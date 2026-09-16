@@ -577,11 +577,22 @@ serving.
 
 ## routing
 
-Which declared tags force which kind's branch.
+The optional second declaration source. The primary one carries no key in this block: the declared
+task is read off the recording's own BIDS stem and resolved through
+taxonomy.ruleset.reference_family_set, which is the graph's one family -> branch mapping and is
+derived in family-taxonomy-ruleset.md. See routing.md, "The declared task always adds its branch".
 
-routing.hint_branch_map -- which may_contain tags and which metadata.speech_type values force which
-kind's branch. A vocabulary, null, owed the corpus it was drawn from. A tag matching no entry forces
-nothing and is recorded as unmapped; forcing only ever ADDS a branch.
+routing.hint_branch_map -- which may_contain tags and which metadata.speech_type values add which
+branch. **Null, and no derivation is owed, because the declared route needs none.** A family ->
+branch mapping already exists and is derived; a tag -> branch mapping would be a second vocabulary
+nobody fitted. The corpus's own tag vocabulary is measurable and does not name branches:
+metadata.speech_type takes non-lexical, read, elicited and recall, and non-lexical alone spans
+VOICE, DDK and AIRWAY, so no entry for it is derivable at all; recording_profile_name takes Speech,
+Breathe and Cough, which is a coarser second copy of the family knowledge and a second thing to keep
+in step with it. AudioHints carries no task field, so a caller cannot name the task through a hint
+even when asked to. The key stays as the escape hatch for a caller whose tags express something a
+family cannot, and it is additive in the same direction as the family route: a tag matching no entry
+adds nothing and is recorded as unmapped; a declaration only ever ADDS a branch.
 
 ## airway
 
@@ -1185,6 +1196,18 @@ rather than the capped consensus transcript, are in family-taxonomy-ruleset.md.
 taxonomy.ruleset -- the whole ruleset block (reference_family_set, branch_gates, branch_flags,
 emptiness, gates) is derived in family-taxonomy-ruleset.md, keyed by gate name, and is not repeated
 here.
+
+taxonomy.ruleset.reference_family_set now has a second reader, and the same four entries serve both.
+It was the family set each branch is SCORED against; as of this session it is also the mapping the
+declared task ROUTES through, since a declared task always adds a route to its own branch
+(routing.md). The entries are unchanged -- AIRWAY: airway, SPEECH: speech, VOICE: voice,
+DDK: syllable_repetition -- and no value was refitted: what changed is that ROUTING reads
+RouteEvaluation.declared, which the offline analysis had always filled from these entries and the
+graph had deliberately left empty. The mapping still skips no gate and rewrites no route state, so
+routed stays the content reading alone. Measured over the 62,547-recording features shard, the
+declared route adds 3,132 (recording, branch) routes -- AIRWAY 362, SPEECH 1,905, VOICE 361,
+DDK 504, +2.85% on 109,811 content routes -- and changes no whole-recording state. The per-branch
+counts and what they leave open are in routing.md, "Measured: +3,132 routes over 62,547 recordings".
 
 ## quality
 

@@ -209,7 +209,7 @@ release:  releasable | withheld | not_assessed
 discard_ground: "unmeasurable" | "acoustically_empty" | null
 reasons:  [ { node, outcome, kind?, why } ]        # every contributing verdict, in order
 ran:      { node: "completed" | "skipped" | "errored" }
-branches: { branch: { will_run, forced_by_hint, route_state, verdict? } }
+branches: { branch: { will_run, forced_by_declaration, route_state, verdict? } }
 findings: { branch: "present" | "absent" | "uncertain" }        # what each branch found
 routes:   { branch: "routed" | "declined" | "unavailable" }     # what the ruleset made of it
 route_state: "routed" | "empty" | "unexplained" | null          # what it made of the recording

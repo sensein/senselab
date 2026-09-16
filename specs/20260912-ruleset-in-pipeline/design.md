@@ -108,21 +108,31 @@ floor. And one level up again: `routing._ruleset_selection` returns `((), None)`
 measurement is absent or its `state` is null, so a reading that was never made can never be counted
 as a reading that routed nothing.
 
-## Decision 4 — the evaluation carries no declaration
+## Decision 4 — the evaluation carried no declaration, and now carries it
+
+**Superseded by the owner decision in
+[`../20260817-triage-workflow-dag/routing.md`](../20260817-triage-workflow-dag/routing.md): routing
+always adds a route to branches based on the task declaration.** What is kept here is why the field
+was empty in the first place, because the reason still constrains where it may be read.
 
 `RouteEvaluation` has a `declared` field: the branches the recording's task family is a reference
-positive for. That is a reference standard, and it is read out of the BIDS stem's `task-` id, which
-is a declaration.
+positive for. It is read out of the BIDS stem's `task-` id, which is a declaration.
 
-TAXONOMY does not read declarations — `taxonomy()`'s own docstring says a classification that reads
-the declaration cannot disagree with it. So the in-pipeline evaluation sets `task_id` and `family`
-to `""`, `declared` comes back empty, and `agreed` / `missed` / `extra` with it. `routed`, `state`,
-`unavailable`, `flags` and `gate_outcomes` are the fields this path fills, and they are content-only,
-which is what the corpus comparison needs.
+**The original decision.** TAXONOMY does not read declarations — `taxonomy()`'s own docstring says a
+classification that reads the declaration cannot disagree with it. While the evaluation was written
+by TAXONOMY, `task_id` and `family` were set to `""`, `declared` came back empty, and
+`agreed` / `missed` / `extra` with it.
 
-The `stem` is still filled, off the `recording` stream entity ADMIT wrote. That is an identifier for
-joining a row back to a run, not evidence, and reading it needs no new argument threaded through the
-node signature.
+**What changed.** The evaluation moved to ROUTING, which is a *selection* node and not a
+classification one, so reading the declaration there rewrites no label and contradicts nothing:
+`live_evidence.declared_task` fills `task_id` and `family` off the stem and `declared` comes back
+populated. The constraint survives intact — `routed`, `state`, `unavailable`, `flags` and
+`gate_outcomes` are still content-only and still what the corpus comparison reduces, and no gate
+reads `family`.
+
+The `stem` is still filled, off the `recording` stream entity ADMIT wrote. It is both the join key
+for a row and, through its `task-` id, where the declaration comes from; reading it needs no new
+argument threaded through the node signature.
 
 ## Decision 5 — a reading that decides nothing must not be able to fail the node
 
@@ -152,6 +162,8 @@ One `measurement` entity named `ruleset_routing`, on `taxonomy`'s own step
 | `error` | null, or the failure |
 | `state` | `routed` \| `empty` \| `unexplained`, or null when `error` is set |
 | `routed` | the branches a gate fired for, in `BRANCHES` order — DDK included |
+| `declared` | the branches the stem's task family is a reference positive for; added with Decision 4's reversal, so the route a declaration added is auditable from the run |
+| `family` | that task family, `""` when the stem declares none |
 | `gate_outcomes` | every gate's outcome by name; every gate is evaluated on every recording |
 | `unavailable` | per branch, the gates whose feature could not be read |
 | `flags` | per branch, the flag gates that fired; a flag annotates and never routes |
