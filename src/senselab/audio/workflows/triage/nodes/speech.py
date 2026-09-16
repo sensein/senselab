@@ -1,18 +1,24 @@
-"""The SPEECH branch: the consensus transcript, diarization, an enrolled target, PII, quality.
+"""The SPEECH branch: the expectation, the consensus transcript, the speakers, PII and quality.
+
+Two entry points and one mode decision. ``align_speech`` evaluates a declared speech task against
+what its own instruction asked for; ``detect_speech`` finds lexical speech on a recording of another
+branch's kind and evaluates nothing. :func:`~...nodes.branches.dispatch` picks between them from the
+declared task family alone, and both write by ``propose`` only.
 
 It runs no ASR and never re-transcribes: PREPROCESS wrote the consensus text stream with
-``senselab.audio.workflows.triage.consensus.align_sources`` and this branch reads it. Speech spans
-come from the lexical consensus words' timings, never the envelope, and pyannote sees only
-``[first word start, last word end]``. The second
-diarizer runs only when pyannote's count is not 1; separation runs only when
-``speech.separation_backend`` names a backend. The target speaker is identified by a caller-supplied
-enrollment, not by a per-file hint, and an enrollment is refused rather than compared unless its
-model and its resolved commit are both the probe's. The PII scan reads the consensus transcript and
-each recognizer's own transcript, once, and marks every occurrence of what it finds on the
-consensus words. This branch marks; it removes nothing.
+``senselab.audio.workflows.triage.consensus.align_sources`` and this branch reads it. It runs no
+diarizer either: the speakers are PREPROCESS's whole-file ``<stream>_diarization`` derivative, read
+back. Speech spans come from the lexical consensus words' timings, never the envelope. The second
+diarizer runs only when the read count is not 1 and ``speech.second_diarizer`` names a model;
+separation runs only when ``speech.separation_backend`` names a backend. The target speaker is
+identified by a caller-supplied enrollment, not by a per-file hint, and an enrollment is refused
+rather than compared unless its model and its resolved commit are both the probe's. The PII scan
+reads the consensus transcript and each recognizer's own transcript, once, and marks every
+occurrence of what it finds on the consensus words. This branch marks; it removes nothing.
 
 Every parameter's derivation is in ``data/config/default.yaml``; the design is in
-``specs/20260817-triage-workflow-dag/branch-speech.md``.
+``specs/20260817-triage-workflow-dag/branch-speech.md`` and what porting it decided is in
+``branch-speech-implementation.md`` beside it.
 """
 
 from __future__ import annotations
