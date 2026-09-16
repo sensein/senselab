@@ -1059,6 +1059,64 @@ Hint tag vocabularies (speech.hint_tags, voice.hint_tags) -- which may_contain t
 caller asserting each kind, seeded from the design documents' own member names. Vocabulary, not
 fitted; extended by override.
 
+## branch
+
+The operating points the four branches' expectation matching reads, shared across AIRWAY, SPEECH,
+VOICE and DDK.
+
+**Every numeric key in this section is null, and that is the whole derivation.**
+`specs/20260817-triage-workflow-dag/expected-patterns.md` is a method inventory, not a threshold
+fit: its own opening says no number in it is fitted, and its executable section states that no
+number appears in any body. Each `p_*` there names a boundary a method needs and does not say where
+it falls. Shipping a value chosen to make a branch run would be an unmeasured decision with a
+public interface -- the same failure the 70 per-knob flags were removed for -- so the keys exist,
+carry `null`, and reading one raises with the key named. A branch body that needs an unmeasured
+boundary therefore fails loudly on the recording it was asked about rather than returning a verdict
+computed from a number nobody chose.
+
+The keys are read lazily, one at a time, through `BranchParams`' properties rather than eagerly
+into a record at construction. Eager reading would make the first null fail every branch on every
+recording, including the bodies that need none of the nulls; lazy reading fails only the body that
+needs the key. That is a consequence of shipping 38 nulls at once and is worth naming, because an
+eager `Params` dataclass is what the design document writes.
+
+What each one would take to settle is a measurement over the corpus the method is for, and none has
+been taken. The four the design flags as the hardest are recorded here so they are not mistaken for
+oversights:
+
+  branch.place_centroid_bands_hz, branch.place_margin_db: the /p/, /t/, /k/ burst-spectrum contrast.
+    The design states the instrument (`spectrogram_wideband`, a 5 ms window at a 5 ms hop, the
+    classical resolution) and that all three places sit inside the 8 kHz ceiling. What it does not
+    state is where the three bands are or what margin resolves a place, and a band triple read off
+    a textbook is not a fit on this corpus's microphones.
+  branch.score_min: one score minimum for HeAR and YAMNet alike, read against `raw_scores` rather
+    than against `labels`. The shipped `windows.*.label_thresholds` are null for all three
+    classifiers, which is why `raw_scores` is the subject at all; a single cut across two
+    classifiers whose score scales were never compared is exactly the kind of value that must be
+    measured rather than assumed.
+  branch.min_contrast_db, branch.effort_split_hz: the within-recording effort contrast. `level` is
+    uncalibrated and no SPL reference exists anywhere in the graph, so the absolute reading is
+    `NOT_SEPARABLE_BY_THIS_DESIGN` and only the contrast is available. Where the split falls and how
+    far two effort levels must differ are both unmeasured.
+  branch.tilt_max_db_per_octave: QUALITY's occlusion reading. The design names `band_profile` as an
+    owed derivative (D3), so the instrument this cut would be taken on does not exist yet.
+
+branch.label_sets -- the one key here that is not a number, and the one that ships with a value. It
+maps a label-set name to the classifier labels that ARE that sound, and the two shipped entries are
+`airway.labels_of_interest` (`[Cough, Breathe]`) split by which kind each label names: `cough:
+[Cough]`, `breath: [Breathe]`. No new decision is taken -- the set membership is the one already
+derived under [airway](#airway) -- and it is a data mapping (`DATA_MAP_PATHS`) so a campaign can add
+a set without editing the installed package. Whether HeAR's `Baby Cough` and `Throat Clear` belong
+in the cough set is a question this split does not answer and does not pretend to: adding either
+would widen the evidence for every counted cough family at once, which is a measurement.
+
+`p_normalise` has NO key. It is a function, not a number, so a config key naming one would be a
+plugin hook nobody has measured, and a second normalisation spelling would compare tokens against a
+transcript normalised another way. `BranchParams.p_normalise` resolves to
+`senselab.audio.workflows.triage.consensus.vocabulary_key`, which is the normalisation the consensus
+(`consensus.py:42`) and the stimulus alignment (`stimulus.py:35`) both declare as "casefold; keep
+alphanumerics and apostrophe".
+
 ## taxonomy
 
 `taxonomy.consolidation_floor` **0.2** -- owner-directed, applied to every classifier, both to
