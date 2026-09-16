@@ -94,6 +94,8 @@ class Finding(NamedTuple):
         start: Extent start, or None when the finding is per recording.
         end: Extent end, or None when the finding is per recording.
         evidence: The finding's own payload.
+        derived_from: The entity ids this finding was read off. Required whenever the finding
+            carries an extent; :func:`write_findings` refuses one that does not.
     """
 
     kind: str
@@ -101,6 +103,7 @@ class Finding(NamedTuple):
     start: float | None
     end: float | None
     evidence: dict[str, Any]
+    derived_from: tuple[str, ...] = ()
 
 
 FINDING_KINDS = ("deviation", "count", "measure", "contest")
@@ -217,26 +220,34 @@ quality_span = proposer("quality")
 """QUALITY is not a routed branch and has only the detect mode, so it is not in :data:`PROPOSERS`."""
 
 
-def deviation(name: str, start: float | None, end: float | None, **evidence: Any) -> Finding:  # noqa: ANN401
+def deviation(
+    name: str,
+    start: float | None,
+    end: float | None,
+    /,
+    *derived_from: str,
+    **evidence: Any,  # noqa: ANN401
+) -> Finding:
     """A finding that the recording departs from what was expected.
 
     Args:
-        name: The deviation type.
-        start: Extent start, or None when the deviation is per recording.
-        end: Extent end, or None.
+        name: The deviation type. Positional only, so a ``name`` keyword reaches the payload.
+        start: Extent start, or None when the deviation is per recording. Positional only.
+        end: Extent end, or None. Positional only.
+        *derived_from: The entity ids the deviation was read off. Required when an extent is given.
         **evidence: The deviation's payload.
 
     Returns:
         The finding.
     """
-    return Finding("deviation", name, start, end, dict(evidence))
+    return Finding("deviation", name, start, end, dict(evidence), tuple(derived_from))
 
 
 def contest(span_id: str, extent: tuple[float, float], claim: str, reason: str) -> Finding:
     """An assertion beside an existing span that it does not carry what was proposed.
 
     Args:
-        span_id: The span being contested.
+        span_id: The span being contested, which is also the assertion's derivation.
         extent: That span's extent.
         claim: What is being contested.
         reason: Why, in controlled vocabulary.
@@ -244,37 +255,47 @@ def contest(span_id: str, extent: tuple[float, float], claim: str, reason: str) 
     Returns:
         The finding.
     """
-    return Finding("contest", claim, extent[0], extent[1], {"of_span": span_id, "reason": reason})
+    return Finding("contest", claim, extent[0], extent[1], {"reason": reason}, (span_id,))
 
 
-def count(name: str, found: Any, declared: Any) -> Finding:  # noqa: ANN401
+def count(name: str, found: Any, declared: Any, *derived_from: str) -> Finding:  # noqa: ANN401
     """What was found beside what the instruction declared. Asserts no discrepancy.
 
     Args:
         name: The count's name.
         found: What was measured.
         declared: What the instruction asked for.
+        *derived_from: The entity ids counted over, if any.
 
     Returns:
         The finding.
     """
-    return Finding("count", name, None, None, {"found": found, "declared": declared})
+    return Finding("count", name, None, None, {"found": found, "declared": declared}, tuple(derived_from))
 
 
-def measured(name: str, start: float | None, end: float | None, value: Any, **covariates: Any) -> Finding:  # noqa: ANN401
+def measured(
+    name: str,
+    start: float | None,
+    end: float | None,
+    value: Any,  # noqa: ANN401
+    /,
+    *derived_from: str,
+    **covariates: Any,  # noqa: ANN401
+) -> Finding:
     """A branch measurement over its own extent, with the covariates that qualify it.
 
     Args:
-        name: The measurement's name.
-        start: Extent start, or None when the measurement is per recording.
-        end: Extent end, or None.
-        value: The value.
+        name: The measurement's name. Positional only, so a ``name`` keyword reaches the covariates.
+        start: Extent start, or None when the measurement is per recording. Positional only.
+        end: Extent end, or None. Positional only.
+        value: The value. Positional only, for the same reason.
+        *derived_from: The entity ids the value was read off. Required when an extent is given.
         **covariates: What the value must be read against.
 
     Returns:
         The finding.
     """
-    return Finding("measure", name, start, end, {"value": value, **dict(covariates)})
+    return Finding("measure", name, start, end, {"value": value, **dict(covariates)}, tuple(derived_from))
 
 
 def deviation_names(findings: Sequence[Finding]) -> tuple[str, ...]:
@@ -371,20 +392,30 @@ def write_findings(
 
     Returns:
         The entity ids written, assertions and measurements in the order the findings were given,
-        with the single ``counts`` measurement last when any count was present.
+        with the single ``counts`` measurement last when any count was present. The folded
+        ``counts`` measurement derives from the union of its entries' sources, first-seen order.
 
     Raises:
-        ValueError: If a finding carries a kind outside :data:`FINDING_KINDS`.
+        ValueError: If a finding carries a kind outside :data:`FINDING_KINDS`, or if a finding
+            carrying an extent names no evidence.
     """
     unknown = sorted({finding.kind for finding in findings} - set(FINDING_KINDS))
     if unknown:
         raise ValueError(f"unknown finding kinds {unknown}; expected one of {list(FINDING_KINDS)}")
     written: list[str] = []
     counts: dict[str, Any] = {}
+    count_sources: dict[str, None] = {}
     for finding in findings:
         extent = None if finding.start is None or finding.end is None else (finding.start, finding.end)
+        if extent is not None and not finding.derived_from:
+            raise ValueError(
+                f"{finding.kind}/{finding.name}: a finding over an extent names its evidence; "
+                "refusing to write a finding whose relationship to the region it was read off is "
+                "unrecorded, because extent coincidence is not an edge a reader can follow"
+            )
         if finding.kind == "count":
             counts[finding.name] = dict(finding.evidence)
+            count_sources.update(dict.fromkeys(finding.derived_from))
             continue
         if finding.kind == "measure":
             attributes = {"name": finding.name, "signal": signal, **finding.evidence}
@@ -397,6 +428,8 @@ def write_findings(
             )
         store.was_generated_by(entity_id, activity_id)
         store.was_attributed_to(entity_id, agent_id)
+        for source_id in finding.derived_from:
+            store.was_derived_from(entity_id, source_id)
         written.append(entity_id)
     if counts:
         entity_id = store.entity(
@@ -404,6 +437,8 @@ def write_findings(
         )
         store.was_generated_by(entity_id, activity_id)
         store.was_attributed_to(entity_id, agent_id)
+        for source_id in count_sources:
+            store.was_derived_from(entity_id, source_id)
         written.append(entity_id)
     return written
 
