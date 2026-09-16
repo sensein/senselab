@@ -1365,7 +1365,7 @@ def off_task(components: Sequence[Proposal], spans: Sequence[Entity], p_gap_off_
             continue
         if any(overlaps(extent, (component.start, component.end)) for component in components):
             continue
-        out.append(deviation("off_task_extent", extent[0], extent[1], measure="gap"))
+        out.append(deviation("off_task_extent", extent[0], extent[1], gap.id, measure="gap"))
     return out
 
 
