@@ -12,6 +12,9 @@ import re
 _TASK = re.compile(r"_task-(?P<task>[^_]+)$")
 _TRAILING_INDEX = re.compile(r"(?:-\d+)+$")
 
+UNKNOWN_TASK = "unknown"
+"""The task id of a stem carrying no ``task-`` entity, which is a stem that declares nothing."""
+
 SYLLABLE_REPETITION: frozenset[str] = frozenset(
     {
         "diadochokinesis-buttercup",
@@ -125,10 +128,10 @@ def task_id_of(stem: str) -> str:
         stem: A stem such as ``sub-a_ses-b_task-harvard-sentences-list-10-3``.
 
     Returns:
-        The lowercased task id, or ``"unknown"`` when the stem carries no ``task-`` entity.
+        The lowercased task id, or :data:`UNKNOWN_TASK` when the stem carries no ``task-`` entity.
     """
     match = _TASK.search(stem)
-    return match.group("task").lower() if match else "unknown"
+    return match.group("task").lower() if match else UNKNOWN_TASK
 
 
 def task_family(task_id: str) -> str:

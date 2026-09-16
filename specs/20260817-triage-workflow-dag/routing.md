@@ -2,7 +2,7 @@
 
 Decides **which branches run**. It evaluates the family taxonomy ruleset over the store
 [`TAXONOMY`](taxonomy.md) has just finished writing, records that reading, and turns it — plus the
-hints — into an execution set.
+recording's own declaration — into an execution set.
 
 Until 2026-09-13 it read `kind` elements instead. Those emitted a constant and are gone; the staging
 is in [`../20260912-ruleset-in-pipeline/design.md`](../20260912-ruleset-in-pipeline/design.md).
@@ -30,8 +30,10 @@ be caught and recorded on the measurement, which was correct only while the read
 | PREPROCESS's whole derivative set — spans, consensus words, per-span classifier scores, the residual reading, the posteriorgram sidecar | PREPROCESS | the eleven gates' feature paths |
 | `yamnet_label_summary` | TAXONOMY | `voice.glide` and `voice.chant` read `plain|yamnet` off it, which is why this node runs after TAXONOMY |
 | `taxonomy.ruleset` | config | every gate's feature path, comparison and threshold, and the emptiness bypass |
+| `taxonomy.ruleset.reference_family_set` | config | which task family declares which branch |
+| the `recording` stream's `path` | ADMIT | the `task-` id, hence the declared family |
 | `routing.hint_branch_map` | config | which declared tag names which branch |
-| `hint.may_contain`, `hint.metadata.speech_type` | caller, optional | the forcing decision |
+| `hint.may_contain`, `hint.metadata.speech_type` | caller, optional | a second, optional declaration source |
 
 No number in this node is a literal. The operating points, which of them are provisional, and the
 open questions are in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md), keyed by gate name.
@@ -41,8 +43,8 @@ open questions are in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md)
 | route state | meaning | branch |
 | --- | --- | --- |
 | `routed` | a gate fired for the branch | **runs** |
-| `declined` | every gate was evaluated and none fired | does not run, unless a hint forces it |
-| `unavailable` | no gate fired and at least one of the branch's gates could not read its feature | does not run, unless a hint forces it |
+| `declined` | every gate was evaluated and none fired | does not run, unless the declaration names it |
+| `unavailable` | no gate fired and at least one of the branch's gates could not read its feature | does not run, unless the declaration names it |
 
 **`unavailable` is kept apart from `declined` and does not run the branch.** A gate whose measurement
 was never written did not decline — that distinction is load-bearing throughout the analysis and is
@@ -73,39 +75,101 @@ subject in ([`branch-voice.md`](branch-voice.md)), a routed branch with no node
 ([`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § G).
 Thirteen recordings fit nothing; what they show is which axis to measure next.
 
-## Hints force execution; they never alter the reading
+## The declared task always adds its branch; it never alters the reading
 
-A hint naming a branch — through `may_contain` or the task's `speech_type` — **forces that branch to
-run**, whatever the ruleset made of it. The forcing is recorded as `forced_by_hint`, and:
+**Owner decision: the routing always adds a route to branches based on the task declaration.** A
+branch the declaration names **runs**, whatever the ruleset made of it, and:
 
-- the route state is **not** rewritten. A forced branch runs against a `declined` route, and the
+- the route state is **not** rewritten. A declared branch runs against a `declined` route, and the
   disagreement between the two is what [`verdict.md`](verdict.md) detects as a mismatch;
-- forcing adds a branch. It never removes one, never relaxes a threshold, and never makes a branch's
-  own conclusion more or less likely.
+- the declaration adds a branch. It never removes one, never relaxes a threshold, and never makes a
+  branch's own conclusion more or less likely. A branch content routed stays routed and is still
+  recorded as content-routed;
+- both sources naming the same branch is one route, not two. `will_run` is a boolean per branch and
+  the execution set is built by one pass over `BRANCHES`, so nothing can be entered twice.
 
-The mapping from a hint tag or `speech_type` value to a branch is the config key
-`routing.hint_branch_map`. A tag with no entry forces nothing and is recorded as unmapped; a tag
-whose entry names something that is not a branch is recorded as unmapped **and** named in
-`bad_map_values`, because a one-character typo under-claims every file in a run and is a different
-thing to chase from a tag the vocabulary does not cover.
+### The declaration is the task, and the task comes off the recording's own path
 
-The hint layer is due its own design pass. This node's job here was re-keying it from kinds to
-branches, and the forcing behaviour is otherwise unchanged.
+Two sources could supply it and the authoritative one is the task itself:
 
-### Measured: the hint changes nothing, and the map would have changed no route
+1. **The derived task family** (always consulted). ADMIT writes the source `path` onto the
+   `recording` stream. `live_evidence.declared_task` reads the stem's `task-` id through
+   `families.task_id_of` / `task_family`, and `evaluate_routes` resolves that family through
+   `taxonomy.ruleset.reference_family_set` into `RouteEvaluation.declared` — which is the field the
+   offline analysis has always filled and the graph deliberately left empty. ROUTING now reads it.
+2. **A hint tag** (optional, unchanged). `hint.may_contain` and `hint.metadata.speech_type` through
+   `routing.hint_branch_map`.
 
-Thirteen b2ai v3.1 recordings run twice — once `hint=None`, once hinted from the BIDS sidecars — differ
-in exactly one field across both stores: `unmapped_tags`, `[]` against the declared tags, on four
-decisions. `forced_by_hint` false on 52/52 decisions. Replaying `_map_tags` and the `will_run` rule
-offline with the map **populated** forces **zero** branches on any of the 13, because the content
-ruleset had already routed every declared branch; the only tag left unmapped would be `non-lexical`,
-which names no branch.
+**Why the family and not the tags.** A family → branch mapping needs no new vocabulary: the graph
+already holds exactly one, `reference_family_set`, and it is derived in
+[`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md). Populating `hint_branch_map` instead
+would mean inventing one. The corpus's own tag vocabulary is measurable and does not name branches:
+`speech_type` takes `non-lexical`, `read`, `elicited` and `recall` — `non-lexical` alone spans
+VOICE, DDK and AIRWAY, so no entry for it is derivable — and `recording_profile_name` takes
+`Speech`, `Breathe`, `Cough`, which is a coarser second copy of the family knowledge and would be a
+second thing to keep in step. `AudioHints` carries no task field at all, so a caller could not name
+the task even if asked to. `hint_branch_map` therefore **stays null**, as the optional second
+source, additive in the same direction; the derivation is in
+[`config-derivations.md`](config-derivations.md).
 
-That is evidence for content-first routing on this material and **not** an argument that the map is
-unnecessary — thirteen recordings say nothing about the population where content and declaration
-disagree, which is the population a forcing map exists for. The values, the diff method and the
-counterfactual's exact map are in
-[`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § A.
+A recording whose stem carries no `task-` entity and whose caller passed no hint declares nothing
+and routes by content alone, exactly as before. A stem spelling `task-unknown` literally is read as
+no declaration, because that string is `task_id_of`'s own sentinel for "no task entity"; no family
+set names `unknown`, so it could add no route either way.
+
+`reference_family_set` is therefore now **both** the reference standard the routed set is scored
+against and the router the declaration goes through. It still skips no gate and rewrites no route
+state, so `routed` stays the content reading alone in every consumer.
+
+A tag with no map entry adds nothing and is recorded as unmapped; a tag whose entry names something
+that is not a branch is recorded as unmapped **and** named in `bad_map_values`, because a
+one-character typo under-claims every file in a run and is a different thing to chase from a tag the
+vocabulary does not cover.
+
+### `forced_by_hint` no longer carried the right meaning and was renamed
+
+The added route is now usually a family's, not a hint's, so the flag naming it was wrong. It is
+`forced_by_declaration` — declared **and** not content-routed, which is exactly the route the
+declaration created — and `declared` beside it is the claim itself, true whether or not it changed
+the outcome. `why` reads `route_<state>_forced_by_declaration`. `declared_family` and
+`declared_by_family` name *which* source declared it, so a hint-added branch and a family-added
+branch stay tellable apart. No parallel field and no alias: pre-alpha.
+
+### Measured: +3,132 routes over 62,547 recordings, and no file-level state changed
+
+Reduced from the finished features shard at
+`/orcd/scratch/bcs/002/satra/gatematrix_20260915/evidence/features` through the same
+`evaluate_routes` the graph runs, so the added routes are exactly `RouteEvaluation.missed`.
+
+| branch | content routes | declared routes | added by declaration |
+| --- | --- | --- | --- |
+| AIRWAY | 23,606 | 13,017 | **362** |
+| SPEECH | 41,565 | 41,224 | **1,905** |
+| VOICE | 22,277 | 8,306 | **361** |
+| DDK | 22,363 | 7,989 | **504** |
+| total | 109,811 | 70,536 | **3,132** |
+
+2,955 recordings (4.7%) gain at least one route; 3,132 / 109,811 is **+2.85%** on the execution set.
+Every one of the 48 families declares at least one branch, so no recording is left declaring
+nothing: `recordings_with_no_declared_branch` is 0. Content routes are untouched by construction —
+the reduction changes no gate and no threshold.
+
+**The file-level `state` is unchanged**, because it reads `routed` and the emptiness bypass and
+neither moves: 62,023 `routed`, 337 `unexplained`, 187 `empty`, before and after. That is the
+consequence worth naming: all **524** recordings whose content routed nothing now run their declared
+branch while the whole-recording state still says `empty` or `unexplained`. For the 187 `empty`
+ones, [`verdict.md`](verdict.md)'s `acoustically_empty` discard is tested *after* any node flag, so a
+declared branch that now runs and disagrees with its `declined` route will flag the file instead of
+discarding it. How many of the 524 change triage that way is **not measurable from the shard** — it
+needs the branches to actually run — and is owed a graph run.
+
+The earlier hint measurement stands and is what this decision replaces: thirteen b2ai v3.1
+recordings run twice, hinted and unhinted, differed in exactly one field, `unmapped_tags`, with
+`forced_by_hint` false on 52/52 decisions, and replaying a populated `hint_branch_map` offline would
+have forced **zero** branches — because the content ruleset had already routed every declared branch
+on that material. Thirteen recordings said nothing about the population where content and
+declaration disagree; the 3,132 routes above are that population, measured. The values and the diff
+method are in [`benchmarks/hints-and-routing-2026-09-15.md`](benchmarks/hints-and-routing-2026-09-15.md) § A.
 
 **Gate values are not recorded anywhere.** `route_attributes` (`live_evidence.py:172-190`) writes
 `gate_outcomes` as `{name: outcome}`; the number each gate compared against its cut is in no element,
@@ -126,7 +190,7 @@ ran and found no PII, has no REDACT verdict at all, and its release axis reads `
 
 ## A file that enters no branch is recorded, not judged
 
-If no gate fires and no hint forces a branch, the execution set is empty. Every decision carries
+If no gate fires and the recording declares nothing, the execution set is empty. Every decision carries
 `will_run: false` with its route state, and the file reaches [`verdict.md`](verdict.md) with no
 branch conclusions to fold. **This node does not `flag` it.** A flag here would decide the file,
 because the fold tests any node `flag` before it tests the recording's own emptiness, and verdict.md's
@@ -162,24 +226,28 @@ expressible without any change to the store contract. Nothing in this target inv
 ## Store contract
 
 One `measurement` named `ruleset_routing`, on this node's `ruleset_routing` step, carrying `state`,
-`routed`, `gate_outcomes`, `unavailable`, `flags`, `sources` and `stem` — the shape is in
-[`../20260912-ruleset-in-pipeline/design.md`](../20260912-ruleset-in-pipeline/design.md). Then one
-`branch_decision` element per branch, written before any branch runs:
+`routed`, `declared`, `family`, `gate_outcomes`, `unavailable`, `flags`, `sources` and `stem` — the
+shape is in [`../20260912-ruleset-in-pipeline/design.md`](../20260912-ruleset-in-pipeline/design.md).
+`declared` and `family` are new: the declaration that added a route must be auditable from the run
+rather than only from re-deriving it off the stem. Then one `branch_decision` element per branch,
+written before any branch runs:
 
 ```
 branch_decision: {
-  branch:            "AIRWAY" | "SPEECH" | "VOICE" | "DDK",
-  will_run:          bool,
-  route_state:       "routed" | "declined" | "unavailable",
-  unavailable_gates: [ ... ],   # this branch's gates that could not read their feature
-  flag_gates:        [ ... ],   # this branch's flag gates that fired; a flag never routes
-  forced_by_hint:    bool,
-  hint_tags:         [ ... ],   # the tags naming this branch; forced_by_hint says whether they
-                                # changed the outcome
-  unmapped_tags:     [ ... ],
-  bad_map_values:    { tag: value },
-  why:               "route_<state>" | "route_<state>_forced_by_hint",
-  stream:            name
+  branch:                "AIRWAY" | "SPEECH" | "VOICE" | "DDK",
+  will_run:              bool,
+  route_state:           "routed" | "declined" | "unavailable",   # content only, never rewritten
+  unavailable_gates:     [ ... ],   # this branch's gates that could not read their feature
+  flag_gates:            [ ... ],   # this branch's flag gates that fired; a flag never routes
+  declared:              bool,      # the declaration named this branch, however it ran
+  forced_by_declaration: bool,      # declared and NOT content-routed: the route the declaration added
+  declared_family:       name,      # the task family the stem declares; "" when it declares none
+  declared_by_family:    bool,      # that family named this branch, as against a hint tag naming it
+  hint_tags:             [ ... ],   # the tags naming this branch, when a hint supplied any
+  unmapped_tags:         [ ... ],
+  bad_map_values:        { tag: value },
+  why:                   "route_<state>" | "route_<state>_forced_by_declaration",
+  stream:                name
 }
 ```
 
@@ -194,7 +262,8 @@ decision instead; a branch with `will_run: true` and no verdict errored, and the
 
 ```
 outcome:   pass          # always; this node reaches no conclusion about the recording
-verdict:   { runs: [...], skipped: [...], forced: [...], empty_set: bool,
+verdict:   { runs: [...], skipped: [...], forced: [...], declared: [...],
+             declared_family: name, empty_set: bool,
              route_state: state, routes: { branch: route_state } }
 view:      the ruleset_routing measurement id, then the branch_decision ids
 ```
@@ -210,7 +279,8 @@ Derivations live in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md) a
 
 | key | what is owed |
 | --- | --- |
-| `routing.hint_branch_map` | which hint tags and `speech_type` values force which branch; a vocabulary, owed the corpus it was drawn from. **Null** in the packaged config, so every tag is unmapped and nothing is forced. Measured 2026-09-15: populating it would have forced nothing on 13 real recordings, so what it is owed is a population where content and declaration disagree, not a larger sample of agreement |
+| `routing.hint_branch_map` | **No longer owed a derivation, and deliberately still null.** The declared route now comes from the task family through `reference_family_set`, which needs no new vocabulary; the corpus's tag vocabulary does not name branches (`non-lexical` spans three) and `recording_profile_name` would be a second copy of the family knowledge. It stays as the optional caller-supplied second source. What is owed is only the corpus a *caller* would draw tags from, if one ever supplies tags a family cannot express |
+| the triage effect of the 524 newly-routed empty recordings | 337 `unexplained` and 187 `empty` recordings now run their declared branch while the whole-recording state is unchanged. For the 187, `verdict.md` tests any node flag before the `acoustically_empty` discard, so a declared branch disagreeing with its `declined` route flags the file instead of discarding it. How many change triage needs the branches to run and is **not** derivable from the features shard; owed a graph run |
 | the ruleset's operating points | scored 0.97 / 0.95 / 0.96 / 0.94 sensitivity across AIRWAY / SPEECH / VOICE / DDK over 62,547 recordings, 333 of them (0.5%) reaching no branch. Which gates are provisional is in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md). **Recall is not the axis under strain on real material**: 13/13 declared branches were reached in the 2026-09-15 run and every flag traced to over-routing, to a branch with no subject, or to a wrong label |
 | the gate values behind an evaluation | the `ruleset_routing` measurement records each gate's outcome and not the number behind it, so a run cannot be audited against its own cuts without re-reducing the store. **Decided 2026-09-15: the evaluation carries them**, because a fired rule may now write a span's label and such a label must cite the rule, the evidence and the value. **Owed a code change**, no longer a decision. The span identity is owed with it: `live_spans` rows carry `"id"` (`routing_analysis/features.py:1084`) and `span_longest_s[measure] = max(durations)` (`:1134`) keeps only the scalar, so no fired gate can name the span it read |
 | the `unexplained` population | 0.5% of the corpus at the scored operating points, and nobody has looked at what is in those recordings. They now flag rather than passing silently, which is what makes the question askable |
