@@ -9,14 +9,22 @@ It is a **method inventory**, not a threshold fit. No number in it is fitted. Wh
 boundary it says what would fit it and marks it owed, per the project rule that a threshold lives in
 `data/` with a written derivation and never as a code literal.
 
-Each method is written as a **named function over named store derivatives** — the table's detection
-column carries the call, [§ The detection functions](#the-detection-functions) carries the body, and
-every family's complete derivative requirement is stated once in that family's block rather than
-assembled from its rows. Two things follow from the form. An input that does not exist has to be
-*named* to be passed, so a row that cannot be implemented says which derivative it is waiting on
-rather than reading as prose about a gap. And every function returns whether the task was done, so
-**a declared family that produced none of its patterns returns *not done*** — the declaration is
-never the answer.
+**Each branch has exactly two entry points**, per the owner's decision of 2026-09-15: an
+`align_<branch>` that evaluates a task of the branch's own kind against what the instruction asked
+for, and a `detect_<branch>` that, on a task of any other kind, finds and marks evidence of the
+branch's own speciality and evaluates nothing. The per-task variation lives in **data** — one
+`Expectation` row per in-family (branch, family) pair — and the code lives in
+[§ The code](#the-code-two-entry-points-per-branch), which is Python that compiles and runs rather
+than pseudo-code. Every family's complete derivative requirement is stated once in that family's
+block rather than assembled from its rows.
+
+Three things follow from the form. An input that does not exist has to be *named* to be passed, so a
+row that cannot be implemented says which derivative it is waiting on rather than reading as prose
+about a gap. Every in-family entry point returns whether the task was done, so **a declared family
+that produced none of its patterns returns *not done*** — the declaration is never the answer. And
+per the owner's second decision, of 2026-09-16, **both modes write by `propose` only**: a branch
+mints spans in its own family and never edits a span another node proposed, so every extent it has
+something to say about is a span it names its own evidence for.
 
 Every corpus figure below was measured on 2026-09-15 over
 `/orcd/data/satra/002/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04` — 2,005 subjects,
@@ -68,6 +76,138 @@ to find; a method that scores the recording against the declaration is measuring
 This is the same line
 [`../20260913-branch-contract-and-hints/design.md:942-948`](../20260913-branch-contract-and-hints/design.md)
 draws for the two counts.
+
+## Two modes per branch, and only two
+
+The owner, 2026-09-15:
+
+> *"each branch will have to do an alignment with expectation function eval for tasks that fit the
+> branch and for tasks that are given to it but not associated with the branch, it should be
+> detecting/refining spans that contain elements the branch specializes for"*
+
+**So a branch has exactly two entry points, and which one runs is one membership test.**
+
+| mode | entry point | when | the question it answers | `done` |
+| --- | --- | --- | --- | --- |
+| **in-family** | `align_<branch>(task_family, store, hints, params)` | the recording's declared family is one this branch owns | *were the expected patterns found, where, and what deviates from them* | `True` / `False` / `UNDETERMINED` |
+| **out-of-family** | `detect_<branch>(store, params)` | the branch was routed here and the family is not its kind | *where is the evidence of this branch's own speciality, and is what was proposed actually there* | **always `UNDETERMINED`** |
+
+The second mode does **not** evaluate the task. It annotates what the branch is expert in, wherever
+it occurs, and says nothing about whether the other branch's task was done. This generalises a rule
+the owner has stated before for AIRWAY — a non-airway recording routed through AIRWAY should still
+find breathing or other airway evidence and mark, refine or refute it — and the generalisation is
+what makes it one function per branch rather than one per (branch, family) pair.
+
+**`done = UNDETERMINED` in the out-of-family mode is a rule, not a default.** An earlier draft of
+this document gave SPEECH's row over the AIRWAY families `done = (no lexical word was found)` —
+reading the absence of lexical content as *"the negative pattern held"*. Under the two-mode rule
+that is wrong: an AIRWAY-declared recording is not SPEECH's task, so SPEECH has no *"was it done"*
+to answer on it. The lexical intrusion is still found, still given an extent and still handed to AIRWAY,
+which owns the deviation ([`branch-airway.md:164-165`](branch-airway.md)); what changes is that
+SPEECH no longer renders it as a verdict of its own.
+
+### What is in family for which branch
+
+The membership test is the branch's reference family set, which the packaged config already
+declares (`default.yaml:239-243`, verified 2026-09-16):
+
+| branch | in-family families | n | source |
+| --- | --- | --- | --- |
+| AIRWAY | `AIRWAY_ELICITING` | **11** | `reference_family_set.AIRWAY: airway` (`default.yaml:240`); the set at `families.py:61-75` |
+| SPEECH | `LEXICAL_SPEECH` ∪ `SYLLABLE_REPETITION` | **31** | `reference_family_set.SPEECH: speech`, whose own trailing comment spells it `lexical_speech \| syllable_repetition` (`default.yaml:241`); the union is `SPEECH_ELICITING` at `families.py:58` |
+| VOICE | `VOICE_ELICITING` | **6** | `reference_family_set.VOICE: voice` (`default.yaml:242`); the set at `families.py:78-87` |
+| DDK | `SYLLABLE_REPETITION` | **10** | `reference_family_set.DDK: syllable_repetition` (`default.yaml:243`); the set at `families.py:15-28` |
+
+**58 (branch, family) rows over 48 declared families.** The ten `SYLLABLE_REPETITION` families are
+in family for **both** SPEECH and DDK, and that is correct rather than an overlap to resolve:
+SPEECH's expectation over them is *no lexical content*, DDK's is *a syllable train*. Both are
+alignments against an expectation; neither is the other's.
+
+### VOICE's own instrument families are not VOICE's, and the two-mode rule makes that visible
+
+`VOICE_ELICITING` has **six** members — `glides-high-to-low`, `glides-low-to-high`, `high-to-low`,
+`maximum-phonation-time`, `maximum-phonation-time-v2`, `prolonged-vowel` (`families.py:78-87`).
+**`cape-v-sentences`, `cape-v-sentences-v2`, `loudness` and `loudness-v2` are in `LEXICAL_SPEECH`**
+(`families.py:31-55`), so under the reference family set they are **out of family for VOICE**.
+
+That is the sharpest consequence of the owner's decision in this document. A CAPE-V recording is a
+voice-quality instrument — six sentences each loading a different phonatory condition — and
+`loudness-v2` is the cheapest effort measurement in the corpus. Under the two-mode rule VOICE meets
+both through `detect_voice`, which marks phonation wherever it finds it and **answers no *"was it
+done"* at all**. The per-sentence pooling and the within-recording effort contrast are still written
+below, as `VOICE_EXPECTATIONS_PENDING_DECLARATION`, and `align_voice` does not read that table.
+
+**The fix is a `families.py` decision, not a branch one**, and one half of it is already on this
+document's unsettled list: `families.py:41-42` puts `loudness` and `loudness-v2` in `LEXICAL_SPEECH`
+while the sidecars declare `speech_type: "non-lexical"` on all 897 and all 705. CAPE-V is the same
+question and was not previously asked, because the old one-function-per-(branch, family) shape let a
+`measure_cape_v_per_sentence` sit under a VOICE heading without any membership test ever running.
+
+### What routing hands each mode
+
+Routing hands a branch **one bit** — `will_run` — and nothing else: `run.py:298-300` passes
+`(store, "plain", config, hint)` to `airway`, `speech` and `voice`, and no branch reads its own
+`branch_decision` (`dag.md:1764-1767`). So the mode test is the branch's, made from the declared
+family, and the declared family reaches it two ways:
+
+- **available today, and ugly.** ADMIT writes the resolved source path onto the `recording` stream
+  entity (`admit.py:101`, `"path": str(source.resolve())`), and `task_family(task_id_of(stem))` is
+  exported from `routing_analysis` (`__init__.py:19`; `families.py:121`, `:134`). A branch can
+  therefore compute its own mode from a filename. **Implementable today**, and it puts BIDS-stem
+  parsing inside a branch, which is the thing `AudioHints` exists to prevent.
+- **the clean route, and `‡`.** `hints.metadata["task_token"]` is the only carrier of the declared
+  task, it is written only by the campaign's own builder — `make_hints.py:381`, `:397`, under **this
+  spec's own** [`runs/b2ai-v2/`](runs/b2ai-v2/make_hints.py), not under the repo root — and **it is
+  read by nothing in `src/senselab`**.
+  `AudioHints` has no `task_family` field at all (`audio_hints.py:149-154`).
+
+**Neither route recovers the trailing index**, because `task_family` strips every trailing numeric
+segment (`families.py:143`, `_TRAILING_INDEX = re.compile(r"(?:-\d+)+$")` at `:13`). That is the
+same loss the `fivebreaths` route and the `maximum-phonation-time-v2` effort escalation both take,
+and it is now a loss in the *mode selector's own input* rather than only in a per-family rule.
+
+### What the two modes replace
+
+The previous version of this document carried **37 named detection functions** — 32 per-task, 4
+out-of-family (`measure_{voice,airway,ddk}_without_declared_task` and `detect_lexical_intrusion`),
+and 1 QUALITY (`detect_occluded_microphone`) — beside three shared instruments and three one-line
+helpers. They become:
+
+| | before | after |
+| --- | --- | --- |
+| in-family determinations | **32** functions, one per (branch, task) | **58 `Expectation` rows** — data, one per in-family (branch, family) pair, built from a 22-field record — dispatched by **4** `align_*` entry points over **13** `Pattern` kinds, i.e. 13 matcher branches in place of 32 functions |
+| out-of-family determinations | 4 functions (`measure_{voice,airway,ddk}_without_declared_task`, `detect_lexical_intrusion`) | **4** `detect_*` entry points |
+| QUALITY | 1 (`detect_occluded_microphone`) | **1** `detect_quality`, folding it in — QUALITY is not routed and has only the detect mode |
+| shared instruments | 3 (`events_in_span`, `sounds_like`, `train_rate`) | the same 3, unchanged in substance, plus the small arithmetic helpers written once |
+
+Nothing was dropped to get there. Every determination the 32 functions made is either a field of an
+`Expectation` or a branch of the matcher its `Pattern` selects, and the ten determinations that were
+marked *no viable approach* are carried as data too — an `Expectation.unviable` entry that makes the
+function emit `NOT_SEPARABLE_BY_THIS_DESIGN` with its reason, rather than silently omitting the
+measurement.
+
+### Both modes write by `propose` only — the owner, 2026-09-16
+
+> *"each branch can generate new spans specific to the task of the branch. it doesn't need to edit
+> existing spans."*
+
+**A branch mints spans in its own family and never modifies a span another node proposed.** The
+mechanics, the four consequences and the code are in
+[§ The write path](#the-write-path--propose-only-and-its-four-consequences); two things belong here,
+because they change what the two modes *are* rather than how they are written.
+
+**It closes the scoping question the two-mode design would otherwise have opened.**
+`branch-conventions.md:20-23` rules that a branch *"`refine`s only a span of the family it is
+proposing into"*, and the out-of-family mode is exactly the case that rule was not written for —
+AIRWAY finding a cough inside a `harvard-sentences-list` recording wants to sharpen the boundary of
+a span AIRWAY does not own. Under propose-only there is nothing to sharpen: AIRWAY mints its own
+`family: "airway"` span over the event and names the carrier in `wasDerivedFrom`. The rule is
+satisfied by construction.
+
+**And it makes the out-of-family mode's output the same kind of thing as the in-family mode's.**
+Both return proposed spans in the branch's own family. What separates them is not what they write
+but what they claim: `align_*` answers *"were the expected patterns found"* and `detect_*` returns
+`UNDETERMINED`, because no pattern was expected of it.
 
 ## The family is the wrong grain for an expected pattern
 
@@ -363,29 +503,32 @@ The five store-wide verbs
 ([`../20260913-branch-contract-and-hints/design.md:564-570`](../20260913-branch-contract-and-hints/design.md)),
 mapped onto the pattern match:
 
+**The owner's 2026-09-16 decision cuts this table down.** *"each branch can generate new spans
+specific to the task of the branch. it doesn't need to edit existing spans."* So **every extent a
+branch has to say something about is a span it proposes**, and the two verbs that edited someone
+else's span are not used by either mode.
+
 | the match's result | verb | payload |
 | --- | --- | --- |
-| this span is where expected pattern P was found | `label` | what the span carries |
-| P was proposed here and is not there | `contest` | that it does not carry what was proposed |
-| the proposer's boundary for P is wrong | `refine` | `corrected_extent: [start, end]` |
-| this is the part of the span that serves the task | `trim` | `task_extent: [start, end]`, plus the `off_task_extent` finding |
-| P is here and PREPROCESS proposed nothing | `propose` | mints a `family: "<branch>"` span |
+| expected pattern P was found here | `propose` | mints a `family: "<branch>"` span, `wasDerivedFrom` the PREPROCESS spans and measurements the extent came from |
+| this is the part of the recording that serves the task | `propose` | the same, with `role: "task_extent"`. **Not `trim`** |
+| the proposer's boundary for P is wrong | `propose` | the branch mints its own span at the right boundary and names the proposer's in `wasDerivedFrom`. **Not `refine`** — the derivation is now the whole record of the relationship |
+| P was proposed here and is not there | `contest` | that it does not carry what was proposed. An assertion *beside* the span, not an edit to it, so it survives the decision unchanged |
+| this span carries P | `label` | what the span carries. Also an assertion beside a span |
 | P's count against the declared count | *not a verb* — a `counts` measurement, `found` beside `declared`, no discrepancy asserted |
 | P was expected and is nowhere | *not a verb* — the branch's own verdict |
 
-`refine` was widened on 2026-09-15 beyond extent: **a fired rule may stamp or refine a span's
-label** — `label` where the span carried none, `refine` where it carried one the rule sharpens
-([`design.md:407-414`](../20260913-branch-contract-and-hints/design.md),
-[`family-taxonomy-ruleset.md:383-395`](family-taxonomy-ruleset.md)). The verb table carries the
-widening: `design.md:568` declares `refine`'s payload as `corrected_extent: [start, end]` **and/or**
-`corrected_attributes: {key: value}`, at least one. So a span-metadata correction is a `refine`, not
-a second `label`, and the rows below use it that way.
+`refine` was widened on 2026-09-15 beyond extent — a fired rule may stamp or refine a span's label,
+`design.md:568` declaring its payload as `corrected_extent` **and/or** `corrected_attributes`. That
+widening is unaffected and unused here: it governs what the *ruleset* may write onto a span, not
+what a branch does with one. **No body in this document emits `refine`.**
 
-**A component span is a `propose` only when nothing proposed the ground.** Where PREPROCESS's
-amplitude spans already cover it — which on a held vowel they do, reading 15.89 s on the MPT
-recording of the 2026-09-15 run — the component is a `label` plus, where the boundary is wrong, a
-`refine`. [`branch-conventions.md:20-23`](branch-conventions.md) scopes both by family, and that
-scoping is unresolved for a label written onto an `amplitude` span.
+**A branch mints even where PREPROCESS's spans already cover the ground.** On a held vowel they do —
+`voice.sustained` read 15.89 s on the MPT recording of the 2026-09-15 run — and under propose-only
+that is not an obstacle: VOICE proposes a `family: "voice"` span over the voiced run and names the
+amplitude span in `wasDerivedFrom`. [`branch-conventions.md:20-23`](branch-conventions.md) scopes
+minting by family, and a `family: "voice"` span collides with no `family is None` reader, so the
+rule is satisfied by construction rather than by an exception.
 
 **Material matching nothing already has a carrier.** PREPROCESS writes `measure: "gap"` spans over
 every stretch no other span source covered (`preprocess.py:1912`), so `off_task_extent` does not
@@ -394,14 +537,18 @@ off-task rather than ordinary silence.
 
 ### Three inconsistencies this document had to navigate
 
-1. **`trim` has no emitter and no method.** `task_extent` appears exactly twice in the whole `specs/`
-   tree — `design.md:569` and `:602` — and **zero times in `src/senselab/`**. No branch document
-   lists `trim` in its emit block; `dag.md:1823-1824` records that AIRWAY writes none. The spec says
-   what `trim` *carries* and nothing about how the extent is *determined*. This document is the first
-   statement of that method, per family.
+1. **`trim` has no emitter and no method — and now no job.** `task_extent` appears exactly twice in
+   the whole `specs/` tree — `design.md:569` and `:602` — and **zero times in `src/senselab/`**. No
+   branch document lists `trim` in its emit block; `dag.md:1823-1824` records that AIRWAY writes
+   none. The spec says what `trim` *carries* and nothing about how the extent is *determined*. This
+   document is the first statement of that method, per family — and under propose-only the extent is
+   a span the branch mints with `role: "task_extent"`, so `trim` is not its carrier either.
 2. **`trim` and `deviate` both claim `off_task_extent`.** `design.md:569` has `trim` carrying it;
    `branch-conventions.md:108` stores every deviation as `assertion, verb: "deviate"` and
-   `branch-airway.md:350` emits AIRWAY's that way. One of the two has to go.
+   `branch-airway.md:350` emits AIRWAY's that way. One of the two has to go, and propose-only
+   settles which half of the pair is live: this document emits `off_task_extent` as a `deviate`
+   finding and never as a span, because off-task material is the *absence* of the branch's
+   speciality and a branch does not mint over ground it is disclaiming.
 3. **The contract's three deviations are not the list.** `branch-conventions.md:123-142` is
    authoritative and carries nine types. `task_extent`, `off_task`, `off_task_extent`,
    `stimulus_mismatch`, `expected_event_count` are **all zero occurrences in `src/senselab/`**;
@@ -436,61 +583,69 @@ count.
 Pattern notation: **L** = lexical, **A** = acoustic, **→** = order the instruction states,
 **&** = both expected, order not stated.
 
-**The detection column is a call, not a description.** Each row names the function that makes the
-determination and lists the store derivatives it reads, spelled as the store spells them; `†` marks
-an input no node writes today and `‡` one that exists but reaches no branch. The body — the decision
-logic, the three things it returns, and the operating points it cannot supply — is in
-[§ The detection functions](#the-detection-functions), one block per task family carrying that
-family's complete derivative requirement.
+**The detection column is a mode and a row of data, not a call.** Each row says which of the
+branch's two entry points meets the recording — `align_<branch>` when the family is in family,
+`detect_<branch>` when it is not — and, for the in-family rows, the `Expectation` that entry point
+looks up. `†` still marks an input no node writes today and `‡` one that exists but reaches no
+branch; the derivative each row needs is stated once in that family's block below rather than
+assembled from the row. The bodies — the matcher each `Pattern` selects, the three things it
+returns, and the operating points it cannot supply — are in
+[§ The code](#the-code-two-entry-points-per-branch).
+
+**A row that reads `Out of family` is not a gap.** It is the second mode doing its job: the branch
+annotates its own speciality over the recording and declines to answer *"was the task done"*,
+because that question is another branch's. Four such rows were previously written as functions of
+their own, and one — `detect_count_in` — turns out to need no successor at all.
 
 ### VOICE
 
 | branch | task | expected pattern | detection |
 | --- | --- | --- | --- |
-| VOICE | `prolonged-vowel` (1,604) | **L→A.** L: the ordered tokens `one two three`, once. A: one continuous voiced production of a single vowel /a/, held to the timer, F0 holding rather than moving. The only voice family in the corpus that is not purely non-lexical, despite `speech_type: non-lexical` | `detect_prolonged_vowel(words, spans, phonation_tracks, continuity_trace, energy_envelope, stream_extent, stimulus_alignment†)` — body: § `prolonged-vowel`. **Owed a code change** for the subject (amplitude spans carry no `family`, and `voice.py:230` selects `family == "phonation"`, so the candidate list is empty before any test runs) and **owed a cut** for the stationarity qualifier — which is a statistic over `continuity_trace` and `f0_hz`, both already in the store, not a missing estimator ([`branch-voice.md:197-210`](branch-voice.md)). The lexical separator is free: the vowel is the voiced production under no lexical word |
-| VOICE | `maximum-phonation-time` (2,696) | **A only.** One held /a/ on one breath, to exhaustion. v1's instruction places the deep inhale **before the record tap is mentioned**, so an audible inhale may be inside the file — a second acoustic pattern that is expected but is not the measurement | `detect_sustained_phonation(spans, phonation_tracks, continuity_trace, energy_envelope, stream_extent, words, span_hear, span_yamnet, hints)` — body: § `maximum-phonation-time`. Same owed code change and same owed cut. Duration of the qualified extent is V2's maximum phonation time. The v1 inhale is an AIRWAY `label`, not an `off_task_extent`. **Owed a measurement** (D2) for any voice-quality number over the extent |
-| VOICE | `maximum-phonation-time-v2` (813) | **A only**, and cleaner: the instruction puts the inhale explicitly *before* the record tap, so no inhale is expected in the file. A behavioural difference from v1, not a wording difference. **And the index carries a second condition**: `-2` (108 English recordings) appends *"Now try to hold out "ah" for even longer."*, so `-1` → `-2` is a within-subject maximum-duration contrast | `detect_sustained_phonation(..., hints.metadata.task_token‡)` — body: § `maximum-phonation-time`. The two contrasts are free and neither reaches a branch: **owed a code change**, since `task_family` collapses the trailing index (`families.py:134-144`) that carries v2's `-2` effort escalation, the same change `fivebreaths` needs |
-| VOICE | `glides-low-to-high` (1,596), `glides-high-to-low` (1,554) | **A only.** One continuous voiced production of /i/ whose F0 sweeps monotonically across the range, in the declared direction. **Not steady** — the opposite of the sustained pattern | `detect_glide(spans, phonation_tracks, continuity_trace, stream_extent, hints)` — body: § `glides-*`. **Implementable today** for the track; **owed a cut** for the dominant monotone segment and its tolerance (V3). `sweep_direction_mismatch` is the declared deviation (`branch-conventions.md:137`). The sustained qualifier does **not** transfer: `continuity_trace` stays high through a glide |
-| VOICE | `high-to-low` (43) | **identical to `glides-high-to-low`** — the instruction string is byte-for-byte the same on all 43 recordings, `stimulus_text` empty on all 43 | **Settled** — an alias, not a task: no function of its own, routed into `detect_glide` with `declared = "down"`. Whether `families.py` folds the two is a declaration question, not a branch one |
-| VOICE | `loudness` (897) | **L&A, counted.** The token `hey`, **three times**, each at maximal effort | `detect_loudness_token(words, stimulus_alignment†)` and `measure_loudness_effort(words, spans, energy_envelope, level, spectrogram_wideband, phonation_tracks.rms_dbfs†, phonation_tracks.cpps_db†)` — body: § `loudness`. The token, its three extents and the `expected_event_count: 3` count are **implementable today**. Absolute effort has **no viable approach**: `level` is uncalibrated and no SPL reference exists in the graph, so the output is a measurement with its covariates, never a `maximal` / `not maximal` verdict |
-| VOICE | `loudness-v2` (705) | **L→A, contrastive.** `hey` at normal effort **→** `hey` shouted. The measurement is the *within-recording* contrast and needs no norm | `detect_loudness_contrast(words, spans, energy_envelope, level, spectrogram_wideband)` — body: § `loudness`. **Implementable today**, and the cheapest effort measure in the corpus: a within-recording difference needs no norm and no calibration. V6 is explicit that v1 and v2 are **not one measurement** ([`branch-voice.md:736`](branch-voice.md)) |
-| VOICE | `cape-v-sentences` (2,370), `-v2` (1,224) | **A riding on SPEECH's L.** Six sentences each loading a different phonatory condition; the voice-quality measurement is per sentence and pooling discards the instrument's design | `measure_cape_v_per_sentence(stimulus_alignment†, phonation_tracks, phonation_tracks.{hnr_db,cpps_db,rms_dbfs}†, continuity_trace, words)` — body: § `cape-v-sentences`. **Owed a measurement** twice over: D1 for the six sentence boundaries, D2 for any per-sentence voice-quality number at all — today's are whole-file scalars standing for six deliberately different phonatory conditions. **Owed a code change** so the boundaries reach VOICE as selectable spans. Nothing output may be presented as a CAPE-V score |
-| VOICE | any AIRWAY- or SPEECH-declared family | **no expected pattern.** VOICE routed 22,277 recordings against 8,306 declaring a voice family | `measure_voice_without_declared_task(spans, phonation_tracks, continuity_trace, energy_envelope, words)` → `done = UNDETERMINED`; the branch concludes on its own question ([`design.md:486-507`](../20260913-branch-contract-and-hints/design.md)). **Owed a cut**: connected speech passes voiced-fraction, F0-availability and interruption tests, so the stationarity qualifier is what stops V4 computing perturbation over consonants and pauses — the same cut, here load-bearing over 22,277 recordings |
+| VOICE | `prolonged-vowel` (1,604) | **L→A.** L: the ordered tokens `one two three`, once. A: one continuous voiced production of a single vowel /a/, held to the timer, F0 holding rather than moving. The only voice family in the corpus that is not purely non-lexical, despite `speech_type: non-lexical` | **In family.** `align_voice` → `Expectation(pattern=SUSTAINED, tokens=("one", "two", "three"), token_source="instructions", declared_duration_s=12.0, lexical_separator=True)`. Reads `words` · `spans` · `phonation_tracks` · `continuity_trace` · `energy_envelope` · `stream_extent` · `stimulus_alignment†`. **Owed a code change** for the subject (amplitude spans carry no `family`, and `voice.py:230` selects `family == "phonation"`, so the candidate list is empty before any test runs) and **owed a cut** for the stationarity qualifier — which is a statistic over `continuity_trace` and `f0_hz`, both already in the store, not a missing estimator ([`branch-voice.md:197-210`](branch-voice.md)). The lexical separator is free: the vowel is the voiced production under no lexical word |
+| VOICE | `maximum-phonation-time` (2,696) | **A only.** One held /a/ on one breath, to exhaustion. v1's instruction places the deep inhale **before the record tap is mentioned**, so an audible inhale may be inside the file — a second acoustic pattern that is expected but is not the measurement | **In family.** `align_voice` → `Expectation(pattern=SUSTAINED, forbid_lexical=True, expect_inhale=True)`. Reads the same, plus `span_hear` · `span_yamnet` for the inhale. Same owed code change and same owed cut. Duration of the qualified extent is V2's maximum phonation time. The v1 inhale is an AIRWAY `label`, not an `off_task_extent`. **Owed a measurement** (D2) for any voice-quality number over the extent |
+| VOICE | `maximum-phonation-time-v2` (813) | **A only**, and cleaner: the instruction puts the inhale explicitly *before* the record tap, so no inhale is expected in the file. A behavioural difference from v1, not a wording difference. **And the index carries a second condition**: `-2` (108 English recordings) appends *"Now try to hold out "ah" for even longer."*, so `-1` → `-2` is a within-subject maximum-duration contrast | **In family.** `align_voice` → `Expectation(pattern=SUSTAINED, forbid_lexical=True, expect_inhale=False)` — the same matcher as v1, one boolean apart, which is what makes the behavioural v1/v2 difference a data difference rather than a second function. The two contrasts are free and neither reaches a branch: **owed a code change**, since `task_family` collapses the trailing index (`families.py:134-144`) that carries v2's `-2` effort escalation, the same change `fivebreaths` needs |
+| VOICE | `glides-low-to-high` (1,596), `glides-high-to-low` (1,554) | **A only.** One continuous voiced production of /i/ whose F0 sweeps monotonically across the range, in the declared direction. **Not steady** — the opposite of the sustained pattern | **In family.** `align_voice` → `Expectation(pattern=GLIDE, declared_direction="up")` and `(..., declared_direction="down")` — two rows, one matcher. **Implementable today** for the track; **owed a cut** for the dominant monotone segment and its tolerance (V3). `sweep_direction_mismatch` is the declared deviation (`branch-conventions.md:137`). The sustained qualifier does **not** transfer: `continuity_trace` stays high through a glide |
+| VOICE | `high-to-low` (43) | **identical to `glides-high-to-low`** — the instruction string is byte-for-byte the same on all 43 recordings, `stimulus_text` empty on all 43 | **Settled** — an alias, not a task: no matcher of its own, one more row in `align_voice`'s table carrying `declared_direction="down"`. Whether `families.py` folds the two is a declaration question, not a branch one |
+| VOICE | `loudness` (897) | **L&A, counted.** The token `hey`, **three times**, each at maximal effort | **Out of family for VOICE today.** `loudness` is `LEXICAL_SPEECH` (`families.py:41`), so `align_voice` never reaches it and `detect_voice` does not evaluate it. The row is written and held in `VOICE_EXPECTATIONS_PENDING_DECLARATION`: `Expectation(pattern=EFFORT, tokens=("hey",), expected_event_count=3, unviable=(("effort_absolute", …),))`. The token, its three extents and the `expected_event_count: 3` count are **implementable today**. Absolute effort has **no viable approach**: `level` is uncalibrated and no SPL reference exists in the graph, so the output is a measurement with its covariates, never a `maximal` / `not maximal` verdict |
+| VOICE | `loudness-v2` (705) | **L→A, contrastive.** `hey` at normal effort **→** `hey` shouted. The measurement is the *within-recording* contrast and needs no norm | **Out of family for VOICE today**, as v1 (`families.py:42`). Held in `VOICE_EXPECTATIONS_PENDING_DECLARATION`: `Expectation(pattern=EFFORT, tokens=("hey",), expected_event_count=2, contrast=True)` — the single field `contrast` is the whole v1/v2 difference. **Implementable today**, and the cheapest effort measure in the corpus: a within-recording difference needs no norm and no calibration. V6 is explicit that v1 and v2 are **not one measurement** ([`branch-voice.md:736`](branch-voice.md)) |
+| VOICE | `cape-v-sentences` (2,370), `-v2` (1,224) | **A riding on SPEECH's L.** Six sentences each loading a different phonatory condition; the voice-quality measurement is per sentence and pooling discards the instrument's design | **Out of family for VOICE today.** CAPE-V is `LEXICAL_SPEECH` (`families.py:33-34`), so the corpus's one deliberate voice-quality instrument reaches VOICE only through `detect_voice`. Held in `VOICE_EXPECTATIONS_PENDING_DECLARATION`: `Expectation(pattern=PER_SENTENCE, token_source="stimulus_text")`. **Owed a measurement** twice over: D1 for the six sentence boundaries, D2 for any per-sentence voice-quality number at all — today's are whole-file scalars standing for six deliberately different phonatory conditions. **Owed a code change** so the boundaries reach VOICE as selectable spans. Nothing output may be presented as a CAPE-V score |
+| VOICE | any AIRWAY- or SPEECH-declared family | **no expected pattern.** VOICE routed 22,277 recordings against 8,306 declaring a voice family | **Out of family.** `detect_voice(store, params)` → `done = UNDETERMINED`; the branch concludes on its own question ([`design.md:486-507`](../20260913-branch-contract-and-hints/design.md)). **Owed a cut**: connected speech passes voiced-fraction, F0-availability and interruption tests, so the stationarity qualifier is what stops V4 computing perturbation over consonants and pauses — the same cut, here load-bearing over 22,277 recordings |
 
 ### SPEECH
 
 | branch | task | expected pattern | detection |
 | --- | --- | --- | --- |
-| SPEECH | `harvard-sentences-list` (13,705), `cape-v-sentences` (2,370), `-v2` (1,224) | **L only**, ordered and fully specified: the words of that recording's `stimulus_text`, in order, once. One sentence per recording — the pattern is per recording, never per family. Measured: **1,060** distinct Harvard sentences, and CAPE-V v1 and v2 share only three of their six sentences. All three families carry the identical instruction, *"Please read the following sentences out loud in your typical voice."* | `detect_read_text(words, spans, stream_extent, stimulus_alignment†)` — body: § `harvard-sentences-list`. **Owed a measurement** (D1): without it the function returns `UNDETERMINED`, because the transcript alone cannot say what was expected. Substitutions and insertions are then enumerated differences carrying the consensus `agreement`; **owed a cut** for omissions, which a skip-arc-free aligner can only surface as a low acoustic score ([`branch-speech.md:115-121`](branch-speech.md)) |
-| SPEECH | `rainbow-passage` (897), `caterpillar-passage` (597) | **L only**, ordered, one long passage. Both grains agree on both fields, on all 897 and all 597 — each is its own acoustic task, so the one-to-many collapse that breaks the other families does not arise. `stimulus_text` is one 338-character passage shared by all 898 rainbow recordings, and one of 1,035 characters shared by the 582 English caterpillar recordings (the 15 Spanish ones carry a 1,079-character Spanish passage) | `detect_read_passage(words, spans, stream_extent, hear_scores, stimulus_alignment†)` — body: § `rainbow-passage`. As above at passage length, and here D1's input is legitimately family-scoped. `[breath]` tokens inside the passage are **not** `filler` — the function subtracts them from the deviation list, because they are how S4 measures breath-group structure |
-| SPEECH | `word-color-stroop` (472) | **L only, ordered, and not the displayed words.** The instruction says *name the colour, do not read the word*. `stimulus_text` is the 15-item colour sequence, i.e. the expected **answer** sequence — **472 distinct sequences over 472 recordings**, one per recording and never shared, so the pattern is maximally per-recording. Declared 75 s; measured median 75.8 s, with 463 of 472 falling between 74 and 77 s | `detect_stroop_sequence(words, spans, stream_extent, stimulus_alignment†)` — body: § `word-color-stroop`. **Owed a measurement** (D1), built per recording from that recording's own 15-colour answer sequence — 472 distinct sequences over 472 recordings. `filler` is never emitted here: hesitation and self-correction are the task's dependent variable ([`branch-speech.md:130-134`](branch-speech.md)) |
-| SPEECH | `free-speech` (3,074) | **L, unordered, with a negative pattern.** No target text. The v1 instruction says *"Do not record yourself reading the prompt"*, so `stimulus_text` is an **anti-pattern**: the question appearing verbatim in the transcript is the deviation. Four questions, per index — three asked 898 times each, one 380 | `detect_free_speech_v1(words, spans, stream_extent, stimulus_alignment†)` — body: § `free-speech`. Presence and extent are **implementable today** from `spans` `measure: "asr"`; the anti-pattern is **owed a measurement** (D1, read inverted) and **owed a cut** (`p_echo_overlap_max`). **This row cannot use the family grain at all**: one frozen prompt covers all 912 sidecars, right on 380 recordings and wrong on 2,694 |
-| SPEECH | `free-speech-v2` (2,120) | **L, unordered, and the negative pattern is gone.** v2's instruction drops *"do not record yourself reading the prompt"* entirely and asks instead to answer *"as though you were having a conversation"*. So verbatim echo is **not** declared a deviation here, and treating v1 and v2 alike would invent one. Six questions, three English (683 each) and three Spanish (24 each) | `detect_free_speech_v2(words, spans, stream_extent, declared_duration_s)` — body: § `free-speech-v2`. **Implementable today**, and it emits **no** verbatim-echo deviation: v2 drops the instruction that made echo one, so firing v1's rule here invents it. The acoustictask prompt matches none of the six v2 questions on all 707 sidecars |
-| SPEECH | `story-recall` (889), `story-recall-v2` (660) | **L, unordered, partly negative.** Recall *in the participant's own words*. `stimulus_text` is the source story — the 717-character grandfather passage for v1, the 1,083-character frog story for v2 — so semantic coverage is expected and **verbatim** reproduction is the deviation, the participant having read rather than recalled. The five Spanish v1 recordings carry the **frog** story, i.e. v2's source under v1's family name, so even here the source must be read per recording | `detect_story_recall(words, spans, stream_extent, stimulus_alignment†)` — body: § `story-recall`. **Owed a measurement** (D1) and **owed a cut** (`p_verbatim_overlap_max`); the n-gram overlap itself is arithmetic once D1 exists. The source is read per recording — the five Spanish v1 recordings carry v2's story under v1's family name |
-| SPEECH | `cinderella-story` (258) | **L, unordered, and nothing machine-readable.** `stimulus_text` is empty on all 258; the source is a physical storybook handed to the participant, so no overlap measure is even definable here | `detect_narrative_presence(words, spans, stream_extent, declared_duration_s)` — body: § `cinderella-story`. Presence and extent **implementable today**, and that is the ceiling rather than a first step: `stimulus_text` is empty on all 258, so **no overlap measure is definable**, D1 included, and the `story-recall` method does not transfer |
-| SPEECH | `productive-vocabulary` (2,910) | **L, weakly specified, per recording.** `stimulus_text` is one cue word per recording — **204 distinct cues** across the corpus, and **78 recordings carry no cue at all**. Expected is definitional speech *about* the cue, not the cue itself | `detect_definitional_speech(words, spans, stream_extent, stimulus_alignment†)` — body: § `productive-vocabulary`. Presence and extent **implementable today**; whether the speech defines its cue has **no viable approach** in this graph — a lexicon or a text model, branch-local, no waveform. 204 cues under one family name and 78 recordings with none |
-| SPEECH | `picture-description` (889), `-option1` (373), `-option2` (329) | **L only, unspecified.** Connected speech, no target text, `stimulus_text` empty on all 1,591 (the stimulus is an image URL in the sidecar). `picture-description` and `-option1` carry a **byte-identical** instruction — *"Tell me everything you see going on in this picture."* — and differ only by image; `-option2` asks for complete sentences *"as though describing it for the blind"* | `detect_connected_speech(words, spans, hear_scores, stream_extent)` — body: § `picture-description`. **Implementable today** for presence, extent, pause structure and breath groups; S4's measures are unbuilt branch code, not a missing derivative ([`branch-speech.md:157`](branch-speech.md)). The v1/option1 instructions are byte-identical, so **no method here may distinguish them** — any difference found is the image's |
-| SPEECH | `open-response-questions` (199) | **L only, unspecified.** *"Please answer the following questions and record your answer."* One `stimulus_text`, a 447-character prompt shared by all 199. Median 30 s | `detect_open_response(words, spans, hear_scores, stream_extent, declared_duration_s)` → `detect_connected_speech` plus the duration count. **Implementable today.** The single shared 447-character prompt makes this the one connected-speech family whose `expected_speech` is legitimately family-scoped |
-| SPEECH | `animal-fluency` (195) | **L, unordered, category-bound, with a repetition anti-pattern.** *"say as many animals as you can, while avoiding repeating the same ones. There is a 1 minute timer"*. `stimulus_text` empty on all 195; the category lives only in `instructions`. Median duration 60 s, matching the declared timer | `detect_item_list(words, spans, stream_extent, declared_duration_s)` — body: § `animal-fluency`. Items, their extents, the repetition anti-pattern and the duration check are **implementable today**; category membership has **no viable approach** here — it needs no waveform, has one consumer, and is branch-local rather than a PREPROCESS derivative |
-| SPEECH | `random-item-generation` (265), `-v2` (207) | **L, unordered, category-bound — and the negative constraint is category-conditional.** Ten categories per family, one per recording, living only in `instructions`. Eight of the ten (`Animals`, `City names`, `Country names`, `Drinks`, `First names`, `Fruits`, `Jobs`, `English words starting with 't'`) say *"Do not repeat any item"*. The other two, **`Letters` and `Numbers`, say the opposite** — *"random letters or numbers (**repetition allowed**)"* — 48 of 265 v1 recordings and 77 of 203 English v2 recordings | `detect_random_items(words, spans, stream_extent, hints)` → `detect_item_list` with `p_repetition_allowed` read from the recording's **own** category. **Owed a code change**: the category lives only in `instructions` and no grain above the recording carries it, so a family-scoped repeat rule inverts the instruction on the `Letters` and `Numbers` recordings — 48 of 265 v1 and 77 of 203 English v2. Category membership: **no viable approach**, as above |
-| SPEECH | `loudness` (897), `loudness-v2` (705) | **L:** the token `hey` | `detect_loudness_token(words, stimulus_alignment†)` — body: § `loudness`. **Implementable today**; SPEECH contributes the token's extents and VOICE's V6 is the measurement wanted. These two are in `LEXICAL_SPEECH` (`families.py:41-42`) while the protocol calls them `speech_type: "non-lexical"` — a `families.py` discrepancy |
-| SPEECH | every `SYLLABLE_REPETITION` family (7,989) | **L: none expected.** `/pa/` is not lexical and ASR mostly declines it. These are **positives** for SPEECH's reference set as of 2026-09-15 (`reference_family_set.SPEECH: speech` = `lexical_speech \| syllable_repetition`, `default.yaml:241`), so near-zero lexical content is the correct observation, not a miss. `diadochokinesis-buttercup` is the exception — see the DDK table | `detect_lexical_absence(words, spans)` — body: § `SYLLABLE_REPETITION`. **Implementable today.** These are **positives** for SPEECH's reference set (`default.yaml:241`), so near-zero lexical content is the correct observation, not a miss; `speech.lexical >= 2` firing here is over-routing on function-word artefacts ([`dag.md:195-196`](dag.md)) |
-| SPEECH | `prolonged-vowel` (1,604) | **L:** the ordered tokens `one two three`, once. The count-in is **prescribed**, not incidental: the instruction asks the participant to repeat *"1, 2, 3 aah"*, on all 1,575 English recordings | `detect_count_in(words, stimulus_alignment†)` — body: § `prolonged-vowel`. **Implementable today**: D1 sharpens it, but an ordered-run match over the consensus words needs nothing new. Measured: 938 of 1,258 transcripts open with `One two three` ([`dag.md:185`](dag.md)) |
-| SPEECH | any AIRWAY-declared family | **L: none expected.** Any lexical content is off-task by construction | `detect_lexical_intrusion(words, spans)` — body: § the AIRWAY families. **Implementable today** and needs no alignment: nothing lexical is expected, so every lexical word is the finding. AIRWAY owns the deviation ([`branch-airway.md:164-165`](branch-airway.md)) |
+| SPEECH | `harvard-sentences-list` (13,705), `cape-v-sentences` (2,370), `-v2` (1,224) | **L only**, ordered and fully specified: the words of that recording's `stimulus_text`, in order, once. One sentence per recording — the pattern is per recording, never per family. Measured: **1,060** distinct Harvard sentences, and CAPE-V v1 and v2 share only three of their six sentences. All three families carry the identical instruction, *"Please read the following sentences out loud in your typical voice."* | **In family.** `align_speech` → `Expectation(pattern=ORDERED_TOKENS, token_source="stimulus_text")`. **Owed a measurement** (D1): without it the function returns `UNDETERMINED`, because the transcript alone cannot say what was expected. Substitutions and insertions are then enumerated differences carrying the consensus `agreement`; **owed a cut** for omissions, which a skip-arc-free aligner can only surface as a low acoustic score ([`branch-speech.md:115-121`](branch-speech.md)) |
+| SPEECH | `rainbow-passage` (897), `caterpillar-passage` (597) | **L only**, ordered, one long passage. Both grains agree on both fields, on all 897 and all 597 — each is its own acoustic task, so the one-to-many collapse that breaks the other families does not arise. `stimulus_text` is one 338-character passage shared by all 898 rainbow recordings, and one of 1,035 characters shared by the 582 English caterpillar recordings (the 15 Spanish ones carry a 1,079-character Spanish passage) | **In family.** `align_speech` → `Expectation(pattern=ORDERED_TOKENS, token_source="stimulus_text", connected=True)` — `connected` is what adds the breath groups, so a passage is a read text plus one boolean. As above at passage length, and here D1's input is legitimately family-scoped. `[breath]` tokens inside the passage are **not** `filler` — the function subtracts them from the deviation list, because they are how S4 measures breath-group structure |
+| SPEECH | `word-color-stroop` (472) | **L only, ordered, and not the displayed words.** The instruction says *name the colour, do not read the word*. `stimulus_text` is the 15-item colour sequence, i.e. the expected **answer** sequence — **472 distinct sequences over 472 recordings**, one per recording and never shared, so the pattern is maximally per-recording. Declared 75 s; measured median 75.8 s, with 463 of 472 falling between 74 and 77 s | **In family.** `align_speech` → `Expectation(pattern=ORDERED_TOKENS, token_source="stimulus_text", declared_duration_s=75.0, emit_filler=False)` — `emit_filler=False` is the one behavioural difference from a read text, and it is a field. **Owed a measurement** (D1), built per recording from that recording's own 15-colour answer sequence — 472 distinct sequences over 472 recordings. `filler` is never emitted here: hesitation and self-correction are the task's dependent variable ([`branch-speech.md:130-134`](branch-speech.md)) |
+| SPEECH | `free-speech` (3,074) | **L, unordered, with a negative pattern.** No target text. The v1 instruction says *"Do not record yourself reading the prompt"*, so `stimulus_text` is an **anti-pattern**: the question appearing verbatim in the transcript is the deviation. Four questions, per index — three asked 898 times each, one 380 | **In family.** `align_speech` → `Expectation(pattern=FREE_RESPONSE, token_source="stimulus_text", anti_pattern="verbatim_prompt")`. Presence and extent are **implementable today** from `spans` `measure: "asr"`; the anti-pattern is **owed a measurement** (D1, read inverted) and **owed a cut** (`p_echo_overlap_max`). **This row cannot use the family grain at all**: one frozen prompt covers all 912 sidecars, right on 380 recordings and wrong on 2,694 |
+| SPEECH | `free-speech-v2` (2,120) | **L, unordered, and the negative pattern is gone.** v2's instruction drops *"do not record yourself reading the prompt"* entirely and asks instead to answer *"as though you were having a conversation"*. So verbatim echo is **not** declared a deviation here, and treating v1 and v2 alike would invent one. Six questions, three English (683 each) and three Spanish (24 each) | **In family.** `align_speech` → `Expectation(pattern=FREE_RESPONSE, declared_duration_s=30.0)` — `anti_pattern` is **absent**, which is the entire v1/v2 difference and is now one missing field rather than a second function that could drift back toward v1's. **Implementable today**, and it emits **no** verbatim-echo deviation: v2 drops the instruction that made echo one, so firing v1's rule here invents it. The acoustictask prompt matches none of the six v2 questions on all 707 sidecars |
+| SPEECH | `story-recall` (889), `story-recall-v2` (660) | **L, unordered, partly negative.** Recall *in the participant's own words*. `stimulus_text` is the source story — the 717-character grandfather passage for v1, the 1,083-character frog story for v2 — so semantic coverage is expected and **verbatim** reproduction is the deviation, the participant having read rather than recalled. The five Spanish v1 recordings carry the **frog** story, i.e. v2's source under v1's family name, so even here the source must be read per recording | **In family.** `align_speech` → `Expectation(pattern=FREE_RESPONSE, token_source="stimulus_text", anti_pattern="verbatim_source")` — the same matcher as `free-speech`, with the other anti-pattern. **Owed a measurement** (D1) and **owed a cut** (`p_verbatim_overlap_max`); the n-gram overlap itself is arithmetic once D1 exists. The source is read per recording — the five Spanish v1 recordings carry v2's story under v1's family name |
+| SPEECH | `cinderella-story` (258) | **L, unordered, and nothing machine-readable.** `stimulus_text` is empty on all 258; the source is a physical storybook handed to the participant, so no overlap measure is even definable here | **In family.** `align_speech` → `Expectation(pattern=FREE_RESPONSE, unviable=(("source_overlap", …),))` — no `token_source` and no `anti_pattern`, and the `unviable` row is what makes the ceiling explicit rather than implied by an absence. Presence and extent **implementable today**, and that is the ceiling rather than a first step: `stimulus_text` is empty on all 258, so **no overlap measure is definable**, D1 included, and the `story-recall` method does not transfer |
+| SPEECH | `productive-vocabulary` (2,910) | **L, weakly specified, per recording.** `stimulus_text` is one cue word per recording — **204 distinct cues** across the corpus, and **78 recordings carry no cue at all**. Expected is definitional speech *about* the cue, not the cue itself | **In family.** `align_speech` → `Expectation(pattern=FREE_RESPONSE, token_source="stimulus_text", unviable=(("defines_its_cue", …),))`. Presence and extent **implementable today**; whether the speech defines its cue has **no viable approach** in this graph — a lexicon or a text model, branch-local, no waveform. 204 cues under one family name and 78 recordings with none |
+| SPEECH | `picture-description` (889), `-option1` (373), `-option2` (329) | **L only, unspecified.** Connected speech, no target text, `stimulus_text` empty on all 1,591 (the stimulus is an image URL in the sidecar). `picture-description` and `-option1` carry a **byte-identical** instruction — *"Tell me everything you see going on in this picture."* — and differ only by image; `-option2` asks for complete sentences *"as though describing it for the blind"* | **In family.** `align_speech` → `Expectation(pattern=FREE_RESPONSE, connected=True)` — **three identical rows**, one per family name, which is the measurable statement that no method here distinguishes them. **Implementable today** for presence, extent, pause structure and breath groups; S4's measures are unbuilt branch code, not a missing derivative ([`branch-speech.md:157`](branch-speech.md)). The v1/option1 instructions are byte-identical, so **no method here may distinguish them** — any difference found is the image's |
+| SPEECH | `open-response-questions` (199) | **L only, unspecified.** *"Please answer the following questions and record your answer."* One `stimulus_text`, a 447-character prompt shared by all 199. Median 30 s | **In family.** `align_speech` → `Expectation(pattern=FREE_RESPONSE, token_source="stimulus_text", declared_duration_s=30.0, connected=True)`. **Implementable today.** The single shared 447-character prompt makes this the one connected-speech family whose `expected_speech` is legitimately family-scoped |
+| SPEECH | `animal-fluency` (195) | **L, unordered, category-bound, with a repetition anti-pattern.** *"say as many animals as you can, while avoiding repeating the same ones. There is a 1 minute timer"*. `stimulus_text` empty on all 195; the category lives only in `instructions`. Median duration 60 s, matching the declared timer | **In family.** `align_speech` → `Expectation(pattern=ITEM_LIST, declared_duration_s=60.0, repetition_allowed=False, unviable=(("category_membership", …),))`. Items, their extents, the repetition anti-pattern and the duration check are **implementable today**; category membership has **no viable approach** here — it needs no waveform, has one consumer, and is branch-local rather than a PREPROCESS derivative |
+| SPEECH | `random-item-generation` (265), `-v2` (207) | **L, unordered, category-bound — and the negative constraint is category-conditional.** Ten categories per family, one per recording, living only in `instructions`. Eight of the ten (`Animals`, `City names`, `Country names`, `Drinks`, `First names`, `Fruits`, `Jobs`, `English words starting with 't'`) say *"Do not repeat any item"*. The other two, **`Letters` and `Numbers`, say the opposite** — *"random letters or numbers (**repetition allowed**)"* — 48 of 265 v1 recordings and 77 of 203 English v2 recordings | **In family.** `align_speech` → `Expectation(pattern=ITEM_LIST, repetition_from_category=True, unviable=(("category_membership", …),))` — `repetition_allowed` is deliberately **not** a field here: it is read per recording, and the matcher returns `UNDETERMINED` when the category cannot be read rather than defaulting to the forbidding rule. **Owed a code change**: the category lives only in `instructions` and no grain above the recording carries it, so a family-scoped repeat rule inverts the instruction on the `Letters` and `Numbers` recordings — 48 of 265 v1 and 77 of 203 English v2. Category membership: **no viable approach**, as above |
+| SPEECH | `loudness` (897), `loudness-v2` (705) | **L:** the token `hey` | **In family.** `align_speech` → `Expectation(pattern=ORDERED_TOKENS, tokens=("hey", "hey", "hey"), expected_event_count=3)` and `(..., tokens=("hey", "hey"), expected_event_count=2)`. **Implementable today**; SPEECH contributes the token's extents and VOICE's V6 is the measurement wanted. These two are in `LEXICAL_SPEECH` (`families.py:41-42`) while the protocol calls them `speech_type: "non-lexical"` — a `families.py` discrepancy |
+| SPEECH | every `SYLLABLE_REPETITION` family (7,989) | **L: none expected.** `/pa/` is not lexical and ASR mostly declines it. These are **positives** for SPEECH's reference set as of 2026-09-15 (`reference_family_set.SPEECH: speech` = `lexical_speech \| syllable_repetition`, `default.yaml:241`), so near-zero lexical content is the correct observation, not a miss. `diadochokinesis-buttercup` is the exception — see the DDK table | **In family.** `align_speech` → `Expectation(pattern=NO_LEXICAL)` — **eight identical rows**; `buttercup` gets its own, below. **Implementable today.** These are **positives** for SPEECH's reference set (`default.yaml:241`), so near-zero lexical content is the correct observation, not a miss; `speech.lexical >= 2` firing here is over-routing on function-word artefacts ([`dag.md:195-196`](dag.md)) |
+| SPEECH | `diadochokinesis-buttercup` (896), `-v2-buttercup` (702) | **L&A**, and the one `SYLLABLE_REPETITION` family with a lexical pattern: a real English word repeated, which the recognisers will produce. So SPEECH's expectation here is the opposite of its other eight syllable-repetition rows | **In family.** `align_speech` → `Expectation(pattern=ORDERED_TOKENS, tokens=("buttercup",) * 10, expected_event_count=10, emit_filler=False)` and `(..., tokens=("buttercup",), declared_duration_s=5.0, emit_filler=False)`. **Implementable today**: the same token matcher every read family uses, over a one-word expectation. SPEECH and DDK both hold this family in family and measure different things over it — the token count and the envelope rate — which is the intended shape, not a conflict |
+| SPEECH | `prolonged-vowel` (1,604) | **L:** the ordered tokens `one two three`, once. The count-in is **prescribed**, not incidental: the instruction asks the participant to repeat *"1, 2, 3 aah"*, on all 1,575 English recordings | **Out of family.** `prolonged-vowel` is `VOICE_ELICITING` (`families.py:78-87`), so SPEECH runs `detect_speech(store, params)`, which marks the count-in as a lexical run and answers no *"was it done"*. The evaluation of the count-in is `align_voice`'s, through that row's `tokens` field. `detect_count_in` therefore has no successor function at all: the expectation became data and the finding became the generic lexical marking. **Implementable today**: D1 sharpens it, but an ordered-run match over the consensus words needs nothing new. Measured: 938 of 1,258 transcripts open with `One two three` ([`dag.md:185`](dag.md)) |
+| SPEECH | any AIRWAY-declared family | **L: none expected.** Any lexical content is off-task by construction | **Out of family.** `detect_speech(store, params)` → `done = UNDETERMINED`; the lexical extents are still emitted and still handed on. **Implementable today** and needs no alignment: nothing lexical is expected, so every lexical word is the finding. AIRWAY owns the deviation ([`branch-airway.md:164-165`](branch-airway.md)) |
 
 ### AIRWAY
 
 | branch | task | expected pattern | detection |
 | --- | --- | --- | --- |
-| AIRWAY | `respiration-and-cough-cough` (1,788) | **A, counted.** Five discrete forced expulsive events — *"After pressing record, cough 5 times"*. `expected_event_count: 5` | `detect_cough_series(spans, energy_envelope, span_hear, span_yamnet, words, stream_extent)` — body: § `respiration-and-cough-cough`. **Owed a code change**: the count is of events, not of label-carrying spans — `by_label` increments once per (span, label) pair (`airway.py:280`), so a 4 s span holding three coughs counts 1. **Owed a cut** for A5/A6's four boundary points. The merging case is a series on one exhalation, visible as multiple maxima inside one span — not `spans.min_separation_ms`, which is 30 ms |
-| AIRWAY | `respiration-and-cough-v2-hardcough` (698) | **A, one event, maximal effort.** *"cough HARD as if something were stuck in your throat"*. No count stated, and the instruction adds a **recording-hygiene** clause found nowhere else — *"do not cover your mouth or place your hand between your mouth and the microphone"* | `detect_hard_cough(spans, energy_envelope, span_hear, span_yamnet, level, spectrogram_wideband, disruptions_file, band_profile†, stream_extent)` — body: § `respiration-and-cough-v2-hardcough`. Events as above, minus the count. *"Hard"* has **no viable approach**: no within-recording contrast and no SPL reference, so the output is a measurement with its covariates. The hygiene clause is QUALITY's: `detect_occluded_microphone(level, spectrogram_wideband, band_profile†, disruptions_file)`, a level and spectral-tilt finding |
-| AIRWAY | `voluntary-cough` (327) | **A, counted (3), maximal effort, with breathing between.** Same *"cough HARD"* wording as `v2-hardcough` but *"Complete this task **3 times** in a single recording"*, with *"then breathe normally again"* between. `expected_event_count: 3`, and the inter-cough breathing is an **expected** pattern, not off-task | `detect_cough_cycles(spans, energy_envelope, span_hear, span_yamnet, hear_scores, words, stream_extent)` — body: § `voluntary-cough`. The one cough family where a cough detector alone is insufficient: the expected pattern is an **alternation**, so material between coughs is matched as breath rather than scored as `off_task_extent`. Same owed cut as the 5-cough row. Median 13.8 s against `v2-hardcough`'s 4.6 s, consistent with three cycles |
-| AIRWAY | `respiration-and-cough-fivebreaths` (3,576) | **A, counted (5) and routed — and the route is per recording, not per family.** Index `-1`/`-3`: nose, mouth closed — **1,778** recordings. Index `-2`/`-4`: mouth — **1,778**. The family name carries neither, and the split is exact | `detect_breath_cycles(spans, energy_envelope, span_hear, span_yamnet, hear_scores, words, stream_extent, hints, band_profile†)` — body: § `respiration-and-cough-fivebreaths`. The count is **owed a cut** (A5's operating points, [`branch-airway.md:243-247`](branch-airway.md)). The route has **no viable approach**: the discriminating band is largely above the 8 kHz ceiling and the residual tilt is confounded one-for-one with mouth-to-microphone geometry, which changes *with the route by construction*. The function returns `route = NOT_SEPARABLE_BY_THIS_DESIGN` and carries `band_profile†` so a negative is attributable. The index that carries the route is **owed a code change** — `task_family` collapses it |
-| AIRWAY | `respiration-and-cough-v2-threebreathsnose` (699), `-threebreathsmouth` (699) | **A, counted (3) and routed**, the route differing *between the two families* and stated in each instruction | `detect_breath_cycles(..., p_expected_count = 3)` with the route read from the family name — body: § `respiration-and-cough-v2-threebreaths{nose,mouth}`. Same count, same route finding. These two and the `fivebreaths` index split are the only declared route contrasts in the corpus, which is why neither should be treated as validation-grade for A7 |
-| AIRWAY | `respiration-and-cough-threequickbreaths` (1,718), `-v2-threebreaths` (699) | **A, counted (3) and timed.** Exhale, then inhale *quickly*. The **interval** is the measurement — a count of three says nothing about whether they were quick | `detect_quick_breaths(..., p_expected_count = 3)` — body: § `respiration-and-cough-threequickbreaths`. The **interval** is the measurement — a count of three says nothing about whether they were quick — and it is arithmetic over the event onsets, so it is **owed the same cut** and nothing more: `p_interval_max_s` cannot be fitted before A5's boundary points are |
-| AIRWAY | `respiration-and-cough-breath` (1,788), `-v2-breath` (699) | **A, uncounted and durational.** Comfortable breathing for a stated duration — 30 s v1, 20 s v2, v2 specifying through the mouth. `expected_event_count` is absent for these, and both durations are honoured: 1,440 of 1,788 v1 recordings run 30-31 s and 638 of 699 v2 run 20-21 s | `detect_comfortable_breathing(hear_scores, span_hear, spans, energy_envelope, words, stream_extent, declared_duration_s)` — body: § `respiration-and-cough-breath`. **Implementable today** on HeAR's `Breathe`, which is a positive detection of the thing being asked about. `residual` `energy_fraction` is **not** read: `residual = plain − g·FRCRN(plain)` and FRCRN is a speech enhancer, so a high fraction means *this is not speech* — a cough, a glide, room noise and a near-silent file all satisfy it. `declared_duration_s` against measured is free and is the sharpest signal here: 132 of 1,788 v1 recordings run under a second |
-| AIRWAY | `breath-sounds` (326) | **A, counted (3), routed (mouth), and preceded by a declared 60 s of nothing.** *"Please relax for 60 seconds until the task starts. Take three deep breaths in a row in and out of the mouth."* So it is **not** the uncounted durational task its name suggests, and it is closest to `v2-threebreathsmouth` | `detect_breath_sounds(..., p_expected_count = 3, p_relax_s)` — body: § `breath-sounds`. Count and route as the three-breath families. The declared 60 s relax is the only place an instruction **prescribes** material that is not the task, and the function emits it as `off_task_extent` only on a recording long enough to contain it — the measured median is 13.2 s against a declared ~73 s |
-| AIRWAY | any SPEECH- or VOICE-declared family | **no expected pattern.** AIRWAY routed broadly and its gate evidence is `unavailable` on 56,505 of 62,547 recordings | `measure_airway_without_declared_task(spans, span_hear, span_yamnet, hear_scores, energy_envelope)` → `done = UNDETERMINED`; it labels airway evidence where it finds it and contests what was proposed and is not there. **Implementable today.** A breath during passage reading is **not** a deviation — it is how S4 measures breath-group structure |
+| AIRWAY | `respiration-and-cough-cough` (1,788) | **A, counted.** Five discrete forced expulsive events — *"After pressing record, cough 5 times"*. `expected_event_count: 5` | **In family.** `align_airway` → `Expectation(pattern=EVENT_SERIES, label_set="cough", expected_event_count=5)`. **Owed a code change**: the count is of events, not of label-carrying spans — `by_label` increments once per (span, label) pair (`airway.py:280`), so a 4 s span holding three coughs counts 1. **Owed a cut** for A5/A6's four boundary points. The merging case is a series on one exhalation, visible as multiple maxima inside one span — not `spans.min_separation_ms`, which is 30 ms |
+| AIRWAY | `respiration-and-cough-v2-hardcough` (698) | **A, one event, maximal effort.** *"cough HARD as if something were stuck in your throat"*. No count stated, and the instruction adds a **recording-hygiene** clause found nowhere else — *"do not cover your mouth or place your hand between your mouth and the microphone"* | **In family.** `align_airway` → `Expectation(pattern=EVENT_SERIES, label_set="cough", expected_event_count=None, unviable=(("effort_absolute", …),))` — the `None` count and the `unviable` row are the whole difference from the 5-cough family. Events as above, minus the count. *"Hard"* has **no viable approach**: no within-recording contrast and no SPL reference, so the output is a measurement with its covariates. The hygiene clause is QUALITY's, and folds into `detect_quality(store, params)` rather than becoming a function of its own: a level and spectral-tilt finding over `level`, `spectrogram_wideband` and `band_profile†` |
+| AIRWAY | `voluntary-cough` (327) | **A, counted (3), maximal effort, with breathing between.** Same *"cough HARD"* wording as `v2-hardcough` but *"Complete this task **3 times** in a single recording"*, with *"then breathe normally again"* between. `expected_event_count: 3`, and the inter-cough breathing is an **expected** pattern, not off-task | **In family.** `align_airway` → `Expectation(pattern=EVENT_ALTERNATION, label_set="cough", expected_event_count=3)` — the one AIRWAY family needing its own matcher, because the expected pattern is an alternation and material between coughs must be matched as breath rather than scored off-task. The one cough family where a cough detector alone is insufficient: the expected pattern is an **alternation**, so material between coughs is matched as breath rather than scored as `off_task_extent`. Same owed cut as the 5-cough row. Median 13.8 s against `v2-hardcough`'s 4.6 s, consistent with three cycles |
+| AIRWAY | `respiration-and-cough-fivebreaths` (3,576) | **A, counted (5) and routed — and the route is per recording, not per family.** Index `-1`/`-3`: nose, mouth closed — **1,778** recordings. Index `-2`/`-4`: mouth — **1,778**. The family name carries neither, and the split is exact | **In family.** `align_airway` → `Expectation(pattern=EVENT_SERIES, label_set="breath", expected_event_count=5, route_from_index=True, unviable=(("route", …),))`. The count is **owed a cut** (A5's operating points, [`branch-airway.md:243-247`](branch-airway.md)). The route has **no viable approach**: the discriminating band is largely above the 8 kHz ceiling and the residual tilt is confounded one-for-one with mouth-to-microphone geometry, which changes *with the route by construction*. The function returns `route = NOT_SEPARABLE_BY_THIS_DESIGN` and carries `band_profile†` so a negative is attributable. The index that carries the route is **owed a code change** — `task_family` collapses it |
+| AIRWAY | `respiration-and-cough-v2-threebreathsnose` (699), `-threebreathsmouth` (699) | **A, counted (3) and routed**, the route differing *between the two families* and stated in each instruction | **In family.** `align_airway` → `Expectation(pattern=EVENT_SERIES, label_set="breath", expected_event_count=3, declared_route="nose")` and `(..., declared_route="mouth")` — the route the family name carries is a field; `fivebreaths` sets `route_from_index` instead, and that one field is where the collapsed index bites. Same count, same route finding. These two and the `fivebreaths` index split are the only declared route contrasts in the corpus, which is why neither should be treated as validation-grade for A7 |
+| AIRWAY | `respiration-and-cough-threequickbreaths` (1,718), `-v2-threebreaths` (699) | **A, counted (3) and timed.** Exhale, then inhale *quickly*. The **interval** is the measurement — a count of three says nothing about whether they were quick | **In family.** `align_airway` → `Expectation(pattern=EVENT_SERIES, label_set="breath", expected_event_count=3, timed_intervals=True)` — `timed_intervals` is what turns the count into an interval measurement; it is a field, not a function. The **interval** is the measurement — a count of three says nothing about whether they were quick — and it is arithmetic over the event onsets, so it is **owed the same cut** and nothing more: `p_interval_max_s` cannot be fitted before A5's boundary points are |
+| AIRWAY | `respiration-and-cough-breath` (1,788), `-v2-breath` (699) | **A, uncounted and durational.** Comfortable breathing for a stated duration — 30 s v1, 20 s v2, v2 specifying through the mouth. `expected_event_count` is absent for these, and both durations are honoured: 1,440 of 1,788 v1 recordings run 30-31 s and 638 of 699 v2 run 20-21 s | **In family.** `align_airway` → `Expectation(pattern=SOUND_COVERAGE, label_set="breath", declared_duration_s=30.0)` and `(..., declared_duration_s=20.0, declared_route="mouth", unviable=(("route", …),))`. **Implementable today** on HeAR's `Breathe`, which is a positive detection of the thing being asked about. `residual` `energy_fraction` is **not** read: `residual = plain − g·FRCRN(plain)` and FRCRN is a speech enhancer, so a high fraction means *this is not speech* — a cough, a glide, room noise and a near-silent file all satisfy it. `declared_duration_s` against measured is free and is the sharpest signal here: 132 of 1,788 v1 recordings run under a second |
+| AIRWAY | `breath-sounds` (326) | **A, counted (3), routed (mouth), and preceded by a declared 60 s of nothing.** *"Please relax for 60 seconds until the task starts. Take three deep breaths in a row in and out of the mouth."* So it is **not** the uncounted durational task its name suggests, and it is closest to `v2-threebreathsmouth` | **In family.** `align_airway` → `Expectation(pattern=EVENT_SERIES, label_set="breath", expected_event_count=3, declared_route="mouth", relax_s=60.0, declared_duration_s=73.0, unviable=(("route", …),))` — `relax_s` is the only field of its kind in the corpus and exists because one instruction prescribes material that is not the task. Count and route as the three-breath families. The declared 60 s relax is the only place an instruction **prescribes** material that is not the task, and the function emits it as `off_task_extent` only on a recording long enough to contain it — the measured median is 13.2 s against a declared ~73 s |
+| AIRWAY | any SPEECH- or VOICE-declared family | **no expected pattern.** AIRWAY routed broadly and its gate evidence is `unavailable` on 56,505 of 62,547 recordings | **Out of family.** `detect_airway(store, params)` → `done = UNDETERMINED`; it labels airway evidence where it finds it and contests what was proposed and is not there. **Implementable today.** A breath during passage reading is **not** a deviation — it is how S4 measures breath-group structure |
 
 ### DDK
 
@@ -502,98 +657,2405 @@ owner's instruction that a declared branch is assessed independently of whether 
 
 | branch | task | expected pattern | detection |
 | --- | --- | --- | --- |
-| DDK | `diadochokinesis-pa` (896), `-ta` (896), `-ka` (896) | **A, counted, alternating.** One syllable repeated *as fast as possible*, **10 times** — `expected_event_count: 10`. v1 states the count; v2 does not | `detect_ddk_train(energy_envelope, spans, continuity_trace, stream_extent)` — body: § `diadochokinesis-pa`. **Owed a cut**, not a measurement: D1's rate is the modulation spectrum of `energy_envelope` over the train and D3's intervals are its event onsets, both over an array the store already holds. Praat's `extract_speech_rate` is **not** the instrument — it is already running inside `praat_features` and its `min_dip` and 0.3 s `min_pause` both under-count the fastest trains, biasing the measurement in the direction of the quantity being measured |
-| DDK | `diadochokinesis-v2-puh` (702), `-tuh` (702), `-kuh` (702) | **A, uncounted, alternating.** Same repetition *until the timer runs out*, so no `expected_event_count`. The `'puhpuhpuhpuhpuhpuh'` in the instruction is an orthographic illustration, **not** a six-repetition instruction. The timer is **5 s**: 630-646 of each family's 702 recordings run 5-6 s, against a v1 median of 5 s spread over 3-9 s | `detect_ddk_train_timed(..., p_expected_count = None, declared_duration_s)` — body: § `diadochokinesis-v2-puh`. As above with no declared count. D5's train fraction has a fixed 5 s denominator here, which makes the rate directly comparable across participants in a way v1's participant-terminated recordings are not — and none of D1-D6 is built to use it |
-| DDK | `diadochokinesis-pataka` (896), `-v2-puhtuhkuh` (701) | **A, ordered and cyclic.** A three-place sequence repeated in order — sequential motion rate. `/pa-pa-pa/` is a collapse of the sequence and is the clinically meaningful finding. v1 asks for the sequence *"10 times"* (`expected_event_count: 10`, i.e. 30 syllables); v2 asks for it *"until the timer runs out"*, which is 5 s, so the two are counted and uncounted respectively | `detect_ddk_sequence(energy_envelope, spans, spectrogram_wideband, stream_extent)` — body: § `diadochokinesis-pataka`. **Owed a cut** for the place decision (`p_burst_window_ms`, `p_place_centroid_bands_hz`, `p_place_margin`) and nothing else: /p/, /t/ and /k/ differ in burst spectrum inside 8 kHz, and `spectrogram_wideband`'s 5 ms window at a 5 ms hop is the classical resolution for it. The **PPG is not the instrument** — it is trained on connected speech and its prior works against the discrimination on a rapid nonsense train ([`branch-ddk.md:318-323`](branch-ddk.md)). `syllable_sequence_mismatch`, deliberately not `stimulus_mismatch` |
-| DDK | `diadochokinesis-buttercup` (896), `-v2-buttercup` (702) | **L&A.** A real English word repeated — so unlike every other DDK family this one **does** have a lexical pattern, and the recognisers will produce it. v1 states the count (*"10 times"*, `expected_event_count: 10`); v2 does not (*"until the timer runs out"*), so the two are not one measurement | `detect_repeated_word(words, energy_envelope, spans, stream_extent)` — body: § `diadochokinesis-buttercup`. **Implementable today**: the repeat count is a counter over normalised consensus tokens, so `transcript_repeat` moving into the store is a convenience rather than the capability. The only DDK family where the lexical route is the right one, and the only one where `ddk.lexical_repetition >= 3` fires for the right reason |
-| DDK | any lexical-speech family | **no expected pattern.** DDK routed 22,363 against 7,989 declaring a DDK family; repetition occurs in ordinary speech — a stutter, a false start, a repeated word | `measure_ddk_without_declared_task(energy_envelope, spans, words)` → `done = UNDETERMINED`. The branch measures what it finds and says what it is; it does not assert that a Harvard sentence failed to be a DDK task ([`branch-ddk.md:66-70`](branch-ddk.md)) |
+| DDK | `diadochokinesis-pa` (896), `-ta` (896), `-ka` (896) | **A, counted, alternating.** One syllable repeated *as fast as possible*, **10 times** — `expected_event_count: 10`. v1 states the count; v2 does not | **In family.** `align_ddk` → `Expectation(pattern=SYLLABLE_TRAIN, expected_event_count=10)` — **three identical rows**, one per target syllable, because nothing in the matcher reads which syllable it is. **Owed a cut**, not a measurement: D1's rate is the modulation spectrum of `energy_envelope` over the train and D3's intervals are its event onsets, both over an array the store already holds. Praat's `extract_speech_rate` is **not** the instrument — it is already running inside `praat_features` and its `min_dip` and 0.3 s `min_pause` both under-count the fastest trains, biasing the measurement in the direction of the quantity being measured |
+| DDK | `diadochokinesis-v2-puh` (702), `-tuh` (702), `-kuh` (702) | **A, uncounted, alternating.** Same repetition *until the timer runs out*, so no `expected_event_count`. The `'puhpuhpuhpuhpuhpuh'` in the instruction is an orthographic illustration, **not** a six-repetition instruction. The timer is **5 s**: 630-646 of each family's 702 recordings run 5-6 s, against a v1 median of 5 s spread over 3-9 s | **In family.** `align_ddk` → `Expectation(pattern=SYLLABLE_TRAIN, declared_duration_s=5.0)` — `expected_event_count` absent and `declared_duration_s` present, which is the whole counted/uncounted difference. As above with no declared count. D5's train fraction has a fixed 5 s denominator here, which makes the rate directly comparable across participants in a way v1's participant-terminated recordings are not — and none of D1-D6 is built to use it |
+| DDK | `diadochokinesis-pataka` (896), `-v2-puhtuhkuh` (701) | **A, ordered and cyclic.** A three-place sequence repeated in order — sequential motion rate. `/pa-pa-pa/` is a collapse of the sequence and is the clinically meaningful finding. v1 asks for the sequence *"10 times"* (`expected_event_count: 10`, i.e. 30 syllables); v2 asks for it *"until the timer runs out"*, which is 5 s, so the two are counted and uncounted respectively | **In family.** `align_ddk` → `Expectation(pattern=SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), expected_event_count=30)` and `(..., declared_duration_s=5.0)`. The expected sequence is data, so a four-place train would be a row and not a rewrite. **Owed a cut** for the place decision (`p_burst_window_ms`, `p_place_centroid_bands_hz`, `p_place_margin`) and nothing else: /p/, /t/ and /k/ differ in burst spectrum inside 8 kHz, and `spectrogram_wideband`'s 5 ms window at a 5 ms hop is the classical resolution for it. The **PPG is not the instrument** — it is trained on connected speech and its prior works against the discrimination on a rapid nonsense train ([`branch-ddk.md:318-323`](branch-ddk.md)). `syllable_sequence_mismatch`, deliberately not `stimulus_mismatch` |
+| DDK | `diadochokinesis-buttercup` (896), `-v2-buttercup` (702) | **L&A.** A real English word repeated — so unlike every other DDK family this one **does** have a lexical pattern, and the recognisers will produce it. v1 states the count (*"10 times"*, `expected_event_count: 10`); v2 does not (*"until the timer runs out"*), so the two are not one measurement | **In family.** `align_ddk` → `Expectation(pattern=ORDERED_TOKENS, tokens=("buttercup",), expected_event_count=10)` and `(..., declared_duration_s=5.0)` — the only DDK row whose `Pattern` is a lexical one, and `align_ddk` dispatches it to the same token matcher SPEECH uses. **Implementable today**: the repeat count is a counter over normalised consensus tokens, so `transcript_repeat` moving into the store is a convenience rather than the capability. The only DDK family where the lexical route is the right one, and the only one where `ddk.lexical_repetition >= 3` fires for the right reason |
+| DDK | any lexical-speech family | **no expected pattern.** DDK routed 22,363 against 7,989 declaring a DDK family; repetition occurs in ordinary speech — a stutter, a false start, a repeated word | **Out of family.** `detect_ddk(store, params)` → `done = UNDETERMINED`. The branch measures what it finds and says what it is; it does not assert that a Harvard sentence failed to be a DDK task ([`branch-ddk.md:66-70`](branch-ddk.md)) |
 
-QUALITY is not in `BRANCHES` — `vocabulary.py:28-29` calls it "a graph edge, never a branch" — so it
-has no rows here. Its Q5 acquisition-consistency capability is the natural home for
-`declared_duration_s` against measured duration, which several rows above want.
+### QUALITY — one mode, and it is the out-of-family one
+
+**QUALITY gets no rows in the table above, and that is a structural statement rather than an
+omission.** It is not in `BRANCHES` (`vocabulary.py:31`); `vocabulary.py:29` calls it *"the terminal
+node every recording reaches, whatever routed. A graph edge, never a branch."* It has **no
+`branch_decision`**, no entry in `branch_gates`, and the runner calls it unconditionally at
+`run.py:310` — after the branch loop at `:302`, over the **`recording`** stream rather than `plain`.
+Its `KIND` is `None` (`quality.py:57`), so the file-level fold never joins its verdict to a branch
+(`vocabulary.py:335` filters on `verdict.kind is not None`). It deletes the hint it is handed
+(`quality.py:238`, `del hint, run_dir`).
+
+**So QUALITY is never handed a task, and therefore can never be in family.** It has one entry point,
+`detect_quality(store, params)`, and that entry point is the *out-of-family* mode by construction:
+task-agnostic, returning `done = UNDETERMINED`, marking what it is expert in wherever it occurs.
+Giving it an `align_quality` would require a family whose declared expectation is a quality
+property, and no such family exists — the closest thing in the corpus is
+`respiration-and-cough-v2-hardcough`'s hygiene clause, which is an expectation **about the
+recording** attached to an AIRWAY task, not a task of QUALITY's own.
+
+Two consequences:
+
+- **`detect_occluded_microphone` is not a separate function.** The hygiene clause —
+  *"do not cover your mouth or place your hand between your mouth and the microphone"*, the only one
+  in the corpus — becomes a branch of `detect_quality`, which runs on that recording as it runs on
+  every other. AIRWAY's row for that family carries the cough events and says nothing about the
+  microphone; QUALITY carries the tilt finding and says nothing about the cough.
+- **`declared_duration_s` against measured duration belongs here**, and several rows above want it.
+  It is a sidecar-consistency check, not a task-completion measurement
+  ([`preprocess-derivatives-for-expected-patterns.md`](preprocess-derivatives-for-expected-patterns.md)
+  § 4.6), which is exactly the shape of a QUALITY finding: 2,020 sidecars declare under a second, and
+  which of the declaration and the recording is wrong is a separate question. Q5 is its capability.
+
+What QUALITY does **today** is one internal-consistency check — whether PREPROCESS's own clip spans
+contradict PREPROCESS's own amplitudes, `quality.py:266-302`, one `contest` assertion per
+contradiction, expected count zero on a fresh store. `detect_quality` below keeps that intact and
+adds the two rows above.
 
 ---
 
-## The detection functions
+## The code: two entry points per branch
 
-One function per row of the table above, named in that row. This section is the body of the
-detection column: the table says what a row takes and what state it is in, and the block here says
-how the determination is made.
+This section is the whole of the executable part. It is **Python that compiles and runs** — compiled
+and exercised end to end over a synthetic store on 2026-09-16, every entry point and every `Pattern`
+branch, with assertions that each proposed span has positive duration, carries its branch's own
+family and names its evidence — rather than pseudo-code, so that porting it to `nodes/<branch>.py`
+is transcription plus type-fixing against the real store objects. What it is *not* is fitted: every
+`p_*` is an unfitted operating point and **no number appears in any body**.
 
-**Every function returns the same triple**, which is what the DAG's verbs read:
+### The write path — `propose` only, and its four consequences
+
+> *"each branch can generate new spans specific to the task of the branch. it doesn't need to edit
+> existing spans."*
+
+**A branch mints spans in its own family and never modifies a span another node proposed.** Four
+things follow, and they are why the code below looks the way it does.
+
+**1. The family-scoping question is closed, not deferred.**
+[`branch-conventions.md:20-23`](branch-conventions.md) rules that a branch *"`refine`s only a span of
+the family it is proposing into"*. Under propose-only that is satisfied by construction — there is
+nothing to refine — so the out-of-family mode has no scoping problem to resolve. An earlier draft of
+this section carried that as an open dependency; it is gone.
+
+**2. `refine` is off the critical path, and the two documentation conflicts around it stop
+blocking.** `refine` is written by nothing in `src/senselab` — swept 2026-09-16, every occurrence of
+the string is prose or an unrelated identifier (`prov_store.py:438`, `praat_parselmouth.py:95`,
+`audio_analysis`'s `refined_identity` / `I1_boundary_refinement` / `fuse.py:1089`,
+`label_membership.py:82`, and `default.yaml:180`'s comment about *"each branch's refined spans"*),
+with **zero call sites**. And `store.md:72` says *"`refine` and `withdraw` are gone as verbs"* while
+`design.md:568` declares `refine`'s payload and `branch-conventions.md:97-100` records it being
+*widened* on 2026-09-15. Both are **documentation conflicts to reconcile, not blockers on these
+branches** — and note `store.md:72` is wrong about `withdraw` independently of `refine`, since
+`WITHDRAW_VERB` is declared at `preprocess.py:142` and written at `:605`.
+
+**3. VOICE gets a subject, and that is what makes it implementable at all.** It no longer waits for
+a `family == "phonation"` span nothing mints. `voice.py:227-231` selects `family == "phonation"`,
+PREPROCESS's amplitude spans carry no `family` key (`preprocess.py:1875-1891`), the detector that
+proposed phonation spans was retired on 2026-09-04, and VOICE therefore takes the no-span `FAIL` at
+`voice.py:235-264` **on every recording** — while the gate that routed it there, `voice.sustained`,
+read the longest **amplitude** span. Under propose-only VOICE reads those amplitude spans plus
+`phonation_tracks` as *evidence* and proposes its own `family: "voice"` span over what qualifies.
+The selector problem dissolves with the editing problem.
+
+**4. Provenance replaces editing.** Every proposed span names in `wasDerivedFrom` the PREPROCESS
+spans and measurements its extent came from. **That link is now the whole record of the
+relationship** — where a refinement used to say *"this span's boundary is wrong, here is the right
+one"*, a proposal says *"here is my span, derived from that one"*, and the derivation is the only
+thing carrying the connection. A body that proposes without it loses information. The minting
+helper asserts on it rather than trusting the author.
+
+**What this enables in code that is not changed here.** `report.py:291`'s
+`_spans_of_family(store, family, *, voice=...)` exists only because VOICE re-minted a second
+phonation span from an existing one and `onset_kind` was the only thing telling the two populations
+apart (its own docstring says so). Under propose-only they are different families —
+`family: "voice"` against whatever proposed the evidence — so the `voice=` split becomes
+unnecessary. `_spans_of_family` has **five** call sites (`report.py:673`, `:688`, `:715`, `:1153`,
+`:1154`) and **three** pass `voice=`: `:673` `voice=False`, `:715` `voice=True`, `:1154`
+`voice=True`. Those three are what the decision simplifies; the other two already read one family
+and are untouched. **Recorded as a simplification the
+decision enables; no code is changed by this document.**
+
+**`label` and `contest` are unaffected.** Both are assertions written *beside* a span, not edits to
+it, so both remain available to either mode — `contest` is the one verb in this document with live
+emitters today (`airway.py:310`, `quality.py:291`).
+
+**One line of the contract's verb table widens.** `design.md:570` gives `propose` as writing a
+`span`, `family: "<branch>"`, `wasDerivedFrom` its evidence — and says it carries *"a region
+PREPROCESS did not find"*. Under propose-only a branch mints **whether or not PREPROCESS found the
+region**, because minting is now the only way it has of saying anything about an extent. The verb,
+the family and the derivation are unchanged; what goes is the novelty precondition, which was the
+half that made `refine` necessary. `branch-conventions.md:20-23`'s family scoping already permits
+this — a `family: "<branch>"` span collides with no `family is None` reader — and its three stated
+consequences (a branch measures over its own span; covariates describe the same extent; nothing is
+left unreconciled) are exactly what the decision generalises.
+
+### What every entry point returns
+
+**Every entry point returns the same triple**, which is what the DAG's verbs read:
 
 ```
-(done, components, deviations)
-
-done        bool | UNDETERMINED — were the expected patterns found. Read off the recording,
-            never off the declaration: a declared family that produced none of its patterns
-            returns False, and a function whose only instrument is missing returns UNDETERMINED
-            rather than guessing.
-components  [(label, start, end)] — where each pattern was found. A component over an extent
-            some node already proposed is a `label` or a `refine`; the component the task is
-            measured over is the `trim` payload, `task_extent`. An empty list is a result.
-deviations  [(deviation_type, start, end, evidence)] — the nine types of
-            `branch-conventions.md:123-142`, plus `counts` entries ({found, declared}) where
-            the instruction declares a number. A count asserts no discrepancy.
+done        Were the expected patterns found. Read off the recording, never off the declaration:
+            a declared family that produced none of its patterns returns False, and a matcher
+            whose only instrument is missing returns UNDETERMINED rather than guessing.
+            `detect_*` returns UNDETERMINED always — it evaluates no task.
+components  The spans this branch PROPOSES, each in the branch's own family, each naming the
+            evidence it came from. An empty list is a result: `_speech_no_lexical` proposes
+            nothing, and that is the correct observation on a syllable-repetition recording.
+deviations  Every finding that is not a proposed span: the nine deviation types of
+            `branch-conventions.md:123-142` plus the two this document owes, the `counts` entries
+            ({found, declared}) where the instruction declares a number, the per-extent
+            measurements with their covariates, and the `contest`s. A count asserts no
+            discrepancy.
 ```
 
-**Reading the signatures.**
+**The third element carries four kinds, and the store splits them:**
+
+| `Finding.kind` | written as | authority |
+| --- | --- | --- |
+| `deviation` | `assertion`, `verb: "deviate"`, plus `deviation_type`, the extent and the evidence | `branch-conventions.md:104-110` |
+| `count` | `measurement` named `counts`, each entry carrying `found` beside `declared` | `branch-conventions.md:104-110` |
+| `measure` | a branch measurement over its own extent, carrying its covariates and its support count | `branch-conventions.md` § *Quality covariates travel with every acoustic measurement* |
+| `contest` | `assertion`, `verb: "contest"` — the one with live emitters (`airway.py:310`, `quality.py:291`) | — |
+
+```python
+UNDETERMINED = "UNDETERMINED"
+NOT_SEPARABLE_BY_THIS_DESIGN = "NOT_SEPARABLE_BY_THIS_DESIGN"
+Done = bool | Literal["UNDETERMINED"]
+
+
+class Proposal(NamedTuple):
+    """A span this branch mints in its own family. It never edits a span another node proposed."""
+
+    family: str                      # the branch's own, lowercase (branch-conventions.md:9-18)
+    role: str                        # what this span is, inside the task
+    start: float
+    end: float
+    derived_from: tuple[str, ...]    # wasDerivedFrom: the whole record of where the extent came from
+    attributes: dict
+
+
+class Finding(NamedTuple):
+    kind: str
+    name: str
+    start: float | None
+    end: float | None
+    evidence: dict
+
+
+class Result(NamedTuple):
+    done: Done
+    components: list[Proposal]
+    deviations: list[Finding]
+
+
+def proposer(family: str):
+    """One minting function per branch. The family is fixed by the branch, never by the caller."""
+
+    def _propose(role: str, extent: tuple[float, float], *derived_from: str, **attributes: object) -> Proposal:
+        assert derived_from, "a proposed span names its evidence; the derivation is the whole record"
+        assert extent[1] > extent[0], f"{role}: a proposed span has positive duration"
+        return Proposal(family, role, float(extent[0]), float(extent[1]), tuple(derived_from), dict(attributes))
+
+    return _propose
+
+
+voice_span = proposer("voice")
+speech_span = proposer("speech")
+airway_span = proposer("airway")
+ddk_span = proposer("ddk")
+quality_span = proposer("quality")
+
+
+def deviation(name: str, start: float | None, end: float | None, **evidence: object) -> Finding:
+    return Finding("deviation", name, start, end, dict(evidence))
+
+
+def contest(span_id: str, extent: tuple[float, float], claim: str, reason: str) -> Finding:
+    return Finding("contest", claim, extent[0], extent[1], {"of_span": span_id, "reason": reason})
+
+
+def count(name: str, found: object, declared: object) -> Finding:
+    return Finding("count", name, None, None, {"found": found, "declared": declared})
+
+
+def measured(name: str, start: float | None, end: float | None, value: object, **covariates: object) -> Finding:
+    return Finding("measure", name, start, end, {"value": value, **dict(covariates)})
+
+
+def unviable(name: str, why: str) -> Finding:
+    return Finding("measure", name, None, None, {"value": NOT_SEPARABLE_BY_THIS_DESIGN, "why": why})
+
+
+# -------------------------------------------------------- the store, by name
+```
+
+### Reading the signatures
 
 | mark | meaning |
 | --- | --- |
 | no mark | the input is a derivative PREPROCESS writes today, spelled as the store spells it |
-| `†` | the derivative does not exist. Named anyway, so the dependency is visible: `stimulus_alignment` (D1), `phonation_tracks.{hnr_db,rms_dbfs,cpps_db}` (D2), `band_profile` (D3), all three from [`preprocess-derivatives-for-expected-patterns.md`](preprocess-derivatives-for-expected-patterns.md) |
-| `‡` | the value exists somewhere in the tree but no branch can read it: `hints.expected_speech` (declared, never populated), the trailing task index (collapsed by `task_family`), `transcript_repeat` (a `routing_analysis` feature, not a store measurement), per-span PPG |
+| `†` | the derivative does not exist. Named anyway, so the dependency is visible: `stimulus_alignment` (D1), the extra `phonation_tracks` columns this document spells `hnr_db` / `rms_dbfs` / `cpps_db` (D2), `band_profile` (D3), all three from [`preprocess-derivatives-for-expected-patterns.md`](preprocess-derivatives-for-expected-patterns.md). **D2's own block names no column identifiers** — it specifies *"harmonics-to-noise ratio in dB, short-time RMS, and smoothed cepstral peak prominence, one value per 10 ms frame, over `plain`"* and is explicitly *not a new entity*, three arrays added to `derivatives/phonation_tracks.npz` (`preprocess.py:1300`). The three names below are this document's spelling of them, not that document's |
+| `‡` | the value exists somewhere in the tree but no branch can read it: `hints.expected_speech` (declared, never populated), `hints.metadata["task_token"]` and the trailing task index it carries, `transcript_repeat` (a `routing_analysis` feature, not a store measurement), per-span PPG |
 | `p_*` | an operating point. **No number appears in any body.** Every `p_*` is unfitted and belongs in `data/` with a written derivation, per the project rule |
 
-**The store types the signatures are written over.** Verified against
-`src/senselab/audio/workflows/triage/nodes/preprocess.py` at this branch's tip; the block list is
-`preprocess.py:2945-2985`.
+D1 is named as a protocol rather than left as a word, so that "what D1 must supply" is a signature
+rather than a description. **Its four `...` bodies are the only ellipses in this section, and they
+are the Python idiom for a `Protocol` rather than an unwritten body** — D1 does not exist, so there
+is nothing to write; what the protocol fixes is the interface every body below calls it through, and
+every one of those call sites handles `store.stimulus_alignment is None`:
 
-| name in a signature | what it is | fields a body may read |
+```python
+class Alignment(Protocol):
+    """D1, `stimulus_alignment`. Absent from the tree; named so the dependency is visible."""
+
+    expected: Sequence            # one row per declared token: .text, .index, .column
+    realised: Sequence            # (expected_token, word) for every token a column realised
+    substitutions: Sequence       # (expected_token, word) where the column read something else
+    insertions: Sequence          # words no expected token claims
+
+    def structure_spans(self) -> Sequence[tuple[float, float]]: ...
+    def run_for(self, tokens: Sequence[str]) -> Sequence: ...
+    def omissions_for(self, tokens: Sequence[str]) -> Sequence[str]: ...
+    def covers_sequence_twice(self, min_overlap: float) -> bool: ...
+```
+
+### The store types the bodies are written over
+
+Verified against `src/senselab/audio/workflows/triage/nodes/preprocess.py` at this branch's tip on
+2026-09-16; the block list is `preprocess.py:2945-2986`.
+
+| name in a body | what it is | fields a body may read |
 | --- | --- | --- |
-| `words` | the `word` entities `consensus_transcript` names (`preprocess.py:2409`; attributes at `consensus.py:391`) | `text`, `bracketed`, `outcome`, `sources`, `readings`, `timings` (per source), `onset_spread_s`, `offset_spread_s`, `temporal_uncertainty_s`, `variants`, `agreement`, `index`, and the entity's own `extent` |
-| `consensus_transcript` | the whole-file stream (`preprocess.py:2456`, name at `:2460`) | `text`, `sources` (model id + commit per source), `word_ids` |
-| `spans` | the `span` entities — the amplitude/continuity/ASR loop at `preprocess.py:1875-1891`, the `gap` loop at `:1893-1919` | `extent`, `measure ∈ {amplitude, continuity, asr, gap}`, `signal`, `peak_over_floor_db`, `k_db`, `merged_proposals`, `contains_clip`, `corroborated_by` |
-| `energy_envelope` | `derivatives/energy_envelope.npz` (`preprocess.py:1612`) | `envelope_dbfs` per sample, `floor_dbfs` (one **global** value, broadcast), `sampling_rate` |
-| `normalized_envelope` | the AGC'd envelope (`:1705`) | the same two arrays |
-| `continuity_trace` | `derivatives/continuity_trace.npz` (`:2549`) | `continuity` per sample in `[0, 1]`, `cut_level`, `cut_percentile`. **This is a spectral-stationarity trace already** — cosine similarity between consecutive log-magnitude spectra (`spectral_continuity/api.py:10`) |
-| `phonation_tracks` | `derivatives/phonation_tracks.npz` (`:1300`), hop 10 ms | `times_s`, `f0_hz`, `strength`, `formant_times_s`, `f1..f4_hz`, `f1..f4_bw_hz`. F0 on `preemphasised`, formants on `plain` |
-| `spectrogram_wideband` / `spectrogram_narrowband` | `derivatives/spectrogram_*.npz` (`:2507`) | `spectrogram` (power), `win_length`, `hop_length`, `n_fft`. 5 ms / 20 ms window, 5 ms hop |
-| `gammatone` | `derivatives/gammatone.npz` (`:2584`) | `centre_frequencies_hz` (40 channels, 80–7800 Hz), `energy_db`, hop 5 ms |
-| `ppg_posteriorgram` | `derivatives/ppg_posteriorgram.npz` (`:803`), on `enhanced` | `posteriorgram[frame, phoneme]`, `phonemes` (40 ARPAbet incl. `<silent>`), `seconds_per_frame`. **Whole file only** |
-| `praat_features` | ~40 whole-file scalars on `enhanced` (`:1179`) | the scalar set. Not re-poolable over an extent |
-| `level` | whole-file, on `plain` (`:2087`) | `peak_dbfs`, `rms_dbfs`, `lufs`. **Uncalibrated** — no SPL reference exists anywhere in the graph |
-| `silence` | YAMNet `Silence` per window (`:2059`) | `windows[{start, end, score, is_silence}]`, `threshold` |
-| `span_hear` / `span_yamnet` | per-span classifier windows (`:2186`, `:2250`) | `span_id`, the window's own `extent`, `raw_scores`, `labels`, `scores`, `labelled`, `isolated_span` |
-| `hear_scores` / `yamnet_scores` / `ast_scores` | the classifier's verbatim whole-file windows (`:1926`) | `start`, `end`, `label_scores` (every label, raw), `win_length`, `hop_length`. HeAR's eight labels are `Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear, Laugh, Speech`; HeAR windows are 2.0 s non-overlapping, YAMNet 0.96 s on a 0.48 s hop, AST 10.24 s non-overlapping |
-| `hear_windows` / `yamnet_windows` / `ast_windows` | the fold of a membership rule over those scores (`:1952`) | **all three are absent under the shipped config**, measured by calling `load_label_membership` against the packaged default: `windows.{yamnet,hear}.label_thresholds` and `windows.ast.default_threshold` are null, `config.require` raises on a null, and the block records its own absence. YAMNet's and HeAR's floors ship at 0.2 with `label_top_k: 4`, and reach a reader only through `span_hear` / `span_yamnet`, which use `optional_label_membership` and tolerate null overrides. **No body below reads a `*_windows` derivative** |
-| `enhanced_hear_scores` / `residual_hear_scores` (and `_yamnet_scores`, `_ast_scores`) | the same per stream — block names `enhanced_hear` / `residual_hear`, measurement names as spelled here (`:2815-2845`, `:2930`) | per-window scores plus `speech_overlap`, and the `_summary_all` / `_summary_speech_free` roll-ups |
-| `enhanced_diarization` / `residual_diarization` | one measurement per stream in `diarization.streams` (`:2617`, `:2985`) — **shipped** | `n_speakers`, `n_segments`, `per_speaker_s`, `speech_s`, `overlap_s`, `max_concurrent_speakers`, and `derivatives/<stream>_diarization.npz` carrying `starts`/`ends`/`speakers`/`streams`. The two streams' counts are never summed |
-| `residual` | the FRCRN subtraction (`:2667`, measurement at `:2778`) | `energy_fraction`, `enhanced_energy_fraction`, `gain_db`, `bands`, `speech_present`, `speech_coverage_fraction`, `n_consensus_words` |
-| `squim` | one assertion per span (`:2133`) | `stoi`, `pesq`, `si_sdr`, over the span's extent |
-| `disruptions_file` | on the **un-resampled** `recording` stream (`:2106`) | clipped runs, dropouts, discontinuities, DC, zero-crossing rate, `sampling_rate` |
-| `clip_spans` | `span` entities with `family: CLIP_FAMILY` (`:714`, block at `:1519`) | `extent`, `signal`, and one `clip_amplitude` measurement beside them |
-| `hints` | `AudioHints` (`audio_hints.py:129`), handed to every branch | `may_contain`, `environment`, `metadata.task_token`‡ (the only carrier of the trailing index), `metadata.speech_type`, `expected_speech`‡ |
-| `stream_extent` | ADMIT's `recording` stream extent, `(0.0, duration_s)` (`admit.py:95-98`) | the measured duration every "was it done" test needs |
+| `words` | the `word` entities `consensus_transcript` names (entity at `preprocess.py:2436`; attributes at `consensus.py:391-416`) | `text`, `bracketed`, `outcome`, `sources`, `readings`, `timings` (per source), `onset_spread_s`, `offset_spread_s`, `temporal_uncertainty_s`, `variants`, `agreement`, `index`, and the entity's own `extent` |
+| `consensus_transcript` | the whole-file stream (block `_consensus` at `:2409`, measurement at `:2456`, name at `:2460`) | `text`, `sources` (model id + resolved commit per source), `word_ids`, `role` |
+| `spans` | the `span` entities — the amplitude/continuity/ASR loop at `preprocess.py:1875-1891`, the `gap` entity loop at `:1905-1920` | always `extent`, `signal`, `measure ∈ {amplitude, continuity, asr, gap}`, `merged_proposals`, `contains_clip`. **`peak_over_floor_db` and `k_db` exist only on `measure == "amplitude"`** and `continuity_cut_percentile` only on `continuity` (`_measure_fields`, `:1782-1787`); `corroborated_by` only when a later proposer overlapped |
+| `energy_envelope` | `derivatives/energy_envelope.npz` (`_envelope` at `:1590`, savez `:1612`, name `:1621`) | npz `envelope_dbfs`, `floor_dbfs` — **one global value, `np.full_like`-broadcast, not a local floor**; entity attribute `sampling_rate` |
+| `normalized_envelope` | the AGC'd envelope (savez `:1705`, name `:1714`) | the same two arrays |
+| `continuity_trace` | `derivatives/continuity_trace.npz` (block `:2522`, savez `:2549`, name `:2554`) | npz **`continuity` only**, per sample in `[0, 1]`; entity attributes `sampling_rate`, `cut_level`, `cut_percentile`. **This is a spectral-stationarity trace already** — cosine similarity between consecutive log-magnitude spectra (`spectral_continuity/api.py:10`), fed the narrowband magnitude |
+| `phonation_tracks` | `derivatives/phonation_tracks.npz` (fn `:1255`, savez `:1300`), hop 10 ms | `times_s`, `f0_hz`, `strength`, `formant_times_s`, `f1..f4_hz`, `f1..f4_bw_hz`. F0 on the pre-emphasised stream, formants on `plain` (`:1288-1291`) |
+| `spectrogram_wideband` / `spectrogram_narrowband` | `derivatives/spectrogram_*.npz` (savez `:2507`) | npz `spectrogram` (power); attributes `win_length`, `hop_length`, `n_fft`. 5 ms / 20 ms window, 5 ms hop (`default.yaml:69-72`). **No `sampling_rate` attribute** — a body takes the working rate from the resample, which is why `band_power` has one as a parameter |
+| `gammatone` | `derivatives/gammatone.npz` (block `:2568`, savez `:2584`) | `centre_frequencies_hz` (40 channels, 80–7800 Hz), `energy_db`; attribute `hop_s` = 0.005. **Read by no body here**: it is an ERB rebinning of the same short-time spectrum the two spectrograms carry |
+| `ppg_posteriorgram` | writer `:774`, relative path `:803`, on `enhanced` | `posteriorgram[frame, phoneme]`, `phonemes` (40 ARPAbet incl. `<silent>`), `seconds_per_frame`. **Whole file only**, and read by no body here |
+| `praat_features` | ~40 whole-file scalars on `enhanced` (fn `:1179`, measurement `:1223-1231`) | **the scalars are nested under one attribute, `features`**, beside `n_features` and the parameter set. Not re-poolable over an extent |
+| `level` | whole-file, on `plain` (block `:2087`, name `:2098`) | `peak_dbfs`, `rms_dbfs`, `lufs`. **Uncalibrated** — no SPL reference exists anywhere in the graph |
+| `silence` | YAMNet `Silence` per window (block `:2059`, name `:2079`) | `windows[{start, end, score, is_silence}]`, `threshold` |
+| `span_hear` / `span_yamnet` | per-span classifier windows (`:2186`, `:2250`; attributes built at `:314-358`) | `span_id`, the window's own `extent`, `raw_scores`, `default_threshold`, `label_top_k`, `labelled`, `isolated_span`, and `labels` / `scores` when a membership rule exists. A refusal becomes an assertion carrying `unmeasured` (`_mark_unmeasured`, `:2174`) |
+| `hear_scores` / `yamnet_scores` / `ast_scores` | the classifier's verbatim whole-file windows (`_scores` at `:1926`) | `start`, `end`, `label_scores` (every label, raw), `win_length`, `hop_length`. HeAR's eight labels are `Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear, Laugh, Speech` (`hear.py:133-142`); HeAR windows 2.0 s non-overlapping, YAMNet 0.96 s on a 0.48 s hop (`yamnet.py:142-143`), AST 10.24 s non-overlapping |
+| `hear_windows` / `yamnet_windows` / `ast_windows` | the fold of a membership rule over those scores (`_windows` at `:1952`) | **all three are absent under the shipped config.** `load_label_membership` (`label_membership.py:55`) `config.require`s all three of `label_top_k`, `default_threshold` and `label_thresholds` — at `:70`, `:71` and `:73`, inside the return at `:69-75` — and `label_thresholds` is **null for yamnet, ast and hear alike** (`default.yaml:94`, `:98`, `:105`), so `ast` fails on two nulls. `_windows` calls it at `:1957`; the block runner catches `(ValueError, LookupError)` at `preprocess.py:2991` and records the block absent at `:2994`. `optional_label_membership` (`:78-102`) reads the same key with `config.get` and tolerates the null, which is why `span_hear` / `span_yamnet` *are* labelled and these are not. **No body below reads a `*_windows` derivative** |
+| `enhanced_hear_scores` / `residual_hear_scores` (and `_yamnet_`, `_ast_`) | the same per stream (`_stream_classifier_scores` at `:2814`, measurement `:2837-2851`, `_stream_hear` `:2930`) | per-window scores plus `speech_overlap`, and the `_summary_all` / `_summary_speech_free` roll-ups (`_stream_classifier_summaries` at `:2859-2888`) |
+| `enhanced_diarization` / `residual_diarization` | one measurement per stream in `diarization.streams` (`:2617`, blocks `:2630`, spliced `:2985`) — **shipped** | `speakers`, `n_speakers`, `n_segments`, `per_speaker_s`, `speech_s`, `overlap_s`, `max_concurrent_speakers`, and `derivatives/<stream>_diarization.npz` carrying `starts`/`ends`/`speakers`/`streams`. The two streams' counts are never summed |
+| `residual` | the FRCRN subtraction (block `:2667`, name `:2778`) | `energy_fraction`, `enhanced_energy_fraction`, `gain_db`, `bands`, `speech_present`, `speech_coverage_fraction`, `n_consensus_words` |
+| `squim` | one **assertion** per span, `verb: "measure"` (`_squim_for` at `:2133`, the assertion written at `:2162-2166`, invoked by `_squim` at `:2172`) | `stoi`, `pesq`, `si_sdr` over the span's extent — **or `unmeasured` and no scores at all** when SQUIM refuses (`:2160`). A body reading it must handle that |
+| `disruptions_file` | on the **un-resampled** `recording` stream (block `:2106`, name `:2125`) | clipped runs, dropouts, discontinuities, DC, zero-crossing rate, `sampling_rate` |
+| `clip_spans` | `span` entities with `family: CLIP_FAMILY` (`:712-715`, block `:1519`) | `extent`, `family`, `signal`, and one `clip_amplitude` measurement beside them (`:621`, attributes `:666-674`) carrying `unclipped_peak`, `unclipped_peak_time_s`, `unclipped_samples_n`, `edge_guard_samples`, `clip_spans_n` and the per-span levels |
+| `hints` | `AudioHints` (`audio_hints.py:129`), handed to every branch | `may_contain` (`:149`), `targeted_speaker_count` (`:150`), `environment` (`:151`), `expected_speech`‡ (`:152`), `target_speaker` (`:153`), `metadata` (`:154`, a `dict[str, Any]`). **`metadata["task_token"]` is a key, not a field, and appears nowhere in `src/senselab`**‡ |
+| `stream_extent` | ADMIT's `recording` stream extent, `(0.0, duration_s)` (`admit.py:95-98`), whose entity also carries `path` (`:101`) | the measured duration every *"was it done"* test needs — and, through `path`, the only in-store carrier of the declared family |
 
-Three helpers recur and are written once here rather than in thirty bodies:
-
-```
-gaps(spans)        = [s for s in spans if s.measure == "gap"]
-lexical(words)     = [w for w in words if not w.bracketed]
-off_task(components, spans) =
-    [("off_task_extent", g.start, g.end, {"measure": "gap"})
-     for g in gaps(spans) if g overlaps no component extent]
-```
-
-`off_task_extent` is emitted by the branch that owns the task; which verb carries it —
-`trim` per `design.md:569` or `deviate` per `branch-conventions.md:108` — is unsettled, and these
-bodies emit the finding without choosing.
+`store.id_of(name)` is the id of the measurement or derivative entity of that name, which is what a
+proposal puts in `wasDerivedFrom`.
 
 **`declared_duration_s` is a sidecar-consistency check, not a task-completion measurement.** Where a
 body reads it, the finding is that the declaration and the recording disagree; which of the two is
-wrong is a separate question, and 2,020 sidecars declare under a second.
+wrong is a separate question, and 2,020 sidecars declare under a second. Its home is QUALITY's Q5.
+
+### The operating points, all of them
+
+```python
+@dataclass(frozen=True)
+class Params:
+    """Every operating point these bodies owe. No number appears here or in any body."""
+
+    p_smoothing_window_s: float
+    p_peak_prominence_db: float
+    p_trough_return_db: float
+    p_event_min_s: float
+    p_score_min: float
+    p_breath_coverage_min: float
+    p_voiced_strength_min: float
+    p_voiced_fraction_min: float
+    p_f0_spread_window_s: float
+    p_f0_spread_max_semitones: float
+    p_continuity_min: float
+    p_production_min_s: float
+    p_monotone_tolerance_semitones: float
+    p_dominant_segment_min_fraction: float
+    p_response_min_s: float
+    p_pause_min_s: float
+    p_run_gap_max_s: float
+    p_breath_group_min_gap_s: float
+    p_omission_score_max: float
+    p_repeat_overlap_min: float
+    p_echo_ngram_n: int
+    p_echo_overlap_max: float
+    p_verbatim_overlap_max: float
+    p_coverage_min: float
+    p_expected_lexical_max: int
+    p_interval_max_s: float
+    p_modulation_band_hz: tuple[float, float]
+    p_rate_prominence_min: float
+    p_train_min_s: float
+    p_repeat_min_occurrences: int
+    p_burst_window_ms: float
+    p_place_centroid_bands_hz: dict[str, tuple[float, float]]
+    p_place_margin_db: float
+    p_effort_split_hz: float
+    p_min_contrast_db: float
+    p_tilt_max_db_per_octave: float
+    p_level_min_dbfs: float
+    p_gap_off_task_min_s: float
+    p_normalise: Callable[[str], str]
+    p_label_sets: dict[str, tuple[str, ...]]
+```
+
+### The mode selector, written once
+
+```python
+IN_FAMILY: dict[str, dict[str, Expectation]] = {
+    "VOICE": VOICE_EXPECTATIONS,
+    "SPEECH": SPEECH_EXPECTATIONS,
+    "AIRWAY": AIRWAY_EXPECTATIONS,
+    "DDK": DDK_EXPECTATIONS,
+}
+
+ALIGN: dict[str, Callable] = {
+    "VOICE": align_voice,
+    "SPEECH": align_speech,
+    "AIRWAY": align_airway,
+    "DDK": align_ddk,
+}
+
+DETECT: dict[str, Callable] = {
+    "VOICE": detect_voice,
+    "SPEECH": detect_speech,
+    "AIRWAY": detect_airway,
+    "DDK": detect_ddk,
+}
+
+
+def run_branch(branch: str, task_family: str | None, store, hints, params: Params) -> Result:
+    """The whole of the mode decision. The declaration picks the mode; it never supplies the answer."""
+    if task_family is not None and task_family in IN_FAMILY[branch]:
+        return ALIGN[branch](task_family, store, hints, params)
+    return DETECT[branch](store, params)
+```
+
+`task_family is None` — an undeclared or unreadable family — takes the out-of-family mode, which is
+the safe arm: the branch annotates its speciality and concludes nothing. There is no third arm and
+no fallback that guesses a family.
+
+### The expectation, as data
+
+```python
+class Pattern(Enum):
+    ORDERED_TOKENS = "ordered_tokens"
+    FREE_RESPONSE = "free_response"
+    ITEM_LIST = "item_list"
+    NO_LEXICAL = "no_lexical"
+    SUSTAINED = "sustained"
+    GLIDE = "glide"
+    EFFORT = "effort"
+    PER_SENTENCE = "per_sentence"
+    EVENT_SERIES = "event_series"
+    EVENT_ALTERNATION = "event_alternation"
+    SOUND_COVERAGE = "sound_coverage"
+    SYLLABLE_TRAIN = "syllable_train"
+    SYLLABLE_SEQUENCE = "syllable_sequence"
+
+
+@dataclass(frozen=True)
+class Expectation:
+    """What the instruction asked for, as data. One row per in-family task."""
+
+    pattern: Pattern
+    tokens: tuple[str, ...] | None = None
+    token_source: str | None = None
+    expected_event_count: int | None = None
+    declared_duration_s: float | None = None
+    label_set: str | None = None
+    sequence: tuple[str, ...] | None = None
+    declared_direction: str | None = None
+    declared_route: str | None = None
+    route_from_index: bool = False
+    relax_s: float | None = None
+    repetition_allowed: bool | None = None
+    repetition_from_category: bool = False
+    lexical_separator: bool = False
+    forbid_lexical: bool = False
+    emit_filler: bool = True
+    expect_inhale: bool = False
+    contrast: bool = False
+    timed_intervals: bool = False
+    anti_pattern: str | None = None
+    connected: bool = False
+    unviable: tuple[tuple[str, str], ...] = ()
+```
+
+**Twenty-two fields, and every one of them was a difference between two functions before.** The
+v1/v2 pairs are the clearest case: `maximum-phonation-time` against `-v2` is `expect_inhale`;
+`free-speech` against `-v2` is `anti_pattern`; every `diadochokinesis` v1 against its v2 is
+`expected_event_count` against `declared_duration_s`. Written as data, the pair cannot drift apart;
+written as two functions, it repeatedly did.
+
+### What spans each in-family task proposes
+
+Every row is what the body below actually mints. The rule the table follows is stated once: **a span
+is proposed where a measurement is taken over it that no existing entity already carries.** A
+realised word already has a `word` entity with its own extent, `agreement` and per-source `timings`,
+so a token gets no second span; a held vowel, a sentence, a cough and a train each carry a
+measurement of their own, so each does.
+
+| branch | task | spans proposed | what each extent is derived from |
+| --- | --- | --- | --- |
+| VOICE | `prolonged-vowel` | **2** — `count_in`, `task_extent` | `count_in` from the consensus `word` extents of the matched `one two three`; `task_extent` from the first and last voiced frame of `phonation_tracks` inside the qualifying amplitude span. **Two, because only the second is the voice measurement**: today every Praat scalar is taken over count-in plus silence plus vowel, which is the defect the split removes. `count_in` carries `excluded_from_measurement=True` |
+| VOICE | `maximum-phonation-time` | **1** — `task_extent` | the voiced run, as above. The v1 inhale gets **no VOICE span**: under propose-only a branch mints only in its own family and an inhale is airway evidence, so `align_voice` records `inhale_expected_in_file` as a count and `detect_airway` — which runs on the same recording — is what proposes the span over it. Whether routing in fact selects AIRWAY on this family often enough for the hand-off to be routine is a routing-share question this document does not measure |
+| VOICE | `maximum-phonation-time-v2` | **1** — `task_extent` | as v1, and no inhale is expected at all |
+| VOICE | `glides-*`, `high-to-low` | **1** — `task_extent` | the tolerant-monotone run over `semitones(f0_hz)`, which is the sweep itself rather than the carrier span |
+| VOICE | `cape-v-sentences`, `-v2` *(pending declaration)* | **n + 1** — one per sentence, plus `task_extent` | each sentence from `stimulus_alignment.structure_spans()`. **One per sentence because pooling across the six discards the instrument's design** — each loads a different phonatory condition, and today's whole-file `praat_features` is exactly that pooling |
+| VOICE | `loudness`, `loudness-v2` *(pending declaration)* | **n**, one per realised token; v2 adds a `task_extent` over the pair | each token from its `word` extent. Per token because the effort measurement is per token; v2's `task_extent` spans the contrast, which is the measurement there |
+| SPEECH | read text and passages | **1 + n** — `task_extent`, plus one `structure_*` per alignment unit, plus breath groups where `connected` | `task_extent` from the first and last realised token; `structure_*` from `stimulus_alignment.structure_spans()`. **No span per token** — a `word` entity already carries that ground, and one per token would mint ~8 × 13,705 extents on `harvard-sentences-list` alone with no measurement attached |
+| SPEECH | `word-color-stroop` | as above | the answer sequence is the alignment's expected tokens; the structure units are the 15 colour items |
+| SPEECH | free response (`free-speech*`, `story-recall*`, `cinderella-story`, `productive-vocabulary`, `picture-description*`, `open-response-questions`) | **1 + n** — `task_extent`, plus one per breath group where `connected` | `task_extent` from the hull of the `measure: "asr"` spans; breath groups from inter-word gaps, HeAR `Breathe` windows and `[breath]` tokens. Each breath group carries its own S4 measurement, which is why it is a span |
+| SPEECH | `animal-fluency`, `random-item-generation*` | **1** — `task_extent` | the hull of the produced items. An item is one `word` entity, so no per-item span; `repeated_item` is a deviation over that word's extent |
+| SPEECH | the eight non-`buttercup` `SYLLABLE_REPETITION` families | **0** | **Nothing, and that is the finding.** The expectation is that no lexical content occurs; a branch that proposed a speech span here would assert the opposite of what it measured |
+| SPEECH | `diadochokinesis-buttercup`, `-v2-buttercup` | **1** — `task_extent` | the hull of the realised `buttercup` tokens |
+| SPEECH | `loudness`, `loudness-v2` | **1** — `task_extent` | the hull of the realised `hey` tokens |
+| AIRWAY | the counted families (`-cough`, `-v2-hardcough`, `fivebreaths`, both `threebreaths*`, `threequickbreaths`, `v2-threebreaths`, `breath-sounds`) | **n + 1** — **one per event**, plus `task_extent` over their hull | each event from `events_in_span`'s peak-prominence and trough-return walk over `energy_envelope`, derived from the carrier amplitude span it was found in. **One per event is the point**: `by_label` increments once per (span, label) pair (`airway.py:280`), so a 4 s span holding three coughs counts 1 today, and the count compared against the instruction's `expected_event_count` is the number of these spans |
+| AIRWAY | `voluntary-cough` | **n + m + 1** — one per cough, one per breath, plus `task_extent` | coughs from `events_in_span`, breaths from the `Breathe`-scoring carrier spans. Both are expected, because the pattern is an alternation and material between coughs must be matched rather than scored off-task |
+| AIRWAY | `-breath`, `-v2-breath` | **n + 1** — one per merged run of `Breathe` windows, plus `task_extent` | HeAR's raw 2.0 s windows, merged. Uncounted and durational, so the runs are the structure |
+| DDK | every train and sequence family | **1** — `task_extent`, the train | the hull of the syllable onsets inside the carrier span, falling back to the carrier's extent. **An individual syllable is NOT a span**: rate, inter-onset interval variability and sequence collapse are statistics over the onset series, and one span per syllable would add ~30 per recording over 7,989 recordings carrying no measurement of their own. The onsets travel as a `counts` entry; a syllable that is not the one the sequence expected travels as a `syllable_sequence_mismatch` deviation with its own extent, which needs no span |
+| DDK | `buttercup`, `-v2-buttercup` | **1** — `task_extent`, the train | the hull of the realised tokens |
+| QUALITY | not a task | **0 or 1** — `occluded` only when the tilt finding fires | the stream extent, derived from `level`, `spectrogram_wideband` and `band_profile†`. The clip check proposes nothing: it contests PREPROCESS's own reading, which is an assertion beside a span |
+
+**Where a task's spans cannot be delimited, nothing is minted and the result is `UNDETERMINED`.**
+Three sites do this rather than proposing a span whose boundaries are guessed: `_speech_ordered`
+when `stimulus_alignment` is absent and the expectation is per recording; `_voice_per_sentence` when
+the same is true of the sentence boundaries; and `_speech_item_list` when the recording's own
+category cannot be read, since the repetition rule inverts between categories. `align_ddk` returns
+`False` with no span when no carrier clears the train minimum — that is a measurement, not an
+absent instrument.
+
+### The shared helpers, written once rather than in thirty bodies
+
+```python
+def lexical(words: Sequence) -> list:
+    return [w for w in words if not w.bracketed]
+
+
+def gaps(spans: Sequence) -> list:
+    return [s for s in spans if s.measure == "gap"]
+
+
+def amplitude_spans(spans: Sequence) -> list:
+    return [s for s in spans if s.measure == "amplitude"]
+
+
+def asr_spans(spans: Sequence) -> list:
+    return [s for s in spans if s.measure == "asr"]
+
+
+def overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
+    return a[0] < b[1] and a[1] > b[0]
+
+
+def duration(extent: tuple[float, float] | None) -> float:
+    return 0.0 if extent is None else float(extent[1] - extent[0])
+
+
+def hull(extents: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
+    if not extents:
+        return None
+    return (min(s for s, _ in extents), max(e for _, e in extents))
+
+
+def merge(extents: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for start, end in sorted(extents):
+        if out and start <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], end))
+        else:
+            out.append((start, end))
+    return out
+
+
+def touches_edge(extent: tuple[float, float], stream_extent: tuple[float, float]) -> bool:
+    return extent[0] <= stream_extent[0] or extent[1] >= stream_extent[1]
+
+
+def off_task(components: Sequence[Proposal], spans: Sequence, p_gap_off_task_min_s: float) -> list[Finding]:
+    out: list[Finding] = []
+    for g in gaps(spans):
+        if duration(g.extent) < p_gap_off_task_min_s:
+            continue
+        if any(overlaps(g.extent, (c.start, c.end)) for c in components):
+            continue
+        out.append(deviation("off_task_extent", g.extent[0], g.extent[1], measure="gap"))
+    return out
+
+
+def declared_duration_count(store, declared: float | None) -> list[Finding]:
+    if declared is None:
+        return []
+    return [count("declared_duration_s", round(duration(store.stream_extent), 2), declared)]
+```
+
+`off_task_extent` is emitted by the branch that owns the task; which verb carries it — `trim` per
+`design.md:569` or `deviate` per `branch-conventions.md:108` — was unsettled. **Propose-only settles
+the other half of that question**: `task_extent` is now a proposed span carrying `role:
+"task_extent"`, not a `trim` payload, so `trim` is not the carrier of the extent either. This
+document's reading is that `trim` has no remaining job; `off_task_extent` stays a `deviate` finding,
+because off-task material is the absence of the branch's speciality rather than an instance of it,
+and a branch does not mint spans over ground it is disclaiming.
+
+#### Array helpers
+
+```python
+def envelope_slice(energy_envelope, extent: tuple[float, float]) -> tuple[np.ndarray, int]:
+    sr = float(energy_envelope.sampling_rate)
+    envelope = np.asarray(energy_envelope.envelope_dbfs, dtype=float)
+    lo = max(0, int(round(extent[0] * sr)))
+    hi = min(envelope.size, int(round(extent[1] * sr)))
+    if hi <= lo:
+        return np.empty(0, dtype=float), lo
+    return envelope[lo:hi], lo
+
+
+def trace_slice(continuity_trace, extent: tuple[float, float]) -> np.ndarray:
+    sr = float(continuity_trace.sampling_rate)
+    trace = np.asarray(continuity_trace.continuity, dtype=float)
+    lo = max(0, int(round(extent[0] * sr)))
+    hi = min(trace.size, int(round(extent[1] * sr)))
+    return trace[lo:hi] if hi > lo else np.empty(0, dtype=float)
+
+
+def boxcar(x: np.ndarray, width: int) -> np.ndarray:
+    if width <= 1 or x.size == 0:
+        return x
+    width = min(width, x.size)
+    return np.convolve(x, np.ones(width, dtype=float) / float(width), mode="same")
+
+
+@dataclass
+class TrackSlice:
+    times_s: np.ndarray
+    f0_hz: np.ndarray
+    strength: np.ndarray
+    voiced: np.ndarray
+    hop_s: float
+
+
+def track_slice(phonation_tracks, extent: tuple[float, float], p_voiced_strength_min: float) -> TrackSlice:
+    times = np.asarray(phonation_tracks.times_s, dtype=float)
+    inside = (times >= extent[0]) & (times < extent[1])
+    hop = float(np.median(np.diff(times))) if times.size > 1 else 0.01
+    strength = np.asarray(phonation_tracks.strength, dtype=float)[inside]
+    return TrackSlice(
+        times_s=times[inside],
+        f0_hz=np.asarray(phonation_tracks.f0_hz, dtype=float)[inside],
+        strength=strength,
+        voiced=strength >= p_voiced_strength_min,
+        hop_s=hop,
+    )
+
+
+def semitones(f0_hz: np.ndarray, ref_hz: float | None = None) -> np.ndarray:
+    f0 = np.asarray(f0_hz, dtype=float)
+    voiced = np.isfinite(f0) & (f0 > 0.0)
+    if not voiced.any():
+        return np.full(f0.shape, np.nan)
+    if ref_hz is None:
+        ref_hz = float(np.median(f0[voiced]))
+    out = np.full(f0.shape, np.nan)
+    out[voiced] = 12.0 * np.log2(f0[voiced] / ref_hz)
+    return out
+
+
+def robust_spread(values: np.ndarray) -> float:
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    if v.size < 2:
+        return 0.0
+    return float(np.percentile(v, 95.0) - np.percentile(v, 5.0))
+
+
+def max_windowed_spread(values: np.ndarray, hop_s: float, window_s: float) -> float:
+    v = np.asarray(values, dtype=float)
+    width = max(2, int(round(window_s / hop_s))) if hop_s > 0.0 else 2
+    if v.size <= width:
+        return robust_spread(v)
+    worst = 0.0
+    for i in range(0, v.size - width + 1):
+        worst = max(worst, robust_spread(v[i : i + width]))
+    return worst
+
+
+def longest_monotone_run(values: np.ndarray, tolerance: float) -> tuple[int, int, int] | None:
+    """Longest run that never reverses by more than `tolerance`. Returns (first, last, sign)."""
+    v = np.asarray(values, dtype=float)
+    finite = np.flatnonzero(np.isfinite(v))
+    if finite.size < 2:
+        return None
+    best: tuple[int, int, int] | None = None
+    for sign in (1, -1):
+        run_start = int(finite[0])
+        extreme = float(v[run_start])
+        previous = run_start
+        candidates: list[tuple[int, int, int]] = []
+        for raw in finite[1:]:
+            index = int(raw)
+            value = float(v[index])
+            if sign * (value - extreme) >= -tolerance:
+                extreme = max(extreme, value) if sign > 0 else min(extreme, value)
+            else:
+                candidates.append((run_start, previous, sign))
+                run_start, extreme = index, value
+            previous = index
+        candidates.append((run_start, previous, sign))
+        for candidate in candidates:
+            if best is None or (candidate[1] - candidate[0]) > (best[1] - best[0]):
+                best = candidate
+    return best
+
+
+def band_power(spectrogram_block, sampling_rate: float, extent: tuple[float, float],
+               lo_hz: float, hi_hz: float) -> float:
+    power = np.asarray(spectrogram_block.spectrogram, dtype=float)
+    freqs = np.fft.rfftfreq(int(spectrogram_block.n_fft), d=1.0 / sampling_rate)
+    bins = (freqs >= lo_hz) & (freqs < hi_hz)
+    hop_s = float(spectrogram_block.hop_length) / sampling_rate
+    first = max(0, int(extent[0] / hop_s))
+    last = min(power.shape[1], int(np.ceil(extent[1] / hop_s)))
+    if last <= first or not bins.any():
+        return float("nan")
+    return float(power[np.ix_(bins, np.arange(first, last))].sum())
+
+
+def spectral_balance_db(spectrogram_block, sampling_rate: float, extent: tuple[float, float], split_hz: float) -> float:
+    low = band_power(spectrogram_block, sampling_rate, extent, 0.0, split_hz)
+    high = band_power(spectrogram_block, sampling_rate, extent, split_hz, sampling_rate / 2.0)
+    if not np.isfinite(low) or not np.isfinite(high) or low <= 0.0:
+        return float("nan")
+    return float(10.0 * np.log10((high + 1e-20) / low))
+
+
+def peak_over_floor_db(energy_envelope, extent: tuple[float, float]) -> float:
+    e, _ = envelope_slice(energy_envelope, extent)
+    if e.size == 0:
+        return float("nan")
+    return float(e.max() - float(energy_envelope.floor_dbfs))
+
+
+def acquisition_covariates(store, extent: tuple[float, float]) -> dict:
+    return {
+        "file_peak_dbfs": store.level.peak_dbfs,
+        "file_rms_dbfs": store.level.rms_dbfs,
+        "file_lufs": store.level.lufs,
+        "contains_clip": any(s.contains_clip for s in store.spans if overlaps(s.extent, extent)),
+        "disruptions": store.disruptions_file.summary,
+        "uncalibrated": True,
+    }
+```
+
+#### The three instruments
+
+```python
+def events_in_span(energy_envelope, span, params: Params) -> list[tuple[float, float]]:
+    """A5/A6 and D3's onsets. Multiple maxima inside one span become separate events."""
+    sr = float(energy_envelope.sampling_rate)
+    raw, offset = envelope_slice(energy_envelope, span.extent)
+    if raw.size < 3:
+        return []
+    e = boxcar(raw, max(1, int(round(params.p_smoothing_window_s * sr))))
+    floor_dbfs = float(energy_envelope.floor_dbfs)
+
+    events: list[tuple[float, float]] = []
+    for i in range(1, e.size - 1):
+        if not (e[i] >= e[i - 1] and e[i] > e[i + 1]):
+            continue
+        if e[i] - floor_dbfs < params.p_peak_prominence_db:
+            continue
+        j, left_min = i - 1, float(e[i])
+        while j >= 0 and e[j] < e[i]:
+            left_min = min(left_min, float(e[j]))
+            j -= 1
+        k, right_min = i + 1, float(e[i])
+        while k < e.size and e[k] < e[i]:
+            right_min = min(right_min, float(e[k]))
+            k += 1
+        if float(e[i]) - max(left_min, right_min) < params.p_peak_prominence_db:
+            continue
+        target = float(e[i]) - params.p_trough_return_db
+        onset = i
+        while onset > 0 and e[onset - 1] > target:
+            onset -= 1
+        tail = i
+        while tail < e.size - 1 and e[tail + 1] > target:
+            tail += 1
+        start = (offset + onset) / sr
+        end = (offset + tail) / sr
+        if end - start >= params.p_event_min_s:
+            events.append((start, end))
+    return merge(events)
+
+
+def sounds_like(span, span_hear, span_yamnet, label_set: Sequence[str], p_score_min: float) -> bool:
+    """`raw_scores` is always written; `labels` is a top-K decision over it (default.yaml:91-107)."""
+    for window in list(span_hear) + list(span_yamnet):
+        if window.span_id != span.id:
+            continue
+        for label in label_set:
+            if float(window.raw_scores.get(label, 0.0)) >= p_score_min:
+                return True
+    return False
+
+
+def train_rate_hz(energy_envelope, extent: tuple[float, float], params: Params) -> float | None:
+    """The modulation spectrum of the envelope. Not Praat's `extract_speech_rate` — see the notes."""
+    sr = float(energy_envelope.sampling_rate)
+    e, _ = envelope_slice(energy_envelope, extent)
+    if e.size < 8:
+        return None
+    windowed = (e - e.mean()) * np.hanning(e.size)
+    spectrum = np.abs(np.fft.rfft(windowed))
+    freqs = np.fft.rfftfreq(e.size, d=1.0 / sr)
+    lo, hi = params.p_modulation_band_hz
+    band = (freqs >= lo) & (freqs <= hi)
+    if not band.any():
+        return None
+    k = int(np.argmax(np.where(band, spectrum, 0.0)))
+    background = float(spectrum[band].mean())
+    if background <= 0.0 or float(spectrum[k]) / background < params.p_rate_prominence_min:
+        return None
+    return float(freqs[k])
+```
+
+#### Lexical arithmetic
+
+```python
+def ordered_run(expected: Sequence[str], words: Sequence, normalise: Callable[[str], str]):
+    """The D1-free fallback: a greedy left-to-right ordered match."""
+    matched: list[tuple[str, object]] = []
+    omissions: list[str] = []
+    cursor = 0
+    for token in expected:
+        hit = None
+        for k in range(cursor, len(words)):
+            if normalise(words[k].text) == normalise(token):
+                hit = k
+                break
+        if hit is None:
+            omissions.append(token)
+        else:
+            matched.append((token, words[hit]))
+            cursor = hit + 1
+    return matched, omissions
+
+
+def ngram_echo_fraction(source_tokens: Sequence[str], produced_tokens: Sequence[str], n: int) -> float:
+    if len(source_tokens) < n or len(produced_tokens) < n:
+        return 0.0
+    source = {tuple(source_tokens[i : i + n]) for i in range(len(source_tokens) - n + 1)}
+    produced = {tuple(produced_tokens[i : i + n]) for i in range(len(produced_tokens) - n + 1)}
+    if not source:
+        return 0.0
+    return len(source & produced) / len(source)
+
+
+def content_coverage(source_tokens: Sequence[str], produced_tokens: Sequence[str]) -> float:
+    source = set(source_tokens)
+    if not source:
+        return 0.0
+    return len(source & set(produced_tokens)) / len(source)
+
+
+def lexical_runs(words: Sequence, max_gap_s: float) -> list[tuple[float, float]]:
+    """Consecutive lexical words separated by no more than `max_gap_s`, as one extent each.
+
+    NOT `merge` over the word extents: `merge` joins only touching or overlapping intervals, and
+    ordinary speech has a gap between every pair of words, so `merge` would return one extent per
+    word. This is the same grouping SPEECH already does today over the consensus word timings
+    (`group_extents_into_runs`, `speech.py:573`).
+    """
+    runs: list[tuple[float, float]] = []
+    for word in words:
+        if runs and word.extent[0] - runs[-1][1] <= max_gap_s:
+            runs[-1] = (runs[-1][0], max(runs[-1][1], word.extent[1]))
+        else:
+            runs.append((word.extent[0], word.extent[1]))
+    return runs
+
+
+def inter_word_gaps(words: Sequence, min_gap_s: float) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for previous, current in zip(words, words[1:]):
+        if current.extent[0] - previous.extent[1] >= min_gap_s:
+            out.append((previous.extent[1], current.extent[0]))
+    return out
+
+
+def group_by_breaks(words: Sequence, breaks: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    if not words:
+        return []
+    groups: list[tuple[float, float]] = []
+    start = words[0].extent[0]
+    for previous, current in zip(words, words[1:]):
+        between = (previous.extent[1], max(current.extent[0], previous.extent[1] + 1e-9))
+        if any(overlaps(b, between) for b in breaks):
+            groups.append((start, previous.extent[1]))
+            start = current.extent[0]
+    groups.append((start, words[-1].extent[1]))
+    return groups
+
+
+def breath_group_extents(store, params: Params) -> list[tuple[float, float]]:
+    words = lexical(store.words)
+    if not words:
+        return []
+    breaks = inter_word_gaps(words, params.p_breath_group_min_gap_s)
+    for window in store.hear_scores:
+        if float(window.label_scores.get("Breathe", 0.0)) >= params.p_score_min:
+            breaks.append((window.start, window.end))
+    for word in store.words:
+        if word.bracketed and word.text == "[breath]":
+            breaks.append(word.extent)
+    return group_by_breaks(words, merge(breaks))
+```
+
+---
+
+### VOICE — `align_voice` and `detect_voice`
+
+```python
+VOICE_EXPECTATIONS: dict[str, Expectation] = {
+    "prolonged-vowel": Expectation(
+        pattern=Pattern.SUSTAINED,
+        tokens=("one", "two", "three"),
+        token_source="instructions",
+        declared_duration_s=12.0,
+        lexical_separator=True,
+    ),
+    "maximum-phonation-time": Expectation(pattern=Pattern.SUSTAINED, forbid_lexical=True, expect_inhale=True),
+    "maximum-phonation-time-v2": Expectation(pattern=Pattern.SUSTAINED, forbid_lexical=True, expect_inhale=False),
+    "glides-low-to-high": Expectation(pattern=Pattern.GLIDE, declared_direction="up"),
+    "glides-high-to-low": Expectation(pattern=Pattern.GLIDE, declared_direction="down"),
+    "high-to-low": Expectation(pattern=Pattern.GLIDE, declared_direction="down"),
+}
+
+VOICE_EXPECTATIONS_PENDING_DECLARATION: dict[str, Expectation] = {
+    "loudness": Expectation(
+        pattern=Pattern.EFFORT,
+        tokens=("hey",),
+        expected_event_count=3,
+        unviable=(("effort_absolute", "`level` is uncalibrated and no SPL reference exists in the graph"),),
+    ),
+    "loudness-v2": Expectation(pattern=Pattern.EFFORT, tokens=("hey",), expected_event_count=2, contrast=True),
+    "cape-v-sentences": Expectation(pattern=Pattern.PER_SENTENCE, token_source="stimulus_text"),
+    "cape-v-sentences-v2": Expectation(pattern=Pattern.PER_SENTENCE, token_source="stimulus_text"),
+}
+```
+
+**V1's stationarity qualifier, one body and three callers** — `align_voice`'s sustained matcher, its
+glide matcher's voicing precondition, and `detect_voice`. It is a **fit, not an estimator**:
+`continuity_trace` is already a spectral-stationarity trace, and F0 spread is a statistic of `f0_hz`
+at a 10 ms hop. It is also what stops V4 computing perturbation over consonants and pauses on the
+22,277 recordings VOICE is routed to without a voice family.
+
+```python
+def qualifying_phonation(store, expectation: Expectation, params: Params) -> list[tuple[object, TrackSlice]]:
+    """V1's stationarity qualifier, over PREPROCESS's amplitude spans. One body, three callers.
+
+    The subject is `measure == "amplitude"`, not `family == "phonation"`. Under propose-only VOICE
+    reads the amplitude spans as evidence and mints its own `family: "voice"` span over what
+    qualifies, so it no longer waits for a phonation span that nothing proposes.
+    """
+    lex = lexical(store.words)
+    out: list[tuple[object, TrackSlice]] = []
+    for span in amplitude_spans(store.spans):
+        if duration(span.extent) < params.p_production_min_s:
+            continue
+        if expectation.lexical_separator and any(overlaps(w.extent, span.extent) for w in lex):
+            continue
+        f = track_slice(store.phonation_tracks, span.extent, params.p_voiced_strength_min)
+        if f.strength.size == 0:
+            continue
+        voiced_fraction = float(f.voiced.mean())
+        pitch = semitones(np.where(f.voiced, f.f0_hz, np.nan))
+        spread = max_windowed_spread(pitch, f.hop_s, params.p_f0_spread_window_s)
+        trace = trace_slice(store.continuity_trace, span.extent)
+        stationarity = float(np.median(trace)) if trace.size else 0.0
+        if (
+            voiced_fraction >= params.p_voiced_fraction_min
+            and spread <= params.p_f0_spread_max_semitones
+            and stationarity >= params.p_continuity_min
+        ):
+            out.append((span, f))
+    return out
+
+
+def voiced_extent(span, f: TrackSlice) -> tuple[float, float]:
+    """The production's own boundaries: the first and last voiced frame inside the carrier span."""
+    inside = f.times_s[f.voiced]
+    if inside.size == 0:
+        return span.extent
+    return (float(inside.min()), float(inside.max()) + f.hop_s)
+```
+
+```python
+def align_voice(task_family: str, store, hints, params: Params) -> Result:
+    expectation = VOICE_EXPECTATIONS.get(task_family)
+    assert expectation is not None, f"{task_family} is not a VOICE family; the caller owes detect_voice"
+
+    if expectation.pattern is Pattern.SUSTAINED:
+        return _voice_sustained(expectation, store, hints, params)
+    if expectation.pattern is Pattern.GLIDE:
+        return _voice_glide(expectation, store, params)
+    if expectation.pattern is Pattern.EFFORT:
+        return _voice_effort(expectation, store, params)
+    if expectation.pattern is Pattern.PER_SENTENCE:
+        return _voice_per_sentence(expectation, store, params)
+    raise NotImplementedError(expectation.pattern)
+```
+
+```python
+def _voice_sustained(expectation: Expectation, store, hints, params: Params) -> Result:
+    """Spans proposed: `count_in` where the instruction prescribes one, and `task_extent`.
+
+    Two for `prolonged-vowel`, one for `maximum-phonation-time` and `-v2`. The count-in gets its
+    own span precisely because it must be excluded from the vowel's measurement window: every
+    Praat scalar today is taken over count-in plus silence plus vowel.
+    """
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    count_in_found = expectation.tokens is None
+
+    if expectation.tokens is not None:
+        alignment = store.stimulus_alignment
+        if alignment is None:
+            matched, omissions = ordered_run(expectation.tokens, lexical(store.words), params.p_normalise)
+        else:
+            matched = [(t, w) for t, w in alignment.run_for(expectation.tokens)]
+            omissions = list(alignment.omissions_for(expectation.tokens))
+        if matched:
+            count_in_found = True
+            components.append(
+                voice_span(
+                    "count_in",
+                    (matched[0][1].extent[0], matched[-1][1].extent[1]),
+                    store.id_of("consensus_transcript"),
+                    *(w.id for _, w in matched),
+                    tokens=[t for t, _ in matched],
+                    excluded_from_measurement=True,
+                )
+            )
+        for token in omissions:
+            findings.append(deviation("omission", None, None, expected=token))
+
+    candidates = sorted(
+        qualifying_phonation(store, expectation, params), key=lambda pair: duration(pair[0].extent), reverse=True
+    )
+    if not candidates:
+        findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+        return Result(False, components, findings)
+
+    carrier, track = candidates[0]
+    extent = voiced_extent(carrier, track)
+    components.append(
+        voice_span(
+            "task_extent",
+            extent,
+            carrier.id,
+            store.id_of("phonation_tracks"),
+            store.id_of("continuity_trace"),
+            production="sustained",
+            support_frames=int(track.voiced.sum()),
+            carrier_extent=list(carrier.extent),
+        )
+    )
+    findings.append(measured("phonation_s", extent[0], extent[1], round(duration(extent), 3),
+                             support_frames=int(track.voiced.sum())))
+    if touches_edge(extent, store.stream_extent):
+        findings.append(deviation("truncation", extent[0], extent[1]))
+    for extra, extra_track in candidates[1:]:
+        findings.append(
+            deviation(
+                "repeat_attempt",
+                *voiced_extent(extra, extra_track),
+                reading="three_attempts_inside_one_recording",
+            )
+        )
+
+    if expectation.expect_inhale:
+        # v1 places the deep inhale before the record tap is mentioned, so an audible inhale may be
+        # inside the file. VOICE proposes NO span for it: under propose-only a branch mints only in
+        # its own family, and an inhale is airway evidence. `detect_airway` runs on this same
+        # recording, wherever routing selects it — and proposes it there.
+        findings.append(count("inhale_expected_in_file", True, None))
+
+    if expectation.forbid_lexical:
+        for word in lexical(store.words):
+            findings.append(deviation("off_task_extent", word.extent[0], word.extent[1], text=word.text))
+
+    if hints is not None:
+        token = hints.metadata.get("task_token")            # ‡ written by no code under src/senselab
+        if token is not None:
+            findings.append(count("task_index", token.rsplit("-", 1)[-1], None))
+
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(count_in_found, components, findings)
+```
+
+```python
+def _voice_glide(expectation: Expectation, store, params: Params) -> Result:
+    """Spans proposed: one, `task_extent`, over the sweep."""
+    best: tuple[object, TrackSlice, int, float, tuple[float, float]] | None = None
+    for span in amplitude_spans(store.spans):
+        if duration(span.extent) < params.p_production_min_s:
+            continue
+        f = track_slice(store.phonation_tracks, span.extent, params.p_voiced_strength_min)
+        if f.strength.size == 0 or float(f.voiced.mean()) < params.p_voiced_fraction_min:
+            continue
+        pitch = semitones(np.where(f.voiced, f.f0_hz, np.nan))
+        run = longest_monotone_run(pitch, params.p_monotone_tolerance_semitones)
+        if run is None:
+            continue
+        first, last, sign = run
+        sweep = (float(f.times_s[first]), float(f.times_s[last]) + f.hop_s)
+        if duration(sweep) / max(duration(span.extent), 1e-9) < params.p_dominant_segment_min_fraction:
+            continue
+        if best is None or duration(sweep) > duration(best[4]):
+            best = (span, f, sign, abs(float(pitch[last] - pitch[first])), sweep)
+
+    if best is None:
+        return Result(False, [], off_task([], store.spans, params.p_gap_off_task_min_s))
+
+    span, f, sign, extent_semitones, sweep = best
+    measured_direction = "up" if sign > 0 else "down"
+    components = [
+        voice_span(
+            "task_extent",
+            sweep,
+            span.id,
+            store.id_of("phonation_tracks"),
+            production="glide",
+            direction=measured_direction,
+            support_frames=int(f.voiced.sum()),
+        )
+    ]
+    findings = [measured("glide_extent_semitones", sweep[0], sweep[1], round(extent_semitones, 2))]
+    if measured_direction != expectation.declared_direction:
+        findings.append(
+            deviation(
+                "sweep_direction_mismatch",
+                sweep[0],
+                sweep[1],
+                declared=expectation.declared_direction,
+                measured=measured_direction,
+                extent_semitones=round(extent_semitones, 2),
+            )
+        )
+    if touches_edge(sweep, store.stream_extent):
+        findings.append(deviation("truncation", sweep[0], sweep[1]))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(True, components, findings)
+```
+
+```python
+def _voice_effort(expectation: Expectation, store, params: Params) -> Result:
+    """Spans proposed: one per realised token, because the effort measurement is per token."""
+    assert expectation.tokens is not None and len(expectation.tokens) == 1
+    token = params.p_normalise(expectation.tokens[0])
+    hits = [w for w in lexical(store.words) if params.p_normalise(w.text) == token]
+    evidence = (store.id_of("energy_envelope"), store.id_of("spectrogram_wideband"))
+
+    levels: list[float] = []
+    balances: list[float] = []
+    components: list[Proposal] = []
+    findings: list[Finding] = [count("expected_event_count", len(hits), expectation.expected_event_count)]
+    for index, word in enumerate(hits):
+        over_floor = peak_over_floor_db(store.energy_envelope, word.extent)
+        balance = spectral_balance_db(
+            store.spectrogram_wideband, store.sampling_rate, word.extent, params.p_effort_split_hz
+        )
+        levels.append(over_floor)
+        balances.append(balance)
+        role = ("normal", "loud")[index] if expectation.contrast and index < 2 else "token_%d" % index
+        components.append(voice_span(role, word.extent, word.id, *evidence, token=word.text, index=index))
+        findings.append(
+            measured(
+                "token_peak_over_floor_db",
+                word.extent[0],
+                word.extent[1],
+                round(over_floor, 2),
+                index=index,
+                **acquisition_covariates(store, word.extent),
+            )
+        )
+        findings.append(
+            measured("token_spectral_balance_db", word.extent[0], word.extent[1], round(balance, 2), index=index)
+        )
+
+    if not expectation.contrast:
+        # v1's "maximal effort": NOT SEPARABLE BY THIS DESIGN. No within-recording contrast and no
+        # SPL reference, so what is emitted is a measurement with its covariates, never a verdict.
+        for name, why in expectation.unviable:
+            findings.append(unviable(name, why))
+        findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+        return Result(len(hits) > 0, components, findings)
+
+    if len(hits) < 2:
+        findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+        return Result(False, components, findings)
+
+    # v2: a within-recording difference needs no norm and no calibration.
+    contrast_db = levels[1] - levels[0]
+    span = (hits[0].extent[0], hits[1].extent[1])
+    components.append(voice_span("task_extent", span, hits[0].id, hits[1].id, *evidence, production="effort_contrast"))
+    findings.append(measured("effort_contrast_db", span[0], span[1], round(contrast_db, 2)))
+    findings.append(
+        measured("effort_contrast_balance_db", span[0], span[1], round(balances[1] - balances[0], 2))
+    )
+    findings.append(count("contrast_clears_p_min_contrast_db", abs(contrast_db) >= params.p_min_contrast_db, None))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(True, components, findings)
+```
+
+```python
+def _voice_per_sentence(expectation: Expectation, store, params: Params) -> Result:
+    """Spans proposed: one per sentence, plus `task_extent` over their hull.
+
+    Pooling across the six sentences discards the instrument's design — each loads a different
+    phonatory condition — which is exactly what today's whole-file `praat_features` does.
+    """
+    alignment = store.stimulus_alignment
+    if alignment is None:
+        # The boundaries cannot be placed, so no span is proposed and nothing is claimed.
+        return Result(UNDETERMINED, [], [unviable("per_sentence_extents", "stimulus_alignment (D1) is absent")])
+    sentences = list(alignment.structure_spans())
+    if not sentences:
+        return Result(UNDETERMINED, [], [])
+
+    tracks = store.phonation_tracks
+    times = np.asarray(tracks.times_s, dtype=float)
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    for index, extent in enumerate(sentences):
+        f = track_slice(tracks, extent, params.p_voiced_strength_min)
+        components.append(
+            voice_span(
+                "sentence_%d" % index,
+                extent,
+                store.id_of("stimulus_alignment"),
+                store.id_of("phonation_tracks"),
+                sentence_index=index,
+                support_frames=int(f.voiced.sum()),
+            )
+        )
+        inside = (times >= extent[0]) & (times < extent[1])
+        if not f.voiced.any():
+            findings.append(measured("sentence_voice_quality", extent[0], extent[1], None, support_frames=0))
+            continue
+        for column_name in ("f0_hz", "hnr_db", "cpps_db", "rms_dbfs"):       # the last three are D2 †
+            column = getattr(tracks, column_name, None)
+            if column is None:
+                findings.append(
+                    unviable("sentence_%s" % column_name, "phonation_tracks.%s (D2) is absent" % column_name)
+                )
+                continue
+            values = np.asarray(column, dtype=float)[inside][f.voiced]
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                continue
+            findings.append(
+                measured(
+                    "sentence_%s_over_voiced_frames" % column_name,
+                    extent[0],
+                    extent[1],
+                    round(float(np.median(values)), 3),
+                    sentence=index,
+                    support_frames=int(values.size),
+                )
+            )
+    whole = hull(sentences)
+    assert whole is not None
+    components.append(
+        voice_span("task_extent", whole, store.id_of("stimulus_alignment"), sentences_n=len(sentences))
+    )
+    for expected_token, word in alignment.substitutions:
+        findings.append(
+            deviation("stimulus_mismatch", word.extent[0], word.extent[1],
+                      expected=expected_token.text, read=word.text)
+        )
+    return Result(True, components, findings)
+```
+
+```python
+def detect_voice(store, params: Params) -> Result:
+    """Out of family. Proposes a `family: "voice"` span over every sustained voiced region it finds.
+
+    Task-agnostic by construction, and it shares `qualifying_phonation` with the in-family mode —
+    the same V1 qualifier, the same amplitude spans, the same `phonation_tracks`. What differs is
+    only that no expectation is consulted and no task is evaluated: `done` is UNDETERMINED, always.
+    This is the mode that runs on most of what VOICE is handed — 22,277 routed recordings against
+    8,306 declaring a voice family.
+    """
+    neutral = Expectation(pattern=Pattern.SUSTAINED)       # no lexical separator: mark what is there
+    qualifying = qualifying_phonation(store, neutral, params)
+    qualifying_ids = {span.id for span, _ in qualifying}
+
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    for carrier, track in qualifying:
+        extent = voiced_extent(carrier, track)
+        components.append(
+            voice_span(
+                "phonation",
+                extent,
+                carrier.id,
+                store.id_of("phonation_tracks"),
+                store.id_of("continuity_trace"),
+                production="sustained",
+                support_frames=int(track.voiced.sum()),
+                carrier_extent=list(carrier.extent),
+                evaluates_no_task=True,
+            )
+        )
+        findings.append(
+            measured("phonation_s", extent[0], extent[1], round(duration(extent), 3),
+                     support_frames=int(track.voiced.sum()))
+        )
+    for span in store.spans:
+        if span.label == "phonation" and span.id not in qualifying_ids:
+            findings.append(contest(span.id, span.extent, "phonation", "fails_the_stationarity_qualifier"))
+    findings.append(count("phonation_spans", len(components), None))
+    return Result(UNDETERMINED, components, findings)
+```
+
+`span.label` is the ruleset-written label the owner's 2026-09-15 decision introduced — a fired rule
+may stamp or refine a span's label. Contesting one is an assertion beside it, so propose-only does
+not touch that path.
+
+---
+
+### SPEECH — `align_speech` and `detect_speech`
+
+```python
+SPEECH_EXPECTATIONS: dict[str, Expectation] = {
+    "harvard-sentences-list": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
+    "cape-v-sentences": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
+    "cape-v-sentences-v2": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
+    "rainbow-passage": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text", connected=True),
+    "caterpillar-passage": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text", connected=True),
+    "word-color-stroop": Expectation(
+        pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text", declared_duration_s=75.0, emit_filler=False
+    ),
+    "loudness": Expectation(pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey", "hey"), expected_event_count=3),
+    "loudness-v2": Expectation(pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey"), expected_event_count=2),
+    "diadochokinesis-buttercup": Expectation(
+        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",) * 10, expected_event_count=10, emit_filler=False
+    ),
+    "diadochokinesis-v2-buttercup": Expectation(
+        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), declared_duration_s=5.0, emit_filler=False
+    ),
+    "free-speech": Expectation(
+        pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text", anti_pattern="verbatim_prompt"
+    ),
+    "free-speech-v2": Expectation(pattern=Pattern.FREE_RESPONSE, declared_duration_s=30.0),
+    "story-recall": Expectation(
+        pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text", anti_pattern="verbatim_source"
+    ),
+    "story-recall-v2": Expectation(
+        pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text", anti_pattern="verbatim_source"
+    ),
+    "cinderella-story": Expectation(
+        pattern=Pattern.FREE_RESPONSE,
+        unviable=(("source_overlap", "`stimulus_text` is empty on all 258; the source is a physical storybook"),),
+    ),
+    "productive-vocabulary": Expectation(
+        pattern=Pattern.FREE_RESPONSE,
+        token_source="stimulus_text",
+        unviable=(("defines_its_cue", "a lexicon or a text model, branch-local, and no waveform"),),
+    ),
+    "picture-description": Expectation(pattern=Pattern.FREE_RESPONSE, connected=True),
+    "picture-description-option1": Expectation(pattern=Pattern.FREE_RESPONSE, connected=True),
+    "picture-description-option2": Expectation(pattern=Pattern.FREE_RESPONSE, connected=True),
+    "open-response-questions": Expectation(
+        pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text", declared_duration_s=30.0, connected=True
+    ),
+    "animal-fluency": Expectation(
+        pattern=Pattern.ITEM_LIST,
+        declared_duration_s=60.0,
+        repetition_allowed=False,
+        unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
+    ),
+    "random-item-generation": Expectation(
+        pattern=Pattern.ITEM_LIST,
+        repetition_from_category=True,
+        unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
+    ),
+    "random-item-generation-v2": Expectation(
+        pattern=Pattern.ITEM_LIST,
+        repetition_from_category=True,
+        unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
+    ),
+}
+for _family in (
+    "diadochokinesis-pa",
+    "diadochokinesis-ta",
+    "diadochokinesis-ka",
+    "diadochokinesis-pataka",
+    "diadochokinesis-v2-puh",
+    "diadochokinesis-v2-tuh",
+    "diadochokinesis-v2-kuh",
+    "diadochokinesis-v2-puhtuhkuh",
+):
+    SPEECH_EXPECTATIONS[_family] = Expectation(pattern=Pattern.NO_LEXICAL)
+```
+
+31 rows: `LEXICAL_SPEECH` (21) ∪ `SYLLABLE_REPETITION` (10), which is `reference_family_set.SPEECH`
+(`default.yaml:241`) and `SPEECH_ELICITING` (`families.py:58`).
+
+```python
+def align_speech(task_family: str, store, hints, params: Params) -> Result:
+    expectation = SPEECH_EXPECTATIONS.get(task_family)
+    assert expectation is not None, f"{task_family} is not a SPEECH family; the caller owes detect_speech"
+
+    if expectation.pattern is Pattern.ORDERED_TOKENS:
+        return _speech_ordered(expectation, store, params)
+    if expectation.pattern is Pattern.FREE_RESPONSE:
+        return _speech_free_response(expectation, store, params)
+    if expectation.pattern is Pattern.ITEM_LIST:
+        return _speech_item_list(expectation, store, hints, params)
+    if expectation.pattern is Pattern.NO_LEXICAL:
+        return _speech_no_lexical(store, params)
+    raise NotImplementedError(expectation.pattern)
+```
+
+```python
+def _speech_ordered(expectation: Expectation, store, params: Params) -> Result:
+    """Spans proposed: `task_extent`, plus one per structure unit the alignment yields (a sentence,
+    a Stroop item), plus the breath groups where the family is `connected`.
+
+    **No span per token.** A realised token already has a `word` entity carrying its own extent,
+    `agreement` and per-source `timings`; minting a second entity over the same ground would
+    duplicate ~13,705 x 8 extents on `harvard-sentences-list` alone and add no measurement.
+    """
+    words = lexical(store.words)
+    alignment = store.stimulus_alignment
+
+    if expectation.tokens is not None:
+        matched, omissions = ordered_run(list(expectation.tokens), words, params.p_normalise)
+        matched_ids = {id(word) for _, word in matched}
+        substitutions: list[tuple[object, object]] = []
+        insertions = [w for w in words if id(w) not in matched_ids]
+        structure: list[tuple[float, float]] = []
+        repeated = False
+    elif alignment is None:
+        # D1 is absent and the expectation is per recording, so no extent can be placed: propose
+        # nothing rather than a span whose boundaries are guessed.
+        return Result(
+            UNDETERMINED,
+            [],
+            [
+                unviable(
+                    "expected_token_sequence",
+                    "stimulus_alignment (D1) is absent; the transcript alone cannot say what was expected",
+                )
+            ],
+        )
+    else:
+        matched = [(t, w) for t, w in alignment.realised]
+        omissions = [t.text for t in alignment.expected if t.column is None]
+        substitutions = list(alignment.substitutions)
+        insertions = list(alignment.insertions)
+        structure = list(alignment.structure_spans())
+        repeated = alignment.covers_sequence_twice(params.p_repeat_overlap_min)
+
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    if matched:
+        read_extent = (matched[0][1].extent[0], matched[-1][1].extent[1])
+        components.append(
+            speech_span(
+                "task_extent",
+                read_extent,
+                store.id_of("consensus_transcript"),
+                *(w.id for _, w in matched),
+                words_n=len(matched),
+                expected_n=len(matched) + len(omissions),
+            )
+        )
+        for index, extent in enumerate(structure):
+            components.append(
+                speech_span(
+                    "structure_%d" % index,
+                    extent,
+                    store.id_of("stimulus_alignment"),
+                    store.id_of("consensus_transcript"),
+                    structure_index=index,
+                )
+            )
+        if touches_edge(read_extent, store.stream_extent):
+            findings.append(deviation("truncation", read_extent[0], read_extent[1]))
+        if repeated:
+            findings.append(deviation("repeat_reading", read_extent[0], read_extent[1]))
+
+    for expected_token, word in substitutions:
+        findings.append(
+            deviation(
+                "stimulus_mismatch",
+                word.extent[0],
+                word.extent[1],
+                expected=getattr(expected_token, "text", expected_token),
+                read=word.text,
+                agreement=word.agreement,
+                variants=word.variants,
+            )
+        )
+    for word in insertions:
+        findings.append(deviation("stimulus_mismatch", word.extent[0], word.extent[1], expected=None, read=word.text))
+    for token in omissions:
+        # A TENTH deviation type, extent-free by nature: a skip-arc-free aligner assigns every
+        # stimulus word an interval, so an omission surfaces only as a low acoustic score.
+        findings.append(
+            deviation("omission", None, None, expected=token, acoustic_score_max=params.p_omission_score_max)
+        )
+
+    if expectation.emit_filler:
+        for word in store.words:
+            if word.bracketed and word.text != "[breath]":    # `[breath]` is S4's, not a disfluency
+                findings.append(deviation("filler", word.extent[0], word.extent[1], text=word.text))
+
+    if expectation.connected:
+        for index, extent in enumerate(breath_group_extents(store, params)):
+            components.append(
+                speech_span(
+                    "breath_group_%d" % index,
+                    extent,
+                    store.id_of("consensus_transcript"),
+                    store.id_of("hear_scores"),
+                    group_index=index,
+                )
+            )
+
+    if expectation.expected_event_count is not None:
+        findings.append(count("expected_event_count", len(matched), expectation.expected_event_count))
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(bool(matched) and not omissions, components, findings)
+```
+
+```python
+def _speech_free_response(expectation: Expectation, store, params: Params) -> Result:
+    """Spans proposed: `task_extent` over the hull of the ASR spans, plus one per breath group
+    where the family is `connected` — each carrying its own S4 measurement."""
+    runs = asr_spans(store.spans)
+    response = hull([s.extent for s in runs])
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    if response is not None:
+        components.append(
+            speech_span("task_extent", response, *(s.id for s in runs), words_n=len(lexical(store.words)))
+        )
+    done: Done = response is not None and duration(response) >= params.p_response_min_s
+
+    if expectation.connected and response is not None and duration(response) > 0.0:
+        words = lexical(store.words)
+        pauses = inter_word_gaps(words, params.p_pause_min_s)
+        groups = breath_group_extents(store, params)
+        for index, extent in enumerate(groups):
+            components.append(
+                speech_span(
+                    "breath_group_%d" % index,
+                    extent,
+                    store.id_of("consensus_transcript"),
+                    store.id_of("hear_scores"),
+                    group_index=index,
+                )
+            )
+        # Named for their measurement convention, never `rate` — `branch-conventions.md:150-152`.
+        findings.append(
+            measured(
+                "speech_rate_from_consensus_words_per_s",
+                response[0],
+                response[1],
+                round(len(words) / duration(response), 3),
+                support_words=len(words),
+            )
+        )
+        findings.append(
+            measured(
+                "pause_fraction_of_response",
+                response[0],
+                response[1],
+                round(sum(duration(p) for p in pauses) / duration(response), 3),
+                support_pauses=len(pauses),
+            )
+        )
+        findings.append(count("breath_groups", len(groups), None))
+
+    if expectation.anti_pattern is not None:
+        alignment = store.stimulus_alignment
+        if alignment is None:
+            findings.append(unviable("anti_pattern_%s" % expectation.anti_pattern, "stimulus_alignment (D1) is absent"))
+        else:
+            source = [params.p_normalise(t.text) for t in alignment.expected]
+            produced = [params.p_normalise(w.text) for w in lexical(store.words)]
+            echo = ngram_echo_fraction(source, produced, params.p_echo_ngram_n)
+            cut = (
+                params.p_echo_overlap_max
+                if expectation.anti_pattern == "verbatim_prompt"
+                else params.p_verbatim_overlap_max
+            )
+            findings.append(measured("verbatim_overlap_fraction", None, None, round(echo, 3), n=params.p_echo_ngram_n))
+            if echo > cut:
+                findings.append(
+                    deviation(
+                        "stimulus_mismatch",
+                        response[0] if response else None,
+                        response[1] if response else None,
+                        reading=expectation.anti_pattern,
+                        overlap=round(echo, 3),
+                    )
+                )
+            if expectation.anti_pattern == "verbatim_source":
+                # "Recall in your own words": semantic coverage is expected and verbatim
+                # reproduction is the deviation, so coverage is what `done` reads.
+                covered = content_coverage(source, produced)
+                findings.append(measured("source_content_coverage", None, None, round(covered, 3)))
+                done = covered >= params.p_coverage_min
+
+    for name, why in expectation.unviable:
+        findings.append(unviable(name, why))
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(done, components, findings)
+```
+
+```python
+def _speech_item_list(expectation: Expectation, store, hints, params: Params) -> Result:
+    """Spans proposed: `task_extent` only. An item is one `word` entity with its own extent, so a
+    per-item span would duplicate ground and carry no measurement of its own; the repetition
+    finding is a deviation over that word's extent."""
+    if expectation.repetition_from_category:
+        # Eight of ten categories say "Do not repeat any item"; `Letters` and `Numbers` say
+        # "repetition allowed" — 48 of 265 v1 and 77 of 203 English v2. A family-scoped rule
+        # inverts the instruction on those, so an unreadable category returns UNDETERMINED.
+        category = hints.metadata.get("category") if hints is not None else None
+        if category is None:
+            return Result(
+                UNDETERMINED,
+                [],
+                [
+                    unviable(
+                        "repetition_rule",
+                        "the category lives only in `instructions`; no grain above the recording carries it",
+                    )
+                ],
+            )
+        repetition_allowed = category in ("Letters", "Numbers")
+    else:
+        repetition_allowed = bool(expectation.repetition_allowed)
+
+    items = lexical(store.words)
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    first_seen: dict[str, float] = {}
+    for word in items:
+        key = params.p_normalise(word.text)
+        if key in first_seen and not repetition_allowed:
+            findings.append(
+                deviation("repeated_item", word.extent[0], word.extent[1],       # an ELEVENTH type
+                          first_at=first_seen[key], text=word.text)
+            )
+        first_seen.setdefault(key, word.extent[0])
+
+    extent = hull([w.extent for w in items])
+    if extent is not None:
+        components.append(
+            speech_span("task_extent", extent, store.id_of("consensus_transcript"), *(w.id for w in items),
+                        items_n=len(items), repetition_allowed=repetition_allowed)
+        )
+    findings.append(count("items", len(items), None))
+    findings.append(count("repetition_allowed", repetition_allowed, None))
+    for name, why in expectation.unviable:
+        findings.append(unviable(name, why))
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(len(items) > 0, components, findings)
+```
+
+```python
+def _speech_no_lexical(store, params: Params) -> Result:
+    """Spans proposed: **none**, and that is the finding.
+
+    `/pa/` is not lexical and ASR mostly declines it. These families are POSITIVES for SPEECH's
+    reference set (`default.yaml:241`), so near-zero lexical content is the correct observation
+    rather than a miss, and a branch that proposed a speech span here would be asserting the
+    opposite of what it measured.
+    """
+    produced = lexical(store.words)
+    findings = [
+        deviation("off_task_extent", w.extent[0], w.extent[1], text=w.text, agreement=w.agreement) for w in produced
+    ]
+    findings.append(count("lexical_words", len(produced), 0))
+    return Result(len(produced) <= params.p_expected_lexical_max, [], findings)
+```
+
+```python
+def detect_speech(store, params: Params) -> Result:
+    """Out of family. Proposes a `family: "speech"` span over every run of lexical words it finds.
+
+    Task-agnostic and needing **no alignment**: nothing lexical is expected on a file of another
+    branch's kind, so every lexical word is the finding. This is `detect_lexical_intrusion`'s
+    successor and also `detect_count_in`'s — on a `prolonged-vowel` recording it proposes a span
+    over `one two three`, and `align_voice`, for which that family IS in family, is what decides
+    whether the prescribed count-in happened. Two branches, two questions, one recording.
+    """
+    words = lexical(store.words)
+    runs = lexical_runs(words, params.p_run_gap_max_s)
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    for index, extent in enumerate(runs):
+        inside = [w for w in words if overlaps(w.extent, extent)]
+        components.append(
+            speech_span(
+                "lexical_run_%d" % index,
+                extent,
+                store.id_of("consensus_transcript"),
+                *(w.id for w in inside),
+                words_n=len(inside),
+                text=" ".join(w.text for w in inside),
+                agreement=min((w.agreement for w in inside), default=None),
+                evaluates_no_task=True,
+            )
+        )
+    for span in store.spans:
+        if span.label == "speech" and not any(overlaps(span.extent, extent) for extent in runs):
+            findings.append(contest(span.id, span.extent, "speech", "no_consensus_word_inside"))
+    findings.append(count("lexical_words", len(words), None))
+    return Result(UNDETERMINED, components, findings)
+```
+
+---
+
+### AIRWAY — `align_airway` and `detect_airway`
+
+```python
+AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
+    "respiration-and-cough-cough": Expectation(pattern=Pattern.EVENT_SERIES, label_set="cough", expected_event_count=5),
+    "respiration-and-cough-v2-hardcough": Expectation(
+        pattern=Pattern.EVENT_SERIES,
+        label_set="cough",
+        expected_event_count=None,
+        unviable=(("effort_absolute", "no within-recording contrast and no SPL reference; `hard` is not measurable"),),
+    ),
+    "voluntary-cough": Expectation(pattern=Pattern.EVENT_ALTERNATION, label_set="cough", expected_event_count=3),
+    "respiration-and-cough-fivebreaths": Expectation(
+        pattern=Pattern.EVENT_SERIES,
+        label_set="breath",
+        expected_event_count=5,
+        route_from_index=True,
+        unviable=(
+            (
+                "route",
+                "the discriminating band sits above the 8 kHz ceiling and the residual tilt is confounded, "
+                "one for one, with mouth-to-microphone geometry",
+            ),
+        ),
+    ),
+    "respiration-and-cough-v2-threebreathsnose": Expectation(
+        pattern=Pattern.EVENT_SERIES,
+        label_set="breath",
+        expected_event_count=3,
+        declared_route="nose",
+        unviable=(("route", "as `fivebreaths`"),),
+    ),
+    "respiration-and-cough-v2-threebreathsmouth": Expectation(
+        pattern=Pattern.EVENT_SERIES,
+        label_set="breath",
+        expected_event_count=3,
+        declared_route="mouth",
+        unviable=(("route", "as `fivebreaths`"),),
+    ),
+    "respiration-and-cough-threequickbreaths": Expectation(
+        pattern=Pattern.EVENT_SERIES, label_set="breath", expected_event_count=3, timed_intervals=True
+    ),
+    "respiration-and-cough-v2-threebreaths": Expectation(
+        pattern=Pattern.EVENT_SERIES, label_set="breath", expected_event_count=3, timed_intervals=True
+    ),
+    "respiration-and-cough-breath": Expectation(
+        pattern=Pattern.SOUND_COVERAGE, label_set="breath", declared_duration_s=30.0
+    ),
+    "respiration-and-cough-v2-breath": Expectation(
+        pattern=Pattern.SOUND_COVERAGE,
+        label_set="breath",
+        declared_duration_s=20.0,
+        declared_route="mouth",
+        unviable=(("route", "as `fivebreaths`"),),
+    ),
+    "breath-sounds": Expectation(
+        pattern=Pattern.EVENT_SERIES,
+        label_set="breath",
+        expected_event_count=3,
+        declared_route="mouth",
+        relax_s=60.0,
+        declared_duration_s=73.0,
+        unviable=(("route", "as `fivebreaths`"),),
+    ),
+}
+```
+
+```python
+def align_airway(task_family: str, store, hints, params: Params) -> Result:
+    expectation = AIRWAY_EXPECTATIONS.get(task_family)
+    assert expectation is not None, f"{task_family} is not an AIRWAY family; the caller owes detect_airway"
+
+    if expectation.pattern is Pattern.EVENT_SERIES:
+        return _airway_event_series(expectation, store, hints, params)
+    if expectation.pattern is Pattern.EVENT_ALTERNATION:
+        return _airway_alternation(expectation, store, params)
+    if expectation.pattern is Pattern.SOUND_COVERAGE:
+        return _airway_coverage(expectation, store, params)
+    raise NotImplementedError(expectation.pattern)
+
+
+def airway_events(label_set_name: str, store, params: Params) -> list[tuple[float, float, str]]:
+    """Each event carries the id of the carrier span, because the proposal must name its evidence."""
+    labels = params.p_label_sets[label_set_name]
+    events: list[tuple[float, float, str]] = []
+    for span in amplitude_spans(store.spans):
+        if not sounds_like(span, store.span_hear, store.span_yamnet, labels, params.p_score_min):
+            continue
+        for start, end in events_in_span(store.energy_envelope, span, params):
+            events.append((start, end, span.id))
+    return sorted(events)
+
+
+def lexical_intrusions(store) -> list[Finding]:
+    # AIRWAY owns this deviation (`branch-airway.md:164-165`); SPEECH's detect mode proposes the
+    # span over the same ground from the other side. Measured examples are examiner speech —
+    # "I'll have you do that one more time. [breath]", "So just breathe."
+    return [
+        deviation("off_task_extent", w.extent[0], w.extent[1], text=w.text, agreement=w.agreement)
+        for w in lexical(store.words)
+    ]
+```
+
+**No body here reads `airway.cough`, and none may.** That gate was selected under a **scoped**
+reference standard — `cough.amplitude_peak_over_floor_db_max` against `declared_cough_vs_breath`,
+12,741 airway recordings, **J 0.7946** at 50 dB — and against the full population, `declared_airway`
+over **61,721** recordings, the same reading is **J −0.1398** (sensitivity 0.2514, specificity
+0.6088; [`family-taxonomy-ruleset.md:265-268`](family-taxonomy-ruleset.md)). Within the airway
+families it is the best cough-vs-breath discriminator there is and it stays in the catalogue; **as a
+cough detector over an arbitrary recording it is worse than chance**, and a body that treated a
+fired `airway.cough` as evidence of a cough would be reading a loudness detector. The shipped gate
+reads `[span_label_set_stat, yamnet.cough_labels.peak_over_floor_db_max]` at 50.0 dB
+(`default.yaml:289-292`); on a 13-recording field run it was unavailable on 12 and read 43.10 dB on
+the one deliberate-cough recording, firing on neither. The bodies below read `raw_scores` and
+`events_in_span` instead.
+
+```python
+def _airway_event_series(expectation: Expectation, store, hints, params: Params) -> Result:
+    """Spans proposed: **one per event**, plus `task_extent` over their hull.
+
+    One per event is the point: `by_label` increments once per (span, label) pair
+    (`airway.py:280`), so a 4 s span holding three coughs counts 1 today. The count that is
+    compared against the instruction's `expected_event_count` is the number of these spans.
+    """
+    assert expectation.label_set is not None
+    events = airway_events(expectation.label_set, store, params)
+    kind = expectation.label_set
+    evidence = (store.id_of("energy_envelope"), store.id_of("span_hear"), store.id_of("span_yamnet"))
+    components: list[Proposal] = [
+        airway_span("%s_%d" % (kind, index), (start, end), span_id, *evidence, label=kind, index=index)
+        for index, (start, end, span_id) in enumerate(events)
+    ]
+    findings: list[Finding] = [count("expected_event_count", len(events), expectation.expected_event_count)]
+
+    onsets = [start for start, _, _ in events]
+    intervals = [round(b - a, 3) for a, b in zip(onsets, onsets[1:])]
+    if expectation.timed_intervals:
+        # "Quick" is the measurement, and it is the interval, not the count: three breaths says
+        # nothing about whether they were quick. p_interval_max_s cannot be fitted before
+        # p_peak_prominence_db and p_trough_return_db are.
+        findings.append(count("inter_onset_interval_s", intervals, None))
+        findings.append(
+            count("intervals_over_p_interval_max_s", sum(1 for v in intervals if v > params.p_interval_max_s), 0)
+        )
+
+    for index, (start, end, _) in enumerate(events):
+        extent = (start, end)
+        findings.append(
+            measured(
+                "%s_peak_over_floor_db" % kind,
+                start,
+                end,
+                round(peak_over_floor_db(store.energy_envelope, extent), 2),
+                index=index,
+                spectral_balance_db=round(
+                    spectral_balance_db(store.spectrogram_wideband, store.sampling_rate, extent,
+                                        params.p_effort_split_hz),
+                    2,
+                ),
+                **acquisition_covariates(store, extent),
+            )
+        )
+
+    declared_route = expectation.declared_route
+    if expectation.route_from_index:
+        token = hints.metadata.get("task_token") if hints is not None else None       # ‡
+        index_segment = token.rsplit("-", 1)[-1] if token else ""
+        declared_route = {"1": "nose", "3": "nose", "2": "mouth", "4": "mouth"}.get(index_segment)
+    if declared_route is not None or expectation.route_from_index:
+        findings.append(count("declared_route", declared_route, None))
+        findings.append(
+            measured(
+                "measured_route",
+                None,
+                None,
+                NOT_SEPARABLE_BY_THIS_DESIGN,
+                content_band_hz=getattr(store.band_profile, "rolloff_hz", None),
+            )
+        )
+
+    task = hull([(start, end) for start, end, _ in events])
+    if task is not None:
+        components.append(
+            airway_span(
+                "task_extent",
+                task,
+                *{span_id for _, _, span_id in events},
+                events_n=len(events),
+                declared_event_count=expectation.expected_event_count,
+                declared_route=declared_route,
+            )
+        )
+        if touches_edge(task, store.stream_extent):
+            findings.append(deviation("truncation", task[0], task[1]))
+
+    if expectation.relax_s is not None and task is not None:
+        # The one family whose instruction PRESCRIBES material that is not the task. Emitted only
+        # on a recording long enough to contain it — the measured median is 13.2 s against ~73 s.
+        if duration(store.stream_extent) >= expectation.relax_s + duration(task):
+            findings.append(deviation("off_task_extent", 0.0, expectation.relax_s, reading="declared_relax_period"))
+
+    findings.extend(lexical_intrusions(store))
+    for name, why in expectation.unviable:
+        findings.append(unviable(name, why))
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(len(events) > 0, components, findings)
+```
+
+```python
+def _airway_alternation(expectation: Expectation, store, params: Params) -> Result:
+    """Spans proposed: one per cough, one per breath, plus `task_extent`.
+
+    The expected pattern is an ALTERNATION, so material between coughs is matched as breath and
+    never scored as off_task_extent — a cough detector alone is insufficient. Median 13.8 s
+    against `v2-hardcough`'s 4.6 s, consistent with three cough-and-breathe cycles in one file.
+    """
+    coughs = airway_events("cough", store, params)
+    breath_labels = params.p_label_sets["breath"]
+    breath_carriers = [
+        s for s in store.spans if sounds_like(s, store.span_hear, store.span_yamnet, breath_labels, params.p_score_min)
+    ]
+    breaths = merge([s.extent for s in breath_carriers])
+    evidence = (store.id_of("energy_envelope"), store.id_of("span_hear"), store.id_of("span_yamnet"))
+
+    components: list[Proposal] = [
+        airway_span("cough_%d" % k, (start, end), span_id, *evidence, label="cough", index=k)
+        for k, (start, end, span_id) in enumerate(coughs)
+    ]
+    components += [
+        airway_span("breath_%d" % k, extent, store.id_of("span_hear"), store.id_of("span_yamnet"),
+                    label="breath", index=k)
+        for k, extent in enumerate(breaths)
+    ]
+
+    cycles = sum(1 for _, cough_end, _ in coughs if any(b[0] >= cough_end for b in breaths))
+    findings: list[Finding] = [
+        count("expected_event_count", len(coughs), expectation.expected_event_count),
+        count("cough_then_breathe_cycles", cycles, expectation.expected_event_count),
+    ]
+    task = hull([(c.start, c.end) for c in components])
+    if task is not None:
+        components.append(
+            airway_span("task_extent", task, *{p.derived_from[0] for p in components},
+                        coughs_n=len(coughs), breaths_n=len(breaths))
+        )
+    findings.extend(lexical_intrusions(store))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(len(coughs) > 0, components, findings)
+```
+
+```python
+def _airway_coverage(expectation: Expectation, store, params: Params) -> Result:
+    """Spans proposed: one per merged run of `Breathe`-scoring windows, plus `task_extent`.
+
+    `residual.energy_fraction` is NOT read here. residual = plain - g*FRCRN(plain) and FRCRN is a
+    speech enhancer, so a high fraction means "FRCRN removed most of this signal", i.e. THIS IS
+    NOT SPEECH — satisfied equally by a cough, a glide, room noise and a near-silent file. As the
+    `airway.breath` routing gate (`default.yaml:285-288`) "not speech" may be adequate; as this
+    row's presence measurement it is not.
+    """
+    assert expectation.label_set is not None
+    labels = params.p_label_sets[expectation.label_set]
+    windows = [
+        (w.start, w.end)
+        for w in store.hear_scores                                     # raw HeAR, 2.0 s, non-overlapping
+        if any(float(w.label_scores.get(label, 0.0)) >= params.p_score_min for label in labels)
+    ]
+    covered = merge(windows)
+    total = sum(duration(extent) for extent in covered)
+    coverage = total / max(duration(store.stream_extent), 1e-9)
+    components: list[Proposal] = [
+        airway_span("breathing_%d" % k, extent, store.id_of("hear_scores"), label="Breathe", index=k)
+        for k, extent in enumerate(covered)
+    ]
+    findings: list[Finding] = [
+        measured("breath_coverage_fraction", None, None, round(coverage, 3), covered_s=round(total, 2))
+    ]
+    task = hull(covered)
+    if task is not None:
+        components.append(
+            airway_span("task_extent", task, store.id_of("hear_scores"), runs_n=len(covered),
+                        covered_s=round(total, 2))
+        )
+    findings.extend(lexical_intrusions(store))
+    for name, why in expectation.unviable:
+        findings.append(unviable(name, why))
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(coverage >= params.p_breath_coverage_min, components, findings)
+```
+
+```python
+def detect_airway(store, params: Params) -> Result:
+    """Out of family. Proposes a `family: "airway"` span over every cough and breath event it finds.
+
+    Task-agnostic, and the same `sounds_like` + `events_in_span` machinery the in-family mode
+    uses. It **does not read `airway.cough`**: that gate was selected under a scoped reference and
+    reads J -0.1398 against `declared_airway` over 61,721 recordings, so at its 50 dB cut it is a
+    loudness detector over an arbitrary recording. A breath during passage reading is NOT a
+    deviation — it is how S4 measures breath-group structure — so nothing here emits one.
+    """
+    evidence = (store.id_of("energy_envelope"), store.id_of("span_hear"), store.id_of("span_yamnet"))
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    for name in ("cough", "breath"):
+        labels = params.p_label_sets[name]
+        for span in store.spans:
+            if not sounds_like(span, store.span_hear, store.span_yamnet, labels, params.p_score_min):
+                continue
+            events = events_in_span(store.energy_envelope, span, params)
+            if not events:
+                # The label is there and the envelope resolves no event boundary inside it, so the
+                # proposal takes the carrier's own extent and says which it is.
+                components.append(
+                    airway_span("airway_event", span.extent, span.id, *evidence, label=name,
+                                boundaries="carrier_span", evaluates_no_task=True)
+                )
+                continue
+            for index, extent in enumerate(events):
+                components.append(
+                    airway_span("%s_event" % name, extent, span.id, *evidence, label=name, index=index,
+                                boundaries="envelope_event", carrier_extent=list(span.extent),
+                                evaluates_no_task=True)
+                )
+            findings.append(count("%s_events_in_span" % name, len(events), None))
+
+    marked = [(c.start, c.end) for c in components]
+    for span in store.spans:
+        if span.label in ("cough", "breath") and not any(overlaps(span.extent, e) for e in marked):
+            findings.append(contest(span.id, span.extent, span.label, "no_raw_score_over_p_score_min"))
+    findings.append(count("airway_events", len(components), None))
+    return Result(UNDETERMINED, components, findings)
+```
+
+AIRWAY's gate evidence is `unavailable` on 56,505 of 62,547 recordings, so the out-of-family mode is
+the one that actually runs on the corpus.
+
+---
+
+### DDK — `align_ddk` and `detect_ddk`
+
+DDK is a declared branch with **no node**: `BRANCHES = ("AIRWAY", "SPEECH", "VOICE", "DDK")`
+(`vocabulary.py:31`), `DDK` is absent from the dispatch table (`run.py:297-301`), and the `call is
+None` arm at `run.py:304-305` marks it `SKIPPED` with `NO_NODE = "no node implements this branch"`
+(`run.py:46`) — **whether or not routing selected it**, because that arm precedes the `in selected`
+test. It is written here on the same terms as the others, per the owner's instruction that a
+declared branch is assessed independently of whether it is implemented.
+
+```python
+DDK_EXPECTATIONS: dict[str, Expectation] = {
+    "diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, expected_event_count=10),
+    "diadochokinesis-ta": Expectation(pattern=Pattern.SYLLABLE_TRAIN, expected_event_count=10),
+    "diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, expected_event_count=10),
+    "diadochokinesis-v2-puh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, declared_duration_s=5.0),
+    "diadochokinesis-v2-tuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, declared_duration_s=5.0),
+    "diadochokinesis-v2-kuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, declared_duration_s=5.0),
+    "diadochokinesis-pataka": Expectation(
+        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), expected_event_count=30
+    ),
+    "diadochokinesis-v2-puhtuhkuh": Expectation(
+        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), declared_duration_s=5.0
+    ),
+    "diadochokinesis-buttercup": Expectation(
+        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), expected_event_count=10
+    ),
+    "diadochokinesis-v2-buttercup": Expectation(
+        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), declared_duration_s=5.0
+    ),
+}
+
+
+def ddk_carrier(store, params: Params):
+    best = None
+    best_rate: float | None = None
+    for span in amplitude_spans(store.spans):
+        if duration(span.extent) < params.p_train_min_s:
+            continue
+        rate = train_rate_hz(store.energy_envelope, span.extent, params)
+        if rate is None:
+            continue
+        if best is None or duration(span.extent) > duration(best.extent):
+            best, best_rate = span, rate
+    return best, best_rate
+
+
+def ddk_places(onsets: Sequence[tuple[float, float]], store, params: Params) -> list[str]:
+    """D6. /p/, /t/ and /k/ differ in burst spectrum in the textbook way — /t/ high-frequency
+    dominant, /k/ a compact mid-frequency peak, /p/ diffuse and falling — and all three sit
+    comfortably inside the 8 kHz band. `spectrogram_wideband` is a 5 ms window at a 5 ms hop, the
+    classical resolution for exactly this measurement.
+
+    The PPG is NOT the instrument: a phonetic posteriorgram is trained on connected speech, and on
+    a rapid nonsense CV train with no lexical context its acoustic-model prior works against the
+    discrimination, at the cost of a model pass to recover less.
+    """
+    places: list[str] = []
+    window_s = params.p_burst_window_ms / 1000.0
+    for start, _ in onsets:
+        burst = (start, start + window_s)
+        energies = {
+            place: band_power(store.spectrogram_wideband, store.sampling_rate, burst, lo, hi)
+            for place, (lo, hi) in params.p_place_centroid_bands_hz.items()
+        }
+        finite = {k: v for k, v in energies.items() if np.isfinite(v) and v > 0.0}
+        if len(finite) < 2:
+            places.append("unresolved")
+            continue
+        ranked = sorted(finite.items(), key=lambda kv: kv[1], reverse=True)
+        margin_db = 10.0 * float(np.log10(ranked[0][1] / ranked[1][1]))
+        places.append(ranked[0][0] if margin_db >= params.p_place_margin_db else "unresolved")
+    return places
+```
+
+```python
+def align_ddk(task_family: str, store, hints, params: Params) -> Result:
+    """Spans proposed: **one**, the train, as `task_extent`.
+
+    An individual syllable is NOT a span. The clinically meaningful quantities — rate, inter-onset
+    interval variability, sequence collapse — are statistics over the onset series, and minting
+    one span per syllable would add roughly 30 spans per recording over 7,989 recordings carrying
+    no measurement of their own. The onsets travel as a `counts` entry, and a syllable that is not
+    the one the sequence expected travels as a `syllable_sequence_mismatch` deviation with its own
+    extent, which needs no span.
+    """
+    expectation = DDK_EXPECTATIONS.get(task_family)
+    assert expectation is not None, f"{task_family} is not a DDK family; the caller owes detect_ddk"
+    if expectation.pattern is Pattern.ORDERED_TOKENS:
+        return _ddk_repeated_word(expectation, store, params)
+
+    train, rate_hz = ddk_carrier(store, params)
+    if train is None:
+        # No carrier clears the train minimum and no modulation peak is prominent, so there is no
+        # extent to propose. Nothing is minted rather than a span whose boundaries are guessed.
+        return Result(False, [], off_task([], store.spans, params.p_gap_off_task_min_s))
+
+    onsets = events_in_span(store.energy_envelope, train, params)
+    starts = [start for start, _ in onsets]
+    extent = hull(onsets) or train.extent
+    findings: list[Finding] = [
+        count("expected_event_count", len(onsets), expectation.expected_event_count),
+        measured("ddk_syllable_rate_from_envelope_modulation_hz", extent[0], extent[1], rate_hz),
+        count("inter_onset_interval_s", [round(b - a, 3) for a, b in zip(starts, starts[1:])], None),
+        count("syllable_onset_s", [round(s, 3) for s in starts], expectation.expected_event_count),
+        measured(
+            "train_fraction_of_recording",                                          # D5
+            extent[0],
+            extent[1],
+            round(duration(extent) / max(duration(store.stream_extent), 1e-9), 3),
+        ),
+    ]
+
+    attributes: dict = {"syllables_n": len(onsets), "production": "syllable_train"}
+    if expectation.pattern is Pattern.SYLLABLE_SEQUENCE:
+        assert expectation.sequence is not None
+        cycle = expectation.sequence
+        places = ddk_places(onsets, store, params)
+        for index, (onset, place) in enumerate(zip(onsets, places)):
+            target = cycle[index % len(cycle)]
+            if place not in (target, "unresolved"):
+                # Deliberately NOT `stimulus_mismatch`: there is no stimulus text and no lexical
+                # expectation. /pa-pa-pa/ is a collapse of the sequence and is the finding.
+                findings.append(
+                    deviation("syllable_sequence_mismatch", onset[0], onset[1], expected=target, measured=place)
+                )
+        resolved = [p for p in places if p != "unresolved"]
+        cycles = sum(
+            1 for i in range(len(resolved) - len(cycle) + 1) if tuple(resolved[i : i + len(cycle)]) == cycle
+        )
+        if resolved:
+            dominant = max(set(resolved), key=resolved.count)
+            findings.append(
+                measured(
+                    "sequence_collapse_fraction",
+                    extent[0],
+                    extent[1],
+                    round(resolved.count(dominant) / len(resolved), 3),
+                    dominant_place=dominant,
+                    support_syllables=len(resolved),
+                )
+            )
+        findings.append(count("realised_cycles", cycles, None))
+        attributes.update(production="syllable_sequence", realised_cycles=cycles, resolved_n=len(resolved))
+        done: Done = bool(onsets) and cycles >= 1
+    else:
+        done = rate_hz is not None and len(onsets) > 0
+
+    components = [
+        ddk_span("task_extent", extent, train.id, store.id_of("energy_envelope"),
+                 store.id_of("spectrogram_wideband"), **attributes)
+    ]
+    if touches_edge(extent, store.stream_extent):
+        findings.append(deviation("truncation", extent[0], extent[1]))
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(done, components, findings)
+```
+
+```python
+def _ddk_repeated_word(expectation: Expectation, store, params: Params) -> Result:
+    """Spans proposed: **one**, the train, over the hull of the realised tokens.
+
+    The only DDK family with a lexical pattern, so the only one where the recognisers produce the
+    count directly and the only one where `ddk.lexical_repetition >= 3` (`default.yaml:301-304`,
+    threshold UNMEASURED) fires for the right reason rather than on function-word repetition.
+    """
+    assert expectation.tokens is not None
+    target = params.p_normalise(expectation.tokens[0])
+    hits = [w for w in lexical(store.words) if params.p_normalise(w.text) == target]
+    findings: list[Finding] = [count("expected_event_count", len(hits), expectation.expected_event_count)]
+    train = hull([w.extent for w in hits])
+    components: list[Proposal] = []
+    if train is not None:
+        components.append(
+            ddk_span(
+                "task_extent",
+                train,
+                store.id_of("consensus_transcript"),
+                store.id_of("energy_envelope"),
+                *(w.id for w in hits),
+                production="lexical_repetition",
+                token=target,
+                repeats_n=len(hits),
+            )
+        )
+        findings.append(
+            measured(
+                "ddk_syllable_rate_from_envelope_modulation_hz",
+                train[0],
+                train[1],
+                train_rate_hz(store.energy_envelope, train, params),
+            )
+        )
+    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(off_task(components, store.spans, params.p_gap_off_task_min_s))
+    return Result(len(hits) > 0, components, findings)
+```
+
+```python
+def detect_ddk(store, params: Params) -> Result:
+    """Out of family. Proposes a `family: "ddk"` span over every rapid repetition train it finds.
+
+    Task-agnostic, from the envelope modulation spectrum — not from Praat's `extract_speech_rate`,
+    whose `min_pause = 0.3 s` (`praat_parselmouth.py:228`) exceeds an entire DDK cycle, and not
+    from the PPG. Repetition occurs in ordinary speech — a stutter, a false start, a repeated
+    word — so the branch measures what it finds and says what it is; it does not assert that a
+    Harvard sentence failed to be a DDK task (`branch-ddk.md:66-70`). DDK routes 22,363
+    recordings against the 7,989 that declare a DDK family, 14,878 of them declaring none
+    (`branch-ddk.md:20`), so this is the mode that dominates its corpus.
+    """
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+    for span in amplitude_spans(store.spans):
+        if duration(span.extent) < params.p_train_min_s:
+            continue
+        rate_hz = train_rate_hz(store.energy_envelope, span.extent, params)
+        if rate_hz is None:
+            continue
+        components.append(
+            ddk_span(
+                "repetition",
+                span.extent,
+                span.id,
+                store.id_of("energy_envelope"),
+                production="acoustic_repetition",
+                rate_hz=rate_hz,
+                evaluates_no_task=True,
+            )
+        )
+        findings.append(
+            measured(
+                "ddk_syllable_rate_from_envelope_modulation_hz",
+                span.extent[0],
+                span.extent[1],
+                rate_hz,
+                reading="acoustic_repetition_not_a_declared_ddk_task",
+            )
+        )
+
+    occurrences: dict[str, list] = {}
+    for word in lexical(store.words):
+        occurrences.setdefault(params.p_normalise(word.text), []).append(word)
+    for token, words in occurrences.items():
+        if len(words) < params.p_repeat_min_occurrences:
+            continue
+        extent = hull([w.extent for w in words])
+        assert extent is not None
+        components.append(
+            ddk_span(
+                "lexical_repetition",
+                extent,
+                store.id_of("consensus_transcript"),
+                *(w.id for w in words),
+                production="lexical_repetition",
+                token=token,
+                repeats_n=len(words),
+                evaluates_no_task=True,
+            )
+        )
+        # `transcript_repeat` is already computed for `ddk.lexical_repetition` but lives in
+        # `routing_analysis/features.py` and is read only by the ruleset. Moving it is a
+        # convenience: this loop is the capability, over word entities the store already holds.
+        findings.append(measured("transcript_repeat", extent[0], extent[1], len(words), token=token))
+    return Result(UNDETERMINED, components, findings)
+```
+
+---
+
+### QUALITY — `detect_quality`, the only mode it can have
+
+```python
+def detect_quality(store, params: Params) -> Result:
+    """QUALITY is never routed and is never in family. It has the detect mode and no other.
+
+    Spans proposed: at most **one**, `occluded`, and only when the tilt finding fires. The clip
+    check proposes nothing — it contests PREPROCESS's own reading, which is an assertion beside a
+    span and never an edit to it.
+    """
+    components: list[Proposal] = []
+    findings: list[Finding] = []
+
+    # Q1, as built today (`quality.py:266-302`): does PREPROCESS's own clip span contradict
+    # PREPROCESS's own amplitude? A store-consistency audit whose expected count is zero.
+    for span in store.spans:
+        if span.family != "clip" or span.signal != store.recording_signal:
+            continue
+        level_dbfs = store.clip_amplitude.level_dbfs.get(span.id)
+        if level_dbfs is None:
+            findings.append(count("clip_span_unmeasurable", span.id, None))
+            continue
+        if store.clip_amplitude.unclipped_peak > level_dbfs * (1.0 + store.clip_contradiction_margin):
+            findings.append(contest(span.id, span.extent, "clip", "clip_above_unclipped_sample"))
+
+    # The hygiene clause of `respiration-and-cough-v2-hardcough`, the corpus's only one, read as a
+    # QUALITY property of the recording rather than as an AIRWAY expectation of the task.
+    extent = store.stream_extent
+    rolloff_hz = getattr(store.band_profile, "rolloff_hz", None)                          # D3 †
+    if rolloff_hz is None:
+        findings.append(unviable("occluded_microphone",
+                                 "`band_profile` (D3) is absent; the tilt half has no reference"))
+    else:
+        balance = spectral_balance_db(
+            store.spectrogram_wideband, store.sampling_rate, extent, params.p_effort_split_hz
+        )
+        octaves = float(np.log2(max(rolloff_hz, 1.0) / max(params.p_effort_split_hz, 1.0)))
+        tilt = balance / octaves if octaves != 0.0 else float("nan")
+        findings.append(
+            measured("spectral_tilt_db_per_octave", extent[0], extent[1], round(tilt, 2), content_band_hz=rolloff_hz)
+        )
+        if (
+            np.isfinite(tilt)
+            and tilt < -params.p_tilt_max_db_per_octave
+            and store.level.rms_dbfs < params.p_level_min_dbfs
+        ):
+            findings.append(
+                deviation(
+                    "occluded_microphone",
+                    extent[0],
+                    extent[1],
+                    tilt_db_per_octave=round(tilt, 2),
+                    rms_dbfs=store.level.rms_dbfs,
+                    content_band_hz=rolloff_hz,
+                )
+            )
+            components.append(
+                quality_span(
+                    "occluded",
+                    extent,
+                    store.id_of("level"),
+                    store.id_of("spectrogram_wideband"),
+                    store.id_of("band_profile"),
+                    tilt_db_per_octave=round(tilt, 2),
+                )
+            )
+
+    # Q5. A sidecar-consistency check, not a task-completion measurement.
+    findings.append(count("declared_duration_s", round(duration(store.stream_extent), 2), store.declared_duration_s))
+    return Result(UNDETERMINED, components, findings)
+```
+
+---
+
+### The ten `NOT_SEPARABLE_BY_THIS_DESIGN` sites
+
+Each is an `Expectation.unviable` entry or a literal in a body, and **each emits a measurement
+saying the determination cannot be made, with its reason** — so a reader can tell *not separable by
+this design* from *nobody has written it yet*. None of the ten is reopened here.
+
+**Ten sites, twelve `unviable` entries**, and the difference is only that one site can span several
+families: `route` is one determination carried by **five** AIRWAY rows (`fivebreaths`, both
+`v2-threebreaths{nose,mouth}`, `v2-breath`, `breath-sounds`, grouped as rows 1–4 below);
+`category_membership` is one carried by **three** SPEECH rows; `effort_absolute` is one
+determination reached twice, by `v2-hardcough` and by `loudness` v1, and is listed twice because the
+two reach it from different directions. Nine of the ten are `unviable` entries; the tenth, the
+sub-second recording, is not — it is every matcher returning `False` correctly and
+uninformatively, which no entry can express.
+
+| # | site | where it fires | why it stays unviable |
+| --- | --- | --- | --- |
+| 1 | `route` | `align_airway`, `fivebreaths` (`route_from_index`) | discriminating band above the 8 kHz ceiling; the residual tilt confounded one-for-one with mouth-to-microphone geometry, which changes *with the route by construction* |
+| 2 | `route` | `align_airway`, `v2-threebreathsnose` / `-mouth` | as 1, and these two plus the `fivebreaths` split are the only declared route contrasts, so none is validation-grade for A7 |
+| 3 | `route` | `align_airway`, `v2-breath` | as 1 |
+| 4 | `route` | `align_airway`, `breath-sounds` | as 1 |
+| 5 | `effort_absolute` | `align_airway`, `v2-hardcough` | *"hard"* has no within-recording contrast and no SPL reference; the output is a measurement with its covariates |
+| 6 | `effort_absolute` | `_voice_effort`'s non-contrast arm, `loudness` | as 5. `loudness-v2` and `voluntary-cough` are unaffected: both carry a within-recording contrast |
+| 7 | `category_membership` | `align_speech`, `animal-fluency` and both `random-item-generation` | a lexicon or a text embedding: branch-local, one consumer, no waveform |
+| 8 | `defines_its_cue` | `align_speech`, `productive-vocabulary` | the same, and 78 recordings carry no cue at all |
+| 9 | `source_overlap` | `align_speech`, `cinderella-story` | the source is a physical storybook; `stimulus_text` empty on all 258, so no overlap measure is definable, D1 included |
+| 10 | a sub-second recording | every body, through `done = False` | 2,020 sidecars declare under a second; every expected pattern is absent, so every matcher correctly returns *not done* and uninformatively. Whether QUALITY should absorb it is a protocol question |
+
+**Five detection approaches stay ruled out**, and they are the rulings of
+[`preprocess-derivatives-for-expected-patterns.md`](preprocess-derivatives-for-expected-patterns.md)
+§ 4.1–4.5 — nasal-versus-oral route from `gammatone` (§ 4.1), D6 sequence conformance from the PPG
+posteriorgram (§ 4.2), syllable-nucleus rate via Praat's speech rate (§ 4.3), absolute effort from
+`level` (§ 4.4), and `residual` `energy_fraction` as the breath-presence reading (§ 4.5). Nothing
+above reads `gammatone` for a route, `ppg_posteriorgram` for a place, `praat_features`'
+`extract_speech_rate` for a rate, `level` for a verdict, or `residual.energy_fraction` for breath
+presence. **§ 4 has a sixth subsection, § 4.6, and it is a scoping correction rather than a
+rule-out**: `declared_duration_s` against measured is *free* and stays, read as a sidecar
+consistency check — which is why `declared_duration_count(...)` emits a `count` and never a
+`deviation`, and why the capability's home is QUALITY's Q5.
+
+---
+
+## What each family requires, and the row that carries it
+
+The research below is unchanged: what each family's instruction asks for, what it needs out of the
+store, what is absent, and the corpus figures behind it. What has changed is the last line of each
+block — the pseudo-code function is now the `Expectation` row its branch's table holds, and the body
+that reads it is the matcher for that row's `Pattern`, above.
 
 ### `prolonged-vowel` (1,604) — VOICE and SPEECH
 
@@ -606,62 +3068,42 @@ over the vowel — without it the only figures that exist are `praat_features`, 
 and include the count-in and the silence.
 **Unreachable:** `hints.expected_speech`‡.
 
-```
-detect_prolonged_vowel(
-    words, spans, phonation_tracks, continuity_trace, energy_envelope, stream_extent,
-    stimulus_alignment†,
-    *, p_count_in_tokens, p_voiced_strength_min, p_voiced_fraction_min,
-       p_f0_spread_window_s, p_f0_spread_max_semitones, p_continuity_min, p_vowel_min_s,
-) -> (done, components, deviations)
+**Its row**, in `VOICE_EXPECTATIONS` — `align_voice` dispatches it to the `SUSTAINED` matcher:
 
-    # P1 — the lexical count-in, prescribed by the instruction ("1, 2, 3 aah")
-    count_in = stimulus_alignment.run_for(p_count_in_tokens)          # D1, when it exists
-             | longest ordered run in lexical(words) whose normalised texts are
-               p_count_in_tokens in order                             # fallback; needs no D1
-
-    # P2 — the held vowel: voiced, under no lexical word, spectrally stationary
-    candidates = [s for s in spans
-                  if s.measure == "amplitude"
-                  and no w in lexical(words) overlaps s.extent]       # the free lexical separator
-    for s in candidates:
-        f = phonation_tracks sliced to s.extent                       # 10 ms hop
-        voiced       = fraction(f.strength >= p_voiced_strength_min)
-        f0_spread    = max over sliding p_f0_spread_window_s of
-                       robust_spread(semitones(f.f0_hz)) on voiced frames
-        stationarity = median(continuity_trace over s.extent)         # already a stationarity trace
-        qualifies(s) = voiced >= p_voiced_fraction_min
-                   and f0_spread <= p_f0_spread_max_semitones
-                   and stationarity >= p_continuity_min
-                   and duration(s) >= p_vowel_min_s
-    vowel = longest qualifying candidate, else None
-
-    done       = (count_in is not None) and (vowel is not None)
-    components = [("count_in", *count_in.extent)] if count_in
-               + [("vowel", *vowel.extent)] if vowel                  # `vowel` is the task_extent
-    deviations = [("truncation", ...)] if vowel touches stream_extent's edge
-               + [("repeat_attempt", ...)] if more than one candidate qualifies
-               + off_task(components, spans)
+```python
+"prolonged-vowel": Expectation(
+    pattern=Pattern.SUSTAINED,
+    tokens=("one", "two", "three"),
+    token_source="instructions",
+    declared_duration_s=12.0,
+    lexical_separator=True,
+),
 ```
 
-```
-detect_count_in(words, stimulus_alignment†, *, p_count_in_tokens)
-        -> (done, components, deviations)
+**Spans proposed: two.** `count_in`, from the consensus `word` extents of the matched
+`one two three`, carrying `excluded_from_measurement=True`; and `task_extent`, from the first and
+last voiced frame of `phonation_tracks` inside the qualifying amplitude span. Both are
+`family: "voice"`, both name their evidence in `wasDerivedFrom`, and neither edits anything
+PREPROCESS wrote. **Two rather than one because only the second is the voice measurement**, which
+is the defect the split removes: today every Praat scalar is taken over count-in plus silence plus
+vowel.
 
-    match = stimulus_alignment.run_for(p_count_in_tokens)
-          | ordered-run match over lexical(words)
-    done       = match is not None
-    components = [("count_in", *match.extent)] if match
-    deviations = [("stimulus_mismatch", *w.extent, {"expected": t, "read": w.text,
-                                                    "agreement": w.agreement})
-                  for (t, w) in match.substitutions]
-```
+**`detect_count_in` has no successor function.** The expectation became the `tokens` field of the row
+above, and the finding became `detect_speech`'s generic lexical marking — SPEECH is **out of family**
+here, `prolonged-vowel` being `VOICE_ELICITING` (`families.py:78-87`), so it proposes a
+`family: "speech"` span over the `one two three` run and answers no *"was it done"*. `align_voice`
+is what evaluates whether the prescribed count-in happened. Two branches, two questions, one
+recording, and one fewer function.
 
 **Notes.** The lexical half is the cheapest row in the document — 938 of 1,258 transcripts open with
 `One two three` ([`dag.md:185`](dag.md)) and the control family fires `speech.intrusion` at 3.2%
 ([`family-taxonomy-ruleset.md:320-323`](family-taxonomy-ruleset.md)). The acoustic half returns
 nothing today for a reason that is not a missing estimator: VOICE selects `family == "phonation"`
-spans (`voice.py:230`) and PREPROCESS's amplitude spans carry no `family` at all, so
-`candidates` is empty before any test runs. That is the owed code change; the owed *decision* is
+spans (`voice.py:230`) and PREPROCESS's amplitude spans carry no `family` at all, so its candidate
+list is empty before any test runs. **Propose-only removes that blocker rather than fixing the
+selector**: `qualifying_phonation` reads the `measure == "amplitude"` spans as evidence and VOICE
+mints its own `family: "voice"` span over what qualifies, so nothing has to stamp a family onto a
+span PREPROCESS wrote. What remains owed is the *decision* —
 `p_f0_spread_*` and `p_continuity_min`, since `continuity_trace` and `f0_hz` are both in the store.
 `words.onomatopoeic_tokens` does not help here — its vocabulary is a cough set
 (`default.yaml:123`), not numerals.
@@ -673,36 +3115,20 @@ spans (`voice.py:230`) and PREPROCESS's amplitude spans carry no `family` at all
 `hints.metadata.task_token`‡ for the trailing index.
 **Absent:** `phonation_tracks.{hnr_db,cpps_db,rms_dbfs}`† (D2).
 
-```
-detect_sustained_phonation(
-    spans, phonation_tracks, continuity_trace, energy_envelope, stream_extent, words,
-    span_hear, span_yamnet, hints,
-    *, p_voiced_strength_min, p_voiced_fraction_min, p_f0_spread_window_s,
-       p_f0_spread_max_semitones, p_continuity_min, p_vowel_min_s,
-       p_inhale_search_s, p_breath_label_set, p_breath_score_min,
-) -> (done, components, deviations)
+**Its rows**, both `SUSTAINED`, one boolean apart:
 
-    vowel = the qualifying candidate of detect_prolonged_vowel's P2 test, longest first,
-            with no lexical-word exclusion applied — this family expects no lexical material,
-            so a lexical word overlapping the production is a finding, not a filter
-
-    version = "v2" if hints.metadata.task_token names a v2 token else "v1"
-    if version == "v1":
-        # v1 places the deep inhale before the record tap is mentioned, so an audible inhale
-        # may be inside the file. It is an AIRWAY `label`, never an off_task_extent.
-        inhale = first span in spans within p_inhale_search_s of stream_extent.start
-                 with sounds_like(span, span_hear, span_yamnet,        # § the AIRWAY families
-                                  p_label_set=p_breath_label_set,
-                                  p_score_min=p_breath_score_min)
-    done       = vowel is not None
-    components = [("phonation", *vowel.extent)]   if vowel     # the task_extent; its duration is V2
-               + [("inhale", *inhale.extent)]     if inhale    # v1 only, handed to AIRWAY
-    deviations = [("truncation", ...)] if vowel touches stream_extent's edge
-               + [("repeat_attempt", ...)] if more than one candidate qualifies
-               + [("off_task_extent", *w.extent, {"text": w.text}) for w in lexical(words)]
-               + off_task(components, spans)
-    counts     = {"phonation_s": duration(vowel), "index": trailing index of task_token}‡
+```python
+"maximum-phonation-time":    Expectation(pattern=Pattern.SUSTAINED, forbid_lexical=True,
+                                         expect_inhale=True),
+"maximum-phonation-time-v2": Expectation(pattern=Pattern.SUSTAINED, forbid_lexical=True,
+                                         expect_inhale=False),
 ```
+
+**Spans proposed: one**, `task_extent`, over the voiced run. **The v1 inhale gets no VOICE span** —
+under propose-only a branch mints only in its own family, and an inhale is airway evidence, so
+`align_voice` records `inhale_expected_in_file` as a count and `detect_airway`, running on the same
+recording, is what proposes the span over it — a hand-off that is real wherever routing selects
+AIRWAY on this family, which this document does not measure.
 
 **Notes.** Duration of the qualified extent is V2's maximum phonation time, and it is a
 norm-bearing scalar: `branch-conventions.md` requires the name to carry its convention. Two
@@ -719,33 +3145,17 @@ under the two readings — so the deviation above is emitted with the reading na
 `continuity_trace` · `stream_extent` · `hints.metadata.task_token`‡ for the declared direction.
 **Absent:** nothing. The measurement is in the store; what is owed is one decision.
 
-```
-detect_glide(
-    spans, phonation_tracks, continuity_trace, stream_extent, hints,
-    *, p_voiced_strength_min, p_voiced_fraction_min, p_monotone_tolerance_semitones,
-       p_dominant_segment_min_fraction, p_glide_min_s,
-) -> (done, components, deviations)
+**Its rows**, three families and one matcher:
 
-    declared = "up" if task_token names low-to-high else "down"       # from the family, a hint
-    for s in [s for s in spans if s.measure == "amplitude"]:
-        f       = phonation_tracks sliced to s.extent
-        voiced  = fraction(f.strength >= p_voiced_strength_min)
-        # V3: the dominant monotone segment. Longest run of semitones(f.f0_hz) that never
-        # reverses by more than p_monotone_tolerance_semitones; its sign is the direction.
-        run     = longest tolerant-monotone run over voiced frames
-        covers  = duration(run) / duration(s)
-        qualifies(s) = voiced >= p_voiced_fraction_min
-                   and covers >= p_dominant_segment_min_fraction
-                   and duration(s) >= p_glide_min_s
-    sweep = longest qualifying span, else None
-
-    done       = sweep is not None
-    components = [("glide", *sweep.extent)] if sweep                   # the task_extent
-    deviations = [("sweep_direction_mismatch", *sweep.extent,
-                   {"declared": declared, "measured": sign(run), "extent_semitones": ...})]
-                  if sweep and sign(run) != declared
-               + [("truncation", ...)] if sweep touches stream_extent's edge
+```python
+"glides-low-to-high": Expectation(pattern=Pattern.GLIDE, declared_direction="up"),
+"glides-high-to-low": Expectation(pattern=Pattern.GLIDE, declared_direction="down"),
+"high-to-low":        Expectation(pattern=Pattern.GLIDE, declared_direction="down"),
 ```
+
+**Spans proposed: one**, `task_extent`, over the **tolerant-monotone run itself** rather than over
+the carrier amplitude span — the sweep is the production, and the carrier's extent is recorded in
+`wasDerivedFrom` and in the span's `carrier_extent` attribute.
 
 **Notes.** A glide is the opposite of the sustained pattern, so `p_continuity_min` does **not**
 transfer: `continuity_trace` stays high through a slowly-moving harmonic structure, which is why it
@@ -763,51 +3173,49 @@ declaration question, not a branch one.
 effort; `stimulus_alignment`† (D1) for `hey` as a declared token rather than a literal.
 **No viable approach** for absolute effort on v1 — see the note.
 
-```
-detect_loudness_token(words, stimulus_alignment†, *, p_token, p_expected_count)
-        -> (done, components, deviations)
+**SPEECH's rows** — `loudness` is `LEXICAL_SPEECH` (`families.py:41-42`), so SPEECH is **in
+family** here and runs the same `ORDERED_TOKENS` matcher every read family uses:
 
-    hits       = ordered matches of p_token over lexical(words)        # SPEECH's half
-    done       = len(hits) > 0
-    components = [("token", *h.extent) for h in hits]
-    counts     = {"expected_event_count": {"found": len(hits), "declared": p_expected_count}}
-```
-
-```
-measure_loudness_effort(words, spans, energy_envelope, level, spectrogram_wideband,
-                        phonation_tracks.rms_dbfs†, phonation_tracks.cpps_db†,
-                        *, p_token, p_expected_count)
-        -> (done, components, deviations)
-
-    hits = detect_loudness_token(...).components
-    for h in hits:
-        measure per token, never as a verdict:
-            peak_over_floor_db  from energy_envelope over h.extent
-            spectral_balance    = high/low band energy ratio of spectrogram_wideband over
-                                  h.extent — the level-invariant half of effort
-            rms_dbfs, cpps_db   over h.extent                          # D2
-        carry the covariates that decide what the number means:
-            level.{peak_dbfs, rms_dbfs, lufs} (file), spans.contains_clip, disruptions_file
-    done       = len(hits) > 0
-    components = [("token", *h.extent) for h in hits]
-    deviations = []                                                     # effort asserts nothing
-    counts     = {"expected_event_count": {"found": len(hits), "declared": p_expected_count}}
+```python
+"loudness":    Expectation(pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey", "hey"),
+                           expected_event_count=3),
+"loudness-v2": Expectation(pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey"),
+                           expected_event_count=2),
 ```
 
-```
-detect_loudness_contrast(words, spans, energy_envelope, level, spectrogram_wideband,
-                         *, p_token, p_min_contrast_db)
-        -> (done, components, deviations)
+The tokens are literals rather than a `token_source`, so **D1 is not load-bearing for SPEECH here**:
+the instruction fixes the word. SPEECH proposes one span, `task_extent` over the hull of the
+realised tokens.
 
-    first, second = the first two matches of p_token over lexical(words), in order
-    done          = both exist
-    contrast_db   = peak_over_floor_db(second) - peak_over_floor_db(first)
-    balance_delta = spectral_balance(second) - spectral_balance(first)
-    components    = [("normal", *first.extent), ("loud", *second.extent)]
-    deviations    = [("off_task_extent", ...)] for lexical material matching neither
-    # A within-recording difference needs no norm and no calibration. Direction is the
-    # measurement; p_min_contrast_db decides only whether the contrast is reported as present.
+**VOICE's row, and it is not read today.** `loudness` is `LEXICAL_SPEECH`, so under
+`reference_family_set.VOICE` it is **out of family for VOICE** and `align_voice` never reaches it.
+The row is written and held:
+
+```python
+# VOICE_EXPECTATIONS_PENDING_DECLARATION
+"loudness": Expectation(
+    pattern=Pattern.EFFORT,
+    tokens=("hey",),
+    expected_event_count=3,
+    unviable=(("effort_absolute",
+               "`level` is uncalibrated and no SPL reference exists in the graph"),),
+),
 ```
+
+**Spans proposed, when the declaration moves: one per realised token**, because the effort
+measurement is per token. The `unviable` entry is what makes `measure_loudness_effort` emit a
+measurement with its covariates and never a `maximal` / `not maximal` verdict.
+
+```python
+# VOICE_EXPECTATIONS_PENDING_DECLARATION
+"loudness-v2": Expectation(pattern=Pattern.EFFORT, tokens=("hey",), expected_event_count=2,
+                           contrast=True),
+```
+
+**One field, `contrast`, is the whole v1/v2 difference** — and it is the field that makes v2 the
+cheapest effort measure in the corpus, because a within-recording difference needs no norm and no
+calibration. **Spans proposed, when the declaration moves: one per token plus a `task_extent` over
+the pair**, since the contrast is the measurement and it spans both.
 
 **Notes.** `level` is peak dBFS, RMS dBFS and LUFS of an uncalibrated consumer recording with
 unknown microphone sensitivity, unknown source-to-microphone distance and, on many handsets, AGC
@@ -830,23 +3238,22 @@ boundaries it yields are what VOICE measures over; `phonation_tracks.{hnr_db,cpp
 (D2), without which there is no per-sentence voice-quality number at all.
 **Unreachable:** `hints.expected_speech`‡; the six sentences per version, which no table carries.
 
-```
-measure_cape_v_per_sentence(
-    stimulus_alignment†, phonation_tracks, phonation_tracks.hnr_db†,
-    phonation_tracks.cpps_db†, phonation_tracks.rms_dbfs†, continuity_trace, words,
-    *, p_voiced_strength_min,
-) -> (done, components, deviations)
+**VOICE's row, and it is not read today.** `cape-v-sentences` and `-v2` are `LEXICAL_SPEECH`
+(`families.py:33-34`), so the corpus's one deliberate voice-quality instrument is **out of family
+for VOICE** under the reference family set and reaches it only through `detect_voice`, which
+evaluates no task. The rows are written and held:
 
-    sentences = stimulus_alignment.structure_spans()    # D1 yields the six boundaries
-    if sentences is empty: return (UNDETERMINED, [], [])
-    for s in sentences:
-        voiced = frames in s where strength >= p_voiced_strength_min
-        report per sentence, on `plain` and over voiced frames only:
-            f0, hnr_db, cpps_db, rms_dbfs                # D2 tracks, pooled over s
-    done       = every sentence has a realised extent
-    components = [("sentence_%d" % i, *s.extent) for i, s in sentences]
-    deviations = [("stimulus_mismatch", ...)] from the alignment, carried by SPEECH
+```python
+# VOICE_EXPECTATIONS_PENDING_DECLARATION
+"cape-v-sentences":    Expectation(pattern=Pattern.PER_SENTENCE, token_source="stimulus_text"),
+"cape-v-sentences-v2": Expectation(pattern=Pattern.PER_SENTENCE, token_source="stimulus_text"),
 ```
+
+**Spans proposed, when the declaration moves: one per sentence, plus a `task_extent` over their
+hull** — because pooling across the six discards the instrument's design, each sentence loading a
+different phonatory condition, and today's whole-file `praat_features` is exactly that pooling.
+**When `stimulus_alignment` is absent the matcher proposes nothing and returns `UNDETERMINED`**
+rather than minting six spans whose boundaries are guessed.
 
 **Notes.** Six sentences each loading a different phonatory condition; pooling across them discards
 the instrument's design, which is exactly what `praat_features` does today — one whole-file number
@@ -863,34 +3270,20 @@ owed code change. Nothing output here may be presented as a CAPE-V score.
 **Unreachable:** `hints.expected_speech`‡ — 1,060 distinct Harvard sentences live in the
 per-recording sidecar and nothing reads them.
 
-```
-detect_read_text(
-    words, spans, stream_extent, stimulus_alignment†,
-    *, p_omission_score_max, p_repeat_overlap_min,
-) -> (done, components, deviations)
+**Its rows**, `ORDERED_TOKENS` with the tokens read per recording:
 
-    a = stimulus_alignment†                        # one column per expected token
-    if a is absent: return (UNDETERMINED, [], [])  # the transcript alone cannot say what was expected
-
-    realised = [t for t in a.expected if t.column is not None]
-    done     = len(realised) / len(a.expected) >= ... is NOT the test — the test is per token,
-               and `done` is "every expected token was realised at least once"
-    components = [("read_text", min(start of realised), max(end of realised))]   # task_extent
-               + [("sentence_%d" % i, *s.extent) for i, s in a.structure_spans()]
-    deviations = [("stimulus_mismatch", *w.extent,
-                   {"expected": t.text, "read": w.text, "agreement": w.agreement,
-                    "variants": w.variants})
-                  for (t, w) in a.substitutions]
-               + [("stimulus_mismatch", *w.extent, {"expected": None, "read": w.text})
-                  for w in a.insertions]
-               + [("omission", t.index, {"expected": t.text})     # a TENTH deviation type,
-                  for t in a.expected if t.column is None]        # and extent-free by nature
-               + [("repeat_reading", ...)] if a covers the token sequence more than once
-                  with overlap >= p_repeat_overlap_min
-               + [("filler", *w.extent) for w in words if w.bracketed]   # a read task expects none
-               + [("truncation", ...)] if the first or last realised token touches stream_extent
-               + off_task(components, spans)
+```python
+"harvard-sentences-list": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
+"cape-v-sentences":       Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
+"cape-v-sentences-v2":    Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
 ```
+
+**Spans proposed: `task_extent` over the realised tokens, plus one `structure_*` per unit the
+alignment yields.** **No span per token** — a realised token already has a `word` entity carrying
+its own extent, `agreement` and per-source `timings`, and one span per token would mint roughly
+8 × 13,705 extents on `harvard-sentences-list` alone with no measurement attached. **Without D1 the
+matcher proposes nothing and returns `UNDETERMINED`**: the transcript alone cannot say what was
+expected, and a guessed boundary is worse than an admitted absence.
 
 **`omission` is not in the deviation vocabulary.** `branch-conventions.md:123-142` is
 authoritative and carries nine types; this is a tenth, and the contract's own rule is that a branch
@@ -917,23 +3310,17 @@ entities for S4's breath groups.
 **Absent:** `stimulus_alignment`† (D1). One shared passage per family, so here D1's input is
 family-scoped and available.
 
+```python
+"rainbow-passage":     Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text",
+                                   connected=True),
+"caterpillar-passage": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text",
+                                   connected=True),
 ```
-detect_read_passage(
-    words, spans, stream_extent, hear_scores, stimulus_alignment†,
-    *, p_omission_score_max, p_repeat_overlap_min, p_breath_group_min_gap_s,
-) -> (done, components, deviations)
 
-    base = detect_read_text(words, spans, stream_extent, stimulus_alignment†, ...)
-    # S4 rides on the same alignment: pause and breath-group structure over the passage
-    gaps_between = inter-word gaps from the per-source `timings` of consecutive lexical words
-    breath_marks = [w for w in words if w.bracketed and w.text == "[breath]"]
-                 + hear_scores windows whose raw `Breathe` score clears p_breath_score_min
-    groups       = runs of lexical words separated by a gap >= p_breath_group_min_gap_s
-                   or by a breath mark
-    done         = base.done
-    components   = base.components + [("breath_group_%d" % i, *g.extent) for i, g in groups]
-    deviations   = base.deviations   minus   [("filler", ...) for w in breath_marks]
-```
+**A passage is a read text plus one boolean.** `connected=True` is what adds the breath groups, so
+`detect_read_passage` is not a second function — it is the same `ORDERED_TOKENS` matcher taking one
+more branch. **Spans proposed: `task_extent`, the `structure_*` units, and one per breath group**,
+each group carrying its own S4 measurement, which is why a group is a span and a token is not.
 
 **Notes.** `[breath]` tokens inside a passage are **not** `filler` — they are how S4 measures breath
 structure, and scoring them as disfluency inverts the measurement. Both grains agree on both fields
@@ -946,21 +3333,16 @@ does not arise here.
 `declared_duration_s` (75 s) from the sidecar.
 **Absent:** `stimulus_alignment`† (D1), whose expected-token list here is the **answer** sequence.
 
+```python
+"word-color-stroop": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text",
+                                 declared_duration_s=75.0, emit_filler=False),
 ```
-detect_stroop_sequence(words, spans, stream_extent, stimulus_alignment†,
-                       *, p_omission_score_max)
-        -> (done, components, deviations)
 
-    a = stimulus_alignment† built from the recording's own 15-colour sequence
-    base = detect_read_text(...) with two changes:
-        - no `filler` deviation is emitted, ever
-        - a substitution is scored against the colour, never against the displayed word
-    done       = every expected colour was realised at least once
-    components = base.components + [("item_%d" % i, *c.extent) for i, c in a.expected]
-    deviations = base.deviations without filler
-               + [("stimulus_mismatch", *w.extent, {"expected": colour, "read": w.text})
-                  for the colour/word confusions the task exists to elicit]
-```
+**`emit_filler=False` is the one behavioural difference from a read text, and it is a field.**
+Hesitation and self-correction are this task's dependent variable, so scoring them as `filler` would
+score the measurement as a defect. The expected tokens are the **answer** sequence — 472 distinct
+sequences over 472 recordings — so the `structure_*` spans are the 15 colour items. **Spans
+proposed: `task_extent` plus the 15 items**, and nothing at all without D1.
 
 **Notes.** The instruction says name the colour, do not read the word, so `stimulus_text` is the
 expected *answer* sequence — 472 distinct sequences over 472 recordings, never shared, so the
@@ -975,23 +3357,15 @@ between 74 and 77 s.
 **Absent:** `stimulus_alignment`† (D1), read **inverted**; a lexical-overlap statistic (the
 `p_echo_*` decision below has no fitted value and no estimator in the graph).
 
+```python
+"free-speech": Expectation(pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text",
+                           anti_pattern="verbatim_prompt"),
 ```
-detect_free_speech_v1(words, spans, stream_extent, stimulus_alignment†,
-                      *, p_echo_ngram_n, p_echo_overlap_max)
-        -> (done, components, deviations)
 
-    speech_runs = [s for s in spans if s.measure == "asr"]
-    done        = any lexical(words) at all — no target text exists, so presence is the pattern
-    components  = [("response", *s.extent) for s in speech_runs]       # task_extent = their hull
-
-    # The negative pattern: v1 says "do not record yourself reading the prompt".
-    a       = stimulus_alignment† against the recording's own question
-    overlap = fraction of p_echo_ngram_n-grams of the prompt found verbatim in lexical(words)
-    deviations = [("stimulus_mismatch", *a.echo_extent,
-                   {"reading": "verbatim_prompt", "overlap": overlap})]
-                 if overlap > p_echo_overlap_max
-               + off_task(components, spans)
-```
+**Spans proposed: one**, `task_extent` over the hull of the `measure: "asr"` spans, derived from
+every one of them. The anti-pattern produces no span — a verbatim echo is a `stimulus_mismatch`
+deviation over the response's extent, not a region of its own. Without D1 the echo test emits
+`NOT_SEPARABLE_BY_THIS_DESIGN` and the presence half still stands.
 
 **Notes.** This row cannot use the family grain at all: the acoustictask JSON carries one frozen
 prompt for all 912 sidecars, which is right on 380 recordings and wrong on 2,694 — four questions,
@@ -1006,21 +3380,14 @@ unexplained.
 `declared_duration_s` (~30 s).
 **Absent:** nothing the row needs. v2 drops the anti-pattern, so D1 is not load-bearing here.
 
+```python
+"free-speech-v2": Expectation(pattern=Pattern.FREE_RESPONSE, declared_duration_s=30.0),
 ```
-detect_free_speech_v2(words, spans, stream_extent, declared_duration_s,
-                      *, p_response_min_s)
-        -> (done, components, deviations)
 
-    speech_runs = [s for s in spans if s.measure == "asr"]
-    response    = hull of speech_runs
-    done        = response exists and duration(response) >= p_response_min_s
-    components  = [("response", *response)]                            # task_extent
-    deviations  = off_task(components, spans)
-    counts      = {"declared_duration_s": {"found": duration(stream_extent),
-                                           "declared": declared_duration_s}}
-    # No verbatim-echo deviation. v2's instruction drops "do not record yourself reading the
-    # prompt" and asks for a conversational answer; firing v1's deviation here invents one.
-```
+**`anti_pattern` is absent, and that is the entire v1/v2 difference.** v2's instruction drops *"do
+not record yourself reading the prompt"*, so no verbatim-echo deviation can fire here — and written
+as a missing field rather than a second function, it cannot drift back toward v1's. **Spans
+proposed: one**, `task_extent`.
 
 **Notes.** The acoustictask prompt matches **none** of the six v2 questions, on all 707 sidecars, so
 the family grain is wrong on every one of the 2,120 recordings. Treating v1 and v2 alike is the
@@ -1032,23 +3399,18 @@ error this pair exists to prevent.
 **Absent:** `stimulus_alignment`† (D1); a lexical-overlap statistic — and note that the overlap
 itself is arithmetic once D1 exists, so what is missing is the *cut*, not an estimator.
 
+```python
+"story-recall":    Expectation(pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text",
+                               anti_pattern="verbatim_source"),
+"story-recall-v2": Expectation(pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text",
+                               anti_pattern="verbatim_source"),
 ```
-detect_story_recall(words, spans, stream_extent, stimulus_alignment†,
-                    *, p_ngram_n, p_verbatim_overlap_max, p_coverage_min)
-        -> (done, components, deviations)
 
-    source   = the recording's own source story (v1 grandfather, v2 frog — read per recording,
-               because the five Spanish v1 recordings carry v2's story under v1's family name)
-    produced = lexical(words)
-    coverage = |content tokens of source seen in produced| / |content tokens of source|
-    verbatim = longest common p_ngram_n-gram run between source and produced, as a fraction
-    done     = coverage >= p_coverage_min                      # recalled, in any words
-    components = [("recall", *hull of asr spans)]              # task_extent
-    deviations = [("stimulus_mismatch", *run.extent,
-                   {"reading": "read_not_recalled", "verbatim": verbatim})]
-                 if verbatim > p_verbatim_overlap_max
-               + off_task(components, spans)
-```
+**The same matcher as `free-speech`, with the other anti-pattern** — and `verbatim_source` is also
+what makes `done` read content coverage rather than duration, since *"recall in your own words"*
+asks for coverage and treats verbatim reproduction as the deviation. The source is read per
+recording, because the five Spanish v1 recordings carry v2's story under v1's family name. **Spans
+proposed: one**, `task_extent`.
 
 **Notes.** *Recall in your own words*: semantic coverage is expected and verbatim reproduction is
 the deviation. An n-gram count against the source answers the question the instruction actually
@@ -1063,18 +3425,16 @@ exists and is not wired into triage, and this row is not a reason to wire it.
 **Absent:** nothing that could help. The source is a physical storybook; `stimulus_text` is empty on
 all 258, so **no overlap measure is definable**, D1 included.
 
+```python
+"cinderella-story": Expectation(
+    pattern=Pattern.FREE_RESPONSE,
+    unviable=(("source_overlap",
+               "`stimulus_text` is empty on all 258; the source is a physical storybook"),),
+),
 ```
-detect_narrative_presence(words, spans, stream_extent, declared_duration_s,
-                          *, p_response_min_s)
-        -> (done, components, deviations)
 
-    response   = hull of [s for s in spans if s.measure == "asr"]
-    done       = response exists and duration(response) >= p_response_min_s
-    components = [("narrative", *response)]                            # task_extent
-    deviations = off_task(components, spans)
-    counts     = {"declared_duration_s": {"found": duration(stream_extent),
-                                          "declared": declared_duration_s}}
-```
+**No `token_source` and no `anti_pattern`**, and the `unviable` row is what makes the ceiling
+explicit rather than implied by two absent fields. **Spans proposed: one**, `task_extent`.
 
 **Notes.** Presence and extent only, and that is the ceiling rather than a first step: the
 `story-recall` n-gram method **does not transfer**, because there is no text to overlap against.
@@ -1086,18 +3446,16 @@ Median 93.9 s; 18 of 258 run under a second.
 **Absent:** `stimulus_alignment`† (D1) for the cue; a "is this speech a definition *of* that cue"
 measure, which is **not** a PREPROCESS derivative and has no viable approach in this graph.
 
+```python
+"productive-vocabulary": Expectation(
+    pattern=Pattern.FREE_RESPONSE,
+    token_source="stimulus_text",
+    unviable=(("defines_its_cue", "a lexicon or a text model, branch-local, and no waveform"),),
+),
 ```
-detect_definitional_speech(words, spans, stream_extent, stimulus_alignment†,
-                           *, p_response_min_s)
-        -> (done, components, deviations)
 
-    response   = hull of [s for s in spans if s.measure == "asr"]
-    done       = response exists and duration(response) >= p_response_min_s   # presence only
-    components = [("definition", *response)]
-    deviations = off_task(components, spans)
-    # Whether the speech defines its cue: NO VIABLE APPROACH here. It needs a lexicon or a text
-    # model, is branch-local, needs no waveform, and 78 recordings carry no cue at all.
-```
+**Spans proposed: one**, `task_extent`. The cue is per recording — 204 distinct cues, 78 recordings
+with none — so the family grain carries nothing here and neither grain does on the cue-less 78.
 
 **Notes.** 204 distinct cues under one family name, so the family grain carries nothing, and on the
 78 cue-less recordings neither grain does.
@@ -1109,21 +3467,15 @@ detect_definitional_speech(words, spans, stream_extent, stimulus_alignment†,
 **Absent:** nothing for presence and extent; S4's connected-speech measures are unbuilt branch code,
 not a missing derivative.
 
+```python
+"picture-description":         Expectation(pattern=Pattern.FREE_RESPONSE, connected=True),
+"picture-description-option1": Expectation(pattern=Pattern.FREE_RESPONSE, connected=True),
+"picture-description-option2": Expectation(pattern=Pattern.FREE_RESPONSE, connected=True),
 ```
-detect_connected_speech(words, spans, hear_scores, stream_extent,
-                        *, p_response_min_s, p_pause_min_s, p_breath_group_min_gap_s)
-        -> (done, components, deviations)
 
-    response   = hull of [s for s in spans if s.measure == "asr"]
-    done       = response exists and duration(response) >= p_response_min_s
-    pauses     = inter-word gaps >= p_pause_min_s, from consecutive lexical words' `timings`
-    groups     = runs of lexical words separated by a pause or a `Breathe`-scoring window
-    components = [("description", *response)]                          # task_extent
-               + [("breath_group_%d" % i, *g.extent) for i, g in groups]
-    deviations = off_task(components, spans)
-    measures   = {"speech_rate_from_consensus_words_per_s": ..., "pause_fraction": ...,
-                  "n_breath_groups": len(groups)}     # named for their convention, not "rate"
-```
+**Three identical rows, which is the measurable statement that no method here distinguishes them.**
+v1 and `-option1` carry a byte-identical instruction and both have empty `stimulus_text`; any
+difference found is the image's. **Spans proposed: `task_extent` plus one per breath group.**
 
 **Notes.** `picture-description` and `-option1` carry a **byte-identical** instruction and both have
 empty `stimulus_text`; the only declared difference is the image, which is not in the sidecar as
@@ -1137,13 +3489,14 @@ different instruction and the same detector.
 **Absent:** `stimulus_alignment`† (D1) only if the prompt is to be excluded as an echo; presence and
 extent need nothing.
 
+```python
+"open-response-questions": Expectation(pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text",
+                                       declared_duration_s=30.0, connected=True),
 ```
-detect_open_response(words, spans, hear_scores, stream_extent, declared_duration_s,
-                     *, p_response_min_s, p_pause_min_s, p_breath_group_min_gap_s)
-        -> detect_connected_speech(...) with counts:
-           {"declared_duration_s": {"found": duration(stream_extent),
-                                    "declared": declared_duration_s}}
-```
+
+The one connected-speech family whose expectation is legitimately family-scoped: a single
+447-character prompt shared by all 199. **Spans proposed: `task_extent` plus one per breath
+group** — the same matcher as `picture-description`, with a duration count attached.
 
 **Notes.** One `stimulus_text` shared by all 199 recordings makes this the single connected-speech
 family whose `expected_speech` is legitimately family-scoped; every other one is per recording or
@@ -1156,25 +3509,18 @@ absent. Median 30 s.
 **Absent:** category membership — branch-local, needs no waveform, **not** a PREPROCESS derivative;
 `transcript_repeat`‡ as a store measurement.
 
+```python
+"animal-fluency": Expectation(
+    pattern=Pattern.ITEM_LIST,
+    declared_duration_s=60.0,
+    repetition_allowed=False,
+    unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
+),
 ```
-detect_item_list(words, spans, stream_extent, declared_duration_s,
-                 *, p_repeat_normaliser, p_repetition_allowed)
-        -> (done, components, deviations)
 
-    items      = lexical(words) grouped into produced items in order
-    normalised = [p_repeat_normaliser(i.text) for i in items]
-    repeats    = [i for i in items if normalised[i] seen earlier in the list]
-    done       = len(items) > 0
-    components = [("item_%d" % k, *i.extent) for k, i in enumerate(items)]
-    deviations = [("repeated_item", *i.extent, {"first_at": ...})    # an ELEVENTH type,
-                  for i in repeats] if not p_repetition_allowed      # owed a row in
-                                                                     # branch-conventions.md
-    counts     = {"items": {"found": len(items), "declared": None},
-                  "declared_duration_s": {"found": duration(stream_extent),
-                                          "declared": declared_duration_s}}
-    # Whether an item is in the declared category: NO VIABLE APPROACH in this graph.
-    # It is a lexicon or a text embedding, one consumer, and no audio.
-```
+**Spans proposed: one**, `task_extent` over the hull of the produced items. **An item gets no span
+of its own** — it is one `word` entity with its own extent — and `repeated_item`, the eleventh
+deviation type this document owes the vocabulary, is a deviation over that word's extent.
 
 **Notes.** The category lives only in `instructions`; `stimulus_text` is empty on all 195. Median
 duration 60 s, matching the declared timer, so the duration check is the row's sharpest free signal.
@@ -1186,14 +3532,18 @@ recording carries.
 **Absent:** the same two, and one more: `p_repetition_allowed` must come from the recording's own
 category, not from the family.
 
+```python
+"random-item-generation":    Expectation(pattern=Pattern.ITEM_LIST, repetition_from_category=True,
+                                         unviable=(("category_membership", "…"),)),
+"random-item-generation-v2": Expectation(pattern=Pattern.ITEM_LIST, repetition_from_category=True,
+                                         unviable=(("category_membership", "…"),)),
 ```
-detect_random_items(words, spans, stream_extent, hints, *, p_repeat_normaliser)
-        -> detect_item_list(..., p_repetition_allowed = category_allows_repetition(hints))
 
-    # Eight of ten categories say "Do not repeat any item". `Letters` and `Numbers` say the
-    # opposite — "repetition allowed" — on 48 of 265 v1 and 77 of 203 English v2 recordings.
-    # A family-scoped rule inverts the instruction on roughly a fifth of them.
-```
+**`repetition_allowed` is deliberately not a field here.** It is read from the recording's own
+category, and when the category cannot be read the matcher **proposes nothing and returns
+`UNDETERMINED`** rather than defaulting to the forbidding rule — because `Letters` and `Numbers` say
+the opposite, on 48 of 265 v1 and 77 of 203 English v2 recordings, and a family-scoped default
+inverts the instruction on roughly a fifth of them.
 
 **Notes.** `transcript_repeat` — largest repeat count of any normalised token — is already computed
 for `ddk.lexical_repetition` (`default.yaml:302`) but lives in `routing_analysis/features.py`, is
@@ -1201,57 +3551,32 @@ read only by the ruleset and is not a store measurement. Moving it is a convenie
 capability: a counter over normalised consensus tokens is arithmetic over word entities the store
 already holds.
 
-### The AIRWAY families — two functions every one of them uses
+### The AIRWAY families — two instruments every one of them uses
 
-Written once here; the family blocks below call them.
+Written once in [§ The three instruments](#the-three-instruments); the family blocks below name them.
 
-```
-events_in_span(energy_envelope, span, *, p_smoothing_window_s, p_peak_prominence_db,
-               p_event_min_s, p_trough_return_db)
-        -> [(start, end)]
+`events_in_span` is written once in
+[§ The three instruments](#the-three-instruments) and is the same body every AIRWAY and DDK row
+calls. A5/A6's four operating points — `p_smoothing_window_s`, `p_peak_prominence_db`,
+`p_trough_return_db`, `p_event_min_s` — are what it is owed, and they are the most load-bearing
+unfitted cut in this document: twelve task blocks and roughly 21,000 recordings wait on them.
 
-    e      = energy_envelope.envelope_dbfs over span.extent, smoothed over p_smoothing_window_s
-    floor  = energy_envelope.floor_dbfs                     # one global value, not a local floor
-    peaks  = local maxima of e with prominence >= p_peak_prominence_db
-    for each peak: onset  = walk back to where e falls p_trough_return_db below the peak
-                   offset = walk forward by the same rule
-    keep events with duration >= p_event_min_s
-    # A5/A6. The merging case is not `spans.min_separation_ms` (30 ms; volitional coughs are
-    # seconds apart): it is a series produced on one exhalation, where the envelope never falls
-    # back within k_db of the floor between bursts and the whole series is one span. That is
-    # multiple maxima inside one span, and separating them is arithmetic over this array.
-```
+`sounds_like` is written once in
+[§ The three instruments](#the-three-instruments). Every AIRWAY body reads `raw_scores` through it
+and applies its own named floor, because `labels` is a top-K ∩ threshold decision over those scores
+(`default.yaml:91-107`) and a cough label ranked fifth is dropped by a size rather than by a score.
 
-```
-sounds_like(span, span_hear, span_yamnet, *, p_label_set, p_score_min) -> bool
+**`detect_lexical_intrusion` is now `detect_speech`'s out-of-family mode**, and the change is not
+only structural. The old body returned `done = (no lexical word was found)`, reading the absence of
+lexical content as *"the negative pattern held"*. Under the two-mode rule that is wrong: an
+AIRWAY-declared recording is not SPEECH's task, so SPEECH has no *"was it done"* to answer on it and
+returns `UNDETERMINED`.
 
-    h = [w for w in span_hear   if w.span_id == span.id]
-    y = [w for w in span_yamnet if w.span_id == span.id]
-    return any window in h or y whose raw_scores[label] >= p_score_min
-           for a label in p_label_set
-    # p_label_set is `cough_labels` or `breath_labels` as `routing_analysis/labels.py:100-105`
-    # defines them: HeAR's own group labels, plus the AudioSet closure for YAMNet. `raw_scores`
-    # is always written; `labels` and `scores` are a decision over it — a label is carried only
-    # when it is in the window's top `label_top_k` (4) AND clears `default_threshold` (0.2 for
-    # YAMNet and HeAR, null for AST), all owner-directed rather than fitted (`default.yaml:91-107`).
-    # A cough label ranked fifth is dropped by a size, not by a score, so this body reads
-    # raw_scores and applies its own named floor.
-```
-
-```
-detect_lexical_intrusion(words, spans) -> (done, components, deviations)
-
-    # SPEECH's row over every AIRWAY-declared family: L, none expected, so any lexical
-    # content is off-task by construction.
-    intrusions = lexical(words)
-    done       = len(intrusions) == 0            # "done" here means the negative pattern held
-    components = []
-    deviations = [("off_task_extent", *w.extent, {"text": w.text, "agreement": w.agreement})
-                  for w in intrusions]
-    # AIRWAY owns the deviation (`branch-airway.md:164-165`); SPEECH supplies the extents.
-    # Measured examples are examiner speech — "I'll have you do that one more time. [breath]",
-    # "So just breathe."
-```
+The extents survive twice over, from both sides. SPEECH proposes a `family: "speech"` span over each
+lexical run; AIRWAY's `lexical_intrusions(store)` emits the `off_task_extent` deviation, because
+AIRWAY owns that deviation ([`branch-airway.md:164-165`](branch-airway.md)) and is the branch whose
+task the material is off. Measured examples are examiner speech — *"I'll have you do that one more
+time. [breath]"*, *"So just breathe."*
 
 Measured examples:
 [`../20260910-taxonomy-routing-evidence/measurements.md:177-182`](../20260910-taxonomy-routing-evidence/measurements.md).
@@ -1262,24 +3587,16 @@ Measured examples:
 `consensus_transcript` + `word` entities (for the intrusion row) · `stream_extent`.
 **Absent:** nothing. Every instrument is in the store; A5/A6's operating points are decisions.
 
+```python
+"respiration-and-cough-cough": Expectation(pattern=Pattern.EVENT_SERIES, label_set="cough",
+                                           expected_event_count=5),
 ```
-detect_cough_series(spans, energy_envelope, span_hear, span_yamnet, words, stream_extent,
-                    *, p_cough_label_set, p_cough_score_min, p_expected_count,
-                       p_smoothing_window_s, p_peak_prominence_db, p_event_min_s,
-                       p_trough_return_db)
-        -> (done, components, deviations)
 
-    carriers = [s for s in spans if s.measure == "amplitude"
-                and sounds_like(s, span_hear, span_yamnet,
-                                p_label_set=p_cough_label_set, p_score_min=p_cough_score_min)]
-    events   = [e for s in carriers for e in events_in_span(energy_envelope, s, ...)]
-    done     = len(events) > 0
-    components = [("cough_%d" % k, *e) for k, e in enumerate(events)]   # hull is the task_extent
-    deviations = detect_lexical_intrusion(words, spans).deviations
-               + [("truncation", ...)] if the first or last event touches stream_extent
-               + off_task(components, spans)
-    counts     = {"expected_event_count": {"found": len(events), "declared": p_expected_count}}
-```
+**Spans proposed: one per event, plus `task_extent` over their hull.** One per event is the point:
+`by_label` increments once per (span, label) pair (`airway.py:280`), so a 4 s span holding three
+coughs counts 1 today, and the count compared against `expected_event_count` is the number of these
+spans. Each event span names the carrier amplitude span it was found in, plus `energy_envelope`,
+`span_hear` and `span_yamnet`, in `wasDerivedFrom`.
 
 **Notes.** The count is of **events**, not of label-carrying spans: `by_label` increments once per
 (span, label) pair (`airway.py:280`), so a 4 s span holding three coughs counts 1 today. That is the
@@ -1293,32 +3610,28 @@ defect the `events_in_span` decomposition removes, and it is branch code.
 `phonation_tracks.rms_dbfs`† (D2).
 **No viable approach** for *"hard"* — see the note.
 
-```
-detect_hard_cough(spans, energy_envelope, span_hear, span_yamnet, level,
-                  spectrogram_wideband, disruptions_file, band_profile†, stream_extent,
-                  *, p_cough_label_set, p_cough_score_min, p_smoothing_window_s,
-                     p_peak_prominence_db, p_event_min_s, p_trough_return_db)
-        -> (done, components, deviations)
-
-    events = as detect_cough_series, with no declared count
-    done   = len(events) > 0
-    components = [("cough_%d" % k, *e) for k, e in enumerate(events)]
-    measures   = per event, never a verdict:
-                   peak_over_floor_db, spectral_balance from spectrogram_wideband
-                 with covariates: level.{peak_dbfs, rms_dbfs, lufs}, contains_clip,
-                                  disruptions_file, band_profile† (D3)
-    # "hard": NO VIABLE APPROACH. There is no within-recording contrast to read effort against
-    # (unlike loudness-v2) and no SPL reference anywhere in the graph. The output is a
-    # measurement with its covariates; never a `hard` / `not hard` verdict.
+```python
+"respiration-and-cough-v2-hardcough": Expectation(
+    pattern=Pattern.EVENT_SERIES,
+    label_set="cough",
+    expected_event_count=None,
+    unviable=(("effort_absolute",
+               "no within-recording contrast and no SPL reference; `hard` is not measurable"),),
+),
 ```
 
-```
-# The hygiene clause — "do not cover your mouth or place your hand between your mouth and the
-# microphone" — is a QUALITY expectation, not an AIRWAY one:
-detect_occluded_microphone(level, spectrogram_wideband, band_profile†, disruptions_file,
-                           *, p_tilt_max_db_per_octave, p_level_min_dbfs)
-        -> a level and spectral-tilt finding on the recording, emitted by QUALITY
-```
+**The `None` count and the `unviable` row are the whole difference from the 5-cough family** — same
+matcher, same spans, one fewer declaration and one more admitted impossibility. **Spans proposed:
+one per event plus `task_extent`.**
+
+**The hygiene clause is QUALITY's, and it is not a separate function.** *"Do not cover your mouth
+or place your hand between your mouth and the microphone"* is the only recording-hygiene clause in
+the corpus, and it is an expectation **about the recording** attached to an AIRWAY task rather than
+a task of QUALITY's own — which is why it folds into `detect_quality`, the mode that runs on every
+recording, rather than becoming an `align_quality` that could never have a family. AIRWAY's row for
+this family carries the cough events and says nothing about the microphone; QUALITY carries the
+tilt finding and says nothing about the cough. It is also the only place D3 has a job that is not
+the route question.
 
 **Notes.** This is the only instruction in the corpus carrying a recording-hygiene clause, and it is
 the only place D3 has a job that is not the route question.
@@ -1328,28 +3641,16 @@ the only place D3 has a job that is not the route question.
 **Requires:** as `-cough`, plus `hear_scores` / `span_hear` `Breathe` for the interleaved breaths.
 **Absent:** the same as `-hardcough` for the effort half.
 
+```python
+"voluntary-cough": Expectation(pattern=Pattern.EVENT_ALTERNATION, label_set="cough",
+                               expected_event_count=3),
 ```
-detect_cough_cycles(spans, energy_envelope, span_hear, span_yamnet, hear_scores, words,
-                    stream_extent,
-                    *, p_cough_label_set, p_breath_label_set, p_cough_score_min,
-                       p_breath_score_min, p_expected_count, p_smoothing_window_s,
-                       p_peak_prominence_db, p_event_min_s, p_trough_return_db)
-        -> (done, components, deviations)
 
-    coughs  = events as detect_cough_series
-    breaths = [s for s in spans if sounds_like(s, span_hear, span_yamnet,
-                                               p_label_set=p_breath_label_set,
-                                               p_score_min=p_breath_score_min)]
-    # The expected pattern is an ALTERNATION: material between coughs is matched as breath,
-    # never scored as off_task_extent. A cough detector alone is insufficient here.
-    cycles  = [(cough, following breath) pairs in time order]
-    done    = len(coughs) > 0
-    components = [("cough_%d" % k, *c) for k, c in enumerate(coughs)]
-               + [("breath_%d" % k, *b.extent) for k, b in enumerate(breaths)]
-    deviations = detect_lexical_intrusion(words, spans).deviations
-               + off_task(components, spans)      # gaps matching neither cough nor breath
-    counts     = {"expected_event_count": {"found": len(coughs), "declared": p_expected_count}}
-```
+**The one AIRWAY family needing its own matcher**, because the expected pattern is an alternation:
+material between coughs is matched as breath rather than scored as `off_task_extent`, and a cough
+detector alone is insufficient. **Spans proposed: one per cough, one per breath, plus
+`task_extent`** — both are expected, so both are minted. Median 13.8 s against `v2-hardcough`'s
+4.6 s, consistent with three cough-and-breathe cycles in one file.
 
 **Notes.** Median 13.8 s against `-v2-hardcough`'s 4.6 s, consistent with three cough-and-breathe
 cycles in one file.
@@ -1361,28 +3662,23 @@ cycles in one file.
 **Absent:** `band_profile`† (D3).
 **No viable approach** for the route itself.
 
+```python
+"respiration-and-cough-fivebreaths": Expectation(
+    pattern=Pattern.EVENT_SERIES,
+    label_set="breath",
+    expected_event_count=5,
+    route_from_index=True,
+    unviable=(("route",
+               "the discriminating band sits above the 8 kHz ceiling and the residual tilt is "
+               "confounded, one for one, with mouth-to-microphone geometry"),),
+),
 ```
-detect_breath_cycles(spans, energy_envelope, span_hear, span_yamnet, hear_scores, words,
-                     stream_extent, hints, band_profile†,
-                     *, p_breath_label_set, p_breath_score_min, p_expected_count,
-                        p_smoothing_window_s, p_peak_prominence_db, p_event_min_s,
-                        p_trough_return_db)
-        -> (done, components, deviations)
 
-    carriers = [s for s in spans if s.measure == "amplitude"
-                and sounds_like(s, span_hear, span_yamnet,
-                                p_label_set=p_breath_label_set, p_score_min=p_breath_score_min)]
-    cycles   = [e for s in carriers for e in events_in_span(energy_envelope, s, ...)]
-    declared_route = "nose" if task_token index ∈ {1, 3} else "mouth"‡   # per recording
-    route    = NOT_SEPARABLE_BY_THIS_DESIGN                              # see the note
-    done     = len(cycles) > 0
-    components = [("breath_%d" % k, *c) for k, c in enumerate(cycles)]
-    deviations = detect_lexical_intrusion(words, spans).deviations
-               + off_task(components, spans)
-    counts     = {"expected_event_count": {"found": len(cycles), "declared": p_expected_count},
-                  "declared_route": declared_route, "measured_route": route,
-                  "content_band_hz": band_profile†.rolloff_hz}
-```
+**Spans proposed: one per breath cycle, plus `task_extent`.** `route_from_index=True` is the one
+field that reads the trailing task index, and it is the field where the collapse bites: the route is
+per recording, the index carries it, and `task_family` strips it (`families.py:143`). The route
+itself is reported `NOT_SEPARABLE_BY_THIS_DESIGN` with `band_profile†`'s content band beside it, so
+a negative is attributable to a measured band limit rather than recorded as *"not yet fitted"*.
 
 **Notes — why `route` is not a measurement.** The discriminating band sits largely above the 8 kHz
 ceiling the 16 kHz working rate imposes, and what remains below it is a spectral-tilt difference
@@ -1398,17 +3694,25 @@ of the same short-time spectrum the two spectrograms already carry, and carries 
 they lack. D3's job is to make a
 negative *attributable* — a contrast that fails on files whose content stops at 4 kHz failed for a
 written-down reason — not to make the route measurable. The route index itself is discarded before
-any branch sees it, because `task_family` collapses the trailing segment (`families.py:134-144`).
+any branch sees it, because `task_family` collapses the trailing segment (`families.py:134-143`).
 
 ### `respiration-and-cough-v2-threebreathsnose` (699), `-threebreathsmouth` (699) — AIRWAY and SPEECH
 
 **Requires:** as `fivebreaths`, with the route declared by the family rather than by the index.
 **Absent:** `band_profile`† (D3). **No viable approach** for the route.
 
+```python
+"respiration-and-cough-v2-threebreathsnose":  Expectation(pattern=Pattern.EVENT_SERIES,
+    label_set="breath", expected_event_count=3, declared_route="nose",
+    unviable=(("route", "as `fivebreaths`"),)),
+"respiration-and-cough-v2-threebreathsmouth": Expectation(pattern=Pattern.EVENT_SERIES,
+    label_set="breath", expected_event_count=3, declared_route="mouth",
+    unviable=(("route", "as `fivebreaths`"),)),
 ```
-detect_breath_cycles(..., p_expected_count = 3)
-    with declared_route read from the family name rather than from the task index
-```
+
+**`declared_route` is a field here and `route_from_index` is not** — the family name carries the
+route, so nothing is lost to the index collapse. Same matcher, same spans: one per cycle plus
+`task_extent`.
 
 **Notes.** These two and the `fivebreaths` index split are the only places the route is a declared
 contrast, and therefore the only design that could ever validate A7 — which is why the argument
@@ -1420,19 +3724,17 @@ above matters: neither should be treated as validation-grade for it.
 **Absent:** nothing beyond `band_profile`†; the interval measurement is arithmetic over
 `events_in_span`'s output.
 
+```python
+"respiration-and-cough-threequickbreaths": Expectation(pattern=Pattern.EVENT_SERIES,
+    label_set="breath", expected_event_count=3, timed_intervals=True),
+"respiration-and-cough-v2-threebreaths":   Expectation(pattern=Pattern.EVENT_SERIES,
+    label_set="breath", expected_event_count=3, timed_intervals=True),
 ```
-detect_quick_breaths(..., p_expected_count = 3, *, p_interval_max_s)
-        -> (done, components, deviations)
 
-    cycles    = detect_breath_cycles(...).components
-    intervals = [onset(c[k+1]) - onset(c[k]) for k in range(len(cycles) - 1)]
-    done      = len(cycles) > 0
-    counts    = {"expected_event_count": {"found": len(cycles), "declared": 3},
-                 "inter_onset_interval_s": intervals}
-    # "Quick" is the measurement, and it is the interval, not the count: three breaths says
-    # nothing about whether they were quick. The whole row depends on A5's boundaries, so
-    # p_interval_max_s cannot be fitted before p_peak_prominence_db and p_trough_return_db are.
-```
+**`timed_intervals` is what turns the count into an interval measurement**, and it is a field rather
+than a function. *"Quick"* is the measurement and it is the interval, not the count: three breaths
+says nothing about whether they were quick. **Spans proposed: one per cycle plus `task_extent`**;
+the intervals are a `counts` entry over the onsets, which need no spans of their own.
 
 ### `respiration-and-cough-breath` (1,788), `-v2-breath` (699) — AIRWAY and SPEECH
 
@@ -1440,29 +3742,20 @@ detect_quick_breaths(..., p_expected_count = 3, *, p_interval_max_s)
 `stream_extent` · `declared_duration_s` (30 s v1, 20 s v2).
 **Absent:** `band_profile`† (D3) for v2's declared mouth route.
 
+```python
+"respiration-and-cough-breath":    Expectation(pattern=Pattern.SOUND_COVERAGE, label_set="breath",
+                                               declared_duration_s=30.0),
+"respiration-and-cough-v2-breath": Expectation(pattern=Pattern.SOUND_COVERAGE, label_set="breath",
+                                               declared_duration_s=20.0, declared_route="mouth",
+                                               unviable=(("route", "as `fivebreaths`"),)),
 ```
-detect_comfortable_breathing(hear_scores, span_hear, spans, energy_envelope, words,
-                             stream_extent, declared_duration_s,
-                             *, p_breath_label_set, p_breath_score_min,
-                                p_breath_coverage_min)
-        -> (done, components, deviations)
 
-    windows  = [w for w in hear_scores                                  # 2.0 s, non-overlapping
-                if any raw score for a label in p_breath_label_set >= p_breath_score_min]
-    coverage = covered seconds / duration(stream_extent)
-    done     = coverage >= p_breath_coverage_min
-    components = [("breathing", *merged extent of windows)]             # task_extent
-    deviations = detect_lexical_intrusion(words, spans).deviations
-               + off_task(components, spans)
-    counts     = {"declared_duration_s": {"found": duration(stream_extent),
-                                          "declared": declared_duration_s}}
-    # `residual.energy_fraction` is NOT read here. `residual = plain - g·FRCRN(plain)` and FRCRN
-    # is a speech enhancer, so a high energy fraction means "FRCRN removed most of this signal",
-    # i.e. THIS IS NOT SPEECH — satisfied equally by a cough, a glide, room noise and a
-    # near-silent file. As a routing gate (`airway.breath`, `default.yaml:285-288`) "not speech"
-    # may be adequate; as this row's presence measurement it is not. HeAR's `Breathe` is a
-    # positive detection of the thing being asked about, and it is the half that stands.
-```
+**Uncounted and durational, so the structure is runs rather than events.** **Spans proposed: one per
+merged run of `Breathe`-scoring HeAR windows, plus `task_extent`.** `residual.energy_fraction` is
+**not** read: `residual = plain − g·FRCRN(plain)` and FRCRN is a speech enhancer, so a high fraction
+means *this is not speech* — satisfied equally by a cough, a glide, room noise and a near-silent
+file. As the `airway.breath` routing gate (`default.yaml:285-288`) *"not speech"* may be adequate;
+as this row's presence measurement it is not.
 
 **Notes.** Both declared durations are honoured — 1,440 of 1,788 v1 recordings run 30-31 s, 638 of
 699 v2 run 20-21 s — and on v1 the duration check is the sharpest "was the task done" signal in the
@@ -1474,17 +3767,19 @@ corpus: **132 of 1,788 run under a second.**
 task).
 **Absent:** `band_profile`† (D3). **No viable approach** for the declared mouth route.
 
+```python
+"breath-sounds": Expectation(
+    pattern=Pattern.EVENT_SERIES, label_set="breath", expected_event_count=3,
+    declared_route="mouth", relax_s=60.0, declared_duration_s=73.0,
+    unviable=(("route", "as `fivebreaths`"),),
+),
 ```
-detect_breath_sounds(..., p_expected_count = 3, *, p_relax_s)
-        -> (done, components, deviations)
 
-    result = detect_breath_cycles(..., p_expected_count = 3)
-    if duration(stream_extent) >= p_relax_s + duration(hull of result.components):
-        # The one family whose instruction PRESCRIBES material that is not the task.
-        deviations += [("off_task_extent", 0.0, p_relax_s, {"reading": "declared_relax_period"})]
-    counts += {"declared_duration_s": {"found": duration(stream_extent),
-                                       "declared": declared_duration_s}}
-```
+**`relax_s` is the only field of its kind in the corpus**, and it exists because one instruction
+prescribes material that is not the task. The declared 60 s is emitted as an `off_task_extent`
+deviation — never as a span, since it is ground the branch is disclaiming — and only on a recording
+long enough to contain it, the measured median being 13.2 s against a declared ~73 s. **Spans
+proposed: one per breath plus `task_extent`**, as the three-breath families.
 
 **Notes.** *"Please relax for 60 seconds until the task starts. Take three deep breaths in a row in
 and out of the mouth."* — so it is **not** the uncounted durational task its name suggests; it is
@@ -1492,46 +3787,33 @@ closest to `-v2-threebreathsmouth`. The measured median is 13.2 s, so the relax 
 not inside the file, and the branch above emits the by-instruction `off_task_extent` only on a
 recording that actually runs long enough to contain it.
 
-### The `SYLLABLE_REPETITION` families (7,989) — SPEECH's row over all ten
+### The `SYLLABLE_REPETITION` families (7,989) — SPEECH's row over eight of the ten
 
-```
-detect_lexical_absence(words, spans, *, p_expected_lexical_max)
-        -> (done, components, deviations)
-
-    produced = lexical(words)
-    done     = len(produced) <= p_expected_lexical_max     # near-zero lexical content is correct
-    components = []
-    deviations = [("off_task_extent", *w.extent, {"text": w.text}) for w in produced]
-    # `/pa/` is not lexical and ASR mostly declines it. These families are POSITIVES for
-    # SPEECH's reference set (`reference_family_set.SPEECH: speech` = lexical_speech |
-    # syllable_repetition, `default.yaml:241`), so near-zero lexical content is the correct
-    # observation, not a miss. `speech.lexical >= 2` firing here is over-routing on
-    # function-word artefacts: 71.3% of that gate's apparent false positives are DDK families
-    # (`dag.md:195-196`). `diadochokinesis-buttercup` is the exception and has its own block.
+```python
+for family in ("diadochokinesis-pa", "diadochokinesis-ta", "diadochokinesis-ka",
+               "diadochokinesis-pataka", "diadochokinesis-v2-puh", "diadochokinesis-v2-tuh",
+               "diadochokinesis-v2-kuh", "diadochokinesis-v2-puhtuhkuh"):
+    SPEECH_EXPECTATIONS[family] = Expectation(pattern=Pattern.NO_LEXICAL)
 ```
 
-### The DDK trains — one function they share
+**Eight identical rows, and `buttercup` is not among them** — it has a lexical pattern and takes the
+`ORDERED_TOKENS` row instead. **Spans proposed: none, and that is the finding.** The expectation is
+that no lexical content occurs, so a branch that proposed a `family: "speech"` span here would
+assert the opposite of what it measured. These families are **positives** for SPEECH's reference set
+(`default.yaml:241`), so near-zero lexical content is the correct observation rather than a miss;
+`speech.lexical >= 2` firing here is over-routing on function-word artefacts.
 
-```
-train_rate(energy_envelope, extent, *, p_modulation_band_hz, p_rate_prominence_min)
-        -> (rate_hz, train_extent)
+### The DDK trains — one instrument they share
 
-    e     = energy_envelope.envelope_dbfs over extent, mean-removed
-    S     = magnitude spectrum of e over p_modulation_band_hz
-    peak  = argmax S, kept only if its prominence >= p_rate_prominence_min
-    # D1, and it is the instrument for D2 as well. Praat's `extract_speech_rate`
-    # (`praat_parselmouth.py:160`, de Jong & Wempe) is ALREADY RUNNING inside `praat_features`
-    # on every recording and will not carry DDK, for two reasons internal to the method:
-    #   - a candidate intensity peak counts only if the dip to the next peak exceeds `min_dip`
-    #     (2 or 4 dB, chosen by a whole-file HNR test), and in a fast /pʌ/ train with weak
-    #     bilabial closure the inter-syllable dip is frequently smaller — so the FASTEST trains
-    #     are the ones most likely to be under-counted;
-    #   - a peak must be voiced and inside a "sounding" interval, whose silence tier is built
-    #     with `min_pause = 0.3 s` — longer than an entire DDK syllable cycle.
-    # Both failures are correlated with the quantity DDK exists to measure, so the bias is
-    # signal-dependent, not noise. The envelope modulation spectrum has neither failure mode
-    # and needs no new derivative.
-```
+`train_rate_hz` is written once in
+[§ The three instruments](#the-three-instruments), and it is the instrument for the rate and for the
+onsets alike. Praat's `extract_speech_rate` is **not** the instrument and is ruled out at
+[`preprocess-derivatives-for-expected-patterns.md`](preprocess-derivatives-for-expected-patterns.md)
+§ 4.3 — it is already running inside `praat_features` on every recording
+(`praat_parselmouth.py:1561`), and its two failure modes both bias the measurement in the direction
+of the quantity being measured: `min_dip` (`:218` sets 4, `:223-224` drops it to 2 when a whole-file
+HNR test reads under 60) under-counts exactly the fastest trains, and its silence tier is built with
+`min_pause = 0.3 s` (`:228`), longer than an entire DDK syllable cycle.
 
 ### `diadochokinesis-pa` (896), `-ta` (896), `-ka` (896) — DDK and SPEECH
 
@@ -1540,30 +3822,19 @@ train_rate(energy_envelope, extent, *, p_modulation_band_hz, p_rate_prominence_m
 **Absent:** nothing. D1–D6 are unbuilt branch code and unfitted operating points, not missing
 derivatives.
 
+```python
+"diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, expected_event_count=10),
+"diadochokinesis-ta": Expectation(pattern=Pattern.SYLLABLE_TRAIN, expected_event_count=10),
+"diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, expected_event_count=10),
 ```
-detect_ddk_train(energy_envelope, spans, continuity_trace, stream_extent,
-                 *, p_modulation_band_hz, p_rate_prominence_min, p_train_min_s,
-                    p_expected_count, p_smoothing_window_s, p_peak_prominence_db,
-                    p_event_min_s, p_trough_return_db)
-        -> (done, components, deviations)
 
-    carriers = [s for s in spans if s.measure == "amplitude"
-                and duration(s) >= p_train_min_s]
-    train    = the carrier with the strongest modulation peak, else None
-    if train is None: return (False, [], [])
-    rate_hz, _ = train_rate(energy_envelope, train.extent, ...)         # D1 / D2
-    onsets     = [e for e in events_in_span(energy_envelope, train, ...)]
-    intervals  = [onsets[k+1].start - onsets[k].start for k in ...]     # D3
-    done       = rate_hz is not None and len(onsets) > 0
-    components = [("train", *train.extent)]                             # task_extent
-               + [("syllable_%d" % k, *o) for k, o in enumerate(onsets)]
-    deviations = [("truncation", ...)] if train touches stream_extent's edge
-               + off_task(components, spans)
-    counts     = {"expected_event_count": {"found": len(onsets), "declared": p_expected_count},
-                  "ddk_syllable_rate_from_envelope_modulation_hz": rate_hz,
-                  "inter_onset_interval_s": intervals,
-                  "train_fraction_of_recording": duration(train) / duration(stream_extent)}  # D5
-```
+**Three identical rows, one per target syllable, because nothing in the matcher reads which syllable
+it is.** **Spans proposed: one**, `task_extent` over the train. **An individual syllable is not a
+span**: rate, inter-onset interval variability and train fraction are statistics over the onset
+series, and one span per syllable would add roughly 30 per recording over 7,989 recordings carrying
+no measurement of their own. The onsets travel as a `counts` entry. When no carrier clears
+`p_train_min_s` with a prominent modulation peak, the matcher proposes nothing and returns `False` —
+a measurement, not an absent instrument.
 
 **Notes.** v1 states the count (10) and v2 does not. The gate that fires without a transcript reads
 `ppg.segment_rate_per_s`, which is owed a code change — `extract_ppg_segments`
@@ -1576,15 +3847,16 @@ whole-file posteriorgram alone with no per-span query. The function above needs 
 **Requires:** as above, plus `declared_duration_s` (a fixed 5 s timer).
 **Absent:** nothing.
 
+```python
+"diadochokinesis-v2-puh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, declared_duration_s=5.0),
+"diadochokinesis-v2-tuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, declared_duration_s=5.0),
+"diadochokinesis-v2-kuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, declared_duration_s=5.0),
 ```
-detect_ddk_train_timed(..., p_expected_count = None, declared_duration_s)
-        -> detect_ddk_train(...) with
-           counts += {"declared_duration_s": {"found": duration(stream_extent),
-                                              "declared": declared_duration_s}}
-    # No expected_event_count: the instruction says "until the timer runs out". The
-    # `'puhpuhpuhpuhpuhpuh'` in the instruction is an orthographic illustration, not a
-    # six-repetition instruction.
-```
+
+**`expected_event_count` absent and `declared_duration_s` present is the whole counted/uncounted
+difference**, and it needs no second matcher. The fixed 5 s denominator makes the train fraction and
+the rate directly comparable across participants in a way v1's participant-terminated recordings are
+not. **Spans proposed: one**, `task_extent`.
 
 **Notes.** 630-646 of each family's 702 recordings run 5-6 s, against a v1 median of 5 s spread over
 3-9 s. The fixed denominator makes D5's train fraction and the rate directly comparable across
@@ -1597,38 +3869,20 @@ the corpus, and none of D1-D6 is built to use it.
 **Absent:** nothing — the instrument this row needs is already written. `ppg_posteriorgram` is
 **not** the instrument; see the note.
 
+```python
+"diadochokinesis-pataka":       Expectation(pattern=Pattern.SYLLABLE_SEQUENCE,
+                                            sequence=("labial", "alveolar", "velar"),
+                                            expected_event_count=30),
+"diadochokinesis-v2-puhtuhkuh": Expectation(pattern=Pattern.SYLLABLE_SEQUENCE,
+                                            sequence=("labial", "alveolar", "velar"),
+                                            declared_duration_s=5.0),
 ```
-detect_ddk_sequence(energy_envelope, spans, spectrogram_wideband, stream_extent,
-                    *, p_modulation_band_hz, p_rate_prominence_min, p_train_min_s,
-                       p_burst_window_ms, p_place_centroid_bands_hz, p_place_margin,
-                       p_expected_sequence, p_expected_count,
-                       p_smoothing_window_s, p_peak_prominence_db, p_event_min_s,
-                       p_trough_return_db)
-        -> (done, components, deviations)
 
-    train  = as detect_ddk_train
-    onsets = events_in_span(energy_envelope, train, ...)
-    for each onset:
-        burst = spectrogram_wideband frames in the first p_burst_window_ms after the onset
-        place = argmax over p_place_centroid_bands_hz of the burst's band energies
-                → one of {labial, alveolar, velar} when the winning band clears the runner-up
-                  by p_place_margin, else `unresolved`
-        # /p/, /t/ and /k/ differ in burst spectrum in the textbook way — /t/ high-frequency
-        # dominant, /k/ a compact mid-frequency peak, /p/ diffuse and falling — and all three
-        # sit comfortably inside the 8 kHz band. `spectrogram_wideband` is a 5 ms window at a
-        # 5 ms hop, the classical resolution for exactly this measurement; `gammatone` at the
-        # same hop gives it pre-pooled.
-    produced = the place sequence, in time order
-    done     = produced is non-empty and cycles through p_expected_sequence at least once
-    components = [("train", *train.extent)]
-               + [("syllable_%d" % k, *o) for k, o in enumerate(onsets)]
-    deviations = [("syllable_sequence_mismatch", *o,
-                   {"expected": p_expected_sequence[k % 3], "measured": place})
-                  for k, (o, place) in enumerate(zip(onsets, produced))
-                  if place != p_expected_sequence[k % 3] and place != "unresolved"]
-    counts     = {"expected_event_count": {"found": len(onsets), "declared": p_expected_count},
-                  "sequence_collapse_fraction": share of positions realised as one place}
-```
+**The expected sequence is data**, so a four-place train would be a row and not a rewrite. **Spans
+proposed: one**, `task_extent` over the train, carrying `production="syllable_sequence"`,
+`realised_cycles` and `resolved_n`. A syllable that is not the one the sequence expected travels as
+a `syllable_sequence_mismatch` deviation **with its own extent, which needs no span** — deliberately
+not `stimulus_mismatch`, since there is no stimulus text and no lexical expectation.
 
 **Notes.** `/pa-pa-pa/` is a collapse of the sequence and is the clinically meaningful finding, which
 is why the deviation is `syllable_sequence_mismatch` and deliberately **not** `stimulus_mismatch`:
@@ -1645,34 +3899,33 @@ uncounted respectively and are not one measurement.
 `stream_extent`.
 **Absent:** nothing. `transcript_repeat`‡ is arithmetic over word entities the store already holds.
 
+```python
+# DDK_EXPECTATIONS
+"diadochokinesis-buttercup":    Expectation(pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",),
+                                            expected_event_count=10),
+"diadochokinesis-v2-buttercup": Expectation(pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",),
+                                            declared_duration_s=5.0),
 ```
-detect_repeated_word(words, energy_envelope, spans, stream_extent,
-                     *, p_target_token, p_repeat_normaliser, p_expected_count,
-                        p_modulation_band_hz, p_rate_prominence_min)
-        -> (done, components, deviations)
 
-    hits    = [w for w in lexical(words)
-               if p_repeat_normaliser(w.text) == p_repeat_normaliser(p_target_token)]
-    train   = hull of hits
-    rate_hz = train_rate(energy_envelope, train, ...)        # the acoustic half, for v2's timer
-    done    = len(hits) > 0
-    components = [("repeat_%d" % k, *w.extent) for k, w in enumerate(hits)]
-               + [("train", *train)]                                    # task_extent
-    deviations = off_task(components, spans)
-    counts     = {"expected_event_count": {"found": len(hits), "declared": p_expected_count},
-                  "ddk_syllable_rate_from_envelope_modulation_hz": rate_hz}
-```
+**The only DDK row whose `Pattern` is a lexical one**, and `align_ddk` dispatches it to its own
+token matcher rather than to the train matcher. **Spans proposed: one**, `task_extent` over the hull
+of the realised tokens, derived from `consensus_transcript`, `energy_envelope` and every matched
+`word`. SPEECH holds this family in family too, with its own `ORDERED_TOKENS` row and its own
+`task_extent`; the two branches measure different things over the same ground — the token count and
+the envelope rate — which is the intended shape, not a conflict.
 
 **Notes.** The only DDK family with a lexical pattern, so the only one where the recognisers produce
 the count directly and the only one where `ddk.lexical_repetition >= 3` fires for the right reason
 rather than on function-word repetition. v1 states the count and v2 does not, so the two are not one
 measurement.
 
-### Routed against no declared task — VOICE, AIRWAY and DDK
+### Out of family — `detect_voice`, `detect_airway` and `detect_ddk`
 
 The three rows where the branch was routed to a recording whose family declares none of its
-patterns. **Declared families are not ground truth, and neither is a routing**: the branch measures
-what it finds, concludes on its own question, and asserts nothing about the other branch's task.
+patterns — **which is where most of the corpus lands**, so none of the three is a placeholder.
+**Declared families are not ground truth, and neither is a routing**: the branch proposes spans over
+what it finds, in its own family, and asserts nothing about the other branch's task. All three
+return `done = UNDETERMINED`, because *"was it done"* is not their question on this recording.
 
 **Requires (VOICE):** `spans` · `phonation_tracks` · `continuity_trace` · `energy_envelope` ·
 `consensus_transcript` + `word` entities. **Absent:** `phonation_tracks.{hnr_db,cpps_db,rms_dbfs}`†
@@ -1680,56 +3933,51 @@ what it finds, concludes on its own question, and asserts nothing about the othe
 connected speech passes voiced-fraction, F0-availability and interruption tests and would otherwise
 have perturbation measured over consonants and pauses.
 
-```
-measure_voice_without_declared_task(spans, phonation_tracks, continuity_trace,
-                                    energy_envelope, words,
-                                    *, p_voiced_strength_min, p_voiced_fraction_min,
-                                       p_f0_spread_window_s, p_f0_spread_max_semitones,
-                                       p_continuity_min)
-        -> (done, components, deviations)
+**`measure_voice_without_declared_task` is now `detect_voice`**, and it is not a stub: it is the
+same `qualifying_phonation` body `align_voice` uses, over the same amplitude spans and the same
+`phonation_tracks`, with no expectation consulted. It **proposes a `family: "voice"` span over every
+sustained voiced region it finds**, each derived from its carrier span plus `phonation_tracks` and
+`continuity_trace`, each carrying `evaluates_no_task=True`, and it contests any span a rule labelled
+`phonation` that fails the qualifier.
 
-    done       = UNDETERMINED                 # no pattern was expected; "done" is not this
-                                              # branch's question on this recording
-    qualifying = spans passing the stationarity qualifier of detect_prolonged_vowel's P2
-    components = [("phonation", *s.extent) for s in qualifying]     # `label`, or `refine` where
-                                                                   # the span carried a label
-    contests   = [("contest", *s.extent) for s in spans a proposer marked phonation
-                  that fail the qualifier]
-```
+`done` is `UNDETERMINED` always. This is the mode that runs on most of what VOICE is handed —
+**22,277 routed recordings, 14,332 of which declare no voice family**
+(`runs/ruleset-score-20260912/ruleset_score.json`, `extra.VOICE`) — so a placeholder here would mean
+VOICE doing nothing on **64%** of its own corpus.
 
 **Requires (AIRWAY):** `spans` · `span_hear` · `span_yamnet` · `hear_scores` · `energy_envelope`.
 **Absent:** nothing.
 
-```
-measure_airway_without_declared_task(spans, span_hear, span_yamnet, hear_scores,
-                                     energy_envelope,
-                                     *, p_cough_label_set, p_breath_label_set, p_score_min)
-        -> (done, components, deviations)
+**`measure_airway_without_declared_task` is now `detect_airway`**, and it is the owner's standing
+AIRWAY rule generalised: a non-airway task routed here still gets its breathing and coughing found
+and marked. It **proposes a `family: "airway"` span over every cough and breath event**, using the
+same `sounds_like` + `events_in_span` machinery as the in-family mode — the event boundaries where
+the envelope resolves them, the carrier's own extent where it does not, with `boundaries` recording
+which. It contests any span a rule labelled `cough` or `breath` that carries no raw score over the
+floor.
 
-    done       = UNDETERMINED
-    components = [("airway_event", *s.extent) for s in spans
-                  if sounds_like(s, span_hear, span_yamnet, ...)]
-    contests   = spans a proposer labelled airway that carry no such evidence
-    # A breath during passage reading is NOT a deviation — it is how S4 measures breath-group
-    # structure. AIRWAY's gate evidence is `unavailable` on 56,505 of 62,547 recordings.
-```
+**It does not read `airway.cough`.** That gate reads **J −0.1398** against `declared_airway` over
+61,721 recordings, so at its 50 dB cut it is a loudness detector over an arbitrary recording, which
+is precisely what this mode is handed. A breath during passage reading is **not** a deviation — it
+is how S4 measures breath-group structure — so nothing here emits one. AIRWAY's gate evidence is
+`unavailable` on 56,505 of 62,547 recordings, so this is the mode that runs on the corpus.
 
 **Requires (DDK):** `energy_envelope` · `spans` · `consensus_transcript` + `word` entities.
 **Absent:** nothing.
 
-```
-measure_ddk_without_declared_task(energy_envelope, spans, words,
-                                  *, p_modulation_band_hz, p_rate_prominence_min,
-                                     p_repeat_normaliser)
-        -> (done, components, deviations)
+**`measure_ddk_without_declared_task` is now `detect_ddk`**, and it **proposes a `family: "ddk"`
+span over every rapid repetition train it finds** — acoustically from the envelope modulation
+spectrum over each amplitude span, and lexically over any normalised token repeated at least
+`p_repeat_min_occurrences` times. Not from Praat's `extract_speech_rate`, whose `min_pause = 0.3 s`
+exceeds an entire DDK cycle, and not from the PPG.
 
-    done       = UNDETERMINED
-    components = [("repetition", *extent) for each modulation peak or repeated token found]
-    # Repetition occurs in ordinary speech — a stutter, a false start, a repeated word. The
-    # branch measures what it finds and says what it is; it does not assert that a Harvard
-    # sentence failed to be a DDK task (`branch-ddk.md:66-70`). DDK is a declared branch with
-    # no node: `run.py:302-306` marks it SKIPPED with "no node implements this branch".
-```
+Repetition occurs in ordinary speech — a stutter, a false start, a repeated word — so the branch
+measures what it finds and says what it is; it does not assert that a Harvard sentence failed to be
+a DDK task ([`branch-ddk.md:66-70`](branch-ddk.md)). DDK routes **22,363 recordings against the
+7,989 that declare a DDK family, 14,878 of them declaring none**
+([`branch-ddk.md:20`](branch-ddk.md)), so this mode is almost the whole of what a built DDK
+branch would do. DDK is a declared branch with no node: `run.py:304-305` marks it
+`SKIPPED` with `NO_NODE`, selected or not.
 
 ---
 
@@ -1803,19 +4051,23 @@ in the same run. The recording is routed to VOICE *by* those spans and then fail
 
 | | today | with the decomposition |
 | --- | --- | --- |
-| P1 found | SPEECH transcribes it and it scores an `extra` against the reference set | a SPEECH `label` on the count-in's extent, matched to `expected_speech` |
-| P2 found | nothing; VOICE `FAIL` | a VOICE `label` (or `refine`) on the vowel's extent |
-| the scalars | whole-file, over count-in + silence + vowel | over P2's extent alone |
-| "was the task done" | unanswerable | P1 found / absent and P2 found / absent, independently |
-| the task extent | not recorded | `trim` carrying `task_extent` = P2's extent |
-| anything else | silent | `off_task_extent` over the `gap` spans it falls in |
+| P1 found | SPEECH transcribes it and it scores an `extra` against the reference set | `align_voice` **proposes a `family: "voice"` span**, `role: "count_in"`, over the matched tokens' extents, carrying `excluded_from_measurement=True`. SPEECH is out of family here and proposes its own `family: "speech"` span over the same run, evaluating nothing |
+| P2 found | nothing; VOICE `FAIL` | `align_voice` **proposes a second span**, `role: "task_extent"`, over the voiced run inside the qualifying amplitude span, `wasDerivedFrom` that span plus `phonation_tracks` and `continuity_trace` |
+| the scalars | whole-file, over count-in + silence + vowel | over P2's span alone — which is what the two spans exist to make possible |
+| "was the task done" | unanswerable | P1 found / absent and P2 found / absent, independently, and `done` is their conjunction |
+| the task extent | not recorded | **a proposed span**, `role: "task_extent"` — not a `trim` payload. Under propose-only the extent is a span the branch mints, so `trim` is not its carrier |
+| anything else | silent | `off_task_extent` over the `gap` spans it falls in — a `deviate` finding, never a span, because it is ground the branch is disclaiming |
 
 ### What is owed to build it
 
-1. **A phonation subject VOICE can select.** Either the ruleset stamps a label on the amplitude span
-   that fired `voice.sustained` (the owner's 2026-09-15 decision), or VOICE's selector widens. Both
-   are **owed a code change**; whether a labelled `amplitude` span is thereby refinable is unresolved
-   at [`branch-conventions.md:61-71`](branch-conventions.md).
+1. ~~**A phonation subject VOICE can select.**~~ **Closed by propose-only, 2026-09-16.** The
+   earlier reading was that either the ruleset stamps a label on the amplitude span that fired
+   `voice.sustained`, or VOICE's selector widens — both owed a code change, with the refinability of
+   a labelled `amplitude` span unresolved at `branch-conventions.md:61-71`. Neither is needed: VOICE
+   reads the amplitude spans as **evidence** and proposes its own `family: "voice"` span over what
+   qualifies, naming the carrier in `wasDerivedFrom`. The selector, the label-stamping question and
+   the refinability question all dissolve together. What is still owed is branch code, as for every
+   row in this document.
 2. **A separator between the count-in and the vowel.** The lexical half is free — consensus `word`
    entities carry `extent` plus per-source `timings`, so `one two three` locates itself and P2 is the
    voiced production under no lexical word. The acoustic half is V1's stationarity qualifier and is
@@ -1829,7 +4081,8 @@ in the same run. The recording is routed to VOICE *by* those spans and then fail
 3. **Scalars taken over an extent.** `extract_praat_parselmouth_features_from_audios` has no extent
    argument, while every Praat call it makes already accepts a time range and is passed `0, 0`. So
    this is **owed a code change**, not a measurement — but to a function outside the triage module
-   with its own consumers.
+   with its own consumers. Note what propose-only supplies to it: the extent to pass is now a span
+   the branch itself minted, so the caller and the extent arrive together.
 4. **A rule for where the pattern comes from.** `expected_speech = ["one","two","three"]` cannot be
    read off `stimulus_text`, which is empty. It comes from the human-read expectations table
    `design.md:336-350` specifies, which does not exist.
@@ -1849,7 +4102,7 @@ owed.**
 
 Verified present in the store as of `9fec73c8`. Anything not on this list does not exist. The same
 inventory, spelled as a function signature spells it and with the fields a body may read, is in
-[§ The detection functions](#the-detection-functions); this table is the consumer's view of it.
+[§ The code](#the-code-two-entry-points-per-branch); this table is the consumer's view of it.
 
 | measurement / entity | granularity | what a pattern match uses it for |
 | --- | --- | --- |
@@ -1917,7 +4170,7 @@ and its own rule is that a branch adding a type adds a row there.
 | --- | --- | --- | --- | --- |
 | `stimulus_alignment` (D1) — the consensus word stream aligned against the declared utterance, with a skip arc | **7 hard, 3 partial** | ~26,800 | absent from the tree; the aligner is not — `align_sources` (`consensus.py:276`) and `harmonize_transcripts` (`harmonize.py:522`) already do this for the ASR-against-ASR case | harvard/CAPE-V read text, passages, stroop, story-recall, free-speech v1's anti-pattern, CAPE-V's per-sentence extents for VOICE, productive-vocabulary's cue; partial on prolonged-vowel, loudness, open-response, all of which have a token-list fallback |
 | `phonation_tracks.{hnr_db, rms_dbfs, cpps_db}` (D2) — three more columns on the grid the npz already writes | **7** | 5,113 sustained + 3,193 glides + 3,594 CAPE-V + 2,627 effort, and the 22,277 VOICE routes | in the tree, computed and thrown away: `hnr_track` (`phonation/api.py:108`) and `_rms_track` are called at `voice.py:267` and `:274` on every VOICE run that gets past `:235` — which is none, because the no-span early return fires first; `extract_cpp_descriptors` builds a per-frame `prominence` array at `praat_parselmouth.py:1030` and reduces it to three scalars at `:1035-1039` | prolonged-vowel, maximum-phonation-time ×2, glides, CAPE-V, loudness, hard-cough/voluntary-cough effort, routed-VOICE |
-| a phonation subject VOICE can select | **4** | 5,113 + 22,277 | in the store and unreadable: `preprocess.py:1875-1891` writes amplitude spans with no `family` key; `voice.py:230` selects `family == "phonation"`, so the candidate list is empty before any test runs | prolonged-vowel, maximum-phonation-time, glides, routed-VOICE |
+| ~~a phonation subject VOICE can select~~ — **withdrawn 2026-09-16** | **0** | — | The blocker was real and the fix is not a derivative: `preprocess.py:1875-1891` writes amplitude spans with no `family` key and `voice.py:230` selects `family == "phonation"`, so VOICE's candidate list is empty before any test runs. Under the owner's propose-only decision VOICE reads those amplitude spans as *evidence* and mints its own `family: "voice"` span, so nothing has to write a family onto them | none. It is branch code, which every row owes anyway |
 | a populated `expected_speech`, at the recording grain | **7, the same as D1** | ~26,800 | `AudioHints.expected_speech` reaches every branch (`audio_hints.py:152`) and nothing populates it: `runs/b2ai-v2/make_hints.py:381` writes `may_contain` and `metadata` from the filename token and never reads `stimulus_text`. On 36 of 48 families `stimulus_text` is empty too, so for those the expectation needs a human-read table that does not exist | D1's blocks. D1 without this is an aligner with nothing to align against |
 | the trailing task index, where it carries a condition | **2** | 3,576 + 813 | in the BIDS stem and in `hints.metadata.task_token`; `task_family` collapses it (`families.py:134-144`) and every family-keyed rule loses it | `fivebreaths`' nose/mouth route, `maximum-phonation-time-v2`'s `-2` effort escalation |
 | `band_profile` (D3) — content band and long-term spectrum on the un-resampled `recording` stream | **0 blocked, 7 unattributable** | ~13,000 airway | absent; `_rolloff_hz` (`audio_analysis/quality.py:156`) is the core and is a private function in a sibling workflow | every airway block, plus the hard-cough hygiene clause. It unblocks nothing — it makes a negative route result *attributable* to a measured band limit rather than recorded as "not yet fitted" |
@@ -1941,7 +4194,7 @@ protocol labelled, not which carry the pattern.
 | what | blocks | recordings | the instrument that already exists |
 | --- | --- | --- | --- |
 | the event boundary: `p_smoothing_window_s`, `p_peak_prominence_db`, `p_trough_return_db`, `p_event_min_s` (A5/A6, and D3's onsets) | **12** | ~13,000 airway + 7,989 DDK | `energy_envelope` per sample with its global floor. The merging case is a series on one exhalation, visible as multiple maxima inside one span — not `spans.min_separation_ms`, which is 30 ms while volitional coughs are seconds apart |
-| what makes a `gap` span off-task rather than ordinary silence | **all 31** | 62,547 | `span` `measure: "gap"`, `silence`, `energy_envelope`. Every body above calls `off_task()` and none of them can say where the line falls |
+| what makes a `gap` span off-task rather than ordinary silence — `p_gap_off_task_min_s` | **all 31** | 62,547 | `span` `measure: "gap"`, `silence`, `energy_envelope`. Every body above calls `off_task()` and none of them can say where the line falls. It is now one named parameter with one call site rather than a rule restated thirty times |
 | the stationarity qualifier: `p_f0_spread_window_s`, `p_f0_spread_max_semitones`, `p_continuity_min`, `p_voiced_strength_min`, `p_voiced_fraction_min` (V1) | **5** | 5,113 + 22,277 | **`continuity_trace` is already a spectral-stationarity trace** — cosine similarity between consecutive log-magnitude spectra (`spectral_continuity/api.py:10`), written per sample (`preprocess.py:2549`); F0 and formant stationarity are statistics of `f0_hz` and `f1..f4_hz` at a 10 ms hop. An earlier draft of this document called this "the single most load-bearing gap"; it is load-bearing, and it is a fit, not an estimator |
 | the DDK rate: `p_modulation_band_hz`, `p_rate_prominence_min` (D1/D2) | **4** | 7,989 | the modulation spectrum of `energy_envelope` over the train. **Not** Praat's `extract_speech_rate`, which is already running inside `praat_features` and whose two failure modes — a `min_dip` the fastest trains do not clear, and a silence tier built with `min_pause = 0.3 s`, longer than a whole DDK cycle — both bias the measurement in the direction of the quantity being measured |
 | the omission cut: `p_omission_score_max` (S3) | **3** | ~19,300 | a skip-arc-free aligner assigns every stimulus word an interval, so an omission surfaces only as a low acoustic score (`branch-speech.md:115-121`). This is the decision that decides whether D1 needs a skip arc |
@@ -2002,6 +4255,48 @@ protocol labelled, not which carry the pattern.
 - **Whether `high-to-low` should stay a separate family.** Its instruction is byte-identical to
   `glides-high-to-low`'s on all 43 recordings, so it is an alias by any measurable test. Whether
   `families.py` folds it is a declaration question, and the table treats the two as one task.
+
+### Closed since the last version
+
+- **~~Which verb carries `off_task_extent`.~~** Half-closed by propose-only: `task_extent` is a
+  **proposed span** carrying `role: "task_extent"`, not a `trim` payload, so `trim` is not the
+  carrier of the extent either. This document's reading is that `trim` has no remaining job, and
+  that `off_task_extent` stays a `deviate` finding — off-task material is the *absence* of the
+  branch's speciality rather than an instance of it, and a branch does not mint spans over ground it
+  is disclaiming. `design.md:569` and `branch-conventions.md:108` still disagree on paper and whoever
+  reconciles them should know the extent question is no longer part of it.
+- **~~Whether a label on an `amplitude` span makes it refinable.~~** Closed by propose-only: there is
+  no refinement, so there is nothing to scope. `branch-conventions.md:61-71`, `design.md:1174-1181`
+  and `branch-voice.md:92-97` all describe a question that the 2026-09-16 decision removes.
+
+### Documentation conflicts, no longer blocking
+
+These were blockers while the branches needed `refine`. Under propose-only they are conflicts
+between documents to reconcile, and no branch waits on them:
+
+- **`refine` is written by nothing in `src/senselab`.** Swept 2026-09-16: every occurrence of the
+  string is prose or an unrelated identifier — `prov_store.py:438`, `praat_parselmouth.py:95`,
+  `audio_analysis`'s `refined_identity` / `I1_boundary_refinement` / `fuse.py:1089`,
+  `label_membership.py:82`, and `default.yaml:180`'s comment that QUALITY judges *"against each
+  branch's refined spans"*. **Zero call sites.** The verbs actually written are `label`, `confirm`,
+  `contest`, `abstain`, `flag`, `attribute`, `measure` and `withdraw`; there is no `propose`, no
+  `refine`, no `trim` and no `deviate` anywhere, and `vocabulary.py` declares no verb vocabulary at
+  all — the verbs are string literals at their write sites plus `quality.CONTEST_VERB:62` and
+  `preprocess.WITHDRAW_VERB:142`.
+- **`store.md:72` says `refine` and `withdraw` are "gone as verbs"**, while `design.md:568` declares
+  `refine`'s payload and `branch-conventions.md:97-100` records it being *widened* on 2026-09-15.
+  Note `store.md:72` is wrong about `withdraw` independently of `refine`: `WITHDRAW_VERB` is
+  declared at `preprocess.py:142` and written at `:605`.
+
+### A code simplification the propose-only decision enables
+
+`report.py:291`'s `_spans_of_family(store, family, *, voice=...)` exists only because VOICE re-minted
+a second phonation span from an existing one, and `onset_kind` — which VOICE writes and the retired
+proposer did not — was the only thing telling the two populations apart. Its own docstring says so.
+Under propose-only they are different **families**, so the `voice=` parameter becomes unnecessary.
+`_spans_of_family` has five call sites — `report.py:673`, `:688`, `:715`, `:1153`, `:1154` — of
+which three pass `voice=` (`:673` `voice=False`, `:715` and `:1154` `voice=True`); those three are
+the ones the decision simplifies. **Recorded, not done: this document changes no code.**
 
 ## Appendix — the instruction per family, verbatim
 
