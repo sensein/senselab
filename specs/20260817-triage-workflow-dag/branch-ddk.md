@@ -320,7 +320,11 @@ nonsense syllables. Sharing the name would pool two different objects.
 
 **Owed.** The mapping from PPG phoneme labels to expected syllables. Whether `/puh/` reliably
 surfaces as a particular argmax phoneme is **unmeasured**, and the posteriorgram is out of domain on
-rapid nonsense repetition.
+rapid nonsense repetition. Since 2026-09-16 the posteriorgram's own place per onset is read and
+reported BESIDE the burst spectrum's, with an agreement fraction over the onsets both resolved:
+that agreement is what would settle this, and until it is measured on labelled material the burst
+spectrum stays the place decision. See
+[`branch-ddk-ppg-instrument.md`](branch-ddk-ppg-instrument.md).
 
 ## Deviations
 
