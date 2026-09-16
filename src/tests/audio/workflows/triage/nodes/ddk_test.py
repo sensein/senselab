@@ -26,6 +26,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     KIND,
     NO_INSTRUMENT,
     NODE,
+    PPG_RATE,
     RATE,
     SYLLABLES_PER_S,
     align_ddk,
@@ -639,7 +640,7 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
     def test_an_absent_envelope_makes_align_undetermined(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """The envelope is DDK's only rate instrument; without it no task was evaluated."""
+        """Neither rate instrument is present, so each says so and no task was evaluated."""
         seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pa", spans=[(1.0, 5.0)])
         result = align_ddk(
             "diadochokinesis-pa", store, None, branch_params(ddk_config), reads=read_ddk(store, tmp_path, "plain")
@@ -647,7 +648,8 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
         assert result.done == UNDETERMINED
         assert result.components == []
         assert [(f.name, f.evidence.get("unavailable")) for f in result.deviations if f.kind == "measure"] == [
-            (RATE, "energy_envelope")
+            (RATE, "energy_envelope"),
+            (PPG_RATE, "ppg_posteriorgram"),
         ]
 
     def test_an_absent_envelope_notes_rather_than_failing(
