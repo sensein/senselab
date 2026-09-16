@@ -1237,6 +1237,24 @@ def touches_edge(extent: tuple[float, float], stream_extent: tuple[float, float]
     return extent[0] <= stream_extent[0] or extent[1] >= stream_extent[1]
 
 
+def stream_entity(store: ProvStore, name: str = RECORDING_STREAM) -> Entity | None:
+    """One stream entity, which is what a finding about the whole recording is read off.
+
+    Args:
+        store: The provenance store.
+        name: The stream entity's name.
+
+    Returns:
+        The entity, or None when no live stream of that name carries an extent.
+    """
+    found = [
+        entity
+        for entity in live_entities(store, "stream")
+        if entity.attributes.get("name") == name and entity.extent is not None
+    ]
+    return found[-1] if found else None
+
+
 def stream_extent(store: ProvStore, name: str = RECORDING_STREAM) -> tuple[float, float] | None:
     """One stream's extent, which is the measured duration every "was it done" test needs.
 
@@ -1247,12 +1265,22 @@ def stream_extent(store: ProvStore, name: str = RECORDING_STREAM) -> tuple[float
     Returns:
         The extent, or None when no live stream of that name carries one.
     """
-    found = [
-        entity
-        for entity in live_entities(store, "stream")
-        if entity.attributes.get("name") == name and entity.extent is not None
-    ]
-    return found[-1].extent if found else None
+    entity = stream_entity(store, name)
+    return None if entity is None else entity.extent
+
+
+def stream_ids(store: ProvStore, name: str = RECORDING_STREAM) -> tuple[str, ...]:
+    """The recording stream's id, as a derivation a finding over the whole recording can name.
+
+    Args:
+        store: The provenance store.
+        name: The stream entity's name.
+
+    Returns:
+        The one id, or nothing when no live stream of that name carries an extent.
+    """
+    entity = stream_entity(store, name)
+    return () if entity is None else (entity.id,)
 
 
 # --------------------------------------------------------------------- reading the store's spans and words
@@ -1401,7 +1429,7 @@ def declared_duration_count(store: ProvStore, declared: float | None) -> list[Fi
     """
     if declared is None:
         return []
-    return [count("declared_duration_s", round(duration(stream_extent(store)), 2), declared)]
+    return [count("declared_duration_s", round(duration(stream_extent(store)), 2), declared, *stream_ids(store))]
 
 
 # --------------------------------------------------------------------- the derivatives, as arrays
