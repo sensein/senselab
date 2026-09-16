@@ -138,9 +138,6 @@ def _no_model_calls(monkeypatch: pytest.MonkeyPatch) -> None:
         "extract_objective_quality_features_from_audios",
         lambda audios, device=None: [{"stoi": 0.9, "pesq": 3.0, "si_sdr": 18.0} for _ in audios],
     )
-    monkeypatch.setattr(
-        speech_module, "_diarization_model", lambda: _FakeModel("pyannote/speaker-diarization-community-1")
-    )
     monkeypatch.setattr(speech_module, "_second_diarizer_model", lambda model_id: _FakeModel(model_id))
     monkeypatch.setattr(speech_module, "_clearvoice_model", lambda model_id: _FakeModel(model_id))
     monkeypatch.setattr(speech_module, "_embedding_model", lambda model_id, revision: _FakeModel(model_id, revision))
