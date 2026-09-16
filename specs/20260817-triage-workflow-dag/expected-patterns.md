@@ -167,8 +167,10 @@ and it is now a loss in the *mode selector's own input* rather than only in a pe
 
 ### What the two modes replace
 
-The previous version of this document carried **37 named functions** — one per (branch, family) row
-plus three shared helpers and one QUALITY function. They become:
+The previous version of this document carried **37 named detection functions** — 32 per-task, 4
+out-of-family (`measure_{voice,airway,ddk}_without_declared_task` and `detect_lexical_intrusion`),
+and 1 QUALITY (`detect_occluded_microphone`) — beside three shared instruments and three one-line
+helpers. They become:
 
 | | before | after |
 | --- | --- | --- |
