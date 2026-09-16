@@ -71,6 +71,7 @@ _ABSENCE_ERRORED = "errored"
 _NO_AXIS = "no time axis: the store holds no readable stream, so there is no shared axis to draw over"
 _NO_POSITIVE_DURATION = "the conditioned stream has no positive duration, so there is no time axis to page"
 _ENVELOPE_AXIS = "envelope dBFS"
+_SPAN_HEAR = "span_hear"
 _SPANS_OVERLAY = "spans (dB over floor)"
 
 _LANE_SOURCE = {
@@ -308,29 +309,29 @@ def _spans_of_family(store: ProvStore, family: str, *, voice: bool | None = None
     return sorted(found, key=lambda span: span.extent or (0.0, 0.0))
 
 
-def _airway_labels(store: ProvStore, marks: dict[str, list[Entity]], span: Entity) -> list[str]:
-    """The airway labels a span carries, from AIRWAY's own label assertions over it.
-
-    The generating activity's node is what makes this AIRWAY's answer rather than any label another
-    node might one day assert over the same span.
+def _airway_span_label(span: Entity) -> str:
+    """What AIRWAY marked one of its own spans as.
 
     Args:
-        store: The provenance store, read for each assertion's generating activity.
-        marks: :func:`_assertions_by_source`'s index.
+        span: A span of the ``airway`` family.
+
+    Returns:
+        The label the proposal carries, or :data:`_UNLABELLED` when it carries none.
+    """
+    return str(span.attributes.get("label") or "") or _UNLABELLED
+
+
+def _envelope_span_label(span: Entity) -> str:
+    """One envelope span's own reading, which is the level PREPROCESS measured over it.
+
+    Args:
         span: An envelope span.
 
     Returns:
-        The labels, sorted. Empty when AIRWAY labelled nothing over the span.
+        The level, rounded, or :data:`_UNLABELLED` when the span carries none.
     """
-    labels = set()
-    for assertion in marks.get(span.id, ()):
-        if assertion.attributes.get("verb") != "label":
-            continue
-        activity_id = store.generated_by(assertion.id)
-        if activity_id is None or store.get_activity(activity_id).node != "AIRWAY":
-            continue
-        labels.add(str(assertion.attributes["label"]))
-    return sorted(labels)
+    level = span.attributes.get("peak_over_floor_db")
+    return _UNLABELLED if level is None else f"{float(level):.0f} dB"
 
 
 def _segments(entries: Iterable[tuple[tuple[float, float], str]]) -> list[dict[str, Any]]:
@@ -510,11 +511,11 @@ def _window_raster(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
 
 
 def _airway_hear_raster(store: ProvStore) -> list[dict[str, Any]]:
-    """The full-probability HeAR windows AIRWAY freshly evaluated inside candidate spans."""
+    """The full-probability HeAR windows re-evaluated inside candidate spans, which AIRWAY reads."""
     windows = [
         (window, window.extent, _window_label_scores(window, raw=True))
         for window in live_entities(store, "measurement")
-        if window.attributes.get("name") == "hear_span_window" and window.extent is not None
+        if window.attributes.get("name") == _SPAN_HEAR and window.extent is not None
     ]
     if not windows:
         return []
@@ -558,7 +559,7 @@ def _classifier_windows(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
 
 
 def _airway_hear_windows(store: ProvStore) -> list[dict[str, Any]]:
-    """The raw HeAR probabilities AIRWAY evaluated within proposed candidate spans."""
+    """The raw HeAR probabilities re-evaluated within proposed candidate spans, which AIRWAY reads."""
     return [
         {
             "entity_id": window.id,
@@ -570,7 +571,7 @@ def _airway_hear_windows(store: ProvStore) -> list[dict[str, Any]]:
             "input_window_s": window.attributes.get("input_window_s"),
         }
         for window in live_entities(store, "measurement")
-        if window.attributes.get("name") == "hear_span_window"
+        if window.attributes.get("name") == _SPAN_HEAR
     ]
 
 
@@ -703,8 +704,8 @@ def _panels(
     panels += _lane(
         "airway",
         _segments(
-            (span.extent, ", ".join(_airway_labels(store, marks, span)) or _UNLABELLED)
-            for span in spans
+            (span.extent, _airway_span_label(span))
+            for span in _spans_of_family(store, "airway")
             if span.extent is not None
         ),
     )
@@ -1148,7 +1149,7 @@ def _timing(entity: Entity) -> dict[str, float] | None:
     return {"start_s": float(entity.extent[0]), "end_s": float(entity.extent[1])}
 
 
-def _branch_evidence(store: ProvStore, marks: dict[str, list[Entity]]) -> dict[str, list[dict[str, Any]]]:
+def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
     """Compact audit evidence for each decision branch, with no raw transcript text.
 
     The detail page can show a few examples while JSON carries every item. A ``word`` is represented
@@ -1172,8 +1173,10 @@ def _branch_evidence(store: ProvStore, marks: dict[str, list[Entity]]) -> dict[s
             continue
         description = str(entity.attributes.get("name") or entity.attributes.get("family") or entity.prov_type)
         if branch == "AIRWAY" and entity.prov_type == "span":
-            labels = ", ".join(_airway_labels(store, marks, entity)) or _UNLABELLED
-            description = f"airway span: {labels}"
+            description = f"airway span: {_airway_span_label(entity)}"
+        elif branch == "AIRWAY" and entity.prov_type == "assertion":
+            claim = entity.attributes.get("deviation_type") or entity.attributes.get("claim")
+            description = f"airway {entity.attributes.get('verb')}: {claim}"
         elif branch == "VOICE" and entity.prov_type == "span":
             description = f"phonation: {entity.attributes.get('member')}/{entity.attributes.get('onset_kind')}"
         elif branch == "REDACT" and entity.prov_type == "span":
@@ -1210,7 +1213,7 @@ def _branch_evidence(store: ProvStore, marks: dict[str, list[Entity]]) -> dict[s
             activity_id = store.generated_by(span.id)
             source_activity = None if activity_id is None else store.get_activity(activity_id)
             if branch == "AIRWAY":
-                description = f"airway source span: {', '.join(_airway_labels(store, marks, span)) or _UNLABELLED}"
+                description = f"airway source span: {_envelope_span_label(span)}"
             elif branch == "SPEECH":
                 description = f"speech span: {span.attributes.get('attributed_to') or 'unattributed'}"
             elif branch == "VOICE":
@@ -1305,7 +1308,7 @@ def _report_document(
         },
         "routing": branches,
         "evidence": {
-            "branches": _branch_evidence(store, marks),
+            "branches": _branch_evidence(store),
             "label_presentations": _window_presentations(store),
             "classifier_windows": _classifier_windows(store),
             "airway_hear_span_windows": _airway_hear_windows(store),
