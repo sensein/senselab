@@ -7,14 +7,15 @@ store in memory, mid-run, with no file yet. This module is the one place the two
 live store to the store's own writer and the result to the analysis reader, so both paths reduce the
 same bytes with the same code and no feature path has two definitions.
 
-The evaluation carries no declaration. A BIDS stem's ``task-`` id is a declaration, so ``task_id``
-and ``family`` are empty here and
-:attr:`~senselab.audio.workflows.triage.routing_analysis.ruleset.RouteEvaluation.declared` with
-them: ``routed``, ``state``, ``unavailable``, ``flags`` and ``gate_outcomes`` are the fields this
-path fills.
+The evaluation carries the recording's own declaration. A BIDS stem's ``task-`` id is that
+declaration, so :func:`declared_task` reads it off the stem ADMIT recorded and
+:attr:`~senselab.audio.workflows.triage.routing_analysis.ruleset.RouteEvaluation.declared` is
+filled through the ruleset's family sets, exactly as the offline analysis path fills it. A stem
+carrying no ``task-`` entity declares nothing and leaves both :data:`UNDECLARED`.
 
 ``specs/20260912-ruleset-in-pipeline/design.md`` holds the reasoning: why the serialisation rather
-than a second reader, and what it costs.
+than a second reader, and what it costs. ``specs/20260817-triage-workflow-dag/routing.md`` holds
+why the declaration is read here rather than resolved a second time downstream.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from typing import Any, Mapping
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.label_membership import LabelMembership
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family, task_id_of
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     extract_features,
@@ -49,7 +51,7 @@ RECORDING_STREAM = "recording"
 """The stream entity ADMIT writes, whose path names the recording."""
 
 UNDECLARED = ""
-"""The task id and family of an evaluation that read no declaration, which every one here did."""
+"""The task id and family of a recording whose stem carries no ``task-`` entity."""
 
 EMPTINESS_SOURCE = "stream_peak_max"
 """The feature source the emptiness bypass reads, which no gate names and every evaluation uses."""
@@ -81,8 +83,8 @@ def recording_stem(store: ProvStore) -> str:
 
     Returns:
         The stem of the path the latest live ``recording`` stream names, or ``""`` when no such
-        stream is in the store. The stem is an identifier only; the ``task-`` id it carries is a
-        declaration and is not read into the evaluation.
+        stream is in the store. The ``task-`` id it carries is the recording's own declaration;
+        :func:`declared_task` reads it.
     """
     found = [
         entity
@@ -92,6 +94,23 @@ def recording_stem(store: ProvStore) -> str:
     if not found:
         return ""
     return Path(str(found[-1].attributes.get("path") or "")).stem
+
+
+def declared_task(stem: str) -> tuple[str, str]:
+    """The task a recording's own file stem declares, and the family it collapses into.
+
+    Args:
+        stem: The recording's file stem, from :func:`recording_stem`.
+
+    Returns:
+        ``(task_id, family)``, both :data:`UNDECLARED` when the stem carries no ``task-`` entity.
+        The one place the graph reads a declaration off the recording itself, so ROUTING and VERDICT
+        cannot disagree about whether there is one.
+    """
+    task_id = task_id_of(stem) if stem else UNKNOWN_TASK
+    if task_id == UNKNOWN_TASK:
+        return UNDECLARED, UNDECLARED
+    return task_id, task_family(task_id)
 
 
 def read_live_features(
@@ -115,25 +134,27 @@ def read_live_features(
             :func:`~senselab.audio.workflows.triage.routing_analysis.features.span_label_memberships`.
         onomatopoeic: The token vocabulary a consensus word is matched against, from
             :func:`~senselab.audio.workflows.triage.routing_analysis.features.onomatopoeic_vocabulary`.
-        stem: The recording's stem, for the record's own id.
+        stem: The recording's stem, for the record's own id and for the declaration
+            :func:`declared_task` reads off it.
 
     Returns:
-        The evidence record, carrying no declaration: ``task_id`` and ``family`` are
-        :data:`UNDECLARED`.
+        The evidence record, carrying the stem's own declaration in ``task_id`` and ``family``,
+        both :data:`UNDECLARED` when the stem declares nothing.
     """
     handle = tempfile.NamedTemporaryFile(  # noqa: SIM115 — closed below; the path outlives the handle
         dir=run_dir, prefix=EVIDENCE_PREFIX, suffix=EVIDENCE_SUFFIX, delete=False
     )
     handle.close()
     path = Path(handle.name)
+    task_id, family = declared_task(stem)
     try:
         store.write_jsonl(path)
         return extract_features(
             path,
             stem=stem,
             run_root=str(run_dir.parent),
-            task_id=UNDECLARED,
-            family=UNDECLARED,
+            task_id=task_id,
+            family=family,
             memberships=memberships,
             onomatopoeic=onomatopoeic,
         )
@@ -182,6 +203,8 @@ def route_attributes(evaluation: RouteEvaluation, ruleset: Ruleset) -> dict[str,
     return {
         "state": evaluation.state.value,
         "routed": list(evaluation.routed),
+        "declared": list(evaluation.declared),
+        "family": evaluation.family,
         "gate_outcomes": {name: outcome.value for name, outcome in evaluation.gate_outcomes.items()},
         "unavailable": {branch: list(names) for branch, names in evaluation.unavailable.items()},
         "flags": {branch: list(names) for branch, names in evaluation.flags.items()},

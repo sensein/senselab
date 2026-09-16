@@ -43,16 +43,18 @@ def _evaluation(
     unavailable: Mapping[str, tuple[str, ...]] | None = None,
     flags: Mapping[str, tuple[str, ...]] | None = None,
     gate_outcomes: Mapping[str, GateOutcome] | None = None,
+    declared: Sequence[str] = (),
+    family: str = "",
 ) -> RouteEvaluation:
     """One ruleset reading, as ``evaluate_live_routes`` would return it."""
     return RouteEvaluation(
         stem="sub-01_task-x",
-        family="",
+        family=family,
         routed=tuple(routed),
-        declared=(),
-        agreed=(),
-        missed=(),
-        extra=(),
+        declared=tuple(declared),
+        agreed=tuple(branch for branch in routed if branch in declared),
+        missed=tuple(branch for branch in declared if branch not in routed),
+        extra=tuple(branch for branch in routed if branch not in declared),
         unavailable=dict(unavailable or {}),
         flags=dict(flags or {}),
         state=state,
@@ -162,6 +164,153 @@ class TestDDKIsRoutableAndHasNoNode:
         assert branches == set(BRANCHES)
 
 
+class TestTheDeclaredTaskAlwaysAddsItsBranch:
+    """Owner decision: a declared task routes to its own branch whatever the content gates read."""
+
+    def test_a_declared_branch_runs_although_every_gate_was_silent(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """The whole decision: content said nothing about VOICE and the declaration routes it anyway."""
+        reads(_evaluation([], declared=["VOICE"], family="prolonged-vowel"))
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.runs == ("VOICE",)
+        assert result.forced == ("VOICE",)
+        assert result.declared == ("VOICE",)
+
+    def test_the_added_route_needs_no_hint_at_all(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """The declaration is the task on the recording's own stem, not something the caller passes."""
+        reads(_evaluation([], declared=["AIRWAY"], family="voluntary-cough"))
+        assert routing(store, None, _map(tmp_path), None, run_dir=tmp_path).runs == ("AIRWAY",)
+
+    def test_the_declared_route_does_not_rewrite_the_content_reading(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A branch added by declaration still records that its gates declined; that is the mismatch."""
+        reads(_evaluation([], declared=["VOICE"], family="prolonged-vowel"))
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        voice = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "VOICE")
+        assert voice.attributes["route_state"] == "declined"
+        assert voice.attributes["will_run"] is True
+        assert voice.attributes["why"] == "route_declined_forced_by_declaration"
+
+    def test_a_declaration_never_removes_a_content_route(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A family declaring only VOICE leaves a content-routed SPEECH running."""
+        reads(_evaluation(["SPEECH"], declared=["VOICE"], family="prolonged-vowel"))
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert set(result.runs) == {"SPEECH", "VOICE"}
+        speech = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
+        assert speech.attributes["route_state"] == "routed"
+        assert speech.attributes["forced_by_declaration"] is False
+
+    def test_a_declared_branch_the_content_already_routed_is_counted_once(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """Both sources naming the same branch is one route, and the added-route record stays empty."""
+        reads(_evaluation(["SPEECH"], declared=["SPEECH"], family="rainbow-passage"))
+        result = routing(store, None, _map(tmp_path), AudioHints(may_contain=["speech"]), run_dir=tmp_path)
+        assert result.runs == ("SPEECH",)
+        assert result.runs.count("SPEECH") == 1
+        assert result.forced == ()
+        assert result.declared == ("SPEECH",)
+        speech = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
+        assert speech.attributes["declared"] is True
+        assert speech.attributes["forced_by_declaration"] is False
+        assert speech.attributes["why"] == "route_routed"
+
+    def test_the_decision_tells_a_declared_route_from_a_content_route(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A reader must be able to say which source put each branch in the execution set."""
+        reads(_evaluation(["SPEECH"], declared=["DDK"], family="diadochokinesis-pa"))
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
+        assert (decisions["SPEECH"]["route_state"], decisions["SPEECH"]["forced_by_declaration"]) == ("routed", False)
+        assert (decisions["DDK"]["route_state"], decisions["DDK"]["forced_by_declaration"]) == ("declined", True)
+        assert decisions["DDK"]["declared_by_family"] is True
+        assert decisions["VOICE"]["will_run"] is False
+        assert decisions["VOICE"]["declared"] is False
+
+    def test_the_declared_family_is_recorded_on_every_decision(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """What declared the route must be nameable from the store, not only that something did."""
+        reads(_evaluation([], declared=["AIRWAY"], family="voluntary-cough"))
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        families = {e.attributes["declared_family"] for e in live_entities(store, "branch_decision")}
+        assert families == {"voluntary-cough"}
+
+    def test_the_reading_records_what_the_declaration_named(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """The measurement carries the declaration, so the added route is auditable from the run."""
+        reads(_evaluation(["SPEECH"], declared=["SPEECH", "DDK"], family="diadochokinesis-pa"))
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        recorded = find_measurement(store, RULESET_ROUTING)
+        assert recorded is not None
+        assert recorded.attributes["declared"] == ["SPEECH", "DDK"]
+        assert recorded.attributes["family"] == "diadochokinesis-pa"
+        assert recorded.attributes["routed"] == ["SPEECH"]
+
+    def test_no_declaration_and_no_hint_routes_by_content_alone(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A recording whose stem declares nothing behaves exactly as it did before this decision."""
+        reads(_evaluation(["SPEECH"]))
+        result = routing(store, None, config, None, run_dir=tmp_path)
+        assert result.runs == ("SPEECH",)
+        assert result.forced == ()
+        assert result.declared == ()
+        assert all(
+            (d.attributes["declared"], d.attributes["forced_by_declaration"], d.attributes["declared_family"])
+            == (False, False, "")
+            for d in live_entities(store, "branch_decision")
+        )
+
+    def test_a_declaration_nothing_routed_still_leaves_the_file_state_alone(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """The added route is a branch decision; what the ruleset made of the recording is unchanged."""
+        reads(_evaluation([], state=RouteState.EMPTY, declared=["VOICE"], family="prolonged-vowel"))
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.route_state == "empty"
+        assert result.runs == ("VOICE",)
+        assert result.empty_set is False
+
+
+class TestTheDeclaredTaskIsReadOffTheStem:
+    """The route comes from the recording's own path, through the ruleset's family sets."""
+
+    def test_a_bids_stem_declares_its_branch_without_any_mocking(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """The whole chain: ADMIT's stream path -> task id -> family -> reference set -> the route."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
+        store.entity(
+            prov_type="stream",
+            extent=(0.0, 1.0),
+            attributes={"name": "recording", "path": "sub-01_ses-1_task-prolonged-vowel-1.wav"},
+        )
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert "VOICE" in result.declared
+        assert "VOICE" in result.runs
+
+    def test_a_stem_with_no_task_entity_declares_nothing(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """The control for the test above: without the task token the same store routes by content."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
+        store.entity(
+            prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", "path": "some-recording.wav"}
+        )
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.declared == ()
+        assert result.forced == ()
+
+
 class TestHintsForceAndNothingElse:
     """A hint adds a branch. It never rewrites a reading and never removes a branch."""
 
@@ -190,8 +339,9 @@ class TestHintsForceAndNothingElse:
         routing(store, None, _map(tmp_path), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
         airway = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "AIRWAY")
         assert airway.attributes["route_state"] == "declined"
-        assert airway.attributes["forced_by_hint"] is True
-        assert airway.attributes["why"] == "route_declined_forced_by_hint"
+        assert airway.attributes["forced_by_declaration"] is True
+        assert airway.attributes["declared_by_family"] is False
+        assert airway.attributes["why"] == "route_declined_forced_by_declaration"
 
     def test_a_hint_naming_a_routed_branch_forces_nothing_and_is_still_recorded(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
@@ -202,7 +352,8 @@ class TestHintsForceAndNothingElse:
         assert result.runs == ("SPEECH",)
         assert result.forced == ()
         speech = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
-        assert speech.attributes["forced_by_hint"] is False
+        assert speech.attributes["forced_by_declaration"] is False
+        assert speech.attributes["declared"] is True
         assert speech.attributes["hint_tags"] == ["speech"]
         assert speech.attributes["why"] == "route_routed"
 

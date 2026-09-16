@@ -2,10 +2,10 @@
 
 It measures nothing and classifies nothing. It evaluates the family taxonomy ruleset over the store
 as TAXONOMY left it, records that reading as the ``ruleset_routing`` measurement, and turns it into
-one ``branch_decision`` per branch. A hint forces a branch to run; it never rewrites the reading,
-never removes a branch and never relaxes a threshold. Its verdict is always a ``pass``: this node
-reaches no conclusion about the recording, and an empty execution set is recorded on the decisions
-for VERDICT to read rather than flagged here.
+one ``branch_decision`` per branch. A declared task always adds a route to its own branch; the
+declaration never rewrites the reading, never removes a branch and never relaxes a threshold. Its
+verdict is always a ``pass``: this node reaches no conclusion about the recording, and an empty
+execution set is recorded on the decisions for VERDICT to read rather than flagged here.
 
 A failure to evaluate the ruleset fails the node, because the ruleset is what decides execution.
 ``specs/20260912-ruleset-in-pipeline/design.md`` holds the staging that brought it here.
@@ -52,7 +52,8 @@ class RoutingResult(NodeResult):
             order. A branch no node implements can be in it; the runner records that rather than
             raising.
         skipped: The branches that will not.
-        forced: The branches that run only because a hint named them.
+        forced: The branches that run only because the declaration named them, in branch order.
+        declared: Every branch the declaration named, whether or not content routed it too.
         empty_set: Whether no branch runs at all.
         route_state: What the ruleset made of the whole recording — ``routed``, ``empty`` or
             ``unexplained``.
@@ -61,6 +62,7 @@ class RoutingResult(NodeResult):
     runs: tuple[str, ...]
     skipped: tuple[str, ...]
     forced: tuple[str, ...]
+    declared: tuple[str, ...]
     empty_set: bool
     route_state: str
 
@@ -139,17 +141,17 @@ def _route_states(attributes: dict[str, Any]) -> dict[str, str]:
     return states
 
 
-def _why(state: str, forced_by_hint: bool) -> str:
+def _why(state: str, forced_by_declaration: bool) -> str:
     """One decision's reason, in controlled vocabulary.
 
     Args:
         state: The branch's route state, one of :data:`BRANCH_ROUTE_STATES`.
-        forced_by_hint: Whether the branch runs only because a hint named it.
+        forced_by_declaration: Whether the branch runs only because the declaration named it.
 
     Returns:
         The reason.
     """
-    return f"route_{state}_forced_by_hint" if forced_by_hint else f"route_{state}"
+    return f"route_{state}_forced_by_declaration" if forced_by_declaration else f"route_{state}"
 
 
 def routing(
@@ -160,18 +162,21 @@ def routing(
     *,
     run_dir: Path,
 ) -> RoutingResult:
-    """Evaluate the ruleset over the store and turn its reading, with the caller's hints, into an execution set.
+    """Evaluate the ruleset over the store and turn its reading, with the declaration, into an execution set.
 
-    A branch the ruleset routed runs; anything else is withheld. A hint naming a branch the ruleset
-    did not route forces it to run and the decision records the disagreement rather than resolving
-    it.
+    A branch the ruleset routed runs. A branch the recording's own declaration names **also** runs,
+    whatever the gates made of it, and the decision records the disagreement rather than resolving
+    it. The two sources are additive in one direction only: a declaration adds a route and removes
+    none.
 
     ``route_state`` is a closed vocabulary: every value written is in
-    :data:`~senselab.audio.workflows.triage.vocabulary.BRANCH_ROUTE_STATES`.
+    :data:`~senselab.audio.workflows.triage.vocabulary.BRANCH_ROUTE_STATES`, and it describes the
+    content reading alone — a declared route never rewrites it.
 
     Args:
         store: The provenance store, holding PREPROCESS's derivatives and TAXONOMY's summaries. Every
-            gate reads one of those, so this node runs after TAXONOMY and not before it.
+            gate reads one of those, so this node runs after TAXONOMY and not before it. It also
+            holds ADMIT's ``recording`` stream, whose path carries the declared task.
         source: The stream the pass is running over; ``None`` means the conditioned stream. Recorded
             on every decision so a second pass over another stream stays tellable apart.
         config: The triage configuration, read for ``taxonomy.ruleset`` and ``routing.hint_branch_map``.
@@ -180,8 +185,9 @@ def routing(
             sidecars of its own; the reader resolves the evidence's against it.
 
     Returns:
-        The branches that run, those that do not, those a hint forced, whether the set is empty, and
-        what the ruleset made of the recording as a whole.
+        The branches that run, those that do not, those the declaration added, every branch the
+        declaration named, whether the set is empty, and what the ruleset made of the recording as a
+        whole.
 
     Raises:
         ValueError: When the ruleset or the membership rule cannot be loaded from the configuration.
@@ -201,6 +207,8 @@ def routing(
 
     states = _route_states(attributes)
     route_state = str(attributes["state"])
+    declared_family = str(attributes["family"])
+    by_family = {str(branch) for branch in attributes["declared"]}
 
     activity = store.activity(node=NODE, step=None, parameters={"config_hash": config.config_hash, "stream": stream})
     store.was_associated_with(activity, software)
@@ -209,6 +217,7 @@ def routing(
     runs: list[str] = []
     skipped: list[str] = []
     forced: list[str] = []
+    declared: list[str] = []
     declined: list[str] = []
     view: list[str] = [measurement_id]
 
@@ -216,8 +225,9 @@ def routing(
         state = states[branch]
         hint_tags = tags_by_branch.get(branch, [])
         by_ruleset = state == ROUTED
-        forced_by_hint = bool(hint_tags) and not by_ruleset
-        will_run = by_ruleset or forced_by_hint
+        by_declaration = branch in by_family or bool(hint_tags)
+        forced_by_declaration = by_declaration and not by_ruleset
+        will_run = by_ruleset or forced_by_declaration
 
         decision_id = store.entity(
             prov_type="branch_decision",
@@ -228,11 +238,14 @@ def routing(
                 "route_state": state,
                 "unavailable_gates": list((attributes.get("unavailable") or {}).get(branch) or ()),
                 "flag_gates": list((attributes.get("flags") or {}).get(branch) or ()),
-                "forced_by_hint": forced_by_hint,
+                "declared": by_declaration,
+                "forced_by_declaration": forced_by_declaration,
+                "declared_family": declared_family,
+                "declared_by_family": branch in by_family,
                 "hint_tags": hint_tags,
                 "unmapped_tags": unmapped,
                 "bad_map_values": bad_values,
-                "why": _why(state, forced_by_hint),
+                "why": _why(state, forced_by_declaration),
                 "stream": stream,
             },
         )
@@ -246,7 +259,9 @@ def routing(
         else:
             skipped.append(branch)
             declined.append(f"{branch} {state}")
-        if forced_by_hint:
+        if by_declaration:
+            declared.append(branch)
+        if forced_by_declaration:
             forced.append(branch)
 
     empty_set = not runs
@@ -267,6 +282,8 @@ def routing(
             "runs": list(runs),
             "skipped": list(skipped),
             "forced": list(forced),
+            "declared": list(declared),
+            "declared_family": declared_family,
             "empty_set": empty_set,
             "route_state": route_state,
             "routes": dict(states),
@@ -280,6 +297,7 @@ def routing(
         runs=tuple(runs),
         skipped=tuple(skipped),
         forced=tuple(forced),
+        declared=tuple(declared),
         empty_set=empty_set,
         route_state=route_state,
     )

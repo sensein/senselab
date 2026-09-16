@@ -111,7 +111,8 @@ embedded rather than referenced**:
   file:        { path, duration_s, sample_rate, channels },
   verdict:     { triage, release, reasons[], kinds{}, screened{}, agreement{}, hints{} },
   screening:   { screened_kinds{}, resolved_kinds{}, agreement{}, decision_paths{} },
-  branches:    { branch: { will_run, forced_by_hint, kind_state, verdict?, flags[] } },
+  branches:    { branch: { will_run, declared, forced_by_declaration, declared_family,
+                           kind_state, verdict?, flags[] } },
   steps:       { step: { summary fields, element_ids[] } },
   provenance:  {
     config_hash: str,                  # the merged config mapping's hash

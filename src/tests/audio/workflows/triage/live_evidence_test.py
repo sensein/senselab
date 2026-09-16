@@ -18,6 +18,7 @@ from senselab.audio.workflows.triage.config import TriageConfig, load_triage_con
 from senselab.audio.workflows.triage.live_evidence import (
     EVIDENCE_PREFIX,
     UNDECLARED,
+    declared_task,
     evaluate_live_routes,
     read_live_features,
     recording_stem,
@@ -41,7 +42,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
 from senselab.utils.prov_store import ProvStore
 
 STEM = "sub-01_ses-01_task-free-speech"
-"""The stem the synthetic recordings carry; its ``task-`` id is a declaration and is never read."""
+"""The stem the synthetic recordings carry; its ``task-`` id is the recording's own declaration."""
 
 
 @pytest.fixture(scope="module")
@@ -235,12 +236,14 @@ def _from_disk(store: ProvStore, config: TriageConfig, run_dir: Path) -> RouteEv
     """
     path = run_dir / "store.jsonl"
     store.write_jsonl(path)
+    stem = recording_stem(store)
+    task_id, family = declared_task(stem)
     features = extract_features(
         path,
-        stem=recording_stem(store),
+        stem=stem,
         run_root=str(run_dir.parent),
-        task_id=UNDECLARED,
-        family=UNDECLARED,
+        task_id=task_id,
+        family=family,
         memberships=span_label_memberships(config),
         onomatopoeic=onomatopoeic_vocabulary(config),
     )
@@ -256,6 +259,8 @@ def _assert_same(live: RouteEvaluation, on_disk: RouteEvaluation) -> None:
     """
     assert live.gate_outcomes == on_disk.gate_outcomes
     assert live.routed == on_disk.routed
+    assert live.declared == on_disk.declared
+    assert live.family == on_disk.family
     assert live.state is on_disk.state
     assert live.unavailable == on_disk.unavailable
     assert live.flags == on_disk.flags
@@ -320,13 +325,38 @@ class TestWhatTheReaderReads:
         assert features.bracketed_types == {"breath": 1}
         assert features.words["lexical"] == 3
 
-    def test_the_evaluation_carries_no_declaration(self, config: TriageConfig, tmp_path: Path) -> None:
-        """The evaluation reads no hint, and a ``task-`` id is a hint; nothing is declared here."""
+    def test_the_evaluation_carries_the_stems_own_declaration(self, config: TriageConfig, tmp_path: Path) -> None:
+        """The ``task-`` id on ADMIT's path is the declaration, resolved through the ruleset's family sets."""
         run_dir = _run_dir(tmp_path)
         evaluation = evaluate_live_routes(_base_store(run_dir), config, run_dir=run_dir)
+        assert evaluation.family == "free-speech"
+        assert evaluation.declared == ("SPEECH",)
+        assert evaluation.stem == STEM
+
+    def test_a_stem_with_no_task_entity_declares_nothing(self, config: TriageConfig, tmp_path: Path) -> None:
+        """The control: the same reduction on a path carrying no ``task-`` id reads no declaration."""
+        run_dir = _run_dir(tmp_path)
+        store = _base_store(run_dir)
+        store.entity(
+            prov_type="stream", extent=(0.0, 4.0), attributes={"name": "recording", "path": "some-recording.wav"}
+        )
+        evaluation = evaluate_live_routes(store, config, run_dir=run_dir)
         assert evaluation.family == UNDECLARED
         assert evaluation.declared == ()
-        assert evaluation.stem == STEM
+
+    def test_the_declaration_is_read_off_the_stem_and_nothing_else(self) -> None:
+        """One definition, so ROUTING and VERDICT cannot disagree about whether there is a declaration."""
+        assert declared_task("sub-01_ses-01_task-prolonged-vowel-2") == ("prolonged-vowel-2", "prolonged-vowel")
+        assert declared_task("plain-run-id") == (UNDECLARED, UNDECLARED)
+        assert declared_task("") == (UNDECLARED, UNDECLARED)
+
+    def test_a_task_literally_named_unknown_declares_nothing(self) -> None:
+        """``task_id_of``'s sentinel collides with a literal ``task-unknown``; undeclared is the safe read.
+
+        No family set names ``unknown``, so such a stem could add no route either way, and reading it
+        as no declaration keeps the file routed by content alone rather than by a sentinel.
+        """
+        assert declared_task("sub-01_ses-01_task-unknown") == (UNDECLARED, UNDECLARED)
 
     def test_the_serialisation_is_removed(self, config: TriageConfig, tmp_path: Path) -> None:
         """The reduction writes into the run directory and leaves nothing behind."""
@@ -366,5 +396,7 @@ class TestTheRecordedAttributes:
         run_dir = _run_dir(tmp_path)
         recorded = route_attributes(evaluate_live_routes(_base_store(run_dir), config, run_dir=run_dir), ruleset)
         assert set(recorded["routed"]) == {"AIRWAY", "SPEECH", "DDK"}
+        assert recorded["declared"] == ["SPEECH"]
+        assert recorded["family"] == "free-speech"
         assert all(isinstance(value, str) for value in recorded["gate_outcomes"].values())
         assert recorded["state"] == RouteState.ROUTED.value

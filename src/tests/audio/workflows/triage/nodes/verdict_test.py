@@ -43,17 +43,21 @@ def _hint_config(tmp_path: Path) -> TriageConfig:
 
 
 def _evaluation(
-    routed: tuple[str, ...], state: RouteState, unavailable: Mapping[str, tuple[str, ...]]
+    routed: tuple[str, ...],
+    state: RouteState,
+    unavailable: Mapping[str, tuple[str, ...]],
+    declared: tuple[str, ...] = (),
+    family: str = "",
 ) -> RouteEvaluation:
     """One ruleset reading, standing in for the reduction the real ROUTING would run."""
     return RouteEvaluation(
         stem="sub-01",
-        family="",
+        family=family,
         routed=routed,
-        declared=(),
-        agreed=(),
-        missed=(),
-        extra=(),
+        declared=declared,
+        agreed=tuple(branch for branch in routed if branch in declared),
+        missed=tuple(branch for branch in declared if branch not in routed),
+        extra=tuple(branch for branch in routed if branch not in declared),
         unavailable=dict(unavailable),
         flags={},
         state=state,
@@ -74,11 +78,18 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
         route: bool = True,
         config: TriageConfig | None = None,
         hint: AudioHints | None = None,
+        declared: Sequence[str] = (),
+        family: str = "",
+        recording_path: str | None = None,
     ) -> ProvStore:
         store = ProvStore(run_id="verdict-test")
         agent = software_agent(store)
+        if recording_path is not None:
+            store.entity(
+                prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", "path": recording_path}
+            )
         if route:
-            reading = _evaluation(tuple(routed), route_state, unavailable or {})
+            reading = _evaluation(tuple(routed), route_state, unavailable or {}, tuple(declared), family)
             monkeypatch.setattr(routing_module, "evaluate_live_routes", lambda *a, **k: reading)
             routing(store, None, config or load_triage_config(), hint, run_dir=tmp_path)
         for node, outcome, kind in node_verdicts:
@@ -287,7 +298,7 @@ class TestTheBranchDecisionsAreRead:
         branches = result.file_verdict.branches
         assert branches["AIRWAY"] == {
             "will_run": True,
-            "forced_by_hint": False,
+            "forced_by_declaration": False,
             "route_state": "routed",
             "verdict": "pass",
         }
@@ -424,6 +435,57 @@ class TestHintsAreReadThroughRoutingsMap:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.hints["AIRWAY"] == "found_unclaimed"
         assert result.file_verdict.triage is Triage.PASS
+
+    def test_the_declared_task_is_a_claim_with_no_hint_and_the_null_map(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The falsehood the null map produced: a cough task read ``found_unclaimed`` before this."""
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
+            routed=("AIRWAY",),
+            declared=("AIRWAY",),
+            family="voluntary-cough",
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.hints["AIRWAY"] == "claimed_and_found"
+        assert result.file_verdict.hints["SPEECH"] == "no_claim"
+
+    def test_a_declared_task_the_branch_did_not_find_flags(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The other half of the same table, reachable for the first time under the null map."""
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None), ("VOICE", Outcome.FAIL, "voice")],
+            routed=(),
+            declared=("VOICE",),
+            family="prolonged-vowel",
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.hints["VOICE"] == "claimed_not_found"
+        assert result.file_verdict.triage is Triage.FLAG
+
+    def test_a_declared_task_no_decision_survived_to_read_is_named_without_any_hint(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """ROUTING errored on a BIDS-named recording: the declaration exists and went unread."""
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None)],
+            route=False,
+            recording_path="sub-01_ses-1_task-voluntary-cough.wav",
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.hints == {}
+        assert any(reason.why == UNREAD_DECLARATION for reason in result.file_verdict.reasons)
+
+    def test_a_stem_declaring_no_task_and_no_hint_is_not_an_unread_declaration(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The control: without a task token on the path there was no declaration to lose."""
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None)], route=False, recording_path="some-recording.wav"
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert not any(reason.why == UNREAD_DECLARATION for reason in result.file_verdict.reasons)
 
     def test_a_map_typo_flags_the_file_it_would_otherwise_have_discarded(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path

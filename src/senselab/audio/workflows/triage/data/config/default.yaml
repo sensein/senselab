@@ -129,9 +129,14 @@ words:
 stimulus:
   sentence_terminators: ".?!"          # characters closing a structure unit inside one prompt; orthographic, not fitted
 
-# Which declared hint tags force which branch.
+# The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
+# read off the recording's own BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`
+# below, which is the graph's one family -> branch mapping. This block is the OPTIONAL second,
+# caller-supplied declaration source, and it is additive in the same direction: it adds routes and
+# removes none. Null, because populating it would invent a tag vocabulary nobody fitted; the
+# derivation is in `specs/20260817-triage-workflow-dag/config-derivations.md`.
 routing:
-  hint_branch_map: null                # tag (and metadata.speech_type) -> branch; a tag matching nothing forces nothing
+  hint_branch_map: null                # tag (and metadata.speech_type) -> branch; a tag matching nothing adds nothing
 
 # AIRWAY's labels of interest, and what may confirm or contest them. Corroboration is no longer a
 # hand-written string map: it comes from the classifier-ontology profile in
@@ -240,8 +245,10 @@ taxonomy:
   # family set each branch is scored against. Each operating point and the firing spread it came
   # from are in `specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`, keyed by gate name.
   ruleset:
-    # branch -> the family set it is SCORED against; routes nothing. MULTI-LABEL: a family may be a
-    # positive for several branches, and the diadochokinesis families are positives for both
+    # branch -> the family set it is SCORED against, AND the family -> branch mapping the declared
+    # task routes through: a recording whose family is a positive here routes to that branch whatever
+    # its gates read. It still skips no gate and rewrites no route state. MULTI-LABEL: a family may
+    # be a positive for several branches, and the diadochokinesis families are positives for both
     # SPEECH (via `speech`) and DDK (via `syllable_repetition`).
     reference_family_set:
       AIRWAY: airway

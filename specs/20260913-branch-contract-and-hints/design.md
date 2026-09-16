@@ -454,9 +454,11 @@ fitted rule.
 
 ### Two standing rules
 
-**A hint may add and inform. It may never suppress.** Routing is the union:
-`will_run = by_ruleset or forced_by_hint` (`routing.py:215-220`). A branch the content routed cannot
-be un-routed by a declaration that disagrees with it.
+**A declaration may add and inform. It may never suppress.** Routing is the union:
+`will_run = by_ruleset or forced_by_declaration`. The declaration is the recording's own task,
+read off its BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`, with a hint tag
+as an optional second source; see [`../20260817-triage-workflow-dag/routing.md`](../20260817-triage-workflow-dag/routing.md).
+A branch the content routed cannot be un-routed by a declaration that disagrees with it.
 
 **Content the task did not ask for is content, not error.** A breathing recording that carries speech
 routes SPEECH on the ruleset's evidence and has that speech recorded.
