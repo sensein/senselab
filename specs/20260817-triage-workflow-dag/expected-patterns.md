@@ -190,8 +190,8 @@ measurement.
 
 **A branch mints spans in its own family and never modifies a span another node proposed.** The
 mechanics, the four consequences and the code are in
-[§ The code](#the-code-two-entry-points-per-branch); two things belong here, because they change
-what the two modes *are* rather than how they are written.
+[§ The write path](#the-write-path--propose-only-and-its-four-consequences); two things belong here,
+because they change what the two modes *are* rather than how they are written.
 
 **It closes the scoping question the two-mode design would otherwise have opened.**
 `branch-conventions.md:20-23` rules that a branch *"`refine`s only a span of the family it is
@@ -708,7 +708,7 @@ family and names its evidence — rather than pseudo-code, so that porting it to
 is transcription plus type-fixing against the real store objects. What it is *not* is fitted: every
 `p_*` is an unfitted operating point and **no number appears in any body**.
 
-### Both modes write by `propose` only — the owner, 2026-09-16
+### The write path — `propose` only, and its four consequences
 
 > *"each branch can generate new spans specific to the task of the branch. it doesn't need to edit
 > existing spans."*
