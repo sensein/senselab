@@ -1016,7 +1016,7 @@ class TestDetectAnnotatesWithoutEvaluating:
         airway(store, "plain", airway_config, run_dir=tmp_path)
         [contested] = _assertions(store, "contest")
         assert contested.attributes["claim"] == "cough"
-        assert contested.attributes["of_span"] == ids["spans"][0]
+        assert store.derived_from(contested.id) == [ids["spans"][0]]
         assert contested.attributes["reason"] == "no_raw_score_over_p_score_min"
         assert _report_entity(store, "AIRWAY").attributes["contested_n"] == 1
 
@@ -1102,7 +1102,7 @@ class TestLexicalIntrusionIsALocatedDeviationConditionedOnTheDeclaration:
         intrusions = [a for a in _assertions(store, "deviate") if a.attributes.get("reading") == "lexical_intrusion"]
         assert len(intrusions) == 1, "a bracketed word is what this branch looks for, not a transcript"
         assert intrusions[0].extent == (1.8, 1.9)
-        assert intrusions[0].attributes["word_id"] == ids["words"][0]
+        assert store.derived_from(intrusions[0].id) == [ids["words"][0]]
         assert "Marisol" not in json.dumps(intrusions[0].attributes)
 
     def test_an_invalidated_word_is_not_an_intrusion(

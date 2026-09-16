@@ -57,6 +57,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     sounds_like,
     spectral_balance_db,
     stream_extent,
+    stream_ids,
     touches_edge,
     unviable_findings,
     write_findings,
@@ -439,6 +440,7 @@ def event_measurements(
     envelope: EnvelopeTrack,
     block: SpectrogramBlock | None,
     params: BranchParams,
+    evidence: Sequence[str] = (),
 ) -> list[Finding]:
     """One acoustic descriptor per event, with the covariates its own extent must be read against.
 
@@ -452,6 +454,7 @@ def event_measurements(
         envelope: The energy envelope.
         block: The wideband spectrogram, or None.
         params: The operating points.
+        evidence: The derivative ids every event was read off, beside its carrier span.
 
     Returns:
         One ``<kind>_peak_over_floor_db`` measurement per event.
@@ -467,6 +470,8 @@ def event_measurements(
                 event.start,
                 event.end,
                 rounded(peak_over_floor_db(envelope, extent)),
+                event.span_id,
+                *evidence,
                 index=index,
                 boundaries=event.boundaries,
                 spectral_balance_db=balance,
@@ -488,7 +493,7 @@ def lexical_intrusions(store: ProvStore) -> list[Finding]:
         store: The provenance store.
 
     Returns:
-        The deviations, in the consensus's own index order. Each names its word by id and carries
+        The deviations, in the consensus's own index order. Each derives from its word and carries
         the agreement behind it; the word's text never enters the store here.
     """
     out: list[Finding] = []
@@ -500,8 +505,8 @@ def lexical_intrusions(store: ProvStore) -> list[Finding]:
                 "off_task_extent",
                 word.extent[0],
                 word.extent[1],
+                word.id,
                 reading="lexical_intrusion",
-                word_id=word.id,
                 agreement=word.attributes.get("agreement"),
             )
         )
@@ -645,19 +650,21 @@ def _airway_event_series(
     block = None if rate is None else read_spectrogram_block(store, run_dir, "spectrogram_wideband", rate)
 
     components = event_proposals(events, kind, store=store, evidence=evidence, graded=graded)
+    carriers = sorted({event.span_id for event in events})
     findings: list[Finding] = [
-        count("expected_event_count", len(events), expectation.expected_event_count),
+        count("expected_event_count", len(events), expectation.expected_event_count, *carriers),
         count(
             "events_with_carrier_boundaries",
             sum(1 for event in events if event.boundaries == CARRIER_BOUNDARIES),
             None,
+            *carriers,
         ),
     ]
 
     onsets = [event.start for event in events]
     intervals = [round(later - earlier, 3) for earlier, later in zip(onsets, onsets[1:])]
     if expectation.timed_intervals:
-        findings.append(count("inter_onset_interval_s", intervals, None))
+        findings.append(count("inter_onset_interval_s", intervals, None, *carriers))
         interval_max_s = params.point("interval_max_s")
         if interval_max_s is not None:
             findings.append(
@@ -665,9 +672,12 @@ def _airway_event_series(
                     "intervals_over_p_interval_max_s",
                     sum(1 for value in intervals if value > interval_max_s),
                     0,
+                    *carriers,
                 )
             )
-    findings.extend(event_measurements(events, kind, store=store, envelope=envelope, block=block, params=params))
+    findings.extend(
+        event_measurements(events, kind, store=store, envelope=envelope, block=block, params=params, evidence=evidence)
+    )
 
     route, route_reported = route_findings(expectation, store, hint, params)
     findings.extend(route_reported)
@@ -688,9 +698,13 @@ def _airway_event_series(
             )
         )
         if whole is not None and touches_edge(task, whole):
-            findings.append(deviation("truncation", task[0], task[1]))
+            findings.append(deviation("truncation", task[0], task[1], *carriers, *evidence))
         if expectation.relax_s is not None and duration(whole) >= expectation.relax_s + duration(task):
-            findings.append(deviation("off_task_extent", 0.0, expectation.relax_s, reading="declared_relax_period"))
+            findings.append(
+                deviation(
+                    "off_task_extent", 0.0, expectation.relax_s, *stream_ids(store), reading="declared_relax_period"
+                )
+            )
 
     findings.extend(lexical_intrusions(store))
     findings.extend(unviable_findings(expectation))
@@ -755,9 +769,17 @@ def _airway_alternation(expectation: Expectation, store: ProvStore, params: Bran
         )
 
     cycles = sum(1 for cough in coughs if any(breath[0] >= cough.end for breath in breaths))
+    cough_carriers = sorted({cough.span_id for cough in coughs})
+    breath_carriers = sorted({span.id for span in carriers})
     findings: list[Finding] = [
-        count("expected_event_count", len(coughs), expectation.expected_event_count),
-        count("cough_then_breathe_cycles", cycles, expectation.expected_event_count),
+        count("expected_event_count", len(coughs), expectation.expected_event_count, *cough_carriers),
+        count(
+            "cough_then_breathe_cycles",
+            cycles,
+            expectation.expected_event_count,
+            *cough_carriers,
+            *breath_carriers,
+        ),
     ]
     task = hull([(component.start, component.end) for component in components])
     if task is not None:
@@ -831,7 +853,7 @@ def _airway_coverage(
         for index, extent in enumerate(covered)
     ]
     findings: list[Finding] = [
-        measured("breath_coverage_fraction", None, None, rounded(coverage, 3), covered_s=rounded(total))
+        measured("breath_coverage_fraction", None, None, rounded(coverage, 3), *evidence, covered_s=rounded(total))
     ]
     route, route_reported = route_findings(expectation, store, hint, params)
     findings.extend(route_reported)
@@ -940,7 +962,7 @@ def detect_airway(store: ProvStore, params: BranchParams, *, run_dir: Path | Non
             )
         )
         marked.extend((event.start, event.end) for event in events)
-        findings.append(count(f"{name}_events", len(events), None))
+        findings.append(count(f"{name}_events", len(events), None, *sorted({each.span_id for each in events})))
 
     for span in spans:
         extent = span.extent
@@ -948,7 +970,14 @@ def detect_airway(store: ProvStore, params: BranchParams, *, run_dir: Path | Non
             continue
         for name in decided_label_sets(span, windows, label_sets):
             findings.append(contest(span.id, extent, name, "no_raw_score_over_p_score_min"))
-    findings.append(count("airway_events", len(components), None))
+    findings.append(
+        count(
+            "airway_events",
+            len(components),
+            None,
+            *sorted({source for component in components for source in component.derived_from}),
+        )
+    )
     return Result(UNDETERMINED, components, findings)
 
 
