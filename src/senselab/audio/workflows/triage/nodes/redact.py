@@ -16,6 +16,13 @@ that is ``unremediable``. The verdict's ``audio_check`` is the constant ``"bound
 the re-scan establishes that the redacted text no longer carries the finding and nothing about the
 audio. See ``specs/20260817-triage-workflow-dag/redact.md``.
 
+Three artifacts are released, not two: the masked audio, the flat redacted transcript, and the
+**redacted consensus stream** as ``consensus.json`` — the consensus structure PREPROCESS built, with
+each surviving word's extent, per-source timings, readings, variants and agreement share, and each
+planned extent folded into one placeholder record carrying its category, its padded bounds and the
+number of words it swallowed but no surface of any kind. One renderer produces both the records and
+the flat text, so the two cannot disagree about what was masked.
+
 The masked audio is a **stream in the store**, written under ``run_dir`` and registered as
 ``redacted``, so a consumer resolves it by name the way it resolves ``plain``, ``enhanced`` and
 ``residual``. It is registered on every path, pass or not: ``run_dir`` is the store side of the
@@ -31,11 +38,12 @@ run directory, and carry no store element id.
 
 from __future__ import annotations
 
+import json
 import math
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
@@ -68,6 +76,8 @@ _RESERVED_CATEGORY_CHAR = "+"  # plan_redactions' merge separator; a string, not
 _UNPLACED_PLACEHOLDER = "[UNPLACED]"  # a word the store places nowhere; a category-less placeholder
 _AUDIO_CHECK = "bounded"  # what a text re-scan can claim about the audio, on every path
 STREAM_NAME = "redacted"  # the store-held name the masked audio resolves under, beside plain/enhanced/residual
+CONSENSUS_ARTIFACT_SCHEMA = "senselab.triage.redacted_consensus"  # what the JSON artifact claims to be
+CONSENSUS_ARTIFACT_VERSION = 1  # bumped when a record's field set changes
 
 
 @dataclass(frozen=True)
@@ -75,8 +85,8 @@ class RedactResult(NodeResult):
     """What REDACT returns.
 
     Attributes:
-        artifacts: The released paths, ``{"audio": ..., "transcript": ...}``; empty on anything
-            but a pass.
+        artifacts: The released paths, ``{"audio": ..., "transcript": ..., "consensus": ...}``;
+            empty on anything but a pass.
     """
 
     artifacts: dict[str, Path]
@@ -289,57 +299,152 @@ def _matches_surviving(word: Entity, category: str, planned: list[RedactionExten
     return not any(_overlaps(hull, (extent.start, extent.end)) for extent in planned)
 
 
-def _transcript(words: list[Entity], planned: list[RedactionExtent]) -> tuple[str, int]:
-    """The transcript with every planned extent's words rendered as one ``[CATEGORY]`` placeholder.
+def _word_record(word: Entity) -> dict[str, Any]:
+    """One surviving consensus word, with its times and its source agreement.
+
+    Args:
+        word: A live ``word`` entity a planned extent does not reach.
+
+    Returns:
+        The record. The store's own element id is not in it, and neither is the entity's raw
+        attribute mapping: only the fields named here are copied, so a field PREPROCESS adds later
+        cannot reach a released artifact without this function being edited.
+    """
+    attributes = word.attributes
+    hull = word_hull(word)
+    extent = word.extent
+    return {
+        "kind": "word",
+        "index": int(attributes["index"]),
+        "text": str(attributes.get("text") or ""),
+        "bracketed": bool(attributes.get("bracketed")),
+        "outcome": attributes.get("outcome"),
+        "start_s": None if extent is None else float(extent[0]),
+        "end_s": None if extent is None else float(extent[1]),
+        "hull_start_s": hull[0],
+        "hull_end_s": hull[1],
+        "agreement": float(attributes["agreement"]) if attributes.get("agreement") is not None else None,
+        "sources": sorted(str(name) for name in attributes.get("sources") or []),
+        "readings": {str(name): str(text) for name, text in (attributes.get("readings") or {}).items()},
+        "timings": {
+            str(name): [float(span[0]), float(span[1])] for name, span in (attributes.get("timings") or {}).items()
+        },
+        "variants": [
+            {
+                "text": str(variant.get("text") or ""),
+                "sources": sorted(str(name) for name in variant.get("sources") or []),
+                "share": float(variant["share"]) if variant.get("share") is not None else None,
+            }
+            for variant in attributes.get("variants") or []
+        ],
+        "onset_spread_s": attributes.get("onset_spread_s"),
+        "offset_spread_s": attributes.get("offset_spread_s"),
+        "temporal_uncertainty_s": attributes.get("temporal_uncertainty_s"),
+    }
+
+
+def _render(words: list[Entity], planned: list[RedactionExtent]) -> tuple[list[dict[str, Any]], str, int]:
+    """The redacted consensus stream, as records and as the flat text derived from them.
 
     Words are released in stream order. A word overlapping a planned extent is replaced along with
-    its padded-in neighbours, matching what the audio lost; the placeholder is emitted at the first
-    overlapping position and later overlapping positions are dropped. A word the store places
-    nowhere overlaps no extent, so it is rendered as the category-less placeholder rather than
-    released verbatim. No timestamps, no ids, no matched text.
+    its padded-in neighbours, matching what the audio lost; one ``redaction`` record is emitted at
+    the first overlapping position and later overlapping positions are folded into it. A word the
+    store places nowhere overlaps no extent, so it becomes an ``unplaced`` record rather than being
+    released verbatim. A record for a redacted or unplaced position carries **no** ``text``, no
+    ``readings`` and no ``variants``: those are per-recognizer surfaces of the very token the
+    redaction exists to withhold.
 
     Args:
         words: PREPROCESS's consensus words, in stream order.
         planned: The padded, merged extents.
 
     Returns:
-        The transcript text and the number of words released as unplaced.
+        ``(records, text, unplaced_n)``. ``text`` is the join of each record's placeholder or
+        surface, so the flat artifact and the structured one cannot disagree about what was masked.
     """
-    tokens: list[str] = []
-    emitted: set[int] = set()
+    records: list[dict[str, Any]] = []
+    position: dict[int, int] = {}
     unplaced = 0
     for word in words:
         if word.extent is None:
             unplaced += 1
-            tokens.append(_UNPLACED_PLACEHOLDER)
+            records.append({"kind": "unplaced", "index": int(word.attributes["index"]), "token": _UNPLACED_PLACEHOLDER})
             continue
         hull = word_hull(word)
         index = next((i for i, p in enumerate(planned) if _overlaps(hull, (p.start, p.end))), None)
         if index is None:
-            tokens.append(str(word.attributes.get("text") or ""))
-        elif index not in emitted:
-            emitted.add(index)
-            tokens.append(f"[{planned[index].category}]")
-    return " ".join(token for token in tokens if token), unplaced
+            records.append(_word_record(word))
+        elif index not in position:
+            position[index] = len(records)
+            records.append(
+                {
+                    "kind": "redaction",
+                    "index": int(word.attributes["index"]),
+                    "token": f"[{planned[index].category}]",
+                    "category": planned[index].category,
+                    "start_s": float(planned[index].start),
+                    "end_s": float(planned[index].end),
+                    "words_n": 1,
+                }
+            )
+        else:
+            records[position[index]]["words_n"] += 1
+    return records, " ".join(token for token in (_token(record) for record in records) if token), unplaced
 
 
-def _write_artifacts(redacted: Audio, transcript_text: str, artifacts_dir: Path) -> dict[str, Path]:
-    """Write the releasable pair. Takes no store and no element id, so it cannot embed one.
+def _token(record: dict[str, Any]) -> str:
+    """What one record contributes to the flat transcript.
+
+    Args:
+        record: A record from :func:`_render`.
+
+    Returns:
+        The surface for a word, the placeholder for anything else.
+    """
+    return str(record["text"]) if record["kind"] == "word" else str(record["token"])
+
+
+def _write_artifacts(
+    redacted: Audio,
+    transcript_text: str,
+    records: list[dict[str, Any]],
+    artifacts_dir: Path,
+) -> dict[str, Path]:
+    """Write the releasable set. Takes no store and no element id, so it cannot embed one.
 
     Args:
         redacted: The verified redacted audio.
         transcript_text: The verified redacted transcript.
+        records: The redacted consensus stream from :func:`_render`.
         artifacts_dir: The release directory.
 
     Returns:
-        The written paths, keyed ``audio``/``transcript``.
+        The written paths, keyed ``audio``/``transcript``/``consensus``.
     """
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     audio_path = artifacts_dir / "audio.wav"
     redacted.save_to_file(str(audio_path))
     transcript_path = artifacts_dir / "transcript.txt"
     transcript_path.write_text(transcript_text + "\n")
-    return {"audio": audio_path, "transcript": transcript_path}
+    consensus_path = artifacts_dir / "consensus.json"
+    consensus_path.write_text(
+        json.dumps(
+            {
+                "schema": CONSENSUS_ARTIFACT_SCHEMA,
+                "version": CONSENSUS_ARTIFACT_VERSION,
+                "text": transcript_text,
+                "n_records": len(records),
+                "n_words": sum(1 for record in records if record["kind"] == "word"),
+                "n_redactions": sum(1 for record in records if record["kind"] == "redaction"),
+                "n_unplaced": sum(1 for record in records if record["kind"] == "unplaced"),
+                "records": records,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    return {"audio": audio_path, "transcript": transcript_path, "consensus": consensus_path}
 
 
 def _register_redacted_stream(
@@ -441,7 +546,7 @@ def redact(
     marked = _pii_marked_words(store)
 
     planned = plan_redactions(extents, padding_ms=padding_ms)
-    transcript_text, unplaced_n = _transcript(words, planned)
+    records, transcript_text, unplaced_n = _render(words, planned)
     checked = (
         _verify(transcript_text, required_detectors)
         if not scan_incomplete
@@ -461,7 +566,7 @@ def redact(
                 extents.append(RedactionExtent(start=hull[0], end=hull[1], category=category))
                 widened.append((hull, marks[category]))
         planned = plan_redactions(extents, padding_ms=padding_ms)
-        transcript_text, unplaced_n = _transcript(words, planned)
+        records, transcript_text, unplaced_n = _render(words, planned)
         checked = _verify(transcript_text, required_detectors)
         unremediable = list(checked.survived)
 
@@ -551,7 +656,7 @@ def redact(
     else:
         outcome = Outcome.PASS
         why = "every finding redacted; the redacted transcript re-scans clean"
-        artifacts = _write_artifacts(redacted, transcript_text, artifacts_dir)
+        artifacts = _write_artifacts(redacted, transcript_text, records, artifacts_dir)
     verdict_id, verdict = write_verdict(
         store,
         verify_act,

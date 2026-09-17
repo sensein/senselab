@@ -711,7 +711,7 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.PASS
         assert _verdict_entity(store, "REDACT").attributes["scan_missing"] == []
-        assert result.artifacts.keys() == {"audio", "transcript"}
+        assert result.artifacts.keys() == {"audio", "transcript", "consensus"}
 
     def test_a_failure_message_from_the_store_scan_never_reaches_the_verdict(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path
@@ -793,7 +793,7 @@ class TestOnlyAPassReleases:
         _stub_pii(monkeypatch, findings=[])
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.PASS
-        assert result.artifacts.keys() == {"audio", "transcript"}
+        assert result.artifacts.keys() == {"audio", "transcript", "consensus"}
         assert _verdict_entity(store, "REDACT").attributes["artifacts_withheld"] is False
 
     def test_artifacts_dir_nested_in_run_dir_is_refused(
@@ -908,7 +908,7 @@ class TestTheTranscriptArtifact:
         placements, so the transcript decides on the hull of the sources' own timings.
         """
         from senselab.audio.tasks.redaction.api import RedactionExtent
-        from senselab.audio.workflows.triage.nodes.redact import _transcript
+        from senselab.audio.workflows.triage.nodes.redact import _render
 
         pre = store.activity(node="PREPROCESS", step="consensus", parameters={})
         # The sources place "alice" at 1.0-1.2 and 5.4-5.8; the fit derives 3.0-3.2, between them.
@@ -930,7 +930,7 @@ class TestTheTranscriptArtifact:
         words = [store.get_entity(word_id) for word_id in ids]
         planned = [RedactionExtent(start=0.9, end=1.3, category="PERSON")]
 
-        text, unplaced = _transcript(words, planned)
+        _records, text, unplaced = _render(words, planned)
 
         assert "alice" not in text, "the name survived because the mask read the fitted extent"
         assert text == "one [PERSON]"
@@ -949,6 +949,121 @@ class TestTheTranscriptArtifact:
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert _verdict_entity(store, "REDACT").attributes["unplaced_words_n"] == 0
         assert "[UNPLACED]" not in result.artifacts["transcript"].read_text()
+
+
+class TestTheRedactedConsensusArtifact:
+    """The consensus structure survives redaction; only the redacted tokens' surfaces do not."""
+
+    def _consensus(self, result: Any) -> dict[str, Any]:  # noqa: ANN401 — the node's own result type
+        """The released consensus artifact, parsed."""
+        return dict(json.loads(result.artifacts["consensus"].read_text()))
+
+    def test_a_surviving_word_keeps_its_times_and_its_source_agreement(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A flat string loses the structure the consensus was built to carry; the JSON keeps it."""
+        _seed_redact_store(store, tmp_path, words=["my", "name", "jane", "here"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        document = self._consensus(result)
+        assert document["schema"] == "senselab.triage.redacted_consensus"
+        first = next(record for record in document["records"] if record.get("text") == "my")
+        assert first["kind"] == "word"
+        assert first["start_s"] == 0.0 and first["end_s"] == 0.5
+        assert first["agreement"] == 1.0
+        assert first["sources"] and first["timings"] and first["outcome"]
+
+    def test_a_redacted_word_contributes_a_placeholder_record_carrying_no_surface(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The record says where and what category, never the token, its readings or its variants."""
+        _seed_redact_store(store, tmp_path, words=["my", "name", "jane", "here"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        document = self._consensus(result)
+        assert "jane" not in json.dumps(document), "the redacted surface reached the released structure"
+        masked = next(record for record in document["records"] if record["kind"] == "redaction")
+        assert masked["category"] == "PERSON"
+        assert masked["token"] == "[PERSON]"
+        assert "text" not in masked and "readings" not in masked and "variants" not in masked
+        assert masked["start_s"] < 2.0 and masked["end_s"] > 2.5, "the record carries the padded extent"
+
+    def test_one_merged_extent_is_one_record_counting_the_words_it_swallowed(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The structure matches what the audio lost, so a reader can tell 1 word from 2."""
+        _seed_redact_store(store, tmp_path, words=["hi", "jane", "doe", "bye"], findings=[("PERSON", (1.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        document = self._consensus(result)
+        assert document["n_redactions"] == 1
+        assert next(r for r in document["records"] if r["kind"] == "redaction")["words_n"] == 2
+
+    def test_the_flat_text_is_the_records_joined_so_the_two_artifacts_cannot_disagree(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One renderer, two artifacts: a mask visible in one and absent from the other is unreachable."""
+        _seed_redact_store(store, tmp_path, words=["my", "name", "jane", "here"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        document = self._consensus(result)
+        rebuilt = " ".join(
+            record["text"] if record["kind"] == "word" else record["token"] for record in document["records"]
+        )
+        assert rebuilt == document["text"]
+        assert result.artifacts["transcript"].read_text().strip() == document["text"]
+
+    def test_an_unplaced_word_is_a_record_with_no_surface(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Text of unknown location cannot be shown to be safe, in the structure as in the string."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        consensus = next(a for a in store.activities("PREPROCESS") if a.step == "consensus")
+        floating = store.entity(
+            prov_type="word",
+            extent=None,
+            attributes={**word_attributes("unplaceable-sentinel", (0.0, 0.0), index=99), "timings": {}},
+        )
+        store.was_generated_by(floating, consensus.id)
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        document = self._consensus(result)
+        assert "unplaceable-sentinel" not in json.dumps(document)
+        assert document["n_unplaced"] == 1
+        assert next(r for r in document["records"] if r["kind"] == "unplaced")["token"] == "[UNPLACED]"
+
+    def test_a_withheld_run_releases_no_consensus_artifact_either(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The control: the new artifact is on the same release gate as the other two."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.artifacts == {}
 
 
 class TestTheRedactedStream:
