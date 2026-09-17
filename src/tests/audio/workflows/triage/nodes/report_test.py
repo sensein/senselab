@@ -267,20 +267,6 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         )
         for index, extent in enumerate(envelope_spans)
     }
-    _entity(
-        "span",
-        (3.0, 3.8),
-        {
-            "family": "phonation",
-            "member": "sustained",
-            "duration_s": 0.8,
-            "production": "voiced",
-            "voiced_fraction": 1.0,
-            "offset_criterion": "f0_stability",
-            "signal": "preemphasised",
-            "hop_s": 0.01,
-        },
-    )
     declared = (
         (("yamnet", 0.96, "Speech"), ("ast", 10.24, "Cough"), ("hear", 2.0, "Breathe"))
         if classifiers is None
@@ -415,7 +401,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         foreign = store.entity(
             prov_type="span",
             extent=(airway_unlabelled[0][0], airway_unlabelled[0][1]),
-            attributes={"family": "phonation", "label": foreign_span_label},
+            attributes={"family": "quality", "label": foreign_span_label},
         )
         store.was_generated_by(foreign, elsewhere)
         store.was_attributed_to(foreign, software)
@@ -518,11 +504,11 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         "span",
         (3.0, 3.8),
         {
-            "family": "phonation",
+            "family": "voice",
+            "role": "phonation",
             "member": "sustained",
             "production": "voiced",
             "duration_s": 0.8,
-            "onset_kind": "period",
             "offset_kind": "criterion",
             "offset_criterion": "f0_stability",
             "marks_n": 12,
@@ -885,7 +871,7 @@ class TestTheSummaryLayers:
         report(store, tmp_path / "summary", _png(tmp_path))
         kinds = [panel["type"] for panel in panels[0]]
         lanes = {panel.get("name") for panel in panels[0] if panel["type"] in {"segments", "tokens"}}
-        assert {"phonation", "speech spans", "airway", "voice"} <= lanes
+        assert {"speech spans", "airway", "voice"} <= lanes
         assert kinds.count("score_raster") == 2
         assert "waveform" in kinds
         assert panels[0][0]["twin"]["data"]

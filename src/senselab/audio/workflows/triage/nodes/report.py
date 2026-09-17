@@ -99,7 +99,6 @@ _LANE_BRANCH = {"speech spans": "SPEECH", "airway": "AIRWAY", "voice": "VOICE", 
 _LANES = (
     "envelope",
     "spans (dB over floor)",
-    "phonation",
     "yamnet labels",
     "ast labels",
     "hear labels",
@@ -322,24 +321,32 @@ def _envelope_spans(store: ProvStore) -> list[Entity]:
     return sorted(spans, key=lambda span: span.extent or (0.0, 0.0))
 
 
-def _spans_of_family(store: ProvStore, family: str, *, voice: bool | None = None) -> list[Entity]:
-    """Spans of one family, optionally only those VOICE re-timed or only those the detector proposed.
-
-    ``onset_kind`` is what tells the two phonation populations apart: VOICE writes it and the
-    detector that proposed the span (TAXONOMY, for the phonation family) does not.
+def _spans_of_family(store: ProvStore, family: str) -> list[Entity]:
+    """Spans of one family, earliest first.
 
     Args:
         store: The provenance store.
-        family: The span family.
-        voice: True for VOICE's spans only, False for the detector's own only, None for both.
+        family: The span family, as ``BRANCH_FAMILY`` names it.
 
     Returns:
         The spans, earliest first.
     """
     found = [span for span in live_entities(store, "span") if span.attributes.get("family") == family]
-    if voice is not None:
-        found = [span for span in found if ("onset_kind" in span.attributes) is voice]
     return sorted(found, key=lambda span: span.extent or (0.0, 0.0))
+
+
+def _voice_span_label(span: Entity) -> str:
+    """One VOICE span's lane label, from the role it was proposed under.
+
+    Args:
+        span: A span of the ``voice`` family.
+
+    Returns:
+        The role, qualified by the production it carries when it names one.
+    """
+    role = str(span.attributes.get("role") or "voice")
+    production = span.attributes.get("production")
+    return f"{role}/{production}" if production else role
 
 
 def _airway_span_label(span: Entity) -> str:
@@ -806,15 +813,6 @@ def _panels(
         drawn.add(_SPANS_OVERLAY)
 
     sources = _span_sources(store)
-    panels += _derived_lane(
-        "phonation",
-        [
-            (span, f"{span.attributes.get('member')}/{span.attributes.get('production')}")
-            for span in _spans_of_family(store, "phonation", voice=False)
-            if span.extent is not None
-        ],
-        sources,
-    )
     for classifier in _CLASSIFIERS:
         panels += _window_raster(store, classifier)
     panels += _airway_hear_raster(store)
@@ -849,11 +847,7 @@ def _panels(
     )
     panels += _derived_lane(
         "voice",
-        [
-            (span, f"{span.attributes.get('member')}/{span.attributes.get('onset_kind')} onset")
-            for span in _spans_of_family(store, "phonation", voice=True)
-            if span.extent is not None
-        ],
+        [(span, _voice_span_label(span)) for span in _spans_of_family(store, "voice") if span.extent is not None],
         sources,
     )
     redacted_words: list[tuple[tuple[float, float], str, object, bool]] = []
@@ -1336,7 +1330,7 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
     source_spans = {
         "AIRWAY": _envelope_spans(store),
         "SPEECH": _spans_of_family(store, "speech"),
-        "VOICE": _spans_of_family(store, "phonation", voice=True),
+        "VOICE": _spans_of_family(store, "voice"),
         "REDACT": [
             span
             for span in live_entities(store, "span")
