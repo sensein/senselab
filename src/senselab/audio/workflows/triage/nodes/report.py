@@ -1310,7 +1310,7 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
             claim = entity.attributes.get("deviation_type") or entity.attributes.get("claim")
             description = f"airway {entity.attributes.get('verb')}: {claim}"
         elif branch == "VOICE" and entity.prov_type == "span":
-            description = f"phonation: {entity.attributes.get('member')}/{entity.attributes.get('onset_kind')}"
+            description = f"voice span: {_voice_span_label(entity)}"
         elif branch == "REDACT" and entity.prov_type == "span":
             description = f"redaction: {entity.attributes.get('category')}"
         elif branch == "SPEECH" and entity.prov_type == "span":
@@ -1349,7 +1349,7 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
             elif branch == "SPEECH":
                 description = f"speech span: {span.attributes.get('attributed_to') or 'unattributed'}"
             elif branch == "VOICE":
-                description = f"phonation: {span.attributes.get('member')}/{span.attributes.get('onset_kind')}"
+                description = f"voice span: {_voice_span_label(span)}"
             else:
                 description = f"redaction: {span.attributes.get('category')}"
             by_branch[branch].append(
