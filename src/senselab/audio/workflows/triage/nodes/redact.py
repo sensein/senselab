@@ -16,6 +16,12 @@ that is ``unremediable``. The verdict's ``audio_check`` is the constant ``"bound
 the re-scan establishes that the redacted text no longer carries the finding and nothing about the
 audio. See ``specs/20260817-triage-workflow-dag/redact.md``.
 
+The masked audio is a **stream in the store**, written under ``run_dir`` and registered as
+``redacted``, so a consumer resolves it by name the way it resolves ``plain``, ``enhanced`` and
+``residual``. It is registered on every path, pass or not: ``run_dir`` is the store side of the
+disjointness check, never the release side. The released file under ``artifacts_dir`` is written
+only on a pass, and is additional to the stream rather than a replacement for it.
+
 A word carries a PII marking through a live ``assertion`` entity whose ``verb`` is ``"label"``,
 whose ``label`` is ``"pii"``, and which is ``wasDerivedFrom`` the word — the store's shared shape for
 a label. Only a pass produces a released pair; a flag withholds exactly like a fail, and the
@@ -39,9 +45,11 @@ from senselab.audio.workflows.triage.nodes.common import (
     consensus_words,
     find_measurement,
     live_entities,
+    path_attributes,
     resolve_stream,
     software_agent,
     word_hull,
+    write_stream,
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
@@ -59,6 +67,7 @@ _PII_LABEL = "pii"  # the marking SPEECH places on a word carrying a finding
 _RESERVED_CATEGORY_CHAR = "+"  # plan_redactions' merge separator; a string, not a threshold
 _UNPLACED_PLACEHOLDER = "[UNPLACED]"  # a word the store places nowhere; a category-less placeholder
 _AUDIO_CHECK = "bounded"  # what a text re-scan can claim about the audio, on every path
+STREAM_NAME = "redacted"  # the store-held name the masked audio resolves under, beside plain/enhanced/residual
 
 
 @dataclass(frozen=True)
@@ -333,6 +342,50 @@ def _write_artifacts(redacted: Audio, transcript_text: str, artifacts_dir: Path)
     return {"audio": audio_path, "transcript": transcript_path}
 
 
+def _register_redacted_stream(
+    store: ProvStore,
+    redacted: Audio,
+    *,
+    run_dir: Path,
+    activity_id: str,
+    agent_id: str,
+    source_id: str,
+    fill: str,
+) -> str:
+    """Persist the redacted audio under ``run_dir`` and register it as the stream named ``redacted``.
+
+    Args:
+        store: The provenance store.
+        redacted: The masked audio.
+        run_dir: The run directory streams live under.
+        activity_id: REDACT's ``apply`` activity.
+        agent_id: The agent answerable for it.
+        source_id: The stream the redaction was applied to.
+        fill: What was written into each extent.
+
+    Returns:
+        The stream entity's id.
+    """
+    relative, report = write_stream(redacted, run_dir, STREAM_NAME)
+    duration_s = float(redacted.waveform.shape[-1]) / float(redacted.sampling_rate)
+    stream_id = store.entity(
+        prov_type="stream",
+        extent=(0.0, duration_s),
+        attributes={
+            "name": STREAM_NAME,
+            **path_attributes(relative, run_dir),
+            "sampling_rate": redacted.sampling_rate,
+            "channels": int(redacted.waveform.shape[0]),
+            "write_gain": report.gain,
+            "fill": fill,
+        },
+    )
+    store.was_generated_by(stream_id, activity_id)
+    store.was_attributed_to(stream_id, agent_id)
+    store.was_derived_from(stream_id, source_id)
+    return stream_id
+
+
 def redact(
     store: ProvStore,
     source: str,
@@ -450,6 +503,12 @@ def redact(
         store.used(apply_act, span_id)
     for word in words:
         store.used(apply_act, word.id)
+    redacted_stream_id = _register_redacted_stream(
+        store, redacted, run_dir=run_dir, activity_id=apply_act, agent_id=software, source_id=stream_id, fill=fill
+    )
+    for span_id in span_ids:
+        store.was_derived_from(redacted_stream_id, span_id)
+    view.append(redacted_stream_id)
 
     verify_act = store.activity(node=NODE, step="verify", parameters={"required_detectors": required_detectors})
     store.was_associated_with(verify_act, software)
