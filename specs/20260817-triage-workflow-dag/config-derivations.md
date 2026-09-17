@@ -1718,6 +1718,43 @@ What would replace it: the edge-error distribution of consensus word boundaries 
 hand-marked or forced-aligned reference over many words, reported at its maximum rather than its
 median. benchmarks/open.md keeps that row.
 
+redaction.llm_check.* -- the optional re-read of the redacted transcript. enabled false: a step that
+turned itself on would make two hosts disagree about the same recording with no record of why, and
+this one needs a GPU. It can only withhold -- it never edits a released artifact and never widens a
+redaction -- so leaving it off costs nothing that the detector cascade was doing.
+
+  model_id google/gemma-4-31B-it-qat-w4a16-ct. The owner asked for "gemma4 (32b)"; there is no 32B.
+  The family is 12B / 26B-A4B / 31B / E2B / E4B, and 31B is the one meant. Both the full and the QAT
+  checkpoint exist; the arithmetic, read off the Hub's own file manifests on 2026-09-17:
+
+    google/gemma-4-31B-it              31,273,088,876 params, all BF16   62.5 GB of weights
+    google/gemma-4-31B-it-qat-w4a16-ct 4-bit packed Linear + 4.31 B BF16 23.3 GB of weights
+
+  62.5 GB of weights leaves about 17 GB on an 80 GB H100 or A100-80 for the KV cache, activations and
+  the allocator's fragmentation, and does not fit at all on the 40 GB and 48 GB parts (A100-40,
+  L40S) that make up most of what a shared cluster actually hands out. It needs two GPUs on those,
+  which turns a per-recording check into a two-GPU reservation. 23.3 GB fits every one of them with
+  room for the cache, and the QAT checkpoint is quantisation-aware trained rather than
+  post-training-quantised, so the accuracy cost is the smallest available at that size. The full
+  checkpoint stays one config override away for a host that has the memory and wants the reference
+  numbers.
+
+  max_iterations 3 -- a CONVENTION, not a fit; no convergence distribution has been measured. The
+  loop exists so the reviewer can see the effect of its own concerns, and the bound exists because a
+  model that flags something every round would otherwise never stop. 1 would make the loop a single
+  review and remove the point of it. The bound is cheap to be wrong about in the safe direction: the
+  step withholds if ANY round flagged, so a run that stops early still withholds, and raising the
+  bound can only add reasoning to the record. What would settle it: the distribution of rounds to
+  convergence over a corpus of redacted transcripts.
+
+  max_new_tokens 1024 -- the reasoning is the product, so this is not small; it is the generation
+  ceiling, not a target. timeout_s 1800 -- one review, model load included; a cold load of a 23 GB
+  checkpoint over a shared filesystem is the dominant term and has been seen to take minutes.
+
+  ref main -- the ref that is RESOLVED. It is never passed to a load: review_redacted_text calls
+  resolve_revision(model_id, ref) first and only the 40-hex commit reaches the worker. See the
+  SHA-not-ref rule in CLAUDE.md and the two allowlists in revision_pinning_guard_test.py.
+
 redaction.fill silence -- owner-directed. redact.md left this DEFERRED, and which of silence, noise
 or bleep is least damaging to the measurements taken downstream of a released artifact is still not
 measured; silence is a declared choice rather than a fitted one. It is the fill with no content of

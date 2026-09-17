@@ -16,6 +16,15 @@ that is ``unremediable``. The verdict's ``audio_check`` is the constant ``"bound
 the re-scan establishes that the redacted text no longer carries the finding and nothing about the
 audio. See ``specs/20260817-triage-workflow-dag/redact.md``.
 
+An **optional LLM check** re-reads the redacted transcript, off unless ``redaction.llm_check.enabled``
+says otherwise. It iterates — a round that flags something masks its concerns and reviews again, to
+``redaction.llm_check.max_iterations`` — and every round's chain of thought is stored as its own
+``redaction_llm_review`` measurement, which is the point of the step rather than a by-product. It can
+only **withhold**: a flag downgrades a pass to a flag, a model that could not be reached leaves the
+detector path's answer standing and is recorded ``absent`` in the verdict and named in its ``why``,
+and neither path edits a released artifact. It runs only where it could change something — never over
+an outcome the detector path already withheld.
+
 Three artifacts are released, not two: the masked audio, the flat redacted transcript, and the
 **redacted consensus stream** as ``consensus.json`` — the consensus structure PREPROCESS built, with
 each surviving word's extent, per-source timings, readings, variants and agreement share, and each
@@ -64,6 +73,7 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.stimulus import split_prompts
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import scan_for_pii
+from senselab.text.tasks.pii_detection.redaction_review import review_payload, review_redacted_text
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "REDACT"
@@ -84,6 +94,9 @@ _TERMINATORS_KEY = "stimulus.sentence_terminators"
 _EXEMPT_VERB = "exempt"  # the store's assertion verb for a redaction deliberately not made
 _EXPECTED_LABEL = "expected_speech"  # what accounted for it: the stimulus the participant was asked to read
 _EXEMPTION_MEASUREMENT = "redaction_exemptions"
+_LLM_SECTION = "redaction.llm_check"
+_LLM_REVIEW_MEASUREMENT = "redaction_llm_review"
+_LLM_PLACEHOLDER = "[LLM_{category}]"  # what a concern is masked with inside the loop, never in a release
 
 
 @dataclass(frozen=True)
@@ -583,6 +596,131 @@ def _expected_survivors(
     return attributable
 
 
+@dataclass(frozen=True)
+class _LlmCheck:
+    """What the optional reviewer established, as the verdict records it.
+
+    Attributes:
+        status: ``disabled`` when the config leaves it off, ``not_run`` when the detector path had
+            already withheld, ``absent`` when the model could not be reached, ``clean`` when it
+            read the transcript and flagged nothing, ``flagged`` when it flagged something.
+        iterations: How many reviews ran.
+        flagged: The categories the reviewer named, sorted. Categories only; the substrings and the
+            reasoning are in the per-iteration measurements, which live in the store rather than in
+            a verdict whose ``why`` is controlled vocabulary.
+        model_id: The repo asked, or the empty string when nothing was.
+        revision: The commit the reviewer loaded, or None.
+        failure: Why it did not run, when it did not.
+    """
+
+    status: str
+    iterations: int
+    flagged: tuple[str, ...]
+    model_id: str
+    revision: str | None
+    failure: str | None
+
+    def as_detail(self) -> dict[str, Any]:
+        """The mapping the verdict carries.
+
+        Returns:
+            The record, flat, so a report reads it without knowing this class.
+        """
+        return {
+            "status": self.status,
+            "iterations": self.iterations,
+            "flagged": list(self.flagged),
+            "model_id": self.model_id,
+            "revision": self.revision,
+            "failure": self.failure,
+        }
+
+
+def _llm_settings(config: TriageConfig) -> dict[str, Any]:
+    """Every ``redaction.llm_check`` key, read in one place.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        The settings.
+
+    Raises:
+        ValueError: If a key is unmeasured. Reading them together means a run that turns the step on
+            with half a configuration is refused before any model is contacted.
+    """
+    names = ("enabled", "model_id", "ref", "max_iterations", "max_new_tokens", "timeout_s")
+    return {name: config.require(f"{_LLM_SECTION}.{name}") for name in names}
+
+
+def _mask_concerns(text: str, findings: Any) -> str:  # noqa: ANN401 — the backend's own finding type
+    """Replace each concern's substring with its placeholder, for the next round only.
+
+    Args:
+        text: The text the round reviewed.
+        findings: That round's findings.
+
+    Returns:
+        The text the next round reviews. A substring the reviewer named but the text does not
+        contain is left alone: nothing is guessed at on the model's behalf.
+    """
+    masked = text
+    for finding in findings:
+        if finding.text and finding.text in masked:
+            masked = masked.replace(finding.text, _LLM_PLACEHOLDER.format(category=finding.category))
+    return masked
+
+
+def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmCheck, list[dict[str, Any]]]:
+    """Read the redacted transcript back with the reviewer, bounded, capturing every chain of thought.
+
+    The loop is here rather than in the model: one review per call, and a round that flags something
+    masks it and reviews again, so the reviewer sees the effect of its own concerns. The masking is
+    local to the loop — nothing it produces is released — and whether **any** round flagged is what
+    decides the check, not whether the last one did.
+
+    Args:
+        transcript_text: The redacted transcript, as it would be released.
+        settings: :func:`_llm_settings`' mapping.
+
+    Returns:
+        ``(check, reviews)`` — the summary and one payload per round, in order. A round that could
+        not run is recorded as such; the first round failing is ``absent``, a later one leaves the
+        flag that already stands and records the failure beside it.
+    """
+    reviews: list[dict[str, Any]] = []
+    current = transcript_text
+    flagged: list[str] = []
+    model_id = str(settings["model_id"])
+    revision: str | None = None
+    for iteration in range(1, int(settings["max_iterations"]) + 1):
+        result = review_redacted_text(
+            current,
+            model_id=model_id,
+            ref=str(settings["ref"]),
+            max_new_tokens=int(settings["max_new_tokens"]),
+            timeout_s=int(settings["timeout_s"]),
+        )
+        reviews.append({**review_payload(result), "iteration": iteration})
+        revision = result.revision or revision
+        if not result.available:
+            if flagged:
+                return (
+                    _LlmCheck("flagged", iteration, tuple(sorted(set(flagged))), model_id, revision, result.failure),
+                    reviews,
+                )
+            return _LlmCheck("absent", iteration, (), model_id, revision, result.failure), reviews
+        if not result.findings:
+            status = "flagged" if flagged else "clean"
+            return _LlmCheck(status, iteration, tuple(sorted(set(flagged))), model_id, revision, None), reviews
+        flagged.extend(finding.category for finding in result.findings)
+        current = _mask_concerns(current, result.findings)
+    return (
+        _LlmCheck("flagged", int(settings["max_iterations"]), tuple(sorted(set(flagged))), model_id, revision, None),
+        reviews,
+    )
+
+
 def _write_artifacts(
     redacted: Audio,
     transcript_text: str,
@@ -700,7 +838,8 @@ def redact(
     Raises:
         ValueError: If ``redaction.fill`` has no value, if ``redaction.padding_ms`` has no usable
             value (see :func:`_padding_ms`), if ``artifacts_dir`` and ``run_dir`` contain one
-            another, if the store carries no PII scan measurement (N15) — an incoherent store, as
+            another, if any ``redaction.llm_check`` key is unmeasured, if the store carries no PII
+            scan measurement (N15) — an incoherent store, as
             distinct from a complete store with nothing to scan, which concludes — or if a finding's
             category is unusable (see :func:`_extents_from_findings`).
         LookupError: If no live stream carries ``source``.
@@ -891,6 +1030,57 @@ def redact(
                 f"every finding redacted except {len(exemptions)} the declared stimulus accounts for; "
                 "the redacted transcript carries nothing else"
             )
+
+    llm_settings = _llm_settings(config)
+    if outcome is not Outcome.PASS:
+        llm = _LlmCheck("not_run", 0, (), "", None, "the detector path withheld; there was nothing to release")
+        reviews: list[dict[str, Any]] = []
+    elif not llm_settings["enabled"]:
+        llm = _LlmCheck("disabled", 0, (), "", None, None)
+        reviews = []
+    else:
+        llm, reviews = _llm_check(transcript_text, llm_settings)
+    review_act: str | None = None
+    if llm.status not in ("disabled", "not_run"):
+        review_act = store.activity(
+            node=NODE,
+            step="llm_check",
+            parameters={"model_id": llm.model_id, "max_iterations": int(llm_settings["max_iterations"])},
+        )
+        store.was_associated_with(review_act, software)
+        if llm.revision is not None:
+            store.was_associated_with(
+                review_act, store.agent(agent_type="model", model_id=llm.model_id, commit_sha=llm.revision)
+            )
+        else:
+            store.was_associated_with(
+                review_act,
+                store.agent(
+                    agent_type="model",
+                    model_id=llm.model_id,
+                    unresolved_reason=llm.failure or "the reviewer did not load",
+                ),
+            )
+        if consensus is not None:
+            store.used(review_act, consensus.id)
+        for span_id in span_ids:
+            store.used(review_act, span_id)
+        for review in reviews:
+            review_id = store.entity(
+                prov_type="measurement",
+                extent=None,
+                attributes={"name": _LLM_REVIEW_MEASUREMENT, "signal": "redacted_transcript", **review},
+            )
+            store.was_generated_by(review_id, review_act)
+            store.was_attributed_to(review_id, software)
+            view.append(review_id)
+
+    if outcome is Outcome.PASS and llm.status == "flagged":
+        outcome = Outcome.FLAG
+        why = "the llm check flagged residue on the redacted transcript: " + ", ".join(llm.flagged)
+    elif outcome is Outcome.PASS and llm.status == "absent":
+        why = f"{why}; the llm check was enabled and did not run ({llm.failure})"
+    if outcome is Outcome.PASS:
         artifacts = _write_artifacts(redacted, transcript_text, records, artifacts_dir)
     verdict_id, verdict = write_verdict(
         store,
@@ -913,6 +1103,7 @@ def redact(
             "expected_exempt_by_category": dict(Counter(exemption.category for exemption in exemptions)),
             "expected_survivors": attributed,
             "expected_speech_declared": bool(units),
+            "llm_check": llm.as_detail(),
             "replanned_n": replanned_n,
             "scan_failed": scan_failed,
             "scan_missing": scan_missing,

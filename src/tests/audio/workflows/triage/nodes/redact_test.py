@@ -24,6 +24,7 @@ from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME, redact
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
+from senselab.text.tasks.pii_detection.redaction_review import ReviewFinding, ReviewResult, parse_completion
 from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
@@ -1358,6 +1359,343 @@ class TestTheRedactedConsensusArtifact:
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.artifacts == {}
+
+
+LLM_ON = "redaction:\n  padding_ms: 50\n  fill: silence\n  llm_check:\n    enabled: true\n"
+
+
+def _stub_review(monkeypatch: pytest.MonkeyPatch, rounds: Sequence[ReviewResult]) -> list[str]:
+    """Replace the node's reviewer with one answer per round, recording every text it was handed."""
+    seen: list[str] = []
+    remaining = list(rounds)
+
+    def _fake(text: str, **kw: Any) -> ReviewResult:  # noqa: ANN401
+        seen.append(text)
+        assert remaining, "the node reviewed more times than the test declared answers for"
+        return remaining.pop(0)
+
+    monkeypatch.setattr(redact_module, "review_redacted_text", _fake)
+    return seen
+
+
+def _clean(reasoning: str = "Nothing here identifies the speaker.") -> ReviewResult:
+    """A round that ran and flagged nothing."""
+    return ReviewResult(available=True, reasoning=reasoning, model_id="stub/model", revision="a" * 40)
+
+
+def _flags(
+    *findings: ReviewFinding, reasoning: str = "A date and a street together locate one person."
+) -> ReviewResult:
+    """A round that ran and flagged something."""
+    return ReviewResult(
+        available=True,
+        reasoning=reasoning,
+        findings=list(findings),
+        model_id="stub/model",
+        revision="a" * 40,
+    )
+
+
+def _reviews(store: ProvStore) -> list[Entity]:
+    """Every captured review measurement, in write order."""
+    return [e for e in store.entities("measurement") if e.attributes.get("name") == "redaction_llm_review"]
+
+
+class TestTheLlmCheckIsOffUnlessAskedFor:
+    """A step that turns itself on would make two hosts disagree with no record of why."""
+
+    def test_the_packaged_config_leaves_it_disabled(self) -> None:
+        """The default is off, and the other keys are present so an override may only flip one."""
+        cfg = load_triage_config()
+        assert cfg.require("redaction.llm_check.enabled") is False
+        assert cfg.require("redaction.llm_check.model_id") == "google/gemma-4-31B-it-qat-w4a16-ct"
+        assert cfg.require("redaction.llm_check.ref") == "main"
+        assert cfg.require("redaction.llm_check.max_iterations") == 3
+
+    def test_a_disabled_check_contacts_nothing_and_says_so(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Off means no subprocess, no venv build, and a verdict that records the absence as a choice."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        seen = _stub_review(monkeypatch, [])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert seen == []
+        assert result.verdict.outcome is Outcome.PASS
+        assert _verdict_entity(store, "REDACT").attributes["llm_check"]["status"] == "disabled"
+        assert _reviews(store) == []
+
+    def test_it_is_not_run_when_the_detector_path_already_withheld(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """It can only withhold, so there is nothing for it to decide over a withheld artifact."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        seen = _stub_review(monkeypatch, [])
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.FAIL
+        assert seen == []
+        assert _verdict_entity(store, "REDACT").attributes["llm_check"]["status"] == "not_run"
+
+
+class TestTheLlmCheckIterates:
+    """It reviews, and a round that flags something reviews again on the masked text."""
+
+    def test_a_clean_first_round_stops_there_and_releases(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One review is the whole loop when nothing is flagged."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        seen = _stub_review(monkeypatch, [_clean()])
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert seen == ["hello [PERSON]"], "the reviewer reads the redacted transcript, not the source"
+        assert result.verdict.outcome is Outcome.PASS
+        check = _verdict_entity(store, "REDACT").attributes["llm_check"]
+        assert check["status"] == "clean" and check["iterations"] == 1
+
+    def test_a_flagged_round_reviews_again_on_the_masked_text(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The reviewer sees the effect of its own concern; that is what the loop is for."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["born", "in", "belmont"], findings=[("PERSON", (0.0, 0.5))])
+        _stub_pii(monkeypatch, findings=[])
+        seen = _stub_review(
+            monkeypatch,
+            [_flags(ReviewFinding(text="belmont", category="LOCATION", why="a town with one clinic")), _clean()],
+        )
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert seen == ["[PERSON] in belmont", "[PERSON] in [LLM_LOCATION]"]
+        assert result.verdict.outcome is Outcome.FLAG, "a concern raised and then masked is still a concern"
+        assert result.artifacts == {}
+
+    def test_the_loop_is_bounded_by_the_config_key(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A reviewer that flags something every round must stop, and the bound is declared."""
+        config = _override(tmp_path, LLM_ON + "    max_iterations: 2\n")
+        _seed_redact_store(store, tmp_path, words=["born", "in", "belmont"], findings=[("PERSON", (0.0, 0.5))])
+        _stub_pii(monkeypatch, findings=[])
+        forever = _flags(ReviewFinding(text="in", category="OTHER", why="still uneasy"))
+        seen = _stub_review(monkeypatch, [forever, forever, forever])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert len(seen) == 2
+        check = _verdict_entity(store, "REDACT").attributes["llm_check"]
+        assert check["status"] == "flagged" and check["iterations"] == 2
+
+    def test_a_named_substring_the_text_does_not_carry_is_left_alone(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A model that hallucinates a substring must not make the next round's text a guess."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        seen = _stub_review(
+            monkeypatch,
+            [_flags(ReviewFinding(text="nowhere-in-the-text", category="OTHER", why="invented")), _clean()],
+        )
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert seen == ["hello [PERSON]", "hello [PERSON]"]
+
+
+class TestTheChainOfThoughtIsCaptured:
+    """The reasoning is the product of the step, not a by-product of it."""
+
+    def test_every_round_reasoning_reaches_the_store(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One measurement per round, carrying that round's reasoning verbatim."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["born", "in", "belmont"], findings=[("PERSON", (0.0, 0.5))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(
+            monkeypatch,
+            [
+                _flags(
+                    ReviewFinding(text="belmont", category="LOCATION", why="a town with one clinic"),
+                    reasoning="The town name narrows the population to a few thousand.",
+                ),
+                _clean(reasoning="With the town masked, nothing remains."),
+            ],
+        )
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        rounds = _reviews(store)
+        assert [e.attributes["iteration"] for e in rounds] == [1, 2]
+        assert rounds[0].attributes["reasoning"] == "The town name narrows the population to a few thousand."
+        assert rounds[1].attributes["reasoning"] == "With the town masked, nothing remains."
+        assert rounds[0].attributes["findings"][0]["why"] == "a town with one clinic"
+
+    def test_the_review_activity_names_the_model_at_its_commit(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A captured chain of thought nobody can attribute to a commit is not evidence."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(monkeypatch, [_clean()])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        activity = next(a for a in store.activities("REDACT") if a.step == "llm_check")
+        agents = [store.get_agent(a) for a in store.associated_with(activity.id)]
+        model = next(agent for agent in agents if agent.agent_type == "model")
+        assert model.commit_sha == "a" * 40
+        assert _verdict_entity(store, "REDACT").attributes["llm_check"]["revision"] == "a" * 40
+
+    def test_the_report_surfaces_the_reasoning(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Captured in the store and unreachable from the report is captured nowhere a reader looks."""
+        from senselab.audio.workflows.triage.nodes.report import _llm_check_lines, _llm_reviews
+
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["born", "in", "belmont"], findings=[("PERSON", (0.0, 0.5))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(
+            monkeypatch,
+            [
+                _flags(
+                    ReviewFinding(text="belmont", category="LOCATION", why="a town with one clinic"),
+                    reasoning="The town name narrows the population to a few thousand.",
+                ),
+                _clean(reasoning="With the town masked, nothing remains."),
+            ],
+        )
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        check = _verdict_entity(store, "REDACT").attributes["llm_check"]
+        text = "\n".join(_llm_check_lines(check, _llm_reviews(store)))
+        assert "The town name narrows the population to a few thousand." in text
+        assert "With the town masked, nothing remains." in text
+        assert "concern [LOCATION]: a town with one clinic" in text
+        assert "llm check: flagged" in text
+
+
+class TestTheLlmCheckDegradesHonestly:
+    """A model that could not be reached never reads as a model that found nothing."""
+
+    def test_an_unavailable_model_is_recorded_absent_and_does_not_crash(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The node concludes; the verdict names the failure; the detector path's answer stands."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(
+            monkeypatch,
+            [ReviewResult(available=False, failure="OSError: no such model", model_id="stub/model")],
+        )
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.PASS
+        check = _verdict_entity(store, "REDACT").attributes["llm_check"]
+        assert check["status"] == "absent" and check["failure"] == "OSError: no such model"
+        assert "the llm check was enabled and did not run" in result.verdict.why
+
+    def test_an_absent_model_is_never_a_silent_pass(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The absence is an entity as well as a sentence, so a reader who skips the why still sees it."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(monkeypatch, [ReviewResult(available=False, failure="timeout", model_id="stub/model")])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        [round_one] = _reviews(store)
+        assert round_one.attributes["available"] is False
+        assert round_one.attributes["failure"] == "timeout"
+        activity = next(a for a in store.activities("REDACT") if a.step == "llm_check")
+        model = next(
+            store.get_agent(a) for a in store.associated_with(activity.id) if store.get_agent(a).agent_type == "model"
+        )
+        assert model.commit_sha is None and model.unresolved_reason == "timeout"
+
+    def test_a_model_lost_after_it_already_flagged_keeps_the_flag(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A concern already raised is not withdrawn because the next round could not run."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["born", "in", "belmont"], findings=[("PERSON", (0.0, 0.5))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(
+            monkeypatch,
+            [
+                _flags(ReviewFinding(text="belmont", category="LOCATION", why="a town with one clinic")),
+                ReviewResult(available=False, failure="CUDA out of memory", model_id="stub/model"),
+            ],
+        )
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.FLAG
+        check = _verdict_entity(store, "REDACT").attributes["llm_check"]
+        assert check["status"] == "flagged" and check["failure"] == "CUDA out of memory"
+
+
+class TestTheReviewerParsesWhatItIsGiven:
+    """The backend's own parsing, with no model anywhere near it."""
+
+    def test_reasoning_survives_a_missing_findings_array(self) -> None:
+        """The reasoning is the product; a malformed array must not discard it."""
+        reasoning, findings = parse_completion("REASONING: nothing identifying remains.")
+        assert reasoning == "nothing identifying remains."
+        assert findings == []
+
+    def test_a_findings_array_is_read_and_the_reasoning_kept_apart(self) -> None:
+        """Both halves come back, and the headings do not leak into either."""
+        reasoning, findings = parse_completion(
+            'REASONING: the town narrows it.\nFINDINGS: [{"text": "belmont", "category": "location", '
+            '"why": "one clinic"}]'
+        )
+        assert reasoning == "the town narrows it."
+        assert [(f.text, f.category, f.why) for f in findings] == [("belmont", "LOCATION", "one clinic")]
+
+    def test_a_quoted_placeholder_in_the_reasoning_does_not_truncate_it(self) -> None:
+        """The reasoning quotes the transcript's own [CATEGORY] tokens; splitting on those loses it."""
+        reasoning, findings = parse_completion(
+            "REASONING: the [PERSON] token already covers the name, so nothing remains.\nFINDINGS: []"
+        )
+        assert reasoning == "the [PERSON] token already covers the name, so nothing remains."
+        assert findings == []
+
+    def test_an_unparsable_array_yields_no_findings_rather_than_raising(self) -> None:
+        """A chatty model is not an unreachable one, and neither is a broken one a clean one."""
+        reasoning, findings = parse_completion("REASONING: hmm.\nFINDINGS: [not json at all}")
+        assert reasoning == "hmm." and findings == []
 
 
 class TestTheRedactedStream:
