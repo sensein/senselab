@@ -106,6 +106,31 @@ class TestTheReferenceStandardIsNotARouter:
             assert names or branch in declaration_only
 
 
+class TestDDKIsRoutedByTheDeclarationAndNothingElse:
+    """The two content gates were removed once ``routing.declaration_required`` decided the route."""
+
+    def test_ddk_names_no_gate_and_no_flag(self, ruleset: Ruleset) -> None:
+        """A named gate would be a second route into a branch the declaration is supposed to decide."""
+        assert ruleset.branch_gates["DDK"] == ()
+        assert ruleset.branch_flags["DDK"] == ()
+
+    def test_the_configuration_defines_no_ddk_gate_to_name(self, ruleset: Ruleset) -> None:
+        """A definition left behind is a gate another branch could pick up by accident."""
+        assert [name for name in ruleset.gates if name.startswith("ddk.")] == []
+
+    def test_no_reading_of_any_recording_routes_ddk(self, ruleset: Ruleset) -> None:
+        """Every feature a removed gate read, at a value that used to fire, now routes nothing."""
+        record = _features(
+            "diadochokinesis-pataka",
+            transcript="pa ta ka " * 12,
+            ppg={"silent_fraction": 0.0, "segment_rate_per_s": 14.70},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert "DDK" not in result.routed
+        assert result.gate_outcomes.keys() == set(ruleset.gates)
+        assert not [name for name in result.gate_outcomes if name.startswith("ddk.")]
+
+
 class TestEachGateFiresAndDoesNot:
     """Every gate, at and under its own threshold."""
 
