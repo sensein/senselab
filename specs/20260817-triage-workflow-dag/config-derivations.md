@@ -1691,11 +1691,39 @@ a flag. A consensus word the store places nowhere overlaps no planned extent, so
 [UNPLACED] rather than verbatim and counted in unplaced_words_n -- text of unknown location cannot
 be shown to be safe.
 
-redaction.fill -- redact.md leaves this DEFERRED: which of silence, noise or bleep is least damaging
-to the measurements taken downstream of a released artifact has not been measured, so the key ships
-null and a run must declare the fill it used. silence and bleep are implemented; noise raises rather
-than shipping an unmeasured spectral shape, because "speech-shaped" names a shaping nobody here has
-fitted. redaction.bleep_hz 1000.0 is the conventional broadcast censor tone -- a presentation
+redaction.padding_ms 250 -- a CONVENTION, not a fit. No word-boundary error distribution has been
+measured for this workflow's recognizer set, so nothing here is a fitted quantile and the number is
+not presented as one. What it has to cover is the residual error between the finding's extent and
+the token's true acoustic boundary. That extent is already the hull of every recognizer's own
+placement (SPEECH's _timings_hull, and word_hull on the re-planning path), so inter-recognizer
+disagreement is absorbed before the margin is applied; the margin covers what the hull still misses.
+The arithmetic that bounds it:
+
+  - below 20 ms it would not clear timestamp quantisation alone. Whisper-family decoders emit word
+    timestamps on a 20 ms token grid over a 10 ms feature hop, and the Qwen3-ASR timings are on a
+    comparable grid, so any margin under one grid step is inside the recognizers' own rounding.
+  - 250 ms is above the ~200 ms tail that published forced-alignment-versus-ASR word-boundary
+    comparisons report for the bulk of English read speech. That is literature, not a measurement
+    taken here, and it is the reason this is a convention: the tail beyond it is exactly the
+    unquantified part.
+  - it is below the ~400 ms mean English word duration, so a margin this size does not, on average,
+    consume a whole further word at each edge. It routinely reaches INTO the neighbours, which is
+    why the design pads and merges rather than trying to be surgical -- in continuous speech the
+    inter-word gap is often zero, so there is no margin that does not touch a neighbour. What bounds
+    the margin from above is how much of the rest of the recording stays intelligible, not whether a
+    neighbour survives; between an audible fragment of a name and a clipped neighbour, only one is
+    recoverable, and the margin is chosen on that asymmetry.
+
+What would replace it: the edge-error distribution of consensus word boundaries against a
+hand-marked or forced-aligned reference over many words, reported at its maximum rather than its
+median. benchmarks/open.md keeps that row.
+
+redaction.fill silence -- owner-directed. redact.md left this DEFERRED, and which of silence, noise
+or bleep is least damaging to the measurements taken downstream of a released artifact is still not
+measured; silence is a declared choice rather than a fitted one. It is the fill with no content of
+its own: zeros add no energy at any frequency, so a downstream measure over a redacted stream reads
+a gap rather than an artefact it has to model. noise raises rather than shipping an unmeasured
+spectral shape, because "speech-shaped" names a shaping nobody here has fitted. redaction.bleep_hz 1000.0 is the conventional broadcast censor tone -- a presentation
 choice, declared rather than defaulted silently, and not fitted. The bleep is scaled to the
 extent's own PEAK, so its RMS is peak/sqrt(2) and the masked extent comes out louder than what it
 replaced by that extent's crest factor over sqrt(2): measured 1.00x on a pure tone and 3.19x on
@@ -1776,9 +1804,6 @@ viewer that scrolls rather than pages.
 Keys deliberately left null, and what each one owes.
 
 UNSET, and why -- benchmarks/open.md carries each of these:
-  redaction.padding_ms: must exceed the *worst* consensus-word edge error, which is unquantified. The
-    median will not do -- of the two boundary failures, an audible fragment of a name and a clipped
-    neighbour, only one is recoverable.
   speech.second_diarizer: no measured ranking of second diarizers exists; while null, a count of
     not-1 records second_diarizer "not_consulted" and still flags.
   speech.target_match_cosine: no similarity threshold has been derived; a hint carrying a target

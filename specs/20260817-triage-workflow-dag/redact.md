@@ -49,8 +49,9 @@ safe to release, and a non-target speaker naming the participant is exactly as u
 Word edges are the consensus ASR word extents and carry their own temporal confidence and timing
 source count. A boundary off by 100 ms either leaves a fragment of a name audible or clips the
 neighbouring word, and only one of those two failures is recoverable. So every redacted extent is
-**padded outward** by `policy.padding_ms`, chosen to exceed the worst measured consensus-word edge
-error rather than the median. Two words whose padded extents overlap are merged into one redaction.
+**padded outward** by `redaction.padding_ms`, which must exceed the worst consensus-word edge error
+rather than the median. It ships at 250 ms as a convention; config-derivations.md states the
+arithmetic that bounds it and says plainly that it is not a fit. Two words whose padded extents overlap are merged into one redaction.
 
 ## The fill is configurable
 
@@ -149,5 +150,5 @@ Derivations live in [`benchmarks/`](benchmarks/).
 
 | key | what is owed |
 | --- | --- |
-| `redaction.fill` | which of `silence`, `noise`, `bleep` is least damaging to downstream measurement; **deferred**, no default |
-| `redaction.padding_ms` | a positive floor exceeding the worst measured consensus-word edge error; **null** |
+| `redaction.fill` | which of `silence`, `noise`, `bleep` is least damaging to downstream measurement is still unmeasured. `silence` now **ships** as an owner-directed declared choice, not as the answer to that question |
+| `redaction.padding_ms` | a positive floor exceeding the worst measured consensus-word edge error. 250 ms now **ships** as a stated convention; the fit — the edge-error distribution at its maximum — is still owed (benchmarks/open.md) |

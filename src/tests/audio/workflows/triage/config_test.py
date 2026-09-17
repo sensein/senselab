@@ -61,6 +61,17 @@ class TestMeasuredValues:
         assert cfg.require("floor.percentile") == 5.0
         assert cfg.require("phonation.periods_per_window") == 4.5
 
+    def test_the_redaction_margin_and_fill_ship_values_so_redact_can_run(self) -> None:
+        """Both were null, and REDACT `require`s both, so the node died on every recording with PII.
+
+        Pinned as values rather than as "not null": a margin that silently became 0 would plan
+        unpadded extents and still read as configured, and a fill that silently became bleep would
+        write a tone where the design says zeros.
+        """
+        cfg = load_triage_config()
+        assert cfg.require("redaction.padding_ms") == 250
+        assert cfg.require("redaction.fill") == "silence"
+
     def test_the_required_detectors_are_the_pii_modules_own_inventory(self) -> None:
         """``pii.required_detectors`` is a vocabulary read off the module, not a fitted subset.
 
@@ -104,7 +115,7 @@ class TestUnsetValues:
         """The error names the open-questions file."""
         cfg = load_triage_config()
         with pytest.raises(ValueError, match="benchmarks/open.md"):
-            cfg.require("redaction.padding_ms")
+            cfg.require("quality.stoi_floor")
 
     def test_every_unset_value_is_null_rather_than_absent(self) -> None:
         """Absent is a typo; null is a decision not yet taken."""
@@ -112,7 +123,6 @@ class TestUnsetValues:
         for path in (
             "phonation.hnr_floor_interval_db",
             "phonation.rms_floor_interval",
-            "redaction.padding_ms",
             "speech.second_diarizer",
             "quality.stoi_floor",
             "taxonomy.speech_labels",
@@ -135,9 +145,9 @@ class TestOverrides:
     def test_an_override_supplies_an_unset_value(self, tmp_path: Path) -> None:
         """An override can supply what nobody had measured."""
         override = tmp_path / "o.yaml"
-        override.write_text("redaction:\n  padding_ms: 250\n")
+        override.write_text("quality:\n  stoi_floor: 0.75\n")
         cfg = load_triage_config(override)
-        assert cfg.require("redaction.padding_ms") == 250
+        assert cfg.require("quality.stoi_floor") == 0.75
 
     def test_an_override_changes_the_hash(self, tmp_path: Path) -> None:
         """Two different merged mappings never share a hash."""
