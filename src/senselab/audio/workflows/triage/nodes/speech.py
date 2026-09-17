@@ -1380,6 +1380,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     )
     store.was_associated_with(expect, software)
     store.used(expect, consensus.id)
+
     def _align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
         """Bind the loaded derivatives to the in-family mode."""
         return align_speech(task_family, store, hint, params, reads=reads)
