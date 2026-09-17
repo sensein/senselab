@@ -454,7 +454,7 @@ ROUND_TRIP_VALUES: dict[str, tuple[Any, Any]] = {
     "kind": ("speech", None),
     "conformance": (False, UNDETERMINED),
     "conformance_of": (TASK, STORE_ASSERTIONS),
-    "deviations": (("clipping",), ()),
+    "deviations": (("omission",), ()),
     "unmeasured": (("branch.target_match_cosine",), ()),
     "in_family": (True, False),
 }
