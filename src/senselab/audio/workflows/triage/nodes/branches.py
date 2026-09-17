@@ -49,10 +49,10 @@ UNKNOWN_TASK = "unknown"
 RECORDING_STREAM = "recording"
 """The stream entity ADMIT writes, whose ``path`` is the only in-store carrier of the declaration."""
 
-BRANCHES = ("AIRWAY", "SPEECH", "VOICE", "DDK")
-"""The four branches this module serves, in the vocabulary's own spelling."""
+BRANCHES = ("AIRWAY", "SPEECH", "VOICE")
+"""The three branches this module serves, in the vocabulary's own spelling."""
 
-BRANCH_FAMILY = {"AIRWAY": "airway", "SPEECH": "speech", "VOICE": "voice", "DDK": "ddk"}
+BRANCH_FAMILY = {"AIRWAY": "airway", "SPEECH": "speech", "VOICE": "voice"}
 """Branch name to the lowercase span family it, and only it, may propose into."""
 
 Done = bool | Literal["UNDETERMINED"]
@@ -235,7 +235,6 @@ PROPOSERS: dict[str, Propose] = {branch: proposer(family) for branch, family in 
 airway_span = PROPOSERS["AIRWAY"]
 speech_span = PROPOSERS["SPEECH"]
 voice_span = PROPOSERS["VOICE"]
-ddk_span = PROPOSERS["DDK"]
 quality_span = proposer("quality")
 """QUALITY is not a routed branch and has only the detect mode, so it is not in :data:`PROPOSERS`."""
 
@@ -478,7 +477,6 @@ class Pattern(Enum):
     ORDERED_TOKENS = "ordered_tokens"
     FREE_RESPONSE = "free_response"
     ITEM_LIST = "item_list"
-    NO_LEXICAL = "no_lexical"
     SUSTAINED = "sustained"
     GLIDE = "glide"
     EFFORT = "effort"
@@ -624,12 +622,6 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
     ),
     "loudness": Expectation(pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey", "hey"), expected_event_count=3),
     "loudness-v2": Expectation(pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey"), expected_event_count=2),
-    "diadochokinesis-buttercup": Expectation(
-        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",) * 10, expected_event_count=10, emit_filler=False
-    ),
-    "diadochokinesis-v2-buttercup": Expectation(
-        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), declared_duration_s=5.0, emit_filler=False
-    ),
     "free-speech": Expectation(
         pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text", anti_pattern="verbatim_prompt"
     ),
@@ -671,11 +663,37 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
         repetition_from_category=True,
         unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
     ),
+    "diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("labial",), expected_event_count=10),
+    "diadochokinesis-ta": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("alveolar",), expected_event_count=10),
+    "diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("velar",), expected_event_count=10),
+    "diadochokinesis-v2-puh": Expectation(
+        pattern=Pattern.SYLLABLE_TRAIN, sequence=("labial",), declared_duration_s=5.0
+    ),
+    "diadochokinesis-v2-tuh": Expectation(
+        pattern=Pattern.SYLLABLE_TRAIN, sequence=("alveolar",), declared_duration_s=5.0
+    ),
+    "diadochokinesis-v2-kuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("velar",), declared_duration_s=5.0),
+    "diadochokinesis-pataka": Expectation(
+        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), expected_event_count=30
+    ),
+    "diadochokinesis-v2-puhtuhkuh": Expectation(
+        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), declared_duration_s=5.0
+    ),
+    "diadochokinesis-buttercup": Expectation(
+        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), expected_event_count=10
+    ),
+    "diadochokinesis-v2-buttercup": Expectation(
+        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), declared_duration_s=5.0
+    ),
 }
-"""SPEECH's 31 in-family rows: ``LEXICAL_SPEECH`` (21) plus ``SYLLABLE_REPETITION`` (10)."""
+"""SPEECH's 31 in-family rows: ``LEXICAL_SPEECH`` (21) plus ``SYLLABLE_REPETITION`` (10).
 
-for _family in sorted(SYLLABLE_REPETITION - {"diadochokinesis-buttercup", "diadochokinesis-v2-buttercup"}):
-    SPEECH_EXPECTATIONS[_family] = Expectation(pattern=Pattern.NO_LEXICAL)
+The ten syllable-repetition rows are the instruction each ``diadochokinesis-*`` task actually gives:
+a train of one place, a cycle of three, or ten repetitions of a word. Every non-lexical row names
+the place its instruction asks for, so a one-syllable train and a sequential one are read by the
+same body with ``len(sequence)`` as the cycle. The two ``buttercup`` rows name a word instead and
+take the lexical route. ``specs/20260817-triage-workflow-dag/ddk-dissolved-into-speech.md``.
+"""
 
 AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
     "respiration-and-cough-cough": Expectation(pattern=Pattern.EVENT_SERIES, label_set="cough", expected_event_count=5),
@@ -741,55 +759,22 @@ AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
 }
 """AIRWAY's eleven in-family rows: ``AIRWAY_ELICITING``."""
 
-DDK_EXPECTATIONS: dict[str, Expectation] = {
-    "diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("labial",), expected_event_count=10),
-    "diadochokinesis-ta": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("alveolar",), expected_event_count=10),
-    "diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("velar",), expected_event_count=10),
-    "diadochokinesis-v2-puh": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN, sequence=("labial",), declared_duration_s=5.0
-    ),
-    "diadochokinesis-v2-tuh": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN, sequence=("alveolar",), declared_duration_s=5.0
-    ),
-    "diadochokinesis-v2-kuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("velar",), declared_duration_s=5.0),
-    "diadochokinesis-pataka": Expectation(
-        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), expected_event_count=30
-    ),
-    "diadochokinesis-v2-puhtuhkuh": Expectation(
-        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), declared_duration_s=5.0
-    ),
-    "diadochokinesis-buttercup": Expectation(
-        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), expected_event_count=10
-    ),
-    "diadochokinesis-v2-buttercup": Expectation(
-        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), declared_duration_s=5.0
-    ),
-}
-"""DDK's ten in-family rows: ``SYLLABLE_REPETITION``.
-
-Every non-lexical row names the place its instruction asks for, so a one-syllable train and a
-sequential one are read by the same code with ``len(sequence)`` as the cycle. The two
-``buttercup`` rows name a word instead and take the lexical route.
-"""
-
 EXPECTATIONS: dict[str, dict[str, Expectation]] = {
     "AIRWAY": AIRWAY_EXPECTATIONS,
     "SPEECH": SPEECH_EXPECTATIONS,
     "VOICE": VOICE_EXPECTATIONS,
-    "DDK": DDK_EXPECTATIONS,
 }
-"""58 rows over 48 declared families: the whole in-family membership test, as data.
+"""48 rows over 48 declared families: the whole in-family membership test, as data.
 
-The ten ``SYLLABLE_REPETITION`` families are in family for both SPEECH and DDK, and that is not an
-overlap to resolve: SPEECH's expectation over them is *no lexical content*, DDK's is *a syllable
-train*, and neither is the other's.
+One row per family, and the ten ``SYLLABLE_REPETITION`` families are SPEECH's like every other
+speaking task: what the instruction asked for is a syllable train, or a cycle of three, or a word
+said ten times.
 """
 
 REFERENCE_FAMILY_SET: dict[str, frozenset[str]] = {
     "AIRWAY": AIRWAY_ELICITING,
     "SPEECH": SPEECH_ELICITING,
     "VOICE": VOICE_ELICITING,
-    "DDK": SYLLABLE_REPETITION,
 }
 """Each branch's in-family family set, as ``families.py`` declares it.
 
@@ -1030,12 +1015,10 @@ POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "echo_overlap_max": float,
     "verbatim_overlap_max": float,
     "coverage_min": float,
-    "expected_lexical_max": int,
     "interval_max_s": float,
     "modulation_band_hz": _band,
     "rate_prominence_min": float,
     "train_min_s": float,
-    "repeat_min_occurrences": int,
     "burst_window_ms": float,
     "place_centroid_bands_hz": _bands,
     "place_margin_db": float,
@@ -1182,12 +1165,10 @@ PARAM_KEYS = (
     "echo_overlap_max",
     "verbatim_overlap_max",
     "coverage_min",
-    "expected_lexical_max",
     "interval_max_s",
     "modulation_band_hz",
     "rate_prominence_min",
     "train_min_s",
-    "repeat_min_occurrences",
     "burst_window_ms",
     "place_margin_db",
     "effort_split_hz",

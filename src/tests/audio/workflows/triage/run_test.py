@@ -9,7 +9,9 @@ lives in the per-node suites.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
+import re
 import sys
 import types
 from dataclasses import replace
@@ -129,13 +131,15 @@ def _tone() -> Audio:
     return Audio(waveform=torch.linspace(-0.5, 0.5, 16000).unsqueeze(0), sampling_rate=16000)
 
 
-def _evaluation(routed: tuple[str, ...], state: RouteState) -> RouteEvaluation:
+def _evaluation(
+    routed: tuple[str, ...], state: RouteState, declared: tuple[str, ...] = (), family: str = ""
+) -> RouteEvaluation:
     """One ruleset reading, standing in for the reduction the real ROUTING would run."""
     return RouteEvaluation(
         stem="recording",
-        family="",
+        family=family,
         routed=routed,
-        declared=(),
+        declared=declared,
         agreed=(),
         missed=(),
         extra=(),
@@ -310,10 +314,16 @@ def graph(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[str]]:
     def _install(
         routed: tuple[str, ...] = ("AIRWAY", "SPEECH", "VOICE"),
         route_state: RouteState = RouteState.ROUTED,
+        declared: tuple[str, ...] = (),
+        family: str = "",
         **kwargs: Any,  # noqa: ANN401
     ) -> list[str]:
         calls: list[str] = []
-        monkeypatch.setattr(routing_module, "evaluate_live_routes", lambda *a, **k: _evaluation(routed, route_state))
+        monkeypatch.setattr(
+            routing_module,
+            "evaluate_live_routes",
+            lambda *a, **k: _evaluation(routed, route_state, declared, family),
+        )
         for name, fake in _fakes(calls, **kwargs).items():
             monkeypatch.setattr(run_module, name, fake)
         real_quality, real_verdict = run_module.quality, run_module.verdict
@@ -347,11 +357,7 @@ class TestHappyPath:
     def test_returns_the_file_verdict_with_every_node_completed(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A graph in which nothing raised reports ``COMPLETED`` for every node, QUALITY included.
-
-        DDK is the exception and not a failure: the vocabulary names it a branch and no node
-        implements it, so the runner records it rather than leaving it out of the result.
-        """
+        """A graph in which nothing raised reports ``COMPLETED`` for every node, QUALITY included."""
         graph()
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
@@ -359,7 +365,6 @@ class TestHappyPath:
         assert result.ran == {
             **dict.fromkeys(GRAPH, RunState.COMPLETED),
             "REPORT": RunState.COMPLETED,
-            "DDK": RunState.SKIPPED,
         }
         assert result.file_verdict.ran["QUALITY"] is RunState.COMPLETED
 
@@ -540,45 +545,35 @@ class TestConditionalExecution:
         assert result.ran["AIRWAY"] is RunState.SKIPPED
         assert result.ran["SPEECH"] is RunState.COMPLETED
 
-    def test_naming_ddk_in_an_execution_set_now_runs_the_node(
-        self,
-        graph: Callable[..., list[str]],
-        config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_the_branch_table_names_exactly_the_branches_the_vocabulary_declares(self) -> None:
+        """A branch in the table the vocabulary does not name runs where nothing routed it."""
+        source = inspect.getsource(run_module._drive_branches)
+        table = source.split("branches: dict[str, Callable[[], BranchResult]] = {", 1)[1].split("}", 1)[0]
+        named = set(re.findall(r'"([A-Z]+)": lambda:', table))
+        assert named == set(BRANCHES) == {"AIRWAY", "SPEECH", "VOICE"}
+        assert "DDK" not in named
+
+    def test_a_declared_syllable_family_runs_speech_and_no_second_branch(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """DDK has a node, so routing naming it runs it and it concludes for itself.
+        """The owner's decision at the runner: diadochokinesis is a speaking task, so SPEECH owns it.
 
-        This test used to pin the opposite — ``SKIPPED`` carrying ``NO_NODE`` — because
-        ``nodes/ddk.py`` did not exist and ``run.py``'s branch table named three of the four
-        branches the vocabulary declares. The table now names all four, so the ``call is None`` arm
-        is unreachable from :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES` and what is
-        left to pin is that the branch runs and that no note is recorded for it. The arm itself, and
-        :data:`~senselab.audio.workflows.triage.run.NO_NODE`, stay: a branch added to the vocabulary
-        ahead of its node is still a record rather than a ``KeyError``, which is what
-        ``test_every_branch_the_vocabulary_names_gets_an_outcome`` covers.
+        No gate fires, so the only route is the declaration's, which
+        ``taxonomy.ruleset.reference_family_set`` resolves to SPEECH alone. The branch that
+        evaluated DDK is gone, so exactly one branch report is written.
         """
-        graph(routed=("SPEECH",))
-        real = run_module.routing
-
-        def _routes_ddk(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-            result = real(*args, **kwargs)
-            return replace(result, runs=(*result.runs, "DDK"))
-
-        monkeypatch.setattr(run_module, "routing", _routes_ddk)
-        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
-        assert result.ran["DDK"] is RunState.COMPLETED
-        assert result.nodes["DDK"].note is None
+        calls = graph(routed=(), declared=("SPEECH",), family="diadochokinesis-pa")
+        result = run_triage(tmp_path / "sub-a_ses-1_task-diadochokinesis-pa.wav", tmp_path / "out", config)
+        assert calls.count("SPEECH") == 1
+        assert "AIRWAY" not in calls and "VOICE" not in calls
+        assert result.ran["SPEECH"] is RunState.COMPLETED
+        assert result.ran["AIRWAY"] is RunState.SKIPPED
+        assert result.ran["VOICE"] is RunState.SKIPPED
         assert result.file_verdict is not None
-        log = json.loads((result.run_dir / "run.json").read_text())
-        assert log["notes"].get("DDK") is None
         store = ProvStore.read_jsonl(result.store_path)
-        # DDK reports rather than decides: it writes a branch_report, not a verdict.
-        assert not [e for e in store.entities("verdict") if e.attributes["node"] == "DDK"]
-        reported = [e for e in store.entities("branch_report") if e.attributes["node"] == "DDK"]
-        assert len(reported) == 1
-        assert reported[0].attributes["kind"] == "ddk"
-        assert not any(reason.node == "DDK" and "never ran" in reason.why for reason in result.file_verdict.reasons)
+        reported = [e.attributes["node"] for e in store.entities("branch_report")]
+        assert sorted(node for node in reported if node in BRANCHES) == ["SPEECH"]
+        assert not any("never ran" in reason.why for reason in result.file_verdict.reasons)
 
     def test_a_branch_with_no_node_is_still_recorded_rather_than_crashing(
         self,

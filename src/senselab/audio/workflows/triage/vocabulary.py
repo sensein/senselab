@@ -30,7 +30,7 @@ GRAPH_ORDER = (
 QUALITY = "QUALITY"
 """The terminal node every recording reaches, whatever routed. A graph edge, never a branch."""
 
-BRANCHES = ("AIRWAY", "SPEECH", "VOICE", "DDK")
+BRANCHES = ("AIRWAY", "SPEECH", "VOICE")
 """The branches routing selects among; each is the authority on its own kind and no other."""
 
 RULESET_ROUTING = "ruleset_routing"
@@ -140,7 +140,6 @@ _VERDICT = "VERDICT"
 _ROUTING = "routing"
 
 BAD_MAP_VALUES = "routing.hint_branch_map names a branch this graph does not route to"
-BAD_DECLARATION_REQUIRED = "routing.declaration_required names a branch this graph does not route to"
 
 UNEXPLAINED_CONTENT = (
     "no branch routed and the recording was not measurably empty; the ruleset could not account for what is in it"
@@ -196,8 +195,7 @@ class BranchReport:
             :data:`UNDETERMINED` — so what an unmeasured point means for the file is this fold's,
             under ``verdict.unmeasured_points_flag``.
         in_family: Whether the branch evaluated a declared task of its own kind — whether
-            ``dispatch`` took the align mode. A fact about the declaration, not a judgement, and the
-            input the fold needs for the DDK asymmetry described in :func:`fold_file_verdict`.
+            ``dispatch`` took the align mode. A fact about the declaration, not a judgement.
     """
 
     node: str
@@ -223,27 +221,19 @@ class BranchDecision:
             hint tag the map resolves. A claim, whether or not it changed the outcome.
         forced_by_declaration: Whether the declaration added it, which is ``declared`` and not
             content-routed. This is the route the declaration created; ``declared`` alone is not.
-        withheld_by_gate: Whether ``routing.declaration_required`` names this branch and nothing
-            declared it, so the ruleset's own route did not become a run. ``route_state`` still says
-            what the ruleset thought, so the two together read as "the ruleset would have routed
-            this, and the declaration gate withheld it".
         hint_tags: The declared tags naming this branch, when a hint supplied any the map resolves.
         bad_map_values: ``routing.hint_branch_map`` entries whose value is not a branch, as
             ``{tag: value}``. A property of the configuration, so every decision carries the same
             one.
-        bad_declaration_required: The ``routing.declaration_required`` names that are not branches.
-            A property of the configuration in the same way, so every decision carries the same one.
     """
 
     branch: str
     will_run: bool
     route_state: str
     forced_by_declaration: bool
-    withheld_by_gate: bool = False
     declared: bool = False
     hint_tags: tuple[str, ...] = ()
     bad_map_values: dict[str, str] = field(default_factory=dict)
-    bad_declaration_required: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -270,11 +260,6 @@ class FoldPolicy:
             missing conformance means is not the same question on a prolonged vowel as on a story
             recall, and a family whose conformance nobody trusts yet is excepted here by name
             rather than by the branch declining to report one.
-        detection_is_evaluation: The branches for which finding the subject *is* evaluating the task,
-            so an out-of-family result is a covariate on the detector rather than a reading of the
-            recording. See :func:`fold_file_verdict` for why DDK is the only one. A membership list,
-            not a weight: nothing here scales a conformance, it decides which of two records the
-            result goes into.
     """
 
     conformance_flags: bool = True
@@ -282,7 +267,6 @@ class FoldPolicy:
     deviation_flags: bool = False
     unmeasured_points_flag: bool = True
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
-    detection_is_evaluation: tuple[str, ...] = ("DDK",)
 
     @classmethod
     def from_config(cls, config: Any) -> "FoldPolicy":  # noqa: ANN401 — TriageConfig, not imported here
@@ -307,9 +291,6 @@ class FoldPolicy:
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
             },
-            detection_is_evaluation=tuple(
-                str(branch) for branch in config.get(f"{_SECTION}.detection_is_evaluation", ("DDK",))
-            ),
         )
 
     def flags_conformance(self, referent: str, declared_family: str | None) -> bool:
@@ -356,9 +337,6 @@ class FileVerdict:
             knowing which node is which.
         deviations: The deviation type names each reporting node found. Recorded and never folded.
         unmeasured: The config paths each reporting node asked for and nobody has measured.
-        detector_covariates: For each branch whose detection is its evaluation, what an
-            out-of-family run of it found. Reported and folded by nothing: it is evidence about the
-            detector, not about the recording.
         declared_family: The task family the recording declares, or None. In the product because the
             fold is task-aware: which flag grounds applied depends on it.
         routes: What the ruleset made of each branch, one of :data:`BRANCH_ROUTE_STATES`. Present
@@ -374,8 +352,6 @@ class FileVerdict:
         bad_map_values: ``routing.hint_branch_map`` entries whose value is not a branch. A
             one-character typo under-claims every file in a run, so it is named here rather than left
             in the decisions for a reader to notice.
-        bad_declaration_required: The ``routing.declaration_required`` names that are not branches,
-            surfaced here for the same reason: a typo there gates nothing and is otherwise silent.
     """
 
     triage: Triage
@@ -386,7 +362,6 @@ class FileVerdict:
     conformance_of: dict[str, str] = field(default_factory=dict)
     deviations: dict[str, list[str]] = field(default_factory=dict)
     unmeasured: dict[str, list[str]] = field(default_factory=dict)
-    detector_covariates: dict[str, dict[str, Any]] = field(default_factory=dict)
     declared_family: str | None = None
     routes: dict[str, str] = field(default_factory=dict)
     route_state: str | None = None
@@ -396,7 +371,6 @@ class FileVerdict:
     ran: dict[str, RunState] = field(default_factory=dict)
     branches: dict[str, dict[str, Any]] = field(default_factory=dict)
     bad_map_values: dict[str, str] = field(default_factory=dict)
-    bad_declaration_required: list[str] = field(default_factory=list)
 
 
 def _found(reported: bool, spans_n: int) -> str:
@@ -529,27 +503,6 @@ def fold_file_verdict(
     * **the declared task.** Every conformance ground is read against it, because what a missing
       conformance *means* is not the same question on a prolonged vowel as on a story recall.
 
-    **DDK is not symmetric with the other three, and the two-mode structure hides that.** The other
-    three branches detect evidence that occurs incidentally: breath and cough happen in any
-    recording, sustained phonation happens in any recording, lexical content happens in any
-    recording. So for them the in-family and out-of-family modes ask genuinely different questions.
-    A rapid alternating repetition train does not occur incidentally — for DDK, *finding the subject
-    is evaluating the task*, and an out-of-family train is far more likely the detector firing than
-    the participant having produced one. That is what the corpus measured, and it is why DDK routes
-    on ``routing.declaration_required`` alone: the content gate ``ddk.lexical_repetition >= 3``
-    routed DDK on 99% of ``rainbow-passage``, 98% of ``caterpillar-passage`` and 87% of
-    ``free-speech``, all of it ordinary function-word repetition, while its acoustic companion
-    ``ddk.ppg_segment_rate_per_s`` separated the two real DDK recordings from every speech recording
-    in the 13-recording sample without overlap. Both gates were removed once the declaration decided
-    the route, so no gate can route DDK on content today.
-
-    So for a branch in ``policy.detection_is_evaluation``, an **out-of-family** result contributes no
-    flag ground at all — neither its conformance nor a route mismatch — and is recorded instead in
-    ``detector_covariates``, which is a fact about the detector's behaviour over the corpus rather
-    than a reading of this recording. In-family it folds exactly like the other three. **Nothing
-    here is a weight or a prior**: no number expresses "much less likely", and fitting one is owed
-    rather than guessed.
-
     A branch ``absent`` is not a file ``discard``. PREPROCESS and ROUTING are each a gate every later
     node depends on, so a raise there is folded from ``ran`` rather than a verdict entity: a node
     that raised wrote none, so it is otherwise invisible to this fold, and a silent, evidence-free
@@ -606,11 +559,8 @@ def fold_file_verdict(
     )
 
     bad_map_values: dict[str, str] = {}
-    bad_required: dict[str, None] = {}
     for recorded in branch_decisions.values():
         bad_map_values.update(recorded.bad_map_values)
-        for name in recorded.bad_declaration_required:
-            bad_required.setdefault(name, None)
 
     reasons = list(node_verdicts)
     if ran.get(_PREPROCESS) is RunState.ERRORED:
@@ -634,23 +584,11 @@ def fold_file_verdict(
     if bad_map_values:
         named = ", ".join(f"{tag}: {value}" for tag, value in sorted(bad_map_values.items()))
         reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{BAD_MAP_VALUES}: {named}"))
-    if bad_required:
-        named = ", ".join(sorted(bad_required))
-        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{BAD_DECLARATION_REQUIRED}: {named}"))
     if hint_claims is None:
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, UNREAD_DECLARATION))
     if route_state == UNEXPLAINED:
         reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, UNEXPLAINED_CONTENT))
-    # A branch whose detection is its evaluation, run out of family, reports about itself rather
-    # than about the recording. Its result is recorded and contributes no ground below.
-    covariates = {
-        name: {"conformance": report.conformance, "spans_n": spans.get(name, 0), "route": routes.get(name)}
-        for name, report in reports.items()
-        if name in rules.detection_is_evaluation and not report.in_family
-    }
     for name, report in reports.items():
-        if name in covariates:
-            continue
         if report.conformance is False and rules.flags_conformance(report.conformance_of, declared_family):
             why = TASK_NOT_CONFORMED if report.conformance_of == TASK else STORE_ASSERTION_CONTRADICTED
             named = f" on {declared_family}" if report.conformance_of == TASK and declared_family else ""
@@ -667,7 +605,7 @@ def fold_file_verdict(
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
         kind = reported.kind if reported is not None else None
-        if agreement[branch] == MISMATCH and branch not in covariates:
+        if agreement[branch] == MISMATCH:
             found = "found it" if findings[branch] == KindState.PRESENT.value else "found no subject"
             reasons.append(
                 NodeVerdict(branch, Outcome.FLAG, kind, f"mismatch: routing {routes[branch]} {branch}, it {found}")
@@ -685,7 +623,6 @@ def fold_file_verdict(
         name: {
             "will_run": decision.will_run,
             "forced_by_declaration": decision.forced_by_declaration,
-            "withheld_by_gate": decision.withheld_by_gate,
             "route_state": decision.route_state,
             "conformance": by_branch[name].conformance if name in by_branch else None,
         }
@@ -715,7 +652,6 @@ def fold_file_verdict(
         conformance_of={name: report.conformance_of for name, report in reports.items()},
         deviations={name: list(report.deviations) for name, report in reports.items()},
         unmeasured={name: list(report.unmeasured) for name, report in reports.items() if report.unmeasured},
-        detector_covariates=covariates,
         declared_family=declared_family,
         routes=routes,
         route_state=route_state,
@@ -725,5 +661,4 @@ def fold_file_verdict(
         ran=dict(ran),
         branches=branch_view,
         bad_map_values=bad_map_values,
-        bad_declaration_required=sorted(bad_required),
     )

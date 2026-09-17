@@ -136,13 +136,10 @@ stimulus:
 # read off the recording's own BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`
 # below, which is the graph's one family -> branch mapping. This block is the OPTIONAL second,
 # caller-supplied declaration source, and it is additive in the same direction: it adds routes and
-# removes none. Null, because populating it would invent a tag vocabulary nobody fitted. The second
-# key runs the other way: it names the branches for which the declaration is REQUIRED, so the ruleset
-# alone never routes them. Both derivations are in
-# `specs/20260817-triage-workflow-dag/config-derivations.md`.
+# removes none. Null, because populating it would invent a tag vocabulary nobody fitted. The
+# derivation is in `specs/20260817-triage-workflow-dag/config-derivations.md`.
 routing:
   hint_branch_map: null                # tag (and metadata.speech_type) -> branch; a tag matching nothing adds nothing
-  declaration_required: [DDK]          # branches that run ONLY when the declaration names them; the ruleset alone never routes them
 
 # AIRWAY's own vocabulary. `branch.label_sets` splits `labels_of_interest` by the kind each label
 # names, and the two modes read that split rather than these labels directly.
@@ -234,8 +231,8 @@ speech:
     tilt_db_per_octave: null           # spectral tilt difference
     d_to_r_db: null                    # direct-to-reverberant ratio difference
 
-# Operating points the four branches' expectation matching reads, shared by AIRWAY, SPEECH, VOICE
-# and DDK so no two can hold cuts that drift. Every numeric key here is null:
+# Operating points the three branches' expectation matching reads, shared by AIRWAY, SPEECH and
+# VOICE so no two can hold cuts that drift. Every numeric key here is null:
 # `specs/20260817-triage-workflow-dag/expected-patterns.md` is a method inventory and fits none of
 # them. `p_normalise` has no key -- it is a function, not a number, and resolves to
 # `consensus.vocabulary_key`, the normalisation the consensus and the stimulus alignment declare.
@@ -267,12 +264,10 @@ branch:
   echo_overlap_max: 0.5                # prompt n-gram overlap above which a free response echoes its prompt
   verbatim_overlap_max: 0.5            # source content overlap above which a recall is verbatim
   coverage_min: 0.5                    # fraction of expected tokens a read text must realise
-  expected_lexical_max: 0              # lexical words a no-lexical expectation tolerates
   interval_max_s: 2.0                  # largest inter-event interval a series the instruction calls quick may show
   modulation_band_hz: [1.0, 10.0]      # [lo, hi] band the envelope modulation peak is searched in
   rate_prominence_min: 2.0             # modulation peak over its own band mean that makes a rate readable
   train_min_s: 1.0                     # shortest carrier span that can hold a syllable train
-  repeat_min_occurrences: 3            # occurrences of one token that make it a repetition
   burst_window_ms: 20.0                # window after a syllable onset the burst spectrum is taken over
   place_margin_db: 3.0                 # dB the leading place band must beat the next by to be resolved
   effort_split_hz: 1000.0              # split the low and high spectral balance of an effort token is taken at
@@ -309,10 +304,6 @@ verdict:
   undetermined_flags: false            # an unanswered conformance is not; detect_* answers UNDETERMINED by construction
   deviation_flags: false               # a deviation is recorded and never a flag ground, until ground truth exists
   unmeasured_points_flag: true         # a reporting node that could not read an operating point it wanted flags
-  # The branches for which finding the subject IS evaluating the task, so an out-of-family result
-  # is a covariate on the detector rather than a reading of the recording. DDK only: a rapid
-  # alternating train does not occur incidentally, where breath, phonation and lexical content all do.
-  detection_is_evaluation: [DDK]
   # declared task family -> whether a non-conformance on it flags, overriding conformance_flags.
   # Data, not schema: a campaign names its own families. Empty ships no family excepted.
   conformance_flags_by_family: {}
@@ -340,31 +331,27 @@ taxonomy:
   ruleset:
     # branch -> the family set it is SCORED against, AND the family -> branch mapping the declared
     # task routes through: a recording whose family is a positive here routes to that branch whatever
-    # its gates read. It still skips no gate and rewrites no route state. MULTI-LABEL: a family may
-    # be a positive for several branches, and the diadochokinesis families are positives for both
-    # SPEECH (via `speech`) and DDK (via `syllable_repetition`).
+    # its gates read. It still skips no gate and rewrites no route state. SPEECH's set is wide on
+    # purpose: it carries the diadochokinesis families, whose syllable trains carry no lexical word
+    # and would never clear `speech.lexical`, and SPEECH is where the PII scan runs.
     reference_family_set:
       AIRWAY: airway
       SPEECH: speech                    # speech = lexical_speech | syllable_repetition
       VOICE: voice
-      DDK: syllable_repetition
     # branch -> families HELD OUT of its scoring; not negatives, not positives. Null everywhere:
     # no branch's reference set omits families whose content is what the branch is for.
     excluded_by_construction:
       AIRWAY: null
       SPEECH: null
       VOICE: null
-      DDK: null
     branch_gates:                       # branch -> gates, any one of which routes it, on any recording
       AIRWAY: [airway.breath, airway.cough, airway.bracketed_event, airway.ppg_silent_fraction]
       SPEECH: [speech.lexical]
       VOICE: [voice.sustained, voice.glide, voice.chant]
-      DDK: []                           # DDK routes on the declaration alone; see routing.declaration_required
     branch_flags:                       # branch -> gates that ANNOTATE it; a flag never routes anything
       AIRWAY: []
       SPEECH: [speech.transcript_agreement]
       VOICE: []
-      DDK: []
     emptiness:                          # the bypass, consulted only when no branch gate fired
       peak_streams: [enhanced|yamnet, residual|yamnet]  # every stream whose top tracked-label score must fall below the floor
       peak_floor: 0.2                   # score under which a stream carries nothing; one value for both streams

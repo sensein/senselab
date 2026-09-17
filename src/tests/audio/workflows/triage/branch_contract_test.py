@@ -3,8 +3,8 @@
 These are the contract-level tests, kept apart from each node's own file because each one pins a
 property of the *boundary* rather than of a body: that no branch writes an outcome, that the fold
 decides from what a branch reports and from nothing else, that the packaged state is sane, that a
-deviation is recorded and not folded, that the REDACT interlock and the three operational states
-came through untouched, and that DDK is folded asymmetrically for the reason the owner gave.
+deviation is recorded and not folded, and that the REDACT interlock and the three operational
+states came through untouched.
 """
 
 from __future__ import annotations
@@ -345,71 +345,35 @@ class TestAllUndeterminedIsSane:
         assert folded.agreement["AIRWAY"] == "agree"
 
 
-class TestDdkIsFoldedAsymmetrically:
-    """Owner, 2026-09-16: for DDK, finding the subject *is* evaluating the task."""
+class TestAnUngatedBranchIsNotScoredForAgreement:
+    """A branch the ruleset names no gate for made no claim, so nothing can contradict one.
 
-    def test_an_out_of_family_ddk_result_is_a_detector_covariate_not_a_reading(self) -> None:
-        """A train on a declared story-recall says more about the detector than about the audio."""
+    ``taxonomy.ruleset.branch_gates`` is configuration: any branch an override leaves with an empty
+    gate list reads :data:`UNGATED`, and the fold must not read that as the ruleset having declined.
+    """
+
+    def test_an_ungated_branch_that_found_its_subject_is_not_a_route_mismatch(self) -> None:
+        """The inversion a gateless branch produced while ``ungated`` still read ``declined``."""
         folded = _fold(
-            [_report("DDK", "ddk", conformance=False, in_family=False)],
-            spans={"DDK": 1},
-            routes={"DDK": ROUTED},
-            declared_family="rainbow-passage",
-        )
-        assert folded.triage is Triage.PASS
-        assert folded.detector_covariates["DDK"]["spans_n"] == 1
-        assert folded.detector_covariates["DDK"]["conformance"] is False
-
-    def test_an_out_of_family_ddk_mismatch_does_not_flag_either(self) -> None:
-        """The over-routing is one gate's doing; a mismatch on it charges the ruleset, not the file."""
-        folded = _fold(
-            [_report("DDK", "ddk", conformance=UNDETERMINED, in_family=False)],
-            spans={"DDK": 1},
-            routes={"DDK": DECLINED},
-            declared_family="free-speech",
-        )
-        assert folded.agreement["DDK"] == "mismatch"
-        assert folded.triage is Triage.PASS
-        assert "DDK" in folded.detector_covariates
-
-    def test_in_family_ddk_folds_like_any_other_branch(self) -> None:
-        """The asymmetry is about the mode, not about the branch being exempt."""
-        folded = _fold(
-            [_report("DDK", "ddk", conformance=False, in_family=True)],
-            spans={"DDK": 1},
-            routes={"DDK": ROUTED},
-            declared_family="ddk-pataka",
-        )
-        assert folded.triage is Triage.FLAG
-        assert "DDK" not in folded.detector_covariates
-
-    def test_an_in_family_ddk_run_that_found_a_train_is_not_a_route_mismatch(self) -> None:
-        """A branch with no gate made no claim, so finding its subject cannot contradict one.
-
-        This is the inversion the empty ``branch_gates.DDK`` produced while a gateless branch still
-        read ``declined``: the ruleset was recorded as having said no, so every successful DDK run
-        scored ``mismatch`` and flagged the file.
-        """
-        folded = _fold(
-            [_report("DDK", "ddk", conformance=True, in_family=True)],
-            spans={"DDK": 1},
-            routes={"DDK": UNGATED},
+            [_report("SPEECH", "speech", conformance=True, in_family=True)],
+            spans={"SPEECH": 1},
+            routes={"SPEECH": UNGATED},
             declared_family="diadochokinesis-pataka",
         )
-        assert folded.agreement["DDK"] == "resolved"
+        assert folded.agreement["SPEECH"] == "resolved"
         assert folded.triage is Triage.PASS
-        assert [reason.why for reason in folded.reasons if reason.node == "DDK"] == []
+        assert [reason.why for reason in folded.reasons if reason.node == "SPEECH"] == []
 
-    def test_an_in_family_ddk_run_that_found_nothing_does_not_score_agreement_either(self) -> None:
-        """The other half of the same inversion: an absent train was not the ruleset being right."""
+    def test_an_ungated_branch_that_found_nothing_does_not_score_agreement_either(self) -> None:
+        """The other half of the same inversion: an absent subject was not the ruleset being right."""
         folded = _fold(
-            [_report("DDK", "ddk", conformance=True, in_family=True)],
-            spans={"DDK": 0},
-            routes={"DDK": UNGATED},
+            [_report("SPEECH", "speech", conformance=True, in_family=True)],
+            spans={"SPEECH": 0},
+            routes={"SPEECH": UNGATED},
             declared_family="diadochokinesis-pataka",
         )
-        assert folded.agreement["DDK"] == "resolved"
-        assert folded.findings["DDK"] == "absent"
+        assert folded.agreement["SPEECH"] == "resolved"
+        assert folded.findings["SPEECH"] == "absent"
 
     def test_a_gated_branch_still_scores_both_arms_exactly_as_before(self) -> None:
         """The fifth state must change nothing for a branch the ruleset did read."""
@@ -427,17 +391,30 @@ class TestDdkIsFoldedAsymmetrically:
             )
             assert folded.agreement["AIRWAY"] == expected, (route, spans_n)
 
-    def test_the_other_three_are_not_in_the_asymmetric_set(self) -> None:
-        """Breath, phonation and lexical content all occur incidentally; a train does not."""
-        policy = FoldPolicy.from_config(load_triage_config())
-        assert policy.detection_is_evaluation == ("DDK",)
-        for branch in ("AIRWAY", "SPEECH", "VOICE"):
+
+class TestAnOutOfFamilyResultIsFoldedLikeAnyOther:
+    """No branch is exempt from its own non-conformance on the strength of the mode it ran in."""
+
+    def test_an_out_of_family_non_conformance_flags_for_every_branch(self) -> None:
+        """``detection_is_evaluation`` exempted one branch's detect arm; nothing exempts one now."""
+        for branch, kind in (("AIRWAY", "airway"), ("SPEECH", "speech"), ("VOICE", "voice")):
             folded = _fold(
-                [_report(branch, "x", conformance=False, in_family=False)],
+                [_report(branch, kind, conformance=False, in_family=False)],
                 spans={branch: 1},
                 routes={branch: ROUTED},
+                declared_family="rainbow-passage",
             )
             assert folded.triage is Triage.FLAG, branch
+
+    def test_the_fold_records_no_detector_covariate_for_any_branch(self) -> None:
+        """The covariate record had one member and went with it; nothing writes one."""
+        folded = _fold(
+            [_report("SPEECH", "speech", conformance=False, in_family=False)],
+            spans={"SPEECH": 1},
+            routes={"SPEECH": ROUTED},
+            declared_family="free-speech",
+        )
+        assert not hasattr(folded, "detector_covariates")
 
 
 class TestQualityEntersThroughConformanceAboutTheStore:
@@ -674,10 +651,10 @@ class TestTheReportSurvivesTheStore:
         assert folded.unmeasured["SPEECH"] == ["branch.target_match_cosine"]
 
     def test_in_family_reaches_the_fold(self) -> None:
-        """The DDK asymmetry reads this off the entity, so the store is where it has to survive."""
+        """A field the writer stores and the reader drops is invisible to a constructed report."""
         report = self._round_trip(
-            node="DDK",
-            kind="ddk",
+            node="SPEECH",
+            kind="speech",
             conformance=False,
             conformance_of=TASK,
             deviations=(),
@@ -686,18 +663,17 @@ class TestTheReportSurvivesTheStore:
         assert report.in_family is False
         folded = _fold(
             [report],
-            spans={"DDK": 1},
-            routes={"DDK": ROUTED},
+            spans={"SPEECH": 1},
+            routes={"SPEECH": ROUTED},
             declared_family="rainbow-passage",
         )
-        assert "DDK" in folded.detector_covariates
-        assert folded.triage is Triage.PASS
+        assert folded.triage is Triage.FLAG
 
     def test_in_family_is_not_hardcoded_at_the_writer(self) -> None:
-        """The align mode has to survive too, or the asymmetry exempts every DDK run."""
+        """The align mode has to survive the round trip too, not only the detect one."""
         report = self._round_trip(
-            node="DDK",
-            kind="ddk",
+            node="SPEECH",
+            kind="speech",
             conformance=False,
             conformance_of=TASK,
             deviations=(),
@@ -706,9 +682,8 @@ class TestTheReportSurvivesTheStore:
         assert report.in_family is True
         folded = _fold(
             [report],
-            spans={"DDK": 1},
-            routes={"DDK": ROUTED},
-            declared_family="ddk-pataka",
+            spans={"SPEECH": 1},
+            routes={"SPEECH": ROUTED},
+            declared_family="diadochokinesis-pataka",
         )
-        assert "DDK" not in folded.detector_covariates
         assert folded.triage is Triage.FLAG
