@@ -530,10 +530,13 @@ def fold_file_verdict(
     recording. So for them the in-family and out-of-family modes ask genuinely different questions.
     A rapid alternating repetition train does not occur incidentally — for DDK, *finding the subject
     is evaluating the task*, and an out-of-family train is far more likely the detector firing than
-    the participant having produced one. The corpus says so: ``ddk.lexical_repetition >= 3`` routes
-    DDK on 99% of ``rainbow-passage``, 98% of ``caterpillar-passage`` and 87% of ``free-speech``, all
-    of it ordinary function-word repetition, while ``ddk.ppg_segment_rate_per_s`` separated the two
-    real DDK recordings from every speech recording in the 13-recording sample without overlap.
+    the participant having produced one. That is what the corpus measured, and it is why DDK routes
+    on ``routing.declaration_required`` alone: the content gate ``ddk.lexical_repetition >= 3``
+    routed DDK on 99% of ``rainbow-passage``, 98% of ``caterpillar-passage`` and 87% of
+    ``free-speech``, all of it ordinary function-word repetition, while its acoustic companion
+    ``ddk.ppg_segment_rate_per_s`` separated the two real DDK recordings from every speech recording
+    in the 13-recording sample without overlap. Both gates were removed once the declaration decided
+    the route, so no gate can route DDK on content today.
 
     So for a branch in ``policy.detection_is_evaluation``, an **out-of-family** result contributes no
     flag ground at all — neither its conformance nor a route mismatch — and is recorded instead in
