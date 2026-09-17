@@ -42,6 +42,7 @@ conformance `UNDETERMINED`, because a refusal is a decision. A misspelled key st
 | the route | `agreement`, against the spans | a `mismatch` flags |
 | deviations | recorded in `deviations`, per node | **no** — see the ground-truth rule below |
 | `unmeasured` | recorded per node | yes, under `verdict.unmeasured_points_flag` |
+| REDACT's LLM re-read | `llm_redaction`, the annotation whole | `flagged` only, under `verdict.llm_redaction_flags`, and only on the **triage** axis |
 | the declared task family | the key every conformance ground is read against | — |
 
 **Deviations are recorded and are not folded into the flag column until ground truth exists.**
@@ -300,6 +301,13 @@ reason to re-derive, not a reason to keep flagging.
 
 Only `pass` clears an artifact, which makes the mapping total.
 
+**Nothing an annotating detector concluded reaches this axis.** REDACT's optional LLM re-read of the
+redacted transcript used to downgrade REDACT's own outcome from `pass` to `flag`, which this table
+then read as `withheld` — an unmeasured model gating a release. Corrected 2026-09-17 on the owner's
+instruction ("the llm is part of a branch, so it can only annotate (with provenance)"). The re-read's
+annotation now reaches the triage axis and only the triage axis; see
+[`llm-check.md`](llm-check.md).
+
 **`releasable` never applies to the store.** The store holds the unredacted consensus transcript by
 design and is append-only. `release` describes REDACT's artifacts and nothing else.
 
@@ -328,6 +336,7 @@ record and cannot mistake one for the other.
 triage:   pass | flag | discard
 release:  releasable | withheld | not_assessed
 discard_ground: "unmeasurable" | "acoustically_empty" | null
+llm_redaction: { status, iterations, flagged, model_id, revision, failure }   # {} when REDACT wrote none
 reasons:  [ { node, outcome, kind?, why } ]        # every contributing verdict, in order
 ran:      { node: "completed" | "skipped" | "errored" }
 branches: { branch: { will_run, forced_by_declaration, route_state, conformance? } }

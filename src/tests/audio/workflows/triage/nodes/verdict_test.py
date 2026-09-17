@@ -18,10 +18,13 @@ from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.run import GRAPH_ORDER
 from senselab.audio.workflows.triage.vocabulary import (
+    LLM_REDACTION_RESIDUE,
+    REDACTION_LLM_ANNOTATION,
     TASK,
     UNDETERMINED,
     UNREAD_DECLARATION,
     Conformance,
+    FoldPolicy,
     Outcome,
     Release,
     RunState,
@@ -616,6 +619,121 @@ class TestTheReleaseAxis:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.release is Release.RELEASABLE
         assert [r.outcome for r in result.file_verdict.reasons if r.node == "REDACT"] == [Outcome.PASS]
+
+
+def _annotate(store: ProvStore, **attributes: Any) -> str:  # noqa: ANN401 — the re-read's own fields
+    """Seed the annotation REDACT's LLM re-read writes, exactly as REDACT writes it.
+
+    Args:
+        store: The provenance store.
+        **attributes: The re-read's own fields — status, iterations, flagged, model_id, revision,
+            failure.
+
+    Returns:
+        The measurement's id.
+    """
+    agent = software_agent(store)
+    activity = store.activity(node="REDACT", step="llm_check", parameters={})
+    store.was_associated_with(activity, agent)
+    entity = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": REDACTION_LLM_ANNOTATION, "signal": "redacted_transcript", **attributes},
+    )
+    store.was_generated_by(entity, activity)
+    store.was_attributed_to(entity, agent)
+    return entity
+
+
+def _llm_off(tmp_path: Path) -> TriageConfig:
+    """The packaged config with the redaction re-read's triage ground switched off."""
+    path = tmp_path / "llm-off.yaml"
+    path.write_text("verdict:\n  llm_redaction_flags: false\n")
+    return load_triage_config(path)
+
+
+class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
+    """Owner, 2026-09-17: "the llm is part of a branch, so it can only annotate (with provenance)"."""
+
+    def test_the_packaged_config_ships_the_key_and_the_policy_reads_it(self) -> None:
+        """A ground with no key is an unmeasured decision with no way to see or turn it off."""
+        assert load_triage_config().require("verdict.llm_redaction_flags") is True
+        assert FoldPolicy.from_config(load_triage_config()).llm_redaction_flags is True
+
+    def test_a_flagged_re_read_does_not_withhold_the_release(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The defect. Release is REDACT's detector verdict; an unmeasured model gates no artifact."""
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
+        _annotate(store, status="flagged", iterations=2, flagged=["LOCATION"], model_id="stub/model", revision="a" * 40)
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.RELEASABLE
+        assert _file_verdict_entity(store).attributes["release"] == "releasable"
+
+    def test_a_flagged_re_read_raises_the_triage_axis_under_the_shipped_key(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The safety signal survives the split: a human should look, and the ground names why."""
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
+        _annotate(store, status="flagged", iterations=2, flagged=["LOCATION"], model_id="stub/model", revision="a" * 40)
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.triage is Triage.FLAG
+        ground = next(reason for reason in result.file_verdict.reasons if LLM_REDACTION_RESIDUE in reason.why)
+        assert ground.node == "VERDICT" and ground.why.endswith("LOCATION")
+
+    def test_the_key_flipped_off_leaves_the_triage_axis_alone(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """The switch is what makes turning the ground off a visible decision rather than a silence."""
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
+        _annotate(store, status="flagged", iterations=2, flagged=["LOCATION"], model_id="stub/model", revision="a" * 40)
+        result = verdict_module.verdict(store, None, _llm_off(tmp_path), run_dir=tmp_path)
+        assert result.file_verdict.triage is Triage.PASS
+        assert not [reason for reason in result.file_verdict.reasons if LLM_REDACTION_RESIDUE in reason.why]
+        assert result.file_verdict.llm_redaction["status"] == "flagged", "off is not unrecorded"
+
+    def test_a_detector_fail_still_withholds_whatever_the_reviewer_said(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The real redaction path is untouched: a surviving finding withholds, re-read or none."""
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.FAIL, None)], routed=ROUTED_PAIR)
+        _annotate(store, status="clean", iterations=1, flagged=[], model_id="stub/model", revision="a" * 40)
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.WITHHELD
+
+    def test_an_absent_re_read_grounds_nothing_and_is_never_silent(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A GPU queue must not decide a release; the absence is in the product instead."""
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
+        _annotate(
+            store, status="absent", iterations=1, flagged=[], model_id="stub/model", revision=None, failure="timeout"
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.triage is Triage.PASS
+        assert result.file_verdict.release is Release.RELEASABLE
+        assert result.file_verdict.llm_redaction == {
+            "status": "absent",
+            "iterations": 1,
+            "flagged": [],
+            "model_id": "stub/model",
+            "revision": None,
+            "failure": "timeout",
+        }
+
+    def test_the_annotation_and_its_provenance_reach_the_written_verdict(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The model at its resolved commit is what makes the annotation evidence rather than an opinion."""
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
+        annotation_id = _annotate(
+            store, status="flagged", iterations=2, flagged=["LOCATION"], model_id="stub/model", revision="a" * 40
+        )
+        verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        recorded = _file_verdict_entity(store).attributes["llm_redaction"]
+        assert recorded["model_id"] == "stub/model" and recorded["revision"] == "a" * 40
+        activity = next(a for a in store.activities("VERDICT"))
+        assert annotation_id in store.uses_of(activity.id), "the fold cites the annotation it read"
 
 
 class TestWhatTheStoreRecords:

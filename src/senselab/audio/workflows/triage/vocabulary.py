@@ -679,7 +679,9 @@ def fold_file_verdict(
     if annotation.get("status") == "flagged" and rules.llm_redaction_flags:
         named = ", ".join(str(category) for category in annotation.get("flagged") or ())
         reasons.append(
-            NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{LLM_REDACTION_RESIDUE}: {named}" if named else LLM_REDACTION_RESIDUE)
+            NodeVerdict(
+                _VERDICT, Outcome.FLAG, None, f"{LLM_REDACTION_RESIDUE}: {named}" if named else LLM_REDACTION_RESIDUE
+            )
         )
     # A branch whose detection is its evaluation, run out of family, reports about itself rather
     # than about the recording. Its result is recorded and contributes no ground below.

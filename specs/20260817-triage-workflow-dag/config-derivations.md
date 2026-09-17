@@ -1749,8 +1749,10 @@ median. benchmarks/open.md keeps that row.
 
 redaction.llm_check.* -- the optional re-read of the redacted transcript. enabled false: a step that
 turned itself on would make two hosts disagree about the same recording with no record of why, and
-this one needs a GPU. It can only withhold -- it never edits a released artifact and never widens a
-redaction -- so leaving it off costs nothing that the detector cascade was doing.
+this one needs a GPU. It can only annotate -- it never edits a released artifact, never widens a
+redaction and, since the owner's correction of 2026-09-17, does not touch REDACT's outcome either --
+so leaving it off costs nothing that the detector cascade was doing. What its annotation means is
+`verdict.llm_redaction_flags` above.
 
   model_id google/gemma-4-31B-it-qat-w4a16-ct. The owner asked for "gemma4 (32b)"; there is no 32B.
   The family is 12B / 26B-A4B / 31B / E2B / E4B, and 31B is the one meant. Both the full and the QAT
@@ -1772,8 +1774,8 @@ redaction -- so leaving it off costs nothing that the detector cascade was doing
   loop exists so the reviewer can see the effect of its own concerns, and the bound exists because a
   model that flags something every round would otherwise never stop. 1 would make the loop a single
   review and remove the point of it. The bound is cheap to be wrong about in the safe direction: the
-  step withholds if ANY round flagged, so a run that stops early still withholds, and raising the
-  bound can only add reasoning to the record. What would settle it: the distribution of rounds to
+  annotation reads `flagged` if ANY round flagged, so a run that stops early still annotates, and
+  raising the bound can only add reasoning to the record. What would settle it: the distribution of rounds to
   convergence over a corpus of redacted transcripts.
 
   max_new_tokens 1024 -- the reasoning is the product, so this is not small; it is the generation
