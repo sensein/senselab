@@ -114,6 +114,12 @@ Each defect was reintroduced on the fixed tree and the guard alone was run:
   family that is nevertheless the wrong family renders, so the guard is satisfied.
 - **Everything outside `senselab/audio/workflows/triage/`.**
 
+The one false-positive shape it can produce: node qualification is per *function*, so a reader that
+compares an activity's `node` for one purpose and selects an entity attribute for an unrelated one
+would have the selection attributed to that node wrongly. No function in the tree does both today.
+If one appears and the guard is wrong about it, split the function rather than widening the
+allowlist — the two concerns were separate to begin with.
+
 ## The allowlist
 
 One entry, `("name", "band_profile")`, and the reason is in the code beside it:
