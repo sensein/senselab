@@ -1266,10 +1266,6 @@ branch.verbatim_overlap_max: 0.5
 branch.coverage_min: 0.5
   A majority of the expected tokens realised.
 
-branch.expected_lexical_max: 0
-  Exact, not conventional, and the one value here that follows from the expectation itself: a
-  `NO_LEXICAL` expectation forbids lexical content, so it tolerates none.
-
 branch.interval_max_s: 2.0
   From the instruction's own word. A series a speaker is told to produce *quickly* does not pause
   for more than about two seconds between events without the instruction having been abandoned.
