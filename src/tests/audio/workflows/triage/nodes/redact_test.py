@@ -1088,6 +1088,28 @@ class TestTheStimulusAccountsForACandidate:
         assert _exemptions(store) == []
         assert result.artifacts["transcript"].read_text().split() == ["[LOCATION]"]
 
+    def test_a_finding_reaching_past_the_words_it_identifies_is_not_exempt(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The words a finding reaches only account for it when they reconstruct its whole extent.
+
+        SPEECH builds a located finding's extent as the hull of the words it covers, so a covered
+        set whose own hulls fall short of that extent means a word was missed — and a missed word is
+        one the exemption would be accounting for without having looked at it. The finding here runs
+        to 3.5 s while ``rainbow`` stops at 2.5 s, so it is planned rather than exempted.
+        """
+        _seed_redact_store(store, tmp_path, words=["form", "a", "rainbow"], findings=[("LOCATION", (2.0, 3.5))])
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(
+            store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path)
+        )
+        assert _exemptions(store) == []
+        assert result.artifacts["transcript"].read_text().split() == ["form", "a", "[LOCATION]"]
+
     def test_the_covered_words_must_be_a_contiguous_run_of_one_declared_unit(
         self,
         store: ProvStore,

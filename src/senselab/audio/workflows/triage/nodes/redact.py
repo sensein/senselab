@@ -94,6 +94,7 @@ _TERMINATORS_KEY = "stimulus.sentence_terminators"
 _EXEMPT_VERB = "exempt"  # the store's assertion verb for a redaction deliberately not made
 _EXPECTED_LABEL = "expected_speech"  # what accounted for it: the stimulus the participant was asked to read
 _EXEMPTION_MEASUREMENT = "redaction_exemptions"
+_COVERAGE_TOLERANCE_S = 1e-9  # float slack on an equality, not a margin
 _LLM_SECTION = "redaction.llm_check"
 _LLM_REVIEW_MEASUREMENT = "redaction_llm_review"
 _LLM_PLACEHOLDER = "[LLM_{category}]"  # what a concern is masked with inside the loop, never in a release
@@ -510,10 +511,16 @@ def _expected_exemptions(
     """Which findings the declared stimulus accounts for.
 
     A candidate is exempt only when **every** word its extent reaches carries a non-empty normalised
-    key and those keys occur, in order and contiguously, inside one declared unit. A finding that
-    reaches every consensus word is never exempt: that is SPEECH's signature for a finding its
-    locator could not place, and a whole-transcript extent would be accounted for by a whole-passage
-    prompt without anything having been matched.
+    key, those words' own hulls span the whole of the extent, and their keys occur in order and
+    contiguously inside one declared unit. A finding that reaches every consensus word is never
+    exempt: that is SPEECH's signature for a finding its locator could not place, and a
+    whole-transcript extent would be accounted for by a whole-passage prompt without anything having
+    been matched.
+
+    The span condition is what makes "every word it reaches" trustworthy. SPEECH builds a located
+    finding's extent as the hull of the words it covers, so the covered words' hulls reconstruct it
+    exactly — unless one was missed, and a missed word is one this function would be accounting for
+    without having looked at it. Any extent the identified words do not reach is therefore refused.
 
     Args:
         findings: The live ``pii`` entities.
@@ -536,11 +543,17 @@ def _expected_exemptions(
         keys = [normalise(str(word.attributes.get("text") or "")) for word in covered]
         if not all(keys):
             continue
+        hulls = [word_hull(word) for word in covered]
+        assert finding.extent is not None  # _covered_words returns nothing without one
+        if (
+            min(start for start, _ in hulls) > float(finding.extent[0]) + _COVERAGE_TOLERANCE_S
+            or max(end for _, end in hulls) < float(finding.extent[1]) - _COVERAGE_TOLERANCE_S
+        ):
+            continue
         for unit_index, (prompt_index, unit_text, unit_keys) in enumerate(keyed):
             offset = _contiguous_run(unit_keys, keys)
             if offset is None:
                 continue
-            assert finding.extent is not None  # _covered_words returns nothing without one
             exemptions.append(
                 _Exemption(
                     finding_id=finding.id,
@@ -788,6 +801,7 @@ def _register_redacted_stream(
     Returns:
         The stream entity's id.
     """
+    (run_dir / "streams").mkdir(parents=True, exist_ok=True)
     relative, report = write_stream(redacted, run_dir, STREAM_NAME)
     duration_s = float(redacted.waveform.shape[-1]) / float(redacted.sampling_rate)
     stream_id = store.entity(
