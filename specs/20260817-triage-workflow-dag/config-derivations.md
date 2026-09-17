@@ -1283,14 +1283,6 @@ branch.train_min_s: 1.0
   At the slowest clinically reported DDK rate (~3 syllables/s), a span worth calling a train holds
   at least three syllables, which is one second.
 
-branch.repeat_min_occurrences: 3
-  From the word: two occurrences are a pair, three are a series, and a repetition *train* needs a
-  series. The removed `ddk.lexical_repetition` routing gate carried the same threshold and
-  over-routed DDK on 99% of `rainbow-passage` — which was an argument about that gate's evidence
-  rather than about this count, and is why VERDICT folds an out-of-family DDK result as a detector
-  covariate (see [verdict](#verdict)). The gate is gone; this count is not it, and stands on the
-  word.
-
 branch.burst_window_ms: 20.0
   The stop burst and its aspiration occupy the first 10-25 ms after release (Blumstein & Stevens,
   1979), and 20 ms is the conventional burst-analysis window. Published convention.

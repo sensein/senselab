@@ -268,7 +268,6 @@ branch:
   modulation_band_hz: [1.0, 10.0]      # [lo, hi] band the envelope modulation peak is searched in
   rate_prominence_min: 2.0             # modulation peak over its own band mean that makes a rate readable
   train_min_s: 1.0                     # shortest carrier span that can hold a syllable train
-  repeat_min_occurrences: 3            # occurrences of one token that make it a repetition
   burst_window_ms: 20.0                # window after a syllable onset the burst spectrum is taken over
   place_margin_db: 3.0                 # dB the leading place band must beat the next by to be resolved
   effort_split_hz: 1000.0              # split the low and high spectral balance of an effort token is taken at

@@ -602,30 +602,62 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
         assert len(_of_kind(result, "deviation", "repeated_item")) == 1
 
 
-class TestASyllableFamilyExpectsNoLexicalContent:
-    """The ten DDK families are in family for SPEECH too, and SPEECH's expectation is the opposite."""
+class TestASyllableFamilyIsEvaluatedAsTheTrainItsInstructionAsksFor:
+    """The ten ``diadochokinesis-*`` families are SPEECH's own rows, served by the syllable body."""
 
-    def test_a_silent_train_proposes_no_speech_span(self, tmp_path: Path) -> None:
-        """`/pa/` is not lexical: proposing a speech span here asserts the opposite of the measure."""
+    def test_a_train_family_reaches_the_syllable_body_rather_than_a_no_lexical_body(self, tmp_path: Path) -> None:
+        """With no envelope the syllable body says which instrument was absent; a no-lexical body would not."""
         store = _store(family="diadochokinesis-pa")
         _transcript(store, [])
-        result = align_speech(
-            "diadochokinesis-pa", store, None, branch_params(_config(tmp_path, {"expected_lexical_max": 0}))
-        )
-        assert result.components == []
-        assert result.done is True
+        result = align_speech("diadochokinesis-pa", store, None, branch_params(_config(tmp_path)))
+        absent = [
+            (finding.name, finding.evidence.get("unavailable"))
+            for finding in result.deviations
+            if finding.kind == "measure" and finding.evidence.get("unavailable")
+        ]
+        assert ("ddk_syllable_rate_from_envelope_modulation_hz", "energy_envelope") in absent
+        assert result.done == UNDETERMINED
 
-    def test_a_lexical_word_on_a_syllable_train_is_off_task(self, tmp_path: Path) -> None:
-        """What the transcript did find is the finding, over that word's own extent."""
+    def test_the_row_carries_the_instructions_own_expectation(self) -> None:
+        """A syllable family's row says what it asks for; ``no lexical content`` is not a task."""
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("labial",)
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].expected_event_count == 10
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence == ("labial", "alveolar", "velar")
+
+    def test_a_lexical_word_on_a_syllable_train_is_not_a_departure(self, tmp_path: Path) -> None:
+        """The removed claim: a word here was an ``off_task_extent``, which is what the owner rejected."""
         store = _store(family="diadochokinesis-pa")
         _transcript(store, [("buttercup", 2.0, 2.6)])
-        result = align_speech(
-            "diadochokinesis-pa", store, None, branch_params(_config(tmp_path, {"expected_lexical_max": 0}))
-        )
-        [off_task] = _of_kind(result, "deviation", "off_task_extent")
-        assert (off_task.start, off_task.end) == (2.0, 2.6)
-        assert result.components == [], "a speech span here would assert the opposite of the measure"
+        result = align_speech("diadochokinesis-pa", store, None, branch_params(_config(tmp_path)))
+        assert _of_kind(result, "deviation", "off_task_extent") == []
+
+    def test_buttercup_takes_the_lexical_token_path(self, tmp_path: Path) -> None:
+        """``buttercup`` is a word, so the consensus words serve the family directly."""
+        store = _store(family="diadochokinesis-buttercup")
+        _transcript(store, [("buttercup", 1.0 + 0.5 * index, 1.4 + 0.5 * index) for index in range(10)])
+        result = align_speech("diadochokinesis-buttercup", store, None, branch_params(_config(tmp_path)))
+        [counted] = [finding for finding in result.deviations if finding.name == "expected_event_count"]
+        assert counted.evidence["found"] == 10
+        assert counted.evidence["declared"] == 10
+        [train] = [span for span in result.components if span.role == "task_extent"]
+        assert train.attributes["production"] == "lexical_repetition"
+        assert train.attributes["token"] == "buttercup"
+        assert result.done is True
+
+    def test_a_buttercup_recording_with_no_such_word_did_not_perform_the_task(self, tmp_path: Path) -> None:
+        """The discriminator for the lexical path: the count is of that token, not of any word."""
+        store = _store(family="diadochokinesis-buttercup")
+        _transcript(store, [("the", 1.0, 1.2), ("birch", 1.3, 1.6)])
+        result = align_speech("diadochokinesis-buttercup", store, None, branch_params(_config(tmp_path)))
+        assert result.components == []
         assert result.done is False
+
+    def test_the_syllable_spans_are_minted_into_speechs_own_family(self, tmp_path: Path) -> None:
+        """One minting family per branch is what ``dispatch`` enforces; a second would weaken it."""
+        store = _store(family="diadochokinesis-buttercup")
+        _transcript(store, [("buttercup", 1.0, 1.4)])
+        result = align_speech("diadochokinesis-buttercup", store, None, branch_params(_config(tmp_path)))
+        assert {span.family for span in result.components} == {"speech"}
 
 
 class TestDetectSpeechNeedsNoAlignmentAndGroupsByGap:

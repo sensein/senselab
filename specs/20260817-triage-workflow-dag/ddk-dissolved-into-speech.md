@@ -86,6 +86,12 @@ record it fed was never written. Removing the key costs no reachable behaviour. 
 is removed with it: its stated reason for existing was that the two-mode contract required both
 arms of a branch, and there is no DDK branch to hold that contract.
 
+`branch.repeat_min_occurrences` — the occurrences of one token that made it a repetition — goes
+with `detect_ddk`, which was its only reader. Its derivation argued from the word: two occurrences
+are a pair, three are a series, and a repetition train needs a series. Nothing measures a series of
+one token any more; SPEECH's own bodies read the transcript against the instruction's tokens
+instead.
+
 Nothing here is recreated as a weight or a prior. If a future measurement shows that an
 out-of-family syllable train on a SPEECH recording is a detector artefact at a measurable rate, that
 rate is what would be fitted — not a membership list.
