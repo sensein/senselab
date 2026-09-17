@@ -80,6 +80,22 @@ line rather than in a suppressed title: `task-… · 2026-08-25  |  task: …  |
 full run id and the file path are provenance and appear in the blocks; every block line is folded to
 the block width, so nothing runs off the page.
 
+### The branch measures the blocks print
+
+`_BRANCH_MEASURES` selects, per branch, which of that branch's report detail keys the BRANCH DETAIL
+`measured:` line and the PDF decision page's MEASURED BRANCH FINDINGS block state. It named three
+branches and not DDK, so every number DDK measures — its train count and extent, the modulation peak
+and the unit it is read in, interval dispersion and its trend, and the nine `ppg_*` readings the PPG
+instrument produces — reached neither reader. A branch conclusion with no numbers beside it can only
+be believed.
+
+`modulation_unit` is listed beside `modulation_peak_hz` because it is that value's unit, and a rate
+printed without one is a number nobody can check. The nine `ppg_*` keys are always present in DDK's
+detail and are None when the branch ran without the PPG instrument, so a run without it prints nine
+em dashes. That is the intended reading: the field exists, it was not measured, and the branch's
+`notes` already say which instrument was absent. Suppressing a None here would make "not measured"
+and "not a field of this branch" render identically.
+
 ### Initial and updated spans share a lane
 
 Owner request, 2026-09-17: *"I would like to see a report with initial and updated spans added to

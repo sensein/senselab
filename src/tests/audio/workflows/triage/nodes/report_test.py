@@ -153,6 +153,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
     skip_voice: bool = False,
     foreign_span_label: str | None = None,
     scan: str = "complete",
+    ddk: bool = False,
 ) -> None:
     """Write what a completed graph would have left behind, so REPORT has a store to read.
 
@@ -177,6 +178,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         scan: ``"complete"`` writes SPEECH's ``pii_scan`` with every detector attempted,
             ``"incomplete"`` writes one with a failed detector, and ``"absent"`` writes none —
             which is what routing declining SPEECH leaves behind.
+        ddk: Whether DDK is routed and writes its own report, whose detail the branch blocks read.
     """
     config = load_triage_config()
     software = software_agent(store)
@@ -333,7 +335,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
             "stem": "rec",
         },
     )
-    for branch in ("AIRWAY", "SPEECH", "VOICE"):
+    for branch in ("AIRWAY", "SPEECH", "VOICE", *(("DDK",) if ddk else ())):
         _entity(
             "branch_decision",
             None,
@@ -512,6 +514,43 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         deviations=(),
         detail={"spans_n": 1, "phonation_s": 0.8, "gate_interval": "unmeasured", "notes": []},
     )
+
+    if ddk:
+        repeat = store.activity(node="DDK", step="align", parameters={})
+        store.was_associated_with(repeat, software)
+        write_report(
+            store,
+            repeat,
+            software,
+            node="DDK",
+            kind="ddk",
+            conformance=True,
+            conformance_of=TASK,
+            deviations=(),
+            detail={
+                "mode": "align",
+                "task_family": "ddk",
+                "trains_n": 1,
+                "train_s": 2.5,
+                "train_fraction": 0.4,
+                "modulation_peak_hz": 5.5,
+                "modulation_unit": "syllables_per_s",
+                "interval_dispersion": 0.12,
+                "interval_trend_s_per_step": 0.003,
+                "ppg_trains_n": 1,
+                "ppg_rate_hz": 5.4,
+                "ppg_repetitions": 14,
+                "ppg_period_s": 0.185,
+                "ppg_jitter_over_median": 0.08,
+                "ppg_cv_units_n": 28,
+                "ppg_interval_trend_s_per_step": 0.001,
+                "ppg_expected_place_fraction": 0.93,
+                "ppg_place_agreement": 0.88,
+                "lexical_repetitions_n": 0,
+                "spans_n": 3,
+                "notes": [],
+            },
+        )
 
     plan = store.activity(node="REDACT", step="plan", parameters={})
     store.was_associated_with(plan, software)
@@ -1410,6 +1449,52 @@ class TestOnlyAirwayLabelsTheAirwayLane:
         _seed_report_store(store, tmp_path, full=True, foreign_span_label="Applause")
         report(store, tmp_path / "summary", _png(tmp_path))
         assert {token["text"] for token in _lane_rows(panels[0], "airway")["proposed"]} == {"cough"}
+
+
+class TestTheDdkBlockCarriesItsMeasurements:
+    """DDK measures what no other branch does, and the page read none of it."""
+
+    def test_the_branch_detail_block_states_ddks_own_measurements(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A branch conclusion without its numbers cannot be judged, only believed."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, ddk=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "modulation_peak_hz=5.5" in blocks
+        assert "modulation_unit=syllables_per_s" in blocks
+        assert "interval_dispersion=0.12" in blocks
+
+    def test_every_ppg_field_ddk_measures_reaches_the_page(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The PPG instrument's nine readings are DDK's own evidence and reached nothing."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, ddk=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        expected = {
+            "ppg_trains_n=1",
+            "ppg_rate_hz=5.4",
+            "ppg_repetitions=14",
+            "ppg_period_s=0.185",
+            "ppg_jitter_over_median=0.08",
+            "ppg_cv_units_n=28",
+            "ppg_interval_trend_s_per_step=0.001",
+            "ppg_expected_place_fraction=0.93",
+            "ppg_place_agreement=0.88",
+        }
+        assert expected <= set(blocks.split())
+
+    def test_the_pdf_decision_pages_measured_findings_name_ddk_too(self, store: ProvStore, tmp_path: Path) -> None:
+        """Both readers of ``_BRANCH_MEASURES`` were blind to DDK, not just the branch-detail one."""
+        _seed_report_store(store, tmp_path, full=True, ddk=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        blocks = "\n".join(_decision_blocks(payload))
+        findings = blocks.split("MEASURED BRANCH FINDINGS", 1)[1].split("SUPPORTING EVIDENCE", 1)[0]
+        assert "DDK: trains_n=1" in findings
+        assert "ppg_rate_hz=5.4" in findings
 
 
 class TestInitialAndUpdatedSpansShareALane:

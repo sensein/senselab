@@ -108,6 +108,26 @@ _BRANCH_MEASURES = {
     "AIRWAY": ("labelled_n", "contested_n", "merged_n"),
     "SPEECH": ("speaker_count", "words_n", "speech_s", "nontarget_speech_s"),
     "VOICE": ("spans_n", "phonation_s", "longest_span_s"),
+    "DDK": (
+        "trains_n",
+        "train_s",
+        "train_fraction",
+        "modulation_peak_hz",
+        "modulation_unit",
+        "interval_dispersion",
+        "interval_trend_s_per_step",
+        "ppg_trains_n",
+        "ppg_rate_hz",
+        "ppg_repetitions",
+        "ppg_period_s",
+        "ppg_jitter_over_median",
+        "ppg_cv_units_n",
+        "ppg_interval_trend_s_per_step",
+        "ppg_expected_place_fraction",
+        "ppg_place_agreement",
+        "lexical_repetitions_n",
+        "spans_n",
+    ),
 }
 
 
