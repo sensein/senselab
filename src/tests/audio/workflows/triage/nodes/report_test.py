@@ -11,6 +11,7 @@ from typing import Any, Sequence
 import numpy as np
 import pytest
 import soundfile as sf
+import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -1608,6 +1609,29 @@ class TestInitialAndUpdatedSpansShareALane:
         airway = _lane_panel(panels[0], "airway")
         assert airway["type"] == "segments"
         assert [segment["label"] for segment in airway["segments"]] == ["cough"]
+
+    def test_a_link_to_an_initial_span_on_another_page_draws_nothing(self, store: ProvStore, tmp_path: Path) -> None:
+        """The PDF pages the timeline, so a pair can straddle a boundary and land on two pages."""
+        from senselab.audio.data_structures import Audio
+        from senselab.audio.tasks.plotting.plotting import TOKEN_DERIVATION_LINK_COLOR, plot_aligned_panels
+
+        del store, tmp_path
+        audio = Audio(waveform=torch.zeros(1, _RATE * 4), sampling_rate=_RATE)
+        panel = {
+            "type": "tokens",
+            "name": "airway",
+            "show_row_labels": True,
+            "tokens": [
+                {"text": "cough", "start": 3.2, "end": 3.6, "row": "proposed", "key": "c", "derived_from": ["p"]},
+                {"text": "12 dB", "start": 0.2, "end": 0.6, "row": "initial", "key": "p"},
+            ],
+        }
+        split = plot_aligned_panels(audio, [panel], time_limits=(2.0, 4.0))
+        lane = next(axis for axis in split.axes if axis.get_ylabel() == "airway")
+        assert [line for line in lane.lines if line.get_color() == TOKEN_DERIVATION_LINK_COLOR] == []
+        whole = plot_aligned_panels(audio, [panel])
+        lane = next(axis for axis in whole.axes if axis.get_ylabel() == "airway")
+        assert len([line for line in lane.lines if line.get_color() == TOKEN_DERIVATION_LINK_COLOR]) == 1
 
     def test_the_lane_draws_one_link_per_edge_it_paired(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
