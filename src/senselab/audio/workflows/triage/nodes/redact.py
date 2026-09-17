@@ -43,11 +43,12 @@ import math
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.nodes.branches import branch_params
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     consensus_words,
@@ -60,6 +61,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_stream,
     write_verdict,
 )
+from senselab.audio.workflows.triage.stimulus import split_prompts
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import scan_for_pii
 from senselab.utils.prov_store import Entity, ProvStore
@@ -78,6 +80,10 @@ _AUDIO_CHECK = "bounded"  # what a text re-scan can claim about the audio, on ev
 STREAM_NAME = "redacted"  # the store-held name the masked audio resolves under, beside plain/enhanced/residual
 CONSENSUS_ARTIFACT_SCHEMA = "senselab.triage.redacted_consensus"  # what the JSON artifact claims to be
 CONSENSUS_ARTIFACT_VERSION = 1  # bumped when a record's field set changes
+_TERMINATORS_KEY = "stimulus.sentence_terminators"
+_EXEMPT_VERB = "exempt"  # the store's assertion verb for a redaction deliberately not made
+_EXPECTED_LABEL = "expected_speech"  # what accounted for it: the stimulus the participant was asked to read
+_EXEMPTION_MEASUREMENT = "redaction_exemptions"
 
 
 @dataclass(frozen=True)
@@ -404,6 +410,179 @@ def _token(record: dict[str, Any]) -> str:
     return str(record["text"]) if record["kind"] == "word" else str(record["token"])
 
 
+@dataclass(frozen=True)
+class _Exemption:
+    """One PII candidate the declared stimulus accounts for, and the evidence that it does.
+
+    Attributes:
+        finding_id: The ``pii`` entity that was not planned.
+        category: Its category.
+        extent: Its extent, unpadded.
+        word_ids: The consensus words it covers, in stream order.
+        expected_keys: The **stimulus's own** normalised tokens the covered run matched, taken from
+            the prompt rather than from the transcript, so a fault in the matcher cannot put
+            transcript text into the audit record.
+        prompt: Which ``expected_speech`` entry accounted for it.
+        unit: Which structure unit of that entry.
+        unit_text: That unit verbatim, as the prompt spelled it.
+    """
+
+    finding_id: str
+    category: str
+    extent: tuple[float, float]
+    word_ids: tuple[str, ...]
+    expected_keys: tuple[str, ...]
+    prompt: int
+    unit: int
+    unit_text: str
+
+
+def _expected_units(hint: AudioHints | None, *, terminators: str) -> list[tuple[int, str, list[str]]]:
+    """The declared stimulus, split into structure units and their verbatim tokens.
+
+    Args:
+        hint: What the recording was declared to contain, or None.
+        terminators: The characters that close a unit inside one prompt.
+
+    Returns:
+        ``(prompt index, unit text, tokens)`` per unit. Empty when there is no hint or no
+        ``expected_speech``, which is what makes the no-hint path identical to the old behaviour.
+    """
+    if hint is None or not hint.expected_speech:
+        return []
+    return split_prompts(list(hint.expected_speech), terminators=terminators)
+
+
+def _covered_words(finding: Entity, words: Sequence[Entity]) -> list[Entity]:
+    """The consensus words a finding's own extent reaches, by the hull of their source timings.
+
+    Args:
+        finding: A live ``pii`` entity.
+        words: PREPROCESS's consensus words, in stream order.
+
+    Returns:
+        The covered words, in stream order. Empty when the finding carries no extent.
+    """
+    if finding.extent is None:
+        return []
+    bounds = (float(finding.extent[0]), float(finding.extent[1]))
+    return [word for word in words if word.extent is not None and _overlaps(word_hull(word), bounds)]
+
+
+def _contiguous_run(haystack: Sequence[str], needle: Sequence[str]) -> int | None:
+    """Where ``needle`` occurs in ``haystack`` as a contiguous run, or None.
+
+    Args:
+        haystack: One unit's normalised tokens.
+        needle: The covered words' normalised keys.
+
+    Returns:
+        The offset of the first occurrence, or None. A run rather than a subsequence: two words the
+        prompt happens to contain in different sentences do not account for them said together.
+    """
+    if not needle or len(needle) > len(haystack):
+        return None
+    for start in range(len(haystack) - len(needle) + 1):
+        if list(haystack[start : start + len(needle)]) == list(needle):
+            return start
+    return None
+
+
+def _expected_exemptions(
+    findings: Sequence[Entity],
+    words: Sequence[Entity],
+    units: Sequence[tuple[int, str, list[str]]],
+    normalise: Callable[[str], str],
+) -> list[_Exemption]:
+    """Which findings the declared stimulus accounts for.
+
+    A candidate is exempt only when **every** word its extent reaches carries a non-empty normalised
+    key and those keys occur, in order and contiguously, inside one declared unit. A finding that
+    reaches every consensus word is never exempt: that is SPEECH's signature for a finding its
+    locator could not place, and a whole-transcript extent would be accounted for by a whole-passage
+    prompt without anything having been matched.
+
+    Args:
+        findings: The live ``pii`` entities.
+        words: PREPROCESS's consensus words, in stream order.
+        units: The declared structure from :func:`_expected_units`.
+        normalise: The branches' own lexical normaliser, ``BranchParams.p_normalise``.
+
+    Returns:
+        One exemption per accounted-for finding, in the findings' own order. Empty when ``units``
+        is empty, which is the no-hint path.
+    """
+    if not units:
+        return []
+    keyed = [(prompt, text, [normalise(token) for token in tokens]) for prompt, text, tokens in units]
+    exemptions: list[_Exemption] = []
+    for finding in findings:
+        covered = _covered_words(finding, words)
+        if not covered or len(covered) == len(words):
+            continue
+        keys = [normalise(str(word.attributes.get("text") or "")) for word in covered]
+        if not all(keys):
+            continue
+        for unit_index, (prompt_index, unit_text, unit_keys) in enumerate(keyed):
+            offset = _contiguous_run(unit_keys, keys)
+            if offset is None:
+                continue
+            assert finding.extent is not None  # _covered_words returns nothing without one
+            exemptions.append(
+                _Exemption(
+                    finding_id=finding.id,
+                    category=str(finding.attributes.get("category", "")),
+                    extent=(float(finding.extent[0]), float(finding.extent[1])),
+                    word_ids=tuple(word.id for word in covered),
+                    expected_keys=tuple(unit_keys[offset : offset + len(keys)]),
+                    prompt=prompt_index,
+                    unit=unit_index,
+                    unit_text=unit_text,
+                )
+            )
+            break
+    return exemptions
+
+
+def _expected_survivors(
+    survived: Sequence[str],
+    words: Sequence[Entity],
+    marked: Mapping[str, Mapping[str, str]],
+    planned: Sequence[RedactionExtent],
+    exempt_word_ids: frozenset[str],
+) -> list[str]:
+    """The surviving categories that nothing but an exempt word can account for.
+
+    The verifier re-scans the released text, in which an exempt word stands verbatim, so it sees the
+    candidate again. A category is attributed to the exemption only when there is at least one
+    exempt word carrying it that no planned extent covers **and** no non-exempt word carrying it in
+    the same position. With no exemptions the first condition can never hold, so this returns
+    nothing and every survivor is a failure exactly as before.
+
+    Args:
+        survived: What the re-scan still saw.
+        words: PREPROCESS's consensus words.
+        marked: Which PII categories the store's label assertions place on each word.
+        planned: The padded, merged extents the pass produced.
+        exempt_word_ids: The words covered by an exemption.
+
+    Returns:
+        The attributable categories, sorted.
+    """
+    attributable: list[str] = []
+    for category in sorted(set(survived)):
+        uncovered = [
+            word
+            for word in words
+            if category in marked.get(word.id, {})
+            and word.extent is not None
+            and not any(_overlaps(word_hull(word), (extent.start, extent.end)) for extent in planned)
+        ]
+        if uncovered and all(word.id in exempt_word_ids for word in uncovered):
+            attributable.append(category)
+    return attributable
+
+
 def _write_artifacts(
     redacted: Audio,
     transcript_text: str,
@@ -507,7 +686,10 @@ def redact(
             PREPROCESS's consensus words.
         source: The store-held stream name, ``"recording"`` (N17).
         config: The triage configuration.
-        hint: Accepted for the shared node shape; not read.
+        hint: What the recording was declared to contain. When it carries ``expected_speech``, a
+            PII candidate the declared stimulus accounts for is exempted from redaction and
+            recorded as such. With no hint or no ``expected_speech`` nothing is exempted and
+            the node behaves exactly as it did before.
         run_dir: The run directory sidecar paths are relative to.
         artifacts_dir: The release directory; must not contain or be contained by ``run_dir``.
 
@@ -539,8 +721,12 @@ def redact(
     scanned_by, scan_failed, scan_missing = _scan_evidence(scan_measurement, required_detectors)
     scan_incomplete = bool(scan_failed) or bool(scan_missing) or not scanned_by
     findings = _findings(store)
-    extents = _extents_from_findings(findings)
     words = consensus_words(store)
+    units = _expected_units(hint, terminators=str(config.require(_TERMINATORS_KEY)))
+    exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise)
+    exempt_findings = {exemption.finding_id for exemption in exemptions}
+    exempt_word_ids = frozenset(word_id for exemption in exemptions for word_id in exemption.word_ids)
+    extents = _extents_from_findings([finding for finding in findings if finding.id not in exempt_findings])
     consensus = find_measurement(store, "consensus_transcript")
     consulted = _pii_marking_assertions(store)
     marked = _pii_marked_words(store)
@@ -552,15 +738,19 @@ def redact(
         if not scan_incomplete
         else _Verification(verified=False, survived=[], scan_ran=False, failed=[], missing=[])
     )
+    attributed = _expected_survivors(checked.survived, words, marked, planned, exempt_word_ids)
+    outstanding = [category for category in checked.survived if category not in attributed]
     replanned_n = 0
     unremediable: list[str] = []
     widened: list[tuple[tuple[float, float], str]] = []
-    if checked.scan_ran and checked.survived:
+    if checked.scan_ran and outstanding:
         replanned_n = 1
-        for category in checked.survived:
+        for category in outstanding:
             for word in words:
                 marks = marked.get(word.id, {})
-                if word.extent is None or not _matches_surviving(word, category, planned, marks):
+                if word.id in exempt_word_ids or word.extent is None:
+                    continue
+                if not _matches_surviving(word, category, planned, marks):
                     continue
                 hull = word_hull(word)
                 extents.append(RedactionExtent(start=hull[0], end=hull[1], category=category))
@@ -568,7 +758,9 @@ def redact(
         planned = plan_redactions(extents, padding_ms=padding_ms)
         records, transcript_text, unplaced_n = _render(words, planned)
         checked = _verify(transcript_text, required_detectors)
-        unremediable = list(checked.survived)
+        attributed = _expected_survivors(checked.survived, words, marked, planned, exempt_word_ids)
+        outstanding = [category for category in checked.survived if category not in attributed]
+        unremediable = list(outstanding)
 
     stream_id, recording = resolve_stream(store, run_dir, source)
     redacted = apply_redactions(recording, planned, fill=fill, bleep_hz=bleep_hz)
@@ -600,6 +792,44 @@ def redact(
                 store.was_derived_from(span_id, assertion_id)
         span_ids.append(span_id)
         view.append(span_id)
+
+    for exemption in exemptions:
+        exempt_id = store.entity(
+            prov_type="assertion",
+            extent=exemption.extent,
+            attributes={
+                "verb": _EXEMPT_VERB,
+                "label": _EXPECTED_LABEL,
+                "category": exemption.category,
+                "expected_keys": list(exemption.expected_keys),
+                "expected_prompt": exemption.prompt,
+                "expected_unit": exemption.unit,
+                "expected_unit_text": exemption.unit_text,
+                "words_n": len(exemption.word_ids),
+            },
+        )
+        store.was_generated_by(exempt_id, plan_act)
+        store.was_attributed_to(exempt_id, software)
+        store.was_derived_from(exempt_id, exemption.finding_id)
+        for word_id in exemption.word_ids:
+            store.was_derived_from(exempt_id, word_id)
+        view.append(exempt_id)
+    exemptions_id = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={
+            "name": _EXEMPTION_MEASUREMENT,
+            "signal": "consensus_transcript",
+            "n": len(exemptions),
+            "by_category": dict(Counter(exemption.category for exemption in exemptions)),
+            "expected_speech_declared": bool(units),
+            "n_units": len(units),
+            "n_findings": len(findings),
+        },
+    )
+    store.was_generated_by(exemptions_id, plan_act)
+    store.was_attributed_to(exemptions_id, software)
+    view.append(exemptions_id)
 
     apply_act = store.activity(node=NODE, step="apply", parameters={"redactions_n": len(planned), "fill": fill})
     store.was_associated_with(apply_act, software)
@@ -650,12 +880,17 @@ def redact(
         why = (
             f"the re-scan over the redacted text is incomplete ({'; '.join(parts)}); an unverified artifact is withheld"
         )
-    elif checked.survived:
+    elif outstanding:
         outcome = Outcome.FAIL
-        why = "verification found pii on the redacted transcript: " + ", ".join(checked.survived)
+        why = "verification found pii on the redacted transcript: " + ", ".join(outstanding)
     else:
         outcome = Outcome.PASS
         why = "every finding redacted; the redacted transcript re-scans clean"
+        if exemptions:
+            why = (
+                f"every finding redacted except {len(exemptions)} the declared stimulus accounts for; "
+                "the redacted transcript carries nothing else"
+            )
         artifacts = _write_artifacts(redacted, transcript_text, records, artifacts_dir)
     verdict_id, verdict = write_verdict(
         store,
@@ -673,6 +908,11 @@ def redact(
             "verified": checked.verified,
             "survived": checked.survived,
             "unremediable": unremediable,
+            "outstanding": outstanding,
+            "expected_exempt_n": len(exemptions),
+            "expected_exempt_by_category": dict(Counter(exemption.category for exemption in exemptions)),
+            "expected_survivors": attributed,
+            "expected_speech_declared": bool(units),
             "replanned_n": replanned_n,
             "scan_failed": scan_failed,
             "scan_missing": scan_missing,
