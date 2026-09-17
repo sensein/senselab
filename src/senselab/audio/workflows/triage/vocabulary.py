@@ -40,6 +40,14 @@ Named here rather than beside the reader so VERDICT can read it back without imp
 dependencies. ``specs/20260912-ruleset-in-pipeline/design.md`` holds its attributes.
 """
 
+REDACTION_LLM_ANNOTATION = "redaction_llm_annotation"
+"""The measurement REDACT writes its optional LLM re-read's summary into.
+
+Named here rather than beside the writer so VERDICT reads it back without importing REDACT's
+dependencies, exactly as :data:`RULESET_ROUTING` is. ``specs/20260817-triage-workflow-dag/llm-check.md``
+holds its attributes.
+"""
+
 ROUTED = "routed"
 DECLINED = "declined"
 UNAVAILABLE = "unavailable"
@@ -149,6 +157,13 @@ UNREAD_DECLARATION = (
     "a declaration was supplied and no branch decision survived to read it against; "
     "what it claimed is unknown, not empty"
 )
+
+LLM_REDACTION_RESIDUE = "the redaction reviewer flagged residue on the redacted transcript"
+"""The flag ground an LLM redaction annotation of ``flagged`` contributes to the triage axis.
+
+Controlled vocabulary, with the reviewer's categories appended; its substrings and its reasoning stay
+in the store's ``redaction_llm_review`` measurements, which are the annotation's evidence.
+"""
 
 
 @dataclass(frozen=True)
@@ -260,12 +275,16 @@ class FoldPolicy:
             missing conformance means is not the same question on a prolonged vowel as on a story
             recall, and a family whose conformance nobody trusts yet is excepted here by name
             rather than by the branch declining to report one.
+        llm_redaction_flags: Whether REDACT's LLM re-read flagging residue is a flag ground on the
+            **triage** axis. It reaches no other axis: release is REDACT's own detector verdict, and
+            an unmeasured model gates no artifact.
     """
 
     conformance_flags: bool = True
     undetermined_flags: bool = False
     deviation_flags: bool = False
     unmeasured_points_flag: bool = True
+    llm_redaction_flags: bool = True
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -287,6 +306,7 @@ class FoldPolicy:
             undetermined_flags=bool(config.get(f"{_SECTION}.undetermined_flags", False)),
             deviation_flags=bool(config.get(f"{_SECTION}.deviation_flags", False)),
             unmeasured_points_flag=bool(config.get(f"{_SECTION}.unmeasured_points_flag", True)),
+            llm_redaction_flags=bool(config.get(f"{_SECTION}.llm_redaction_flags", True)),
             conformance_flags_by_family={
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
@@ -352,6 +372,10 @@ class FileVerdict:
         bad_map_values: ``routing.hint_branch_map`` entries whose value is not a branch. A
             one-character typo under-claims every file in a run, so it is named here rather than left
             in the decisions for a reader to notice.
+        llm_redaction: REDACT's LLM re-read, as the annotation it wrote — status, iterations, flagged
+            categories, model id, resolved commit, failure. Carried on every path, the step's absence
+            included, so a reader of this product never has to infer whether the re-read happened.
+            Empty when REDACT wrote no annotation.
     """
 
     triage: Triage
@@ -371,6 +395,7 @@ class FileVerdict:
     ran: dict[str, RunState] = field(default_factory=dict)
     branches: dict[str, dict[str, Any]] = field(default_factory=dict)
     bad_map_values: dict[str, str] = field(default_factory=dict)
+    llm_redaction: dict[str, Any] = field(default_factory=dict)
 
 
 def _found(reported: bool, spans_n: int) -> str:
@@ -414,7 +439,8 @@ def _release_from(node_verdicts: Sequence[NodeVerdict]) -> Release:
     Returns:
         The release state for REDACT's artifacts only — never for anything in the store. Only
         ``pass`` clears an artifact, so the mapping is total: a flag, or any member added later,
-        withholds rather than defaulting to cleared.
+        withholds rather than defaulting to cleared. REDACT's outcome is its detector path's alone,
+        so nothing an annotating model concluded reaches this axis.
     """
     redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
     if redact is None:
@@ -477,6 +503,7 @@ def fold_file_verdict(
     hint_claims: Mapping[str, bool] | None,
     route_state: str | None,
     declared_family: str | None = None,
+    llm_redaction: Mapping[str, Any] | None = None,
     policy: FoldPolicy | None = None,
 ) -> FileVerdict:
     """Decide the file, from the deciding nodes' verdicts and the reporting nodes' reports.
@@ -502,6 +529,9 @@ def fold_file_verdict(
       is ``policy.unmeasured_points_flag``.
     * **the declared task.** Every conformance ground is read against it, because what a missing
       conformance *means* is not the same question on a prolonged vowel as on a story recall.
+    * **REDACT's LLM re-read.** An annotation, never a decision. ``flagged`` is a triage ground under
+      ``policy.llm_redaction_flags``; ``absent`` is carried in the product and grounds nothing, so the
+      detector path's answer stands; and neither reaches the release axis.
 
     A branch ``absent`` is not a file ``discard``. PREPROCESS and ROUTING are each a gate every later
     node depends on, so a raise there is folded from ``ran`` rather than a verdict entity: a node
@@ -529,6 +559,10 @@ def fold_file_verdict(
         declared_family: The task family the recording declares, or None. **The fold is task-aware
             through this**: a non-conformance is read against the task that was asked for, and
             ``policy.conformance_flags_by_family`` is where a family is excepted.
+        llm_redaction: REDACT's LLM re-read annotation, or None where the node wrote none. A detector
+            annotates and this fold decides, so the annotation reaches the **triage** axis under
+            ``policy.llm_redaction_flags`` and reaches the release axis on no path at all: release is
+            ``_release_from``'s reading of REDACT's own detector outcome and nothing else.
         policy: What to do with what was reported, from the ``verdict.*`` config section. None is
             the packaged policy, which is what a caller folding without a configuration gets.
 
@@ -588,6 +622,15 @@ def fold_file_verdict(
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, UNREAD_DECLARATION))
     if route_state == UNEXPLAINED:
         reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, UNEXPLAINED_CONTENT))
+    annotation = dict(llm_redaction or {})
+    if annotation.get("status") == "flagged" and rules.llm_redaction_flags:
+        named = ", ".join(str(category) for category in annotation.get("flagged") or ())
+        reasons.append(
+            NodeVerdict(
+                _VERDICT, Outcome.FLAG, None, f"{LLM_REDACTION_RESIDUE}: {named}" if named else LLM_REDACTION_RESIDUE
+            )
+        )
+    # than about the recording. Its result is recorded and contributes no ground below.
     for name, report in reports.items():
         if report.conformance is False and rules.flags_conformance(report.conformance_of, declared_family):
             why = TASK_NOT_CONFORMED if report.conformance_of == TASK else STORE_ASSERTION_CONTRADICTED
@@ -661,4 +704,5 @@ def fold_file_verdict(
         ran=dict(ran),
         branches=branch_view,
         bad_map_values=bad_map_values,
+        llm_redaction=annotation,
     )

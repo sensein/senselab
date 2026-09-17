@@ -34,7 +34,12 @@ from senselab.audio.workflows.triage.nodes.common import (
     live_entities,
     resolve_stream,
 )
-from senselab.audio.workflows.triage.vocabulary import BRANCHES, GRAPH_ORDER, RULESET_ROUTING
+from senselab.audio.workflows.triage.vocabulary import (
+    BRANCHES,
+    GRAPH_ORDER,
+    REDACTION_LLM_ANNOTATION,
+    RULESET_ROUTING,
+)
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "REPORT"
@@ -1463,6 +1468,7 @@ def _report_document(
         "branches": branches,
         "steps": steps,
         "llm_check": _llm_reviews(store),
+        "llm_annotation": _llm_annotation(store),
         "transcript": {
             "text": _consensus_transcript(store),
             "marked_text": _marked_transcript(store),
@@ -1757,11 +1763,27 @@ def _llm_reviews(store: ProvStore) -> list[dict[str, Any]]:
     ]
 
 
+def _llm_annotation(store: ProvStore) -> dict[str, Any] | None:
+    """REDACT's LLM re-read summary, as the annotation measurement carries it.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The status, iteration count, flagged categories, model id, resolved commit and failure, or
+        None when REDACT wrote no annotation.
+    """
+    measurement = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    if measurement is None:
+        return None
+    return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal")}
+
+
 def _llm_check_lines(check: dict[str, Any] | None, reviews: list[dict[str, Any]], *, prefix: str = "    ") -> list[str]:
     """The LLM check's status and its captured reasoning, as report lines.
 
     Args:
-        check: REDACT's ``llm_check`` verdict field, or None when the node wrote none.
+        check: :func:`_llm_annotation`'s record, or None when the node wrote no annotation.
         reviews: :func:`_llm_reviews`' records.
         prefix: Indent.
 
@@ -1849,7 +1871,7 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
 
     redact = steps.get("REDACT")
     lines.append(_redact_line(redact).replace("redact:", "REDACT:", 1))
-    lines += _llm_check_lines((redact or {}).get("llm_check"), document.get("llm_check") or [])
+    lines += _llm_check_lines(document.get("llm_annotation"), document.get("llm_check") or [])
     redact_items = document["evidence"]["branches"].get("REDACT") or []
     for item in redact_items[:4]:
         timing = item.get("timing") or {}
