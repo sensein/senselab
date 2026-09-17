@@ -338,7 +338,7 @@ deviations: { node: [type, ...] }                               # recorded; fold
 unmeasured: { node: [config path, ...] }                        # what it asked for and nobody measured
 detector_covariates: { branch: {conformance, spans_n, route} }  # out-of-family, detection_is_evaluation
 declared_family: "prolonged-vowel" | null                       # what every conformance was read against
-routes:   { branch: "routed" | "declined" | "unavailable" }     # what the ruleset made of it
+routes:   { branch: "routed" | "declined" | "unavailable" | "ungated" }   # what the ruleset made of it
 route_state: "routed" | "empty" | "unexplained" | null          # what it made of the recording
 agreement:{ branch: "agree" | "mismatch" | "resolved" | "not_run" }
 hints:    { branch: "claimed_and_found" | "claimed_not_found" | "found_unclaimed" | "no_claim" }

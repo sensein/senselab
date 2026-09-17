@@ -236,7 +236,7 @@ written before any branch runs:
 branch_decision: {
   branch:                "AIRWAY" | "SPEECH" | "VOICE" | "DDK",
   will_run:              bool,
-  route_state:           "routed" | "declined" | "unavailable",   # content only, never rewritten
+  route_state:           "routed" | "declined" | "unavailable" | "ungated",  # content only, never rewritten
   unavailable_gates:     [ ... ],   # this branch's gates that could not read their feature
   flag_gates:            [ ... ],   # this branch's flag gates that fired; a flag never routes
   declared:              bool,      # the declaration named this branch, however it ran

@@ -626,6 +626,12 @@ a reader can see "the ruleset would have routed this, and the declaration gate w
 than a branch that merely declined. Overwriting route_state would have destroyed exactly the
 measurement the gate exists to argue about.
 
+Since branch_gates.DDK was emptied, DDK's own route_state is ungated on every recording, which is the
+fifth state added for it: a branch that names no gate was never read, so it neither routed nor
+declined. _agreement resolves it rather than scoring it, because a branch that made no claim cannot
+be agreed or disagreed with. Reading it as declined -- which is what it did before ungated existed --
+inverted the route check and flagged every DDK run that found its subject.
+
 An entry naming a branch this graph does not route to is a configuration fault, not a missing
 measurement, and is reported the way routing.hint_branch_map's bad values are -- see
 vocabulary.BAD_DECLARATION_REQUIRED.

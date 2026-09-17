@@ -13,7 +13,7 @@ from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
-from senselab.audio.workflows.triage.vocabulary import BRANCHES, RULESET_ROUTING, Outcome
+from senselab.audio.workflows.triage.vocabulary import BRANCH_ROUTE_STATES, BRANCHES, RULESET_ROUTING, Outcome
 from senselab.utils.prov_store import ProvStore
 
 
@@ -150,6 +150,39 @@ class TestTheRulesetDecides:
             routing(store, None, load_triage_config(path), run_dir=tmp_path)
 
 
+class TestAGatelessBranchIsUngatedAndNotDeclined:
+    """A branch the ruleset never looked at did not decline; the two must stay tellable apart."""
+
+    def test_a_branch_with_no_configured_gate_reads_ungated(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """``branch_gates.DDK`` is empty, so nothing was read and nothing said no."""
+        reads(_evaluation(["AIRWAY"]))
+        routing(store, None, load_triage_config(), run_dir=tmp_path)
+        decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
+        assert decisions["DDK"]["route_state"] == "ungated"
+        assert decisions["DDK"]["route_state"] in BRANCH_ROUTE_STATES
+
+    def test_a_gated_branch_whose_gates_were_silent_still_reads_declined(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """The discriminating half: ``ungated`` must not swallow the branch that was read and declined."""
+        reads(_evaluation(["AIRWAY"]))
+        routing(store, None, load_triage_config(), run_dir=tmp_path)
+        decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
+        assert decisions["VOICE"]["route_state"] == "declined"
+        assert decisions["SPEECH"]["route_state"] == "declined"
+
+    def test_an_unreadable_gate_still_outranks_ungated(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A feature that could not be read is a fact about the store, never a missing gate list."""
+        reads(_evaluation([], unavailable={"VOICE": ("voice.glide",)}))
+        routing(store, None, load_triage_config(), run_dir=tmp_path)
+        decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
+        assert decisions["VOICE"]["route_state"] == "unavailable"
+
+
 class TestDDKRoutesOnTheDeclarationOnly:
     """``routing.declaration_required`` ships ``[DDK]``: the declaration decides, in both directions."""
 
@@ -177,12 +210,12 @@ class TestDDKRoutesOnTheDeclarationOnly:
     def test_a_declared_family_runs_the_gated_branch_whatever_the_ruleset_thought(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """The other direction: the declaration is ground truth, so a declined reading does not stop it."""
+        """The other direction: the declaration is ground truth, so a reading that did not route cannot stop it."""
         reads(_evaluation([], declared=["DDK"], family="diadochokinesis"))
         result = routing(store, None, _gated(tmp_path, "[DDK]"), run_dir=tmp_path)
         assert result.runs == ("DDK",)
         ddk = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "DDK")
-        assert ddk.attributes["route_state"] == "declined"
+        assert ddk.attributes["route_state"] == "ungated"
         assert ddk.attributes["withheld_by_gate"] is False
         assert ddk.attributes["forced_by_declaration"] is True
 
@@ -301,7 +334,7 @@ class TestTheDeclaredTaskAlwaysAddsItsBranch:
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
         decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
         assert (decisions["SPEECH"]["route_state"], decisions["SPEECH"]["forced_by_declaration"]) == ("routed", False)
-        assert (decisions["DDK"]["route_state"], decisions["DDK"]["forced_by_declaration"]) == ("declined", True)
+        assert (decisions["DDK"]["route_state"], decisions["DDK"]["forced_by_declaration"]) == ("ungated", True)
         assert decisions["DDK"]["declared_by_family"] is True
         assert decisions["VOICE"]["will_run"] is False
         assert decisions["VOICE"]["declared"] is False
