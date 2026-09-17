@@ -40,6 +40,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     STORE_ASSERTIONS,
     TASK,
     UNDETERMINED,
+    UNGATED,
     BranchDecision,
     BranchReport,
     Conformance,
@@ -381,6 +382,50 @@ class TestDdkIsFoldedAsymmetrically:
         )
         assert folded.triage is Triage.FLAG
         assert "DDK" not in folded.detector_covariates
+
+    def test_an_in_family_ddk_run_that_found_a_train_is_not_a_route_mismatch(self) -> None:
+        """A branch with no gate made no claim, so finding its subject cannot contradict one.
+
+        This is the inversion the empty ``branch_gates.DDK`` produced while a gateless branch still
+        read ``declined``: the ruleset was recorded as having said no, so every successful DDK run
+        scored ``mismatch`` and flagged the file.
+        """
+        folded = _fold(
+            [_report("DDK", "ddk", conformance=True, in_family=True)],
+            spans={"DDK": 1},
+            routes={"DDK": UNGATED},
+            declared_family="diadochokinesis-pataka",
+        )
+        assert folded.agreement["DDK"] == "resolved"
+        assert folded.triage is Triage.PASS
+        assert [reason.why for reason in folded.reasons if reason.node == "DDK"] == []
+
+    def test_an_in_family_ddk_run_that_found_nothing_does_not_score_agreement_either(self) -> None:
+        """The other half of the same inversion: an absent train was not the ruleset being right."""
+        folded = _fold(
+            [_report("DDK", "ddk", conformance=True, in_family=True)],
+            spans={"DDK": 0},
+            routes={"DDK": UNGATED},
+            declared_family="diadochokinesis-pataka",
+        )
+        assert folded.agreement["DDK"] == "resolved"
+        assert folded.findings["DDK"] == "absent"
+
+    def test_a_gated_branch_still_scores_both_arms_exactly_as_before(self) -> None:
+        """The fifth state must change nothing for a branch the ruleset did read."""
+        for route, spans_n, expected in (
+            (ROUTED, 1, "agree"),
+            (ROUTED, 0, "mismatch"),
+            (DECLINED, 1, "mismatch"),
+            (DECLINED, 0, "agree"),
+        ):
+            folded = _fold(
+                [_report("AIRWAY", "airway", conformance=True, in_family=True)],
+                spans={"AIRWAY": spans_n},
+                routes={"AIRWAY": route},
+                declared_family="respiration-and-cough-threequickbreaths",
+            )
+            assert folded.agreement["AIRWAY"] == expected, (route, spans_n)
 
     def test_the_other_three_are_not_in_the_asymmetric_set(self) -> None:
         """Breath, phonation and lexical content all occur incidentally; a train does not."""

@@ -35,6 +35,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     ROUTED,
     RULESET_ROUTING,
     UNAVAILABLE,
+    UNGATED,
     Outcome,
 )
 from senselab.utils.prov_store import ProvStore
@@ -126,18 +127,22 @@ def _route_states(attributes: dict[str, Any]) -> dict[str, str]:
 
     Returns:
         One of :data:`~senselab.audio.workflows.triage.vocabulary.BRANCH_ROUTE_STATES` per branch.
-        A branch a gate fired for is ``routed``; one whose gates were all silent is ``declined``; one
-        with no fired gate and at least one gate whose feature could not be read is ``unavailable``,
-        which is a branch that was never judged rather than one that declined.
+        A branch a gate fired for is ``routed``; one with no fired gate and at least one gate whose
+        feature could not be read is ``unavailable``, which is a branch that was never judged rather
+        than one that declined; one that names no gate at all is ``ungated``, which is a branch the
+        ruleset never looked at; and one whose gates were all silent is ``declined``.
     """
     routed = {str(branch) for branch in attributes.get("routed") or ()}
     unreadable = attributes.get("unavailable") or {}
+    ungated = {str(branch) for branch in attributes.get("ungated") or ()}
     states: dict[str, str] = {}
     for branch in BRANCHES:
         if branch in routed:
             states[branch] = ROUTED
         elif unreadable.get(branch):
             states[branch] = UNAVAILABLE
+        elif branch in ungated:
+            states[branch] = UNGATED
         else:
             states[branch] = DECLINED
     return states

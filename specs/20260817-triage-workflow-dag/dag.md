@@ -138,13 +138,16 @@ charge against the ruleset. It is a store fact: ROUTING writes it as the `state`
 `ruleset_routing` measurement, and the fold reads it for the `acoustically_empty` discard and the
 `UNEXPLAINED` flag (step 7). There is no fourth, null reading: a failure to evaluate now raises.
 
-**branch route state** — `routed`, `declined` or `unavailable` (`vocabulary.BRANCH_ROUTE_STATES`,
-`vocabulary.py:45`), **exactly one per branch per recording**, derived from the same evaluation by
-`routing._route_states` (`routing.py:117`). `routed` is a gate fired; `declined` is every gate
-evaluated and none fired; `unavailable` is no gate fired **and** at least one of that branch's gates
-could not be read — a branch that was never judged, not one that declined. Do not collapse the last
-two: only `routed` runs the branch, but only `declined` is a reading to disagree with, which is why
-`_agreement` returns `resolved` for `unavailable` (step 7).
+**branch route state** — `routed`, `declined`, `unavailable` or `ungated`
+(`vocabulary.BRANCH_ROUTE_STATES`), **exactly one per branch per recording**, derived from the same
+evaluation by `routing._route_states`. `routed` is a gate fired; `declined` is every gate evaluated
+and none fired; `unavailable` is no gate fired **and** at least one of that branch's gates could not
+be read — a branch that was never judged, not one that declined; `ungated` is a branch that names no
+gate at all, which the ruleset never looked at. Do not collapse the four: only `routed` runs the
+branch, and only `routed` and `declined` are readings to disagree with, which is why `_agreement`
+returns `resolved` for both `unavailable` and `ungated` (step 7). The two resolve for different
+reasons and must not be merged — `unavailable` says an instrument failed, `ungated` says none was
+configured, and conflating them misleads exactly the reader debugging a route.
 
 **recorded routing** — the `ruleset_routing` measurement ROUTING writes
 (`vocabulary.RULESET_ROUTING`, `live_evidence.route_attributes`): file route state, the routed
@@ -944,7 +947,7 @@ graph LR
   EMP --> M
   UNX --> M
   FL -.-> M
-  M ==>|"per branch: routed /<br/>declined / unavailable"| RO["ROUTING branch_decision<br/>will_run"]
+  M ==>|"per branch: routed / declined /<br/>unavailable / ungated"| RO["ROUTING branch_decision<br/>will_run"]
   M -.->|"file route state"| V["VERDICT: acoustically_empty<br/>or UNEXPLAINED flag"]
   RO ==> B["the branches that run"]
 ```
@@ -1237,7 +1240,7 @@ from any decision back to the gate outcomes behind it is in the store rather tha
 declared task family names the branch, or a hint tag the map resolves does; `forced_by_declaration`
 is true only when `by_declaration` holds **and** the ruleset did not already route it; `will_run` is
 the disjunction. That is the whole selection: two additive sources, no second opinion, and no state
-that runs a branch for want of evidence. `_route_states` turns the evaluation into one of three per
+that runs a branch for want of evidence. `_route_states` turns the evaluation into one of four per
 branch, from the content gates alone:
 
 | branch route state | when | does it run |
@@ -1245,6 +1248,7 @@ branch, from the content gates alone:
 | `routed` | one of that branch's gates fired | yes |
 | `unavailable` | none fired **and** at least one of its gates could not be read | no, unless declared |
 | `declined` | none fired and every gate was readable | no, unless declared |
+| `ungated` | the branch names no gate, so nothing was read | no, unless declared — DDK's state on every recording |
 
 **`unavailable` does not run the branch, and that is the deliberate reversal.** The deleted path ran
 a branch on anything that was not `absent`, which is how a graph that could never read its floors
@@ -1264,7 +1268,7 @@ What each decision entity carries (`routing.py:225-237`):
 | --- | --- |
 | `branch` | the branch's name, which is also the name its own verdict is written under |
 | `will_run` | whether it was selected |
-| `route_state` | `routed` / `declined` / `unavailable` |
+| `route_state` | `routed` / `declined` / `unavailable` / `ungated` |
 | `unavailable_gates` | that branch's gates whose feature could not be read |
 | `flag_gates` | that branch's flag gates that fired — annotation, never routing |
 | `declared` | the declaration named this branch, however the branch ran |
@@ -2161,7 +2165,7 @@ informative absence in the pipeline as an operational fault (step 5c). The 6-of-
 ```mermaid
 graph TD
   G1["the recording's declaration names DDK<br/>(routing.declaration_required; no gate)"] --> DEC
-  DEC["branch_decision: will_run<br/>route_state always 'declined'"] --> LOOKUP
+  DEC["branch_decision: will_run<br/>route_state always 'ungated'"] --> LOOKUP
   LOOKUP["run._drive_branches looks DDK up<br/>and finds nothing (run.py:303-305)"] --> SKIP
   SKIP["NodeOutcome SKIPPED, note NO_NODE<br/>no entity, no verdict"] --> FOLD
   FOLD["fold: 'DDK was asked to run and never ran'<br/>(vocabulary.py:398-401)"]
