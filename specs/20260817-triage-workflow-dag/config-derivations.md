@@ -1451,6 +1451,35 @@ verdict.unmeasured_points_flag: true
   worth seeing on the recording it affected. It would have been false while the section shipped 38
   nulls; it is true because it no longer does.
 
+verdict.llm_redaction_flags: true
+  Whether REDACT's optional LLM re-read of the redacted transcript, having flagged residue, is a
+  flag ground on the **triage** axis. Added 2026-09-17 on the owner's correction: "the llm is part
+  of a branch, so it can only annotate (with provenance)" -- the same contract the branches took the
+  day before ("a refusal is a decision. a branch does not decide"). Until then the re-read
+  downgraded REDACT's own outcome from `pass` to `flag`, and `_release_from` reads that outcome, so
+  an unmeasured model was withholding the release on its own. It no longer touches that axis at all.
+
+  The key exists because the two axes ask different questions. Triage asks whether a human should
+  look at the recording; release asks whether an artifact may be handed on. An LLM that says "a
+  birth month, a street and an employer are still here, and together they are one person" is making
+  a claim a human reviewer should read -- that is a triage question and the answer belongs on the
+  triage axis. It is not evidence that a detector missed a span, which is what the release axis is
+  a reading of.
+
+  True, and the argument is an asymmetry rather than a rate: a false "residue" flag costs one human
+  review, a missed one costs a disclosure. **No false-positive rate has been measured for
+  `google/gemma-4-31B-it-qat-w4a16-ct` on this corpus, or on any corpus.** Nothing here is fitted.
+  The key is the switch that makes turning it off a visible decision, and a measured rate is what
+  would let the default be argued rather than asserted; until one exists, the asymmetry is the whole
+  argument and the reviewer is off by default anyway (`redaction.llm_check.enabled: false`).
+
+  It governs `flagged` only. An `absent` re-read -- enabled, and the model could not be reached --
+  grounds nothing and lets the detector path's answer stand, which is the shipped rule argued in
+  `llm-check.md`: withholding on absence would make the release depend on GPU queue depth rather
+  than on the recording. It is still never silent: the annotation is a store measurement, it is in
+  the file verdict's `llm_redaction` and in the report. An operator who wants absence to flag is
+  asking for a different rule and needs its own key with its own derivation.
+
 verdict.conformance_flags_by_family: {}
   Declared task family -> whether a non-conformance on it flags, overriding `conformance_flags`.
   **This is what makes the fold task-aware** (owner: "verdict has to evaluate based on all branches

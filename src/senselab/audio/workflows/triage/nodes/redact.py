@@ -19,11 +19,13 @@ audio. See ``specs/20260817-triage-workflow-dag/redact.md``.
 An **optional LLM check** re-reads the redacted transcript, off unless ``redaction.llm_check.enabled``
 says otherwise. It iterates — a round that flags something masks its concerns and reviews again, to
 ``redaction.llm_check.max_iterations`` — and every round's chain of thought is stored as its own
-``redaction_llm_review`` measurement, which is the point of the step rather than a by-product. It can
-only **withhold**: a flag downgrades a pass to a flag, a model that could not be reached leaves the
-detector path's answer standing and is recorded ``absent`` in the verdict and named in its ``why``,
-and neither path edits a released artifact. It runs only where it could change something — never over
-an outcome the detector path already withheld.
+``redaction_llm_review`` measurement, which is the point of the step rather than a by-product. It
+**annotates and never decides**: its summary is a ``redaction_llm_annotation`` measurement carrying
+the status, the iteration count, the flagged categories, the model and the commit it loaded, written
+on every path including the ones where it did not run, and this node's outcome is its detector path's
+alone. What an annotation of ``flagged`` or ``absent`` means is VERDICT's, under
+``verdict.llm_redaction_flags``. It is asked only where a release was in prospect — never over an
+outcome the detector path already withheld.
 
 Three artifacts are released, not two: the masked audio, the flat redacted transcript, and the
 **redacted consensus stream** as ``consensus.json`` — the consensus structure PREPROCESS built, with
@@ -71,7 +73,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_verdict,
 )
 from senselab.audio.workflows.triage.stimulus import split_prompts
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.text.tasks.pii_detection.api import scan_for_pii
 from senselab.text.tasks.pii_detection.redaction_review import review_payload, review_redacted_text
 from senselab.utils.prov_store import Entity, ProvStore
@@ -611,7 +613,7 @@ def _expected_survivors(
 
 @dataclass(frozen=True)
 class _LlmCheck:
-    """What the optional reviewer established, as the verdict records it.
+    """What the optional reviewer established, as the ``redaction_llm_annotation`` measurement records it.
 
     Attributes:
         status: ``disabled`` when the config leaves it off, ``not_run`` when the detector path had
@@ -619,8 +621,8 @@ class _LlmCheck:
             read the transcript and flagged nothing, ``flagged`` when it flagged something.
         iterations: How many reviews ran.
         flagged: The categories the reviewer named, sorted. Categories only; the substrings and the
-            reasoning are in the per-iteration measurements, which live in the store rather than in
-            a verdict whose ``why`` is controlled vocabulary.
+            reasoning are in the per-iteration measurements beside it, so nothing VERDICT reads to
+            decide on carries transcript text.
         model_id: The repo asked, or the empty string when nothing was.
         revision: The commit the reviewer loaded, or None.
         failure: Why it did not run, when it did not.
@@ -634,10 +636,10 @@ class _LlmCheck:
     failure: str | None
 
     def as_detail(self) -> dict[str, Any]:
-        """The mapping the verdict carries.
+        """The mapping the annotation measurement carries.
 
         Returns:
-            The record, flat, so a report reads it without knowing this class.
+            The record, flat, so a report and VERDICT both read it without knowing this class.
         """
         return {
             "status": self.status,
@@ -1054,14 +1056,17 @@ def redact(
         reviews = []
     else:
         llm, reviews = _llm_check(transcript_text, llm_settings)
-    review_act: str | None = None
+    review_act = store.activity(
+        node=NODE,
+        step="llm_check",
+        parameters={
+            "model_id": llm.model_id or str(llm_settings["model_id"]),
+            "max_iterations": int(llm_settings["max_iterations"]),
+            "enabled": bool(llm_settings["enabled"]),
+        },
+    )
+    store.was_associated_with(review_act, software)
     if llm.status not in ("disabled", "not_run"):
-        review_act = store.activity(
-            node=NODE,
-            step="llm_check",
-            parameters={"model_id": llm.model_id, "max_iterations": int(llm_settings["max_iterations"])},
-        )
-        store.was_associated_with(review_act, software)
         if llm.revision is not None:
             store.was_associated_with(
                 review_act, store.agent(agent_type="model", model_id=llm.model_id, commit_sha=llm.revision)
@@ -1088,12 +1093,15 @@ def redact(
             store.was_generated_by(review_id, review_act)
             store.was_attributed_to(review_id, software)
             view.append(review_id)
+    annotation_id = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": REDACTION_LLM_ANNOTATION, "signal": "redacted_transcript", **llm.as_detail()},
+    )
+    store.was_generated_by(annotation_id, review_act)
+    store.was_attributed_to(annotation_id, software)
+    view.append(annotation_id)
 
-    if outcome is Outcome.PASS and llm.status == "flagged":
-        outcome = Outcome.FLAG
-        why = "the llm check flagged residue on the redacted transcript: " + ", ".join(llm.flagged)
-    elif outcome is Outcome.PASS and llm.status == "absent":
-        why = f"{why}; the llm check was enabled and did not run ({llm.failure})"
     if outcome is Outcome.PASS:
         artifacts = _write_artifacts(redacted, transcript_text, records, artifacts_dir)
     verdict_id, verdict = write_verdict(
@@ -1117,7 +1125,6 @@ def redact(
             "expected_exempt_by_category": dict(Counter(exemption.category for exemption in exemptions)),
             "expected_survivors": attributed,
             "expected_speech_declared": bool(units),
-            "llm_check": llm.as_detail(),
             "replanned_n": replanned_n,
             "scan_failed": scan_failed,
             "scan_missing": scan_missing,
