@@ -46,7 +46,9 @@ conformance `UNDETERMINED`, because a refusal is a decision. A misspelled key st
 
 **Deviations are recorded and are not folded into the flag column until ground truth exists.**
 `specs/20260913-branch-contract-and-hints/design.md` states that `filler` and `stimulus_mismatch` are
-expected on ordinary read speech, so routing them in would flag the corpus. The constraint survived
+expected on ordinary read speech, so routing them in would flag the corpus — and carries, since
+2026-09-16, which of the eleven declared types that argument actually fits and which are genuine
+departures awaiting a measured rate. The constraint survived
 this change and is now a declared switch — `verdict.deviation_flags`, shipping `false` — rather than
 an implicit rule in the code, so that flipping it is a visible decision with a derivation.
 
