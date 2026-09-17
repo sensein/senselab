@@ -1148,9 +1148,12 @@ class BranchParams:
         """How a token is normalised before it is compared. Not a config key: it is a function.
 
         Returns:
-            ``consensus.vocabulary_key``, which is the normalisation PREPROCESS's own consensus and
-            stimulus alignment already declare (``casefold; keep alphanumerics and apostrophe``).
-            A second spelling here would compare tokens against a transcript normalised another way.
+            ``consensus.vocabulary_key``: casefold, then strip the edge punctuation
+            ``. , ; : ! ? " ' ( )``.
+            Interior punctuation survives, so ``555-1234`` keeps its hyphen and ``[um]`` keeps its
+            brackets. This is **not** the stimulus alignment's ``normalise_token`` (``casefold; keep
+            alphanumerics and apostrophe``), which drops both; an earlier version of this docstring
+            named that normalisation and was wrong about what the property returns.
         """
         return vocabulary_key
 
