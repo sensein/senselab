@@ -297,6 +297,10 @@ recogniser wrote the word down.
 
 ## F — DDK: the PPG gate discriminates perfectly; the unmeasured lexical gate causes every false positive
 
+> Both gates below were removed after this run, when `routing.declaration_required: [DDK]` made the
+> declaration the only route into the branch. This section is the measurement as it stood on
+> 2026-09-15 and is left as the record; the `default.yaml` line citations in it are stale.
+
 | gate | fired on | value | cut |
 | --- | --- | --- | --- |
 | `ddk.ppg_segment_rate_per_s` | D1, D2 — and nothing else | **12.33, 14.70** /s | 10 |

@@ -77,18 +77,25 @@ posteriorgram is an absence, never a negative.
 
 ## How DDK is routed today
 
-Two gates, either of which routes (`default.yaml:234`, defined at `:280-287`):
+**On the declaration alone.** `routing.declaration_required: [DDK]` names DDK, so the branch runs
+when and only when the recording's declaration names it; `branch_gates.DDK` is empty and no content
+reading can route it.
 
-| gate | feature | threshold | measured 2026-09-15, 13 recordings |
+Two gates used to. They were removed once the declaration decided the route, because a gate that can
+neither add a route nor withhold one is dead, and the measurement behind their removal is this:
+
+| removed gate | feature | threshold | measured 2026-09-15, 13 recordings |
 | --- | --- | --- | --- |
-| `ddk.lexical_repetition` | `transcript_repeat` — largest repeat count of any normalised token | `>= 3`, marked **UNMEASURED** at `default.yaml:283` | fired on 3 of 4 speech recordings (5, 4, 8) on function-word repetition; **the sole gate routing every false DDK positive** |
+| `ddk.lexical_repetition` | `transcript_repeat` — largest repeat count of any normalised token | `>= 3`, marked **UNMEASURED** | fired on 3 of 4 speech recordings (5, 4, 8) on function-word repetition; **the sole gate routing every false DDK positive** |
 | `ddk.ppg_segment_rate_per_s` | `ppg.segment_rate_per_s` — contiguous argmax-phoneme segments per second | `>= 10` | fired on both real DDK recordings (12.33, 14.70 /s) and on no speech recording (8.89, 8.64, 7.44, 7.10 /s) |
 
-The second reads no transcript, so it routes a syllable train an ASR declines to transcribe — which
-is most of them, since `/pa-pa-pa/` is not lexical.
+The second read no transcript, so it routed a syllable train an ASR declines to transcribe — which is
+most of them, since `/pa-pa-pa/` is not lexical. It made no error on that sample and the lexical gate
+made every one; neither survives, because the declaration answers the question both were asked.
 
-**Neither may be refit.** Both would be fitted against declared DDK families, encoding which
-recordings the protocol labelled rather than which carry a syllable train.
+**Neither may be revived by refitting.** Both would be fitted against declared DDK families, encoding
+which recordings the protocol labelled rather than which carry a syllable train — which is the
+declaration, taken the long way round.
 
 ## Capabilities
 
@@ -232,11 +239,11 @@ from Praat on six parameters, with the code's own comments recording that no rea
 **All of it is owed**, and the measurements are in
 [`praat-instrument-audit.md`](praat-instrument-audit.md).
 
-**Demote the PPG segment rate.** `ddk.ppg_segment_rate_per_s` is a fine *gate* — it routes without a
+**Do not report the PPG segment rate as a rate.** It was a workable *gate* — it routed without a
 transcript — but as a measurement an argmax-change rate has no interpretable units: one syllable with
 an onset consonant and a vowel yields two or more segments, and the count depends on the
-posteriorgram's inventory rather than on articulation. Keep it for routing; do not report it as a
-rate.
+posteriorgram's inventory rather than on articulation. The gate is gone; the prohibition on reporting
+the number as a rate is not.
 
 **Do not reconcile D1 and D2 into one number.**
 
@@ -369,7 +376,7 @@ and Unresolved on `Outcome.FAIL`'s wording.
 | D1 propose and measure the train | **not built**; no module computes an envelope modulation spectrum; unit ambiguity must be resolved in the output |
 | D2 nucleus rate | **not built**; `extract_speech_rate` exists, no branch consumes it; four undeclared operating points |
 | D3 interval structure | **not built**; nothing computes an inter-onset sequence, its dispersion or its trend |
-| D4 segment inventory | **not built**; `extract_ppg_segments` exists but no *branch* calls it — `features.py:421` does, to compute the `ddk.ppg_segment_rate_per_s` gate feature |
+| D4 segment inventory | **not built**; `extract_ppg_segments` exists but no *branch* calls it — `features.py:421` does, to compute a feature that no gate has read since `ddk.ppg_segment_rate_per_s` was removed |
 | D5 train fraction | **not built** |
 | D6 sequence conformance | **not built**; PPG-to-syllable mapping owed |
 
@@ -410,8 +417,8 @@ contest, the object must be a PREPROCESS span.
 
 ## Out of scope
 
-Normative interpretation of rate or regularity. Reconciling D1 and D2 into one number. Any refit of
-`ddk.lexical_repetition` or `ddk.ppg_segment_rate_per_s` against declared families.
+Normative interpretation of rate or regularity. Reconciling D1 and D2 into one number. Any revival of
+`ddk.lexical_repetition` or `ddk.ppg_segment_rate_per_s` as routing gates.
 
 ## Unresolved
 
