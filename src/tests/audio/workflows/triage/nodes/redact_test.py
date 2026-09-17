@@ -427,10 +427,9 @@ class TestRemediationHappensExactlyOnce:
 class TestTheFillIsDeclared:
     """A run declares the fill it used, and the verdict records it."""
 
-    def test_a_null_fill_refuses_before_any_store_write(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """The key ships with no default; two artifacts under different fills are not comparable."""
+    def test_a_null_fill_refuses_before_any_store_write(self, store: ProvStore, tmp_path: Path) -> None:
+        """An override may null the shipped fill; two artifacts under different fills are not comparable."""
+        config = _override(tmp_path, "redaction:\n  padding_ms: 50\n  fill: null\n")
         _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         before = len(store.entities())
         with pytest.raises(ValueError, match="redaction.fill"):
@@ -588,8 +587,8 @@ class TestThePaddingIsValidated:
     """padding_ms is a validity check at entry, before any store write."""
 
     def test_a_null_padding_refuses_before_any_store_write(self, store: ProvStore, tmp_path: Path) -> None:
-        """The margin is unmeasured, so a run that does not declare one gets no answer."""
-        config = _override(tmp_path, "redaction:\n  fill: silence\n")
+        """An override may null the shipped margin, and a null margin gets no answer."""
+        config = _override(tmp_path, "redaction:\n  padding_ms: null\n  fill: silence\n")
         _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         before = store.fingerprint()
         with pytest.raises(ValueError, match="redaction.padding_ms"):

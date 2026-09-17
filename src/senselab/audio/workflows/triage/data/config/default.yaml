@@ -430,8 +430,8 @@ pii:
 
 # What a released transcript replaces, and by how much padding.
 redaction:
-  padding_ms: null                     # outward pad on a redacted extent; must exceed the worst word-edge error
-  fill: null                           # what replaces redacted audio: silence, noise or bleep
+  padding_ms: 250                      # outward pad on a redacted extent; a convention, not a fit
+  fill: silence                        # what replaces redacted audio: silence, noise or bleep
   bleep_hz: 1000.0                     # tone frequency when fill is bleep
 
 # Background residual: FRCRN_SE_16K's enhancement, lag-aligned and gain-fitted, subtracted from
