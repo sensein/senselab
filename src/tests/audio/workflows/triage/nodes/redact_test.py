@@ -1428,6 +1428,13 @@ def _reviews(store: ProvStore) -> list[Entity]:
     return [e for e in store.entities("measurement") if e.attributes.get("name") == "redaction_llm_review"]
 
 
+def _annotation(store: ProvStore) -> dict[str, Any]:
+    """The re-read's summary, as the annotation measurement VERDICT reads carries it."""
+    found = [e for e in store.entities("measurement") if e.attributes.get("name") == "redaction_llm_annotation"]
+    assert len(found) == 1, f"expected exactly one annotation, found {len(found)}"
+    return dict(found[0].attributes)
+
+
 class TestTheLlmCheckIsOffUnlessAskedFor:
     """A step that turns itself on would make two hosts disagree with no record of why."""
 
@@ -1453,7 +1460,7 @@ class TestTheLlmCheckIsOffUnlessAskedFor:
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert seen == []
         assert result.verdict.outcome is Outcome.PASS
-        assert _verdict_entity(store, "REDACT").attributes["llm_check"]["status"] == "disabled"
+        assert _annotation(store)["status"] == "disabled"
         assert _reviews(store) == []
 
     def test_it_is_not_run_when_the_detector_path_already_withheld(
@@ -1470,7 +1477,7 @@ class TestTheLlmCheckIsOffUnlessAskedFor:
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.FAIL
         assert seen == []
-        assert _verdict_entity(store, "REDACT").attributes["llm_check"]["status"] == "not_run"
+        assert _annotation(store)["status"] == "not_run"
 
 
 class TestTheLlmCheckIterates:
@@ -1490,7 +1497,7 @@ class TestTheLlmCheckIterates:
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert seen == ["hello [PERSON]"], "the reviewer reads the redacted transcript, not the source"
         assert result.verdict.outcome is Outcome.PASS
-        check = _verdict_entity(store, "REDACT").attributes["llm_check"]
+        check = _annotation(store)
         assert check["status"] == "clean" and check["iterations"] == 1
 
     def test_a_flagged_round_reviews_again_on_the_masked_text(
@@ -1509,8 +1516,10 @@ class TestTheLlmCheckIterates:
         )
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert seen == ["[PERSON] in belmont", "[PERSON] in [LLM_LOCATION]"]
-        assert result.verdict.outcome is Outcome.FLAG, "a concern raised and then masked is still a concern"
-        assert result.artifacts == {}
+        check = _annotation(store)
+        assert check["status"] == "flagged", "a concern raised and then masked is still a concern"
+        assert result.verdict.outcome is Outcome.PASS, "the reviewer annotates; the detector path decided"
+        assert result.artifacts != {}, "an unmeasured model does not withhold the release"
 
     def test_the_loop_is_bounded_by_the_config_key(
         self,
@@ -1526,7 +1535,7 @@ class TestTheLlmCheckIterates:
         seen = _stub_review(monkeypatch, [forever, forever, forever])
         redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert len(seen) == 2
-        check = _verdict_entity(store, "REDACT").attributes["llm_check"]
+        check = _annotation(store)
         assert check["status"] == "flagged" and check["iterations"] == 2
 
     def test_a_named_substring_the_text_does_not_carry_is_left_alone(
@@ -1593,7 +1602,7 @@ class TestTheChainOfThoughtIsCaptured:
         agents = [store.get_agent(a) for a in store.associated_with(activity.id)]
         model = next(agent for agent in agents if agent.agent_type == "model")
         assert model.commit_sha == "a" * 40
-        assert _verdict_entity(store, "REDACT").attributes["llm_check"]["revision"] == "a" * 40
+        assert _annotation(store)["revision"] == "a" * 40
 
     def test_the_report_surfaces_the_reasoning(
         self,
@@ -1618,7 +1627,7 @@ class TestTheChainOfThoughtIsCaptured:
             ],
         )
         redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        check = _verdict_entity(store, "REDACT").attributes["llm_check"]
+        check = _annotation(store)
         text = "\n".join(_llm_check_lines(check, _llm_reviews(store)))
         assert "The town name narrows the population to a few thousand." in text
         assert "With the town masked, nothing remains." in text
@@ -1645,9 +1654,9 @@ class TestTheLlmCheckDegradesHonestly:
         )
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.PASS
-        check = _verdict_entity(store, "REDACT").attributes["llm_check"]
+        check = _annotation(store)
         assert check["status"] == "absent" and check["failure"] == "OSError: no such model"
-        assert "the llm check was enabled and did not run" in result.verdict.why
+        assert "llm" not in result.verdict.why, "REDACT's why is its detector path's; the absence is the annotation's"
 
     def test_an_absent_model_is_never_a_silent_pass(
         self,
@@ -1688,8 +1697,8 @@ class TestTheLlmCheckDegradesHonestly:
             ],
         )
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.FLAG
-        check = _verdict_entity(store, "REDACT").attributes["llm_check"]
+        assert result.verdict.outcome is Outcome.PASS
+        check = _annotation(store)
         assert check["status"] == "flagged" and check["failure"] == "CUDA out of memory"
 
 
@@ -1796,7 +1805,7 @@ class TestTheRedactedStream:
 class TestWhatTheStoreRecords:
     """One activity per phase, one span per planned extent, and a used edge per read element."""
 
-    def test_the_three_activities_the_spans_and_every_read(
+    def test_the_four_activities_the_spans_and_every_read(
         self,
         store: ProvStore,
         redact_config: TriageConfig,
@@ -1819,7 +1828,7 @@ class TestWhatTheStoreRecords:
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
 
         activities = store.activities("REDACT")
-        assert sorted(str(a.step) for a in activities) == ["apply", "plan", "verify"]
+        assert sorted(str(a.step) for a in activities) == ["apply", "llm_check", "plan", "verify"]
         plan_act = next(a for a in activities if a.step == "plan")
         apply_act = next(a for a in activities if a.step == "apply")
         verify_act = next(a for a in activities if a.step == "verify")
