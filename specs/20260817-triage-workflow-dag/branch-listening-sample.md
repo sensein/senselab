@@ -25,7 +25,6 @@ oversight.
 | `airway.labels_of_interest` | `[Cough, Breathe]` | `:555-557` — recorded as *"Vocabulary, not thresholds."* |
 | `spans.min_duration_ms` | `50` | `:234` — *"conventional and not fitted"* |
 | `voice.f0_search_range_hz` | `[50.0, 600.0]` | `:748-760`, with the five narrowing coefficients at `:598-730` — the derivation describes per-recording narrowing and, since 2026-09-14, so does the code. Until then it did not, and that mismatch is what this document exists to catch. See below. |
-| `ddk.ppg_segment_rate_per_s` | `10 /s` | `family-taxonomy-ruleset.md:102` — *"recall-first, not J"* |
 
 These carry reasoning. Listening would tell you whether the reasoning holds on real audio; it is not
 needed to explain what the number is doing.
@@ -47,13 +46,13 @@ decision was recorded, not evidence that the code does what it says — see
 `config-derivations.md:74`. The way that was caught was reading the implementation, not the
 derivation, and nothing about the fix makes the next such case detectable any earlier.
 
-### Marked unmeasured and in force — exactly one
+### Marked unmeasured and in force — none
 
-`ddk.lexical_repetition: 3`, marked in **both** the config (`default.yaml:260`) and the derivations
-table (`family-taxonomy-ruleset.md:101`, *"not measured"*). It routes DDK today.
-
-This is the only shipped value in the triage config whose own documentation says no measurement
-stands behind it.
+`ddk.lexical_repetition: 3` was the one such value: marked unmeasured in both the config and the
+derivations table, and routing DDK anyway. It was removed with `ddk.ppg_segment_rate_per_s` when
+`routing.declaration_required: [DDK]` made the declaration the only route into the branch, so no
+shipped value in the triage config now says in its own documentation that no measurement stands
+behind it.
 
 ### Null by documented decision — listening could supply these
 

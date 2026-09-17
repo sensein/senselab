@@ -87,7 +87,7 @@ def _base_store(run_dir: Path) -> ProvStore:
     """A live store standing for a recording with speech, one airway token and a repeated word.
 
     Every family of evidence the packaged gates read is represented, either present or deliberately
-    absent: three gates fire, five stay silent and three cannot be read at all.
+    absent: three gates fire, four stay silent and two cannot be read at all.
 
     Args:
         run_dir: The run directory the store's stem path is placed beside.
@@ -375,7 +375,8 @@ class TestWhatTheReaderReads:
         sources = required_sources(ruleset)
         assert sources == tuple(sorted(set(sources)))
         assert "stream_peak_max" in sources
-        assert {"words", "ppg", "transcript_repeat", "bracketed_set"} <= set(sources)
+        assert {"words", "ppg", "bracketed_set"} <= set(sources)
+        assert "transcript_repeat" not in sources
 
 
 class TestTheRecordedAttributes:
@@ -395,7 +396,7 @@ class TestTheRecordedAttributes:
         """Every recorded field is a JSON scalar or container, so the store can carry it."""
         run_dir = _run_dir(tmp_path)
         recorded = route_attributes(evaluate_live_routes(_base_store(run_dir), config, run_dir=run_dir), ruleset)
-        assert set(recorded["routed"]) == {"AIRWAY", "SPEECH", "DDK"}
+        assert set(recorded["routed"]) == {"AIRWAY", "SPEECH"}
         assert recorded["declared"] == ["SPEECH"]
         assert recorded["family"] == "free-speech"
         assert all(isinstance(value, str) for value in recorded["gate_outcomes"].values())

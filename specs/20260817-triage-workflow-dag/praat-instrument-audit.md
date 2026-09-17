@@ -252,9 +252,8 @@ measures which non-speech events FRCRN nulls and which pass through, which is a 
 surviving energy, not about timing. The claim was an assertion in an ordered path, and it is
 retracted here rather than left to be cited.
 
-**And DDK rhythm does not depend on the PPG.** `ddk.lexical_repetition` reads
-`transcript_repeat` — the largest repeat count of any normalised transcript token
-(`../../src/senselab/audio/workflows/triage/data/config/default.yaml:264-267`) — and
+**And DDK rhythm does not depend on the PPG.** `ddk.lexical_repetition` — the routing gate since
+removed — read `transcript_repeat`, the largest repeat count of any normalised transcript token, and
 `diadochokinesis-buttercup` (896) plus `diadochokinesis-v2-buttercup` (702) are **1,598 recordings
 of a real English word** (`branch-ddk.md:34`, `:39`), where a transcript route works directly.
 `ppg.segment_rate_per_s` is a **routing gate feature** (`default.yaml:268-271`), and

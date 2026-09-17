@@ -98,11 +98,16 @@ gates fires.
 | AIRWAY | `airway.cough` ‡ | `span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"]` | >= | 50.0 dB | **not re-measured** | — | — |
 | AIRWAY | `airway.bracketed_event` ‡ | `bracketed_types` over `taxonomy.airway_bracket_tokens` | >= | 1 token | 0.722 | — | — |
 | AIRWAY | `airway.ppg_silent_fraction` | `ppg.silent_fraction` | >= | 0.757 | recall-first, not J | — | — |
-| DDK | `ddk.lexical_repetition` | max token repetition in `transcript` | >= | 3 | **not measured** | — | — |
-| DDK | `ddk.ppg_segment_rate_per_s` | `ppg.segment_rate_per_s` | >= | 10 /s | recall-first, not J | — | — |
+| DDK | — | — | — | — | — | — | — |
 
-The two posteriorgram gates were chosen by recall at an over-routing budget rather than by J, and
-their measurements are in `specs/20260911-praat-ppg-detectors/design.md` rather than here.
+**DDK names no gate.** `routing.declaration_required: [DDK]` routes the branch off the declaration
+alone, so `branch_gates.DDK` is empty. The two gates it used to name — `ddk.lexical_repetition` at
+`>= 3` (**never measured**) and `ddk.ppg_segment_rate_per_s` at `>= 10 /s` (recall-first, not J) —
+were removed once the declaration decided the route. Their measurements stay recorded below, because
+they are what the removal rests on.
+
+`airway.ppg_silent_fraction` was chosen by recall at an over-routing budget rather than by J, and its
+measurements are in `specs/20260911-praat-ppg-detectors/design.md` rather than here.
 
 `airway.ppg_silent_fraction`'s **0.757** is the fitted cut and the one the packaged config ships.
 This row read `0.90` until 2026-09-13 — the placeholder written before the corpus was available,
@@ -238,8 +243,8 @@ Traced by reading each selecting sweep, not by reading this document's own table
 | `airway.cough` | `cough.amplitude_peak_over_floor_db_max` | `declared_cough_vs_breath` | **12,741 airway recordings** | J 0.7946 at 50 dB | **yes** |
 | `airway.bracketed_event` | a hand count over the capped transcript | airway families against **lexical-speech families** | two family sets, not the corpus | J ~0.710 at 1 token | **yes** |
 | `airway.ppg_silent_fraction` | `airway.ppg_silent_fraction` | `declared_airway`, recall at a 10% budget | 62,547, 2,345 absent | recall 0.761 at 0.757 | no |
-| `ddk.ppg_segment_rate_per_s` | `ddk.ppg_segment_rate_per_s` | `declared_ddk`, recall at a 5% budget | 62,547, 2,345 absent | 351 of 855 recovered, 4.7% non-DDK firing, at 10 /s | no |
-| `ddk.lexical_repetition` | — | — | — | **none** | **untraceable** |
+| `ddk.ppg_segment_rate_per_s` (removed) | `ddk.ppg_segment_rate_per_s` | `declared_ddk`, recall at a 5% budget | 62,547, 2,345 absent | 351 of 855 recovered, 4.7% non-DDK firing, at 10 /s | no |
+| `ddk.lexical_repetition` (removed) | — | — | — | **none** | **untraceable** |
 | `speech.transcript_agreement` (flag) | — | — | — | **none** | **untraceable** |
 
 The sources are `specs/20260910-taxonomy-routing-evidence/measurements.md` and its `sweeps.json`,
@@ -247,7 +252,8 @@ The sources are `specs/20260910-taxonomy-routing-evidence/measurements.md` and i
 `/orcd/scratch/bcs/002/satra/routing_scratch/{full_out,deriv_out,glide_out}/summary.md`.
 
 **Two entries could not be traced, and are reported as untraced rather than guessed.**
-`ddk.lexical_repetition >= 3` has no sweep anywhere, which this document already states.
+`ddk.lexical_repetition >= 3` had no sweep anywhere, which this document already states, and it is
+one of the two reasons the gate was removed rather than refitted.
 `speech.transcript_agreement >= 3` routes nothing, but its 3 appears in no sweep either: the
 agreement feature was swept at 1, 2, 3 and 4 against three standards, its max-Youden points are 2
 (`declared_lexical_speech`, J 0.8226) and 4 (`declared_speech`, J 0.7416), and 3 is neither. It
@@ -477,17 +483,21 @@ downstream consumer of the SPEECH branch needs and a fact the router must not ac
 
 **No downstream consumer is implemented.** The flag is carried and reported; nothing reads it yet.
 
-### `ddk.lexical_repetition` is lexical, and the acoustic gate is missing
+### DDK's two gates were lexical and acoustic, and both were removed
 
-The DDK gate reads a feature no extraction writes: the largest number of times any single normalised
-token repeats in the recording's consensus transcript. Normalisation is lowercasing and splitting on
+Both gates below were shipped and are now gone: `routing.declaration_required: [DDK]` routes the
+branch off the declaration alone, and a gate that can neither add a route nor withhold one is dead.
+What follows is what they measured, which is why the declaration gate exists.
+
+`ddk.lexical_repetition` read a feature no extraction writes: the largest number of times any single
+normalised token repeats in the recording's consensus transcript. Normalisation is lowercasing and splitting on
 punctuation as well as whitespace, so `Pa, pa. PA!` is three instances and `pa-pa-pa-pa` is four.
 `RecordingFeatures.transcript` is capped at 300 characters (`TRANSCRIPT_CAP`), which is ample for a
 repetition count and truncates mid-token; the fragment counts as its own token rather than as
 another instance of the token it came from, which biases the count down by at most one.
 
-It was called `ddk.declared` and is renamed `ddk.lexical_repetition`, because measurement shows it
-only works when the elicited unit is a dictionary word:
+It was called `ddk.declared` and was renamed `ddk.lexical_repetition`, because measurement showed it
+only worked when the elicited unit is a dictionary word:
 
 | family | elicited unit | instruction wording | fall-through |
 | --- | --- | --- | --- |
@@ -497,25 +507,25 @@ only works when the elicited unit is a dictionary word:
 A recogniser transcribing a repeated dictionary word emits the same token each time and the counter
 sees the repetition. A recogniser transcribing a repeated non-lexical syllable emits whatever
 lexical neighbours it can find, and they differ between repetitions, so the count collapses. The
-gate is therefore a **lexical** repetition gate and the name now says so — a 24.6% fall-through on
+gate was therefore a **lexical** repetition gate and its name said so — a 24.6% fall-through on
 `-v2-puh` is not a measurement about that recording's content, it is the gate reading a transcript
 of something that has no transcript.
 
-**Threshold 3 has not been swept.** No sweep exists over this feature, so there is no J, no firing
+**Threshold 3 was never swept.** No sweep exists over this feature, so there was no J, no firing
 spread, and no operating point.
 
-**The acoustic gate beside it is `ddk.ppg_segment_rate_per_s`**, added 2026-09-12: the
+**The acoustic gate beside it was `ddk.ppg_segment_rate_per_s`**, added 2026-09-12: the
 posteriorgram's argmax-segment rate, which is a rate of articulatory change and needs no recogniser
 to spell the unit. It was fitted rather than assumed, and its measurements are in
-`specs/20260911-praat-ppg-detectors/design.md`. Threshold 3 on the lexical gate is still unswept.
+`specs/20260911-praat-ppg-detectors/design.md`.
 
 **Both gates watched on real material of both kinds, 2026-09-15.** Thirteen b2ai v3.1 recordings, two
 of them real DDK:
 
 | gate | on the two DDK recordings | on the four speech recordings | cut |
 | --- | --- | --- | --- |
-| `ddk.ppg_segment_rate_per_s` | **12.33, 14.70** /s — both fire | **8.89, 8.64, 7.44, 7.10** /s — none fires | 10 |
-| `ddk.lexical_repetition` | — | **5, 4, 8** fire; **2** (a 4.0 s Harvard sentence) does not | 3 |
+| `ddk.ppg_segment_rate_per_s` | **12.33, 14.70** /s — both fired | **8.89, 8.64, 7.44, 7.10** /s — none fired | 10 |
+| `ddk.lexical_repetition` | — | **5, 4, 8** fired; **2** (a 4.0 s Harvard sentence) did not | 3 |
 
 The acoustic gate separated the two kinds with no overlap: nearest speech value 1.11 /s below the cut,
 nearest DDK value 2.33 /s above it, the two populations 3.44 /s apart with the cut inside that gap.
@@ -1099,7 +1109,7 @@ was `null` in every shipped release. It is populated now.
 
 **545** `respiration-and-cough-*` recordings carry `words.lexical >= 4`. **523** of those also trip
 the `ddk.lexical_repetition` gate, because `cough cough cough cough` is four repeats of one token —
-which is what that gate counts, and it is counting a cough. Those recordings route to AIRWAY,
+which is what that gate counted, and it was counting a cough. Those recordings routed to AIRWAY,
 SPEECH **and** DDK. AIRWAY is right; the other two are handed a subject they cannot assess, which is
 the failure mode "Four branches, because diadochokinesis was in none of three" describes for DDK
 firing the speech detectors, arriving here from the opposite direction.

@@ -44,7 +44,8 @@ called out where it lands:
 Spot-checked again on 2026-09-13 at `51967abb`, which corrected eight citations and three claims
 about current behaviour: the gap spans below, QUALITY's margin, the `clip_contradiction_margin`
 readership, the extend drivers' fingerprint gate, TAXONOMY's third activity step, DDK's `NO_NODE`,
-four stale FIGURE line numbers and two stale `vocabulary.py` ones. The section that changed most is
+four stale FIGURE line numbers and two stale `vocabulary.py` ones. The DDK sections were corrected
+again on 2026-09-16, when the branch acquired a node and the declaration replaced its gates. The section that changed most is
 "Background, and the gap spans", which asserted the opposite of what the code does.
 
 **Where this graph is going is designed, and none of it is built.**
@@ -98,16 +99,18 @@ to a measured-and-held detector it turns a recorded decision into an import erro
 corpus is profiled.
 
 **gate** — a detector **plus one threshold**, named in `taxonomy.ruleset.gates`, that a branch
-routes on. There are **11** declared: ten route and one only flags. **Every gate is a
-detector-shaped reading; most detectors are not gates** — 172 catalogue readings, 11 of them pinned
+routes on. There are **9** declared: eight route and one only flags. **Every gate is a
+detector-shaped reading; most detectors are not gates** — 172 catalogue readings, 9 of them pinned
 to a cut, and the pinning is the whole difference. `airway.residual_energy_fraction` becomes the gate
 `airway.breath` by being fixed at `>= 0.10`; `speech.words_lexical` becomes `speech.lexical` at
 `>= 2`; `voice.longest_amplitude_span` becomes `voice.sustained` at `>= 3.0 s`;
-`voice.yamnet_chant_peak.plain` becomes `voice.chant` at `>= 0.02`. Two gates happen to carry their
-detector's own name — `airway.ppg_silent_fraction` and `ddk.ppg_segment_rate_per_s` — which is
-spelling, not identity: the detector is the sweep, the gate is the one point taken off it. Two
-others, `airway.bracketed_event` and `ddk.lexical_repetition`, read sources no detector reads
-(`BRACKETED_SET`, `TRANSCRIPT_REPEAT` in `ruleset.py`) and carry cuts that were never swept.
+`voice.yamnet_chant_peak.plain` becomes `voice.chant` at `>= 0.02`. One gate happens to carry its
+detector's own name — `airway.ppg_silent_fraction` — which is spelling, not identity: the detector is
+the sweep, the gate is the one point taken off it. One other, `airway.bracketed_event`, reads a
+source no detector reads (`BRACKETED_SET` in `ruleset.py`) and carries a cut that was never swept.
+**DDK names no gate at all** and routes on `routing.declaration_required` instead; its two former
+gates, `ddk.lexical_repetition` (`TRANSCRIPT_REPEAT`, never swept) and `ddk.ppg_segment_rate_per_s`,
+were removed once the declaration decided the route.
 A gate is evaluated on **every** recording and reports one of `FIRED`, `SILENT` or `UNAVAILABLE`;
 `UNAVAILABLE` is a fact about the store, never a negative measurement.
 
@@ -136,13 +139,16 @@ charge against the ruleset. It is a store fact: ROUTING writes it as the `state`
 `ruleset_routing` measurement, and the fold reads it for the `acoustically_empty` discard and the
 `UNEXPLAINED` flag (step 7). There is no fourth, null reading: a failure to evaluate now raises.
 
-**branch route state** — `routed`, `declined` or `unavailable` (`vocabulary.BRANCH_ROUTE_STATES`,
-`vocabulary.py:45`), **exactly one per branch per recording**, derived from the same evaluation by
-`routing._route_states` (`routing.py:117`). `routed` is a gate fired; `declined` is every gate
-evaluated and none fired; `unavailable` is no gate fired **and** at least one of that branch's gates
-could not be read — a branch that was never judged, not one that declined. Do not collapse the last
-two: only `routed` runs the branch, but only `declined` is a reading to disagree with, which is why
-`_agreement` returns `resolved` for `unavailable` (step 7).
+**branch route state** — `routed`, `declined`, `unavailable` or `ungated`
+(`vocabulary.BRANCH_ROUTE_STATES`), **exactly one per branch per recording**, derived from the same
+evaluation by `routing._route_states`. `routed` is a gate fired; `declined` is every gate evaluated
+and none fired; `unavailable` is no gate fired **and** at least one of that branch's gates could not
+be read — a branch that was never judged, not one that declined; `ungated` is a branch that names no
+gate at all, which the ruleset never looked at. Do not collapse the four: only `routed` runs the
+branch, and only `routed` and `declined` are readings to disagree with, which is why `_agreement`
+returns `resolved` for both `unavailable` and `ungated` (step 7). The two resolve for different
+reasons and must not be merged — `unavailable` says an instrument failed, `ungated` says none was
+configured, and conflating them misleads exactly the reader debugging a route.
 
 **recorded routing** — the `ruleset_routing` measurement ROUTING writes
 (`vocabulary.RULESET_ROUTING`, `live_evidence.route_attributes`): file route state, the routed
@@ -414,14 +420,12 @@ selects a branch. ROUTING's own evaluation of `taxonomy.ruleset` is the single d
 only thing on this diagram that is. The second edge TAXONOMY used to have into ROUTING, the
 non-authoritative `ruleset_routing` reading, is gone because ROUTING now makes that reading itself.
 
-**DDK is routable and still has no node.** `run._drive_branches` looks a branch up in its dispatch
-table rather than indexing it (`run.py:303-305`), so a branch with no implementation is recorded
-`SKIPPED` with the note `NO_NODE`, selected or not. ROUTING now writes a `branch_decision` for DDK
-like any other branch, and `will_run` is true for it whenever one of its two gates fires. **The
-consequence is a flag, and it is the honest one**: the decision says the branch was asked, no verdict
-comes back, and the fold emits "DDK was asked to run and never ran". That is scoped to recordings
-whose DDK gates actually fire, not to every recording — which is precisely the difference from the
-kind-line route rejected in step 5d — and it is the standing argument for building `nodes/ddk.py`.
+**DDK is routable and has a node.** ROUTING writes a `branch_decision` for it like any other
+branch, `run._drive_branches` dispatches it (`run.py:316`), and `will_run` is true for it exactly
+when the declaration names it. `run._drive_branches` still looks a branch up rather than indexing
+its dispatch table, so a branch with no implementation would be recorded `SKIPPED` with the note
+`NO_NODE`, selected or not — a guard nothing reaches today. The flag this section used to describe,
+"DDK was asked to run and never ran", is gone with the missing node.
 
 **QUALITY's edge comes from PREPROCESS, not from the branches.** It is drawn after them in
 `GRAPH_ORDER` and called after the branch loop, but it reads no branch output as evidence: its
@@ -456,8 +460,8 @@ A branch that raises is recorded `errored` and its siblings still run: none read
 inconsistency worth knowing before reading a `run.json`. On the ADMIT-fail and PREPROCESS-fail paths
 the runner writes `SKIPPED` for a slice of `GRAPH_ORDER` (`run.py:432`, `:291-292`), and `DDK` is
 not in `GRAPH_ORDER`, so it carries no outcome at all there and is absent from
-`TriageRunResult.nodes`. On the happy path the branch loop records it `SKIPPED` with
-`note: "no node implements this branch"`.
+`TriageRunResult.nodes`. On the happy path the branch loop records it like any other branch, run or
+skipped.
 
 ## The linear walk
 
@@ -517,11 +521,13 @@ are measurements with no boundary decided.
   Praat could not place.
 
 Neither block decides anything, and **no node reads either directly** — but both now reach a
-decision, because `taxonomy.ruleset` has two posteriorgram gates and ROUTING evaluates the ruleset
+decision, because `taxonomy.ruleset` has a posteriorgram gate and ROUTING evaluates the ruleset
 (step 4). `RecordingFeatures.ppg` reduces the posteriorgram to
 `PPG_SUMMARY_KEYS` (segment rate, segment duration statistics, distinct phonemes, silent fraction,
 the repetition triple) and `RecordingFeatures.praat` carries the scalars.
-`airway.ppg_silent_fraction` and `ddk.ppg_segment_rate_per_s` are the two gates.
+`airway.ppg_silent_fraction` is the gate. `ddk.ppg_segment_rate_per_s` was a second until DDK moved
+to the declaration and both its gates were removed, so `segment_rate_per_s` is now reduced and read
+by nothing.
 
 **A third `enhanced`-stream block is owed and does not exist: diarization.** `diariz` and `pyannote`
 appear nowhere in `nodes/preprocess.py`; the graph's only diarization is SPEECH's, inside that branch
@@ -927,7 +933,7 @@ graph LR
   G -->|"airway.breath / .cough<br/>.bracketed_event<br/>.ppg_silent_fraction"| AIR["AIRWAY"]
   G -->|"speech.lexical"| SPE["SPEECH"]
   G -->|"voice.sustained<br/>voice.glide / .chant"| VOI["VOICE"]
-  G -->|"ddk.lexical_repetition<br/>ddk.ppg_segment_rate_per_s"| DDK["DDK"]
+  D["the recording's declaration"] -.->|"routing.declaration_required<br/>DDK names no gate"| DDK["DDK"]
   G -.->|"evaluated, recorded,<br/>routes nothing"| FL["speech.transcript_agreement<br/>flags SPEECH"]
   G -->|"no gate fired"| E{{"emptiness bypass<br/>consulted only here"}}
   E -->|fired| EMP["file state = EMPTY"]
@@ -940,7 +946,7 @@ graph LR
   EMP --> M
   UNX --> M
   FL -.-> M
-  M ==>|"per branch: routed /<br/>declined / unavailable"| RO["ROUTING branch_decision<br/>will_run"]
+  M ==>|"per branch: routed / declined /<br/>unavailable / ungated"| RO["ROUTING branch_decision<br/>will_run"]
   M -.->|"file route state"| V["VERDICT: acoustically_empty<br/>or UNEXPLAINED flag"]
   RO ==> B["the branches that run"]
 ```
@@ -959,7 +965,7 @@ is exactly why it cannot be a route, and since it now has a node its position is
 | AIRWAY | `airway.breath`, `airway.cough`, `airway.bracketed_event`, `airway.ppg_silent_fraction` | residual energy fraction `>= 0.10`; loudest cough-labelled span `>= 50 dB` over its own floor; one typed bracketed airway token from `taxonomy.airway_bracket_tokens`; posteriorgram frames whose argmax phoneme is `<silent>` `>= 0.757` |
 | SPEECH | `speech.lexical` | live consensus words that are not bracketed, any outcome, `>= 2` |
 | VOICE | `voice.sustained`, `voice.glide`, `voice.chant` | longest live amplitude span `>= 3.0 s`; YAMNet singing-subtree union peak on `plain` `>= 0.05`; YAMNet `Chant` peak on `plain` `>= 0.02` |
-| DDK | `ddk.lexical_repetition`, `ddk.ppg_segment_rate_per_s` | largest repeat count of any normalised transcript token `>= 3`; contiguous argmax-phoneme segments per second `>= 10` |
+| DDK | none — `routing.declaration_required: [DDK]` | nothing; the declaration routes it, and no content reading can |
 
 **SPEECH routes on ASR words alone.** `words.total` is the wrong field — bracketed tokens fire
 almost everywhere, so `total >= 1` scores specificity 0.075 — and the bracketed half is not noise
@@ -1005,12 +1011,13 @@ already inside `DECLARED_KIND["speech"]`; the ruleset reads the narrower set by 
 `declared_kinds("diadochokinesis-ka")` still returns `{"speech"}` and the existing sweep's reference
 standards are unchanged.
 
-`ddk.lexical_repetition` was called `ddk.declared` and is renamed because measurement shows it only
-works when the elicited unit is a dictionary word: `diadochokinesis-buttercup` ("repeat the **word**
-/buttercup/") falls through at 1.6%, `diadochokinesis-v2-puh` ("repeat the **syllable** /PA/") at
-24.6%. `ddk.ppg_segment_rate_per_s` is the acoustic gate beside it — a rate of articulatory change
-that never had to spell the unit — and it was fitted rather than assumed. The lexical cut of 3 has
-never been swept.
+`ddk.lexical_repetition` was called `ddk.declared` and was renamed because measurement showed it
+only worked when the elicited unit is a dictionary word: `diadochokinesis-buttercup` ("repeat the
+**word** /buttercup/") fell through at 1.6%, `diadochokinesis-v2-puh` ("repeat the **syllable** /PA/")
+at 24.6%. `ddk.ppg_segment_rate_per_s` was the acoustic gate beside it — a rate of articulatory
+change that never had to spell the unit — and it was fitted rather than assumed; the lexical cut of 3
+was never swept. **Both are gone**: `routing.declaration_required: [DDK]` made the declaration the
+only route into the branch, which left neither gate able to add a route or withhold one.
 
 #### Three outcomes, and only one of them indicts the ruleset
 
@@ -1203,7 +1210,7 @@ AIRWAY verdicts rest on a gap span rather than on a proposed one.
 | item | what is owed |
 | --- | --- |
 | `airway.cough` | its 50 dB cut is **carried over unswept** onto a population smaller and louder than the one it was fitted on. Re-fitting it from the corpus run is the first thing to do with that run |
-| `ddk.lexical_repetition` | threshold 3 has **never been swept**: no J, no firing spread, no operating point |
+| `ddk.lexical_repetition` | **settled by deletion.** Threshold 3 was never swept — no J, no firing spread, no operating point — and the gate was removed with `ddk.ppg_segment_rate_per_s` when DDK moved to `routing.declaration_required`, so the sweep is no longer owed |
 | `airway.bracketed_event` | its J came off the 300-character-capped transcript and is a lower bound; the gate must be re-measured from the extracted `bracketed_types` counts |
 | `speech.lexical` | 2 against 3 is a judgement no number here settles; a count-grid sweep with DDK held out of the negatives, reporting max- and median-family firing beside J, is what would inform it. The existing sweep predates re-bracketing, so it must be re-run before its `>= 3` and `>= 4` rows can be compared with the branch figures |
 | `words.onomatopoeic_tokens` | **populated** at `77b247a1` with the measured cough lexicon, so this is no longer a null. Two things remain owed: the lexicon was fitted at `>= 2` tokens (sens 0.361, spec 0.999) and PREPROCESS brackets at **one**, whose firing rate was never measured; and only the cough set was measured — the manoeuvre transcribed as a word still leaks into SPEECH elsewhere, e.g. 145 `'E.'` in `glides-low-to-high` |
@@ -1211,7 +1218,7 @@ AIRWAY verdicts rest on a gap span rather than on a proposed one.
 | the presence floors | **settled by deletion.** The four `taxonomy.presence_floor.*` nulls are gone from the config and the lines that read them are gone from `nodes/taxonomy.py`; adopting the ruleset retired the question rather than answering it. `taxonomy.speech_labels` is still null and still owed a value, but only by `nodes/speech.py`, which reads it as corroborating evidence inside the branch |
 | the agreement between routing and the branches | stage 1's parallel columns are gone with the second selection; the axis that replaces them is `FileVerdict.agreement`, which compares the **route** against what the branch then found (step 7). Nobody has counted that over the corpus yet, and it is the number that says whether a gate over-routes |
 | the hint layer | designed above, not implemented — and [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md) now proposes replacing it rather than finishing it: the per-recording facts come from the BIDS sidecar as a `declaration` measurement SCREEN resolves, and that design names three separate reasons the present hint path could not have worked (the sidecar unread, the only populated map raising on load, and its values failing a case-sensitive `BRANCHES` test) |
-| a DDK arm | there is no `nodes/ddk.py`; see step 5d |
+| a DDK arm | **built.** `nodes/ddk.py` runs both modes over the envelope and the posteriorgram CV walk; what is still owed is `DDK` in `GRAPH_ORDER`, see step 5d |
 | the branch-held detectors | 22 of them sit in `BRANCH_DETECTORS["VOICE"]`, swept and deliberately not gated. `nodes/voice.py` does not read one. What a branch would *conclude* from a pitch trajectory is decided nowhere |
 
 ### 4. routing — evaluate the ruleset (+ hints) into an execution set
@@ -1232,7 +1239,7 @@ from any decision back to the gate outcomes behind it is in the store rather tha
 declared task family names the branch, or a hint tag the map resolves does; `forced_by_declaration`
 is true only when `by_declaration` holds **and** the ruleset did not already route it; `will_run` is
 the disjunction. That is the whole selection: two additive sources, no second opinion, and no state
-that runs a branch for want of evidence. `_route_states` turns the evaluation into one of three per
+that runs a branch for want of evidence. `_route_states` turns the evaluation into one of four per
 branch, from the content gates alone:
 
 | branch route state | when | does it run |
@@ -1240,6 +1247,7 @@ branch, from the content gates alone:
 | `routed` | one of that branch's gates fired | yes |
 | `unavailable` | none fired **and** at least one of its gates could not be read | no, unless declared |
 | `declined` | none fired and every gate was readable | no, unless declared |
+| `ungated` | the branch names no gate, so nothing was read | no, unless declared — DDK's state on every recording |
 
 **`unavailable` does not run the branch, and that is the deliberate reversal.** The deleted path ran
 a branch on anything that was not `absent`, which is how a graph that could never read its floors
@@ -1248,10 +1256,9 @@ tells the two apart in its agreement table (step 7) rather than ROUTING resolvin
 
 **Every branch in `BRANCHES` gets a decision, DDK included.** `BRANCH_FOR_KIND` and
 `UNCLASSIFIED_BRANCHES` are gone; the loop is over `BRANCHES` itself (`routing.py:215`), so the
-four-branch vocabulary and the four-branch decision set are the same set by construction. DDK has no
-node, and `run._drive_branches` records it `SKIPPED` with `NO_NODE` whether or not it is selected
-(`run.py:300-302`, and the function's own docstring at `:257-259`) — see step 5d
-for what that then does to the file verdict.
+four-branch vocabulary and the four-branch decision set are the same set by construction. DDK is
+dispatched like the other three; its decision differs only in carrying `route_state: ungated`,
+because it names no gate — see step 5d.
 
 What each decision entity carries (`routing.py:225-237`):
 
@@ -1259,7 +1266,7 @@ What each decision entity carries (`routing.py:225-237`):
 | --- | --- |
 | `branch` | the branch's name, which is also the name its own verdict is written under |
 | `will_run` | whether it was selected |
-| `route_state` | `routed` / `declined` / `unavailable` |
+| `route_state` | `routed` / `declined` / `unavailable` / `ungated` |
 | `unavailable_gates` | that branch's gates whose feature could not be read |
 | `flag_gates` | that branch's flag gates that fired — annotation, never routing |
 | `declared` | the declaration named this branch, however the branch ran |
@@ -1416,28 +1423,35 @@ decided nowhere. Until it is, "held for VOICE" means held, not used.
 
 *Goals served*: none of the three; it was never one of them.
 
-### 5d. DDK — routed, unbuilt
+### 5d. DDK — built, and routed by the declaration
 
-A branch with no node. `DDK` is in `BRANCHES` and in `taxonomy.ruleset` — a reference family set, a
-construction exclusion on SPEECH, two gates and a scored 2x2 — and there is **no `nodes/ddk.py`**,
-no `DDK` in `GRAPH_ORDER`, and no entry in `run.py`'s dispatch table.
+**`nodes/ddk.py` exists and runs.** It is in `run._drive_branches`' dispatch table
+(`run.py:316`) and is driven like any other branch. What this section said until now — no
+`nodes/ddk.py`, no dispatch entry, `SKIPPED` with `NO_NODE`, and a fold reason *"DDK was asked to run
+and never ran"* — described the state before the node landed and is no longer true of any of it. The
+`NO_NODE` arm remains in `run.py` as the guard it always was; no branch reaches it today.
 
-**Since stage 2 it is selected on content, not never.** ROUTING loops over `BRANCHES` itself, so DDK
-gets a `branch_decision` like any other branch and `will_run` is true for it whenever
-`ddk.lexical_repetition` or `ddk.ppg_segment_rate_per_s` fires. Three things then hold, and the
-third is a real cost this document should not soften:
+**One claim from the old text still holds: `DDK` is absent from `GRAPH_ORDER`.** VERDICT and
+`report.py` both sort unknown nodes last, and `TriageRunResult.nodes` is composed over
+`(*GRAPH_ORDER, REPORT, *BRANCHES)`, so the outcome is carried. The live consequence is narrow and
+pre-existing: `run.py`'s `GRAPH_ORDER[PREPROCESS+1 : VERDICT]` slice does not name DDK, so a failed
+PREPROCESS leaves DDK with **no** recorded outcome rather than `SKIPPED`.
+[`branch-ddk-implementation.md`](branch-ddk-implementation.md) carries that item.
 
-- `run._drive_branches` **looks the branch up** rather than indexing its dispatch table
-  (`run.py:303-305`); a branch with no implementation is recorded `SKIPPED` carrying
-  `note: "no node implements this branch"`, selected or not, and the note reaches `run.json` under a
-  `notes` key. Before `a8b15900` that lookup was an index and naming DDK in an execution set would
-  have been a `KeyError` that killed the run.
-- `TriageRunResult.nodes` is built over `(*GRAPH_ORDER, REPORT, *BRANCHES)`; it was filtered to
-  `GRAPH_ORDER`, so DDK's outcome was computed and then silently dropped.
-- **A recording whose DDK gates fire now flags.** The decision says the branch was asked, no verdict
-  comes back, and `fold_file_verdict` emits `"DDK was asked to run and never ran"` — a `FLAG` reason
-  like any other. VERDICT orders its reasons through `GRAPH_ORDER`, which does not name DDK, so the
-  reason sorts last rather than being dropped.
+**It is selected by the declaration alone.** ROUTING loops over `BRANCHES` itself, so DDK gets a
+`branch_decision` like any other branch. It was selected on content until
+`routing.declaration_required: [DDK]` landed and the two content gates were removed; `will_run` is
+now true for it exactly when the declaration names it, and its `route_state` is `ungated` on every
+recording, because a branch that names no gate was never read.
+
+**Two instruments, not one.** `align_ddk` and `detect_ddk` read the energy envelope *and* the
+posteriorgram: `ppg_evidence` (`nodes/ddk.py:716`, landed `8c01ee2e`) collapses the argmax raster to
+phoneme runs, reads a stop run followed by a vowel run as a CV unit whose onset is the stop's own
+start, and takes maximal contiguous stretches of regular inter-onset intervals as trains. Those
+onsets feed the same interval, dispersion, trend and per-cycle-position functions the envelope path
+uses rather than a parallel timing path, and the place the posteriorgram reads is reported beside the
+burst spectrum's with an agreement fraction over the onsets both resolved. The posteriorgram is not
+the authority.
 
 **That flag is the honest outcome, and it is scoped.** It fires on recordings that the two gates
 select, which is exactly the property the rejected alternative lacked — though the gates and
@@ -1450,19 +1464,20 @@ have stopped the `acoustically_empty` discard from ever firing. A branch with no
 acquire a default that asserts presence, and must not acquire one asserting absence without evidence
 either. Routing it on its own measured gates does neither.
 
-**Measured 2026-09-15, and the scope claim needs qualifying in both directions.** On 13 b2ai v3.1
-recordings DDK routed **5**: the two real DDK recordings via `ddk.ppg_segment_rate_per_s`, and three
-pure-speech recordings via `ddk.lexical_repetition` alone, on ordinary function-word repetition. The
-acoustic gate made no error on that sample; the unswept lexical gate made every one. So the flag is
-scoped to what the gates select and not to what the recordings contain — which is far better than the
-alternative's "every recording" and not the same thing as "syllable-repetition content and no others".
+**Measured 2026-09-15 under the gates, and it is why they are gone.** On 13 b2ai v3.1 recordings DDK
+routed **5**: the two real DDK recordings via `ddk.ppg_segment_rate_per_s`, and three pure-speech
+recordings via `ddk.lexical_repetition` alone, on ordinary function-word repetition. The acoustic gate
+made no error on that sample; the unswept lexical gate made every one. The flag was scoped to what the
+gates selected and not to what the recordings contained — better than the alternative's "every
+recording" and not the same thing as "syllable-repetition content and no others", which is the gap the
+declaration now closes by routing only what was declared.
 **And it changed no file's outcome**: all five already carried another flag, so the missing node cost
 that run a flag *reason* on 38% of it and a flagged *file* on none of it. That is the difference
 between an artifact and a defect, and it does not weaken the argument for building the node so much as
 relocate it: the case rests on the branch having a subject, not on the flag count.
 [`branch-ddk.md`](branch-ddk.md) *The state of this branch* carries the reading;
-[`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md) § *`ddk.lexical_repetition` is lexical*
-carries the gate values.
+[`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md) § *DDK's two gates were lexical and
+acoustic, and both were removed* carries the gate values.
 
 One artifact of the half-state is still visible: `report.py` builds `_EVIDENCE_BRANCHES = (*BRANCHES,
 "REDACT")`, so `_branch_evidence` emits an always-empty `"DDK"` key in the report JSON. Its
@@ -1472,11 +1487,12 @@ What an arm would need, and what is now left of the list: `nodes/ddk.py` on the 
 returning a verdict with `kind="ddk"`, entries in `GRAPH_ORDER` and the dispatch table, and a
 subject. **The kind line it used to need is off the list** — that was the direction the staging
 pointed, and stage 2 took it: ROUTING reads routed branches, so DDK needs no kind line at all. The
-acoustic syllable-repetition evidence `ddk.ppg_segment_rate_per_s` reads is a routing feature; what a
-branch would *conclude* about a rate is decided nowhere. The measurement behind it is 855
-declared-DDK recordings that route somewhere and never to DDK, of which the cut at 10 recovers 351.
+acoustic syllable-repetition evidence `ddk.ppg_segment_rate_per_s` read was a routing feature; what a
+branch would *conclude* about a rate is decided nowhere. The measurement behind it was 855
+declared-DDK recordings that route somewhere and never to DDK, of which the cut at 10 recovered 351 —
+and the declaration recovers all 855, which is what removed the gate.
 
-**The path a routed DDK actually takes** — two gates, a decision, a lookup that finds nothing, a
+**The path a routed DDK actually takes** — a declaration, a decision, a lookup that finds nothing, a
 fold reason — is drawn below, § *DDK's own DAG*.
 
 *Goals served*: none yet.
@@ -2152,24 +2168,21 @@ informative absence in the pipeline as an operational fault (step 5c). The 6-of-
 
 ```mermaid
 graph TD
-  G1["ddk.lexical_repetition, at least 3<br/>(transcript_repeat; UNMEASURED)"] --> DEC
-  G2["ddk.ppg_segment_rate_per_s, at least 10<br/>(posteriorgram segments per second)"] --> DEC
-  DEC["branch_decision: will_run<br/>(routing.py:215-237)"] --> LOOKUP
-  LOOKUP["run._drive_branches looks DDK up<br/>and finds nothing (run.py:303-305)"] --> SKIP
-  SKIP["NodeOutcome SKIPPED, note NO_NODE<br/>no entity, no verdict"] --> FOLD
-  FOLD["fold: 'DDK was asked to run and never ran'<br/>(vocabulary.py:398-401)"]
+  G1["the recording's declaration names DDK<br/>(routing.declaration_required; no gate)"] --> DEC
+  DEC["branch_decision: will_run<br/>route_state always 'ungated'"] --> DISP
+  DISP["run._drive_branches dispatches DDK<br/>(run.py:316)"] --> NODE
+  NODE["nodes/ddk.py: align_ddk or detect_ddk<br/>envelope + ppg_evidence CV walk"] --> FOLD
+  FOLD["spans, findings, a report<br/>_agreement resolves an ungated route"]
 ```
 
 #### Present — what the module does today
 
-**What it reads: nothing.** There is no `nodes/ddk.py`, no `DDK` in `GRAPH_ORDER` and no entry in
-the dispatch table (`run.py:297-301`); `DDK` is in `BRANCHES` (`vocabulary.py:31`) and in
-`taxonomy.ruleset`, which is the whole of its existence. **Its internal steps: none.** **What it
-writes: nothing** — not an entity, not a measurement, not a verdict. Its only record is the runner's
-`NodeOutcome(state=SKIPPED, note=NO_NODE)` and, downstream of that, one `FLAG` reason in the file
-fold.
+**What it reads:** the energy envelope, the wideband spectrogram, the consensus words, and the
+posteriorgram through `ppg_evidence`. It writes spans, findings and a report like any other branch.
+`DDK` is still absent from `GRAPH_ORDER`, which is the one part of the old "unbuilt" reading that
+survives.
 
-#### Intended: `align_ddk` and `detect_ddk` — not built, and neither is the branch
+#### `align_ddk` and `detect_ddk`
 
 ```mermaid
 graph TD
@@ -2186,10 +2199,9 @@ graph TD
   DE --> DEOUT["one PROPOSED span per repetition train,<br/>acoustic and lexical; done = UNDETERMINED"]
 ```
 
-**There is nothing to sit these beside.** DDK reads nothing, has no internal steps and writes
-nothing; `run.py:304-305` marks it `SKIPPED` with `NO_NODE` whether or not routing selected it,
-because the `call is None` arm precedes the `in selected` test. Both modes below are therefore
-entirely intended.
+Both modes are implemented. The `call is None` arm in `run._drive_branches` still precedes the
+`in selected` test, so a branch with no dispatch entry would be `SKIPPED` with `NO_NODE` whether or
+not routing selected it — DDK no longer takes that arm.
 
 **The ten in-family rows** are three `Pattern` kinds: `SYLLABLE_TRAIN` (the six single-syllable
 families), `SYLLABLE_SEQUENCE` (`pataka` and `puhtuhkuh`, whose expected cycle
@@ -2204,10 +2216,12 @@ recordings carrying no measurement of their own. The onsets travel as a `counts`
 that is not the one the sequence expected travels as a `syllable_sequence_mismatch` deviation with
 its own extent, which needs no span.
 
-**What routing hands each mode.** Two gates route DDK — `ddk.lexical_repetition >= 3`
-(`default.yaml:301-304`, threshold **UNMEASURED**) and `ddk.ppg_segment_rate_per_s >= 10`. DDK is
+**What routing hands each mode.** Nothing routes DDK but the declaration: `branch_gates.DDK` is
+empty and `routing.declaration_required: [DDK]` decides. Two gates used to — `ddk.lexical_repetition
+>= 3` (threshold **UNMEASURED**) and `ddk.ppg_segment_rate_per_s >= 10` — and under them DDK was
 routed to **22,363 recordings against the 7,989 that declare a DDK family, 14,878 of them
-declaring none** ([`branch-ddk.md:20`](branch-ddk.md)), so `detect_ddk` is almost the whole of
+declaring none** ([`branch-ddk.md:20`](branch-ddk.md)), which is why they were removed. Under the
+declaration the routed set is the declared set, so `align_ddk` is the whole of
 what a built branch would do: it proposes a
 `family: "ddk"` span over every rapid repetition train it finds — acoustically from the envelope
 modulation spectrum, lexically over any token repeated often enough — and asserts nothing about the

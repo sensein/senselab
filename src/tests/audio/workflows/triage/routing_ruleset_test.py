@@ -89,12 +89,46 @@ class TestTheReferenceStandardIsNotARouter:
         """An unrecognised task id is not silently swept into a branch."""
         assert ruleset.reference_branches("unknown") == ()
 
-    def test_every_branch_has_gates_and_they_all_exist(self, ruleset: Ruleset) -> None:
-        """A branch with no gate could never be routed to, whatever a recording carries."""
+    def test_every_gate_a_branch_names_exists(self, ruleset: Ruleset) -> None:
+        """A gate no ``gates:`` entry defines would be a route the ruleset could never evaluate."""
         assert set(ruleset.branch_gates) == set(BRANCHES)
         for names in ruleset.branch_gates.values():
-            assert names
             assert all(name in ruleset.gates for name in names)
+
+    def test_only_a_branch_the_declaration_gates_may_have_no_gates_of_its_own(self, ruleset: Ruleset) -> None:
+        """A gateless branch content can never reach is reachable only through its declaration.
+
+        The exemption is read off ``routing.declaration_required`` rather than naming a branch, so
+        emptying a branch's gates without gating it on the declaration fails here.
+        """
+        declaration_only = set(load_triage_config().get("routing.declaration_required") or ())
+        for branch, names in ruleset.branch_gates.items():
+            assert names or branch in declaration_only
+
+
+class TestDDKIsRoutedByTheDeclarationAndNothingElse:
+    """The two content gates were removed once ``routing.declaration_required`` decided the route."""
+
+    def test_ddk_names_no_gate_and_no_flag(self, ruleset: Ruleset) -> None:
+        """A named gate would be a second route into a branch the declaration is supposed to decide."""
+        assert ruleset.branch_gates["DDK"] == ()
+        assert ruleset.branch_flags["DDK"] == ()
+
+    def test_the_configuration_defines_no_ddk_gate_to_name(self, ruleset: Ruleset) -> None:
+        """A definition left behind is a gate another branch could pick up by accident."""
+        assert [name for name in ruleset.gates if name.startswith("ddk.")] == []
+
+    def test_no_reading_of_any_recording_routes_ddk(self, ruleset: Ruleset) -> None:
+        """Every feature a removed gate read, at a value that used to fire, now routes nothing."""
+        record = _features(
+            "diadochokinesis-pataka",
+            transcript="pa ta ka " * 12,
+            ppg={"silent_fraction": 0.0, "segment_rate_per_s": 14.70},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert "DDK" not in result.routed
+        assert result.gate_outcomes.keys() == set(ruleset.gates)
+        assert not [name for name in result.gate_outcomes if name.startswith("ddk.")]
 
 
 class TestEachGateFiresAndDoesNot:
@@ -109,7 +143,6 @@ class TestEachGateFiresAndDoesNot:
             ("airway.breath", "residual", "energy_fraction"),
             ("airway.cough", "span_label_set_stats", "yamnet.cough_labels.peak_over_floor_db_max"),
             ("airway.ppg_silent_fraction", "ppg", "silent_fraction"),
-            ("ddk.ppg_segment_rate_per_s", "ppg", "segment_rate_per_s"),
         ],
     )
     def test_a_scalar_gate_fires_at_its_threshold_and_not_below(
@@ -145,12 +178,6 @@ class TestEachGateFiresAndDoesNot:
         assert evaluate_gate(_features("prolonged-vowel", peaks={"plain|yamnet|Chant": 0.019}), rule) is (
             GateOutcome.SILENT
         )
-
-    def test_the_ddk_gate_counts_repeated_transcript_tokens(self, ruleset: Ruleset) -> None:
-        """Three repeats of one syllable carries it; two do not."""
-        rule = ruleset.gates["ddk.lexical_repetition"]
-        assert evaluate_gate(_features("diadochokinesis-pa", transcript="pa pa pa"), rule) is GateOutcome.FIRED
-        assert evaluate_gate(_features("diadochokinesis-pa", transcript="pa pa"), rule) is GateOutcome.SILENT
 
 
 class TestContentRoutesWithoutTheInstruction:
@@ -224,9 +251,9 @@ class TestAMissingMeasurementIsNotANegative:
         assert evaluate_gate(record, ruleset.gates["voice.glide"]) is GateOutcome.UNAVAILABLE
 
     def test_a_gate_with_no_consensus_transcript_reads_unavailable(self, ruleset: Ruleset) -> None:
-        """No transcript is no repeat count, which is not a repeat count of zero."""
-        record = _features("diadochokinesis-pa", consensus_present=False)
-        assert evaluate_gate(record, ruleset.gates["ddk.lexical_repetition"]) is GateOutcome.UNAVAILABLE
+        """No transcript is no bracketed token, which is not a bracketed-token count of zero."""
+        record = _features("breath-sounds", consensus_present=False)
+        assert evaluate_gate(record, ruleset.gates["airway.bracketed_event"]) is GateOutcome.UNAVAILABLE
 
     def test_an_unreadable_gate_is_named_rather_than_counted_as_silent(self, ruleset: Ruleset) -> None:
         """A breath recording with no residual and no span statistic is unmeasured, not empty."""
@@ -533,17 +560,17 @@ class TestQualityIsATerminalNodeAndNotABranch:
         assert QUALITY not in ruleset.reference_family_set
 
 
-class TestThePosteriorgramGatesRouteWithoutATranscript:
+class TestThePosteriorgramGateRoutesWithoutATranscript:
     """A posteriorgram is taken whether or not any recogniser could spell what was said."""
 
-    def test_both_gates_are_branch_gates_whose_thresholds_come_off_the_configuration(self, ruleset: Ruleset) -> None:
-        """Neither cut is a literal: the gate carries whatever ``taxonomy.ruleset.gates`` says."""
+    def test_the_gate_is_a_branch_gate_whose_threshold_comes_off_the_configuration(self, ruleset: Ruleset) -> None:
+        """The cut is not a literal: the gate carries whatever ``taxonomy.ruleset.gates`` says."""
         gates = load_triage_config().require("taxonomy.ruleset.gates")
-        assert "ddk.ppg_segment_rate_per_s" in ruleset.branch_gates["DDK"]
         assert "airway.ppg_silent_fraction" in ruleset.branch_gates["AIRWAY"]
-        for name in ("ddk.ppg_segment_rate_per_s", "airway.ppg_silent_fraction"):
-            assert ruleset.gates[name].threshold == float(gates[name]["threshold"])
-            assert ruleset.gates[name].op == "at_least"
+        assert ruleset.gates["airway.ppg_silent_fraction"].threshold == float(
+            gates["airway.ppg_silent_fraction"]["threshold"]
+        )
+        assert ruleset.gates["airway.ppg_silent_fraction"].op == "at_least"
 
     def test_the_silent_fraction_gate_joins_the_residual_rather_than_replacing_it(self, ruleset: Ruleset) -> None:
         """Both gates carry AIRWAY, so a recording either one reads is a recording AIRWAY gets."""
@@ -554,19 +581,17 @@ class TestThePosteriorgramGatesRouteWithoutATranscript:
             "airway.ppg_silent_fraction",
         )
         assert ruleset.gates["airway.ppg_silent_fraction"].feature == ("ppg", "silent_fraction")
-        assert ruleset.gates["ddk.ppg_segment_rate_per_s"].feature == ("ppg", "segment_rate_per_s")
 
-    def test_ddk_routes_on_the_segment_rate_with_no_repeated_token_in_the_transcript(self, ruleset: Ruleset) -> None:
-        """The syllable train the recogniser spelled three different ways still reaches DDK."""
+    def test_a_syllable_train_no_gate_reads_routes_nowhere(self, ruleset: Ruleset) -> None:
+        """Content alone can no longer reach DDK, whatever the posteriorgram or the transcript says."""
         record = _features(
             "diadochokinesis-pa",
-            transcript="pa ta ka",
+            transcript="pa pa pa pa",
             ppg={"silent_fraction": 0.0, "segment_rate_per_s": 12.0},
         )
         result = evaluate_routes(record, ruleset)
-        assert result.gate_outcomes["ddk.lexical_repetition"] is GateOutcome.SILENT
-        assert result.routed == ("DDK",)
-        assert result.agreed == ("DDK",)
+        assert result.routed == ()
+        assert result.missed == ("SPEECH", "DDK")
 
     def test_airway_routes_on_the_silent_fraction_with_no_residual_measurement(self, ruleset: Ruleset) -> None:
         """The 2345 recordings with no posteriorgram are not the ones with no residual."""
@@ -590,7 +615,6 @@ class TestThePosteriorgramGatesRouteWithoutATranscript:
         """An absent sidecar leaves the gate unread, which is not the gate staying silent."""
         record = _features("respiration-and-cough-threequickbreaths", ppg={})
         assert evaluate_gate(record, ruleset.gates["airway.ppg_silent_fraction"]) is GateOutcome.UNAVAILABLE
-        assert evaluate_gate(record, ruleset.gates["ddk.ppg_segment_rate_per_s"]) is GateOutcome.UNAVAILABLE
 
 
 class TestBracketedTokensAreAirwayEvidence:

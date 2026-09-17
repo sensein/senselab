@@ -614,9 +614,12 @@ that occurs incidentally -- breath and cough happen in any recording, sustained 
 any recording, lexical content happens in any recording -- so a content route to them is a reading
 worth having even when nothing declared them. A rapid alternating repetition train does not occur
 incidentally. A content-only route to DDK is therefore always a detector artefact rather than a
-participant having produced one, and the corpus says so directly: ddk.lexical_repetition >= 3 routes
+participant having produced one, and the corpus said so directly: ddk.lexical_repetition >= 3 routed
 DDK on 99% of rainbow-passage, 98% of caterpillar-passage and 87% of free-speech, all of it ordinary
-function-word repetition (see fold_file_verdict and branch-ddk.md for the same measurement).
+function-word repetition (see fold_file_verdict and branch-ddk.md for the same measurement). That
+measurement is the derivation of this key, and it is also why branch_gates.DDK is now empty:
+ddk.lexical_repetition and ddk.ppg_segment_rate_per_s were removed once the declaration decided the
+route, since neither could then add a route or withhold one.
 
 The second half of the decision is what the gate buys. Because the route can no longer be created by
 content, the branch's own detector is free to run at maximum sensitivity: a false positive inside a
@@ -631,6 +634,12 @@ record what the ruleset thought, and a withheld route is recorded beside it as w
 a reader can see "the ruleset would have routed this, and the declaration gate withheld it" rather
 than a branch that merely declined. Overwriting route_state would have destroyed exactly the
 measurement the gate exists to argue about.
+
+Since branch_gates.DDK was emptied, DDK's own route_state is ungated on every recording, which is the
+fifth state added for it: a branch that names no gate was never read, so it neither routed nor
+declined. _agreement resolves it rather than scoring it, because a branch that made no claim cannot
+be agreed or disagreed with. Reading it as declined -- which is what it did before ungated existed --
+inverted the route check and flagged every DDK run that found its subject.
 
 An entry naming a branch this graph does not route to is a configuration fault, not a missing
 measurement, and is reported the way routing.hint_branch_map's bad values are -- see
@@ -1280,10 +1289,11 @@ branch.train_min_s: 1.0
 
 branch.repeat_min_occurrences: 3
   From the word: two occurrences are a pair, three are a series, and a repetition *train* needs a
-  series. Note that this is the same threshold the `ddk.lexical_repetition` routing gate uses, and
-  that gate over-routes DDK on 99% of `rainbow-passage` — which is an argument about that gate's
-  evidence rather than about this count, and is why VERDICT now folds an out-of-family DDK result as
-  a detector covariate (see [verdict](#verdict)).
+  series. The removed `ddk.lexical_repetition` routing gate carried the same threshold and
+  over-routed DDK on 99% of `rainbow-passage` — which was an argument about that gate's evidence
+  rather than about this count, and is why VERDICT folds an out-of-family DDK result as a detector
+  covariate (see [verdict](#verdict)). The gate is gone; this count is not it, and stands on the
+  word.
 
 branch.burst_window_ms: 20.0
   The stop burst and its aspiration occupy the first 10-25 ms after release (Blumstein & Stevens,
@@ -1462,13 +1472,15 @@ verdict.detection_is_evaluation: [DDK]
   an out-of-family train is far more likely the detector firing than the participant having produced
   one.
 
-  The corpus supports the mechanism rather than supplying a number: `ddk.lexical_repetition >= 3` --
-  the gate with no sweep anywhere and untraceable provenance -- routes DDK on 99% of
+  The corpus supported the mechanism rather than supplying a number: `ddk.lexical_repetition >= 3`
+  -- the gate with no sweep anywhere and untraceable provenance -- routed DDK on 99% of
   `rainbow-passage`, 98% of `caterpillar-passage` and 87% of `free-speech`, all of it ordinary
   function-word repetition; while `ddk.ppg_segment_rate_per_s` separated the two real DDK recordings
   from every speech recording in the 13-recording sample without overlap (12.33 and 14.70 /s against
-  a maximum of 8.89). So the over-routing is one gate's doing and a `detect_ddk` that fires on those
-  recordings is reporting the artefact.
+  a maximum of 8.89). So the over-routing was one gate's doing and a `detect_ddk` that fired on those
+  recordings was reporting the artefact. Both gates have since been removed, which closes the source
+  of out-of-family DDK runs in the packaged configuration; this key's fold is unchanged, and the
+  `routing.hint_branch_map` reaches it again the moment a caller populates it.
 
   **Deliberately not a weight and not a prior.** A numeric expression of "much less likely" would be
   a fit nobody has taken; what is encoded is which of two records the out-of-family result goes into.

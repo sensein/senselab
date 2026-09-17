@@ -359,7 +359,7 @@ taxonomy:
       AIRWAY: [airway.breath, airway.cough, airway.bracketed_event, airway.ppg_silent_fraction]
       SPEECH: [speech.lexical]
       VOICE: [voice.sustained, voice.glide, voice.chant]
-      DDK: [ddk.lexical_repetition, ddk.ppg_segment_rate_per_s]
+      DDK: []                           # DDK routes on the declaration alone; see routing.declaration_required
     branch_flags:                       # branch -> gates that ANNOTATE it; a flag never routes anything
       AIRWAY: []
       SPEECH: [speech.transcript_agreement]
@@ -405,14 +405,6 @@ taxonomy:
         feature: [ppg, silent_fraction]   # posteriorgram frames whose argmax phoneme is <silent>
         op: at_least
         threshold: 0.757                # silent frame fraction that routes AIRWAY, beside airway.breath
-      ddk.lexical_repetition:
-        feature: [transcript_repeat]    # largest repeat count of any normalised transcript token
-        op: at_least
-        threshold: 3                    # repeats that route DDK; UNMEASURED, and lexical-only by construction
-      ddk.ppg_segment_rate_per_s:
-        feature: [ppg, segment_rate_per_s]   # contiguous argmax-phoneme segments per second of analysed audio
-        op: at_least
-        threshold: 10                   # segments per second that route DDK, reading no transcript
 
 # SQUIM and disruption tolerances. Every key in this section is currently read by nothing in
 # `src/senselab`: the gate they describe is unimplemented.
