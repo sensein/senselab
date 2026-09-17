@@ -267,7 +267,6 @@ branch:
   echo_overlap_max: 0.5                # prompt n-gram overlap above which a free response echoes its prompt
   verbatim_overlap_max: 0.5            # source content overlap above which a recall is verbatim
   coverage_min: 0.5                    # fraction of expected tokens a read text must realise
-  expected_lexical_max: 0              # lexical words a no-lexical expectation tolerates
   interval_max_s: 2.0                  # largest inter-event interval a series the instruction calls quick may show
   modulation_band_hz: [1.0, 10.0]      # [lo, hi] band the envelope modulation peak is searched in
   rate_prominence_min: 2.0             # modulation peak over its own band mean that makes a rate readable
