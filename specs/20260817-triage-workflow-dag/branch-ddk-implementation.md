@@ -127,9 +127,9 @@ to produce, and it flags rather than fails: a train was found.
 | a train span, `done` true or `UNDETERMINED` | `PASS` | |
 
 A `lexical_repetition` span is **not** a train: `TRAIN_ROLES` is `("task_extent", "repetition")`, so
-a recording routed by `ddk.lexical_repetition` on ordinary function-word repetition comes back with
-`trains_n: 0` and `FAIL`, carrying the repetition it did find as what it is. That is the case the
-gate produces on most of this branch's corpus and it is pinned by test.
+a recording carrying ordinary function-word repetition and no train comes back with `trains_n: 0` and
+`FAIL`, carrying the repetition it did find as what it is. That was the case `ddk.lexical_repetition`
+produced on most of this branch's corpus before the gate was removed, and it is pinned by test.
 
 **The vocabulary makes the absent-instrument row uncomfortable and it is left uncomfortable.**
 `vocabulary._resolved` maps `FAIL` to `absent` and everything else to `present`, so a `FLAG` for a
@@ -159,9 +159,10 @@ correct and both worth stating:
    asked about) and not a regression introduced here.
 2. With the keys supplied, a DDK-routed recording carrying no train now reads `FAIL`, which
    `_agreement` scores `MISMATCH` against a `routed` route — "mismatch: routing routed DDK, it found
-   no subject". That replaces one flag reason with another on the population
-   `ddk.lexical_repetition` over-routes, and it is the honest reading: the gate routed connected
-   speech and the branch found no train there.
+   no subject". That replaced one flag reason with another on the population
+   `ddk.lexical_repetition` over-routed, and it was the honest reading: the gate routed connected
+   speech and the branch found no train there. With the gate removed, the population that reaches
+   this row is the declared one.
 
 `DDK` is still absent from `GRAPH_ORDER`. Nothing breaks on that — `report.py` and `verdict.py` both
 sort unknown nodes last, and `run.py:453` composes `nodes` from `(*GRAPH_ORDER, REPORT_NODE,

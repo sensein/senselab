@@ -83,10 +83,14 @@ contributes no flag ground at all — neither its conformance nor a route mismat
 `detector_covariates` instead: a fact about the detector's behaviour over the corpus, not a reading of
 this recording. In-family it folds exactly like the other three.
 
-The corpus supplies the mechanism, not a number: `ddk.lexical_repetition >= 3` — the gate with no
-sweep anywhere — routes DDK on 99% of `rainbow-passage`, 98% of `caterpillar-passage` and 87% of
+The corpus supplied the mechanism, not a number: `ddk.lexical_repetition >= 3` — the gate with no
+sweep anywhere — routed DDK on 99% of `rainbow-passage`, 98% of `caterpillar-passage` and 87% of
 `free-speech`, all ordinary function-word repetition, while `ddk.ppg_segment_rate_per_s` separated the
-two real DDK recordings from every speech recording in the 13-recording sample without overlap.
+two real DDK recordings from every speech recording in the 13-recording sample without overlap. Those
+figures are why content must not route DDK, and they are what `routing.declaration_required: [DDK]`
+answers. Both gates were removed once it landed, so `branch_gates.DDK` is empty and DDK runs only when
+the declaration names it. The out-of-family arm is therefore no longer reachable from the packaged
+configuration — see [`dag.md`](dag.md) § *DDK routes on the declaration alone*.
 **Nothing here is a weight or a prior.** A per-branch, per-mode prior over the corpus is *owed*; a
 number invented to express "much less likely" would be a fit nobody took.
 
