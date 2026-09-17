@@ -44,13 +44,67 @@ safe to release, and a non-target speaker naming the participant is exactly as u
 | scope | target speaker's spans | every finding |
 | purpose | does this recording need a human | is this artifact releasable |
 
+## What the declared stimulus accounts for
+
+A PII-shaped token the *stimulus text asked the participant to read* is not a disclosure. The
+rainbow passage carries `rainbow`, which reads as a LOCATION to more than one detector; the Harvard
+sentences carry proper nouns; a picture-description prompt names places. Redacting them costs the
+recording the very content the task was designed to elicit, and discloses nothing, because the
+prompt is public and was chosen before the participant spoke.
+
+So REDACT reads `hint.expected_speech`. **With no hint, or a hint declaring no utterance, nothing is
+exempted and the node is exactly what it was** — that is the control, and it is tested as one.
+
+A candidate is exempt only when all of the following hold:
+
+1. its own (unpadded) extent reaches at least one consensus word, by the hull of that word's
+   per-source timings — the same hull the mask decides on;
+2. it does not reach *every* consensus word. That is SPEECH's signature for a finding whose text its
+   locator could not place anywhere (`pii_unlocated`), whose extent is then the whole transcript.
+   A whole-passage prompt would "account for" such a finding without anything having been matched,
+   so the whole-stream case is refused outright rather than thresholded;
+3. every word it reaches normalises to a non-empty key under `BranchParams.p_normalise` — the
+   branches' own lexical normaliser (`consensus.vocabulary_key`: casefold, strip edge punctuation),
+   not a second spelling invented here. A punctuation-only word would otherwise match trivially;
+4. those keys occur **in order and contiguously** inside one declared structure unit. A run, not a
+   subsequence: two words the prompt happens to contain in different sentences do not account for
+   them said together.
+
+### The verifier still sees it, and that is handled explicitly
+
+An exempt word stands verbatim in the released text, so the verification re-scan finds the candidate
+again. Left alone, the re-planning pass would widen onto it and the second scan would call it
+`unremediable` — the exemption would never take effect, and the node would fail every recording it
+applied to. Two changes make it coherent:
+
+- the re-plan never widens onto a word an exemption covers;
+- a surviving category is attributed to the exemption when there is at least one **exempt** word
+  carrying it that no planned extent covers *and* no non-exempt word carrying it in the same
+  position. With no exemptions the first condition can never hold, so every survivor is a failure
+  exactly as before.
+
+The attribution is per word, not per category. A recording where `rainbow` is exempt and `alice`
+carries the same category still redacts `alice`, still re-plans, and still fails if `alice` survives.
+
+### Every suppression is recorded
+
+A redaction not made is a decision, and an unrecorded decision is indistinguishable from a bug. Each
+exemption writes a live `assertion` entity — `verb: exempt`, `label: expected_speech` — carrying the
+category, the matched tokens, which prompt and which structure unit accounted for it, that unit
+verbatim, and the number of words covered; `wasDerivedFrom` the `pii` finding and every word it
+covers. A `redaction_exemptions` measurement carries the counts, and the verdict carries
+`expected_exempt_n`, `expected_exempt_by_category`, `expected_survivors` and
+`expected_speech_declared`. The matched tokens in the assertion are taken from the **prompt**, not
+from the transcript, so a fault in the matcher cannot put participant text into the audit record.
+
 ## Redaction is conservative at the edges
 
 Word edges are the consensus ASR word extents and carry their own temporal confidence and timing
 source count. A boundary off by 100 ms either leaves a fragment of a name audible or clips the
 neighbouring word, and only one of those two failures is recoverable. So every redacted extent is
-**padded outward** by `policy.padding_ms`, chosen to exceed the worst measured consensus-word edge
-error rather than the median. Two words whose padded extents overlap are merged into one redaction.
+**padded outward** by `redaction.padding_ms`, which must exceed the worst consensus-word edge error
+rather than the median. It ships at 250 ms as a convention; config-derivations.md states the
+arithmetic that bounds it and says plainly that it is not a fit. Two words whose padded extents overlap are merged into one redaction.
 
 ## The fill is configurable
 
@@ -119,10 +173,13 @@ decision** with its own authorisation.
 ## Product
 
 ```
-artifacts: { audio?, transcript? }   # each redacted, each independently optional
+artifacts: { audio?, transcript?, consensus? }   # each redacted, released together on a pass
+streams:   { redacted }                         # the masked audio, in the store, on every path
 verdict:   { redactions_n, by_category{}, padding_ms, fill, verified: bool, survived[],
-             unremediable[], replanned_n, scan_failed[], scan_missing[], required_detectors[],
-             unplaced_words_n, audio_check, artifacts_withheld: bool }
+             outstanding[], unremediable[], replanned_n, scan_failed[], scan_missing[],
+             required_detectors[], unplaced_words_n, audio_check, artifacts_withheld: bool,
+             expected_exempt_n, expected_exempt_by_category{}, expected_survivors[],
+             expected_speech_declared }
 ```
 
 **Only a pass produces a released pair; a flag withholds exactly like a fail.** On anything but a pass
@@ -137,6 +194,18 @@ because their extent is unknown — text of unknown location is never released v
 must be a non-negative whole number of milliseconds; zero is accepted and contradicts the margin's
 purpose.
 
+`survived` is the re-scan's raw answer; `outstanding` is what remains of it after the declared
+stimulus is accounted for, and `outstanding` is what decides the outcome. `expected_survivors` names
+the difference. `consensus` is the redacted consensus stream as JSON: one record per surviving word
+with its extent, per-source timings and readings, variants and agreement share, and one placeholder
+record per planned extent carrying its category, padded bounds and word count — and no surface,
+readings or variants for anything masked. The flat transcript is the records joined, so the two
+cannot disagree about what was redacted.
+
+The `redacted` stream is written under the **run** directory and registered in the store on every
+path, pass or not. The run directory is the store side of the disjointness check and already holds
+the unredacted audio; the release directory is the only thing gated on a pass.
+
 ## Out of scope
 
 Deciding *whether* to release, running any recognizer, scanning anything but the consensus
@@ -149,5 +218,5 @@ Derivations live in [`benchmarks/`](benchmarks/).
 
 | key | what is owed |
 | --- | --- |
-| `redaction.fill` | which of `silence`, `noise`, `bleep` is least damaging to downstream measurement; **deferred**, no default |
-| `redaction.padding_ms` | a positive floor exceeding the worst measured consensus-word edge error; **null** |
+| `redaction.fill` | which of `silence`, `noise`, `bleep` is least damaging to downstream measurement is still unmeasured. `silence` now **ships** as an owner-directed declared choice, not as the answer to that question |
+| `redaction.padding_ms` | a positive floor exceeding the worst measured consensus-word edge error. 250 ms now **ships** as a stated convention; the fit — the edge-error distribution at its maximum — is still owed (benchmarks/open.md) |

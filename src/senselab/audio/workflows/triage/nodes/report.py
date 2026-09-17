@@ -30,6 +30,7 @@ from senselab.audio.workflows.triage.config import MIN_AST_HOP_S, TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     consensus_words,
     find_measurement,
+    find_measurements,
     live_entities,
     resolve_stream,
 )
@@ -39,7 +40,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "REPORT"
 SUMMARY_STEM = "summary"
 FORMATS = ("png", "pdf")
-REPORT_SCHEMA_VERSION = "triage-summary/v5"
+REPORT_SCHEMA_VERSION = "triage-summary/v6"
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
@@ -1461,6 +1462,7 @@ def _report_document(
         "verdict": verdict,
         "branches": branches,
         "steps": steps,
+        "llm_check": _llm_reviews(store),
         "transcript": {
             "text": _consensus_transcript(store),
             "marked_text": _marked_transcript(store),
@@ -1729,6 +1731,65 @@ def _lane_absences_from_document(document: dict[str, Any], drawn: set[str]) -> l
     return out
 
 
+def _llm_reviews(store: ProvStore) -> list[dict[str, Any]]:
+    """Every round of REDACT's optional LLM check, in order, chain of thought included.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        One record per review, carrying the iteration, whether the model ran, its reasoning
+        verbatim, what it flagged, and the commit it loaded. Empty when the step did not run. The
+        reasoning is the point of the step, so it is carried whole rather than summarised.
+    """
+    return [
+        {
+            "iteration": entity.attributes.get("iteration"),
+            "available": entity.attributes.get("available"),
+            "reasoning": entity.attributes.get("reasoning") or "",
+            "findings": entity.attributes.get("findings") or [],
+            "failure": entity.attributes.get("failure"),
+            "model_id": entity.attributes.get("model_id"),
+            "revision": entity.attributes.get("revision"),
+            "entity_id": entity.id,
+        }
+        for entity in find_measurements(store, "redaction_llm_review")
+    ]
+
+
+def _llm_check_lines(check: dict[str, Any] | None, reviews: list[dict[str, Any]], *, prefix: str = "    ") -> list[str]:
+    """The LLM check's status and its captured reasoning, as report lines.
+
+    Args:
+        check: REDACT's ``llm_check`` verdict field, or None when the node wrote none.
+        reviews: :func:`_llm_reviews`' records.
+        prefix: Indent.
+
+    Returns:
+        One status line, then one block per review. An absent model is stated, never elided: the
+        step having been enabled and not run is a different claim from it having passed.
+    """
+    if check is None:
+        return []
+    status = str(check.get("status"))
+    lines = [
+        f"{prefix}llm check: {status} (iterations={_shown(check.get('iterations'))} "
+        f"model={_shown(check.get('model_id')) or 'none'} revision={_shown(check.get('revision')) or 'none'})"
+    ]
+    if check.get("flagged"):
+        lines.append(f"{prefix}  flagged: {', '.join(str(name) for name in check['flagged'])}")
+    if check.get("failure"):
+        lines.append(f"{prefix}  did not run: {check['failure']}")
+    for review in reviews:
+        lines.append(f"{prefix}  review {_shown(review.get('iteration'))}: available={review.get('available')}")
+        for finding in review.get("findings") or []:
+            lines.append(f"{prefix}    concern [{finding.get('category')}]: {finding.get('why')}")
+        for line in str(review.get("reasoning") or "").splitlines():
+            if line.strip():
+                lines.append(f"{prefix}    reasoning: {line.strip()}")
+    return lines
+
+
 def _redact_line(redact: dict[str, Any] | None, *, prefix: str = "  ") -> str:
     """One compact REDACT outcome line for the detail hierarchy."""
     if redact is None:
@@ -1788,6 +1849,7 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
 
     redact = steps.get("REDACT")
     lines.append(_redact_line(redact).replace("redact:", "REDACT:", 1))
+    lines += _llm_check_lines((redact or {}).get("llm_check"), document.get("llm_check") or [])
     redact_items = document["evidence"]["branches"].get("REDACT") or []
     for item in redact_items[:4]:
         timing = item.get("timing") or {}
