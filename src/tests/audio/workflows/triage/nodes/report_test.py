@@ -1486,8 +1486,9 @@ class TestTheSyllableMeasuresReachThePage:
         blocks = "\n".join(_decision_blocks(payload))
         findings = blocks.split("MEASURED BRANCH FINDINGS", 1)[1].split("SUPPORTING EVIDENCE", 1)[0]
         assert "SPEECH: " in findings
-        assert "trains_n=1" in findings
-        assert "ppg_rate_hz=5.4" in findings
+        named = {token.strip("; ") for token in findings.split()}
+        assert "trains_n=1" in named, "the train count itself, not the ppg_ prefixed one"
+        assert "ppg_rate_hz=5.4" in named
 
     def test_a_recording_that_ran_no_syllable_body_carries_none_of_the_keys(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
