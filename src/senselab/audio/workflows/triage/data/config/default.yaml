@@ -304,6 +304,12 @@ verdict:
   undetermined_flags: false            # an unanswered conformance is not; detect_* answers UNDETERMINED by construction
   deviation_flags: false               # a deviation is recorded and never a flag ground, until ground truth exists
   unmeasured_points_flag: true         # a reporting node that could not read an operating point it wanted flags
+  # REDACT's LLM re-read annotates; this decides what the annotation means, and only on the triage
+  # axis: release stays REDACT's own detector verdict whatever the reviewer concluded.
+  llm_redaction_flags: true            # a flagged redaction re-read is a triage flag ground
+  # The branches for which finding the subject IS evaluating the task, so an out-of-family result
+  # is a covariate on the detector rather than a reading of the recording. DDK only: a rapid
+  # alternating train does not occur incidentally, where breath, phonation and lexical content all do.
   # declared task family -> whether a non-conformance on it flags, overriding conformance_flags.
   # Data, not schema: a campaign names its own families. Empty ships no family excepted.
   conformance_flags_by_family: {}

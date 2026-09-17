@@ -6,6 +6,10 @@ deciding nodes write ``verdict`` entities; this node reads all three, adds the d
 routing decisions, and hands them to ``vocabulary.fold_file_verdict``. The two axes it keeps apart —
 triage and release — and the tables it implements are in
 ``specs/20260817-triage-workflow-dag/verdict.md``.
+
+REDACT's optional LLM re-read is read here too, as the annotation it is: its ``flagged`` reaches the
+triage axis under ``verdict.llm_redaction_flags`` and the release axis on no path, which stays
+REDACT's own detector verdict. See ``specs/20260817-triage-workflow-dag/llm-check.md``.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
+    REDACTION_LLM_ANNOTATION,
     RULESET_ROUTING,
     UNDETERMINED,
     BranchDecision,
@@ -226,6 +231,26 @@ def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:
     return str(measurement.attributes["state"]), [measurement.id]
 
 
+def _llm_redaction(store: ProvStore) -> tuple[dict[str, object] | None, list[str]]:
+    """REDACT's LLM re-read annotation, as the detector that wrote it recorded it.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The annotation and the id it came from, or ``(None, [])`` when REDACT wrote none — which is
+        a re-read never recorded, not a re-read that found nothing. ``name`` and ``signal`` are the
+        measurement's own bookkeeping and are dropped; everything else is carried through unread, so
+        what the model established reaches this fold exactly as REDACT wrote it.
+    """
+    measurement = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    if measurement is None:
+        return None, []
+    return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal")}, [
+        measurement.id
+    ]
+
+
 def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list[str]]:
     """ROUTING's decision per branch.
 
@@ -350,6 +375,7 @@ def verdict(
     reports = [report for _, report in report_pairs]
     route_state, route_ids = _route_state(store)
     decisions, decision_ids = _branch_decisions(store)
+    annotation, annotation_ids = _llm_redaction(store)
     resolved_ran = {**_derived_ran(store, node_verdicts, reports), **(ran or {})}
     declared_family = declared_task(recording_stem(store))[1]
     file_verdict = fold_file_verdict(
@@ -361,6 +387,7 @@ def verdict(
         hint_claims=_hint_claims(decisions, hint, declared_family=declared_family),
         route_state=route_state,
         declared_family=declared_family or None,
+        llm_redaction=annotation,
         policy=FoldPolicy.from_config(config),
     )
 
@@ -368,7 +395,11 @@ def verdict(
     activity = store.activity(node=NODE, step=None, parameters={"config_hash": config.config_hash})
     store.was_associated_with(activity, software)
     folded_ids = (
-        [entity.id for entity, _ in pairs] + [entity.id for entity, _ in report_pairs] + route_ids + decision_ids
+        [entity.id for entity, _ in pairs]
+        + [entity.id for entity, _ in report_pairs]
+        + route_ids
+        + decision_ids
+        + annotation_ids
     )
     for folded_id in folded_ids:
         store.used(activity, folded_id)
@@ -400,6 +431,7 @@ def verdict(
             "hints": dict(file_verdict.hints),
             "branches": dict(file_verdict.branches),
             "bad_map_values": dict(file_verdict.bad_map_values),
+            "llm_redaction": dict(file_verdict.llm_redaction),
             "ran": {node: state.value for node, state in file_verdict.ran.items()},
             "reasons": [
                 {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why} for r in file_verdict.reasons
