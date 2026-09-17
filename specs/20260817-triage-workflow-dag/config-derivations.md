@@ -1691,11 +1691,76 @@ a flag. A consensus word the store places nowhere overlaps no planned extent, so
 [UNPLACED] rather than verbatim and counted in unplaced_words_n -- text of unknown location cannot
 be shown to be safe.
 
-redaction.fill -- redact.md leaves this DEFERRED: which of silence, noise or bleep is least damaging
-to the measurements taken downstream of a released artifact has not been measured, so the key ships
-null and a run must declare the fill it used. silence and bleep are implemented; noise raises rather
-than shipping an unmeasured spectral shape, because "speech-shaped" names a shaping nobody here has
-fitted. redaction.bleep_hz 1000.0 is the conventional broadcast censor tone -- a presentation
+redaction.padding_ms 250 -- a CONVENTION, not a fit. No word-boundary error distribution has been
+measured for this workflow's recognizer set, so nothing here is a fitted quantile and the number is
+not presented as one. What it has to cover is the residual error between the finding's extent and
+the token's true acoustic boundary. That extent is already the hull of every recognizer's own
+placement (SPEECH's _timings_hull, and word_hull on the re-planning path), so inter-recognizer
+disagreement is absorbed before the margin is applied; the margin covers what the hull still misses.
+The arithmetic that bounds it:
+
+  - below 20 ms it would not clear timestamp quantisation alone. Whisper-family decoders emit word
+    timestamps on a 20 ms token grid over a 10 ms feature hop, and the Qwen3-ASR timings are on a
+    comparable grid, so any margin under one grid step is inside the recognizers' own rounding.
+  - 250 ms is above the ~200 ms tail that published forced-alignment-versus-ASR word-boundary
+    comparisons report for the bulk of English read speech. That is literature, not a measurement
+    taken here, and it is the reason this is a convention: the tail beyond it is exactly the
+    unquantified part.
+  - it is below the ~400 ms mean English word duration, so a margin this size does not, on average,
+    consume a whole further word at each edge. It routinely reaches INTO the neighbours, which is
+    why the design pads and merges rather than trying to be surgical -- in continuous speech the
+    inter-word gap is often zero, so there is no margin that does not touch a neighbour. What bounds
+    the margin from above is how much of the rest of the recording stays intelligible, not whether a
+    neighbour survives; between an audible fragment of a name and a clipped neighbour, only one is
+    recoverable, and the margin is chosen on that asymmetry.
+
+What would replace it: the edge-error distribution of consensus word boundaries against a
+hand-marked or forced-aligned reference over many words, reported at its maximum rather than its
+median. benchmarks/open.md keeps that row.
+
+redaction.llm_check.* -- the optional re-read of the redacted transcript. enabled false: a step that
+turned itself on would make two hosts disagree about the same recording with no record of why, and
+this one needs a GPU. It can only withhold -- it never edits a released artifact and never widens a
+redaction -- so leaving it off costs nothing that the detector cascade was doing.
+
+  model_id google/gemma-4-31B-it-qat-w4a16-ct. The owner asked for "gemma4 (32b)"; there is no 32B.
+  The family is 12B / 26B-A4B / 31B / E2B / E4B, and 31B is the one meant. Both the full and the QAT
+  checkpoint exist; the arithmetic, read off the Hub's own file manifests on 2026-09-17:
+
+    google/gemma-4-31B-it              31,273,088,876 params, all BF16   62.5 GB of weights
+    google/gemma-4-31B-it-qat-w4a16-ct 4-bit packed Linear + 4.31 B BF16 23.3 GB of weights
+
+  62.5 GB of weights leaves about 17 GB on an 80 GB H100 or A100-80 for the KV cache, activations and
+  the allocator's fragmentation, and does not fit at all on the 40 GB and 48 GB parts (A100-40,
+  L40S) that make up most of what a shared cluster actually hands out. It needs two GPUs on those,
+  which turns a per-recording check into a two-GPU reservation. 23.3 GB fits every one of them with
+  room for the cache, and the QAT checkpoint is quantisation-aware trained rather than
+  post-training-quantised, so the accuracy cost is the smallest available at that size. The full
+  checkpoint stays one config override away for a host that has the memory and wants the reference
+  numbers.
+
+  max_iterations 3 -- a CONVENTION, not a fit; no convergence distribution has been measured. The
+  loop exists so the reviewer can see the effect of its own concerns, and the bound exists because a
+  model that flags something every round would otherwise never stop. 1 would make the loop a single
+  review and remove the point of it. The bound is cheap to be wrong about in the safe direction: the
+  step withholds if ANY round flagged, so a run that stops early still withholds, and raising the
+  bound can only add reasoning to the record. What would settle it: the distribution of rounds to
+  convergence over a corpus of redacted transcripts.
+
+  max_new_tokens 1024 -- the reasoning is the product, so this is not small; it is the generation
+  ceiling, not a target. timeout_s 1800 -- one review, model load included; a cold load of a 23 GB
+  checkpoint over a shared filesystem is the dominant term and has been seen to take minutes.
+
+  ref main -- the ref that is RESOLVED. It is never passed to a load: review_redacted_text calls
+  resolve_revision(model_id, ref) first and only the 40-hex commit reaches the worker. See the
+  SHA-not-ref rule in CLAUDE.md and the two allowlists in revision_pinning_guard_test.py.
+
+redaction.fill silence -- owner-directed. redact.md left this DEFERRED, and which of silence, noise
+or bleep is least damaging to the measurements taken downstream of a released artifact is still not
+measured; silence is a declared choice rather than a fitted one. It is the fill with no content of
+its own: zeros add no energy at any frequency, so a downstream measure over a redacted stream reads
+a gap rather than an artefact it has to model. noise raises rather than shipping an unmeasured
+spectral shape, because "speech-shaped" names a shaping nobody here has fitted. redaction.bleep_hz 1000.0 is the conventional broadcast censor tone -- a presentation
 choice, declared rather than defaulted silently, and not fitted. The bleep is scaled to the
 extent's own PEAK, so its RMS is peak/sqrt(2) and the masked extent comes out louder than what it
 replaced by that extent's crest factor over sqrt(2): measured 1.00x on a pure tone and 3.19x on
@@ -1776,9 +1841,6 @@ viewer that scrolls rather than pages.
 Keys deliberately left null, and what each one owes.
 
 UNSET, and why -- benchmarks/open.md carries each of these:
-  redaction.padding_ms: must exceed the *worst* consensus-word edge error, which is unquantified. The
-    median will not do -- of the two boundary failures, an audible fragment of a name and a clipped
-    neighbour, only one is recoverable.
   speech.second_diarizer: no measured ranking of second diarizers exists; while null, a count of
     not-1 records second_diarizer "not_consulted" and still flags.
   speech.target_match_cosine: no similarity threshold has been derived; a hint carrying a target

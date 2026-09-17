@@ -123,7 +123,7 @@ file ADMIT must admit and describe, not one it can measure with this.
 | the design needs | senselab | status |
 | --- | --- | --- |
 | mute / silence a padded time extent in audio | **nothing in senselab redacts anything.** `grep -rn 'redact'` finds only comments in `workflows/audio_analysis/global_summary.py` and `text/tasks/pii_detection/rules.py`. `data_augmentation.api.augment_audios` wraps audiomentations and does not do targeted extents | MISSING |
-| pad an extent outward by a margin | nothing — and **the margin is undecided by design** (it must exceed the *worst* alignment edge error, which is unquantified) | MISSING and must stay unset |
+| pad an extent outward by a margin | nothing — and the margin was undecided by design (it must exceed the *worst* alignment edge error, which is unquantified). **Superseded 2026-09-17**: `redaction.padding_ms` ships 250 ms as a declared convention, because leaving it null made REDACT raise on every recording carrying a finding. The fit is still owed; see config-derivations.md and benchmarks/open.md | SHIPPED as a convention |
 | merge overlapping padded extents | nothing | MISSING |
 | produce a redacted transcript | nothing | MISSING |
 | re-run ASR and the PII scan on the node's own output | `transcribe_audios` + `scan_for_pii` again | OK\* |

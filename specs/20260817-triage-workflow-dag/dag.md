@@ -1355,13 +1355,16 @@ Runs only when SPEECH ran **and** its scan found live PII (`run.py:311-318`,
 them: `redaction.padding_ms` (`require`, `:116`), `redaction.fill` (`require`, `:368`),
 `redaction.bleep_hz` (`get`, `:369`) and `pii.required_detectors` (`require`, `:371`).
 
-**`redaction.padding_ms` and `redaction.fill` are both null and both `require`d, so REDACT cannot
-run at all — it raises on the first of them it reaches.** It is unreachable by configuration, like
-the `pass` and `discard` rows of the fold's ladder. The raise is caught: the call is wrapped in
-`_attempt` (`run.py:207`), which records the node `ERRORED` with the message and returns `None`
-(`run.py:224`), so the failure is an operational fact about the run and changes no verdict.
+**Both `redaction.padding_ms` and `redaction.fill` now ship values** (`250` and `silence`;
+config-derivations.md carries both derivations, and the margin is a declared convention rather than
+a fit). They used to be null and both are `require`d, so REDACT raised on the first of them it
+reached and the node was unreachable by configuration, like the `pass` and `discard` rows of the
+fold's ladder — observed on 3 of 6 recordings in a real run. That raise was caught: the call is
+wrapped in `_attempt` (`run.py:207`), which records the node `ERRORED` with the message and returns
+`None` (`run.py:224`), so the failure was an operational fact about the run and changed no verdict.
+An override may still null either key, and the same raise path is what answers then.
 `pii.required_detectors` and `redaction.bleep_hz` are populated (`[gliner, presidio, rules]` and
-`1000.0`) and are not what stops it. The initial plan uses each PII finding's own extent
+`1000.0`). The initial plan uses each PII finding's own extent
 (`_extents_from_findings`, `redact.py:160-183`), computed upstream in SPEECH; the **re-plan** widens
 to `word_hull(word)` (`redact.py:407`) — the union of the fitted extent and every source's own
 reading (`common.py:253-258`) — a deliberate widening for safety. `word_hull` is also read by the
@@ -2318,7 +2321,7 @@ PREPROCESS derivative nothing writes yet — the bandwidth spectrum (Q2), the ca
 | --- | --- | --- | --- |
 | 1. bad quality | yes — SQUIM, level, `disruptions_file`, per-span SQUIM, forty Praat scalars, and now per-span and whole-file clip amplitudes | **one internal-consistency check, and nothing about the recording** | QUALITY exists and runs (step 5e), but what it decides is whether PREPROCESS's own clip spans contradict PREPROCESS's own amplitudes — a store-consistency audit whose expected count is zero. `quality.stoi_floor`, `quality.pesq_floor`, `quality.disruption_clipped_s_max` and `quality.disruption_dropout_s_max` are still null and still read by **nothing in `src/senselab`** |
 | 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | **yes, for which branch looks** | the ruleset of step 3c now decides which branch is asked, so a recording no longer reaches every branch by default. What it still does not decide is what SPEECH then concludes about a second speaker: `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design. And the diarization named here is SPEECH's, over the lexical hull only: there is **no whole-file diarization derivative**, so *how many voices are in this recording* is stated nowhere, by any node (steps 2 and 5e) |
-| 3. PII | yes — the consensus transcript and each recognizer's own transcript are scanned in one call | **yes** | the one goal fully wired to a decision, and the only one whose acting node cannot run: `redaction.padding_ms` and `redaction.fill` are null and both `require`d, so REDACT raises. SPEECH marks PII; nothing releases a redacted product |
+| 3. PII | yes — the consensus transcript and each recognizer's own transcript are scanned in one call | **yes** | the one goal fully wired to a decision, and now the whole way through: `redaction.padding_ms` and `redaction.fill` ship values, so REDACT runs, plans, verifies and releases. SPEECH marks PII; REDACT releases the redacted pair |
 
 ## What each run records about itself
 
