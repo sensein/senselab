@@ -109,7 +109,7 @@ _LANES = (
     "redacted",
 )
 
-_BRANCH_MEASURES = {
+BRANCH_MEASURES = {
     "AIRWAY": ("labelled_n", "contested_n", "merged_n"),
     "SPEECH": (
         "speaker_count",
@@ -399,7 +399,7 @@ def _lane(name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"type": "segments", "segments": entries, "name": name, "height_ratio": 0.6}] if entries else []
 
 
-def _span_sources(store: ProvStore) -> dict[str, list[Entity]]:
+def span_sources(store: ProvStore) -> dict[str, list[Entity]]:
     """Every live span, indexed by the live span it names in ``wasDerivedFrom``.
 
     Built once per report. ``ProvStore.derived_from`` walks every relation, so asking it per span
@@ -425,7 +425,7 @@ def _span_sources(store: ProvStore) -> dict[str, list[Entity]]:
     return index
 
 
-def _initial_span_label(span: Entity) -> str:
+def initial_span_label(span: Entity) -> str:
     """One upstream span's own reading, as the row that shows what came in states it.
 
     Args:
@@ -451,7 +451,7 @@ def _derived_lane(
     Args:
         name: The lane's name, drawn as the panel's y-label.
         entries: ``(span, label)`` for every span the lane draws, earliest first.
-        sources: :func:`_span_sources`'s index.
+        sources: :func:`span_sources`'s index.
 
     Returns:
         A one-element list holding the panel, or an empty list. With no derivation to show the
@@ -483,7 +483,7 @@ def _derived_lane(
             seen.add(parent.id)
             tokens.append(
                 {
-                    "text": _initial_span_label(parent),
+                    "text": initial_span_label(parent),
                     "start": float(parent.extent[0]),
                     "end": float(parent.extent[1]),
                     "row": _INITIAL_ROW,
@@ -812,7 +812,7 @@ def _panels(
         waveform["spans"] = {"name": _SPANS_OVERLAY, "segments": overlay}
         drawn.add(_SPANS_OVERLAY)
 
-    sources = _span_sources(store)
+    sources = span_sources(store)
     for classifier in _CLASSIFIERS:
         panels += _window_raster(store, classifier)
     panels += _airway_hear_raster(store)
@@ -885,7 +885,7 @@ def _verdict_entities(store: ProvStore) -> dict[str, Entity]:
 
     Returns:
         ``{node: entity}`` over every node that **decided**. A reporting node — a branch, or
-        QUALITY — is not here: it writes a ``branch_report``, read by :func:`_report_entities`.
+        QUALITY — is not here: it writes a ``branch_report``, read by :func:`report_entities`.
     """
     latest: dict[str, Entity] = {}
     for entity in store.entities("verdict"):
@@ -894,7 +894,7 @@ def _verdict_entities(store: ProvStore) -> dict[str, Entity]:
     return latest
 
 
-def _report_entities(store: ProvStore) -> dict[str, Entity]:
+def report_entities(store: ProvStore) -> dict[str, Entity]:
     """The latest live ``branch_report`` entity per node, keyed by node name.
 
     Args:
@@ -920,7 +920,7 @@ def _concluded_entities(store: ProvStore) -> dict[str, Entity]:
         ``{node: entity}`` over every node that decided or reported. The two vocabularies are
         disjoint by node, so nothing here can be shadowed.
     """
-    return {**_verdict_entities(store), **_report_entities(store)}
+    return {**_verdict_entities(store), **report_entities(store)}
 
 
 def _steps(store: ProvStore) -> dict[str, dict[str, Any]]:
@@ -971,7 +971,7 @@ def _branches(store: ProvStore) -> dict[str, dict[str, Any]]:
     for entity in store.entities("branch_decision"):
         if not store.is_invalidated(entity.id):
             decisions[str(entity.attributes["branch"])] = entity
-    concluded = _report_entities(store)
+    concluded = report_entities(store)
     branches: dict[str, dict[str, Any]] = {}
     for branch, decision in decisions.items():
         verdict_entity = concluded.get(branch)
@@ -1168,7 +1168,7 @@ def _lane_absences(store: ProvStore, drawn: set[str]) -> list[tuple[str, str]]:
             out.append((lane, f"PREPROCESS/{derivative} {reading} [{raised}]"))
         elif branch is not None and branch in branches and not branches[branch]["will_run"]:
             out.append((lane, f"{branch} did not run: {branches[branch]['why']}"))
-        elif branch is not None and _report_entities(store).get(branch) is None:
+        elif branch is not None and report_entities(store).get(branch) is None:
             out.append((lane, f"{branch} wrote no report"))
         else:
             out.append((lane, "nothing in the store for it"))
@@ -1844,7 +1844,7 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
             f"route_state={decision['route_state']} why={decision['why']}"
         )
         lines.append(f"    conformance: {_shown(decision['conformance'])}")
-        measured = [f"{key}={_shown(detail[key])}" for key in _BRANCH_MEASURES.get(branch, ()) if key in detail]
+        measured = [f"{key}={_shown(detail[key])}" for key in BRANCH_MEASURES.get(branch, ()) if key in detail]
         if measured:
             lines.append("    measured: " + "  ".join(measured))
         for name in decision["deviations"]:
@@ -2000,7 +2000,7 @@ def _decision_blocks(document: dict[str, Any]) -> list[str]:
         decision, detail = routing[branch], document["steps"].get(branch, {})
         if not decision["will_run"]:
             continue
-        measures = [f"{key}={_shown(detail[key])}" for key in _BRANCH_MEASURES.get(branch, ()) if key in detail]
+        measures = [f"{key}={_shown(detail[key])}" for key in BRANCH_MEASURES.get(branch, ()) if key in detail]
         flags = [str(flag) for flag in decision.get("flags") or []]
         if measures or flags:
             lines.append(f"  {branch}: " + "; ".join([*measures, *flags]))

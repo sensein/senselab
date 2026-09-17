@@ -7,7 +7,7 @@ import pytest
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.label_membership import LabelMembership
-from senselab.audio.workflows.triage.nodes.common import resolve_stream
+from senselab.audio.workflows.triage.nodes.common import resolve_stream, software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.figure import (
     FigureStyle,
     _raster_rows,
@@ -16,6 +16,7 @@ from senselab.audio.workflows.triage.nodes.figure import (
 )
 from senselab.audio.workflows.triage.nodes.preprocess import _span_window_attributes
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
+from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
 
 
@@ -69,8 +70,20 @@ def _seed_stream_summary(
 
 
 def _seed_preprocess_verdict(store: ProvStore, absent: dict[str, str]) -> None:
-    """PREPROCESS's own verdict entity, carrying only the ``absent`` map ``_absent_reasons`` reads."""
-    store.entity(prov_type="verdict", extent=None, attributes={"node": "PREPROCESS", "detail": {"absent": absent}})
+    """PREPROCESS's own verdict, written through ``write_verdict`` so its shape is the real one."""
+    activity = store.activity(node="PREPROCESS", step="condition", parameters={})
+    agent = software_agent(store)
+    store.was_associated_with(activity, agent)
+    write_verdict(
+        store,
+        activity,
+        agent,
+        node="PREPROCESS",
+        outcome=Outcome.PASS,
+        kind=None,
+        why="conditioning complete; absent derivatives are listed",
+        detail={"absent": absent, "derivatives": {}},
+    )
 
 
 class TestTheWindowAttributes:

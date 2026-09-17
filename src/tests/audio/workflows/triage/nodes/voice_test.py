@@ -843,7 +843,7 @@ class TestTheNodeWritesWhatItFound:
         assert ids["amplitude"][0] in store.uses_of(activity.id)
 
     def test_the_report_carries_the_keys_the_summary_reads(self, tmp_path: Path) -> None:
-        """``report._BRANCH_MEASURES["VOICE"]`` names three, and a writer may not drop a reader's."""
+        """``report.BRANCH_MEASURES["VOICE"]`` names three, and a writer may not drop a reader's."""
         store, _ = seed(tmp_path)
         voice(store, "plain", config(), None, run_dir=tmp_path)
         report = find_branch_report(store, "VOICE")
