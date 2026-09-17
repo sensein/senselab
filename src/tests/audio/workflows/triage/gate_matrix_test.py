@@ -704,21 +704,21 @@ class TestGateCellArithmetic:
         assert row["fired_rate"] == pytest.approx(0.0)
 
 
-class TestTheReferenceIsMultiLabel:
-    """A family declares the SET of branches that apply to it, not one, and nothing is held out."""
+class TestTheReferenceIsTheSetOfBranchesThatApply:
+    """A family declares the SET of branches that apply to it, and nothing is held out."""
 
-    def test_a_ddk_family_declares_both_speech_and_ddk(self, ruleset: Ruleset) -> None:
-        """Diadochokinesis material is speech and is DDK, so routing to both agrees twice over."""
-        assert ruleset.reference_branches("diadochokinesis-pa") == ("SPEECH", "DDK")
+    def test_a_ddk_family_declares_speech_and_speech_alone(self, ruleset: Ruleset) -> None:
+        """A syllable train is a speaking task, so SPEECH is the branch that evaluates it."""
+        assert ruleset.reference_branches("diadochokinesis-pa") == ("SPEECH",)
 
     def test_a_lexical_family_declares_speech_alone(self, ruleset: Ruleset) -> None:
-        """Multi-label must not mean every family gets every branch."""
+        """A set of branches must not mean every family gets every branch."""
         assert ruleset.reference_branches("harvard-sentences-list") == ("SPEECH",)
         assert ruleset.reference_branches("prolonged-vowel") == ("VOICE",)
         assert ruleset.reference_branches("voluntary-cough") == ("AIRWAY",)
 
     def test_speech_is_scored_against_the_union_and_not_the_lexical_half(self, ruleset: Ruleset) -> None:
-        """``lexical_speech`` excludes DDK by construction; ``speech`` is the union that does not."""
+        """``lexical_speech`` omits the syllable families; ``speech`` is the union that carries them."""
         assert ruleset.reference_family_set["SPEECH"] == "speech"
 
     def test_no_branch_holds_any_family_out_of_its_population(self, ruleset: Ruleset) -> None:
@@ -838,7 +838,7 @@ class TestWhereEachFamilyRoutes:
 
     def test_a_cell_that_routed_nothing_carries_no_margins_and_no_gates(self, ruleset: Ruleset) -> None:
         """An empty distribution must stay empty rather than reporting a zero nobody measured."""
-        cell = _cell(family_routing([_features("prolonged-vowel")], ruleset), "prolonged-vowel", "DDK")
+        cell = _cell(family_routing([_features("prolonged-vowel")], ruleset), "prolonged-vowel", "AIRWAY")
         assert cell.routed == 0
         assert cell.margins == {}
         assert cell.gates_summary() == "-"
@@ -885,11 +885,11 @@ class TestFamilyStatesCountAdditiveRouting:
         assert set(entry.states) == set(ROUTE_STATES)
         assert sum(entry.states.values()) == entry.n == 2
 
-    def test_the_json_row_names_every_declared_branch(self, ruleset: Ruleset) -> None:
-        """A multi-label declaration has to survive into the table as more than one branch."""
+    def test_the_json_row_names_the_declared_branch(self, ruleset: Ruleset) -> None:
+        """The declaration has to survive into the table, named rather than counted."""
         row = family_states([_features("diadochokinesis-pa")], ruleset)[0].as_json()
-        assert row["declared"] == "SPEECH+DDK"
-        assert row["n_declared"] == 2
+        assert row["declared"] == "SPEECH"
+        assert row["n_declared"] == 1
 
     def test_a_family_declaring_nothing_reads_a_dash_and_not_an_empty_string(self, ruleset: Ruleset) -> None:
         """An unassigned family is in no branch's set, which must be visible in the row."""

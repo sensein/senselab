@@ -22,7 +22,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     BRANCH_FAMILY,
     BRANCHES,
-    DDK_EXPECTATIONS,
     DEVIATION_TYPES,
     EXPECTATIONS,
     PARAM_KEYS,
@@ -203,7 +202,7 @@ class TestAProposalNamesItsEvidence:
     def test_a_zero_length_proposal_is_refused(self) -> None:
         """A span with no duration names no extent."""
         with pytest.raises(ValueError, match="positive duration"):
-            PROPOSERS["DDK"]("task_extent", (2.0, 2.0), "evidence-1")
+            PROPOSERS["SPEECH"]("task_extent", (2.0, 2.0), "evidence-1")
 
     def test_a_reversed_proposal_is_refused(self) -> None:
         """An end before its start is a bug, not a degenerate case to tolerate."""
@@ -290,9 +289,9 @@ class TestWhatTheProposedSpanCarries:
     def test_many_proposals_are_written_in_order(self) -> None:
         """The report reads them positionally, so the order is part of the contract."""
         store = _store()
-        activity = store.activity(node="DDK", step=None, parameters={})
+        activity = store.activity(node="SPEECH", step=None, parameters={})
         agent = store.agent(agent_type="software", version="test")
-        proposals = [PROPOSERS["DDK"]("task_extent", (float(i), float(i) + 1.0), "e1") for i in range(3)]
+        proposals = [PROPOSERS["SPEECH"]("task_extent", (float(i), float(i) + 1.0), "e1") for i in range(3)]
         ids = propose_spans(store, activity, agent, proposals)
         assert [store.get_entity(each).extent for each in ids] == [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]
 
@@ -334,7 +333,7 @@ class TestAFindingNamesTheEvidenceItWasReadOff:
     def test_the_folded_counts_measurement_derives_from_the_union_of_its_entries(self) -> None:
         """One entity stands for every entry, so every entry's evidence has to be reachable from it."""
         store = _store()
-        activity = store.activity(node="DDK", step=None, parameters={})
+        activity = store.activity(node="SPEECH", step=None, parameters={})
         agent = store.agent(agent_type="software", version="test")
         findings = [
             count("syllables", 12, 12, "span-1", "envelope-1"),
@@ -415,17 +414,16 @@ class TestFindingsAreWrittenBesideSpansNotOntoThem:
 
 
 class TestTheExpectationTableIsData:
-    """58 rows over 48 families. A row that cannot round-trip is carrying behaviour."""
+    """48 rows over 48 families. A row that cannot round-trip is carrying behaviour."""
 
-    def test_there_are_fifty_eight_rows(self) -> None:
+    def test_there_are_forty_eight_rows(self) -> None:
         """The count is the design's own, and the per-branch split is the reference family sets'."""
         assert {branch: len(table) for branch, table in EXPECTATIONS.items()} == {
             "AIRWAY": 11,
             "SPEECH": 31,
             "VOICE": 6,
-            "DDK": 10,
         }
-        assert sum(len(table) for table in EXPECTATIONS.values()) == 58
+        assert sum(len(table) for table in EXPECTATIONS.values()) == 48
 
     def test_each_table_is_exactly_its_branchs_reference_family_set(self) -> None:
         """A row for a family the branch does not own would never be reached; a gap returns detect."""
@@ -433,25 +431,25 @@ class TestTheExpectationTableIsData:
             ("AIRWAY", AIRWAY_ELICITING),
             ("SPEECH", SPEECH_ELICITING),
             ("VOICE", VOICE_ELICITING),
-            ("DDK", SYLLABLE_REPETITION),
         ):
             assert set(EXPECTATIONS[branch]) == set(families), branch
             assert REFERENCE_FAMILY_SET[branch] == families
 
     def test_the_reference_sets_match_the_ones_the_packaged_config_names(self) -> None:
-        """``taxonomy.ruleset.reference_family_set`` names the same four sets by key."""
+        """``taxonomy.ruleset.reference_family_set`` names the same three sets by key."""
         declared = load_triage_config().require("taxonomy.ruleset.reference_family_set")
-        assert declared == {"AIRWAY": "airway", "SPEECH": "speech", "VOICE": "voice", "DDK": "syllable_repetition"}
+        assert declared == {"AIRWAY": "airway", "SPEECH": "speech", "VOICE": "voice"}
 
-    def test_the_ten_syllable_families_are_in_family_for_both_speech_and_ddk(self) -> None:
-        """Not an overlap to resolve: SPEECH expects no lexical content, DDK expects a train."""
-        both = set(SPEECH_EXPECTATIONS) & set(DDK_EXPECTATIONS)
-        assert both == set(SYLLABLE_REPETITION)
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].pattern is Pattern.NO_LEXICAL
-        assert DDK_EXPECTATIONS["diadochokinesis-pa"].pattern is Pattern.SYLLABLE_TRAIN
+    def test_the_ten_syllable_families_are_speechs_with_the_instructions_own_expectation(self) -> None:
+        """A syllable train is a speaking task, so its row says what the instruction asked for."""
+        assert set(SYLLABLE_REPETITION) <= set(SPEECH_EXPECTATIONS)
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].pattern is Pattern.SYLLABLE_TRAIN
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("labial",)
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].pattern is Pattern.SYLLABLE_SEQUENCE
+        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].pattern is Pattern.ORDERED_TOKENS
 
     def test_every_row_round_trips_through_plain_data(self) -> None:
-        """All 58, field for field, so the table can be recorded in a run and read back."""
+        """All 48, field for field, so the table can be recorded in a run and read back."""
         seen = 0
         for table in EXPECTATIONS.values():
             for family, expectation in table.items():
@@ -459,7 +457,7 @@ class TestTheExpectationTableIsData:
                 assert set(mapping) == {field.name for field in fields(Expectation)}, family
                 assert Expectation.from_mapping(mapping) == expectation, family
                 seen += 1
-        assert seen == 58
+        assert seen == 48
 
     def test_the_mapping_is_json_shaped_rather_than_python_shaped(self) -> None:
         """A tuple or an Enum in a stored attribute is not something a reader can rely on."""
@@ -478,7 +476,7 @@ class TestTheExpectationTableIsData:
         assert mpt == {"expect_inhale"}
         free = difference(SPEECH_EXPECTATIONS["free-speech"], SPEECH_EXPECTATIONS["free-speech-v2"])
         assert "anti_pattern" in free
-        ddk = difference(DDK_EXPECTATIONS["diadochokinesis-pa"], DDK_EXPECTATIONS["diadochokinesis-v2-puh"])
+        ddk = difference(SPEECH_EXPECTATIONS["diadochokinesis-pa"], SPEECH_EXPECTATIONS["diadochokinesis-v2-puh"])
         assert ddk == {"expected_event_count", "declared_duration_s"}
 
     def test_the_pending_declaration_rows_are_not_in_the_dispatch_table(self) -> None:
@@ -583,12 +581,12 @@ class TestTheModeSelector:
         """The safe arm: annotate the speciality, conclude nothing. There is no third arm."""
         assert mode_of("AIRWAY", _store(path="/tmp/plain.wav")) == ("detect", None)
 
-    def test_a_syllable_family_is_in_family_for_both_speech_and_ddk(self) -> None:
-        """One recording, two align modes, neither the other's."""
+    def test_a_syllable_family_is_in_family_for_speech_and_no_other_branch(self) -> None:
+        """One recording, one align mode. There is no second branch to divide the task with."""
         store = _store(path="sub-a_task-diadochokinesis-pa.wav")
         assert mode_of("SPEECH", store)[0] == "align"
-        assert mode_of("DDK", store)[0] == "align"
         assert mode_of("VOICE", store)[0] == "detect"
+        assert mode_of("AIRWAY", store)[0] == "detect"
 
     def test_the_out_of_family_mode_may_answer_only_undetermined(self) -> None:
         """``done = UNDETERMINED`` there is a rule, not a default: no pattern was expected of it."""
@@ -650,7 +648,7 @@ class TestEveryOperatingPointIsAConfigKey:
         """The design fitted every key; none may still ship null, and ``point`` never raises for one."""
         config = load_triage_config()
         numeric = [key for key in PARAM_KEYS if key != "label_sets"]
-        assert len(numeric) == 38
+        assert len(numeric) == 36
         params = branch_params(config)
         for key in numeric:
             assert config.values[PARAM_SECTION][key] is not None, key
@@ -707,7 +705,7 @@ class TestEveryOperatingPointIsAConfigKey:
     def test_a_count_key_comes_back_as_an_integer(self) -> None:
         """``point("echo_ngram_n")`` indexes a slice; a float there is a TypeError at the call site."""
         assert isinstance(_params(echo_ngram_n=3).point("echo_ngram_n"), int)
-        assert isinstance(_params(expected_lexical_max=0).point("expected_lexical_max"), int)
+        assert isinstance(_params(ddk_min_repetitions=4).point("ddk_min_repetitions"), int)
 
 
 # --------------------------------------------------------------------- the shared helpers

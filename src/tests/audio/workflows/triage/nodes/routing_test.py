@@ -24,10 +24,10 @@ def _config(tmp_path: Path, entries: str) -> TriageConfig:
     return load_triage_config(path)
 
 
-def _gated(tmp_path: Path, required: str, entries: str = "    ddk: DDK\n") -> TriageConfig:
-    """The packaged config with a hint map and ``routing.declaration_required`` both supplied."""
-    path = tmp_path / "gated.yaml"
-    path.write_text(f"routing:\n  declaration_required: {required}\n  hint_branch_map:\n{entries}")
+def _gateless(tmp_path: Path, branch: str) -> TriageConfig:
+    """The packaged config with one branch's ``taxonomy.ruleset.branch_gates`` entry emptied."""
+    path = tmp_path / "gateless.yaml"
+    path.write_text(f"taxonomy:\n  ruleset:\n    branch_gates:\n      {branch}: []\n")
     return load_triage_config(path)
 
 
@@ -89,7 +89,7 @@ class TestTheRulesetDecides:
         reads(_evaluation(["SPEECH"]))
         result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
         assert result.runs == ("SPEECH",)
-        assert set(result.skipped) == {"AIRWAY", "VOICE", "DDK"}
+        assert set(result.skipped) == {"AIRWAY", "VOICE"}
         assert result.route_state == "routed"
 
     def test_a_branch_nothing_routed_is_declined(
@@ -156,12 +156,21 @@ class TestAGatelessBranchIsUngatedAndNotDeclined:
     def test_a_branch_with_no_configured_gate_reads_ungated(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """``branch_gates.DDK`` is empty, so nothing was read and nothing said no."""
+        """An emptied ``branch_gates`` entry means nothing was read and nothing said no."""
+        reads(_evaluation(["AIRWAY"]))
+        routing(store, None, _gateless(tmp_path, "VOICE"), run_dir=tmp_path)
+        decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
+        assert decisions["VOICE"]["route_state"] == "ungated"
+        assert decisions["VOICE"]["route_state"] in BRANCH_ROUTE_STATES
+
+    def test_the_packaged_config_leaves_no_branch_gateless(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """``ungated`` is reachable only through a configuration that empties a gate list."""
         reads(_evaluation(["AIRWAY"]))
         routing(store, None, load_triage_config(), run_dir=tmp_path)
-        decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
-        assert decisions["DDK"]["route_state"] == "ungated"
-        assert decisions["DDK"]["route_state"] in BRANCH_ROUTE_STATES
+        states = {e.attributes["route_state"] for e in live_entities(store, "branch_decision")}
+        assert "ungated" not in states
 
     def test_a_gated_branch_whose_gates_were_silent_still_reads_declined(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
@@ -183,86 +192,13 @@ class TestAGatelessBranchIsUngatedAndNotDeclined:
         assert decisions["VOICE"]["route_state"] == "unavailable"
 
 
-class TestDDKRoutesOnTheDeclarationOnly:
-    """``routing.declaration_required`` ships ``[DDK]``: the declaration decides, in both directions."""
-
-    def test_a_ruleset_route_alone_does_not_run_a_gated_branch(
-        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
-    ) -> None:
-        """Content analysis routed DDK and nothing declared it, so the branch does not run."""
-        reads(_evaluation(["DDK"]))
-        result = routing(store, None, _gated(tmp_path, "[DDK]"), run_dir=tmp_path)
-        assert result.runs == ()
-        assert "DDK" in result.skipped
-
-    def test_the_withheld_route_records_what_the_ruleset_thought(
-        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
-    ) -> None:
-        """``route_state`` is not overwritten, so the gate's decision stays separable from the reading."""
-        reads(_evaluation(["DDK"]))
-        routing(store, None, _gated(tmp_path, "[DDK]"), run_dir=tmp_path)
-        ddk = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "DDK")
-        assert ddk.attributes["route_state"] == "routed"
-        assert ddk.attributes["withheld_by_gate"] is True
-        assert ddk.attributes["will_run"] is False
-        assert ddk.attributes["why"] == "route_routed_withheld_pending_declaration"
-
-    def test_a_declared_family_runs_the_gated_branch_whatever_the_ruleset_thought(
-        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
-    ) -> None:
-        """The other direction: the declaration is ground truth, so a reading that did not route cannot stop it."""
-        reads(_evaluation([], declared=["DDK"], family="diadochokinesis"))
-        result = routing(store, None, _gated(tmp_path, "[DDK]"), run_dir=tmp_path)
-        assert result.runs == ("DDK",)
-        ddk = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "DDK")
-        assert ddk.attributes["route_state"] == "ungated"
-        assert ddk.attributes["withheld_by_gate"] is False
-        assert ddk.attributes["forced_by_declaration"] is True
-
-    def test_a_hint_tag_satisfies_the_gate_as_the_family_does(
-        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
-    ) -> None:
-        """The gate reads ``by_declaration``, which is the family or a mapped tag, not the family alone."""
-        reads(_evaluation(["DDK"]))
-        hint = AudioHints(may_contain=["ddk"])
-        result = routing(store, None, _gated(tmp_path, "[DDK]"), hint, run_dir=tmp_path)
-        assert result.runs == ("DDK",)
-        ddk = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "DDK")
-        assert ddk.attributes["withheld_by_gate"] is False
-
-    def test_a_branch_the_key_does_not_name_keeps_the_additive_behaviour(
-        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
-    ) -> None:
-        """Only the named branches change; AIRWAY still runs on the ruleset's route alone."""
-        reads(_evaluation(["AIRWAY", "DDK"]))
-        result = routing(store, None, _gated(tmp_path, "[DDK]"), run_dir=tmp_path)
-        assert result.runs == ("AIRWAY",)
-        airway = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "AIRWAY")
-        assert airway.attributes["withheld_by_gate"] is False
-        assert airway.attributes["declaration_required"] is False
-
-    def test_an_empty_key_restores_the_ungated_behaviour_everywhere(
-        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
-    ) -> None:
-        """The gate is a membership list, so an empty one gates nothing."""
-        reads(_evaluation(["DDK"]))
-        result = routing(store, None, _gated(tmp_path, "[]"), run_dir=tmp_path)
-        assert result.runs == ("DDK",)
-
-    def test_a_configured_name_that_is_not_a_branch_is_recorded_on_every_decision(
-        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
-    ) -> None:
-        """A typo gates nothing and is otherwise silent, so it is carried the way a bad map value is."""
-        reads(_evaluation(["DDK"]))
-        result = routing(store, None, _gated(tmp_path, "[DDKK]"), run_dir=tmp_path)
-        assert result.runs == ("DDK",)
-        decisions = live_entities(store, "branch_decision")
-        assert all(e.attributes["bad_declaration_required"] == ["DDKK"] for e in decisions)
+class TestEveryBranchGetsADecision:
+    """The record VERDICT joins to is written for every branch, whatever the ruleset made of it."""
 
     def test_every_branch_gets_a_decision(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """One decision per branch in the vocabulary, DDK included, and none for REDACT."""
+        """One decision per branch in the vocabulary, and none for REDACT."""
         reads(_evaluation(["SPEECH"]))
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
         branches = {e.attributes["branch"] for e in live_entities(store, "branch_decision")}
@@ -330,14 +266,14 @@ class TestTheDeclaredTaskAlwaysAddsItsBranch:
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
         """A reader must be able to say which source put each branch in the execution set."""
-        reads(_evaluation(["SPEECH"], declared=["DDK"], family="diadochokinesis-pa"))
+        reads(_evaluation(["SPEECH"], declared=["VOICE"], family="prolonged-vowel"))
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
         decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
         assert (decisions["SPEECH"]["route_state"], decisions["SPEECH"]["forced_by_declaration"]) == ("routed", False)
-        assert (decisions["DDK"]["route_state"], decisions["DDK"]["forced_by_declaration"]) == ("ungated", True)
-        assert decisions["DDK"]["declared_by_family"] is True
-        assert decisions["VOICE"]["will_run"] is False
-        assert decisions["VOICE"]["declared"] is False
+        assert (decisions["VOICE"]["route_state"], decisions["VOICE"]["forced_by_declaration"]) == ("declined", True)
+        assert decisions["VOICE"]["declared_by_family"] is True
+        assert decisions["AIRWAY"]["will_run"] is False
+        assert decisions["AIRWAY"]["declared"] is False
 
     def test_the_declared_family_is_recorded_on_every_decision(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
@@ -352,11 +288,11 @@ class TestTheDeclaredTaskAlwaysAddsItsBranch:
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
         """The measurement carries the declaration, so the added route is auditable from the run."""
-        reads(_evaluation(["SPEECH"], declared=["SPEECH", "DDK"], family="diadochokinesis-pa"))
+        reads(_evaluation(["SPEECH"], declared=["SPEECH"], family="diadochokinesis-pa"))
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
         recorded = find_measurement(store, RULESET_ROUTING)
         assert recorded is not None
-        assert recorded.attributes["declared"] == ["SPEECH", "DDK"]
+        assert recorded.attributes["declared"] == ["SPEECH"]
         assert recorded.attributes["family"] == "diadochokinesis-pa"
         assert recorded.attributes["routed"] == ["SPEECH"]
 

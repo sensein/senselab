@@ -100,6 +100,15 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_report,
     write_stream,
 )
+from senselab.audio.workflows.triage.nodes.ddk import (
+    NO_ENVELOPE,
+    NO_PPG,
+    DdkReads,
+    align_ddk,
+    read_ddk,
+    syllable_detail,
+)
+from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.stimulus import LexicalWord, StimulusAlignment, align_stimulus
 from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
@@ -1196,44 +1205,14 @@ def _speech_item_list(
     return Result(len(items) > 0, components, findings)
 
 
-def _speech_no_lexical(store: ProvStore, params: BranchParams) -> Result:
-    """A syllable-repetition task, in family for SPEECH, whose expectation is no lexical content.
-
-    Proposes **no** span, and that is the finding. ``/pa/`` is not lexical and ASR mostly declines
-    it, so near-zero lexical content is the correct observation rather than a miss, and a branch
-    proposing a speech span here would assert the opposite of what it measured.
-
-    Args:
-        store: The provenance store.
-        params: The operating points.
-
-    Returns:
-        Whether the recording stayed non-lexical, no spans, and one deviation per lexical word.
-    """
-    points = params
-    produced = lexical_words(store)
-    findings: list[Finding] = []
-    for word in produced:
-        start, end = word_extent(word)
-        findings.append(
-            deviation(
-                "off_task_extent",
-                start,
-                end,
-                word.id,
-                text=word_text(word),
-                agreement=word.attributes.get("agreement"),
-                measure="lexical",
-            )
-        )
-    findings.append(count("lexical_words", len(produced), 0, *(word.id for word in produced)))
-    tolerated = points.point("expected_lexical_max")
-    findings.extend(points.record())
-    done: Done = UNDETERMINED if tolerated is None else len(produced) <= int(tolerated)
-    return Result(done, [], findings)
-
-
-def align_speech(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
+def align_speech(
+    task_family: str,
+    store: ProvStore,
+    hint: AudioHints | None,
+    params: BranchParams,
+    *,
+    reads: DdkReads = DdkReads(),
+) -> Result:
     """Evaluate a declared speech task against what its own instruction asked for.
 
     Args:
@@ -1241,6 +1220,7 @@ def align_speech(task_family: str, store: ProvStore, hint: AudioHints | None, pa
         store: The provenance store.
         hint: What the recording was declared to contain.
         params: The operating points.
+        reads: The derivatives the syllable body measures over, loaded by :func:`speech`.
 
     Returns:
         Whether the expected patterns were found, the spans proposed, and the deviations.
@@ -1252,14 +1232,14 @@ def align_speech(task_family: str, store: ProvStore, hint: AudioHints | None, pa
     expectation = SPEECH_EXPECTATIONS.get(task_family)
     if expectation is None:
         raise KeyError(f"{task_family} is not a SPEECH family; the caller owes detect_speech")
+    if task_family in SYLLABLE_REPETITION:
+        return align_ddk(expectation, store, params, reads=reads)
     if expectation.pattern is Pattern.ORDERED_TOKENS:
         return _speech_ordered(expectation, store, hint, params)
     if expectation.pattern is Pattern.FREE_RESPONSE:
         return _speech_free_response(expectation, store, hint, params)
     if expectation.pattern is Pattern.ITEM_LIST:
         return _speech_item_list(expectation, store, hint, params)
-    if expectation.pattern is Pattern.NO_LEXICAL:
-        return _speech_no_lexical(store, params)
     raise NotImplementedError(f"{task_family}: SPEECH serves no body for {expectation.pattern}")
 
 
@@ -1357,6 +1337,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     values = _required(params, enrollment)
 
     software = software_agent(store)
+    reads = read_ddk(store, run_dir, source)
     plain_id, plain = resolve_stream(store, run_dir, source)
     recording_id, recording = resolve_stream(store, run_dir, ORIGINAL)
     sampling_rate = int(plain.sampling_rate)
@@ -1399,8 +1380,19 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     )
     store.was_associated_with(expect, software)
     store.used(expect, consensus.id)
-    result = dispatch(NODE, store, params, hint, align=align_speech, detect=detect_speech)
+
+    def _align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
+        """Bind the loaded derivatives to the in-family mode."""
+        return align_speech(task_family, store, hint, params, reads=reads)
+
+    result = dispatch(NODE, store, params, hint, align=_align, detect=detect_speech)
     expectation_findings = [*result.deviations, *params.record()]
+    syllable = syllable_detail(result) if declared_family in SYLLABLE_REPETITION and mode == "align" else {}
+    if syllable:
+        if reads.envelope is None:
+            notes.append(NO_ENVELOPE)
+        if reads.ppg is None:
+            notes.append(NO_PPG)
     view.extend(propose_spans(store, expect, software, result.components))
     view.extend(write_findings(store, expect, software, expectation_findings, signal=source))
 
@@ -1429,6 +1421,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     "spans_n": len(result.components),
                     "findings_n": len(expectation_findings),
                 },
+                **syllable,
                 "words_n": 0,
                 "speech_s": 0.0,
                 "nontarget_speech_s": None,
@@ -2022,6 +2015,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "spans_n": len(result.components),
             "findings_n": len(expectation_findings),
         },
+        **syllable,
         "words_n": len(lexical),
         "speech_s": speech_s,
         "nontarget_speech_s": nontarget_speech_s,

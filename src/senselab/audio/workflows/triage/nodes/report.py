@@ -107,9 +107,11 @@ _LANES = (
 
 _BRANCH_MEASURES = {
     "AIRWAY": ("labelled_n", "contested_n", "merged_n"),
-    "SPEECH": ("speaker_count", "words_n", "speech_s", "nontarget_speech_s"),
-    "VOICE": ("spans_n", "phonation_s", "longest_span_s"),
-    "DDK": (
+    "SPEECH": (
+        "speaker_count",
+        "words_n",
+        "speech_s",
+        "nontarget_speech_s",
         "trains_n",
         "train_s",
         "train_fraction",
@@ -127,8 +129,8 @@ _BRANCH_MEASURES = {
         "ppg_expected_place_fraction",
         "ppg_place_agreement",
         "lexical_repetitions_n",
-        "spans_n",
     ),
+    "VOICE": ("spans_n", "phonation_s", "longest_span_s"),
 }
 
 
@@ -1196,7 +1198,6 @@ def _verdict(store: ProvStore) -> dict[str, Any]:
             "conformance_of": {},
             "deviations": {},
             "unmeasured": {},
-            "detector_covariates": {},
             "routes": {},
             "route_state": None,
             "agreement": {},
@@ -1433,7 +1434,6 @@ def _report_document(
             "conformance_of": verdict.get("conformance_of") or {},
             "deviations": verdict.get("deviations") or {},
             "unmeasured": verdict.get("unmeasured") or {},
-            "detector_covariates": verdict.get("detector_covariates") or {},
             "declared_family": verdict.get("declared_family"),
             "agreement": verdict.get("agreement") or {},
             "ruleset": _ruleset_reading(store),

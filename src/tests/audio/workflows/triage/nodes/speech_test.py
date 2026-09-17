@@ -157,6 +157,37 @@ def speech_config(tmp_path: Path) -> TriageConfig:
     return _speech_config(tmp_path)
 
 
+SYLLABLE_POINTS = (
+    "branch:\n"
+    "  train_min_s: 1.5\n"
+    "  modulation_band_hz: [2.0, 12.0]\n"
+    "  rate_prominence_min: 2.0\n"
+    "  smoothing_window_s: 0.011\n"
+    "  peak_prominence_db: 6.0\n"
+    "  trough_return_db: 3.0\n"
+    "  event_min_s: 0.02\n"
+)
+"""The event walk's own points, at the 1 kHz envelope these fixtures write.
+
+An odd ``smoothing_window_s`` in samples: an even boxcar width is a half-sample shift, which ties
+every other maximum and loses it, so the packaged 0.05 s would measure that artefact rather than
+the train.
+"""
+
+
+@pytest.fixture
+def syllable_config(tmp_path: Path) -> TriageConfig:
+    """The base configuration plus the operating points the syllable body reads.
+
+    Args:
+        tmp_path: Where the override file is written.
+
+    Returns:
+        The configuration.
+    """
+    return _override(tmp_path, SYLLABLE_POINTS)
+
+
 @pytest.fixture
 def second_diarizer_config(tmp_path: Path) -> TriageConfig:
     """The second-diarizer configuration, as a parameter.
@@ -2071,6 +2102,179 @@ class TestTheNodeRunsOneModeAndProposesWhatItFinds:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")], only_where_present=True)
         speech(store, "plain", speech_config, self._declared("harvard-sentences-list"), run_dir=tmp_path)
+        assert find_measurement(store, "pii_scan") is not None
+        assert live_entities(store, "pii")
+        marks = [
+            entity
+            for entity in live_entities(store, "assertion")
+            if entity.attributes.get("verb") == "label" and entity.attributes.get("label") == "pii"
+        ]
+        assert marks, "redact.py selects on exactly this verb and label pair"
+
+
+def _seed_train_envelope(
+    store: ProvStore, tmp_path: Path, *, extent: tuple[float, float], rate_hz: float, duration_s: float = 5.0
+) -> None:
+    """Write the energy envelope a syllable train modulates, and the amplitude span carrying it.
+
+    Args:
+        store: The store to seed.
+        tmp_path: The run directory the sidecar goes under.
+        extent: Where the train sits.
+        rate_hz: How many syllables a second it repeats at.
+        duration_s: The recording's duration.
+    """
+    envelope_rate = 1000
+    n = int(duration_s * envelope_rate)
+    floor = np.full(n, -60.0)
+    envelope = np.full(n, -70.0)
+    start, end = extent
+    lo, hi = int(start * envelope_rate), int(end * envelope_rate)
+    times = np.arange(lo, hi) / envelope_rate
+    shape = 0.5 + 0.5 * np.cos(2.0 * np.pi * rate_hz * (times - start))
+    envelope[lo:hi] = -60.0 + 25.0 * shape
+    (tmp_path / "derivatives").mkdir(exist_ok=True)
+    np.savez(tmp_path / "derivatives" / "energy_envelope.npz", envelope_dbfs=envelope, floor_dbfs=floor)
+    preprocess = store.activity(node="PREPROCESS", step="seed-train", parameters={})
+    envelope_id = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={
+            "name": "energy_envelope",
+            "path": "derivatives/energy_envelope.npz",
+            "sampling_rate": envelope_rate,
+        },
+    )
+    store.was_generated_by(envelope_id, preprocess)
+    span_id = store.entity(
+        prov_type="span",
+        extent=extent,
+        attributes={"signal": "preemphasised", "measure": "amplitude", "merged_proposals": 1, "k_db": 18.0},
+    )
+    store.was_generated_by(span_id, preprocess)
+
+
+class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
+    """The DDK branch is dissolved: SPEECH evaluates the train, and no second branch reports."""
+
+    def _declared(self, family: str) -> AudioHints:
+        """A declaration naming one task family and nothing else.
+
+        Args:
+            family: The declared task family.
+
+        Returns:
+            The hints.
+        """
+        return AudioHints(metadata={"task_token": family})
+
+    def test_a_declared_diadochokinesis_pa_gets_a_syllable_train_conformance(
+        self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The owner's case: /pa pa pa/ is a speaking task and SPEECH says whether it happened."""
+        _seed_speech_store(store, tmp_path, words=[])
+        _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", syllable_config, self._declared("diadochokinesis-pa"), run_dir=tmp_path)
+        detail = _report_entity(store, "SPEECH").attributes
+        assert detail["expectation"]["mode"] == "align"
+        assert detail["expectation"]["task_family"] == "diadochokinesis-pa"
+        assert detail["trains_n"] == 1
+        assert detail["modulation_peak_hz"] == pytest.approx(5.0, abs=0.5)
+        assert detail["modulation_unit"] == "syllables_per_s"
+        assert result.report.conformance is True
+        assert result.report.conformance_of == "task"
+
+    def test_the_train_is_a_speech_span_carrying_its_production(
+        self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One minting family per branch: the train is SPEECH's, told apart by its own attributes."""
+        _seed_speech_store(store, tmp_path, words=[])
+        _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", syllable_config, self._declared("diadochokinesis-pa"), run_dir=tmp_path)
+        trains = [
+            entity for entity in live_entities(store, "span") if entity.attributes.get("production") == "syllable_train"
+        ]
+        assert [entity.attributes["family"] for entity in trains] == ["speech"]
+        assert trains[0].attributes["role"] == "task_extent"
+        assert not [entity for entity in live_entities(store, "span") if entity.attributes.get("family") == "ddk"], (
+            "nothing mints into a ddk family any more"
+        )
+
+    def test_no_second_branch_reports_on_a_syllable_recording(
+        self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One recording, one report about the task. The DDK branch's second report is gone."""
+        _seed_speech_store(store, tmp_path, words=[])
+        _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", syllable_config, self._declared("diadochokinesis-pa"), run_dir=tmp_path)
+        assert find_branch_report(store, "DDK") is None
+        reports = {
+            str(entity.attributes["node"])
+            for entity in live_entities(store, "branch_report")
+            if entity.attributes.get("conformance_of") == "task"
+        }
+        assert reports == {"SPEECH"}
+
+    def test_a_diadochokinesis_buttercup_recording_still_takes_the_lexical_token_path(
+        self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``buttercup`` is a word, so the consensus words serve it and the train is lexical."""
+        _seed_speech_store(store, tmp_path, words=["buttercup"] * 10)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", syllable_config, self._declared("diadochokinesis-buttercup"), run_dir=tmp_path)
+        detail = _report_entity(store, "SPEECH").attributes
+        assert detail["expectation"]["task_family"] == "diadochokinesis-buttercup"
+        assert detail["trains_n"] == 1
+        assert result.report.conformance is True
+        [train] = [
+            entity
+            for entity in live_entities(store, "span")
+            if entity.attributes.get("production") == "lexical_repetition"
+        ]
+        assert train.attributes["token"] == "buttercup"
+        assert train.attributes["repeats_n"] == 10
+
+    def test_a_non_ddk_lexical_recording_carries_no_syllable_measures(
+        self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control: an ordinary speaking task is unaffected and reports no train."""
+        _seed_speech_store(store, tmp_path, words=["the", "birch", "canoe", "slid"])
+        _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(
+            store,
+            "plain",
+            syllable_config,
+            AudioHints(metadata={"task_token": "harvard-sentences-list"}),
+            run_dir=tmp_path,
+        )
+        detail = _report_entity(store, "SPEECH").attributes
+        assert detail["expectation"]["task_family"] == "harvard-sentences-list"
+        assert "trains_n" not in detail
+        assert "modulation_peak_hz" not in detail
+        assert detail["words_n"] == 4
+
+    def test_pii_is_still_scanned_on_a_declared_ddk_recording(
+        self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The safety-critical invariant: SPEECH is where the scan runs, and a train does not skip it.
+
+        A syllable-repetition recording routes to SPEECH on its declared family whatever the
+        ``speech.lexical`` gate reads, and a disclosure spoken over a DDK take must not escape
+        because the instruction asked for nonsense syllables.
+        """
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")], only_where_present=True)
+        speech(store, "plain", syllable_config, self._declared("diadochokinesis-pa"), run_dir=tmp_path)
+        detail = _report_entity(store, "SPEECH").attributes
+        assert detail["pii"]["categories"] == ["PERSON"]
+        assert detail["pii"]["n"] == 1
+        assert detail["pii"]["scanned_by"], "the scan ran rather than being skipped"
         assert find_measurement(store, "pii_scan") is not None
         assert live_entities(store, "pii")
         marks = [
