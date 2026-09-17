@@ -18,7 +18,8 @@ import soundfile as sf
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import redact as redact_module
-from senselab.audio.workflows.triage.nodes.redact import redact
+from senselab.audio.workflows.triage.nodes.common import resolve_stream
+from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME, redact
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
@@ -948,6 +949,74 @@ class TestTheTranscriptArtifact:
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert _verdict_entity(store, "REDACT").attributes["unplaced_words_n"] == 0
         assert "[UNPLACED]" not in result.artifacts["transcript"].read_text()
+
+
+class TestTheRedactedStream:
+    """The masked audio is a stream in the store, resolvable like plain/enhanced/residual."""
+
+    def test_the_redacted_audio_resolves_as_a_named_stream(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A consumer downstream of REDACT asks the store for it by name, not the release directory."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        stream_id, audio = resolve_stream(store, tmp_path, STREAM_NAME)
+        entity = store.get_entity(stream_id)
+        assert entity.attributes["name"] == STREAM_NAME
+        assert entity.attributes["fill"] == "silence"
+        assert entity.attributes["checksum_sha256"]
+        window = audio.waveform[:, int(0.95 * SR) : int(2.05 * SR)]
+        assert float(window.abs().max()) == 0.0, "the planned extent is not silent in the store's stream"
+
+    def test_the_stream_is_the_masked_audio_not_the_source(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The control: the source stream still carries signal where the redacted one carries none."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        _, source = resolve_stream(store, tmp_path, "recording")
+        window = source.waveform[:, int(1.1 * SR) : int(1.4 * SR)]
+        assert float(window.abs().max()) > 0.0
+
+    def test_the_stream_is_registered_even_when_the_artifacts_are_withheld(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The run directory is the store side, never the release side; a withheld run still records it."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.artifacts == {}
+        assert not _release(tmp_path).exists() or not list(_release(tmp_path).iterdir())
+        stream_id, _ = resolve_stream(store, tmp_path, STREAM_NAME)
+        assert store.derived_from(stream_id), "the stream records what it came from"
+
+    def test_the_artifact_file_is_still_written_beside_the_stream(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The stream is additional to the released file, not a replacement for it."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.artifacts["audio"].exists()
+        assert result.artifacts["audio"].parent == _release(tmp_path)
 
 
 class TestWhatTheStoreRecords:
