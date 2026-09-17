@@ -2028,6 +2028,9 @@ class BranchRow:
     Attributes:
         key: The span entity's id, which is what a derivation names.
         label: What the bar is captioned with.
+        short: The caption a bar too narrow for ``label`` falls back to, before it falls back to
+            none at all. A bar is never dropped, so a narrow one saying ``cough`` carries more than
+            the same bar saying nothing.
         start: The span's start, in recording seconds.
         end: Its end.
         row: :data:`BRANCH_PROPOSED_ROW` or :data:`BRANCH_INITIAL_ROW`.
@@ -2036,6 +2039,7 @@ class BranchRow:
 
     key: str
     label: str
+    short: str
     start: float
     end: float
     row: str
@@ -2086,22 +2090,26 @@ class BranchLane:
         return tuple(row for row in self.rows if row.row == BRANCH_INITIAL_ROW)
 
 
-def _proposed_span_label(span: Entity) -> str:
-    """One proposed span's caption, from the role every proposer stamps and its own qualifier.
+def _proposed_span_label(span: Entity) -> tuple[str, str]:
+    """One proposed span's caption and the shorter one a narrow bar falls back to.
 
     Args:
         span: A span of a branch's family.
 
     Returns:
-        The role, qualified by whichever of ``label``, ``production`` and ``attributed_to`` the
-        proposal carries a value for, and marked ``nontarget`` when it says so.
+        ``(label, short)``. The label is the role every proposer stamps, qualified by whichever of
+        ``label``, ``production`` and ``attributed_to`` the proposal carries a value for and marked
+        ``nontarget`` when it says so; the short form is the qualifier alone, which is the half that
+        distinguishes one proposal from its neighbours.
     """
     role = str(span.attributes.get("role") or "")
     qualifier = next(
         (str(span.attributes[key]) for key in _BRANCH_QUALIFIERS if span.attributes.get(key) is not None), ""
     )
     label = f"{role}/{qualifier}" if role and qualifier else (role or qualifier or _UNLABELLED)
-    return f"{label} nontarget" if span.attributes.get("nontarget") else label
+    if span.attributes.get("nontarget"):
+        return f"{label} nontarget", f"{qualifier or role} nontarget"
+    return label, qualifier or role or _UNLABELLED
 
 
 def _lane_state(decision: Entity | None, report: Entity | None) -> str:
@@ -2157,10 +2165,12 @@ def branch_lanes(store: ProvStore) -> list[BranchLane]:
             if extent is None:
                 continue
             parents = [parent for parent in sources.get(span.id, []) if parent.extent is not None]
+            label, short = _proposed_span_label(span)
             rows.append(
                 BranchRow(
                     key=span.id,
-                    label=_proposed_span_label(span),
+                    label=label,
+                    short=short,
                     start=float(extent[0]),
                     end=float(extent[1]),
                     row=BRANCH_PROPOSED_ROW,
@@ -2172,10 +2182,12 @@ def branch_lanes(store: ProvStore) -> list[BranchLane]:
                 if parent.id in seen or parent_extent is None:
                     continue
                 seen.add(parent.id)
+                reading = initial_span_label(parent)
                 rows.append(
                     BranchRow(
                         key=parent.id,
-                        label=initial_span_label(parent),
+                        label=reading,
+                        short=reading,
                         start=float(parent_extent[0]),
                         end=float(parent_extent[1]),
                         row=BRANCH_INITIAL_ROW,
@@ -2309,7 +2321,10 @@ def _branch_lane_panel(axis: Axes, lane: BranchLane, window: tuple[float, float]
             )
         )
         placed[row.key] = (y, left, right)
-        _fit_cell_text(axis, (left + right) / 2, y, row.label, (right - left) * points_per_second, style, renderer)
+        budget = (right - left) * points_per_second
+        for caption in dict.fromkeys((row.label, row.short)):
+            if _fit_cell_text(axis, (left + right) / 2, y, caption, budget, style, renderer):
+                break
     for row in on_page:
         child = placed.get(row.key)
         if row.row != BRANCH_PROPOSED_ROW or child is None:

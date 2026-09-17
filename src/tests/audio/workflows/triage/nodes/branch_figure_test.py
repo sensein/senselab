@@ -155,6 +155,34 @@ class TestTheLaneReadsWhatTheBranchesWrote:
             "breath_group_0",
         ]
 
+    def test_a_narrow_bar_falls_back_to_the_qualifier_rather_than_to_nothing(self, routed: ProvStore) -> None:
+        """A bar is never dropped, so one too narrow for its role says what distinguishes it."""
+        source = _envelope_spans(routed)[0].id
+        _run_branch(
+            routed,
+            "AIRWAY",
+            [("cough_event", (1.1, 1.2), source, {"label": "cough"})],
+            kind="airway",
+            detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
+        )
+        [lane] = [lane for lane in branch_lanes(routed) if lane.branch == "AIRWAY"]
+        [proposed] = lane.proposed
+        assert (proposed.label, proposed.short) == ("cough_event/cough", "cough")
+
+    def test_an_initial_row_has_no_shorter_form_to_fall_back_to(self, routed: ProvStore) -> None:
+        """Its reading is already one term; abbreviating a level in dB would change the number."""
+        source = _envelope_spans(routed)[0].id
+        _run_branch(
+            routed,
+            "AIRWAY",
+            [("cough_event", (1.1, 1.8), source, {"label": "cough"})],
+            kind="airway",
+            detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
+        )
+        [lane] = [lane for lane in branch_lanes(routed) if lane.branch == "AIRWAY"]
+        [initial] = lane.initial
+        assert (initial.label, initial.short) == ("20 dB", "20 dB")
+
     def test_only_the_measures_the_report_carries_are_read(self, routed: ProvStore) -> None:
         """SPEECH's syllable keys are written only on an in-family align run; absent is not None."""
         source = _envelope_spans(routed)[0].id
