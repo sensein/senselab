@@ -1082,7 +1082,7 @@ def syllable_detail(result: Result) -> dict[str, Any]:
 
     Returns:
         The detail mapping, carrying rates and regularity as measurements and no normative reading
-        of either. ``report.py``'s ``_BRANCH_MEASURES["SPEECH"]`` names these keys.
+        of either. ``report.py``'s ``BRANCH_MEASURES["SPEECH"]`` names these keys.
     """
     trains = [component for component in result.components if component.role in TRAIN_ROLES]
     return {
