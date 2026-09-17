@@ -25,26 +25,57 @@ word is what carries an extent. Turning a flagged substring into a redaction wou
 a time extent from a text match, which is exactly the class of inference the graph refuses
 elsewhere. Withholding needs no such guess.
 
-## The rule: it can only withhold
+## The rule: it annotates, and VERDICT decides — owner correction, 2026-09-17
 
-| state | what it does to the outcome |
-| --- | --- |
-| `disabled` | nothing. The config left it off. |
-| `not_run` | nothing. The detector path had already withheld, so there was nothing to decide over. |
-| `clean` | nothing. The pass was already the detector path's answer. |
-| `flagged` | a `pass` becomes a `flag`; artifacts are withheld. |
-| `absent` | nothing to the outcome. Recorded in the verdict **and** named in the verdict's `why`. |
+> "the llm is part of a branch, so it can only annotate (with provenance)."
 
-`absent` deserves the argument. An enabled step that cannot reach its model has two honest options:
-withhold everything, or let the answer the detector path already reached stand and say loudly that
-the extra check did not happen. Withholding would mean a cluster whose GPU queue is full releases
-nothing at all, and the release decision would then depend on machine availability rather than on
-the recording. So the answer stands — but `llm_check.status` is `absent`, `llm_check.failure` names
-the reason, an `available: false` measurement is in the store, the review activity's model agent
-carries `unresolved_reason` rather than a commit, and the verdict's `why` ends with
-"the llm check was enabled and did not run (...)". It is never a *silent* pass. **If an operator
-wants an enabled-and-absent check to withhold, that is a different rule and needs a config key with
-its own derivation; it is not the shipped one.**
+The same contract the branches took the day before — *"a refusal is a decision. a branch does not
+decide. it's an authority on task/branch specific detection."* This check is a detector. Detectors
+annotate.
+
+**What was wrong.** `redact.py` carried
+
+```python
+if outcome is Outcome.PASS and llm.status == "flagged":
+    outcome = Outcome.FLAG
+```
+
+and `vocabulary._release_from` reads REDACT's outcome as the release state. So an LLM flag withheld
+the release. An unmeasured model was deciding whether a recording could be handed on.
+
+**What it is now.** REDACT's outcome is its own — the detector path, the mask, the `scan_for_pii`
+re-verification — on every path. The re-read's summary is a `redaction_llm_annotation` measurement
+and nothing else.
+
+| state | what REDACT's outcome does | what VERDICT does with the annotation |
+| --- | --- | --- |
+| `disabled` | nothing | nothing. The config left it off. |
+| `not_run` | nothing | nothing. The detector path had already withheld. |
+| `clean` | nothing | nothing. |
+| `flagged` | **nothing** | raises `triage` to `flag` under `verdict.llm_redaction_flags`. Never `release`. |
+| `absent` | nothing | nothing. Carried in `llm_redaction`; the detector path's answer stands. |
+
+**Why the triage axis and not release.** They answer different questions. Triage asks whether a human
+should look at the recording; release asks whether an artifact may be handed on. "A birth month, a
+street and an employer are still here, and together they are one person" is a claim a human reviewer
+should read — a triage question. It is not evidence that a detector missed a span, which is the only
+thing the release axis is a reading of. The safety signal survives; the unmeasured gate does not.
+
+`verdict.llm_redaction_flags` ships `true`: a false "residue" flag costs one review, a missed one
+costs a disclosure. **No false-positive rate has been measured for this model on this corpus.**
+`config-derivations.md` § verdict says so in the same words, because a default argued from an
+asymmetry rather than from a rate has to say which it is.
+
+`absent` deserves its argument, unchanged. An enabled step that cannot reach its model has two honest
+options: withhold everything, or let the answer the detector path already reached stand and say
+loudly that the extra check did not happen. Withholding would mean a cluster whose GPU queue is full
+releases nothing at all, and the release would then depend on machine availability rather than on the
+recording. So the answer stands — and it is never a *silent* pass: the annotation's `status` is
+`absent`, its `failure` names the reason, an `available: false` measurement is in the store, the
+review activity's model agent carries `unresolved_reason` rather than a commit, and the file
+verdict's `llm_redaction` carries the whole record. **If an operator wants an enabled-and-absent
+check to flag, that is a different rule and needs its own config key with its own derivation; it is
+not the shipped one.**
 
 A round that flags something and is then followed by a round that could not run keeps the flag. A
 concern already raised is not withdrawn because the next round failed.
@@ -65,16 +96,24 @@ the model's behalf.
 
 ## What reaches the store
 
-One `redaction_llm_review` measurement per round, under a `REDACT`/`llm_check` activity associated
-with a model agent carrying the resolved commit (or an `unresolved_reason`). Each carries the
-iteration, `available`, the reasoning verbatim, the findings with their categories and one-sentence
-reasons, the failure if any, the model id and the revision. The verdict carries a flat `llm_check`
-summary — status, iterations, flagged **categories**, model, revision, failure — and no reasoning:
-the verdict's `why` is controlled vocabulary, and a chain of thought quotes the transcript.
+One `REDACT`/`llm_check` activity, written on **every** path — disabled and not-run included, where
+it carries `enabled` and no model agent — so the step's state is a record rather than an inference
+from an absence. When the step ran, the activity is associated with a model agent carrying the
+resolved commit (or an `unresolved_reason`).
 
-`report.py` reads the measurements back (`_llm_reviews`) and renders status, concerns and reasoning
-under the REDACT block, so the captured reasoning is reachable from the document a reader opens
-rather than only from the store. The summary JSON carries them under `llm_check`.
+Under it: one `redaction_llm_review` measurement per round, carrying the iteration, `available`, the
+reasoning verbatim, the findings with their categories and one-sentence reasons, the failure if any,
+the model id and the revision. And one `redaction_llm_annotation` measurement — status, iterations,
+flagged **categories**, model id, revision, failure — which is what VERDICT reads. No reasoning
+reaches it: a `why` is controlled vocabulary and a chain of thought quotes the transcript.
+
+REDACT's verdict carries **no** `llm_check` field. It used to, and a field in a verdict the verdict
+does not act on is a second record able to disagree with the first.
+
+`report.py` reads both back (`_llm_annotation`, `_llm_reviews`) and renders status, concerns and
+reasoning under the REDACT block, so the captured reasoning is reachable from the document a reader
+opens rather than only from the store. The summary JSON carries the rounds under `llm_check` and the
+summary under `llm_annotation`. The file verdict carries the same summary under `llm_redaction`.
 
 None of this reaches `artifacts_dir`. The store, the run directory and the summary are the private
 side; the release directory is the only thing gated on a pass, and the reviewer writes nothing into
@@ -98,7 +137,9 @@ the mechanism working as designed.
 ## Tests
 
 None of them needs the model. `redact_module.review_redacted_text` is stubbed with a scripted list
-of `ReviewResult`s, which is what lets the iteration, the chain-of-thought capture, the flag-to-
-withhold rule and the absent path all be pinned on a laptop. The backend's own parsing
+of `ReviewResult`s, which is what lets the iteration, the chain-of-thought capture, the
+annotate-don't-decide rule and the absent path all be pinned on a laptop. Two of them run REDACT and
+then VERDICT over the same store, which is the only place the release axis and the triage axis can be
+read against one flagged re-read at once. The backend's own parsing
 (`parse_completion`) is tested directly, including the case where the reasoning quotes the
 transcript's `[CATEGORY]` placeholders — splitting the answer on the first `[` truncated it there.

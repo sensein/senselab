@@ -21,7 +21,8 @@ from senselab.audio.workflows.triage.config import TriageConfig, load_triage_con
 from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes.common import resolve_stream
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME, redact
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.nodes.verdict import verdict as verdict_node
+from senselab.audio.workflows.triage.vocabulary import LLM_REDACTION_RESIDUE, Outcome, Release, Triage
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
 from senselab.text.tasks.pii_detection.redaction_review import ReviewFinding, ReviewResult, parse_completion
@@ -1611,7 +1612,7 @@ class TestTheChainOfThoughtIsCaptured:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Captured in the store and unreachable from the report is captured nowhere a reader looks."""
-        from senselab.audio.workflows.triage.nodes.report import _llm_check_lines, _llm_reviews
+        from senselab.audio.workflows.triage.nodes.report import _llm_annotation, _llm_check_lines, _llm_reviews
 
         config = _override(tmp_path, LLM_ON)
         _seed_redact_store(store, tmp_path, words=["born", "in", "belmont"], findings=[("PERSON", (0.0, 0.5))])
@@ -1627,12 +1628,54 @@ class TestTheChainOfThoughtIsCaptured:
             ],
         )
         redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        check = _annotation(store)
-        text = "\n".join(_llm_check_lines(check, _llm_reviews(store)))
+        text = "\n".join(_llm_check_lines(_llm_annotation(store), _llm_reviews(store)))
         assert "The town name narrows the population to a few thousand." in text
         assert "With the town masked, nothing remains." in text
         assert "concern [LOCATION]: a town with one clinic" in text
         assert "llm check: flagged" in text
+        assert f"revision={'a' * 40}" in text, "a chain of thought nobody can attribute to a commit is not evidence"
+
+
+class TestTheReviewerAnnotatesAndVerdictDecides:
+    """Owner, 2026-09-17: "the llm is part of a branch, so it can only annotate (with provenance)"."""
+
+    def test_a_flagged_re_read_releases_and_flags_the_triage_axis(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The whole split, end to end: REDACT's own path cleared the artifact, and a human still looks."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["born", "in", "belmont"], findings=[("PERSON", (0.0, 0.5))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(
+            monkeypatch,
+            [_flags(ReviewFinding(text="belmont", category="LOCATION", why="a town with one clinic")), _clean()],
+        )
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.PASS and result.artifacts != {}
+        folded = verdict_node(store, None, config, run_dir=tmp_path).file_verdict
+        assert folded.release is Release.RELEASABLE, "an unmeasured model does not gate a release"
+        assert folded.triage is Triage.FLAG, "and the safety signal survives the split"
+        assert any(LLM_REDACTION_RESIDUE in reason.why for reason in folded.reasons)
+        assert folded.llm_redaction["revision"] == "a" * 40
+
+    def test_a_surviving_finding_still_withholds_with_no_re_read_in_sight(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The control on the real redaction path: the change must not weaken it."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.FAIL and result.artifacts == {}
+        folded = verdict_node(store, None, config, run_dir=tmp_path).file_verdict
+        assert folded.release is Release.WITHHELD
+        assert folded.llm_redaction["status"] == "not_run"
 
 
 class TestTheLlmCheckDegradesHonestly:

@@ -246,9 +246,9 @@ def _llm_redaction(store: ProvStore) -> tuple[dict[str, object] | None, list[str
     measurement = find_measurement(store, REDACTION_LLM_ANNOTATION)
     if measurement is None:
         return None, []
-    return {
-        key: value for key, value in measurement.attributes.items() if key not in ("name", "signal")
-    }, [measurement.id]
+    return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal")}, [
+        measurement.id
+    ]
 
 
 def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list[str]]:
