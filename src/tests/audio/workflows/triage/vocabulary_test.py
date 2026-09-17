@@ -11,7 +11,6 @@ from dataclasses import replace
 from typing import Sequence
 
 from senselab.audio.workflows.triage.vocabulary import (
-    BAD_DECLARATION_REQUIRED,
     BAD_MAP_VALUES,
     DECLINED,
     ROUTED,
@@ -503,20 +502,19 @@ class TestABranchThatNeverRanIsNotOneThatFailed:
     def test_a_routed_branch_with_no_node_is_reported_rather_than_ignored(self) -> None:
         """A routed branch that left no verdict flags the file, whatever silenced it.
 
-        DDK is the name here because it was the only branch with no node when this was written. It
-        has one now, so the state the fold is handed is the general one: the branch was asked to
-        run and concluded nothing — skipped, errored, or completed without a verdict. The fold must
-        say so rather than pass quietly, and that is what is pinned.
+        The state the fold is handed is the general one: the branch was asked to run and concluded
+        nothing — skipped, errored, or completed without a verdict. The fold must say so rather
+        than pass quietly, and that is what is pinned.
         """
         folded = fold_file_verdict(
             [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
-            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED, DDK=ROUTED),
-            ran={"DDK": RunState.SKIPPED},
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.SKIPPED},
             hint_claims={},
             route_state=ROUTED,
         )
         assert folded.triage is Triage.FLAG
-        assert any(reason.node == "DDK" and "never ran" in reason.why for reason in folded.reasons)
+        assert any(reason.node == "SPEECH" and "never ran" in reason.why for reason in folded.reasons)
 
     def test_the_branches_map_joins_the_decision_to_the_reported_conformance(self) -> None:
         """A skipped branch carries the reason it was skipped, beside a branch that reported."""
@@ -652,34 +650,6 @@ class TestAConfigTypoIsNamedNotSwallowed:
         assert folded.discard_ground is None
         assert folded.bad_map_values == {"cough": "AIRWY"}
         assert any(BAD_MAP_VALUES in reason.why and "AIRWY" in reason.why for reason in folded.reasons)
-
-    def test_a_bad_declaration_required_name_flags_where_the_file_would_otherwise_discard(self) -> None:
-        """The same failure on the gate key: it gates nothing and is otherwise silent."""
-        decisions = _all_declined()
-        decisions["AIRWAY"] = replace(decisions["AIRWAY"], bad_declaration_required=("DDKK",))
-        folded = fold_file_verdict(
-            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
-            branch_decisions=decisions,
-            ran={},
-            hint_claims={},
-            route_state="empty",
-        )
-        assert folded.triage is Triage.FLAG
-        assert folded.discard_ground is None
-        assert folded.bad_declaration_required == ["DDKK"]
-        assert any(BAD_DECLARATION_REQUIRED in reason.why and "DDKK" in reason.why for reason in folded.reasons)
-
-    def test_a_well_formed_declaration_required_flags_nothing(self) -> None:
-        """The control: the same recording discards when the gate key is sound."""
-        folded = fold_file_verdict(
-            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
-            branch_decisions=_all_declined(),
-            ran={},
-            hint_claims={},
-            route_state="empty",
-        )
-        assert folded.bad_declaration_required == []
-        assert folded.triage is Triage.DISCARD
 
     def test_a_well_formed_map_flags_nothing(self) -> None:
         """The control: the same recording discards when the map is sound."""
