@@ -1079,8 +1079,13 @@ class TestTheStimulusAccountsForACandidate:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """SPEECH's signature for a finding it could not place; a whole-passage prompt must not absolve it."""
-        _seed_redact_store(store, tmp_path, words=["form", "a", "rainbow"], findings=[("LOCATION", (0.0, 3.0))])
+        """SPEECH's signature for a finding it could not place; a whole-passage prompt must not absolve it.
+
+        The extent is the exact hull of every word, so the span-coverage condition is satisfied and
+        ``form a rainbow`` really is a contiguous run of the passage. Only the whole-stream rule
+        stands between that and an exemption, which is what this pins.
+        """
+        _seed_redact_store(store, tmp_path, words=["form", "a", "rainbow"], findings=[("LOCATION", (0.0, 2.5))])
         _stub_pii(monkeypatch, findings=[])
         result = redact(
             store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path)
