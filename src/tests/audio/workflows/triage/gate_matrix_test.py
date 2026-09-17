@@ -752,21 +752,21 @@ class TestWhereEachFamilyRoutes:
     def test_a_routing_two_gates_agreed_on_is_counted_once_and_credited_to_both(self, ruleset: Ruleset) -> None:
         """``routed`` is per recording; ``fired_gates`` is per gate. They are different denominators."""
         record = _features(
-            "diadochokinesis-pa",
-            transcript="pa pa pa pa",
-            ppg={"silent_fraction": 0.1, "segment_rate_per_s": 12.33},
+            "respiration-and-cough-threequickbreaths",
+            residual={"energy_fraction": 0.5},
+            ppg={"silent_fraction": 0.95, "segment_rate_per_s": 0.0},
         )
-        cell = _cell(family_routing([record], ruleset), "diadochokinesis-pa", "DDK")
+        cell = _cell(family_routing([record], ruleset), "respiration-and-cough-threequickbreaths", "AIRWAY")
         assert cell.routed == 1
-        assert cell.fired_gates == {"ddk.lexical_repetition": 1, "ddk.ppg_segment_rate_per_s": 1}
+        assert cell.fired_gates == {"airway.breath": 1, "airway.ppg_silent_fraction": 1}
         assert cell.sole_gates == {}
 
     def test_a_routing_one_gate_carried_alone_names_that_gate_as_sole(self, ruleset: Ruleset) -> None:
         """A sole-firing gate is the routing that disappears if the gate is removed."""
-        record = _features("rainbow-passage", transcript="the the the the")
-        cell = _cell(family_routing([record], ruleset), "rainbow-passage", "DDK")
+        record = _features("rainbow-passage", residual={"energy_fraction": 0.5})
+        cell = _cell(family_routing([record], ruleset), "rainbow-passage", "AIRWAY")
         assert cell.routed == 1
-        assert cell.sole_gates == {"ddk.lexical_repetition": 1}
+        assert cell.sole_gates == {"airway.breath": 1}
 
     def test_a_branch_beyond_the_declaration_says_so_rather_than_scoring_as_error(self, ruleset: Ruleset) -> None:
         """``prolonged-vowel`` on three lexical words routes SPEECH. Not declared, not an error."""
@@ -786,49 +786,55 @@ class TestWhereEachFamilyRoutes:
     def test_the_margin_is_the_least_clearing_firing_gate(self, ruleset: Ruleset) -> None:
         """How far past its cut the routing actually was is the narrowest gate, not the widest."""
         record = _features(
-            "diadochokinesis-pa",
-            transcript="pa pa pa pa pa pa pa pa pa pa pa pa",
-            ppg={"silent_fraction": 0.1, "segment_rate_per_s": 10.5},
+            "prolonged-vowel",
+            span_longest_s={"amplitude": 6.0},
+            peaks={"plain|yamnet|Chant": 0.021},
         )
-        cell = _cell(family_routing([record], ruleset), "diadochokinesis-pa", "DDK")
+        cell = _cell(family_routing([record], ruleset), "prolonged-vowel", "VOICE")
         assert cell.margins["median"] == pytest.approx(0.05)
 
     def test_the_routed_rate_is_over_every_recording_of_the_family(self, ruleset: Ruleset) -> None:
         """Three recordings, one routing: 1/3, not 1/1."""
         records = [
-            _features("rainbow-passage", "a", transcript="the the the the"),
+            _features("rainbow-passage", "a", residual={"energy_fraction": 0.5}),
             _features("rainbow-passage", "b"),
             _features("rainbow-passage", "c"),
         ]
-        cell = _cell(family_routing(records, ruleset), "rainbow-passage", "DDK")
+        cell = _cell(family_routing(records, ruleset), "rainbow-passage", "AIRWAY")
         assert cell.routed == 1
         assert cell.n == 3
         assert cell.routed_rate == pytest.approx(1 / 3)
         assert cell.not_routed == 2
 
     def test_a_non_routing_with_every_gate_unread_is_not_a_silent_one(self, ruleset: Ruleset) -> None:
-        """DDK declares two gates; dropping both features leaves the branch unevaluable, not silent."""
-        record = _features("diadochokinesis-pa", consensus_present=False, ppg={})
-        cell = _cell(family_routing([record], ruleset), "diadochokinesis-pa", "DDK")
+        """AIRWAY declares four gates; dropping every feature leaves the branch unevaluable, not silent."""
+        record = _features(
+            "respiration-and-cough-threequickbreaths",
+            residual={},
+            span_label_set_stats={},
+            consensus_present=False,
+            ppg={},
+        )
+        cell = _cell(family_routing([record], ruleset), "respiration-and-cough-threequickbreaths", "AIRWAY")
         assert cell.routed == 0
         assert cell.not_routed_all_unavailable == 1
         assert cell.not_routed_some_unavailable == 1
 
     def test_a_partly_unread_branch_is_some_and_not_all(self, ruleset: Ruleset) -> None:
-        """One of DDK's two gates unread is a partial, which must not read as total."""
-        record = _features("diadochokinesis-pa", ppg={})
-        cell = _cell(family_routing([record], ruleset), "diadochokinesis-pa", "DDK")
+        """One of AIRWAY's four gates unread is a partial, which must not read as total."""
+        record = _features("respiration-and-cough-threequickbreaths", ppg={})
+        cell = _cell(family_routing([record], ruleset), "respiration-and-cough-threequickbreaths", "AIRWAY")
         assert cell.routed == 0
         assert cell.not_routed_some_unavailable == 1
         assert cell.not_routed_all_unavailable == 0
 
     def test_a_routing_made_while_a_gate_was_unread_is_flagged_as_partial_evidence(self, ruleset: Ruleset) -> None:
-        """DDK entered on the repetition gate while the PPG rate could not be read at all."""
-        record = _features("diadochokinesis-pa", transcript="pa pa pa pa", ppg={})
-        cell = _cell(family_routing([record], ruleset), "diadochokinesis-pa", "DDK")
+        """AIRWAY entered on the residual while the posteriorgram could not be read at all."""
+        record = _features("respiration-and-cough-threequickbreaths", residual={"energy_fraction": 0.5}, ppg={})
+        cell = _cell(family_routing([record], ruleset), "respiration-and-cough-threequickbreaths", "AIRWAY")
         assert cell.routed == 1
         assert cell.routed_with_unavailable == 1
-        assert cell.sole_gates == {"ddk.lexical_repetition": 1}
+        assert cell.sole_gates == {"airway.breath": 1}
 
     def test_a_cell_that_routed_nothing_carries_no_margins_and_no_gates(self, ruleset: Ruleset) -> None:
         """An empty distribution must stay empty rather than reporting a zero nobody measured."""
@@ -840,29 +846,28 @@ class TestWhereEachFamilyRoutes:
 
     def test_the_json_row_carries_the_counts_and_the_gates(self, ruleset: Ruleset) -> None:
         """The breakdown has to be readable off the table, not only off the object."""
-        record = _features("rainbow-passage", transcript="the the the the")
-        row = _cell(family_routing([record], ruleset), "rainbow-passage", "DDK").as_json()
+        record = _features("rainbow-passage", residual={"energy_fraction": 0.5})
+        row = _cell(family_routing([record], ruleset), "rainbow-passage", "AIRWAY").as_json()
         assert row["routed"] == 1
         assert row["agreement"] == BEYOND_DECLARATION
-        assert row["firing_gates"] == "ddk.lexical_repetition:1"
-        assert row["sole_firing_gates"] == "ddk.lexical_repetition:1"
+        assert row["firing_gates"] == "airway.breath:1"
+        assert row["sole_firing_gates"] == "airway.breath:1"
 
 
 class TestFamilyStatesCountAdditiveRouting:
     """How many branches each recording routed to, which is the measure of additive routing."""
 
     def test_a_recording_routed_to_two_branches_lands_in_the_two_bucket(self, ruleset: Ruleset) -> None:
-        """A DDK recording routes SPEECH and DDK. That is two, and it is intended."""
+        """A held vowel spoken over routes VOICE and SPEECH. That is two, and it is intended."""
         record = _features(
-            "diadochokinesis-pa",
+            "prolonged-vowel",
             words={"agreement": 10, "total": 11, "lexical": 11},
-            transcript="pa pa pa pa",
-            ppg={"silent_fraction": 0.1, "segment_rate_per_s": 12.33},
+            span_longest_s={"amplitude": 6.0},
         )
         entry = family_states([record], ruleset)[0]
         assert entry.branch_counts["2"] == 1
         assert entry.branch_counts["1"] == 0
-        assert entry.declared == ("SPEECH", "DDK")
+        assert entry.declared == ("VOICE",)
 
     def test_every_branch_count_bucket_is_present_at_zero(self, ruleset: Ruleset) -> None:
         """A bucket nothing landed in must read zero rather than be missing from the row."""
@@ -872,7 +877,10 @@ class TestFamilyStatesCountAdditiveRouting:
 
     def test_every_route_state_is_present_and_they_sum_to_the_recordings(self, ruleset: Ruleset) -> None:
         """The three states partition the family, so a reader can check the row adds up."""
-        records = [_features("rainbow-passage", "a", transcript="the the the the"), _features("rainbow-passage", "b")]
+        records = [
+            _features("rainbow-passage", "a", residual={"energy_fraction": 0.5}),
+            _features("rainbow-passage", "b"),
+        ]
         entry = family_states(records, ruleset)[0]
         assert set(entry.states) == set(ROUTE_STATES)
         assert sum(entry.states.values()) == entry.n == 2
