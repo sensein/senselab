@@ -1429,7 +1429,7 @@ class TestTheSyllableMeasuresReachThePage:
     """The syllable instrument measures what no other does, and dissolving DDK must not drop it.
 
     The measures now arrive through SPEECH's report detail, because SPEECH is the branch that runs
-    the syllable body. Both readers of ``_BRANCH_MEASURES`` have to find them under ``SPEECH``.
+    the syllable body. Both readers of ``BRANCH_MEASURES`` have to find them under ``SPEECH``.
     """
 
     def test_the_branch_detail_block_states_the_syllable_measurements(
@@ -1466,7 +1466,7 @@ class TestTheSyllableMeasuresReachThePage:
         assert expected <= set(blocks.split())
 
     def test_the_pdf_decision_pages_measured_findings_name_them_too(self, store: ProvStore, tmp_path: Path) -> None:
-        """Both readers of ``_BRANCH_MEASURES`` were blind to these, not just the branch-detail one."""
+        """Both readers of ``BRANCH_MEASURES`` were blind to these, not just the branch-detail one."""
         _seed_report_store(store, tmp_path, full=True, syllable=True)
         payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
         blocks = "\n".join(_decision_blocks(payload))

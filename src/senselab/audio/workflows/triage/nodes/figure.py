@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import textwrap
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import ceil
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -31,6 +31,7 @@ from matplotlib.figure import Figure
 from matplotlib.text import Text
 
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
 from senselab.audio.workflows.triage.nodes.common import (
     consensus_words,
     find_measurement,
@@ -38,6 +39,13 @@ from senselab.audio.workflows.triage.nodes.common import (
     live_entities,
     resolve_stream,
 )
+from senselab.audio.workflows.triage.nodes.report import (
+    BRANCH_MEASURES,
+    initial_span_label,
+    report_entities,
+    span_sources,
+)
+from senselab.audio.workflows.triage.nodes.taxonomy import SUMMARISED_CLASSIFIERS
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, RULESET_ROUTING
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -50,7 +58,8 @@ _SOURCE_STREAM = "recording"
 #: Characters per line of the cover title, at its 11 pt proportional face on an 11-inch page.
 _TITLE_COLUMNS = 95
 
-_SUMMARISED_CLASSIFIERS = ("yamnet", "ast", "hear")
+#: Imported, never restated: TAXONOMY iterates this same tuple when it writes the summaries below.
+_SUMMARISED_CLASSIFIERS = SUMMARISED_CLASSIFIERS
 
 #: One title per stream section, keyed by the ``enhanced``/``residual`` prefix PREPROCESS writes.
 _STREAM_TITLES: dict[str, str] = {
@@ -150,6 +159,15 @@ class FigureStyle:
             row stays present because the label is still part of the file's union.
         asr_rows: How many staggered rows the consensus-word lane uses.
         asr_row_height: The bar height within one word-lane row, in row units.
+        branch_height_ratios: One entry per panel of :func:`branch_figure`'s page, top first:
+            spectrogram, waveform, then one lane per branch in ``BRANCHES`` order.
+        colour_branch_initial: The fill of an initial span — one a branch named in ``wasDerivedFrom``.
+        colour_branch_proposed: The fill of a span a branch proposed. The two fills are the ones
+            ``report.py``'s paired lane already uses, so the same pairing reads the same in both
+            products.
+        colour_branch_link: The connector drawn from a proposal to the initial span it names.
+        branch_row_height: A branch lane's bar height, in row units.
+        branch_link_linewidth: The connector's width.
     """
 
     page_seconds: float = 20.0
@@ -206,6 +224,12 @@ class FigureStyle:
     asr_rows: int = 4
     asr_row_height: float = 0.52
     span_row_colours: dict[str, str] = field(default_factory=dict)
+    branch_height_ratios: tuple[float, ...] = (0.66, 0.6, 0.5, 0.5, 0.5)
+    colour_branch_initial: str = "#dbeafe"
+    colour_branch_proposed: str = "#fde9c8"
+    colour_branch_link: str = "#6a51a3"
+    branch_row_height: float = 0.56
+    branch_link_linewidth: float = 0.8
 
     def row_colour(self, code: str) -> str:
         """The colour for one span-source row.
@@ -297,29 +321,6 @@ def _mark_padding(axes: Sequence[Axes], duration_s: float, t1: float, style: Fig
     return True
 
 
-def _stream_path(store: ProvStore, run_dir: Path) -> Path | None:
-    """The conditioned stream this figure draws, preferring the pre-emphasised one.
-
-    Args:
-        store: The provenance store.
-        run_dir: The run directory the stream sits under.
-
-    Returns:
-        The stream's file path, or None when neither stream is in the store.
-    """
-    for name in (_STREAM, _FALLBACK_STREAM):
-        try:
-            entity_id, _ = resolve_stream(store, run_dir, name)
-        except LookupError:
-            continue
-        entity = store.get_entity(entity_id)
-        path = Path(str(entity.attributes["path"]))
-        candidate = path if path.is_absolute() else run_dir / path
-        if candidate.is_file():
-            return candidate
-    return None
-
-
 def _absent_reasons(store: ProvStore) -> dict[str, str]:
     """Which PREPROCESS derivatives are absent, and the exception that made each one absent.
 
@@ -327,15 +328,17 @@ def _absent_reasons(store: ProvStore) -> dict[str, str]:
         store: The provenance store.
 
     Returns:
-        ``{derivative: reason}``, empty when PREPROCESS recorded no verdict.
+        ``{derivative: reason}``, empty when PREPROCESS recorded no live verdict.
     """
+    latest: Entity | None = None
     for entity in store.entities("verdict"):
         if store.is_invalidated(entity.id) or entity.attributes.get("node") != "PREPROCESS":
             continue
-        detail = entity.attributes.get("detail") or {}
-        absent = detail.get("absent") or {}
-        return {str(name): str(reason) for name, reason in absent.items()}
-    return {}
+        latest = entity
+    if latest is None:
+        return {}
+    absent = latest.attributes.get("absent") or {}
+    return {str(name): str(reason) for name, reason in absent.items()}
 
 
 def _npz(run_dir: Path, store: ProvStore, name: str, key: str) -> np.ndarray | None:
@@ -1993,4 +1996,541 @@ def preprocess_figure(
     written["figure"] = pdf_path
     (figure_dir / "taxonomy_summary.json").write_text(json.dumps({"lines": summary_lines}, indent=1) + "\n")
     written["taxonomy_summary"] = figure_dir / "taxonomy_summary.json"
+    return written
+
+
+#: A branch lane's two rows, initial over proposed, spelled as ``report.py``'s paired lane spells them.
+BRANCH_INITIAL_ROW = "initial"
+BRANCH_PROPOSED_ROW = "proposed"
+
+#: A branch wrote a report, so it ran. What it found is a separate question the lane answers.
+LANE_RAN = "ran"
+#: ROUTING decided against the branch, so no node was called and nothing of its own is in the store.
+LANE_WITHHELD = "withheld"
+#: ROUTING selected the branch and no report followed, which is neither running nor being withheld.
+LANE_NO_REPORT = "asked, no report"
+#: ROUTING never decided, so the store cannot say whether the branch was meant to run.
+LANE_UNDECIDED = "undecided"
+
+#: The attributes a proposal carries to distinguish itself inside its role, in the order preferred.
+_BRANCH_QUALIFIERS = ("label", "production", "attributed_to")
+
+_UNLABELLED = "unlabelled"
+
+#: The stem suffix this product's files take, so both figures can be written into one directory.
+_BRANCH_STEM_SUFFIX = "branches"
+
+
+@dataclass(frozen=True)
+class BranchRow:
+    """One bar of a branch lane.
+
+    Attributes:
+        key: The span entity's id, which is what a derivation names.
+        label: What the bar is captioned with.
+        short: The caption a bar too narrow for ``label`` falls back to, before it falls back to
+            none at all. A bar is never dropped, so a narrow one saying ``cough`` carries more than
+            the same bar saying nothing.
+        start: The span's start, in recording seconds.
+        end: Its end.
+        row: :data:`BRANCH_PROPOSED_ROW` or :data:`BRANCH_INITIAL_ROW`.
+        derived_from: The ids this span names in ``wasDerivedFrom``, empty on an initial row.
+    """
+
+    key: str
+    label: str
+    short: str
+    start: float
+    end: float
+    row: str
+    derived_from: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BranchLane:
+    """One branch's whole contribution, before any page is cut.
+
+    Attributes:
+        branch: The branch's name.
+        family: The family it mints, as ``BRANCH_FAMILY`` binds it.
+        state: One of :data:`LANE_RAN`, :data:`LANE_WITHHELD`, :data:`LANE_NO_REPORT`,
+            :data:`LANE_UNDECIDED`.
+        route_state: ROUTING's own state for it, or None when ROUTING never decided.
+        why: ROUTING's own reason, or None.
+        conformance: What the branch reported, or None when it wrote no report.
+        conformance_of: What that conformance is about.
+        deviations: The deviation type names it reported.
+        unmeasured: The config points it asked for and nobody has measured.
+        measures: The ``BRANCH_MEASURES`` entries its report actually carries, in table order. A key
+            the report does not carry is absent here rather than present as None, which is the
+            distinction ``report.py`` already draws between a value of None and a field never written.
+        rows: Every bar, proposals and the initial spans they name, earliest first.
+    """
+
+    branch: str
+    family: str
+    state: str
+    route_state: str | None
+    why: str | None
+    conformance: Any
+    conformance_of: str | None
+    deviations: tuple[str, ...]
+    unmeasured: tuple[str, ...]
+    measures: tuple[tuple[str, Any], ...]
+    rows: tuple[BranchRow, ...]
+
+    @property
+    def proposed(self) -> tuple[BranchRow, ...]:
+        """The branch's own spans."""
+        return tuple(row for row in self.rows if row.row == BRANCH_PROPOSED_ROW)
+
+    @property
+    def initial(self) -> tuple[BranchRow, ...]:
+        """The spans those were derived from."""
+        return tuple(row for row in self.rows if row.row == BRANCH_INITIAL_ROW)
+
+
+def _proposed_span_label(span: Entity) -> tuple[str, str]:
+    """One proposed span's caption and the shorter one a narrow bar falls back to.
+
+    Args:
+        span: A span of a branch's family.
+
+    Returns:
+        ``(label, short)``. The label is the role every proposer stamps, qualified by whichever of
+        ``label``, ``production`` and ``attributed_to`` the proposal carries a value for and marked
+        ``nontarget`` when it says so; the short form is the qualifier alone, which is the half that
+        distinguishes one proposal from its neighbours.
+    """
+    role = str(span.attributes.get("role") or "")
+    qualifier = next(
+        (str(span.attributes[key]) for key in _BRANCH_QUALIFIERS if span.attributes.get(key) is not None), ""
+    )
+    label = f"{role}/{qualifier}" if role and qualifier else (role or qualifier or _UNLABELLED)
+    if span.attributes.get("nontarget"):
+        return f"{label} nontarget", f"{qualifier or role} nontarget"
+    return label, qualifier or role or _UNLABELLED
+
+
+def _lane_state(decision: Entity | None, report: Entity | None) -> str:
+    """Which of the four states the store puts a branch in.
+
+    Args:
+        decision: ROUTING's ``branch_decision`` for it, or None.
+        report: Its own ``branch_report``, or None.
+
+    Returns:
+        The state. A branch that reported ran, whatever it found; one ROUTING withheld was never
+        called; one ROUTING selected that left no report is neither, and saying so is the point.
+    """
+    if report is not None:
+        return LANE_RAN
+    if decision is None:
+        return LANE_UNDECIDED
+    return LANE_NO_REPORT if decision.attributes.get("will_run") else LANE_WITHHELD
+
+
+def branch_lanes(store: ProvStore) -> list[BranchLane]:
+    """Every branch's lane, in ``BRANCHES`` order, read from what the branches themselves wrote.
+
+    Every proposed span carries a family, a role and at least one ``wasDerivedFrom``, because
+    ``propose_span`` is the only writer of one and refuses a proposal missing any of the three. The
+    pairing therefore follows the edge and never an extent overlap, exactly as ``report.py``'s
+    ``_derived_lane`` does — :func:`span_sources` is the same index, built once.
+
+    Args:
+        store: The provenance store, after ROUTING and the branches have run.
+
+    Returns:
+        One lane per branch, whether or not it ran.
+    """
+    decisions = {str(entity.attributes.get("branch")): entity for entity in live_entities(store, "branch_decision")}
+    reports = report_entities(store)
+    sources = span_sources(store)
+    by_family: dict[str, list[Entity]] = {}
+    for span in live_entities(store, "span"):
+        family = span.attributes.get("family")
+        if family is None or span.extent is None:
+            continue
+        by_family.setdefault(str(family), []).append(span)
+
+    lanes: list[BranchLane] = []
+    for branch in BRANCHES:
+        family = BRANCH_FAMILY[branch]
+        decision, report = decisions.get(branch), reports.get(branch)
+        rows: list[BranchRow] = []
+        seen: set[str] = set()
+        for span in sorted(by_family.get(family, ()), key=lambda span: span.extent or (0.0, 0.0)):
+            extent = span.extent
+            if extent is None:
+                continue
+            parents = [parent for parent in sources.get(span.id, []) if parent.extent is not None]
+            label, short = _proposed_span_label(span)
+            rows.append(
+                BranchRow(
+                    key=span.id,
+                    label=label,
+                    short=short,
+                    start=float(extent[0]),
+                    end=float(extent[1]),
+                    row=BRANCH_PROPOSED_ROW,
+                    derived_from=tuple(parent.id for parent in parents),
+                )
+            )
+            for parent in parents:
+                parent_extent = parent.extent
+                if parent.id in seen or parent_extent is None:
+                    continue
+                seen.add(parent.id)
+                reading = initial_span_label(parent)
+                rows.append(
+                    BranchRow(
+                        key=parent.id,
+                        label=reading,
+                        short=reading,
+                        start=float(parent_extent[0]),
+                        end=float(parent_extent[1]),
+                        row=BRANCH_INITIAL_ROW,
+                    )
+                )
+        attributes: Mapping[str, Any] = {} if report is None else report.attributes
+        lanes.append(
+            BranchLane(
+                branch=branch,
+                family=family,
+                state=_lane_state(decision, report),
+                route_state=None if decision is None else str(decision.attributes.get("route_state")),
+                why=None if decision is None else str(decision.attributes.get("why")),
+                conformance=attributes.get("conformance"),
+                conformance_of=None if report is None else str(attributes.get("conformance_of")),
+                deviations=tuple(str(name) for name in attributes.get("deviations") or ()),
+                unmeasured=tuple(str(name) for name in attributes.get("unmeasured") or ()),
+                measures=tuple((key, attributes[key]) for key in BRANCH_MEASURES.get(branch, ()) if key in attributes),
+                rows=tuple(sorted(rows, key=lambda row: (row.start, row.end, row.key))),
+            )
+        )
+    return lanes
+
+
+def rows_on_page(lane: BranchLane, window: tuple[float, float]) -> tuple[BranchRow, ...]:
+    """The lane's bars that reach a page, whether or not they fit inside it.
+
+    A span crossing a page boundary is on both pages and is drawn clipped to each, so its extent is
+    never restated as the page's edge.
+
+    Args:
+        lane: The lane.
+        window: The page's ``(start, end)``.
+
+    Returns:
+        The bars, in the lane's own order.
+    """
+    t0, t1 = window
+    return tuple(row for row in lane.rows if row.end > t0 and row.start < t1)
+
+
+def lane_note(lane: BranchLane, on_page: int) -> str:
+    """What a lane says instead of bars, or ``""`` when it has bars to draw.
+
+    A branch that did not run and a branch that ran and proposed nothing are different facts about
+    the graph, and this is where the figure keeps them apart.
+
+    Args:
+        lane: The lane.
+        on_page: How many of its bars reach this page.
+
+    Returns:
+        The note, or an empty string.
+    """
+    if lane.state == LANE_UNDECIDED:
+        return f"ROUTING wrote no decision for {lane.branch}"
+    if lane.state == LANE_WITHHELD:
+        return f"{lane.branch} did not run — route {lane.route_state}: {lane.why}"
+    if lane.state == LANE_NO_REPORT:
+        return f"{lane.branch} was selected to run and wrote no report"
+    if not lane.proposed:
+        return f"{lane.branch} ran and proposed no {lane.family} span"
+    if not on_page:
+        return f"{lane.branch} proposed {_plural(len(lane.proposed), f'{lane.family} span')}, none on this page"
+    return ""
+
+
+def _lane_title(lane: BranchLane) -> str:
+    """One lane's own heading, so a page read on its own says what the lane is.
+
+    Args:
+        lane: The lane.
+
+    Returns:
+        The title.
+    """
+    head = f"{lane.branch} — {lane.family} spans"
+    if lane.route_state is not None:
+        head += f" · route {lane.route_state}"
+    if lane.state == LANE_RAN:
+        head += f" · conformance {lane.conformance} of {lane.conformance_of}"
+    else:
+        head += f" · {lane.state}"
+    return head + " — initial over proposed, linked by wasDerivedFrom"
+
+
+def _branch_lane_panel(axis: Axes, lane: BranchLane, window: tuple[float, float], style: FigureStyle) -> None:
+    """One branch's two-row lane, each proposal joined to the spans it names.
+
+    A connector is drawn only where both ends are on the page, which is the rule the shared token
+    renderer already applies: a derivation naming a bar this page does not carry draws nothing
+    rather than a line to an edge.
+
+    Args:
+        axis: The panel.
+        lane: The lane.
+        window: The page's ``(start, end)``.
+        style: The drawing configuration.
+    """
+    from matplotlib.patches import Rectangle
+
+    t0, t1 = window
+    axis.set_xlim(t0, t1)
+    axis.set_title(_lane_title(lane), fontsize=style.title_fontsize)
+    on_page = rows_on_page(lane, window)
+    note = lane_note(lane, len(on_page))
+    if note:
+        _absent_panel(axis, window, note, style)
+        return
+    axis.set_yticks([0, 1])
+    axis.set_yticklabels([BRANCH_PROPOSED_ROW, BRANCH_INITIAL_ROW], fontsize=style.tick_fontsize)
+    axis.set_ylim(-0.6, 1.6)
+    axis.tick_params(axis="y", length=0)
+    axis.axhline(0.5, color="0.85", linewidth=0.5, zorder=0)
+    renderer = _renderer(axis)
+    points_per_second = _axis_points_per_second(axis, window, renderer)
+    placed: dict[str, tuple[float, float, float]] = {}
+    for row in on_page:
+        initial = row.row == BRANCH_INITIAL_ROW
+        y = 1.0 if initial else 0.0
+        left, right = max(row.start, t0), min(row.end, t1)
+        axis.add_patch(
+            Rectangle(
+                (left, y - style.branch_row_height / 2),
+                right - left,
+                style.branch_row_height,
+                facecolor=style.colour_branch_initial if initial else style.colour_branch_proposed,
+                edgecolor="0.25",
+                linewidth=0.6,
+                zorder=3,
+            )
+        )
+        placed[row.key] = (y, left, right)
+        budget = (right - left) * points_per_second
+        for caption in dict.fromkeys((row.label, row.short)):
+            if _fit_cell_text(axis, (left + right) / 2, y, caption, budget, style, renderer):
+                break
+    for row in on_page:
+        child = placed.get(row.key)
+        if row.row != BRANCH_PROPOSED_ROW or child is None:
+            continue
+        for parent_key in row.derived_from:
+            parent = placed.get(parent_key)
+            if parent is None:
+                continue
+            axis.plot(
+                [(child[1] + child[2]) / 2, (parent[1] + parent[2]) / 2],
+                [child[0] + style.branch_row_height / 2, parent[0] - style.branch_row_height / 2],
+                color=style.colour_branch_link,
+                linewidth=style.branch_link_linewidth,
+                zorder=5,
+            )
+
+
+def _measure_text(value: Any) -> str:  # noqa: ANN401 — anything a report attribute can hold
+    """One measurement's value as the block prints it.
+
+    Args:
+        value: What the branch reported.
+
+    Returns:
+        The text. A float is rounded, since a branch's own rounding is what it reported and more
+        digits here would suggest a precision the block did not receive.
+    """
+    if isinstance(value, bool) or not isinstance(value, float):
+        return str(value)
+    return f"{value:.3f}"
+
+
+def branch_report_lines(lanes: Sequence[BranchLane]) -> list[str]:
+    """Each branch's own report, as the cover prints it.
+
+    These are file-scoped facts — a conformance, a deviation, an unmeasured config point, a count
+    over the whole recording — so they belong on the cover rather than repeated inside a page's
+    twenty-second frame, where a whole-file number reads as a measurement of that window.
+
+    Args:
+        lanes: :func:`branch_lanes`' result.
+
+    Returns:
+        The lines, in print order.
+    """
+    lines: list[str] = ["BRANCH REPORTS"]
+    for lane in lanes:
+        state = lane.state if lane.state != LANE_RAN else f"ran · conformance {lane.conformance}"
+        lines.append(f"  {lane.branch:<8} {str(lane.route_state or 'no decision'):<12} {state}")
+        if lane.state != LANE_RAN:
+            if lane.why:
+                lines.append(f"      why          {lane.why}")
+            continue
+        lines.append(f"      of           {lane.conformance_of}")
+        measures = "  ".join(f"{key}={_measure_text(value)}" for key, value in lane.measures)
+        lines.append(f"      measures     {measures or 'none of its table reached the report'}")
+        lines.append(f"      deviations   {', '.join(lane.deviations) or 'none'}")
+        lines.append(f"      unmeasured   {', '.join(lane.unmeasured) or 'none'}")
+        paired = sum(1 for row in lane.proposed if row.derived_from)
+        lines.append(
+            f"      spans        {_plural(len(lane.proposed), f'{lane.family} span')} proposed, "
+            f"{paired} naming an initial span"
+        )
+    return lines
+
+
+def branch_figure(
+    store: ProvStore,
+    figure_dir: Path,
+    config: TriageConfig,
+    *,
+    run_dir: Path,
+    style: FigureStyle | None = None,
+    stem: str | None = None,
+) -> dict[str, Path]:
+    """Draw the branches' output from the store, one image per page.
+
+    The sibling of :func:`preprocess_figure`: the same arguments, the same page width and padded
+    tail, the same return shape, and the same rule that nothing is written back to the store, so it
+    too can be re-invoked over a completed run directory. Where that one draws PREPROCESS's and
+    TAXONOMY's derivatives, this one draws what each branch proposed, over the two panels a proposal
+    is read against — the spectrogram and the waveform its initial spans were cut from.
+
+    Its files take a distinct stem, so both products can be generated into one directory.
+
+    Args:
+        store: The provenance store, after the branches have run.
+        figure_dir: Where the images are written; created if absent.
+        config: The run's configuration, read for the values the panels annotate and never written.
+        run_dir: Where PREPROCESS wrote its streams and derivative sidecars.
+        style: How to draw. Defaults to :class:`FigureStyle`.
+        stem: The filename stem, defaulting to the run id.
+
+    Returns:
+        ``{"figure": pdf, "branch_summary": json, "page01": png, ...}`` in page order.
+
+    Raises:
+        LookupError: If no conditioned stream is in the store, since there is then no time axis to
+            draw a proposal against and a blank page would misreport that as a measurement.
+    """
+    import matplotlib.pyplot as plt
+
+    style = style or FigureStyle()
+    audio = None
+    for name in (_STREAM, _FALLBACK_STREAM):
+        try:
+            _, audio = resolve_stream(store, run_dir, name)
+            break
+        except LookupError:
+            continue
+    if audio is None:
+        raise LookupError("no conditioned stream in the store; PREPROCESS must run before FIGURE")
+    sampling_rate = int(audio.sampling_rate)
+    samples = audio.waveform.detach().cpu().numpy().astype("float64")
+    if samples.ndim > 1:
+        samples = samples.mean(axis=0)
+    duration_s = len(samples) / float(sampling_rate)
+
+    absent = _absent_reasons(store)
+    envelope = _npz(run_dir, store, "energy_envelope", "envelope_dbfs")
+    floor_array = _npz(run_dir, store, "energy_envelope", "floor_dbfs")
+    floor_db = float(floor_array[0]) if floor_array is not None and len(floor_array) else None
+    wideband = _npz(run_dir, store, "spectrogram_wideband", "spectrogram")
+    hop_s = float(config.require("spectrogram.hop_ms")) / 1000.0
+    trace, cut_level, cut_percentile = _continuity(store, run_dir)
+    lanes = branch_lanes(store)
+    report_lines = branch_report_lines(lanes)
+
+    wideband_title = (
+        f"wideband spectrogram ({float(config.require('spectrogram.wideband_window_ms')):.0f} ms window, "
+        f"{float(config.require('spectrogram.hop_ms')):.0f} ms hop) — the signal each proposal is a claim about"
+    )
+    collapsed = [index for index, empty in ((0, wideband is None),) if empty]
+    collapsed += [2 + index for index, lane in enumerate(lanes) if not rows_on_page(lane, (0.0, duration_s))]
+    height_ratios = _page_height_ratios(replace(style, height_ratios=style.branch_height_ratios), collapsed)
+
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, Path] = {}
+    name = f"{stem or store.run_id}-{_BRANCH_STEM_SUFFIX}"
+    pdf_path = figure_dir / f"{name}.pdf"
+    pdf = PdfPages(pdf_path)
+    cover = plt.figure(figsize=style.figure_inches)
+    title = f"{stem or store.run_id} — branch outputs"
+    cover.suptitle("\n".join(textwrap.wrap(title, width=_TITLE_COLUMNS, break_long_words=True)), fontsize=11)
+    _taxonomy_panel(cover.add_axes((0.06, 0.02, 0.92, 0.86)), report_lines, style)
+    pdf.savefig(cover, dpi=style.dpi)
+    plt.close(cover)
+    for index, window in enumerate(pages(duration_s, style), start=1):
+        figure: Figure
+        figure, axes = plt.subplots(
+            len(height_ratios),
+            1,
+            figsize=style.figure_inches,
+            constrained_layout=True,
+            gridspec_kw={"height_ratios": height_ratios},
+        )
+        axis_wide, axis_wave, *lane_axes = axes
+        _spectrogram_panel(
+            axis_wide,
+            wideband,
+            hop_s,
+            sampling_rate,
+            window,
+            wideband_title,
+            style,
+            absent.get("spectrogram_wideband", "spectrogram_wideband is absent from the store"),
+        )
+        _waveform_panel(
+            axis_wave,
+            samples,
+            sampling_rate,
+            envelope,
+            floor_db,
+            trace,
+            window,
+            style,
+            k_db=float(config.require("spans.k_db")),
+            cut_level=cut_level,
+            cut_percentile=cut_percentile,
+            continuity_absent=absent.get("continuity_trace", "continuity_trace is absent from the store"),
+        )
+        for lane, axis in zip(lanes, lane_axes):
+            _branch_lane_panel(axis, lane, window, style)
+
+        timed = list(axes)
+        for axis in timed:
+            axis.set_xlim(*window)
+            axis.tick_params(axis="x", labelsize=style.tick_fontsize)
+        for axis in timed[:-1]:
+            axis.tick_params(axis="x", labelbottom=False)
+        padded = _mark_padding(timed, duration_s, window[1], style)
+        timed[-1].set_xlabel("Time (s)")
+        pad_note = "  ·  padded to a uniform page" if padded else ""
+        figure.suptitle(
+            f"{name} — page {index}, {window[0]:.0f}-{window[1]:.0f}s of {duration_s:.2f}s{pad_note}",
+            fontsize=10,
+        )
+        pdf.savefig(figure, dpi=style.dpi)
+        if style.also_write_pngs:
+            page_path = figure_dir / f"{name}__page{index:02d}.png"
+            figure.savefig(page_path, dpi=style.dpi)
+            written[f"page{index:02d}"] = page_path
+        plt.close(figure)
+
+    pdf.close()
+    written["figure"] = pdf_path
+    (figure_dir / "branch_summary.json").write_text(json.dumps({"lines": report_lines}, indent=1) + "\n")
+    written["branch_summary"] = figure_dir / "branch_summary.json"
     return written
