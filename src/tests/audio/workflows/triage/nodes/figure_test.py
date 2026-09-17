@@ -8,19 +8,21 @@ from typing import Callable
 import pytest
 
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.nodes.common import live_entities
+from senselab.audio.workflows.triage.nodes.common import live_entities, software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.figure import (
     FigureStyle,
+    _absent_reasons,
     _asr_lane_panel,
     _spans,
     _words,
     pages,
     preprocess_figure,
+    summary_panel_lines,
     taxonomy_summary_lines,
 )
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
-from senselab.audio.workflows.triage.vocabulary import BRANCHES
+from senselab.audio.workflows.triage.vocabulary import BRANCHES, Outcome
 from senselab.utils.prov_store import ProvStore
 
 
@@ -474,6 +476,66 @@ class TestTheClipFlagIsReadFromTheLiveClipSpans:
         store, _ = self._seeded(extent)
         [span] = _spans(store)
         assert span["contains_clip"] is True
+
+
+class TestTheAbsenceReasonsAreReadFromWhatPreprocessWrote:
+    """``write_verdict`` splats its ``detail``, so the absences sit at the top of the attributes."""
+
+    @staticmethod
+    def _conclude(store: ProvStore, absent: dict[str, str]) -> None:
+        """PREPROCESS's verdict, written through the real writer rather than hand-built."""
+        activity = store.activity(node="PREPROCESS", step="condition", parameters={})
+        agent = software_agent(store)
+        store.was_associated_with(activity, agent)
+        write_verdict(
+            store,
+            activity,
+            agent,
+            node="PREPROCESS",
+            outcome=Outcome.PASS,
+            kind=None,
+            why="conditioning complete; absent derivatives are listed",
+            detail={"absent": absent, "derivatives": {}},
+        )
+
+    def test_the_reasons_reach_the_reader(self, store: ProvStore) -> None:
+        """A reader keyed to a nested ``detail`` finds nothing, because no writer nests one."""
+        self._conclude(store, {"span_yamnet": "ValueError: windows.yamnet.default_threshold is null"})
+        assert _absent_reasons(store) == {"span_yamnet": "ValueError: windows.yamnet.default_threshold is null"}
+
+    def test_the_latest_verdict_wins(self, store: ProvStore) -> None:
+        """An extend pass re-runs PREPROCESS; every other reader reports the newer record."""
+        self._conclude(store, {"span_hear": "LookupError: the first pass"})
+        self._conclude(store, {"span_hear": "LookupError: the second pass"})
+        assert _absent_reasons(store) == {"span_hear": "LookupError: the second pass"}
+
+    def test_an_invalidated_verdict_is_not_read(self, store: ProvStore) -> None:
+        """A withdrawn record must not supply a reason the graph no longer stands behind."""
+        self._conclude(store, {"span_hear": "LookupError: withdrawn"})
+        entity = next(iter(store.entities("verdict")))
+        store.was_invalidated_by(entity.id, store.activity(node="PREPROCESS", step="withdraw", parameters={}))
+        assert _absent_reasons(store) == {}
+
+    def test_the_readout_prints_the_reason_preprocess_recorded(
+        self,
+        store: ProvStore,
+        seed_preprocess_store: Callable[..., None],
+    ) -> None:
+        """The whole point of the map: the page names the null key rather than inventing a note."""
+        seed_preprocess_store(store, duration_s=3.0, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
+        self._conclude(store, {"yamnet_scores": "ValueError: windows.yamnet.default_threshold is null"})
+        text = "\n".join(taxonomy_summary_lines(store, FigureStyle()))
+        assert "ValueError: windows.yamnet.default_threshold is null" in text
+
+    def test_without_a_recorded_reason_the_readout_says_so(
+        self,
+        store: ProvStore,
+        seed_preprocess_store: Callable[..., None],
+    ) -> None:
+        """The control on the test above: absent with no verdict is stated, never filled in."""
+        seed_preprocess_store(store, duration_s=3.0, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
+        text = "\n".join(taxonomy_summary_lines(store, FigureStyle()))
+        assert "no reason recorded" in text
 
 
 def matplotlib_colour(hex_colour: str) -> tuple[float, float, float]:
