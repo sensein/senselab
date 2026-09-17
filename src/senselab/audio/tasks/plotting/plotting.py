@@ -56,6 +56,9 @@ BOUNDARY_RULE_CASING_WIDTH_PT = 2.4  # the casing's width in points; half the di
 BOUNDARY_RULE_DASHES = (0.0, (3.5, 2.0))  # a dash pattern, so a reference rule is not read as a drawn signal
 CURVE_WIDTH_PT = 1.3  # the width of an overlaid probability curve
 CURVE_HALO_WIDTH_PT = 2.9  # its white casing, which is what keeps it legible over any tab20 bar
+TOKEN_DERIVATION_LINK_COLOR = "0.35"  # the connector a tokens panel draws from a token to the token it names
+TOKEN_DERIVATION_LINK_WIDTH_PT = 0.7  # its width in points
+TOKEN_DERIVATION_LINK_ALPHA = 0.8  # its alpha, so a dense lane of links stays behind the bars it joins
 
 
 def _fitted_token_fontsize(
@@ -1089,6 +1092,9 @@ def plot_aligned_panels(
       at ``fontsize`` is shrunk towards ``floor_fontsize`` and dropped if it does not fit there
       either. The bar is never dropped. ``boundaries`` draws a vertical rule across the lane at
       every visible token edge, so a lane of abutting tokens reads as the boundaries between them.
+      A token may carry a ``key`` naming it and a ``derived_from`` listing the keys it came from; a
+      straight connector is drawn from that token's bar to each named bar on the same page, and a
+      ``derived_from`` entry naming a key no token on this page carries draws nothing.
       ``curves``, a block of ``{"name": str, "limits": (float, float),
       "data": [(times, values, label, color), ...]}``, overlays continuous curves on a right-hand
       axis of its own, named by ``name`` and spanning ``limits`` (default ``(0.0, 1.0)``). Each
@@ -1304,6 +1310,8 @@ def plot_aligned_panels(
                 banded = bool(token_curves.get("data"))
                 placements: List[_TokenPlacement] = []
                 edges: List[float] = []
+                drawn_at: Dict[str, Tuple[float, float]] = {}
+                links: List[Tuple[str, str]] = []
                 for token in tokens:
                     block = block_of[str(token.get("row") or "")]
                     start, end = float(token["start"]), float(token["end"])
@@ -1352,6 +1360,24 @@ def plot_aligned_panels(
                         )
                     placements.append(_TokenPlacement(block, bars[0], label, start + width / 2.0, width / 2.0))
                     edges.extend((start, end))
+                    key = token.get("key")
+                    if key is None:
+                        continue
+                    drawn_at[str(key)] = (start + width / 2.0, centre)
+                    links += [(str(key), str(source)) for source in token.get("derived_from") or []]
+                for key, source in links:
+                    if key not in drawn_at or source not in drawn_at:
+                        continue
+                    (x0, y0), (x1, y1) = drawn_at[key], drawn_at[source]
+                    ax.plot(
+                        [x0, x1],
+                        [y0, y1],
+                        color=TOKEN_DERIVATION_LINK_COLOR,
+                        linewidth=TOKEN_DERIVATION_LINK_WIDTH_PT,
+                        alpha=TOKEN_DERIVATION_LINK_ALPHA,
+                        solid_capstyle="butt",
+                        zorder=0.25,
+                    )
                 if panel.get("boundaries"):
                     _draw_boundary_rules(ax, edges, time_limits=x_limits)
                 if placements:
