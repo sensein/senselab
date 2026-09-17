@@ -345,7 +345,6 @@ class TestTheBranchDecisionsAreRead:
         assert branches["AIRWAY"] == {
             "will_run": True,
             "forced_by_declaration": False,
-            "withheld_by_gate": False,
             "route_state": "routed",
             "conformance": True,
         }
