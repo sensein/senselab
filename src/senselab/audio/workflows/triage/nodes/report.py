@@ -53,6 +53,11 @@ _TITLE_COLUMNS = 96
 _SHOWN_DECIMALS = 4
 _TOP_CATEGORIES = 6
 _TOKEN_CYCLE_ROWS = ("1", "2", "3")
+_INITIAL_ROW = "initial"
+_PROPOSED_ROW = "proposed"
+_INITIAL_FILL = "#dbeafe"
+_PROPOSED_FILL = "#fde9c8"
+_PAIRED_LANE_HEIGHT_RATIO = 0.9
 _EVIDENCE_BRANCHES = (*BRANCHES, "REDACT")
 _WORDS_LANE_LABEL = "consensus ASR"
 _TITLE_SEPARATOR = " · "
@@ -103,6 +108,26 @@ _BRANCH_MEASURES = {
     "AIRWAY": ("labelled_n", "contested_n", "merged_n"),
     "SPEECH": ("speaker_count", "words_n", "speech_s", "nontarget_speech_s"),
     "VOICE": ("spans_n", "phonation_s", "longest_span_s"),
+    "DDK": (
+        "trains_n",
+        "train_s",
+        "train_fraction",
+        "modulation_peak_hz",
+        "modulation_unit",
+        "interval_dispersion",
+        "interval_trend_s_per_step",
+        "ppg_trains_n",
+        "ppg_rate_hz",
+        "ppg_repetitions",
+        "ppg_period_s",
+        "ppg_jitter_over_median",
+        "ppg_cv_units_n",
+        "ppg_interval_trend_s_per_step",
+        "ppg_expected_place_fraction",
+        "ppg_place_agreement",
+        "lexical_repetitions_n",
+        "spans_n",
+    ),
 }
 
 
@@ -357,6 +382,111 @@ def _lane(name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         A one-element list holding the panel, or an empty list.
     """
     return [{"type": "segments", "segments": entries, "name": name, "height_ratio": 0.6}] if entries else []
+
+
+def _span_sources(store: ProvStore) -> dict[str, list[Entity]]:
+    """Every live span, indexed by the live span it names in ``wasDerivedFrom``.
+
+    Built once per report. ``ProvStore.derived_from`` walks every relation, so asking it per span
+    while drawing is quadratic in a store that holds one relation per proposal.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{span id: [span it was derived from, ...]}``, in write order. A derivation naming
+        something that is not a live span with an extent — a measurement, a word, an id the store
+        does not hold — contributes nothing, so a span whose whole derivation is such a name is
+        absent from the mapping rather than present with an empty list.
+    """
+    spans = {span.id: span for span in live_entities(store, "span") if span.extent is not None}
+    index: dict[str, list[Entity]] = {}
+    for relation, source, target in store.relations():
+        if relation != "wasDerivedFrom" or source not in spans:
+            continue
+        parent = spans.get(target)
+        if parent is not None:
+            index.setdefault(source, []).append(parent)
+    return index
+
+
+def _initial_span_label(span: Entity) -> str:
+    """One upstream span's own reading, as the row that shows what came in states it.
+
+    Args:
+        span: A span another span was derived from.
+
+    Returns:
+        The producer's own reading of it: the level PREPROCESS measured, the family and role a
+        proposer stamped, or :data:`_UNLABELLED`.
+    """
+    if "peak_over_floor_db" in span.attributes:
+        return _envelope_span_label(span)
+    family, role = span.attributes.get("family"), span.attributes.get("role")
+    if family and role:
+        return f"{family}/{role}"
+    return str(family or span.attributes.get("name") or "") or _UNLABELLED
+
+
+def _derived_lane(
+    name: str, entries: list[tuple[Entity, str]], sources: dict[str, list[Entity]]
+) -> list[dict[str, Any]]:
+    """One span lane, paired with the spans its own spans were derived from when there are any.
+
+    Args:
+        name: The lane's name, drawn as the panel's y-label.
+        entries: ``(span, label)`` for every span the lane draws, earliest first.
+        sources: :func:`_span_sources`'s index.
+
+    Returns:
+        A one-element list holding the panel, or an empty list. With no derivation to show the
+        panel is the ``segments`` lane :func:`_lane` builds and nothing else; with one it is a
+        two-row ``tokens`` lane whose lower row holds what the lane draws and whose upper row holds
+        the spans those were derived from, each pair joined by the edge that relates them.
+    """
+    paired = [(span, label, sources.get(span.id, [])) for span, label in entries]
+    if not any(parents for _, _, parents in paired):
+        return _lane(name, _segments((span.extent, label) for span, label in entries if span.extent is not None))
+    tokens: list[dict[str, Any]] = [
+        {
+            "text": label,
+            "start": float(span.extent[0]),
+            "end": float(span.extent[1]),
+            "row": _PROPOSED_ROW,
+            "color": _PROPOSED_FILL,
+            "key": span.id,
+            "derived_from": [parent.id for parent in parents],
+        }
+        for span, label, parents in paired
+        if span.extent is not None
+    ]
+    seen: set[str] = set()
+    for _, _, parents in paired:
+        for parent in parents:
+            if parent.id in seen or parent.extent is None:
+                continue
+            seen.add(parent.id)
+            tokens.append(
+                {
+                    "text": _initial_span_label(parent),
+                    "start": float(parent.extent[0]),
+                    "end": float(parent.extent[1]),
+                    "row": _INITIAL_ROW,
+                    "color": _INITIAL_FILL,
+                    "key": parent.id,
+                }
+            )
+    return [
+        {
+            "type": "tokens",
+            "tokens": tokens,
+            "name": name,
+            "report_lane": name,
+            "expand_label_slots": True,
+            "height_ratio": _PAIRED_LANE_HEIGHT_RATIO,
+            "show_row_labels": True,
+        }
+    ]
 
 
 def _token_lane(
@@ -667,28 +797,31 @@ def _panels(
         waveform["spans"] = {"name": _SPANS_OVERLAY, "segments": overlay}
         drawn.add(_SPANS_OVERLAY)
 
-    panels += _lane(
+    sources = _span_sources(store)
+    panels += _derived_lane(
         "phonation",
-        _segments(
-            (span.extent, f"{span.attributes.get('member')}/{span.attributes.get('production')}")
+        [
+            (span, f"{span.attributes.get('member')}/{span.attributes.get('production')}")
             for span in _spans_of_family(store, "phonation", voice=False)
             if span.extent is not None
-        ),
+        ],
+        sources,
     )
     for classifier in _CLASSIFIERS:
         panels += _window_raster(store, classifier)
     panels += _airway_hear_raster(store)
-    panels += _lane(
+    panels += _derived_lane(
         "speech spans",
-        _segments(
+        [
             (
-                span.extent,
+                span,
                 f"{span.attributes.get('attributed_to') or 'unattributed'}"
                 + (" nontarget" if span.attributes.get("nontarget") else ""),
             )
             for span in _spans_of_family(store, "speech")
             if span.extent is not None
-        ),
+        ],
+        sources,
     )
     words = [word for word in _words(store) if word.extent is not None]
     panels += _token_lane(
@@ -701,21 +834,19 @@ def _panels(
         report_lane="words",
         expand_label_slots=True,
     )
-    panels += _lane(
+    panels += _derived_lane(
         "airway",
-        _segments(
-            (span.extent, _airway_span_label(span))
-            for span in _spans_of_family(store, "airway")
-            if span.extent is not None
-        ),
+        [(span, _airway_span_label(span)) for span in _spans_of_family(store, "airway") if span.extent is not None],
+        sources,
     )
-    panels += _lane(
+    panels += _derived_lane(
         "voice",
-        _segments(
-            (span.extent, f"{span.attributes.get('member')}/{span.attributes.get('onset_kind')} onset")
+        [
+            (span, f"{span.attributes.get('member')}/{span.attributes.get('onset_kind')} onset")
             for span in _spans_of_family(store, "phonation", voice=True)
             if span.extent is not None
-        ),
+        ],
+        sources,
     )
     redacted_words: list[tuple[tuple[float, float], str, object, bool]] = []
     for word in words:
