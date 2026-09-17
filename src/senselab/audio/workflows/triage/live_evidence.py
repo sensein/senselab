@@ -195,10 +195,12 @@ def route_attributes(evaluation: RouteEvaluation, ruleset: Ruleset) -> dict[str,
 
     Args:
         evaluation: What the ruleset made of the recording.
-        ruleset: The ruleset it was evaluated under, for the sources it reads.
+        ruleset: The ruleset it was evaluated under, for the sources it reads and the branches it
+            configures no gate for.
 
     Returns:
-        The attributes.
+        The attributes. ``ungated`` names the branches whose gate list is empty, so a reader of the
+        stored measurement can tell a branch the ruleset declined from one it never looked at.
     """
     return {
         "state": evaluation.state.value,
@@ -208,6 +210,7 @@ def route_attributes(evaluation: RouteEvaluation, ruleset: Ruleset) -> dict[str,
         "gate_outcomes": {name: outcome.value for name, outcome in evaluation.gate_outcomes.items()},
         "unavailable": {branch: list(names) for branch, names in evaluation.unavailable.items()},
         "flags": {branch: list(names) for branch, names in evaluation.flags.items()},
+        "ungated": sorted(branch for branch, names in ruleset.branch_gates.items() if not names),
         "sources": list(required_sources(ruleset)),
         "stem": evaluation.stem,
     }

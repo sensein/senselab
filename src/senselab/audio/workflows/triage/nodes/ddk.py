@@ -1001,8 +1001,7 @@ def _repeated_word(
     """The two ``buttercup`` families: the only DDK tasks whose instruction names a real word.
 
     Spans proposed: **one**, the train, over the hull of the realised tokens. The consensus words
-    serve this family directly, so it is the cheapest in the branch and the one family where
-    ``ddk.lexical_repetition`` fires for the right reason rather than on function-word repetition.
+    serve this family directly, so it is the cheapest in the branch.
 
     Args:
         expectation: The row, whose first token is the word the instruction names.

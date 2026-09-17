@@ -660,7 +660,7 @@ owner's instruction that a declared branch is assessed independently of whether 
 | DDK | `diadochokinesis-pa` (896), `-ta` (896), `-ka` (896) | **A, counted, alternating.** One syllable repeated *as fast as possible*, **10 times** — `expected_event_count: 10`. v1 states the count; v2 does not | **In family.** `align_ddk` → `Expectation(pattern=SYLLABLE_TRAIN, sequence=("labial"|"alveolar"|"velar",), expected_event_count=10)` — **three rows differing in the place their instruction names**. They were three identical rows until 2026-09-16, when the posteriorgram CV instrument ([`branch-ddk-ppg-instrument.md`](branch-ddk-ppg-instrument.md)) gave the matcher something to read the syllable with; `/pa/` IS labial, so the place is the task definition and not a fit, and `len(sequence)` is now the cycle for a one-syllable train as it already was for a sequential one. **Owed a cut**, not a measurement: D1's rate is the modulation spectrum of `energy_envelope` over the train and D3's intervals are its event onsets, both over an array the store already holds. Praat's `extract_speech_rate` is **not** the instrument — it is already running inside `praat_features` and its `min_dip` and 0.3 s `min_pause` both under-count the fastest trains, biasing the measurement in the direction of the quantity being measured |
 | DDK | `diadochokinesis-v2-puh` (702), `-tuh` (702), `-kuh` (702) | **A, uncounted, alternating.** Same repetition *until the timer runs out*, so no `expected_event_count`. The `'puhpuhpuhpuhpuhpuh'` in the instruction is an orthographic illustration, **not** a six-repetition instruction. The timer is **5 s**: 630-646 of each family's 702 recordings run 5-6 s, against a v1 median of 5 s spread over 3-9 s | **In family.** `align_ddk` → `Expectation(pattern=SYLLABLE_TRAIN, sequence=("labial"|"alveolar"|"velar",), declared_duration_s=5.0)` — `expected_event_count` absent and `declared_duration_s` present, which is the whole counted/uncounted difference; the place is named here for the same reason it is on the v1 rows. As above with no declared count. D5's train fraction has a fixed 5 s denominator here, which makes the rate directly comparable across participants in a way v1's participant-terminated recordings are not — and none of D1-D6 is built to use it |
 | DDK | `diadochokinesis-pataka` (896), `-v2-puhtuhkuh` (701) | **A, ordered and cyclic.** A three-place sequence repeated in order — sequential motion rate. `/pa-pa-pa/` is a collapse of the sequence and is the clinically meaningful finding. v1 asks for the sequence *"10 times"* (`expected_event_count: 10`, i.e. 30 syllables); v2 asks for it *"until the timer runs out"*, which is 5 s, so the two are counted and uncounted respectively | **In family.** `align_ddk` → `Expectation(pattern=SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), expected_event_count=30)` and `(..., declared_duration_s=5.0)`. The expected sequence is data, so a four-place train would be a row and not a rewrite. **Owed a cut** for the place decision (`p_burst_window_ms`, `p_place_centroid_bands_hz`, `p_place_margin`) and nothing else: /p/, /t/ and /k/ differ in burst spectrum inside 8 kHz, and `spectrogram_wideband`'s 5 ms window at a 5 ms hop is the classical resolution for it. The **PPG is not the place authority** — it is trained on connected speech and its prior works against the discrimination on a rapid nonsense train ([`branch-ddk.md:318-323`](branch-ddk.md)), and nobody has measured whether it holds there. Since 2026-09-16 it is read anyway and reported BESIDE the burst spectrum, with an agreement fraction over the onsets both resolved, because that agreement is the only thing that can settle D6's owed question — see [`branch-ddk-ppg-instrument.md`](branch-ddk-ppg-instrument.md). `syllable_sequence_mismatch`, deliberately not `stimulus_mismatch` |
-| DDK | `diadochokinesis-buttercup` (896), `-v2-buttercup` (702) | **L&A.** A real English word repeated — so unlike every other DDK family this one **does** have a lexical pattern, and the recognisers will produce it. v1 states the count (*"10 times"*, `expected_event_count: 10`); v2 does not (*"until the timer runs out"*), so the two are not one measurement | **In family.** `align_ddk` → `Expectation(pattern=ORDERED_TOKENS, tokens=("buttercup",), expected_event_count=10)` and `(..., declared_duration_s=5.0)` — the only DDK row whose `Pattern` is a lexical one, and `align_ddk` dispatches it to the same token matcher SPEECH uses. **Implementable today**: the repeat count is a counter over normalised consensus tokens, so `transcript_repeat` moving into the store is a convenience rather than the capability. The only DDK family where the lexical route is the right one, and the only one where `ddk.lexical_repetition >= 3` fires for the right reason |
+| DDK | `diadochokinesis-buttercup` (896), `-v2-buttercup` (702) | **L&A.** A real English word repeated — so unlike every other DDK family this one **does** have a lexical pattern, and the recognisers will produce it. v1 states the count (*"10 times"*, `expected_event_count: 10`); v2 does not (*"until the timer runs out"*), so the two are not one measurement | **In family.** `align_ddk` → `Expectation(pattern=ORDERED_TOKENS, tokens=("buttercup",), expected_event_count=10)` and `(..., declared_duration_s=5.0)` — the only DDK row whose `Pattern` is a lexical one, and `align_ddk` dispatches it to the same token matcher SPEECH uses. **Implementable today**: the repeat count is a counter over normalised consensus tokens, so `transcript_repeat` moving into the store is a convenience rather than the capability. The only DDK family where the lexical route is the right one — and the only one where the removed `ddk.lexical_repetition >= 3` gate used to fire for the right reason |
 | DDK | any lexical-speech family | **no expected pattern.** DDK routed 22,363 against 7,989 declaring a DDK family; repetition occurs in ordinary speech — a stutter, a false start, a repeated word | **Out of family.** `detect_ddk(store, params)` → `done = UNDETERMINED`. The branch measures what it finds and says what it is; it does not assert that a Harvard sentence failed to be a DDK task ([`branch-ddk.md:66-70`](branch-ddk.md)) |
 
 ### QUALITY — one mode, and it is the out-of-family one
@@ -2833,8 +2833,7 @@ def _ddk_repeated_word(expectation: Expectation, store, params: Params) -> Resul
     """Spans proposed: **one**, the train, over the hull of the realised tokens.
 
     The only DDK family with a lexical pattern, so the only one where the recognisers produce the
-    count directly and the only one where `ddk.lexical_repetition >= 3` (`default.yaml:301-304`,
-    threshold UNMEASURED) fires for the right reason rather than on function-word repetition.
+    count directly.
     """
     assert expectation.tokens is not None
     target = params.p_normalise(expectation.tokens[0])
@@ -2929,9 +2928,9 @@ def detect_ddk(store, params: Params) -> Result:
                 evaluates_no_task=True,
             )
         )
-        # `transcript_repeat` is already computed for `ddk.lexical_repetition` but lives in
-        # `routing_analysis/features.py` and is read only by the ruleset. Moving it is a
-        # convenience: this loop is the capability, over word entities the store already holds.
+        # `transcript_repeat` is already computed in `routing_analysis/features.py`, where no gate
+        # has read it since `ddk.lexical_repetition` was removed. Moving it is a convenience: this
+        # loop is the capability, over word entities the store already holds.
         findings.append(measured("transcript_repeat", extent[0], extent[1], len(words), token=token))
     return Result(UNDETERMINED, components, findings)
 ```
@@ -3550,10 +3549,9 @@ the opposite, on 48 of 265 v1 and 77 of 203 English v2 recordings, and a family-
 inverts the instruction on roughly a fifth of them.
 
 **Notes.** `transcript_repeat` — largest repeat count of any normalised token — is already computed
-for `ddk.lexical_repetition` (`default.yaml:302`) but lives in `routing_analysis/features.py`, is
-read only by the ruleset and is not a store measurement. Moving it is a convenience, not the
-capability: a counter over normalised consensus tokens is arithmetic over word entities the store
-already holds.
+in `routing_analysis/features.py`, where it was read by `ddk.lexical_repetition` until that gate was
+removed; it is not a store measurement. Moving it is a convenience, not the capability: a counter
+over normalised consensus tokens is arithmetic over word entities the store already holds.
 
 ### The AIRWAY families — two instruments every one of them uses
 
@@ -3919,9 +3917,9 @@ of the realised tokens, derived from `consensus_transcript`, `energy_envelope` a
 the envelope rate — which is the intended shape, not a conflict.
 
 **Notes.** The only DDK family with a lexical pattern, so the only one where the recognisers produce
-the count directly and the only one where `ddk.lexical_repetition >= 3` fires for the right reason
-rather than on function-word repetition. v1 states the count and v2 does not, so the two are not one
-measurement.
+the count directly — and the only one where the removed `ddk.lexical_repetition >= 3` gate used to
+fire for the right reason rather than on function-word repetition. v1 states the count and v2 does
+not, so the two are not one measurement.
 
 ### Out of family — `detect_voice`, `detect_airway` and `detect_ddk`
 

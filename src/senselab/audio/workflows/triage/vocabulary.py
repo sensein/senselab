@@ -43,9 +43,11 @@ dependencies. ``specs/20260912-ruleset-in-pipeline/design.md`` holds its attribu
 ROUTED = "routed"
 DECLINED = "declined"
 UNAVAILABLE = "unavailable"
+UNGATED = "ungated"
 
-BRANCH_ROUTE_STATES = (ROUTED, DECLINED, UNAVAILABLE)
-"""What the ruleset made of one branch: a gate fired, every gate was silent, or none could be read."""
+BRANCH_ROUTE_STATES = (ROUTED, DECLINED, UNAVAILABLE, UNGATED)
+"""What the ruleset made of one branch: a gate fired, every gate was silent, none could be read, or
+the branch configures no gate at all and the ruleset never looked."""
 
 EMPTY = "empty"
 UNEXPLAINED = "unexplained"
@@ -215,7 +217,8 @@ class BranchDecision:
         branch: The branch's name, which is also the name its own verdict is written under.
         will_run: Whether routing selected it.
         route_state: What the ruleset made of this branch, one of :data:`BRANCH_ROUTE_STATES`. The
-            content reading alone; a declared route never rewrites it.
+            content reading alone; a declared route never rewrites it. ``ungated`` is not a reading:
+            the branch names no gate, so nothing was read and nothing declined.
         declared: Whether the recording's declaration named this branch — its task family, or a
             hint tag the map resolves. A claim, whether or not it changed the outcome.
         forced_by_declaration: Whether the declaration added it, which is ``declared`` and not
@@ -460,8 +463,10 @@ def _agreement(route: str, reported: bool, found_state: str) -> str:
 
     Returns:
         ``not_run`` when the branch left no report, ``agree`` or ``mismatch`` against a route the
-        ruleset could read, and ``resolved`` where it could not — a branch whose gates were all
-        unreadable made no claim to agree or disagree with.
+        ruleset could read, and ``resolved`` where it could not. Two routes fall to ``resolved`` and
+        neither reaches the ``routed`` or ``declined`` arms: :data:`UNAVAILABLE`, a branch whose
+        gates were all unreadable, and :data:`UNGATED`, a branch that names no gate. Neither made a
+        claim to agree or disagree with, for different reasons.
     """
     if not reported:
         return NOT_RUN
@@ -530,10 +535,13 @@ def fold_file_verdict(
     recording. So for them the in-family and out-of-family modes ask genuinely different questions.
     A rapid alternating repetition train does not occur incidentally — for DDK, *finding the subject
     is evaluating the task*, and an out-of-family train is far more likely the detector firing than
-    the participant having produced one. The corpus says so: ``ddk.lexical_repetition >= 3`` routes
-    DDK on 99% of ``rainbow-passage``, 98% of ``caterpillar-passage`` and 87% of ``free-speech``, all
-    of it ordinary function-word repetition, while ``ddk.ppg_segment_rate_per_s`` separated the two
-    real DDK recordings from every speech recording in the 13-recording sample without overlap.
+    the participant having produced one. That is what the corpus measured, and it is why DDK routes
+    on ``routing.declaration_required`` alone: the content gate ``ddk.lexical_repetition >= 3``
+    routed DDK on 99% of ``rainbow-passage``, 98% of ``caterpillar-passage`` and 87% of
+    ``free-speech``, all of it ordinary function-word repetition, while its acoustic companion
+    ``ddk.ppg_segment_rate_per_s`` separated the two real DDK recordings from every speech recording
+    in the 13-recording sample without overlap. Both gates were removed once the declaration decided
+    the route, so no gate can route DDK on content today.
 
     So for a branch in ``policy.detection_is_evaluation``, an **out-of-family** result contributes no
     flag ground at all — neither its conformance nor a route mismatch — and is recorded instead in
