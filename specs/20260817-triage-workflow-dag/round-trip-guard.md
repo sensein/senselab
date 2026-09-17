@@ -120,3 +120,53 @@ One entry, `("name", "band_profile")`, and the reason is in the code beside it:
 `airway.content_band_hz` reads a roll-off no node computes, and says so in its own docstring.
 `test_every_exemption_is_still_needed` fails the entry out when the reader goes away or a writer
 appears.
+
+## The guard is not self-satisfying
+
+A sweep that parses nothing passes everything, so its own machinery was mutated and each mutation
+must die. All four do, against `test_the_sweep_sees_both_sides` (and, where the allowlist stops
+being justified, `test_every_exemption_is_still_needed`):
+
+| mutation | dies |
+|----------|------|
+| `SELECTOR_HELPERS = {}` | yes, 2 tests |
+| `_reads()` returns `[]` | yes, 2 tests |
+| `_sources()` parses no module | yes, 2 tests |
+| `_declared_node` attributes every write to the shared bucket | yes, 1 test |
+
+## Further live instances found while sweeping — reported, not fixed
+
+Two, both the same shape as D3 and D4 and both still on the tree. Neither is touched here, and
+neither is allowlisted: allowlisting a live defect is the thing an allowlist must never do.
+
+1. **`report._branch_evidence` renders `phonation: None/None` for every VOICE row.**
+   `nodes/report.py:1313` and `nodes/report.py:1352` build a VOICE span's description from
+   `span.attributes.get("member")` and `span.attributes.get("onset_kind")`. Neither key is stamped
+   by any writer in the triage tree — `onset_kind` is the key D4's own fix records as "written
+   nowhere" under propose-only, and `member` appears at no write site at all. D4 repaired the lane
+   at `report.py:850` and left these two, so the voice lane now draws and the voice *evidence* still
+   reads `None/None`.
+2. **`airway.content_band_hz` can only return `None`.** `nodes/airway.py:298` selects the
+   measurement `band_profile` and reads its `rolloff_hz`; no node writes either. The docstring says
+   so — "or None, which is every run today, the derivative not existing" — so this is a known
+   absence rather than a surprise, and it is the one allowlist entry the value sweep carries. What
+   the allowlist does not record is that any route decision reading a content band reads an absence
+   on every recording.
+
+A third candidate, `deviation_type` at `report.py:1310`, is **not** an instance:
+`branches.write_findings` writes it under a variable dict key (`key = "deviation_type" if …`), which
+a purely static key sweep cannot see.
+
+### Why the key direction is not part of the guard
+
+The two instances above were found by sweeping attribute **keys** a reader looks up against keys any
+writer could stamp — a stricter sweep than the value crosswalk that ships. It is not enabled,
+because enabling it today would require allowlisting both findings, and an allowlist that carries
+live defects is how a guard starts lying. Turn it on once they are resolved; the sweep is four
+tests' worth of code and the same `_selected_key` already in the file.
+
+### The reverse direction is not a defect here
+
+"Written but never read" is not a defect class in this graph: `run.py` persists the whole store to
+`store.jsonl`, so a measurement no node reads back is still a product. A guard in that direction
+would fire on every measurement written for the record rather than for a reader.

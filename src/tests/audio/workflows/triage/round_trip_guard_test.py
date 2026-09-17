@@ -393,12 +393,12 @@ def _reads() -> list[tuple[str, str, str, set[str]]]:
                         if len(node.args) > index:
                             found += [(key, value, site, qualifiers) for value in _plain(node.args[index])]
                 elif isinstance(node, ast.Compare):
-                    key = _selected_key(node.left)
-                    if key not in KEYED_ATTRIBUTES:
+                    selected = _selected_key(node.left)
+                    if selected not in KEYED_ATTRIBUTES:
                         continue
                     for operator, comparator in zip(node.ops, node.comparators):
                         if isinstance(operator, (ast.Eq, ast.NotEq, ast.In, ast.NotIn)):
-                            found += [(str(key), value, site, qualifiers) for value in _plain(comparator)]
+                            found += [(str(selected), value, site, qualifiers) for value in _plain(comparator)]
     return [(site, key, value, qualifiers) for key, value, site, qualifiers in found]
 
 
