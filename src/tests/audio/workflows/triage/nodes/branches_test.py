@@ -648,7 +648,7 @@ class TestEveryOperatingPointIsAConfigKey:
         """The design fitted every key; none may still ship null, and ``point`` never raises for one."""
         config = load_triage_config()
         numeric = [key for key in PARAM_KEYS if key != "label_sets"]
-        assert len(numeric) == 37
+        assert len(numeric) == 36
         params = branch_params(config)
         for key in numeric:
             assert config.values[PARAM_SECTION][key] is not None, key
@@ -705,7 +705,7 @@ class TestEveryOperatingPointIsAConfigKey:
     def test_a_count_key_comes_back_as_an_integer(self) -> None:
         """``point("echo_ngram_n")`` indexes a slice; a float there is a TypeError at the call site."""
         assert isinstance(_params(echo_ngram_n=3).point("echo_ngram_n"), int)
-        assert isinstance(_params(repeat_min_occurrences=3).point("repeat_min_occurrences"), int)
+        assert isinstance(_params(ddk_min_repetitions=4).point("ddk_min_repetitions"), int)
 
 
 # --------------------------------------------------------------------- the shared helpers

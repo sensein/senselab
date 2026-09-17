@@ -74,16 +74,16 @@ class TestTheReferenceStandardIsNotARouter:
             assert set_name in FAMILY_SETS
 
     def test_the_reference_branch_comes_off_the_task_entity(self, ruleset: Ruleset) -> None:
-        """Read through the family sets rather than restated here, and multi-label since 2026-09-15.
+        """Read through the family sets rather than restated here.
 
-        A diadochokinesis family declares SPEECH as well as DDK: the material is speech and it is
-        DDK, so routing to both agrees with the declaration on both counts. It used to declare DDK
-        alone, with ``syllable_repetition`` held out of SPEECH's population instead.
+        A diadochokinesis family declares SPEECH, because ``speech`` is
+        ``lexical_speech | syllable_repetition``: a syllable train is a speaking task and SPEECH is
+        the branch that evaluates whether it happened.
         """
         assert ruleset.reference_branches("harvard-sentences-list") == ("SPEECH",)
         assert ruleset.reference_branches("voluntary-cough") == ("AIRWAY",)
         assert ruleset.reference_branches("prolonged-vowel") == ("VOICE",)
-        assert ruleset.reference_branches("diadochokinesis-pataka") == ("SPEECH", "DDK")
+        assert ruleset.reference_branches("diadochokinesis-pataka") == ("SPEECH",)
 
     def test_a_family_no_set_carries_is_a_reference_positive_for_nothing(self, ruleset: Ruleset) -> None:
         """An unrecognised task id is not silently swept into a branch."""
@@ -95,38 +95,27 @@ class TestTheReferenceStandardIsNotARouter:
         for names in ruleset.branch_gates.values():
             assert all(name in ruleset.gates for name in names)
 
-    def test_only_a_branch_the_declaration_gates_may_have_no_gates_of_its_own(self, ruleset: Ruleset) -> None:
-        """A gateless branch content can never reach is reachable only through its declaration.
-
-        The exemption is read off ``routing.declaration_required`` rather than naming a branch, so
-        emptying a branch's gates without gating it on the declaration fails here.
-        """
-        declaration_only = set(load_triage_config().get("routing.declaration_required") or ())
+    def test_every_branch_names_at_least_one_gate_of_its_own(self, ruleset: Ruleset) -> None:
+        """A gateless branch is one content can never reach, and the packaged ruleset ships none."""
         for branch, names in ruleset.branch_gates.items():
-            assert names or branch in declaration_only
+            assert names, branch
 
 
-class TestDDKIsRoutedByTheDeclarationAndNothingElse:
-    """The two content gates were removed once ``routing.declaration_required`` decided the route."""
-
-    def test_ddk_names_no_gate_and_no_flag(self, ruleset: Ruleset) -> None:
-        """A named gate would be a second route into a branch the declaration is supposed to decide."""
-        assert ruleset.branch_gates["DDK"] == ()
-        assert ruleset.branch_flags["DDK"] == ()
+class TestNoDdkGateSurvivesTheBranch:
+    """The two DDK content gates were removed; no definition may be left for another branch to pick up."""
 
     def test_the_configuration_defines_no_ddk_gate_to_name(self, ruleset: Ruleset) -> None:
         """A definition left behind is a gate another branch could pick up by accident."""
         assert [name for name in ruleset.gates if name.startswith("ddk.")] == []
 
-    def test_no_reading_of_any_recording_routes_ddk(self, ruleset: Ruleset) -> None:
-        """Every feature a removed gate read, at a value that used to fire, now routes nothing."""
+    def test_no_reading_of_any_recording_evaluates_a_ddk_gate(self, ruleset: Ruleset) -> None:
+        """Every feature a removed gate read, at a value that used to fire, is now read by nothing."""
         record = _features(
             "diadochokinesis-pataka",
             transcript="pa ta ka " * 12,
             ppg={"silent_fraction": 0.0, "segment_rate_per_s": 14.70},
         )
         result = evaluate_routes(record, ruleset)
-        assert "DDK" not in result.routed
         assert result.gate_outcomes.keys() == set(ruleset.gates)
         assert not [name for name in result.gate_outcomes if name.startswith("ddk.")]
 
@@ -352,9 +341,9 @@ class TestScoringContentAgainstTheDeclaredFamily:
     def test_a_branch_no_recording_declares_has_no_sensitivity(self, ruleset: Ruleset) -> None:
         """No reference positive is not a sensitivity of zero."""
         evaluations = [evaluate_routes(_features("prolonged-vowel"), ruleset)]
-        ddk = score_branches(evaluations, ruleset)["DDK"].against_reference
-        assert ddk.sensitivity is None
-        assert ddk.specificity == 1.0
+        airway = score_branches(evaluations, ruleset)["AIRWAY"].against_reference
+        assert airway.sensitivity is None
+        assert airway.specificity == 1.0
 
 
 class TestTheTokenRepeatCounter:
@@ -583,7 +572,11 @@ class TestThePosteriorgramGateRoutesWithoutATranscript:
         assert ruleset.gates["airway.ppg_silent_fraction"].feature == ("ppg", "silent_fraction")
 
     def test_a_syllable_train_no_gate_reads_routes_nowhere(self, ruleset: Ruleset) -> None:
-        """Content alone can no longer reach DDK, whatever the posteriorgram or the transcript says."""
+        """A syllable train carries no lexical word, so content routes it nowhere and SPEECH is missed.
+
+        The declaration is what routes it, through ``reference_family_set``, and that is why
+        SPEECH's set carries ``syllable_repetition``.
+        """
         record = _features(
             "diadochokinesis-pa",
             transcript="pa pa pa pa",
@@ -591,7 +584,7 @@ class TestThePosteriorgramGateRoutesWithoutATranscript:
         )
         result = evaluate_routes(record, ruleset)
         assert result.routed == ()
-        assert result.missed == ("SPEECH", "DDK")
+        assert result.missed == ("SPEECH",)
 
     def test_airway_routes_on_the_silent_fraction_with_no_residual_measurement(self, ruleset: Ruleset) -> None:
         """The 2345 recordings with no posteriorgram are not the ones with no residual."""
