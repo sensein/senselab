@@ -49,6 +49,9 @@ On a single shared time axis, one row each:
 | redacted transcript words, when PII marking changed at least one consensus word — a parallel compact token lane whose placeholders show exactly what a released transcript would replace; a placeholder is never bold and takes the neutral fill | REDACT |
 | spectrogram | the conditioned stream |
 
+Every span lane above is paired with the spans its own spans were derived from, when there are
+any; see *Initial and updated spans share a lane* below.
+
 The waveform, the envelope and the envelope spans are three readings of one signal and share one
 row. The right-hand y-label is simply `dBFS`; each span carries its own dB-over-floor annotation,
 so the axis does not repeat a second, unrelated label. A lane that shares that row is still a
@@ -76,6 +79,44 @@ one, so the run label — the task token the run id names, and the date — live
 line rather than in a suppressed title: `task-… · 2026-08-25  |  task: …  |  declared hints: …`. The
 full run id and the file path are provenance and appear in the blocks; every block line is folded to
 the block width, so nothing runs off the page.
+
+### Initial and updated spans share a lane
+
+Owner request, 2026-09-17: *"I would like to see a report with initial and updated spans added to
+the span axes."*
+
+The graph is propose-only. PREPROCESS mints the envelope spans; each branch then proposes spans in
+its own family rather than editing what it read, and `propose_span` refuses a proposal whose
+`wasDerivedFrom` names nothing. So for one region the store holds an **initial** span and one or
+more **branch-proposed** spans derived from it, and the lane used to draw only the second.
+
+A span lane is therefore paired: its lower row holds what the lane already drew, its upper row holds
+the spans those were derived from, and a connector joins each pair. The pairing reads
+`wasDerivedFrom` and nothing else. Extent coincidence is exactly the ambiguity those edges were
+added to remove: two of AIRWAY's proposals sit on the same envelope span when the branch splits a
+candidate, and an overlap rule pairs each with the other's parent as readily as with its own. A
+measured check: replacing the edge lookup with an overlap test over the same seeded store pairs one
+proposal with three parents where the edge names one.
+
+A lane whose spans name no live span is left as the `segments` lane it always was, byte for byte —
+not a one-row paired lane. Two shapes for "nothing was derived here" would make the absence of a
+derivation look like a rendering choice; one shape makes it the absence it is.
+
+Three cases collapse the pairing back to an unpaired lane, all of them deliberately silent: a
+derivation naming an entity the store does not hold, one naming something that is not a span (a
+measurement, a word — SPEECH derives its runs from the consensus measurement and its words), and one
+naming a span that has since been invalidated. Each loses the link, never the span: a proposal is
+what a branch reported, and withholding it because its evidence cannot be resolved would delete a
+reading to protect a drawing. An invalidated span is not evidence, so it is not drawn as what came
+in.
+
+An initial span named by several proposals is drawn once. Drawing it per proposal would put two
+identical bars in one row and read as two measurements of the region rather than one.
+
+The rows are ordered initial-over-proposed, which is also the order the `tokens` renderer stacks
+declared rows in (the first declared row is the lowest), so the lane is built proposed-first. The
+row heights, fills and the connector's colour and width are visualisation values and sit with the
+other plot constants in `report.py` and `plotting.py`; none of them is a pipeline config key.
 
 ## The summary — the blocks
 

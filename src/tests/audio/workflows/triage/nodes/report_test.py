@@ -99,6 +99,35 @@ def _capture_headers(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
     return captured
 
 
+def _capture_figures(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Record the figure each aligned render produced, so a drawn lane can be inspected."""
+    from senselab.audio.workflows.triage.nodes import report as report_module
+
+    captured: list[Any] = []
+    real = report_module.plot_aligned_panels
+
+    def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+        figure = real(audio, panels, **kwargs)
+        captured.append(figure)
+        return figure
+
+    monkeypatch.setattr(report_module, "plot_aligned_panels", _spy)
+    return captured
+
+
+def _lane_panel(panels: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    """The one panel a lane drew."""
+    return next(panel for panel in panels if panel.get("name") == name)
+
+
+def _lane_rows(panels: list[dict[str, Any]], name: str) -> dict[str, list[dict[str, Any]]]:
+    """A paired lane's tokens, grouped by the row each declares, in declaration order."""
+    rows: dict[str, list[dict[str, Any]]] = {}
+    for token in _lane_panel(panels, name)["tokens"]:
+        rows.setdefault(str(token["row"]), []).append(token)
+    return rows
+
+
 def _stub_the_drawing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace the aligned-panel render with a bare figure, to time the store-reading path alone."""
     from matplotlib import pyplot
@@ -828,7 +857,8 @@ class TestTheSummaryLayers:
         _seed_report_store(store, tmp_path, full=True)
         report(store, tmp_path / "summary", _png(tmp_path))
         kinds = [panel["type"] for panel in panels[0]]
-        assert kinds.count("segments") >= 4
+        lanes = {panel.get("name") for panel in panels[0] if panel["type"] in {"segments", "tokens"}}
+        assert {"phonation", "speech spans", "airway", "voice"} <= lanes
         assert kinds.count("score_raster") == 2
         assert "waveform" in kinds
         assert panels[0][0]["twin"]["data"]
@@ -1058,9 +1088,9 @@ class TestTheSummaryLayers:
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True, airway_labelled=[(1.0, 1.3)], airway_unlabelled=[(2.0, 2.3)])
         report(store, tmp_path / "summary", _png(tmp_path))
-        segments = [segment for panel in panels[0] if panel.get("name") == "airway" for segment in panel["segments"]]
-        assert [segment["label"] for segment in segments] == ["cough"]
-        assert (segments[0]["start"], segments[0]["end"]) == (1.0, 1.3)
+        proposed = _lane_rows(panels[0], "airway")["proposed"]
+        assert [token["text"] for token in proposed] == ["cough"]
+        assert (proposed[0]["start"], proposed[0]["end"]) == (1.0, 1.3)
 
     def test_a_layer_the_store_does_not_hold_is_simply_absent(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1379,10 +1409,136 @@ class TestOnlyAirwayLabelsTheAirwayLane:
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True, foreign_span_label="Applause")
         report(store, tmp_path / "summary", _png(tmp_path))
-        labels = {
-            segment["label"] for panel in panels[0] if panel.get("name") == "airway" for segment in panel["segments"]
+        assert {token["text"] for token in _lane_rows(panels[0], "airway")["proposed"]} == {"cough"}
+
+
+class TestInitialAndUpdatedSpansShareALane:
+    """A lane shows what came in beside what a branch made of it, joined by ``wasDerivedFrom``."""
+
+    def _airway_span(self, store: ProvStore, extent: tuple[float, float], *sources: str) -> str:
+        """One further AIRWAY proposal, derived from whatever ids are named."""
+        activity = store.activities("AIRWAY")[0]
+        agent = store.agents("software")[0]
+        span_id = store.entity(
+            prov_type="span",
+            extent=extent,
+            attributes={"family": "airway", "role": "cough_event", "label": "cough"},
+        )
+        store.was_generated_by(span_id, activity.id)
+        store.was_attributed_to(span_id, agent.id)
+        for source in sources:
+            store.was_derived_from(span_id, source)
+        return span_id
+
+    def test_a_lane_whose_spans_name_no_span_is_the_segments_lane_it_always_was(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing was derived over this region, so the lane must be untouched by the pairing."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        voice = _lane_panel(panels[0], "voice")
+        assert voice["type"] == "segments"
+        assert [(segment["start"], segment["end"]) for segment in voice["segments"]] == [(3.0, 3.8)]
+        assert "tokens" not in voice
+
+    def test_a_lane_whose_spans_name_a_span_pairs_the_two_over_one_another(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AIRWAY derives its proposal from a PREPROCESS span; both belong on the lane."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        airway = _lane_panel(panels[0], "airway")
+        assert airway["type"] == "tokens"
+        rows = _lane_rows(panels[0], "airway")
+        assert list(rows) == ["proposed", "initial"]
+        assert [token["text"] for token in rows["proposed"]] == ["cough"]
+        assert [(token["start"], token["end"]) for token in rows["proposed"]] == [(1.0, 1.3)]
+        assert [(token["start"], token["end"]) for token in rows["initial"]] == [(1.0, 1.3)]
+        assert rows["initial"][0]["text"].endswith(" dB")
+
+    def test_each_proposal_names_the_span_it_was_derived_from_rather_than_the_one_it_overlaps(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The edge decides the pairing: a proposal over another span's extent still names its own."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, airway_labelled=[(1.0, 1.3)], airway_unlabelled=[(2.0, 2.3)])
+        envelope = {
+            span.extent: span.id
+            for span in store.entities("span")
+            if "peak_over_floor_db" in span.attributes and span.extent is not None
         }
-        assert labels == {"cough"}
+        self._airway_span(store, (1.0, 1.3), envelope[(2.0, 2.3)])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "airway")
+        derived = {token["key"]: token["derived_from"] for token in rows["proposed"]}
+        assert sorted(sum(derived.values(), [])) == sorted([envelope[(1.0, 1.3)], envelope[(2.0, 2.3)]])
+        initial = {token["key"]: (token["start"], token["end"]) for token in rows["initial"]}
+        assert initial == {envelope[(1.0, 1.3)]: (1.0, 1.3), envelope[(2.0, 2.3)]: (2.0, 2.3)}
+
+    def test_one_initial_span_is_drawn_once_however_many_proposals_name_it(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two readings of one region are two proposals over one initial span, not two of each."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        parent = next(
+            span.id
+            for span in store.entities("span")
+            if span.extent == (1.0, 1.3) and "peak_over_floor_db" in span.attributes
+        )
+        self._airway_span(store, (1.05, 1.25), parent)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "airway")
+        assert len(rows["proposed"]) == 2
+        assert [token["key"] for token in rows["initial"]] == [parent]
+
+    def test_a_proposal_whose_initial_span_is_not_in_the_store_still_draws(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A derivation naming nothing the store holds loses the link, never the span."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        orphan = self._airway_span(store, (4.0, 4.4), "no-such-entity")
+        report(store, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "airway")
+        drawn = {token["key"]: token["derived_from"] for token in rows["proposed"]}
+        assert drawn[orphan] == []
+        assert "no-such-entity" not in {token["key"] for token in rows["initial"]}
+
+    def test_a_proposal_whose_initial_span_was_withdrawn_still_draws(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An invalidated span is not evidence, so it is not drawn as what came in."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        parent = next(
+            span.id
+            for span in store.entities("span")
+            if span.extent == (1.0, 1.3) and "peak_over_floor_db" in span.attributes
+        )
+        store.was_invalidated_by(parent, store.activities("PREPROCESS")[0].id)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        airway = _lane_panel(panels[0], "airway")
+        assert airway["type"] == "segments"
+        assert [segment["label"] for segment in airway["segments"]] == ["cough"]
+
+    def test_the_lane_draws_one_link_per_edge_it_paired(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The relationship is drawn, not left to the reader to infer from two coincident extents."""
+        from senselab.audio.tasks.plotting.plotting import TOKEN_DERIVATION_LINK_COLOR
+
+        figures = _capture_figures(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        lane = next(axis for axis in figures[0].axes if axis.get_ylabel() == "airway")
+        links = [line for line in lane.lines if line.get_color() == TOKEN_DERIVATION_LINK_COLOR]
+        assert len(links) == 1
+        (x0, x1), (y0, y1) = links[0].get_xdata(), links[0].get_ydata()
+        assert (x0, x1) == (pytest.approx(1.15), pytest.approx(1.15))
+        assert y0 < y1
 
 
 class TestElementIdsNameLiveEvidenceOnly:
