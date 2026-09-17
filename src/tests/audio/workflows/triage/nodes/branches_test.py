@@ -7,6 +7,7 @@ does what a hand-checked fixture says it does, and that the declared task family
 place and returns nothing rather than raising when no carrier names one.
 """
 
+import ast
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
@@ -16,11 +17,13 @@ import pytest
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.nodes import branches as branches_module
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     BRANCH_FAMILY,
     BRANCHES,
     DDK_EXPECTATIONS,
+    DEVIATION_TYPES,
     EXPECTATIONS,
     PARAM_KEYS,
     PARAM_SECTION,
@@ -1186,3 +1189,66 @@ class TestReadingADerivativeBack:
         assert track.floor_dbfs == pytest.approx(-58.5)
         assert track.sampling_rate == pytest.approx(100.0)
         assert peak_over_floor_db(track, (0.0, 0.03)) == pytest.approx(38.5)
+
+
+class TestTheDeviationVocabularyIsClosed:
+    """Eleven deviation types were emitted against three declared, because nothing checked.
+
+    The write now refuses an undeclared name, and this sweep refuses a declaration nobody emits —
+    so the two cannot drift apart again in either direction.
+    """
+
+    @staticmethod
+    def _emitted() -> dict[str, list[str]]:
+        """Every ``deviation(...)`` name in the triage tree, by site.
+
+        An AST walk rather than a grep: the calls that hid this defect wrap across lines, and a
+        grep for ``deviation("name"`` matched only the single-line ones.
+        """
+        found: dict[str, list[str]] = {}
+        root = Path(branches_module.__file__ or "").parent.parent
+        for source in sorted(root.rglob("*.py")):
+            for node in ast.walk(ast.parse(source.read_text())):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                    continue
+                if node.func.id != "deviation" or not node.args:
+                    continue
+                first = node.args[0]
+                assert isinstance(first, ast.Constant) and isinstance(first.value, str), (
+                    f"{source.name}:{node.lineno} builds a deviation name at runtime; the sweep "
+                    "cannot check it and VERDICT cannot fold it"
+                )
+                found.setdefault(first.value, []).append(f"{source.name}:{node.lineno}")
+        return found
+
+    def test_every_emitted_deviation_is_declared(self) -> None:
+        """A new deviation type fails here until someone declares what it observes."""
+        undeclared = {name: sites for name, sites in self._emitted().items() if name not in DEVIATION_TYPES}
+        assert undeclared == {}, f"emitted but not in DEVIATION_TYPES: {undeclared}"
+
+    def test_every_declared_deviation_is_emitted(self) -> None:
+        """A declared type nobody writes is a claim about the graph that is not true."""
+        unemitted = sorted(set(DEVIATION_TYPES) - set(self._emitted()))
+        assert unemitted == [], f"declared in DEVIATION_TYPES but emitted nowhere: {unemitted}"
+
+    def test_every_type_says_what_it_observes(self) -> None:
+        """The declaration carries a meaning, not just a name."""
+        for name, what in DEVIATION_TYPES.items():
+            assert what and not what.endswith("."), name
+
+    def test_the_write_refuses_an_undeclared_deviation(self) -> None:
+        """The mechanism that stops the next drift, at the only function that writes."""
+        store = _store()
+        agent = store.agent(agent_type="software", version="test")
+        activity = store.activity(node="VOICE", step="branch", parameters={})
+        finding = Finding("deviation", "invented_type", 0.0, 1.0, {}, ("word-1",))
+        with pytest.raises(ValueError, match="undeclared deviation types"):
+            write_findings(store, activity, agent, [finding], signal="plain")
+
+    def test_a_declared_deviation_still_writes(self) -> None:
+        """The guard refuses the undeclared name and nothing else."""
+        store = _store()
+        agent = store.agent(agent_type="software", version="test")
+        activity = store.activity(node="VOICE", step="branch", parameters={})
+        finding = Finding("deviation", "truncation", 0.0, 1.0, {}, ("word-1",))
+        assert len(write_findings(store, activity, agent, [finding], signal="plain")) == 1

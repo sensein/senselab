@@ -185,10 +185,10 @@ class BranchReport:
         kind: The kind it reports on, or None where it reports on no kind.
         conformance: Whether what was asked for happened — True, False, or :data:`UNDETERMINED`.
         conformance_of: What that conformance is about, one of :data:`CONFORMANCE_REFERENTS`.
-        deviations: The deviation type names it found, sorted and deduplicated. Recorded, never a
-            ground for a flag: ``specs/20260913-branch-contract-and-hints/design.md`` states that
-            ``filler`` and ``stimulus_mismatch`` are expected on ordinary read speech, so folding
-            them into the flag column would flag the corpus.
+        deviations: The deviation type names it found, sorted and deduplicated, each one declared
+            in ``nodes.branches.DEVIATION_TYPES``. Recorded, never a ground for a flag under
+            ``verdict.deviation_flags``; ``specs/20260913-branch-contract-and-hints/design.md``
+            carries which of the eleven that rule fits and which await ground truth.
         unmeasured: The config paths a body asked for and nobody has measured, in read order. A
             branch never refuses over one — it reports it here and leaves the dependent conformance
             :data:`UNDETERMINED` — so what an unmeasured point means for the file is this fold's,
@@ -256,8 +256,9 @@ class FoldPolicy:
         undetermined_flags: Whether an unanswered conformance is. False, and load-bearing: the
             out-of-family mode evaluates no task and answers :data:`UNDETERMINED` by construction,
             so a True here flags every recording no branch was in-family for.
-        deviation_flags: Whether a reported deviation is. False until ground truth exists: two of
-            the three deviation types are expected on ordinary read speech.
+        deviation_flags: Whether a reported deviation is. False until ground truth exists, for
+            all eleven declared types: some are ordinary on read speech and some are genuine
+            departures, and no rate is measured for any of them.
         unmeasured_points_flag: Whether a reporting node that could not read an operating point it
             wanted is. True: with the packaged section carrying a value for every key, this fires
             only where an override removed one, which is a configuration fault worth seeing.

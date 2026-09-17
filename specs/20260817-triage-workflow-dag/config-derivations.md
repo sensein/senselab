@@ -1420,7 +1420,9 @@ verdict.deviation_flags: false
   Whether a reported deviation is a flag ground. False **until ground truth exists**, which is the
   standing constraint from `specs/20260913-branch-contract-and-hints/design.md`: `filler` and
   `stimulus_mismatch` are expected on ordinary read speech, so folding them into the flag column
-  would flag the corpus. The key exists so that the "until" is a declared switch with a derivation
+  would flag the corpus. That design now records all eleven declared types and says which the
+  argument fits; `truncation`, `omission`, `sweep_direction_mismatch` and
+  `syllable_sequence_mismatch` are candidate flag grounds once a rate is measured. The key exists so that the "until" is a declared switch with a derivation
   rather than an implicit rule in the fold, and so that flipping it is a visible decision.
 
 verdict.unmeasured_points_flag: true

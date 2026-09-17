@@ -110,6 +110,25 @@ class Finding(NamedTuple):
 FINDING_KINDS = ("deviation", "count", "measure", "contest")
 """Every ``Finding.kind`` the store knows how to write."""
 
+DEVIATION_TYPES = {
+    "filler": "a disfluency or non-speech token where the task expected lexical content",
+    "lexical_content": "a lexical word where the task expected none",
+    "off_task_extent": "a region of the recording that does not serve the declared task",
+    "omission": "an expected token the recording does not realise",
+    "repeat_attempt": "a further carrier where the task expected one production",
+    "repeat_reading": "an alignment covering the expected sequence more than once",
+    "repeated_item": "an item repeated where the task expected each once",
+    "stimulus_mismatch": "a lexical word that is not the word the stimulus expected",
+    "sweep_direction_mismatch": "a pitch sweep running against its declared direction",
+    "syllable_sequence_mismatch": "a syllable whose place is not the one its cycle position expects",
+    "truncation": "a production the recording does not contain the end of",
+}
+"""Every deviation type a branch may report, and what each observes.
+
+Closed, and enforced at the write by :func:`write_findings`: VERDICT folds deviations by name, so a
+name nobody declared is a name no reader can fold.
+"""
+
 
 class Result(NamedTuple):
     """What every branch entry point returns: the three things a branch reports and nothing else.
@@ -403,6 +422,12 @@ def write_findings(
     unknown = sorted({finding.kind for finding in findings} - set(FINDING_KINDS))
     if unknown:
         raise ValueError(f"unknown finding kinds {unknown}; expected one of {list(FINDING_KINDS)}")
+    undeclared = sorted({finding.name for finding in findings if finding.kind == "deviation"} - set(DEVIATION_TYPES))
+    if undeclared:
+        raise ValueError(
+            f"undeclared deviation types {undeclared}; every deviation VERDICT folds by name is "
+            f"declared in DEVIATION_TYPES, so add it there before reporting it"
+        )
     written: list[str] = []
     counts: dict[str, Any] = {}
     count_sources: dict[str, None] = {}

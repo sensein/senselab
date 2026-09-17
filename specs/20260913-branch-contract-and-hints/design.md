@@ -910,13 +910,44 @@ an observation with an extent.
 column would flag the corpus — the exact failure stage 1 refused when it declined to let a
 default-uncertain kind line flag every recording.
 
-A deviation is an observation **with an extent**. Three qualify:
+**That argument was derived over three types and now governs eleven, and it does not fit all of
+them equally.** `filler`, `stimulus_mismatch`, `repeated_item` and `lexical_content` are ordinary on
+spontaneous or read speech and would flag the corpus. `truncation`, `omission`,
+`sweep_direction_mismatch` and `syllable_sequence_mismatch` are **not** ordinary — each says the
+production departed from what the instruction asked for, and each is a candidate flag ground once
+ground truth exists to set a rate against. `verdict.deviation_flags` stays `false` for all eleven,
+because no ground truth exists for any of them and a rule fitted to none is worse than a rule that
+flags none.
 
-| type | what it says |
-| --- | --- |
-| `stimulus_mismatch` | a lexical word that is not the word the stimulus expected |
-| `filler` | a disfluency or non-speech token where the task expected lexical content |
-| `off_task_extent` | a region of the recording that does not serve the declared task |
+A per-type folding policy is the natural extension and is **deliberately not built**: every entry
+would read `false` today, which is a mechanism carrying no decision, and this graph does not ship an
+unmeasured decision. Build it with the first measured rate, not before.
+
+A deviation is an observation **with an extent**. Eleven qualify, declared in
+`nodes/branches.py`'s `DEVIATION_TYPES` and enforced at the write by `write_findings`:
+
+| type | what it says | branch |
+| --- | --- | --- |
+| `stimulus_mismatch` | a lexical word that is not the word the stimulus expected | SPEECH |
+| `filler` | a disfluency or non-speech token where the task expected lexical content | SPEECH |
+| `off_task_extent` | a region of the recording that does not serve the declared task | AIRWAY, SPEECH, shared |
+| `lexical_content` | a lexical word where the task expected none | VOICE |
+| `omission` | an expected token the recording does not realise | SPEECH, VOICE |
+| `repeat_attempt` | a further carrier where the task expected one production | VOICE |
+| `repeat_reading` | an alignment covering the expected sequence more than once | SPEECH |
+| `repeated_item` | an item repeated where the task expected each once | SPEECH |
+| `sweep_direction_mismatch` | a pitch sweep running against its declared direction | VOICE |
+| `syllable_sequence_mismatch` | a syllable whose place is not the one its cycle position expects | DDK |
+| `truncation` | a production the recording does not contain the end of | AIRWAY, DDK, SPEECH, VOICE |
+
+**This table said "three" until 2026-09-16, while the branches emitted eleven.** Nothing validated
+the name at the write, so the vocabulary and the code drifted apart silently — and the three it
+named were a subset, not a mistake, which is why nothing ever failed. `write_findings` now refuses
+an undeclared name and `branches_test.py`'s AST sweep refuses a declared name nobody emits, so the
+two cannot part again in either direction.
+
+The three named above are the three the folding argument below was actually derived over. The other
+eight inherited a justification written without them in view — see the note under that rule.
 
 **`speaker_count` and `expected_event_count` are not deviations** — they are file-level counts with
 no extent, and the section's own definition excludes them.
