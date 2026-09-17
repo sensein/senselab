@@ -13,7 +13,7 @@ reading for each.
 **Routing is additive and the reference is multi-label.** A recording routes to every branch one of
 whose gates fires, so several branches on one recording is intended rather than an error, and a
 family declares the *set* of branches that legitimately apply to it — a diadochokinesis family
-declares both ``SPEECH`` and ``DDK``. A branch routed beyond that set is therefore reported as
+declares ``SPEECH``. A branch routed beyond that set is therefore reported as
 :data:`BEYOND_DECLARATION` and never as a false positive of a precision.
 
 ``unavailable`` is a category of its own throughout. A gate whose evidence was never written did
@@ -658,7 +658,7 @@ class FamilyRouting:
         n: How many recordings of the family were read.
         declared: Whether the family's reference family sets name this branch. The reference is
             multi-label, so a family may declare several branches: a diadochokinesis family
-            declares both ``SPEECH`` and ``DDK``.
+            declares ``SPEECH``.
         routed: How many recordings of the family this branch routed on content.
         fired_gates: Gate to how many of those routings it fired on, in descending count. A routing
             two gates both fired on appears under each.

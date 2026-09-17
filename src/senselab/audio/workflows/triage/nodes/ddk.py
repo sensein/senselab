@@ -104,7 +104,7 @@ PPG_PLACE_NOT_AUTHORITY = (
 
 @dataclass(frozen=True)
 class DdkReads:
-    """The stored derivatives DDK measures over, read once by the node.
+    """The stored derivatives the syllable body measures over, read once by SPEECH.
 
     The expectation bodies carry ``(store, params)`` and no run directory, and every sidecar path
     in the store is relative to one, so the loaders cannot run inside a body. They run in
