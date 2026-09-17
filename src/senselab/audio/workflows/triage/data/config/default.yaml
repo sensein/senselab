@@ -433,6 +433,13 @@ redaction:
   padding_ms: 250                      # outward pad on a redacted extent; a convention, not a fit
   fill: silence                        # what replaces redacted audio: silence, noise or bleep
   bleep_hz: 1000.0                     # tone frequency when fill is bleep
+  llm_check:                           # an instruction-tuned LLM reads the redacted transcript back
+    enabled: false                     # off; a run with a GPU turns it on
+    model_id: google/gemma-4-31B-it-qat-w4a16-ct   # the QAT w4a16 checkpoint, which fits one GPU
+    ref: main                          # resolved to a commit SHA before any load; never passed to one
+    max_iterations: 3                  # bound on the review / mask / re-review loop
+    max_new_tokens: 1024               # generation ceiling; the reasoning is the product, not the verdict
+    timeout_s: 1800                    # wall clock per review, model load included
 
 # Background residual: FRCRN_SE_16K's enhancement, lag-aligned and gain-fitted, subtracted from
 # `plain`. Both the enhancement and the residual are written and classified; no energy-fraction

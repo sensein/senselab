@@ -54,6 +54,12 @@ REVISION_RESOLVED_SUBPROCESS_FILES = {
     "audio/tasks/speech_to_text/qwen.py",
     "audio/tasks/text_to_speech/qwen_tts.py",
     "text/tasks/pii_detection/subprocess_backend.py",
+    # redaction_review.py: review_redacted_text calls resolve_revision(model_id, ref) FIRST and
+    # never forwards `ref` past that point. The worker payload's "revision" is that 40-hex SHA;
+    # AutoTokenizer/AutoModelForCausalLM are called with revision=<sha> on the online path, and
+    # with the staged snapshot directory (itself named by the commit) on the offline path, where
+    # the worker reads the commit back off the directory name rather than trusting the payload.
+    "text/tasks/pii_detection/redaction_review.py",
 }
 
 # Subprocess workers that CANNOT pass a revision to their loader, because the upstream loader has
