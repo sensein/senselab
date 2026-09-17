@@ -424,6 +424,15 @@ recorded as a fact on the pooled measurement.
 HeAR window 2.0 s -- model-imposed, not chosen. The detector's graph rejects every other input
 length outright, which is why a shorter span is placed in a buffer rather than passed as-is.
 
+windows.ast.default_threshold / label_thresholds / label_top_k -- null, null, 4
+  **AST is reporting-only, and these need no derivation.** No ruleset gate names an AST feature, no
+  branch reads an AST window, and TAXONOMY's `ast_label_summary` is taken off the raw scores rather
+  than off the window fold -- so the three keys govern a fold nothing downstream consumes. An
+  earlier note here read "no ROC over this corpus exists", which framed a decision as a gap and
+  invited someone to fit a threshold for a consumer that does not exist. Owner, 2026-09-16: not
+  needed. Should AST ever gain a consumer, that consumer's requirement is what derives these, not a
+  sweep run for its own sake.
+
 windows.ast.win_length_s 10.24 -- owner-directed: AST reads the recording in 10 s windows (10.24 s
 is the model's 1024-frame input at a 10 ms hop, the nearest realisable width to the directive).
 The audio_analysis workflow measured and prefers a 0.96 s slid window for its own purposes; that

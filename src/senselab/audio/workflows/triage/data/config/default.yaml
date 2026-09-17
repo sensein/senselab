@@ -94,9 +94,12 @@ windows:
     label_thresholds: null             # per-label overrides of that default
     label_top_k: 4                     # owner-directed: how many labels of a window are eligible at all
   ast:
-    default_threshold: null            # as above; no ROC over this corpus exists
+    # AST is REPORTING-ONLY: no ruleset gate reads it, no branch reads it, and TAXONOMY's label
+    # summary comes off the raw scores. So these three govern a window fold nothing consumes, and
+    # a null here is the decision, not a gap. Do not fit a threshold for them.
+    default_threshold: null            # not needed; nothing downstream reads an AST window label set
     label_thresholds: null             # as above
-    label_top_k: 4                     # as above
+    label_top_k: 4                     # as above; inert while the fold has no consumer
     win_length_s: 10.24                # owner-directed 10 s window (1024-frame input)
     hop_s: 10.24                       # non-overlapping until a hop is fitted; a null here stopped AST running
     top_k: 527                         # AudioSet's full label space; a size, not a threshold
