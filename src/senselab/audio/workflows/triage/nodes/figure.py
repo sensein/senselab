@@ -327,15 +327,17 @@ def _absent_reasons(store: ProvStore) -> dict[str, str]:
         store: The provenance store.
 
     Returns:
-        ``{derivative: reason}``, empty when PREPROCESS recorded no verdict.
+        ``{derivative: reason}``, empty when PREPROCESS recorded no live verdict.
     """
+    latest: Entity | None = None
     for entity in store.entities("verdict"):
         if store.is_invalidated(entity.id) or entity.attributes.get("node") != "PREPROCESS":
             continue
-        detail = entity.attributes.get("detail") or {}
-        absent = detail.get("absent") or {}
-        return {str(name): str(reason) for name, reason in absent.items()}
-    return {}
+        latest = entity
+    if latest is None:
+        return {}
+    absent = latest.attributes.get("absent") or {}
+    return {str(name): str(reason) for name, reason in absent.items()}
 
 
 def _npz(run_dir: Path, store: ProvStore, name: str, key: str) -> np.ndarray | None:
