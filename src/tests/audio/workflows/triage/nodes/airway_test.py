@@ -148,6 +148,7 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
     no_contrast: bool = False,
     merged: int = 1,
     duration_s: float = 5.0,
+    band_rolloff_hz: float | None = None,
 ) -> dict[str, Any]:
     """Write the store surface AIRWAY reads, in the shapes PREPROCESS ships.
 
@@ -171,6 +172,8 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
         bracketed_words: The same for bracketed words, indexed after ``words``.
         silence_windows: YAMNet's graded windows, as ``{start, end, score, is_silence}`` dicts.
         no_contrast: Whether PREPROCESS reported ``spans_no_contrast``.
+        band_rolloff_hz: PREPROCESS's ``band_profile`` roll-off, in Hz. None writes no measurement,
+            which is the state a run predating D3 is in.
         merged: The ``merged_proposals`` count every seeded amplitude span carries.
         duration_s: The stream's duration.
 
@@ -206,6 +209,20 @@ def _seed(  # noqa: C901 — one independent block per derivative, as PREPROCESS
         (0.0, duration_s),
         {"name": "plain", "path": f"streams/{name}", "sampling_rate": 16000, "channels": 1},
     )
+    if band_rolloff_hz is not None:
+        ids["band_profile"] = _write(
+            "measurement",
+            None,
+            {
+                "name": "band_profile",
+                "signal": "recording",
+                "path": "derivatives/band_profile.npz",
+                "rolloff_hz": float(band_rolloff_hz),
+                "rolloff_quantile": 0.95,
+                "nyquist_hz": 24000.0,
+                "sampling_rate": 48000,
+            },
+        )
 
     for start, end in spans:
         ids["spans"].append(
@@ -741,7 +758,34 @@ class TestTheRouteIsNotSeparableByThisDesign:
         airway(store, "plain", airway_config, run_dir=tmp_path)
         [measured_route] = find_measurements(store, "measured_route")
         assert measured_route.attributes["value"] == NOT_SEPARABLE_BY_THIS_DESIGN
-        assert measured_route.attributes["content_band_hz"] is None, "band_profile does not exist"
+        assert measured_route.attributes["content_band_hz"] is None, "no band_profile was seeded"
+        [route] = find_measurements(store, "route")
+        assert route.attributes["value"] == NOT_SEPARABLE_BY_THIS_DESIGN
+
+    def test_the_content_band_covariate_carries_the_measured_roll_off_when_one_exists(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """D3 exists, so the covariate stops being absent and the negative becomes attributable.
+
+        The route stays ``NOT_SEPARABLE_BY_THIS_DESIGN``: the discriminating band sits largely above
+        the 8 kHz ceiling and the residual tilt is confounded one-for-one with mouth-to-microphone
+        geometry, which changes WITH the route by construction. What changes is only that a reader
+        can now see the band the negative was reached on. 4000.0 is chosen to be a value no default,
+        no Nyquist and no sampling rate in this fixture coincides with, so a constant cannot pass.
+        """
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-v2-threebreathsnose",
+            spans=[(0.0, 5.0)],
+            scores=[{"Breathe": 0.9}],
+            envelope=bump(500, (50, 250, 450)),
+            band_rolloff_hz=4000.0,
+        )
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        [measured_route] = find_measurements(store, "measured_route")
+        assert measured_route.attributes["content_band_hz"] == 4000.0
+        assert measured_route.attributes["value"] == NOT_SEPARABLE_BY_THIS_DESIGN
         [route] = find_measurements(store, "route")
         assert route.attributes["value"] == NOT_SEPARABLE_BY_THIS_DESIGN
 
