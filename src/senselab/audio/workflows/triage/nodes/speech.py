@@ -762,39 +762,26 @@ def _repeat_fraction(expected: Sequence[str], produced: Sequence[str]) -> float:
     return sum(1 for key in wanted if counts.get(key, 0) > 1) / len(wanted)
 
 
-def _breath_groups(store: ProvStore, points: BranchParams) -> list[tuple[float, float]]:
-    """The breath groups of a connected production, from the inter-word gaps and breath evidence.
+def _phrase_runs(store: ProvStore, points: BranchParams) -> list[tuple[float, float]]:
+    """The gap-bounded runs of lexical words in a connected production.
 
     Args:
         store: The provenance store.
         points: The operating points.
 
     Returns:
-        One extent per group, or nothing when the gap that breaks a group is unmeasured or the
-        recording carries no lexical word.
+        One extent per run, or nothing when the gap that breaks a run is unmeasured or the recording
+        carries no lexical word.
     """
     words = lexical_words(store)
-    min_gap = points.point("breath_group_min_gap_s")
-    if not words or min_gap is None:
+    max_gap = points.point("run_gap_max_s")
+    if not words or max_gap is None:
         return []
-    breaks = list(inter_word_gaps(words, float(min_gap)))
-    score_min = points.point("score_min")
-    breath_labels = set((points.point("label_sets") or {}).get("breath", ())) if score_min is not None else set()
-    if breath_labels:
-        for window in find_measurements(store, "span_hear"):
-            scores = window.attributes.get("raw_scores") or {}
-            if window.extent is None:
-                continue
-            if any(float(scores.get(label, 0.0)) >= float(score_min) for label in breath_labels):
-                breaks.append(window.extent)
-    for word in consensus_words(store):
-        if word.attributes["bracketed"] and word_text(word) == BREATH_TOKEN and word.extent is not None:
-            breaks.append(word.extent)
-    return group_by_breaks(words, merge([extent for extent in breaks if extent[1] > extent[0]]))
+    return lexical_runs(words, float(max_gap))
 
 
-def _breath_group_components(store: ProvStore, points: BranchParams, evidence: Sequence[str]) -> list[Proposal]:
-    """One proposed span per breath group of a connected production.
+def _phrase_run_components(store: ProvStore, points: BranchParams, evidence: Sequence[str]) -> list[Proposal]:
+    """One proposed span per gap-bounded run of a connected production.
 
     Args:
         store: The provenance store.
@@ -807,8 +794,8 @@ def _breath_group_components(store: ProvStore, points: BranchParams, evidence: S
     if not evidence:
         return []
     return [
-        MINT(f"breath_group_{index}", extent, *evidence, group_index=index)
-        for index, extent in enumerate(_breath_groups(store, points))
+        MINT(f"phrase_run_{index}", extent, *evidence, run_index=index)
+        for index, extent in enumerate(_phrase_runs(store, points))
         if extent[1] > extent[0]
     ]
 
@@ -836,7 +823,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
     """A task whose instruction prescribes a token sequence: was it produced, and how?
 
     Proposes ``task_extent``, one span per realised structure unit the alignment yields — a CAPE-V
-    sentence, a Rainbow sentence — and the breath groups where the family is connected. No span per
+    sentence, a Rainbow sentence — and the phrase runs where the family is connected. No span per
     token: a realised token already has a ``word`` entity carrying its own extent, its agreement and
     its per-source timings.
 
@@ -996,7 +983,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
                 findings.append(deviation("filler", start, end, word.id, text=word_text(word)))
 
     if expectation.connected:
-        components.extend(_breath_group_components(store, points, evidence))
+        components.extend(_phrase_run_components(store, points, evidence))
 
     if expectation.expected_event_count is not None:
         findings.append(
@@ -1019,7 +1006,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
 ) -> Result:
     """A task prescribing no words: was there a response, and how was it produced?
 
-    Proposes ``task_extent`` over the hull of PREPROCESS's ASR spans, plus one span per breath group
+    Proposes ``task_extent`` over the hull of PREPROCESS's ASR spans, plus one span per phrase run
     where the family is connected. A family carrying no ``stimulus_text`` — every
     ``picture-description`` and every ``cinderella-story`` in the corpus — expects nothing lexical,
     so every lexical word is the response rather than a departure from one.
@@ -1047,9 +1034,9 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
 
     if expectation.connected and response is not None and duration(response) > 0.0:
         evidence = [entity_id for entity_id in (consensus_id,) if entity_id is not None]
-        groups = _breath_groups(store, points)
+        groups = _phrase_runs(store, points)
         components.extend(
-            MINT(f"breath_group_{index}", extent, *evidence, group_index=index)
+            MINT(f"phrase_run_{index}", extent, *evidence, run_index=index)
             for index, extent in enumerate(groups)
             if extent[1] > extent[0] and evidence
         )
@@ -1079,7 +1066,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                     support_pauses=len(pauses),
                 )
             )
-        findings.append(count("breath_groups", len(groups), None, *evidence))
+        findings.append(count("phrase_runs", len(groups), None, *evidence))
 
     if expectation.anti_pattern is not None:
         read = _stimulus(store, hint, params)

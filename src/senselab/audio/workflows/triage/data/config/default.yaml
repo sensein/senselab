@@ -258,7 +258,6 @@ branch:
   response_min_s: 0.5                  # shortest extent that counts as a response at all
   pause_min_s: 0.25                    # gap between words that is a pause rather than coarticulation
   run_gap_max_s: 0.5                   # largest gap two lexical words may straddle and stay one run
-  breath_group_min_gap_s: 0.5          # inter-word gap that breaks a breath group
   repeat_overlap_min: 0.5              # overlap fraction at which an alignment covers the expected sequence twice
   echo_ngram_n: 3                      # n of the n-gram the prompt-echo overlap is measured over
   echo_overlap_max: 0.5                # prompt n-gram overlap above which a free response echoes its prompt
