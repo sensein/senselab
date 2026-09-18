@@ -158,6 +158,14 @@ UNREAD_DECLARATION = (
     "what it claimed is unknown, not empty"
 )
 
+CRITICAL_ABSENCE = "a critical measurement is absent, so no gate of at least one branch could be read"
+"""The flag ground a critical failure contributes, with the branch, gate and recorded absence appended.
+
+A critical failure is not a discard ground: the two that exist say the recording could not be
+measured (ADMIT) or carried nothing (the emptiness bypass), and neither is a claim this makes. See
+``specs/20260817-triage-workflow-dag/critical-failure.md``.
+"""
+
 LLM_REDACTION_RESIDUE = "the redaction reviewer flagged residue on the redacted transcript"
 """The flag ground an LLM redaction annotation of ``flagged`` contributes to the triage axis.
 
@@ -240,6 +248,10 @@ class BranchDecision:
         bad_map_values: ``routing.hint_branch_map`` entries whose value is not a branch, as
             ``{tag: value}``. A property of the configuration, so every decision carries the same
             one.
+        withheld_critical: Whether this branch was not run because the run hit a critical failure,
+            rather than because the ruleset and the declaration both left it out. It is the fourth
+            state a branch can be in beside routed-and-ran, ran-and-found-nothing and not-selected,
+            and a reader that cannot tell it from not-selected reads a withheld run as a decision.
     """
 
     branch: str
@@ -249,6 +261,7 @@ class BranchDecision:
     declared: bool = False
     hint_tags: tuple[str, ...] = ()
     bad_map_values: dict[str, str] = field(default_factory=dict)
+    withheld_critical: bool = False
 
 
 @dataclass(frozen=True)
@@ -376,6 +389,10 @@ class FileVerdict:
             categories, model id, resolved commit, failure. Carried on every path, the step's absence
             included, so a reader of this product never has to infer whether the re-read happened.
             Empty when REDACT wrote no annotation.
+        critical_absences: Per branch not one of whose gates could be read, each gate and the
+            absence the node that failed to write its evidence recorded. Non-empty is a critical
+            failure: the run went straight here and no branch was run. Empty on every other path,
+            the ordinary partly-unreadable one included.
     """
 
     triage: Triage
@@ -396,6 +413,7 @@ class FileVerdict:
     branches: dict[str, dict[str, Any]] = field(default_factory=dict)
     bad_map_values: dict[str, str] = field(default_factory=dict)
     llm_redaction: dict[str, Any] = field(default_factory=dict)
+    critical_absences: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def _found(reported: bool, spans_n: int) -> str:
@@ -504,6 +522,7 @@ def fold_file_verdict(
     route_state: str | None,
     declared_family: str | None = None,
     llm_redaction: Mapping[str, Any] | None = None,
+    critical_absences: Mapping[str, Mapping[str, str]] | None = None,
     policy: FoldPolicy | None = None,
 ) -> FileVerdict:
     """Decide the file, from the deciding nodes' verdicts and the reporting nodes' reports.
@@ -563,6 +582,10 @@ def fold_file_verdict(
             annotates and this fold decides, so the annotation reaches the **triage** axis under
             ``policy.llm_redaction_flags`` and reaches the release axis on no path at all: release is
             ``_release_from``'s reading of REDACT's own detector outcome and nothing else.
+        critical_absences: Per branch not one of whose gates could be read, each gate and the
+            recorded absence behind it, as ``routing`` wrote them. Non-empty flags and names what
+            was missing; it is never a discard, because neither discard ground is a claim about a
+            measurement that failed to be taken.
         policy: What to do with what was reported, from the ``verdict.*`` config section. None is
             the packaged policy, which is what a caller folding without a configuration gets.
 
@@ -622,6 +645,13 @@ def fold_file_verdict(
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, UNREAD_DECLARATION))
     if route_state == UNEXPLAINED:
         reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, UNEXPLAINED_CONTENT))
+    absences = {branch: dict(gates) for branch, gates in (critical_absences or {}).items()}
+    if absences:
+        named = "; ".join(
+            f"{branch}: " + ", ".join(f"{gate} ({why})" for gate, why in sorted(gates.items()))
+            for branch, gates in sorted(absences.items())
+        )
+        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{CRITICAL_ABSENCE}: {named}"))
     annotation = dict(llm_redaction or {})
     if annotation.get("status") == "flagged" and rules.llm_redaction_flags:
         named = ", ".join(str(category) for category in annotation.get("flagged") or ())
@@ -667,6 +697,7 @@ def fold_file_verdict(
             "will_run": decision.will_run,
             "forced_by_declaration": decision.forced_by_declaration,
             "route_state": decision.route_state,
+            "withheld_critical": decision.withheld_critical,
             "conformance": by_branch[name].conformance if name in by_branch else None,
         }
         for name, decision in branch_decisions.items()
@@ -705,4 +736,5 @@ def fold_file_verdict(
         branches=branch_view,
         bad_map_values=bad_map_values,
         llm_redaction=annotation,
+        critical_absences=absences,
     )
