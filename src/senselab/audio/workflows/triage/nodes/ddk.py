@@ -29,6 +29,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Proposal,
     Result,
     SpectrogramBlock,
+    Syllable,
     acquisition_covariates,
     amplitude_spans,
     band_power,
@@ -40,7 +41,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     duration,
     events_in_span,
     hull,
-    lexical,
     measured,
     mode_of,
     propose_spans,
@@ -51,11 +51,8 @@ from senselab.audio.workflows.triage.nodes.branches import (
     stream_ids,
     touches_edge,
     train_rate_hz,
-    word_extent,
-    word_text,
 )
 from senselab.audio.workflows.triage.nodes.common import (
-    consensus_words,
     find_measurement,
     live_entities,
 )
@@ -66,7 +63,6 @@ RATE = "ddk_syllable_rate_from_envelope_modulation_hz"
 
 ENVELOPE = "energy_envelope"
 WIDEBAND = "spectrogram_wideband"
-TRANSCRIPT = "consensus_transcript"
 PPG = "ppg_posteriorgram"
 
 PPG_RATE = "ddk_syllable_rate_from_ppg_cv_onsets_hz"
@@ -76,10 +72,12 @@ PPG_RATE = "ddk_syllable_rate_from_ppg_cv_onsets_hz"
 PPG_UNITS = "ddk_cv_unit_count"
 PPG_DISPERSION = "ddk_ppg_interval_dispersion"
 PPG_EXPECTED_PLACE = "ddk_expected_place_fraction"
+PPG_EXPECTED_NUCLEUS = "ddk_expected_nucleus_fraction"
 PPG_PLACE_AGREEMENT = "ddk_place_agreement_ppg_vs_burst"
 
 UNRESOLVED = "unresolved"
-"""The place a burst spectrum did not separate, which is not a substitution."""
+"""The place a burst spectrum did not separate, or the nucleus class no declared class holds, which
+is not a substitution."""
 
 SYLLABLES_PER_S = "syllables_per_s"
 CYCLES_OR_SYLLABLES_PER_S = "cycles_or_syllables_per_s"
@@ -87,8 +85,8 @@ CYCLES_OR_SYLLABLES_PER_S = "cycles_or_syllables_per_s"
 the two and the harmonic-equality tolerance that would separate them is unmeasured, so the unit is
 carried as ambiguous rather than resolved by assumption."""
 
-TRAIN_ROLES = ("task_extent", "repetition")
-"""The roles that are a train. ``lexical_repetition`` is a repeated word, not a syllable train."""
+TRAIN_ROLES = ("task_extent",)
+"""The roles that are a train."""
 
 NO_TRAIN = "no syllable train was found"
 NO_ENVELOPE = "the energy envelope is absent; the syllable train's only rate instrument could not be read"
@@ -116,7 +114,6 @@ class DdkReads:
         envelope_id: That measurement's entity id, for the derivation.
         wideband: The wideband spectrogram, or None when it or the working rate is absent.
         wideband_id: That measurement's entity id.
-        transcript_id: The consensus transcript's entity id, for a lexical proposal's derivation.
         ppg: The phonetic posteriorgram, or None when the derivative is absent.
         ppg_id: That measurement's entity id, for the derivation of everything the CV walk reads.
     """
@@ -125,7 +122,6 @@ class DdkReads:
     envelope_id: str | None = None
     wideband: SpectrogramBlock | None = None
     wideband_id: str | None = None
-    transcript_id: str | None = None
     ppg: Posteriorgram | None = None
     ppg_id: str | None = None
 
@@ -167,7 +163,6 @@ def read_ddk(store: ProvStore, run_dir: Path, source: str) -> DdkReads:
     """
     envelope = find_measurement(store, ENVELOPE)
     wideband = find_measurement(store, WIDEBAND)
-    transcript = find_measurement(store, TRANSCRIPT)
     posteriorgram = find_measurement(store, PPG)
     rate = working_rate(store, source)
     block = None if rate is None else read_spectrogram_block(store, run_dir, WIDEBAND, rate)
@@ -177,7 +172,6 @@ def read_ddk(store: ProvStore, run_dir: Path, source: str) -> DdkReads:
         envelope_id=None if envelope is None else envelope.id,
         wideband=block,
         wideband_id=None if block is None or wideband is None else wideband.id,
-        transcript_id=None if transcript is None else transcript.id,
         ppg=frames,
         ppg_id=None if frames is None or posteriorgram is None else posteriorgram.id,
     )
@@ -526,23 +520,55 @@ def stop_phonemes(stop_places: dict[str, tuple[str, ...]]) -> dict[str, str]:
     return {phoneme: place for place, phonemes in stop_places.items() for phoneme in phonemes}
 
 
-def phoneme_class(label: str, places: dict[str, str], vowels: Sequence[str]) -> str:
+def nucleus_classes(classes: dict[str, tuple[str, ...]]) -> dict[str, str]:
+    """The nucleus vocabulary as one phoneme-to-class lookup.
+
+    Args:
+        classes: ``branch.ddk_nucleus_classes``: each class and the phonemes that are it.
+
+    Returns:
+        Each nucleus phoneme mapped to its class. A phoneme two classes both name resolves to the
+        first in declaration order.
+    """
+    lookup: dict[str, str] = {}
+    for name, phonemes in classes.items():
+        for phoneme in phonemes:
+            lookup.setdefault(phoneme, name)
+    return lookup
+
+
+def admitted_nuclei(classes: dict[str, tuple[str, ...]], template: Sequence[Syllable] | None) -> tuple[str, ...]:
+    """The nuclei the CV walk admits: the union of the classes the declared template names.
+
+    Args:
+        classes: ``branch.ddk_nucleus_classes``.
+        template: The declared syllable template, or None when no row declares one.
+
+    Returns:
+        Every phoneme of every class the template names, in the vocabulary's declaration order.
+        Every class when the template is None, which is the widest the vocabulary allows.
+    """
+    named = {position.nucleus for position in template} if template else set(classes)
+    return tuple(phoneme for name, phonemes in classes.items() if name in named for phoneme in phonemes)
+
+
+def phoneme_class(label: str, places: dict[str, str], nuclei: Sequence[str]) -> str:
     """Which of the three classes one phoneme falls into.
 
     Args:
         label: The phoneme.
         places: The stop-to-place lookup :func:`stop_phonemes` built.
-        vowels: The nuclei a DDK syllable may surface as.
+        nuclei: The nuclei the declared template admits, from :func:`admitted_nuclei`.
 
     Returns:
         :data:`CONSONANT`, :data:`VOWEL` or :data:`OTHER`.
     """
     if label in places:
         return CONSONANT
-    return VOWEL if label in vowels else OTHER
+    return VOWEL if label in nuclei else OTHER
 
 
-def cv_units(runs: Sequence[PhonemeRun], places: dict[str, str], vowels: Sequence[str]) -> list[CvUnit]:
+def cv_units(runs: Sequence[PhonemeRun], places: dict[str, str], nuclei: Sequence[str]) -> list[CvUnit]:
     """The consonant-vowel syllables in a run sequence.
 
     Each consonant run is scanned forward: the first vowel run closes a unit whose onset is the
@@ -552,12 +578,14 @@ def cv_units(runs: Sequence[PhonemeRun], places: dict[str, str], vowels: Sequenc
     Args:
         runs: The phoneme runs, in time order.
         places: The stop-to-place lookup.
-        vowels: The nuclei a DDK syllable may surface as.
+        nuclei: The nuclei the declared template admits, from :func:`admitted_nuclei`.
 
     Returns:
-        The units, in onset order. Empty on material that holds no stops.
+        The units, in onset order. Empty on material that holds no stops. A consonant with no
+        following nucleus — a coda, such as the ``p`` of ``buttercup`` — closes no unit and is
+        therefore counted as none.
     """
-    classes = [phoneme_class(run.label, places, vowels) for run in runs]
+    classes = [phoneme_class(run.label, places, nuclei) for run in runs]
     units: list[CvUnit] = []
     for index, run in enumerate(runs):
         if classes[index] != CONSONANT:
@@ -615,12 +643,19 @@ def syllable_trains(units: Sequence[CvUnit], tolerance: float, min_repetitions: 
     return trains
 
 
-def ppg_reading(ppg: Posteriorgram | None, params: BranchParams) -> PpgReading | None:
+def ppg_reading(
+    ppg: Posteriorgram | None, params: BranchParams, template: Sequence[Syllable] | None = None
+) -> PpgReading | None:
     """Run the CV walk and the train finder over one posteriorgram.
+
+    Extraction is permissive and conformance is positional: the walk admits any nucleus in the union
+    of the classes ``template`` names, and :func:`ppg_evidence` then checks each unit's place and
+    nucleus class against the position the template gave it.
 
     Args:
         ppg: The posteriorgram, or None when the derivative is absent.
         params: The operating points.
+        template: The declared syllable template, or None when no row declares one.
 
     Returns:
         The reading, or None when the derivative is absent, which is an absent instrument and not a
@@ -630,12 +665,12 @@ def ppg_reading(ppg: Posteriorgram | None, params: BranchParams) -> PpgReading |
     if ppg is None:
         return None
     stop_places = params.point("ddk_stop_places")
-    vowels = params.point("ddk_vowel_phonemes")
+    classes = params.point("ddk_nucleus_classes")
     tolerance = params.point("ddk_interval_tolerance")
     minimum = params.point("ddk_min_repetitions")
-    if stop_places is None or vowels is None or tolerance is None or minimum is None:
+    if stop_places is None or classes is None or tolerance is None or minimum is None:
         return PpgReading(units=(), train=None, readable=False)
-    units = cv_units(phoneme_runs(ppg), stop_phonemes(stop_places), vowels)
+    units = cv_units(phoneme_runs(ppg), stop_phonemes(stop_places), admitted_nuclei(classes, template))
     trains = syllable_trains(units, tolerance, minimum)
     longest = max(trains, key=lambda train: train.repetitions, default=None)
     return PpgReading(units=tuple(units), train=longest, readable=True)
@@ -655,25 +690,40 @@ def unit_places(units: Sequence[CvUnit], stop_places: dict[str, tuple[str, ...]]
     return [lookup.get(unit.consonant, UNRESOLVED) for unit in units]
 
 
-def expected_place_fraction(places: Sequence[str], sequence: Sequence[str]) -> tuple[float | None, dict[str, Any]]:
-    """How far a place series realised the cycle its instruction asked for.
+def unit_nuclei(units: Sequence[CvUnit], classes: dict[str, tuple[str, ...]]) -> list[str]:
+    """The nucleus class the posteriorgram read for each unit's vowel.
 
     Args:
-        places: One place per unit, in order.
-        sequence: The places the instruction cycles through; length one for a single-syllable train.
+        units: The CV units.
+        classes: ``branch.ddk_nucleus_classes``.
 
     Returns:
-        The fraction of resolved units whose place is the one its cycle position expected, and the
+        One class per unit, :data:`UNRESOLVED` for a nucleus the vocabulary does not name.
+    """
+    lookup = nucleus_classes(classes)
+    return [lookup.get(unit.vowel, UNRESOLVED) for unit in units]
+
+
+def expected_fraction(realised: Sequence[str], expected: Sequence[str]) -> tuple[float | None, dict[str, Any]]:
+    """How far one realised series matched the cycle its instruction asked for, position by position.
+
+    Args:
+        realised: One reading per unit, in order.
+        expected: What the instruction asks for at each cycle position; length one for a
+            single-syllable train.
+
+    Returns:
+        The fraction of resolved units whose reading is the one its cycle position expected, and the
         same fraction per position. Both are empty when nothing was resolved.
     """
-    resolved = [(index, place) for index, place in enumerate(places) if place != UNRESOLVED]
-    if not resolved or not sequence:
+    resolved = [(index, value) for index, value in enumerate(realised) if value != UNRESOLVED]
+    if not resolved or not expected:
         return None, {}
-    matched = sum(1 for index, place in resolved if place == sequence[index % len(sequence)])
+    matched = sum(1 for index, value in resolved if value == expected[index % len(expected)])
     by_position: dict[str, Any] = {}
-    for position in range(len(sequence)):
-        at = [place for index, place in resolved if index % len(sequence) == position]
-        hits = sum(1 for place in at if place == sequence[position])
+    for position in range(len(expected)):
+        at = [value for index, value in resolved if index % len(expected) == position]
+        hits = sum(1 for value in at if value == expected[position])
         by_position[str(position)] = None if not at else round(hits / len(at), 3)
     return round(matched / len(resolved), 3), by_position
 
@@ -704,7 +754,7 @@ def ppg_evidence(
     reads: DdkReads,
     params: BranchParams,
     reading: PpgReading | None,
-    sequence: Sequence[str] | None,
+    template: Sequence[Syllable] | None,
 ) -> tuple[list[Proposal], list[Finding]]:
     """Everything the CV instrument has to say about one recording, in both modes.
 
@@ -713,7 +763,8 @@ def ppg_evidence(
         reads: The derivatives, for the posteriorgram's entity id and the burst instrument.
         params: The operating points.
         reading: What the CV walk read, or None when the posteriorgram is absent.
-        sequence: The places the declared instruction cycles through, or None out of family.
+        template: The syllable template the declared instruction cycles through, or None out of
+            family.
 
     Returns:
         The one train span this instrument proposes and the findings it takes. An absent
@@ -733,7 +784,7 @@ def ppg_evidence(
     extent = train.extent
     extents = [unit.extent for unit in train.units]
     intervals = intervals_of(extents)
-    cycle = len(sequence) if sequence else 1
+    cycle = len(template) if template else 1
     findings.extend(
         [
             measured(
@@ -766,8 +817,10 @@ def ppg_evidence(
 
     stop_places = params.point("ddk_stop_places") or {}
     places = unit_places(train.units, stop_places)
-    if sequence:
-        fraction, by_position = expected_place_fraction(places, sequence)
+    nuclei = unit_nuclei(train.units, params.point("ddk_nucleus_classes") or {})
+    if template:
+        expected_places = [position.place for position in template]
+        fraction, by_position = expected_fraction(places, expected_places)
         findings.append(
             measured(
                 PPG_EXPECTED_PLACE,
@@ -775,10 +828,24 @@ def ppg_evidence(
                 extent[1],
                 fraction,
                 *evidence,
-                expected_sequence=list(sequence),
+                expected_sequence=expected_places,
                 by_position=by_position,
                 realised_places=places,
                 reading=PPG_PLACE_NOT_AUTHORITY,
+            )
+        )
+        expected_nuclei = [position.nucleus for position in template]
+        fraction, by_position = expected_fraction(nuclei, expected_nuclei)
+        findings.append(
+            measured(
+                PPG_EXPECTED_NUCLEUS,
+                extent[0],
+                extent[1],
+                fraction,
+                *evidence,
+                expected_sequence=expected_nuclei,
+                by_position=by_position,
+                realised_nuclei=nuclei,
             )
         )
     if reads.wideband is not None:
@@ -813,7 +880,7 @@ def _with_ppg(done: Done, reading: PpgReading | None) -> Done:
     """Fold the CV instrument into a conformance the other instrument reached.
 
     Args:
-        done: What the envelope or the transcript concluded.
+        done: What the envelope instrument concluded.
         reading: What the CV walk read, or None when the posteriorgram is absent or unreadable.
 
     Returns:
@@ -827,7 +894,7 @@ def _with_ppg(done: Done, reading: PpgReading | None) -> Done:
     return True if reading.train is not None or done is True else False
 
 
-# --------------------------------------------------------------------- the two modes
+# --------------------------------------------------------------------- the one mode
 
 
 def align_ddk(
@@ -846,8 +913,8 @@ def align_ddk(
     expected travels as a ``syllable_sequence_mismatch`` deviation with its own extent.
 
     Args:
-        expectation: The row SPEECH holds for this family, whose pattern is ``SYLLABLE_TRAIN``,
-            ``SYLLABLE_SEQUENCE`` or — for the two ``buttercup`` rows — ``ORDERED_TOKENS``.
+        expectation: The row SPEECH holds for this family, whose pattern is ``SYLLABLE_TRAIN`` or
+            ``SYLLABLE_SEQUENCE`` and whose ``sequence`` is its syllable template.
         store: The provenance store.
         params: The operating points.
         reads: The derivatives, loaded by :func:`speech`.
@@ -855,10 +922,9 @@ def align_ddk(
     Returns:
         Whether the expected patterns were found, the one train span, and the findings.
     """
-    reading = ppg_reading(reads.ppg, params)
-    if expectation.pattern is Pattern.ORDERED_TOKENS:
-        return _repeated_word(expectation, store, params, reads, reading)
-    cv_spans, cv_findings = ppg_evidence(store, reads, params, reading, expectation.sequence)
+    template = expectation.sequence
+    reading = ppg_reading(reads.ppg, params, template)
+    cv_spans, cv_findings = ppg_evidence(store, reads, params, reading, template)
     declared = declared_duration_count(store, expectation.declared_duration_s)
     if reads.envelope is None:
         return Result(_with_ppg(UNDETERMINED, reading), cv_spans, [_absent(ENVELOPE), *cv_findings, *declared])
@@ -881,8 +947,9 @@ def align_ddk(
     intervals = intervals_of(onsets)
     span_s = duration(extent)
     recording_s = duration(stream_extent(store))
-    sequence = expectation.sequence if expectation.pattern is Pattern.SYLLABLE_SEQUENCE else None
-    unit = CYCLES_OR_SYLLABLES_PER_S if sequence else SYLLABLES_PER_S
+    cycle = template if template and expectation.pattern is Pattern.SYLLABLE_SEQUENCE else None
+    places_expected = None if cycle is None else [position.place for position in cycle]
+    unit = CYCLES_OR_SYLLABLES_PER_S if cycle else SYLLABLES_PER_S
 
     carrier = _evidence(train.id, reads.envelope_id, reads.wideband_id)
     findings: list[Finding] = [
@@ -908,7 +975,7 @@ def align_ddk(
             *carrier,
             support_intervals=len(intervals),
             trend_s_per_step=trend(intervals),
-            by_position={} if sequence is None else dispersion_by_position(intervals, len(sequence)),
+            by_position={} if cycle is None else dispersion_by_position(intervals, len(cycle)),
         ),
         measured(
             "train_fraction_of_recording",
@@ -926,12 +993,12 @@ def align_ddk(
     # `ddk_carrier` only returns a span whose rate was readable, so a `rate_hz is not None` clause
     # here would be vacuous; the syllable count is the whole condition.
     done: Done = len(onsets) > 0
-    if sequence is not None:
+    if places_expected is not None:
         places = ddk_places(onsets, params, reads.wideband)
         if reads.wideband is None:
             findings.append(measured("syllable_place", extent[0], extent[1], None, *carrier, unavailable=WIDEBAND))
         for index, (onset, place) in enumerate(zip(onsets, places)):
-            target = sequence[index % len(sequence)]
+            target = places_expected[index % len(places_expected)]
             if place not in (target, UNRESOLVED):
                 findings.append(
                     deviation(
@@ -941,8 +1008,8 @@ def align_ddk(
         resolved = [place for place in places if place != UNRESOLVED]
         cycles = sum(
             1
-            for index in range(len(resolved) - len(sequence) + 1)
-            if tuple(resolved[index : index + len(sequence)]) == tuple(sequence)
+            for index in range(len(resolved) - len(places_expected) + 1)
+            if resolved[index : index + len(places_expected)] == places_expected
         )
         if resolved:
             dominant = max(set(resolved), key=resolved.count)
@@ -968,74 +1035,6 @@ def align_ddk(
     findings.extend(cv_findings)
     findings.extend(declared)
     return Result(_with_ppg(done, reading), components, findings)
-
-
-def _repeated_word(
-    expectation: Expectation,
-    store: ProvStore,
-    params: BranchParams,
-    reads: DdkReads,
-    reading: PpgReading | None,
-) -> Result:
-    """The two ``buttercup`` families: the only DDK tasks whose instruction names a real word.
-
-    Spans proposed: **one**, the train, over the hull of the realised tokens. The consensus words
-    serve this family directly, so it is the cheapest in the branch.
-
-    Args:
-        expectation: The row, whose first token is the word the instruction names.
-        store: The provenance store.
-        params: The operating points.
-        reads: The derivatives, loaded by :func:`speech`.
-        reading: What the CV walk read. ``buttercup`` is a stop-and-vowel word like every other DDK
-            stimulus, so the instrument reads it, and a recogniser that missed the word entirely
-            does not make the task unperformed.
-
-    Returns:
-        Whether the word was realised at all, the one train span, and the findings.
-
-    Raises:
-        ValueError: If the row names no token, which no DDK ``ORDERED_TOKENS`` row does.
-    """
-    if not expectation.tokens:
-        raise ValueError("a DDK ordered-tokens row names the word its instruction asks for")
-    target = params.p_normalise(expectation.tokens[0])
-    hits = [word for word in lexical(consensus_words(store)) if params.p_normalise(word_text(word)) == target]
-    hit_ids = tuple(word.id for word in hits)
-    findings: list[Finding] = [count("expected_event_count", len(hits), expectation.expected_event_count, *hit_ids)]
-    train = hull([word_extent(word) for word in hits])
-    components: list[Proposal] = []
-    if train is not None and train[1] > train[0]:
-        components.append(
-            speech_span(
-                "task_extent",
-                train,
-                *_evidence(reads.transcript_id, reads.envelope_id, *hit_ids),
-                production="lexical_repetition",
-                token=target,
-                repeats_n=len(hits),
-            )
-        )
-        if reads.envelope is None:
-            findings.append(_absent(ENVELOPE))
-        else:
-            findings.append(
-                measured(
-                    RATE,
-                    train[0],
-                    train[1],
-                    train_rate_hz(reads.envelope, train, params),
-                    *_evidence(reads.transcript_id, reads.envelope_id, *hit_ids),
-                    unit=SYLLABLES_PER_S,
-                    support_words=len(hits),
-                    **acquisition_covariates(store, train),
-                )
-            )
-    cv_spans, cv_findings = ppg_evidence(store, reads, params, reading, expectation.sequence)
-    components.extend(cv_spans)
-    findings.extend(cv_findings)
-    findings.extend(declared_duration_count(store, expectation.declared_duration_s))
-    return Result(_with_ppg(len(hits) > 0, reading), components, findings)
 
 
 # --------------------------------------------------------------------- what SPEECH reports
@@ -1101,6 +1100,6 @@ def syllable_detail(result: Result) -> dict[str, Any]:
         "ppg_interval_trend_s_per_step": _covariate(result.deviations, PPG_DISPERSION, "trend_s_per_step"),
         "ppg_expected_place_fraction": _value(result.deviations, PPG_EXPECTED_PLACE),
         "ppg_place_agreement": _value(result.deviations, PPG_PLACE_AGREEMENT),
+        "ppg_expected_nucleus_fraction": _value(result.deviations, PPG_EXPECTED_NUCLEUS),
         "ppg_trains_n": sum(1 for component in result.components if component.role == "ppg_train"),
-        "lexical_repetitions_n": sum(1 for component in result.components if component.role == "lexical_repetition"),
     }
