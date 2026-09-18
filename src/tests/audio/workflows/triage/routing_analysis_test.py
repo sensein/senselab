@@ -840,6 +840,27 @@ def test_a_throat_clearing_span_counts_toward_the_cough_set(tmp_path: Path) -> N
     assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_min"] == pytest.approx(30.0)
 
 
+def test_every_declared_label_set_carries_a_count_whether_or_not_anything_did(tmp_path: Path) -> None:
+    """A set no span carried is a measured zero, not a key that was never written.
+
+    The whistle set has yamnet members and nothing on this recording carries one. Without the
+    count, ``airway.cough``'s shape -- a set-conditioned gate on a recording where the classifier
+    ran and found nothing -- reads unavailable, which is the one gate of nine that does.
+    """
+    record = _multi_label(tmp_path)
+    for set_name, per_classifier in LABEL_SETS.items():
+        key = f"yamnet.{set_name}.span_count"
+        if per_classifier["yamnet"]:
+            assert key in record.span_label_set_stats, key
+        else:
+            assert key not in record.span_label_set_stats, key
+    assert record.span_label_set_stats["yamnet.whistle.span_count"] == pytest.approx(0.0)
+    assert "yamnet.whistle.peak_over_floor_db_max" not in record.span_label_set_stats
+    assert not [key for key in record.span_label_set_stats if key.startswith("hear.")], (
+        "the store carries no per-span HeAR windows, so HeAR measured no set and counts none"
+    )
+
+
 def test_a_span_counts_once_toward_a_set_however_many_members_it_carries(tmp_path: Path) -> None:
     """``Breathing`` and ``Sniff`` are both breath-set labels on one span, which is one span."""
     record = _multi_label(tmp_path)
@@ -922,7 +943,11 @@ def _write_posteriorgram(run_dir: Path, indices: Sequence[int]) -> tuple[str, in
 
 
 def _derivative_store(path: Path, indices: Sequence[int], *, sidecar: bool = True) -> Path:
-    """A store carrying the two PREPROCESS derivatives and nothing else a detector reads.
+    """A store carrying the two PREPROCESS derivatives, and the transcript a gated detector reads.
+
+    The ``+no_agreed_word`` detectors are gated on ``("words", "agreement")``, so they need a
+    consensus transcript to be readable at all. It carries no words: no agreed word is what they
+    are gated on, and it is a measurement only once a recogniser has run.
 
     Args:
         path: Where the store goes.
@@ -941,6 +966,7 @@ def _derivative_store(path: Path, indices: Sequence[int], *, sidecar: bool = Tru
         path,
         [
             _entity("stream", "stream-1", {"name": "recording"}, [0.0, frames * SECONDS_PER_FRAME]),
+            _entity("measurement", "consensus-1", {"name": "consensus_transcript", "signal": "plain", "text": ""}),
             _entity(
                 "measurement",
                 "praat-1",
@@ -1128,7 +1154,11 @@ def _contour(kind: str, frames: int = PHONATION_FRAMES) -> np.ndarray:
 
 
 def _phonation_store(path: Path, kind: str, *, sidecar: bool = True) -> Path:
-    """A store carrying the ``phonation_tracks`` measurement and the sidecar it does not name.
+    """A store carrying ``phonation_tracks``, its sidecar, and the transcript a gated detector reads.
+
+    The ``+no_agreed_word`` detectors are gated on ``("words", "agreement")``, so they need a
+    consensus transcript to be readable at all. It carries no words: no agreed word is what they
+    are gated on, and it is a measurement only once a recogniser has run.
 
     Args:
         path: Where the store goes.
@@ -1154,6 +1184,7 @@ def _phonation_store(path: Path, kind: str, *, sidecar: bool = True) -> Path:
         path,
         [
             _entity("stream", "stream-1", {"name": "recording"}, [0.0, seconds]),
+            _entity("measurement", "consensus-1", {"name": "consensus_transcript", "signal": "plain", "text": ""}),
             _entity("measurement", "phonation-1", dict(PHONATION_ATTRIBUTES), [0.0, seconds]),
         ],
     )

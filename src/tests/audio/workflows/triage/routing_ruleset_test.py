@@ -55,7 +55,7 @@ def _features(family: str, **overrides: object) -> RecordingFeatures:
         residual={"energy_fraction": 0.0},
         span_longest_s={"amplitude": 0.0},
         span_stats={"all.peak_over_floor_db_max": 0.0},
-        span_label_set_stats={"yamnet.cough_labels.peak_over_floor_db_max": 0.0},
+        span_label_set_stats={"yamnet.cough_labels.span_count": 0.0},
         ppg={"silent_fraction": 0.0, "segment_rate_per_s": 0.0},
         classifier_streams=["plain|yamnet"],
     )
@@ -243,6 +243,49 @@ class TestAMissingMeasurementIsNotANegative:
         """No transcript is no bracketed token, which is not a bracketed-token count of zero."""
         record = _features("breath-sounds", consensus_present=False)
         assert evaluate_gate(record, ruleset.gates["airway.bracketed_event"]) is GateOutcome.UNAVAILABLE
+
+    def test_a_lexical_count_with_no_transcript_reads_unavailable_not_declined(self, ruleset: Ruleset) -> None:
+        """No recogniser ran, which is not a recording carrying fewer than two lexical words.
+
+        ``features.words`` is built from the live word entities, so both ASR blocks failing leaves
+        every count at zero. Reading that as a measurement records SPEECH as declined on a false
+        claim about the recording, which is worse than an admitted absence.
+        """
+        record = _features("lexical-speech", consensus_present=False, words={})
+        assert evaluate_gate(record, ruleset.gates["speech.lexical"]) is GateOutcome.UNAVAILABLE
+        assert evaluate_gate(record, ruleset.gates["speech.transcript_agreement"]) is GateOutcome.UNAVAILABLE
+        result = evaluate_routes(record, ruleset)
+        assert "SPEECH" not in result.routed
+        assert "speech.lexical" in result.unavailable["SPEECH"]
+
+    def test_a_non_finite_energy_fraction_reads_unavailable_not_silent(self, ruleset: Ruleset) -> None:
+        """``residual_energy_fraction`` is nan when the input carried no energy at all.
+
+        ``nan >= 0.10`` is False, so an unrouted read of it would record AIRWAY as silent on a
+        number that does not exist.
+        """
+        record = _features("breath-sounds", residual={"energy_fraction": float("nan")})
+        assert evaluate_gate(record, ruleset.gates["airway.breath"]) is GateOutcome.UNAVAILABLE
+
+    def test_a_label_set_that_ran_and_carried_nothing_reads_silent_not_unavailable(self, ruleset: Ruleset) -> None:
+        """A measured count of zero cough-labelled spans is a definite non-fire.
+
+        ``airway.cough`` names ``peak_over_floor_db_max``, which an empty sample has no value for.
+        The count beside it is the measurement, and it says the classifier ran and nothing carried
+        the set -- which the gate must read as a reason not to fire, not as a reason it could not
+        be read.
+        """
+        record = _features("voluntary-cough", span_label_set_stats={"yamnet.cough_labels.span_count": 0.0})
+        assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
+
+    def test_a_label_set_never_written_at_all_still_reads_unavailable(self, ruleset: Ruleset) -> None:
+        """No count key is the per-span classifier never having run, which is not a count of zero.
+
+        The distinction the count key carries: present and zero is ``ran, found none``; absent is
+        ``never written``.
+        """
+        record = _features("voluntary-cough", span_label_set_stats={})
+        assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.UNAVAILABLE
 
     def test_an_unreadable_gate_is_named_rather_than_counted_as_silent(self, ruleset: Ruleset) -> None:
         """A breath recording with no residual and no span statistic is unmeasured, not empty."""
@@ -525,10 +568,20 @@ class TestTheCoughGateIsSetConditioned:
         record = _features("free-speech", span_stats={"all.peak_over_floor_db_max": 70.0})
         assert evaluate_routes(record, ruleset).routed == ()
 
-    def test_no_cough_labelled_span_is_unreadable_rather_than_silent(self, ruleset: Ruleset) -> None:
-        """A recording with no cough-set span never measured the quantity the gate reads."""
-        record = _features("voluntary-cough", span_label_set_stats={})
-        assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.UNAVAILABLE
+    def test_the_two_reasons_the_gate_reads_no_decibel_are_told_apart(self, ruleset: Ruleset) -> None:
+        """Every instrument running and finding no cough is not the same as no instrument running.
+
+        The per-span classifier writes ``<classifier>.<set>.span_count`` for every declared set on
+        every recording, so its presence is what separates the two. Present and zero: the set was
+        measured and nothing carried it, and the gate must not fire. Absent: nothing measured it,
+        and the gate cannot be read.
+        """
+        measured = _features("voluntary-cough", span_label_set_stats={"yamnet.cough_labels.span_count": 0.0})
+        unmeasured = _features("voluntary-cough", span_label_set_stats={})
+        assert evaluate_gate(measured, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
+        assert evaluate_gate(unmeasured, ruleset.gates["airway.cough"]) is GateOutcome.UNAVAILABLE
+        assert evaluate_routes(measured, ruleset).unavailable == {}
+        assert evaluate_routes(unmeasured, ruleset).unavailable["AIRWAY"] == ("airway.cough",)
 
 
 class TestQualityIsATerminalNodeAndNotABranch:

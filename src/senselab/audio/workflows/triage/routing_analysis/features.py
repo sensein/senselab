@@ -897,6 +897,13 @@ def _label_span_statistics(
     spans carrying any of its members, counted once each, and is not the union of its members'
     distributions.
 
+    A classifier that scored at least one span yields a distribution for every set it declares
+    members for, whether or not a span carried that set, so ``<classifier>.<set>.span_count`` is
+    written and reads zero where nothing did. A classifier that scored no span at all yields none
+    of those keys: the absent count is what says nothing measured the set, and a zero count is what
+    says something did and found nothing. A set no span carried has no ``peak_over_floor_db``
+    sample and so no key for one.
+
     Args:
         spans: The live spans, each carrying ``id`` and ``peak_db``.
         span_scores: ``{classifier: {span_id: {label: max score}}}``.
@@ -911,7 +918,11 @@ def _label_span_statistics(
         carried = _span_labels(spans, span_scores, classifier, memberships[classifier])
         tracked = TRACKED_LABELS[classifier]
         grouped: dict[str, list[dict[str, Any]]] = {}
-        by_set: dict[str, list[dict[str, Any]]] = {}
+        by_set: dict[str, list[dict[str, Any]]] = (
+            {set_name: [] for set_name, per_classifier in LABEL_SETS.items() if per_classifier[classifier]}
+            if classifier in span_scores
+            else {}
+        )
         for span in spans:
             labels = carried.get(str(span["id"]), ())
             for label in labels:
