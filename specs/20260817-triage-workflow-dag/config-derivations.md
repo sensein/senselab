@@ -1350,11 +1350,30 @@ branch.ddk_stop_places:
   (`DATA_MAP_PATHS`), so a campaign may add a place without editing the installed package. The stop
   SET the CV walk reads is this mapping's union; there is no second key spelling it.
 
-branch.ddk_vowel_phonemes: [aa, ah, ao, ow, uh, uw]
-  The mid and back vowels, read off the same task definition. Any member satisfies the nucleus, which
-  is how the phonemic variation across /pa/, /pah/, /paw/ and /puh/ is tolerated rather than
-  penalised -- the instruction fixes the consonant and leaves the vowel's realisation to the speaker
-  and the argmax. Not fitted.
+branch.ddk_nucleus_classes:
+  low [aa, ae, ah, ao, aw, ay], rhotic [er]
+  Read off the phonetic category, not fitted: `low` is the six a-initial ARPAbet vowels, the low and
+  open-mid nuclei; `rhotic` is the one r-coloured vowel, which is buttercup's middle nucleus. The
+  shape is `branch.ddk_stop_places`' -- class -> the phonemes that ARE that class -- so the two share
+  one idiom and one accessor type. A syllable template position (`branches.Syllable`) names one of
+  these keys; the CV walk admits the UNION of the classes the declared template names, and
+  conformance is then checked per position against the class that position named. Any member of a
+  class satisfies it, which is how the phonemic variation across /pa/, /pah/ and /paw/ is tolerated
+  rather than penalised. This replaced one global vowel list, `branch.ddk_vowel_phonemes:
+  [aa, ah, ao, ow, uh, uw]`, which held no rhotic and therefore found 2 of buttercup's 3 syllables on
+  every recording.
+  **Corpus-confirmed, not corpus-derived.** On 150 recordings per family, stop->next-run pairs off
+  the argmax raster: /pa/ /ta/ /ka/ /pataka/ are `ah` and `aa` throughout, and buttercup's three most
+  common pairs are its three syllables -- /k/->ah 19.7%, /t/->er 14.2%, /b/->ah 10.1%. On 1,800
+  recordings at tol=1.5, widening the global set from [aa ah ao ow uh uw] to [aa ae ah ao aw ay]
+  moved sensitivity 0.633 -> 0.693 at unchanged specificity (0.950 -> 0.949); `ow`, `uh` and `uw`
+  never appear in the top 14 post-stop nuclei. Those numbers say the phonetic category is the right
+  one; they are not where its membership came from.
+  NOT IMPLEMENTED, and why -- strict adjacency: requiring the nucleus run to be immediately adjacent
+  to the stop run costs sensitivity (0.693 -> 0.605) and shortens median trains 6 -> 5, buying
+  specificity 0.949 -> 0.995. Since the DDK dissolution there is no DDK routing, so this instrument
+  only ever runs in-family on the ten declared families and specificity is close to irrelevant. The
+  intervening-run gap is admitting genuine units. See ddk-syllable-template.md.
 
 NOT SHIPPED, and why -- the DDK rate plausibility band:
   An earlier draft of this instrument carried `branch.ddk_rate_band_hz: [1.5, 8.0]` as an acceptance

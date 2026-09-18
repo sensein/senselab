@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Finding,
     Proposal,
     Result,
+    Syllable,
     branch_params,
     dispatch,
     merge,
@@ -620,9 +621,18 @@ class TestASyllableFamilyIsEvaluatedAsTheTrainItsInstructionAsksFor:
 
     def test_the_row_carries_the_instructions_own_expectation(self) -> None:
         """A syllable family's row says what it asks for; ``no lexical content`` is not a task."""
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("labial",)
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == (Syllable("labial", "low"),)
         assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].expected_event_count == 10
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence == ("labial", "alveolar", "velar")
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence == (
+            Syllable("labial", "low"),
+            Syllable("alveolar", "low"),
+            Syllable("velar", "low"),
+        )
+        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].sequence == (
+            Syllable("labial", "low"),
+            Syllable("alveolar", "rhotic"),
+            Syllable("velar", "low"),
+        )
 
     def test_a_lexical_word_on_a_syllable_train_is_not_a_departure(self, tmp_path: Path) -> None:
         """The removed claim: a word here was an ``off_task_extent``, which is what the owner rejected."""
@@ -631,33 +641,24 @@ class TestASyllableFamilyIsEvaluatedAsTheTrainItsInstructionAsksFor:
         result = align_speech("diadochokinesis-pa", store, None, branch_params(_config(tmp_path)))
         assert _of_kind(result, "deviation", "off_task_extent") == []
 
-    def test_buttercup_takes_the_lexical_token_path(self, tmp_path: Path) -> None:
-        """``buttercup`` is a word, so the consensus words serve the family directly."""
+    def test_buttercup_takes_the_syllable_body_and_no_lexical_one(self, tmp_path: Path) -> None:
+        """``buttercup`` is three syllables, so its own template serves it and the word count does not.
+
+        The ten ``buttercup`` tokens below are exactly what the deleted lexical path counted. What the
+        syllable body reports instead is which instrument it could not read, because this store
+        carries neither the envelope nor the posteriorgram.
+        """
         store = _store(family="diadochokinesis-buttercup")
         _transcript(store, [("buttercup", 1.0 + 0.5 * index, 1.4 + 0.5 * index) for index in range(10)])
         result = align_speech("diadochokinesis-buttercup", store, None, branch_params(_config(tmp_path)))
-        [counted] = [finding for finding in result.deviations if finding.name == "expected_event_count"]
-        assert counted.evidence["found"] == 10
-        assert counted.evidence["declared"] == 10
-        [train] = [span for span in result.components if span.role == "task_extent"]
-        assert train.attributes["production"] == "lexical_repetition"
-        assert train.attributes["token"] == "buttercup"
-        assert result.done is True
-
-    def test_a_buttercup_recording_with_no_such_word_did_not_perform_the_task(self, tmp_path: Path) -> None:
-        """The discriminator for the lexical path: the count is of that token, not of any word."""
-        store = _store(family="diadochokinesis-buttercup")
-        _transcript(store, [("the", 1.0, 1.2), ("birch", 1.3, 1.6)])
-        result = align_speech("diadochokinesis-buttercup", store, None, branch_params(_config(tmp_path)))
+        absent = [
+            (finding.name, finding.evidence.get("unavailable"))
+            for finding in result.deviations
+            if finding.kind == "measure" and finding.evidence.get("unavailable")
+        ]
+        assert ("ddk_syllable_rate_from_envelope_modulation_hz", "energy_envelope") in absent
         assert result.components == []
-        assert result.done is False
-
-    def test_the_syllable_spans_are_minted_into_speechs_own_family(self, tmp_path: Path) -> None:
-        """One minting family per branch is what ``dispatch`` enforces; a second would weaken it."""
-        store = _store(family="diadochokinesis-buttercup")
-        _transcript(store, [("buttercup", 1.0, 1.4)])
-        result = align_speech("diadochokinesis-buttercup", store, None, branch_params(_config(tmp_path)))
-        assert {span.family for span in result.components} == {"speech"}
+        assert result.done == UNDETERMINED
 
 
 class TestDetectSpeechNeedsNoAlignmentAndGroupsByGap:

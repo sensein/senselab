@@ -292,9 +292,13 @@ branch:
     labial: [p, b]
     alveolar: [t, d]
     velar: [k, g]
-  # the vowels a DDK syllable's nucleus may surface as; any member satisfies V, which is how
-  # phonemic variation across /pa/, /pah/, /paw/, /puh/ is tolerated rather than penalised.
-  ddk_vowel_phonemes: [aa, ah, ao, ow, uh, uw]
+  # nucleus class -> the phonemes that ARE that class, in the posteriorgram's ARPAbet spelling.
+  # Data, not schema, and the same idiom `ddk_stop_places` uses. A syllable template position
+  # (`branches.Syllable`) names one of these keys; the CV walk admits the union of the classes the
+  # declared template names, and conformance is checked per position against the class it named.
+  ddk_nucleus_classes:
+    low: [aa, ae, ah, ao, aw, ay]
+    rhotic: [er]
 
 # What VERDICT does with what the reporting nodes report. A branch reports and VERDICT decides, so
 # every threshold that turns a reading into a judgement about the recording is here and none is in

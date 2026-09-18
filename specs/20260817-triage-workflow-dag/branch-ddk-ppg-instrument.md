@@ -34,8 +34,9 @@ variation the owner named: phonemic, timing, articulatory.
    period all read as an absent instrument.
 2. `argmax` per frame; collapse consecutive identical labels into runs. Adjacent runs carry
    different labels by construction.
-3. Class per run: **C** if the phoneme is a key of `branch.ddk_stop_places`, **V** if it is in
-   `branch.ddk_vowel_phonemes`, **O** otherwise.
+3. Class per run: **C** if the phoneme is a key of `branch.ddk_stop_places`, **V** if it is in the
+   union of the `branch.ddk_nucleus_classes` entries the declared syllable template names, **O**
+   otherwise. See [`ddk-syllable-template.md`](ddk-syllable-template.md).
 4. A **CV unit** is a C run followed by a V run. Scan forward from each C run: the first V closes a
    unit whose onset is the C run's own start; the first further C ends the scan with nothing
    emitted. Because runs alternate, this resolves without a window — **there is no lookahead
@@ -120,7 +121,8 @@ folds in through `_with_ppg` and does three things and no more:
 
 A collapsed sequence is never a non-conformance. `/pa-pa-pa/` for `/pa-ta-ka/` is the clinically
 meaningful finding the sequential families exist to surface, and it travels as a low
-`ddk_expected_place_fraction` and a `syllable_sequence_mismatch` deviation.
+`ddk_expected_place_fraction` and a `syllable_sequence_mismatch` deviation. A substituted nucleus is
+the same kind of finding, on `ddk_expected_nucleus_fraction`.
 
 **Absent posteriorgram is UNDETERMINED, never a refusal.** The absence is recorded as a
 `ddk_syllable_rate_from_ppg_cv_onsets_hz` measurement with no value naming the missing derivative,
@@ -128,10 +130,13 @@ and as the `NO_PPG` note on the branch report.
 
 ## The expectation table
 
-Every non-lexical DDK row now names the place its instruction asks for:
-`sequence=("labial",)` for `-pa` and `-v2-puh`, `("alveolar",)` for `-ta`/`-v2-tuh`,
-`("velar",)` for `-ka`/`-v2-kuh`, and the three-place cycle for `-pataka`/`-v2-puhtuhkuh` as before.
-The two `buttercup` rows are `ORDERED_TOKENS` and take the lexical route.
+Every DDK row names a **syllable template**: one `branches.Syllable` per position, carrying both the
+onset place and the nucleus class its instruction asks for. `(("labial","low"),)` for `-pa` and
+`-v2-puh`, `(("alveolar","low"),)` for `-ta`/`-v2-tuh`, `(("velar","low"),)` for `-ka`/`-v2-kuh`, the
+three-place all-low cycle for `-pataka`/`-v2-puhtuhkuh`, and
+`(("labial","low"), ("alveolar","rhotic"), ("velar","low"))` for both `buttercup` rows — which are
+therefore `SYLLABLE_SEQUENCE` like `pataka`, not a lexical special case.
+[`ddk-syllable-template.md`](ddk-syllable-template.md) is the whole of that change.
 
 This removes a limitation `expected-patterns.md` named as a defect in its own design — *"three
 identical rows, one per target syllable, because nothing in the matcher reads which syllable it

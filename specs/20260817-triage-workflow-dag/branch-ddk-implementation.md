@@ -126,10 +126,11 @@ to produce, and it flags rather than fails: a train was found.
 | a train span and `done is False` | `FLAG` | the expected pattern was not found over a train that was |
 | a train span, `done` true or `UNDETERMINED` | `PASS` | |
 
-A `lexical_repetition` span is **not** a train: `TRAIN_ROLES` is `("task_extent", "repetition")`, so
-a recording carrying ordinary function-word repetition and no train comes back with `trains_n: 0` and
-`FAIL`, carrying the repetition it did find as what it is. That was the case `ddk.lexical_repetition`
-produced on most of this branch's corpus before the gate was removed, and it is pinned by test.
+`TRAIN_ROLES` is `("task_extent",)`. It once read `("task_extent", "repetition")` and admitted a
+`lexical_repetition` span, but no writer ever minted either of those two roles: `"repetition"` was
+minted nowhere, and the lexical path minted `role="task_extent"` with `lexical_repetition` in
+`production`. Both were removed with the lexical path itself — see
+[`ddk-syllable-template.md`](ddk-syllable-template.md).
 
 **The vocabulary makes the absent-instrument row uncomfortable and it is left uncomfortable.**
 `vocabulary._resolved` maps `FAIL` to `absent` and everything else to `present`, so a `FLAG` for a

@@ -23,6 +23,7 @@ from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes import speech as speech_module
+from senselab.audio.workflows.triage.nodes.branches import SPEECH_EXPECTATIONS
 from senselab.audio.workflows.triage.nodes.common import (
     find_branch_report,
     find_measurement,
@@ -2218,24 +2219,25 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         }
         assert reports == {"SPEECH"}
 
-    def test_a_diadochokinesis_buttercup_recording_still_takes_the_lexical_token_path(
+    def test_a_diadochokinesis_buttercup_recording_takes_the_syllable_body(
         self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``buttercup`` is a word, so the consensus words serve it and the train is lexical."""
+        """``buttercup`` is three syllables, so the train comes from the carrier, not from the words."""
         _seed_speech_store(store, tmp_path, words=["buttercup"] * 10)
+        _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", syllable_config, self._declared("diadochokinesis-buttercup"), run_dir=tmp_path)
         detail = _report_entity(store, "SPEECH").attributes
         assert detail["expectation"]["task_family"] == "diadochokinesis-buttercup"
+        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].expected_event_count == 30
         assert detail["trains_n"] == 1
-        assert result.report.conformance is True
         [train] = [
             entity
             for entity in live_entities(store, "span")
-            if entity.attributes.get("production") == "lexical_repetition"
+            if entity.attributes.get("production") == "syllable_sequence"
         ]
-        assert train.attributes["token"] == "buttercup"
-        assert train.attributes["repeats_n"] == 10
+        assert train.attributes["syllables_n"] > 1
+        assert result.report.in_family is True
 
     def test_a_non_ddk_lexical_recording_carries_no_syllable_measures(
         self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
