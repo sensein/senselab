@@ -154,9 +154,13 @@ def _stub_models(
         lambda config: _FakeModel(str(config.require("diarization.model"))),
     )
     monkeypatch.setattr(preprocess_module, "diarize_audios", diarize or fake_diarize)
-    if enhance is not None:
-        monkeypatch.setattr(preprocess_module, "_frcrn_model", lambda: _FakeModel("alibabasglab/FRCRN_SE_16K"))
-        monkeypatch.setattr(preprocess_module, "enhance_audios", enhance)
+
+    def fake_enhance(audios: list, model: Any = None) -> list:  # noqa: ANN401
+        """FRCRN returning its input unchanged, so the residual block runs without the real model."""
+        return list(audios)
+
+    monkeypatch.setattr(preprocess_module, "_frcrn_model", lambda: _FakeModel("alibabasglab/FRCRN_SE_16K"))
+    monkeypatch.setattr(preprocess_module, "enhance_audios", enhance or fake_enhance)
 
 
 @pytest.fixture
@@ -217,30 +221,18 @@ def windows_config(tmp_path: Path) -> TriageConfig:
         "  hear:\n"
         "    default_threshold: 0.5\n"
         "    label_thresholds: {}\n"
-        "residual:\n"
-        "  enabled: false\n"
     )
     return load_triage_config(override)
 
 
 @pytest.fixture
-def residual_config(tmp_path: Path) -> TriageConfig:
-    """The packaged configuration with the residual PREPROCESS block turned on."""
-    override = tmp_path / "residual.yaml"
-    override.write_text("residual:\n  enabled: true\n")
-    return load_triage_config(override)
-
-
-@pytest.fixture
-def phonation_config(tmp_path: Path) -> TriageConfig:
-    """The packaged config with the residual PREPROCESS block off, for the phonation-track pass.
+def phonation_config() -> TriageConfig:
+    """The packaged config, for the phonation-track pass.
 
     The F0 range is no longer part of this fixture: PREPROCESS derives the recording's own from
     ``voice.f0_search_range_hz``, which the packaged file states.
     """
-    override = tmp_path / "phonation.yaml"
-    override.write_text("residual:\n  enabled: false\n")
-    return load_triage_config(override)
+    return load_triage_config()
 
 
 @pytest.fixture
@@ -268,8 +260,6 @@ def spans_config(tmp_path: Path) -> TriageConfig:
         "  ceiling: 0.95\n"
         "spans:\n"
         "  k_db: 12.0\n"
-        "residual:\n"
-        "  enabled: false\n"
     )
     return load_triage_config(override)
 
@@ -300,8 +290,6 @@ def asr_span_config(tmp_path: Path) -> TriageConfig:
         "spans:\n"
         "  k_db: 12.0\n"
         "speech:\n"
-        "residual:\n"
-        "  enabled: false\n"
     )
     return load_triage_config(override)
 
@@ -339,8 +327,6 @@ def span_quality_config(tmp_path: Path) -> TriageConfig:
         "  yamnet:\n"
         "    default_threshold: 0.5\n"
         "    label_thresholds: {Speech: 0.4}\n"
-        "residual:\n"
-        "  enabled: false\n"
     )
     return load_triage_config(override)
 

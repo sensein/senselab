@@ -55,18 +55,9 @@ from tests.audio.workflows.triage.nodes.conftest import (
 )
 
 
-@pytest.fixture
-def config(tmp_path: Path) -> TriageConfig:
-    """The packaged config, with the residual block off.
-
-    Overrides the module-scoped ``config`` fixture from ``conftest.py`` for this file: every test
-    here that isn't ``TestResidualStep`` is about some other PREPROCESS block, and none of them stub
-    FRCRN, so leaving the packaged default (on) would make them run it for real. ``TestResidualStep``
-    builds its own configs explicitly and does not use this fixture.
-    """
-    override = tmp_path / "no_residual.yaml"
-    override.write_text("residual:\n  enabled: false\n")
-    return load_triage_config(override)
+def _frcrn_unavailable(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
+    """FRCRN raising, which is the one gate that leaves ``enhanced`` and ``residual`` unwritten."""
+    raise RuntimeError("worker timed out")
 
 
 def _clipped_at_44k() -> np.ndarray:
@@ -1024,17 +1015,6 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "yamnet_windows",
             "ast_windows",
             "hear_windows",
-            "residual",
-            "enhanced_yamnet",
-            "enhanced_ast",
-            "enhanced_hear",
-            "residual_yamnet",
-            "residual_ast",
-            "residual_hear",
-            "ppg_posteriorgram",
-            "praat_features",
-            "enhanced_diarization",
-            "residual_diarization",
             "stimulus_alignment",
         }
         for name in ("span_hear", "span_yamnet"):
@@ -1518,7 +1498,7 @@ class TestWordsAreBracketAware:
     ) -> None:
         """With the vocabulary supplied, 'khh' becomes [KHH] and the raw token stays in the readings."""
         override = tmp_path / "tokens.yaml"
-        override.write_text("words:\n  onomatopoeic_tokens: [khh, ahem]\nresidual:\n  enabled: false\n")
+        override.write_text("words:\n  onomatopoeic_tokens: [khh, ahem]\n")
         config = load_triage_config(override)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello khh world"), qwen=_line("hello khh world"))
@@ -1537,7 +1517,7 @@ class TestWordsAreBracketAware:
     ) -> None:
         """With the vocabulary emptied, `khh` stays the word the recognizer produced."""
         override = tmp_path / "no-tokens.yaml"
-        override.write_text("words:\n  onomatopoeic_tokens: null\nresidual:\n  enabled: false\n")
+        override.write_text("words:\n  onomatopoeic_tokens: null\n")
         config = load_triage_config(override)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello khh world"), qwen=_line("hello khh world"))
@@ -1743,7 +1723,7 @@ class TestASTTooShortDegradesWithoutLosingTheRecording:
     def test_ast_blocks_are_absent_but_yamnet_and_hear_survive(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -1764,7 +1744,7 @@ class TestASTTooShortDegradesWithoutLosingTheRecording:
 
         monkeypatch.setattr(preprocess_module, "classify_audios", _classify)
 
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         absent = _absent_map(store)
         for name in ("ast_scores", "enhanced_ast", "residual_ast"):
@@ -1893,39 +1873,24 @@ class TestResidualBandsAndSpeechOverlap:
 class TestResidualStep:
     """PREPROCESS's background-residual block: on by default, no meaning gate, classified both ways."""
 
-    def test_disabled_is_absent_and_harmless(
-        self,
-        store: ProvStore,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """With ``residual.enabled: false`` set explicitly, FRCRN never runs and every other derivative is untouched."""
-        override = tmp_path / "residual.yaml"
-        override.write_text("residual:\n  enabled: false\n")
-        config = load_triage_config(override)
-        _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch)
-        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        assert {
-            "residual",
-            "enhanced_yamnet",
-            "enhanced_ast",
-            "enhanced_hear",
-            "residual_yamnet",
-            "residual_ast",
-            "residual_hear",
-        } <= set(result.absent)
-        assert find_measurement(store, "residual") is None
-        assert find_measurement(store, "residual_yamnet_scores") is None
-        assert find_measurement(store, "enhanced_yamnet_scores") is None
-        assert find_measurement(store, "level") is not None
-        assert _absent_map(store)["residual"] == "ValueError: residual.enabled is false"
+    def test_the_block_carries_no_switch_that_could_turn_it_off(self) -> None:
+        """Four of nine ruleset gates read the residual or the enhanced stream it is fitted against.
+
+        ``airway.breath`` reads ``[residual, energy_fraction]`` and ``airway.ppg_silent_fraction``
+        needs the PPG, which runs on ``enhanced``; both streams come out of this one block. A flag
+        whose false value makes a declared gate unreadable is not an option a configuration may
+        offer, so the configuration states none and PREPROCESS reads none.
+        """
+        packaged = load_triage_config()
+        assert packaged.get("residual.enabled") is None
+        assert "enabled" not in dict(packaged.require("residual"))
+        source = (Path(preprocess_module.__file__)).read_text(encoding="utf-8")
+        assert "residual.enabled" not in source
 
     def test_a_silent_enhancement_output_is_written_and_measured_regardless(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -1939,7 +1904,7 @@ class TestResidualStep:
         """
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, enhance=_fake_enhance(0.0))
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         measurement = find_measurement(store, "residual")
         assert measurement is not None
         attrs = measurement.attributes
@@ -1955,7 +1920,7 @@ class TestResidualStep:
     def test_an_uncorrelated_enhancement_output_is_written_and_measured_regardless(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -1975,7 +1940,7 @@ class TestResidualStep:
             return [enhanced]
 
         _stub_models(monkeypatch, enhance=_uncorrelated_enhance)
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         measurement = find_measurement(store, "residual")
         assert measurement is not None
         attrs = measurement.attributes
@@ -1985,7 +1950,7 @@ class TestResidualStep:
     def test_an_identical_enhancement_output_is_written_and_measured_regardless(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -1993,7 +1958,7 @@ class TestResidualStep:
         """FRCRN reproducing the input exactly still writes both streams -- residual near-zero energy."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, enhance=_fake_enhance(1.0))
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         measurement = find_measurement(store, "residual")
         assert measurement is not None
         attrs = measurement.attributes
@@ -2004,7 +1969,7 @@ class TestResidualStep:
     def test_frcrn_raising_gates_absent_rather_than_failing_the_node(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2019,7 +1984,7 @@ class TestResidualStep:
             raise RuntimeError("worker timed out")
 
         _stub_models(monkeypatch, enhance=_broken)
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         reason = _absent_map(store)["residual"]
         assert "FRCRN enhancement unavailable" in reason
         assert "RuntimeError" in reason
@@ -2028,7 +1993,7 @@ class TestResidualStep:
     def test_a_partial_residual_writes_both_streams_measurement_and_both_summaries(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2052,7 +2017,7 @@ class TestResidualStep:
             qwen=_line("hello world"),
             enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
         )
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         for stream_name in ("enhanced", "residual"):
             stream = next(
@@ -2102,7 +2067,7 @@ class TestResidualStep:
     def test_hear_also_runs_over_both_streams(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2114,7 +2079,7 @@ class TestResidualStep:
             hear=[window(0.0, 2.0, {"Cough": 0.7})],
             enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
         )
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         for prefix in ("enhanced", "residual"):
             scores = find_measurement(store, f"{prefix}_hear_scores")
             assert scores is not None
@@ -2125,7 +2090,7 @@ class TestResidualStep:
     def test_speech_present_is_false_and_unmeasured_without_any_consensus(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2138,7 +2103,7 @@ class TestResidualStep:
             raise LookupError("no recognizer available")
 
         monkeypatch.setattr(preprocess_module, "transcribe_audios", _broken_transcribe)
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         absent = _absent_map(store)
         assert "consensus_transcript" in absent
         measurement = find_measurement(store, "residual")
@@ -2153,7 +2118,7 @@ class TestResidualStep:
     def test_speech_present_is_false_but_measured_when_consensus_has_no_lexical_words(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2166,7 +2131,7 @@ class TestResidualStep:
             qwen=_line("[cough]"),
             enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
         )
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         measurement = find_measurement(store, "residual")
         assert measurement is not None
         assert measurement.attributes["speech_present"] is False
@@ -2185,7 +2150,7 @@ class TestTheNodeAgreesWithTheLibraryFunction:
     def test_the_stored_measurement_matches_calling_compute_residual_directly(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2193,7 +2158,7 @@ class TestTheNodeAgreesWithTheLibraryFunction:
         """Reproduce the node's ``plain``/``enhanced`` pair outside it and recompute independently."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1))
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         measurement = find_measurement(store, "residual")
         assert measurement is not None
@@ -2206,7 +2171,7 @@ class TestTheNodeAgreesWithTheLibraryFunction:
         enhanced = _fake_enhance(0.5, noise_scale=0.05, seed=1)([Audio(waveform=x, sampling_rate=sr)], model=None)[0]
         sig = enhanced.waveform.squeeze(0).to(torch.float64).numpy()
 
-        max_lag_ms = float(residual_config.require("residual.max_lag_ms"))
+        max_lag_ms = float(config.require("residual.max_lag_ms"))
         independent = compute_residual(ref, sig, sr, max_lag_ms=max_lag_ms)
 
         assert independent.lag_samples == attrs["lag_samples"]
@@ -2224,7 +2189,7 @@ class TestThePosteriorgramAndPraatBlocks:
     def test_the_posteriorgram_is_a_sidecar_the_entity_names_by_digest(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2232,7 +2197,7 @@ class TestThePosteriorgramAndPraatBlocks:
         """The npz lands under ``derivatives/`` and the entity carries its path, SHA-256 and shape."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1))
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         measurement = find_measurement(store, PPG_MEASUREMENT)
         assert measurement is not None
@@ -2260,7 +2225,7 @@ class TestThePosteriorgramAndPraatBlocks:
     def test_praats_scalars_are_attributes_and_the_stream_is_the_enhanced_one(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2268,14 +2233,14 @@ class TestThePosteriorgramAndPraatBlocks:
         """Forty-five small numbers need no sidecar; a non-finite one is null rather than NaN."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1))
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         measurement = find_measurement(store, PRAAT_MEASUREMENT)
         assert measurement is not None
         attrs = measurement.attributes
         assert attrs["signal"] == "enhanced"
-        assert attrs["time_step_s"] == residual_config.require("praat_features.time_step_s")
-        assert attrs["window_length_s"] == residual_config.require("praat_features.window_length_s")
+        assert attrs["time_step_s"] == config.require("praat_features.time_step_s")
+        assert attrs["window_length_s"] == config.require("praat_features.window_length_s")
         assert attrs["n_features"] == len(attrs["features"])
         assert attrs["n_features"] > 0
         assert "path" not in attrs
@@ -2290,7 +2255,7 @@ class TestThePosteriorgramAndPraatBlocks:
     def test_both_read_the_enhanced_stream_back_out_of_the_store(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2309,7 +2274,7 @@ class TestThePosteriorgramAndPraatBlocks:
             return fake_ppgs(audios, device)
 
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), ppgs=_recording_ppgs)
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         _, replayed = preprocess_module.ppg_input(store, tmp_path)
         assert seen == [replayed.waveform.shape[-1]]
@@ -2317,7 +2282,7 @@ class TestThePosteriorgramAndPraatBlocks:
     def test_a_model_that_produced_no_posteriorgram_is_a_named_absence(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2329,7 +2294,7 @@ class TestThePosteriorgramAndPraatBlocks:
             return [PpgsPosteriorgramUnavailable("ppgs produced no posteriorgram: RuntimeError: shapes")]
 
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), ppgs=_unavailable)
-        result = preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         assert find_measurement(store, PPG_MEASUREMENT) is None
         assert PPG_MEASUREMENT in result.absent
@@ -2348,7 +2313,7 @@ class TestThePosteriorgramAndPraatBlocks:
     ) -> None:
         """No enhanced stream is a cascading absence, not a failure of the node."""
         _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch)
+        _stub_models(monkeypatch, enhance=_frcrn_unavailable)
         result = preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
 
         assert PPG_MEASUREMENT in result.absent
@@ -2545,7 +2510,7 @@ class TestTheStimulusAlignmentBlock:
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
         override = tmp_path / "no-terminators.yaml"
-        override.write_text("residual:\n  enabled: false\nstimulus:\n  sentence_terminators: null\n")
+        override.write_text("stimulus:\n  sentence_terminators: null\n")
         config = load_triage_config(override)
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="Hello world.")])
         result = preprocess(store, _audio(tmp_path), config, hint, run_dir=tmp_path)
@@ -2655,7 +2620,7 @@ class TestTheDiarizationBlock:
     def test_a_single_speaker_recording_is_one_voice_in_a_sidecar_named_by_digest(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2667,7 +2632,7 @@ class TestTheDiarizationBlock:
             enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
             diarize=_diarizer((0.2, 2.4, "SPEAKER_00")),
         )
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         measurement = find_measurement(store, ENHANCED_DIARIZATION)
         assert measurement is not None
@@ -2677,7 +2642,7 @@ class TestTheDiarizationBlock:
         assert attrs["n_segments"] == 1
         assert attrs["signal"] == "enhanced"
         assert attrs["exclusive"] is False
-        assert attrs["model"] == residual_config.require("diarization.model")
+        assert attrs["model"] == config.require("diarization.model")
         assert attrs["path"] == f"derivatives/{ENHANCED_DIARIZATION}.npz"
         assert len(attrs["checksum_sha256"]) == 64
         assert attrs["size_bytes"] > 0
@@ -2690,13 +2655,13 @@ class TestTheDiarizationBlock:
 
         enhanced_id, _ = resolve_stream(store, tmp_path, "enhanced")
         assert store.derived_from(measurement.id) == [enhanced_id]
-        agents = [a for a in store.agents("model") if a.model_id == residual_config.require("diarization.model")]
+        agents = [a for a in store.agents("model") if a.model_id == config.require("diarization.model")]
         assert agents and agents[0].commit_sha
 
     def test_a_two_speaker_recording_reports_two_voices_and_where_the_second_one_is(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2708,7 +2673,7 @@ class TestTheDiarizationBlock:
             enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
             diarize=_diarizer((0.0, 2.0, "SPEAKER_00"), (1.5, 2.5, "SPEAKER_01")),
         )
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         measurement = find_measurement(store, ENHANCED_DIARIZATION)
         assert measurement is not None
@@ -2729,7 +2694,7 @@ class TestTheDiarizationBlock:
     def test_a_recording_with_no_speech_is_zero_voices_rather_than_an_absence(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2737,7 +2702,7 @@ class TestTheDiarizationBlock:
         """Breath and cough recordings really do diarize to nothing; zero is an answer, not a failure."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), diarize=_diarizer())
-        result = preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         measurement = find_measurement(store, ENHANCED_DIARIZATION)
         assert measurement is not None
@@ -2749,7 +2714,7 @@ class TestTheDiarizationBlock:
     def test_a_model_this_host_cannot_obtain_is_a_typed_absence_not_a_node_failure(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2763,7 +2728,7 @@ class TestTheDiarizationBlock:
 
         monkeypatch.setattr(preprocess_module, "diarization_model", diarization_model)
         monkeypatch.setattr(preprocess_module, "PyannoteAudioModel", _gated)
-        result = preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         assert find_measurement(store, ENHANCED_DIARIZATION) is None
         assert ENHANCED_DIARIZATION in result.absent
@@ -2776,7 +2741,7 @@ class TestTheDiarizationBlock:
     def test_a_diarizer_that_raises_mid_call_is_the_same_typed_absence(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2788,7 +2753,7 @@ class TestTheDiarizationBlock:
             raise RuntimeError("segmentation produced no frames")
 
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), diarize=_explode)
-        result = preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         assert find_measurement(store, ENHANCED_DIARIZATION) is None
         assert ENHANCED_DIARIZATION in result.absent
@@ -2804,7 +2769,7 @@ class TestTheDiarizationBlock:
     ) -> None:
         """No stream of that name is a cascading absence, exactly as it is for the posteriorgram."""
         _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch)
+        _stub_models(monkeypatch, enhance=_frcrn_unavailable)
         result = preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
 
         assert ENHANCED_DIARIZATION in result.absent
@@ -2824,7 +2789,7 @@ class TestTheDiarizationBlock:
         would compare them as if they were the same.
         """
         override = tmp_path / "plain_diarization.yaml"
-        override.write_text("residual:\n  enabled: false\ndiarization:\n  streams: [plain]\n")
+        override.write_text("diarization:\n  streams: [plain]\n")
         config = load_triage_config(override)
         assert diarization_streams(config) == ("plain",)
         _seed_admit(store, tmp_path, wav_writer)
@@ -2848,7 +2813,7 @@ class TestTheDiarizationBlock:
     ) -> None:
         """The packaged file hands no bound; an override that states one must reach the call."""
         override = tmp_path / "bounded.yaml"
-        override.write_text("residual:\n  enabled: false\ndiarization:\n  streams: [plain]\n  max_speakers: 3\n")
+        override.write_text("diarization:\n  streams: [plain]\n  max_speakers: 3\n")
         config = load_triage_config(override)
         _seed_admit(store, tmp_path, wav_writer)
         seen: dict[str, Any] = {}
@@ -2865,7 +2830,7 @@ class TestTheDiarizationBlock:
     def test_the_block_reads_each_stream_back_out_of_the_store(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2879,18 +2844,18 @@ class TestTheDiarizationBlock:
             return [[ScriptLine(speaker="SPEAKER_00", start=0.0, end=1.0)]]
 
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), diarize=_recording_diarize)
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         replayed = [
             preprocess_module.diarization_input(store, tmp_path, stream)[1].waveform.shape[-1]
-            for stream in diarization_streams(residual_config)
+            for stream in diarization_streams(config)
         ]
         assert seen == replayed
 
     def test_both_halves_of_the_enhancement_partition_are_measured_separately(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2910,7 +2875,7 @@ class TestTheDiarizationBlock:
             return [[ScriptLine(speaker="SPEAKER_00", start=0.0, end=1.0)] if calls[-1] == 0 else []]
 
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), diarize=_by_stream)
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         enhanced = find_measurement(store, ENHANCED_DIARIZATION)
         residual = find_measurement(store, RESIDUAL_DIARIZATION)
@@ -2927,7 +2892,7 @@ class TestTheDiarizationBlock:
     def test_the_sidecar_names_the_stream_on_every_row_so_two_can_be_concatenated(
         self,
         store: ProvStore,
-        residual_config: TriageConfig,
+        config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -2939,10 +2904,10 @@ class TestTheDiarizationBlock:
             enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
             diarize=_diarizer((0.1, 1.0, "SPEAKER_00")),
         )
-        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
         rows: list[tuple[float, float, str, str]] = []
-        for stream in diarization_streams(residual_config):
+        for stream in diarization_streams(config):
             measurement = find_measurement(store, diarization_measurement(stream))
             assert measurement is not None
             payload = np.load(tmp_path / measurement.attributes["path"])
@@ -2971,7 +2936,7 @@ class TestTheDiarizationBlock:
         derivative nobody had written yet.
         """
         override = tmp_path / "no_diarization.yaml"
-        override.write_text("residual:\n  enabled: false\ndiarization:\n  streams: null\n")
+        override.write_text("diarization:\n  streams: null\n")
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch)
         result = preprocess(store, _audio(tmp_path), load_triage_config(override), run_dir=tmp_path)
@@ -2990,13 +2955,13 @@ class TestTheDiarizationBlock:
     ) -> None:
         """One block per stream, so a run with no residual still measures what it does have.
 
-        The override turns the residual block off, so this run writes ``plain`` but no ``residual``;
-        naming both streams isolates the missing one's failure to its own entry.
+        FRCRN raising leaves this run with ``plain`` and no ``residual``; naming both streams
+        isolates the missing one's failure to its own entry.
         """
         override = tmp_path / "plain_and_residual.yaml"
-        override.write_text("residual:\n  enabled: false\ndiarization:\n  streams: [plain, residual]\n")
+        override.write_text("diarization:\n  streams: [plain, residual]\n")
         _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch, diarize=_diarizer((0.0, 1.0, "SPEAKER_00")))
+        _stub_models(monkeypatch, diarize=_diarizer((0.0, 1.0, "SPEAKER_00")), enhance=_frcrn_unavailable)
         result = preprocess(store, _audio(tmp_path), load_triage_config(override), run_dir=tmp_path)
 
         assert find_measurement(store, diarization_measurement("plain")) is not None

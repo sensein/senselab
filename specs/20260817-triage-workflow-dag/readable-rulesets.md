@@ -1,0 +1,185 @@
+# Readable rulesets: every gate reads, or says why it could not
+
+> "there shouldn't be anything in rulesets that cannot be read. the rulesets + hints determine
+> which branches are selected."
+>
+> "if a residual is required for a gate, then residual.enabled cannot be false. or even exist. it
+> should just be true or not even a flag."
+>
+> — the owner, 2026-09-18
+
+The ruleset declares nine gates over four branches. Every one of them reads one number out of
+`RecordingFeatures` and compares it against one threshold. This document records what was found
+when each of the nine was traced back to the code that writes the number it reads, and what was
+changed.
+
+The governing distinction throughout is between three different things that had been collapsed
+into two outcomes:
+
+- **a measurement that did not clear the threshold** — `SILENT`, a fact about the recording;
+- **a measurement that was never taken** — `UNAVAILABLE`, a fact about the run;
+- **a measurement that was taken and found nothing** — which is a fact about the recording, and
+  read as `UNAVAILABLE` in one place and as a fabricated zero in another.
+
+## 1. `residual.enabled` is gone
+
+`data/config/default.yaml` shipped `residual:\n  enabled: true`. Its only reader was in
+`preprocess.py::_residual`, two lines that raised `ValueError("residual.enabled is false")`.
+
+Four of the nine gates depend on that block:
+
+| gate | reads | needs |
+| --- | --- | --- |
+| `airway.breath` | `[residual, energy_fraction]` | the `residual` measurement |
+| `airway.ppg_silent_fraction` | `[ppg, silent_fraction]` | the PPG, which runs on `enhanced` |
+| — | — | `enhanced` and `residual` are both written by the one block |
+
+`_residual` writes both streams: the lag-aligned FRCRN output as `enhanced`, and
+`plain - g*enhanced` as `residual`. The PPG block reads `enhanced`. So setting the flag false made
+two of AIRWAY's four gates unreadable at once, and the recording could then only reach AIRWAY
+through `airway.cough` or `airway.bracketed_event`.
+
+A flag whose `false` value makes declared gates unreadable is not an option a configuration may
+offer. The key and its reader are both removed. The block now always runs; when FRCRN is genuinely
+unavailable it raises, and that is recorded in the verdict's `absent` map like any other block
+failure — which is the honest path, because it names a reason rather than a setting.
+
+The configuration loader already refuses an unknown override key, so a stale
+`residual:\n  enabled: false` in someone's variant YAML now fails loudly rather than silently
+doing nothing.
+
+Test cost: the flag had been doing double duty as a test-speed switch — several fixtures set it
+false so that PREPROCESS would not reach the real FRCRN. `_stub_models` now always replaces
+`enhance_audios` (defaulting to a pass-through), which is what those fixtures actually wanted. Two
+tests that used the flag to produce a missing `enhanced` stream now make FRCRN raise instead,
+which is the one remaining way that stream can be absent.
+
+## 2. The `words` arm had no consensus guard
+
+`detectors.py`'s `words` arm read `float(features.words.get(arguments[0], 0))` with no check on
+`features.consensus_present`. The `bracketed_set` and `onomatopoeic` arms two lines below both
+guard on it.
+
+`features.words` is built from the live word entities. When both ASR blocks fail and no consensus
+transcript is written, there are no word entities, so every count is zero — and `speech.lexical`
+(`[words, lexical] at_least 2`) read `0.0` and recorded SPEECH as **declined**: "this recording
+carries fewer than two lexical words". No recogniser had run. That is a false claim about the
+recording, and it is worse than an admitted absence, because a declined branch is not revisited
+and an unavailable one is named in `unavailable_gates`.
+
+The guard is added. It affects `speech.lexical` and the `speech.transcript_agreement` flag.
+
+## 3. Shape A: an empty label set produced no key at all
+
+`features.py::_label_span_statistics` only ever created a `by_set` entry for a set some live span
+carried:
+
+```python
+if members and any(label in members for label in labels):
+    by_set.setdefault(set_name, []).append(span)
+```
+
+and only sets present in `by_set` reached `_distribution`. So on a recording with no cough-labelled
+span, `yamnet.cough_labels.peak_over_floor_db_max` was never written,
+`detector_value`'s `_optional` returned `None`, and `airway.cough` read `UNAVAILABLE`.
+
+`airway.cough` was the only one of the nine gates that read `unavailable` when every instrument ran
+and found nothing. The other eight read `silent`.
+
+"No live span carries a cough label" is a definite measurement with a definite consequence: the
+gate must not fire.
+
+### The encoding chosen, and why
+
+The precedent for the count was already in the tree: `_distribution` writes `<prefix>.span_count`
+unconditionally, so a set that reaches it with an empty selection already yields a defined count of
+zero. `_label_span_statistics` now seeds `by_set` with an entry for **every** `LABEL_SETS` name
+that the classifier declares members for, so `<classifier>.<set>.span_count` is written for every
+set on every recording, `0.0` where nothing carried it.
+
+The dB keys are a different matter. `peak_over_floor_db_max` over an empty sample has no value, and
+`value_stats({})` correctly returns `{}`. Two encodings were available:
+
+- **a numeric sentinel written into the feature table.** Rejected. There is no dB that means "no
+  span". A zero reads as a *loud* span against an `at_least 50.0` gate's units — the gate would not
+  fire, but `peak_over_floor_db_min` under an `at_most` gate would fire on the same zero. Worse,
+  the sentinel would then be in the features shard, indistinguishable from a measurement, and every
+  downstream consumer (the detector profile's quantile ladder, the gate matrix, the tables) would
+  have to learn to drop it.
+- **an explicit non-firing outcome produced at read time.** Chosen. The feature table stays
+  honest: no measurement, no dB key. The reader — `detector_value`'s `span_label_stat` and
+  `span_label_set_stat` arms — consults the companion `<prefix>.span_count`. When that count is
+  present and zero, the sample is empty *by measurement*, and the arm returns the module's existing
+  `GATE_CLOSED` / `GATE_CLOSED_BELOW` sentinel according to the reader's polarity — the same pair
+  the `gated` source already returns when its corroborator did not fire, defined as "below every
+  threshold" and "above every threshold" respectively. When the count key is absent altogether, the
+  classifier never ran and the arm still returns `None`.
+
+This is what makes the two cases distinguishable, which is the whole point: `span_count` present
+and zero is "ran, found none"; `span_count` absent is "never written". The polarity comes from
+`ruleset._POLARITY`, which already maps `at_least`/`at_most` onto `above`/`below`; `gate_value`
+now passes it into the `Detector` it builds, where it previously left the field at its default.
+
+## 4. The `residual` arm could return NaN
+
+`detectors.py`'s `residual` arm returned `float(value)` directly — the one gate-reachable table
+read that did not go through `_optional`. `residual_energy_fraction` is `nan` when
+`input_energy == 0` (`tasks/speech_enhancement/residual.py`), and `nan >= 0.10` is `False`, so a
+non-finite value read as a quiet non-fire: `airway.breath` recorded SILENT on a number that does
+not exist.
+
+The arm now goes through `_optional`, which already rejects a non-finite value. The redundant
+`if not features.residual` guard is removed with it: `_optional` on an empty table returns `None`
+for the same reason.
+
+## 5. `unavailable_gates` carries the reason
+
+For the genuine "instrument did not run" cases — `voice.glide` and `voice.chant` when no
+`plain|yamnet` summary was written, `airway.bracketed_event` and `speech.lexical` with no consensus
+— no value is invented. What is missing is a reason, and PREPROCESS already records one per block
+in its verdict's `absent` map.
+
+`RecordingFeatures` now carries that map (`absent`, read off the PREPROCESS verdict entity the
+extractor already visits). `RouteEvaluation.unavailable` changes from
+`Mapping[str, tuple[str, ...]]` to `Mapping[str, Mapping[str, str]]` — branch to gate to reason —
+and `branch_decision.unavailable_gates` follows it. The reason is the `absent` entry for the block
+that would have written the evidence, resolved through a declared source-to-block mapping
+(`features.EVIDENCE_BLOCKS`); where no block is named absent, the reason states the evidence that
+was not in the store.
+
+This turns "never judged" into an accountable statement: a reader of the store can tell
+`airway.breath` unavailable *because FRCRN timed out* from `airway.breath` unavailable *because
+nothing wrote a residual at all*.
+
+## Reported, not fixed
+
+### Shape B: the cough was found, on a span class that carries no dB
+
+`peak_over_floor_db` is written only for `measure == "amplitude"` spans. ASR spans carry
+`float("nan")`; gap and continuity spans carry no such attribute at all. So a cough label landing
+on a gap span yields `yamnet.cough_labels.span_count = 1` — the cough **was** found — while
+`peak_over_floor_db_max` is still absent from the finite sample, and under the fix above the gate
+reads a definite non-fire on a recording where a cough was detected.
+
+Recommendation, with the evidence, is in the report accompanying this change. The short form:
+the gate's stated intent is "loudest cough-labelled span", and that intent is only true across
+span classes if `peak_over_floor_db` is measured on every span class. Anything short of that is a
+gate that reads a quantity two of three span classes do not have. This changes what the gate
+*means*, so it is not a repair and is not made here.
+
+### Shape C: a span explicitly recorded as not measured is folded into the negatives
+
+`preprocess.py::_mark_unmeasured` records a span it could not score as an `assertion` carrying an
+`unmeasured` reason. `extract_features` absorbs assertions only when `name == "squim"`. So for
+every other measurement, a span explicitly recorded as *not measured* leaves no trace in the
+features at all, and the span is simply one of the negatives.
+
+### Two adjacent items
+
+`RouteState` has no unavailable member. When the emptiness bypass itself is unreadable,
+`evaluate_routes` falls through to `UNEXPLAINED`, which that enum's own docstring calls "a charge
+against the ruleset" — for something the ruleset could not read.
+
+`vocabulary.py` defaults `route_state` to `UNAVAILABLE` for any branch with no `branch_decision`
+entity. That is a different fact — "no decision was recorded for this branch" — sharing one token
+with "the gates could not be read".
