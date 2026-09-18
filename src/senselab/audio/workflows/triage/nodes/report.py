@@ -28,11 +28,16 @@ from senselab.audio.tasks.plotting.plotting import (
 )
 from senselab.audio.workflows.triage.config import MIN_AST_HOP_S, TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
+    BRANCH_MEASURES,
     consensus_words,
+    envelope_span_label,
     find_measurement,
     find_measurements,
+    initial_span_label,
     live_entities,
+    report_entities,
     resolve_stream,
+    span_sources,
 )
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
@@ -108,34 +113,6 @@ _LANES = (
     "voice",
     "redacted",
 )
-
-BRANCH_MEASURES = {
-    "AIRWAY": ("labelled_n", "contested_n", "merged_n"),
-    "SPEECH": (
-        "speaker_count",
-        "words_n",
-        "speech_s",
-        "nontarget_speech_s",
-        "trains_n",
-        "train_s",
-        "train_fraction",
-        "modulation_peak_hz",
-        "modulation_unit",
-        "interval_dispersion",
-        "interval_trend_s_per_step",
-        "ppg_trains_n",
-        "ppg_rate_hz",
-        "ppg_repetitions",
-        "ppg_period_s",
-        "ppg_jitter_over_median",
-        "ppg_cv_units_n",
-        "ppg_interval_trend_s_per_step",
-        "ppg_expected_place_fraction",
-        "ppg_place_agreement",
-        "lexical_repetitions_n",
-    ),
-    "VOICE": ("spans_n", "phonation_s", "longest_span_s"),
-}
 
 
 class ReportRenderError(RuntimeError):
@@ -361,19 +338,6 @@ def _airway_span_label(span: Entity) -> str:
     return str(span.attributes.get("label") or "") or _UNLABELLED
 
 
-def _envelope_span_label(span: Entity) -> str:
-    """One envelope span's own reading, which is the level PREPROCESS measured over it.
-
-    Args:
-        span: An envelope span.
-
-    Returns:
-        The level, rounded, or :data:`_UNLABELLED` when the span carries none.
-    """
-    level = span.attributes.get("peak_over_floor_db")
-    return _UNLABELLED if level is None else f"{float(level):.0f} dB"
-
-
 def _segments(entries: Iterable[tuple[tuple[float, float], str]]) -> list[dict[str, Any]]:
     """Segment dicts for a ``segments`` panel.
 
@@ -397,50 +361,6 @@ def _lane(name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         A one-element list holding the panel, or an empty list.
     """
     return [{"type": "segments", "segments": entries, "name": name, "height_ratio": 0.6}] if entries else []
-
-
-def span_sources(store: ProvStore) -> dict[str, list[Entity]]:
-    """Every live span, indexed by the live span it names in ``wasDerivedFrom``.
-
-    Built once per report. ``ProvStore.derived_from`` walks every relation, so asking it per span
-    while drawing is quadratic in a store that holds one relation per proposal.
-
-    Args:
-        store: The provenance store.
-
-    Returns:
-        ``{span id: [span it was derived from, ...]}``, in write order. A derivation naming
-        something that is not a live span with an extent — a measurement, a word, an id the store
-        does not hold — contributes nothing, so a span whose whole derivation is such a name is
-        absent from the mapping rather than present with an empty list.
-    """
-    spans = {span.id: span for span in live_entities(store, "span") if span.extent is not None}
-    index: dict[str, list[Entity]] = {}
-    for relation, source, target in store.relations():
-        if relation != "wasDerivedFrom" or source not in spans:
-            continue
-        parent = spans.get(target)
-        if parent is not None:
-            index.setdefault(source, []).append(parent)
-    return index
-
-
-def initial_span_label(span: Entity) -> str:
-    """One upstream span's own reading, as the row that shows what came in states it.
-
-    Args:
-        span: A span another span was derived from.
-
-    Returns:
-        The producer's own reading of it: the level PREPROCESS measured, the family and role a
-        proposer stamped, or :data:`_UNLABELLED`.
-    """
-    if "peak_over_floor_db" in span.attributes:
-        return _envelope_span_label(span)
-    family, role = span.attributes.get("family"), span.attributes.get("role")
-    if family and role:
-        return f"{family}/{role}"
-    return str(family or span.attributes.get("name") or "") or _UNLABELLED
 
 
 def _derived_lane(
@@ -894,22 +814,6 @@ def _verdict_entities(store: ProvStore) -> dict[str, Entity]:
     return latest
 
 
-def report_entities(store: ProvStore) -> dict[str, Entity]:
-    """The latest live ``branch_report`` entity per node, keyed by node name.
-
-    Args:
-        store: The provenance store.
-
-    Returns:
-        ``{node: entity}`` over every node that reported.
-    """
-    latest: dict[str, Entity] = {}
-    for entity in store.entities("branch_report"):
-        if not store.is_invalidated(entity.id):
-            latest[str(entity.attributes.get("node"))] = entity
-    return latest
-
-
 def _concluded_entities(store: ProvStore) -> dict[str, Entity]:
     """Every node's own record, whichever of the two kinds it writes.
 
@@ -1345,7 +1249,7 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
             activity_id = store.generated_by(span.id)
             source_activity = None if activity_id is None else store.get_activity(activity_id)
             if branch == "AIRWAY":
-                description = f"airway source span: {_envelope_span_label(span)}"
+                description = f"airway source span: {envelope_span_label(span)}"
             elif branch == "SPEECH":
                 description = f"speech span: {span.attributes.get('attributed_to') or 'unattributed'}"
             elif branch == "VOICE":

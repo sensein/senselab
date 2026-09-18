@@ -33,16 +33,14 @@ from matplotlib.text import Text
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
 from senselab.audio.workflows.triage.nodes.common import (
+    BRANCH_MEASURES,
     consensus_words,
     find_measurement,
     find_measurements,
-    live_entities,
-    resolve_stream,
-)
-from senselab.audio.workflows.triage.nodes.report import (
-    BRANCH_MEASURES,
     initial_span_label,
+    live_entities,
     report_entities,
+    resolve_stream,
     span_sources,
 )
 from senselab.audio.workflows.triage.nodes.taxonomy import SUMMARISED_CLASSIFIERS
