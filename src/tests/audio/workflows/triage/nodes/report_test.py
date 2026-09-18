@@ -18,10 +18,12 @@ from senselab.audio.workflows.triage.config import TriageConfig, load_triage_con
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_report, write_verdict
 from senselab.audio.workflows.triage.nodes.report import (
     ReportRenderError,
+    _assertions_by_source,
     _consensus_word_color,
     _decision_blocks,
     _header,
     _paginate_panels,
+    _report_document,
     _window_label_scores,
     report,
 )
@@ -945,6 +947,25 @@ class TestTheSummaryLayers:
         assert "routes (routed):" in header["support"]
         assert "AIRWAY=routed" in header["support"]
         assert "VOICE=unavailable" in header["support"]
+
+    def test_the_header_outcome_is_the_conformance_a_branch_actually_reported(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """A branch writes no verdict, so the header may not read one; conformance stands in its place."""
+        _seed_report_store(store, tmp_path, full=True)
+        document = _report_document(store, _assertions_by_source(store), load_triage_config(), summary_format="pdf")
+        assert "verdict" not in next(iter(document["routing"].values()))
+        assert "outcomes: AIRWAY=True" in _header(document)["support"]
+
+    def test_the_measured_findings_read_the_gate_names_routing_writes(self, store: ProvStore, tmp_path: Path) -> None:
+        """ROUTING writes ``flag_gates``; a line keyed to ``flags`` can never show one."""
+        _seed_report_store(store, tmp_path, full=True)
+        document = _report_document(store, _assertions_by_source(store), load_triage_config(), summary_format="pdf")
+        decision = next(iter(document["routing"].values()))
+        assert "flags" not in decision and "flag_gates" in decision
+        document["routing"]["AIRWAY"]["flag_gates"] = ["cough_present"]
+        blocks = _decision_blocks(document)
+        assert any("cough_present" in line for line in blocks)
 
     def test_the_spectrogram_and_the_blocks_are_both_drawn(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
