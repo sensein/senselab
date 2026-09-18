@@ -105,3 +105,28 @@ padding's spectrum, and a silent file has no band edge to report.
 
 Both paths are pinned, and both mutations that would make them fatal are caught: raising a class
 outside the non-fatal pair, and dropping the digest guard so an unreadable file reaches the decoder.
+
+## 6. What the built instrument reads, measured
+
+Four synthetic cases, packaged config (20 ms / 5 ms / 0.95 / 24 bands / 50 Hz), `tilt` fitted by
+least squares over the finite `level_db` against `log2(band_centre_hz)` — the reduction
+`verdict.tilt_max_db_per_octave` would cut on:
+
+| input | declared rate | Nyquist | roll-off | n_fft | tilt |
+|---|---|---|---|---|---|
+| 8 kHz-sourced, stored at 48 kHz (lowpass 4 kHz) | 48000 | 24000 | **3700 Hz** | 960 | −10.27 dB/oct |
+| telephone band, stored at 48 kHz (lowpass 3.4 kHz) | 48000 | 24000 | **3100 Hz** | 960 | −7.83 dB/oct |
+| true full-band 48 kHz capture | 48000 | 24000 | **22850 Hz** | 960 | +0.02 dB/oct |
+| full-band at the 16 kHz working rate | 16000 | 8000 | **7650 Hz** | 320 | −0.02 dB/oct |
+
+Rows 1 and 3 are the same container and the same declared rate and read 3700 against 22850, which
+is the separation no existing derivative could make. The roll-off sits a little below each nominal
+cutoff because a 10th-order Butterworth rolls off gradually and the 95% cumulative point falls
+inside the transition band; that is the statistic behaving correctly, not an offset to correct.
+
+**And this table is also the argument against defaulting the tilt cut.** The band-limited rows read
+−10.27 and −7.83 dB/oct on recordings that are not occluded at all — they are merely narrowband. A
+hand over the microphone would also read steeply negative. So the tilt alone does not separate
+"occluded" from "narrowband source", and a cut fitted without labels would call every telephone-band
+recording in the corpus an occluded microphone. Any fit has to condition on the roll-off, which is
+why both ship and neither is reduced away here.
