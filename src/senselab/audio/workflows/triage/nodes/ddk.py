@@ -817,8 +817,8 @@ def ppg_evidence(
 
     stop_places = params.point("ddk_stop_places") or {}
     places = unit_places(train.units, stop_places)
-    nuclei = unit_nuclei(train.units, params.point("ddk_nucleus_classes") or {})
     if template:
+        nuclei = unit_nuclei(train.units, params.point("ddk_nucleus_classes") or {})
         expected_places = [position.place for position in template]
         fraction, by_position = expected_fraction(places, expected_places)
         findings.append(
