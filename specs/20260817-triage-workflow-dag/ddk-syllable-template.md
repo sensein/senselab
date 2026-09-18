@@ -85,9 +85,9 @@ owner's stated intent — a substitution is a finding, not a rejection.
 ## `Pattern.ORDERED_TOKENS`
 
 Checked, not assumed: after this change **no syllable family uses it**. The member stays, because
-SPEECH's own lexical families use it heavily — `harvard-sentences-list`, `cape-v-sentences`(`-v2`),
-`rainbow-passage`, `caterpillar-passage`, `free-speech`, `loudness`, `loudness-v2` — eight rows.
-`align_ddk` no longer branches on a pattern at all.
+SPEECH's own lexical families use it heavily — `harvard-sentences-list`, `cape-v-sentences`,
+`cape-v-sentences-v2`, `rainbow-passage`, `caterpillar-passage`, `word-color-stroop`, `loudness`,
+`loudness-v2` — eight rows. `align_ddk` no longer branches on a pattern at all.
 
 ## What was measured and not implemented
 
