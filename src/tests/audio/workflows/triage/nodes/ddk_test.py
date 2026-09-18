@@ -650,6 +650,22 @@ class TestButtercupIsAThreeSyllableTemplate:
         assert nucleus.attributes["by_position"] == {"0": 1.0, "1": 0.0, "2": 1.0}
         assert result.done is True
 
+    def test_a_pa_recording_is_unaffected_by_any_of_this(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The control: a one-position low template reads its own place and nucleus at 1.0."""
+        seed_ddk_store(
+            store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        [place] = _measurements(store, PPG_EXPECTED_PLACE)
+        [nucleus] = _measurements(store, PPG_EXPECTED_NUCLEUS)
+        assert place.attributes["expected_sequence"] == ["labial"]
+        assert place.attributes["value"] == pytest.approx(1.0)
+        assert nucleus.attributes["expected_sequence"] == ["low"]
+        assert nucleus.attributes["value"] == pytest.approx(1.0)
+        assert nucleus.attributes["realised_nuclei"] == ["low"] * 8
+
     def test_it_counts_the_same_thirty_syllables_pataka_does(self) -> None:
         """Ten repetitions of three syllables, so the row is structurally the sequential one's."""
         assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].expected_event_count == 30
