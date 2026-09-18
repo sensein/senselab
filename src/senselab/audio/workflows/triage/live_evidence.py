@@ -36,8 +36,10 @@ from senselab.audio.workflows.triage.routing_analysis.features import (
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     RouteEvaluation,
     Ruleset,
+    critical_blocks,
     evaluate_routes,
     load_ruleset,
+    unreadable_branches,
 )
 from senselab.utils.prov_store import ProvStore
 
@@ -201,6 +203,9 @@ def route_attributes(evaluation: RouteEvaluation, ruleset: Ruleset) -> dict[str,
     Returns:
         The attributes. ``ungated`` names the branches whose gate list is empty, so a reader of the
         stored measurement can tell a branch the ruleset declined from one it never looked at.
+        ``unreadable`` names the branches not one of whose gates could be read, and
+        ``critical_blocks`` the blocks this ruleset needs for every branch to stay judgeable;
+        ``specs/20260817-triage-workflow-dag/critical-failure.md`` holds what each is for.
     """
     return {
         "state": evaluation.state.value,
@@ -211,6 +216,8 @@ def route_attributes(evaluation: RouteEvaluation, ruleset: Ruleset) -> dict[str,
         "unavailable": {branch: dict(reasons) for branch, reasons in evaluation.unavailable.items()},
         "flags": {branch: list(names) for branch, names in evaluation.flags.items()},
         "ungated": sorted(branch for branch, names in ruleset.branch_gates.items() if not names),
+        "unreadable": list(unreadable_branches(evaluation, ruleset)),
+        "critical_blocks": list(critical_blocks(ruleset)),
         "sources": list(required_sources(ruleset)),
         "stem": evaluation.stem,
     }

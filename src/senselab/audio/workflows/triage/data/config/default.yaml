@@ -148,6 +148,12 @@ stimulus:
 # derivation is in `specs/20260817-triage-workflow-dag/config-derivations.md`.
 routing:
   hint_branch_map: null                # tag (and metadata.speech_type) -> branch; a tag matching nothing adds nothing
+  # The branch to run when no gate fired, no declaration named one, and the run was not critical.
+  # Null: nobody has measured which branch a recording no rule accounted for belongs in, and picking
+  # one would turn a visible ruleset gap into a branch report that looks like a route. The two ways
+  # to get here are already decided — `empty` discards, `unexplained` flags. See
+  # `specs/20260817-triage-workflow-dag/critical-failure.md` § the no-hint-no-gate case.
+  default_branch: null
 
 # AIRWAY's own vocabulary. `branch.label_sets` splits `labels_of_interest` by the kind each label
 # names, and the two modes read that split rather than these labels directly.
