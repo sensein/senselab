@@ -158,7 +158,7 @@ _SYLLABLE_DETAIL = {
     "ppg_interval_trend_s_per_step": 0.001,
     "ppg_expected_place_fraction": 0.93,
     "ppg_place_agreement": 0.88,
-    "lexical_repetitions_n": 0,
+    "ppg_expected_nucleus_fraction": 0.9,
 }
 """What ``ddk.syllable_detail`` returns for an in-family syllable task, as ``speech()`` merges it."""
 
