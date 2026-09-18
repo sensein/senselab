@@ -2914,8 +2914,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _residual() -> None:
         """Background residual and its paired enhancement: ``plain`` and a lag-aligned FRCRN pass.
 
-        Gated by ``residual.enabled``: FRCRN_SE_16K runs on ``plain``, is cross-correlation
-        aligned to it (``residual.max_lag_ms`` search via
+        FRCRN_SE_16K runs on ``plain``, is cross-correlation aligned to it (``residual.max_lag_ms`` search via
         :func:`~senselab.audio.tasks.speech_enhancement.residual.compute_residual`), and the aligned
         enhancement is written as its own stream (``enhanced``) alongside the least-squares
         gain-fitted ``residual = plain - g*enhanced``. Both are written whenever this block runs, so
@@ -2938,8 +2937,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         unioned, over the stream's duration). When no consensus transcript exists at all, the latter
         two are ``None`` (unmeasured) rather than 0, and ``speech_present`` is False.
         """
-        if not bool(config.require("residual.enabled")):
-            raise ValueError("residual.enabled is false")
         max_lag_ms = float(config.require("residual.max_lag_ms"))
         bands_hz = [(float(band[0]), float(band[1])) for band in config.require("residual.bands_hz")]
         model = _frcrn_model()

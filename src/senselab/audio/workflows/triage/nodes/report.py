@@ -886,7 +886,7 @@ def _branches(store: ProvStore) -> dict[str, dict[str, Any]]:
             "forced_by_declaration": bool(decision.attributes.get("forced_by_declaration")),
             "declared_family": decision.attributes.get("declared_family") or "",
             "route_state": decision.attributes.get("route_state"),
-            "unavailable_gates": list(decision.attributes.get("unavailable_gates") or []),
+            "unavailable_gates": dict(decision.attributes.get("unavailable_gates") or {}),
             "flag_gates": list(decision.attributes.get("flag_gates") or []),
             "why": decision.attributes.get("why"),
             "conformance": None if verdict_entity is None else verdict_entity.attributes.get("conformance"),
