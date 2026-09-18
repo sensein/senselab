@@ -49,6 +49,12 @@ uses for place → stops, so the two share one idiom and one accessor type.
 **per position** against the template — place and nucleus class both, as
 `ddk_expected_place_fraction` and `ddk_expected_nucleus_fraction`, each with its own `by_position`.
 
+`syllable_detail` reports the new one as `ppg_expected_nucleus_fraction`. **`report.py`'s
+`BRANCH_MEASURES["SPEECH"]` does not name it yet**, so the summary does not print it; both readers
+select with `if key in detail`, so nothing breaks and nothing is fabricated. Adding it, and removing
+the stale `lexical_repetitions_n` entry beside it, is one line each in a file this change
+deliberately did not touch.
+
 This preserves the property the flat list had: `/pa/`, `/pah/` and `/paw/` all satisfy `low`, so
 phonemic variation inside a class costs nothing. A substituted place or nucleus is a **finding**, not
 a rejection — "buttercap" keeps all three units and scores 2/3 on the nucleus, which is the
