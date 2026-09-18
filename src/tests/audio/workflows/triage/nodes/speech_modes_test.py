@@ -415,11 +415,11 @@ class TestADesignedEmptyFamilyScoresNothingAsADeparture:
 
     def test_an_unmeasured_operating_point_is_named_rather_than_defaulted(self, tmp_path: Path) -> None:
         """Every `branch` key now ships a value; nulling one is still named rather than defaulted."""
-        params = branch_params(_config(tmp_path, {"response_min_s": None, "breath_group_min_gap_s": None}))
+        params = branch_params(_config(tmp_path, {"response_min_s": None, "run_gap_max_s": None}))
         result = align_speech("picture-description", self._described(), None, params)
         assert result.done == UNDETERMINED
         assert "response_min_s" in _unmeasured(result)
-        assert "breath_group_min_gap_s" in _unmeasured(result)
+        assert "run_gap_max_s" in _unmeasured(result)
 
     def test_the_family_whose_source_is_a_physical_book_says_so(self, tmp_path: Path) -> None:
         """`cinderella-story` has an empty `stimulus_text` on all 258; the overlap is unviable."""
