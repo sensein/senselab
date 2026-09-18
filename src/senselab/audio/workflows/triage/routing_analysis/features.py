@@ -228,6 +228,9 @@ class RecordingFeatures:
         peaks: ``{peak_key: score}`` for every tracked label on every stream and classifier.
         classifier_streams: Which ``<stream>|<classifier>`` summaries were present at all.
         kind_state: TAXONOMY's own state per kind, so its current behaviour can be measured too.
+        absent: Every derivative a node recorded as absent, block name to the reason it recorded.
+            PREPROCESS writes one entry per block it could not run; the mapping is what lets an
+            unreadable gate state why rather than only that it was unread.
         verdicts: Each node's own record — a deciding node's outcome, or a reporting node's
             conformance, spelled ``conformance=<value>`` so the two are never mistaken for each other.
         n_entities: How many entity records the store held, as a parse sanity check.
@@ -260,6 +263,7 @@ class RecordingFeatures:
     peaks: dict[str, float] = field(default_factory=dict)
     classifier_streams: list[str] = field(default_factory=list)
     kind_state: dict[str, str] = field(default_factory=dict)
+    absent: dict[str, str] = field(default_factory=dict)
     verdicts: dict[str, str] = field(default_factory=dict)
     n_entities: int = 0
 
@@ -897,6 +901,13 @@ def _label_span_statistics(
     spans carrying any of its members, counted once each, and is not the union of its members'
     distributions.
 
+    A classifier that scored at least one span yields a distribution for every set it declares
+    members for, whether or not a span carried that set, so ``<classifier>.<set>.span_count`` is
+    written and reads zero where nothing did. A classifier that scored no span at all yields none
+    of those keys: the absent count is what says nothing measured the set, and a zero count is what
+    says something did and found nothing. A set no span carried has no ``peak_over_floor_db``
+    sample and so no key for one.
+
     Args:
         spans: The live spans, each carrying ``id`` and ``peak_db``.
         span_scores: ``{classifier: {span_id: {label: max score}}}``.
@@ -911,7 +922,11 @@ def _label_span_statistics(
         carried = _span_labels(spans, span_scores, classifier, memberships[classifier])
         tracked = TRACKED_LABELS[classifier]
         grouped: dict[str, list[dict[str, Any]]] = {}
-        by_set: dict[str, list[dict[str, Any]]] = {}
+        by_set: dict[str, list[dict[str, Any]]] = (
+            {set_name: [] for set_name, per_classifier in LABEL_SETS.items() if per_classifier[classifier]}
+            if classifier in span_scores
+            else {}
+        )
         for span in spans:
             labels = carried.get(str(span["id"]), ())
             for label in labels:
@@ -1098,6 +1113,8 @@ def extract_features(
             features.kind_state[str(attributes.get("kind"))] = str(attributes.get("state"))
         elif prov_type == "verdict":
             features.verdicts[str(attributes.get("node"))] = str(attributes.get("outcome"))
+            for block, reason in (attributes.get("absent") or {}).items():
+                features.absent[str(block)] = str(reason)
         elif prov_type == "branch_report":
             features.verdicts[str(attributes.get("node"))] = f"conformance={attributes.get('conformance')}"
         elif prov_type == "stream" and attributes.get("name") == "recording":

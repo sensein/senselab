@@ -72,7 +72,7 @@ def _hint_config(tmp_path: Path) -> TriageConfig:
 def _evaluation(
     routed: tuple[str, ...],
     state: RouteState,
-    unavailable: Mapping[str, tuple[str, ...]],
+    unavailable: Mapping[str, Mapping[str, str]],
     declared: tuple[str, ...] = (),
     family: str = "",
 ) -> RouteEvaluation:
@@ -233,7 +233,7 @@ class TestTheRouteIsReadVerbatim:
         store = make_verdict_store(
             concluded=[("ADMIT", Outcome.PASS, None), ("SPEECH", Outcome.PASS, "speech")],
             routed=(),
-            unavailable={"SPEECH": ("speech.words",)},
+            unavailable={"SPEECH": {"speech.words": "consensus_transcript: unmeasured"}},
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.routes["SPEECH"] == "unavailable"

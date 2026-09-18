@@ -680,8 +680,8 @@ def _summary_sections(store: ProvStore, style: FigureStyle) -> tuple[list[list[s
         run = "runs" if entity.attributes.get("will_run") else "withheld"
         forced = " (added by declaration)" if entity.attributes.get("forced_by_declaration") else ""
         route_lines.append(f"  {branch:<8} {state:<12} {run}{forced}")
-        for name in sorted(entity.attributes.get("unavailable_gates") or ()):
-            route_lines.append(f"      {name:<28} unavailable")
+        for name, reason in sorted((entity.attributes.get("unavailable_gates") or {}).items()):
+            route_lines.append(f"      {name:<28} unavailable: {reason}")
         for name in sorted(entity.attributes.get("flag_gates") or ()):
             route_lines.append(f"      {name:<28} flagged")
     fired = sorted(name for name, outcome in gate_outcomes.items() if outcome == "fired")
