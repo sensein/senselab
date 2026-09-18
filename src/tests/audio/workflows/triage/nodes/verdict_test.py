@@ -349,6 +349,7 @@ class TestTheBranchDecisionsAreRead:
             "will_run": True,
             "forced_by_declaration": False,
             "route_state": "routed",
+            "withheld_critical": False,
             "conformance": True,
         }
         assert branches["SPEECH"]["will_run"] is False
