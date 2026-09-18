@@ -16,7 +16,7 @@ import sys
 import types
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 import pytest
 import torch
@@ -132,7 +132,11 @@ def _tone() -> Audio:
 
 
 def _evaluation(
-    routed: tuple[str, ...], state: RouteState, declared: tuple[str, ...] = (), family: str = ""
+    routed: tuple[str, ...],
+    state: RouteState,
+    declared: tuple[str, ...] = (),
+    family: str = "",
+    unavailable: Mapping[str, Mapping[str, str]] | None = None,
 ) -> RouteEvaluation:
     """One ruleset reading, standing in for the reduction the real ROUTING would run."""
     return RouteEvaluation(
@@ -143,7 +147,7 @@ def _evaluation(
         agreed=(),
         missed=(),
         extra=(),
-        unavailable={},
+        unavailable=dict(unavailable or {}),
         flags={},
         state=state,
         gate_outcomes={"airway.cough": GateOutcome.SILENT},
@@ -316,13 +320,14 @@ def graph(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[str]]:
         route_state: RouteState = RouteState.ROUTED,
         declared: tuple[str, ...] = (),
         family: str = "",
+        unavailable: Mapping[str, Mapping[str, str]] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> list[str]:
         calls: list[str] = []
         monkeypatch.setattr(
             routing_module,
             "evaluate_live_routes",
-            lambda *a, **k: _evaluation(routed, route_state, declared, family),
+            lambda *a, **k: _evaluation(routed, route_state, declared, family, unavailable),
         )
         for name, fake in _fakes(calls, **kwargs).items():
             monkeypatch.setattr(run_module, name, fake)
@@ -1238,3 +1243,65 @@ class TestTheTerminalNodeContract:
         assert result.ran["VOICE"] is RunState.ERRORED
         assert calls.index("VOICE") < calls.index("QUALITY")
         assert result.ran["QUALITY"] is RunState.COMPLETED
+
+
+_ASR_GONE = {"SPEECH": {"speech.lexical": "consensus_transcript: both asr blocks failed"}}
+
+
+class TestACriticalFailureGoesStraightToVerdict:
+    """The owner's rule of 2026-09-18, end to end over the runner.
+
+    ``specs/20260817-triage-workflow-dag/critical-failure.md`` derives what makes a failure critical.
+    """
+
+    def test_both_asr_blocks_failing_runs_no_branch(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A branch run here would be run on a routing decision the ruleset could not make."""
+        calls = graph(routed=("AIRWAY", "VOICE"), unavailable=_ASR_GONE)
+        run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert not [branch for branch in BRANCHES if branch in calls]
+        assert "VERDICT" in calls
+
+    def test_no_branch_report_reaches_the_store(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """QUALITY still reports; it is the terminal node and not a branch."""
+        graph(routed=("AIRWAY", "VOICE"), unavailable=_ASR_GONE)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        store = ProvStore.read_jsonl(result.store_path)
+        reporters = {e.attributes["node"] for e in store.entities("branch_report")}
+        assert not reporters & set(BRANCHES)
+        assert "QUALITY" in reporters
+
+    def test_the_file_verdict_names_the_missing_measurement(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A short-circuit that swallowed the recording would be worse than not short-circuiting."""
+        graph(routed=("AIRWAY", "VOICE"), unavailable=_ASR_GONE)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.file_verdict is not None
+        assert result.file_verdict.critical_absences == _ASR_GONE
+        assert any("consensus_transcript" in reason.why for reason in result.file_verdict.reasons)
+
+    def test_a_withheld_branch_is_distinguishable_from_one_that_ran_and_found_nothing(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Both leave no span; only one of them was ever asked."""
+        graph(routed=("AIRWAY", "VOICE"), unavailable=_ASR_GONE)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.nodes["VOICE"].state is RunState.SKIPPED
+        assert result.nodes["VOICE"].note == run_module.WITHHELD_CRITICAL
+        assert result.file_verdict is not None
+        assert result.file_verdict.branches["VOICE"]["withheld_critical"] is True
+
+    def test_a_readable_gate_still_routes_normally(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """One unreadable gate beside readable siblings withholds nothing."""
+        calls = graph(routed=("AIRWAY", "VOICE"), unavailable={"AIRWAY": {"airway.bracketed_event": "gone"}})
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert [branch for branch in BRANCHES if branch in calls] == ["AIRWAY", "VOICE"]
+        assert result.nodes["VOICE"].note is None
+        assert result.file_verdict is not None
+        assert result.file_verdict.critical_absences == {}

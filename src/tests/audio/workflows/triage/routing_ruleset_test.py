@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from senselab.audio.workflows.triage.config import load_triage_config
@@ -14,12 +16,14 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     GateOutcome,
     RouteState,
     Ruleset,
+    critical_blocks,
     evaluate_gate,
     evaluate_routes,
     load_ruleset,
     max_token_repeat,
     score_branches,
     tally_families,
+    unreadable_branches,
 )
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, GRAPH_ORDER, QUALITY
 
@@ -723,3 +727,37 @@ class TestBracketedTokensAreAirwayEvidence:
         """A store that never ran consensus has an unread gate, not a silent one."""
         record = _features("breath-sounds", consensus_present=False)
         assert evaluate_gate(record, ruleset.gates["airway.bracketed_event"]) is GateOutcome.UNAVAILABLE
+
+
+class TestWhichAbsenceIsCritical:
+    """Derived from the configured gates, so a campaign's own ruleset gets its own answer.
+
+    ``specs/20260817-triage-workflow-dag/critical-failure.md`` carries the derivation.
+    """
+
+    def test_the_packaged_critical_set_is_the_consensus_transcript_alone(self, ruleset: Ruleset) -> None:
+        """SPEECH names one gate, so losing its one block is what leaves a branch unjudgeable."""
+        assert critical_blocks(ruleset) == ("consensus_transcript",)
+
+    def test_a_span_derived_block_becomes_critical_when_it_is_a_branchs_only_gate(self, tmp_path: Path) -> None:
+        """The owner named span-based measurements; they are critical exactly when nothing sits beside them."""
+        path = tmp_path / "spans_only.yaml"
+        path.write_text("taxonomy:\n  ruleset:\n    branch_gates:\n      VOICE: [voice.sustained]\n")
+        assert critical_blocks(load_ruleset(load_triage_config(path))) == ("consensus_transcript", "spans")
+
+    def test_a_second_gate_over_another_block_ends_the_criticality(self, tmp_path: Path) -> None:
+        """Nothing is hard-coded: the set is whatever the configured gates make it."""
+        path = tmp_path / "two_gates.yaml"
+        path.write_text("taxonomy:\n  ruleset:\n    branch_gates:\n      SPEECH: [speech.lexical, voice.sustained]\n")
+        assert critical_blocks(load_ruleset(load_triage_config(path))) == ()
+
+    def test_a_branch_with_one_readable_gate_is_never_unreadable(self, ruleset: Ruleset) -> None:
+        """A silent gate is an opinion; only a branch with no opinion at all is critical."""
+        evaluation = evaluate_routes(_features("free-speech", consensus_present=False), ruleset)
+        assert "AIRWAY" not in unreadable_branches(evaluation, ruleset)
+        assert unreadable_branches(evaluation, ruleset) == ("SPEECH",)
+
+    def test_a_readable_consensus_leaves_no_branch_unreadable(self, ruleset: Ruleset) -> None:
+        """An ASR that ran and transcribed nothing is a measured nothing, not an absence."""
+        evaluation = evaluate_routes(_features("free-speech", consensus_present=True), ruleset)
+        assert "SPEECH" not in unreadable_branches(evaluation, ruleset)

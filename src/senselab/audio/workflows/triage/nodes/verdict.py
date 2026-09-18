@@ -231,6 +231,30 @@ def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:
     return str(measurement.attributes["state"]), [measurement.id]
 
 
+def _critical_absences(store: ProvStore) -> dict[str, dict[str, str]]:
+    """Which branches the ruleset could form no opinion about at all, and why, as ROUTING recorded it.
+
+    Read off the same ``ruleset_routing`` measurement the route state comes from, so the fold and the
+    node that short-circuited the run cannot disagree about what was missing.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        Per branch not one of whose gates could be read, each gate and the absence the node that
+        failed to write its evidence recorded. Empty when ROUTING wrote no evaluation, and empty on
+        every non-critical path.
+    """
+    measurement = find_measurement(store, RULESET_ROUTING)
+    if measurement is None:
+        return {}
+    unavailable = measurement.attributes.get("unavailable") or {}
+    return {
+        str(branch): {str(gate): str(why) for gate, why in (unavailable.get(str(branch)) or {}).items()}
+        for branch in measurement.attributes.get("unreadable") or ()
+    }
+
+
 def _llm_redaction(store: ProvStore) -> tuple[dict[str, object] | None, list[str]]:
     """REDACT's LLM re-read annotation, as the detector that wrote it recorded it.
 
@@ -276,6 +300,7 @@ def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list
             bad_map_values={
                 str(tag): str(value) for tag, value in (entity.attributes.get("bad_map_values") or {}).items()
             },
+            withheld_critical=bool(entity.attributes.get("withheld_critical")),
         )
         ids.append(entity.id)
     return decisions, ids
@@ -388,6 +413,7 @@ def verdict(
         route_state=route_state,
         declared_family=declared_family or None,
         llm_redaction=annotation,
+        critical_absences=_critical_absences(store),
         policy=FoldPolicy.from_config(config),
     )
 
@@ -432,6 +458,7 @@ def verdict(
             "branches": dict(file_verdict.branches),
             "bad_map_values": dict(file_verdict.bad_map_values),
             "llm_redaction": dict(file_verdict.llm_redaction),
+            "critical_absences": {branch: dict(gates) for branch, gates in file_verdict.critical_absences.items()},
             "ran": {node: state.value for node, state in file_verdict.ran.items()},
             "reasons": [
                 {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why} for r in file_verdict.reasons

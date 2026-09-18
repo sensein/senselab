@@ -638,6 +638,24 @@ even when asked to. The key stays as the escape hatch for a caller whose tags ex
 family cannot, and it is additive in the same direction as the family route: a tag matching no entry
 adds nothing and is recorded as unmapped; a declaration only ever ADDS a branch.
 
+routing.default_branch -- the branch to run when nothing else routed one and the run was not
+critical. **Null, and the mechanism ships inert, because no measurement supports choosing one.**
+The owner's rule of 2026-09-18 says every non-critical recording should reach 1+ branches, and the
+empty route set is the one case that can violate it: no gate fired, no task was declared and no hint
+tag mapped. Both ways to get there are already decided without a branch. route_state `empty` is the
+emptiness bypass having read every tracked stream peak under taxonomy.ruleset.emptiness.peak_floor,
+and fold_file_verdict discards it on the acoustically_empty ground -- a branch run over it would
+measure the same nothing the bypass already measured. route_state `unexplained` is content no gate
+accounted for, and the fold already flags it under UNEXPLAINED_CONTENT; routing a default branch
+there would replace that visible ruleset gap with a branch report, which reads as a route that was
+made rather than one that was missing. Neither is a critical failure: the ruleset looked at every
+branch and formed an opinion about each, and the file reaches VERDICT with a reason either way.
+Picking a branch would also need a number nobody has: which of AIRWAY, SPEECH and VOICE is likeliest
+on a recording no rule explains is exactly the question the ruleset failed to answer. The key exists
+so a campaign that can answer it for its own corpus can say so without editing the package; it takes
+a branch name and adds that one route, recorded as `route_<state>_by_default` so a defaulted route
+is never mistaken for a gated one. See critical-failure.md, "The no-hint-no-gate case".
+
 routing.declaration_required -- the branches that run ONLY when the declaration names them, whether
 by task family or by a hint tag the map resolves. Ships [DDK], and DDK alone. **This is the one key
 in the block that runs against the additive direction**: for a branch named here the ruleset's own

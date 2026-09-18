@@ -457,6 +457,45 @@ def evaluate_gate(features: RecordingFeatures, gate: Gate) -> GateOutcome:
     return gate_outcome_of(gate_value(features, gate), gate)
 
 
+def critical_blocks(ruleset: Ruleset) -> tuple[str, ...]:
+    """The evidence blocks one ruleset cannot lose and still form an opinion about every branch.
+
+    Args:
+        ruleset: The loaded ruleset.
+
+    Returns:
+        Each block every gate of at least one gated branch reads, once, in sorted order. Derived
+        from the configured ``branch_gates`` and their readers, so a campaign shipping other gates
+        gets other blocks without a code change.
+    """
+    blocks: set[str] = set()
+    for names in ruleset.branch_gates.values():
+        per_gate = [set(evidence_blocks(ruleset.gates[name].feature)) for name in names if name in ruleset.gates]
+        if per_gate:
+            blocks |= set.intersection(*per_gate)
+    return tuple(sorted(blocks))
+
+
+def unreadable_branches(evaluation: RouteEvaluation, ruleset: Ruleset) -> tuple[str, ...]:
+    """The branches whose every gate could not be read, so the ruleset formed no opinion about them.
+
+    Args:
+        evaluation: What the ruleset made of the recording.
+        ruleset: The ruleset it was evaluated under.
+
+    Returns:
+        The branches, in :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES` order. A
+        branch naming no gate is never one: it was never asked. A branch with one readable gate is
+        never one either, however that gate read, because a silent gate is an opinion.
+    """
+    return tuple(
+        branch
+        for branch in BRANCHES
+        if ruleset.branch_gates.get(branch)
+        and set(evaluation.unavailable.get(branch, {})) >= set(ruleset.branch_gates[branch])
+    )
+
+
 def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvaluation:
     """Route one recording from its content, then compare that against what its family declares.
 
