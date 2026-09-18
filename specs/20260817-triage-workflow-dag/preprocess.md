@@ -68,6 +68,7 @@ recording (as supplied) --> resample-+
 | `phonation_tracks` | **this is what exists, and it is whole-file.** F0 over the pre-emphasised stream and F1–F4 by Burg over `plain`, computed once on the analysis hop (`preprocess.py:965-973`) and written as one `phonation_tracks` npz (`:977-991`, name at `:134`). It is not sliced per phonation span, because there are no phonation spans. There is no `formant_tracks` derivative, and the "TAXONOMY's voice kind" consumer this table used to name is doubly gone: kinds were deleted in ruleset stage 2 | pre-emph (F0), plain (formants) | the voice scalars; no branch reads it |
 | `level` | peak dBFS, RMS dBFS, LUFS | plain | voice branch reference level. **File-level only** |
 | `disruptions_file` | clipped runs, zero-crossing rate | **recording** | SPEECH step 8; VERDICT |
+| `band_profile` | the content band: a cumulative-energy roll-off, plus a log-spaced long-term average spectrum in an npz sidecar | **recording** | AIRWAY's `content_band_hz` covariate. D3; [band-profile-d3.md](band-profile-d3.md) |
 | `squim` | STOI, PESQ, SI-SDR — objective head only | plain | speech branch, **per span, not per file**; reported, not gated |
 | `asr_crisperwhisper` | an `asr_hypothesis`: transcript and word timings | plain | one source of the consensus; SPEECH's PII scan reads its transcript |
 | `asr_qwen` | an `asr_hypothesis`: transcript and word timings | plain | one source of the consensus; SPEECH's PII scan reads its transcript |
@@ -410,8 +411,10 @@ taken.
 ## Working rate
 
 16 kHz. Every downstream model is 16 kHz native. A narrowband input with a 4 kHz ceiling restricts
-what the airway branch can conclude. `disruptions_file` is the exception and is measured before any
-rate or level change.
+what the airway branch can conclude, and **`band_profile` (D3) is what measures whether the input is
+one** — it has to be taken before the resample, because afterwards every spectrum reports this rate's
+ceiling whatever the file held. `disruptions_file` and `band_profile` are the two exceptions and are
+both measured before any rate or level change.
 
 ## Extensibility
 

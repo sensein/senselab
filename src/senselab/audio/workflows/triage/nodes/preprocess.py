@@ -3,7 +3,7 @@
 Every model that answers a whole-file question runs here: YAMNet, AST, HeAR and the diarizer alike.
 No later node re-runs one. The recognizers, the aligner, SQUIM, level and the window classifiers read the plain
 resampled signal; the envelope, spans, spectrograms, gammatone and the phonation pass read the
-pre-emphasised one; ``disruptions_file`` reads the original recording. This node takes no pass/flag/
+pre-emphasised one; ``disruptions_file`` and ``band_profile`` read the original recording. This node takes no pass/flag/
 fail decision of its own — but it is not guaranteed to complete. Each block still runs in its own
 try/except, and a block whose config value is unmeasured (a null default) or whose own upstream
 prerequisite is missing from the store still records that derivative ``absent`` and moves on, exactly
