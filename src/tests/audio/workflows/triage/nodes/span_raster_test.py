@@ -433,46 +433,17 @@ class TestTheStreamSummaries:
         assert "Hum 0.70" in text
         assert "(1/2 win)" in text
 
-    def test_a_disabled_block_states_that_reason_not_zeros(
+    def test_an_absent_block_states_its_own_reason_not_zeros(
         self,
         store: ProvStore,
         config: TriageConfig,
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """A store built with ``residual.enabled: false`` still reads this way -- that path stays live.
+        """FRCRN raising is the one reason ``residual`` is absent, and both sections state it.
 
         Both the ``enhanced`` and ``residual`` sections read the same absent ``residual``
         measurement, so neither states a value it never had.
-        """
-        seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        _seed_preprocess_verdict(
-            store,
-            {
-                "residual": "ValueError: residual.enabled is false",
-                "residual_yamnet": "LookupError: residual is absent",
-                "residual_ast": "LookupError: residual is absent",
-            },
-        )
-
-        lines = summary_panel_lines(store, FigureStyle())
-        text = "\n".join(lines)
-        assert text.count("residual.enabled is false") == 2, "both stream sections must state the same absence"
-        assert "0.00 dB" not in text
-        assert "0.0%" not in text
-
-    def test_a_gated_block_states_the_gates_own_reason(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        seed_preprocess_store: Callable[..., None],
-        tmp_path: Path,
-    ) -> None:
-        """A different reason text from the disabled case, so a reader does not conflate the two.
-
-        There is no energy-fraction gate any more, so the only other reason ``residual`` states is
-        FRCRN itself being unavailable — still distinct from ``residual.enabled is false``.
         """
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
@@ -486,8 +457,9 @@ class TestTheStreamSummaries:
         )
 
         text = "\n".join(summary_panel_lines(store, FigureStyle()))
-        assert "FRCRN enhancement unavailable" in text
-        assert "residual.enabled is false" not in text
+        assert text.count("FRCRN enhancement unavailable") == 2, "both stream sections must state the same absence"
+        assert "0.00 dB" not in text
+        assert "0.0%" not in text
 
     def test_a_block_that_ran_with_no_windows_says_so_rather_than_an_empty_list(
         self,
