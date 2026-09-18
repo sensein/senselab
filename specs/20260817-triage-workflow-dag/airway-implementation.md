@@ -211,7 +211,7 @@ than done. `classifier_ontology.py` is unchanged and its other consumers are una
 discriminating band is above the 16 kHz working rate's ceiling and the residual tilt is confounded
 one-for-one with mouth-to-microphone geometry, which changes with the route by construction. The
 `route` measurement is `NOT_SEPARABLE_BY_THIS_DESIGN` with `content_band_hz` carried as its
-covariate — None on every run, `band_profile` (D3) not existing — so the negative is attributable.
+covariate, now measured: `band_profile` (D3) is built, so the negative is attributable to a band.
 
 ## Still owed
 

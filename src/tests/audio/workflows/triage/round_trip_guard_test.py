@@ -37,14 +37,7 @@ KEYED_ATTRIBUTES = ("name", "family", "role", "verb")
 MINIMUM_SELECTOR_HELPERS = 4
 """How many selector helpers the sweep must discover before it is reading the tree at all."""
 
-UNWRITTEN_ON_PURPOSE = {
-    ("name", "band_profile"): (
-        "airway.content_band_hz reads a band roll-off no node computes. Its own docstring says so "
-        "-- 'or None, which is every run today, the derivative not existing' -- and the route "
-        "negative is carried as absent rather than omitted so it stays attributable. Remove this "
-        "entry when a node writes band_profile, not before."
-    ),
-}
+UNWRITTEN_ON_PURPOSE: dict[tuple[str, str], str] = {}
 """Selections knowingly matching no writer. Each entry is a reader whose absent result is the
 design, not a defect; anything else here is the defect this file exists to stop."""
 

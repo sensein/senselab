@@ -122,10 +122,12 @@ allowlist — the two concerns were separate to begin with.
 
 ## The allowlist
 
-One entry, `("name", "band_profile")`, and the reason is in the code beside it:
-`airway.content_band_hz` reads a roll-off no node computes, and says so in its own docstring.
-`test_every_exemption_is_still_needed` fails the entry out when the reader goes away or a writer
-appears.
+**Empty, as of D3.** It held one entry, `("name", "band_profile")`: `airway.content_band_hz` read a
+roll-off no node computed, and said so in its own docstring. `test_every_exemption_is_still_needed`
+did exactly what it was written to do — when PREPROCESS gained the `band_profile` block, the entry
+failed out as "exempted but a writer now produces it", and it was dropped rather than widened. The
+mechanism is the point: an entry outliving its reason is an allowlist that has started lying, and
+this one was caught by the test rather than by anyone remembering.
 
 ## The guard is not self-satisfying
 
@@ -152,12 +154,12 @@ neither is allowlisted: allowlisting a live defect is the thing an allowlist mus
    nowhere" under propose-only, and `member` appears at no write site at all. D4 repaired the lane
    at `report.py:850` and left these two, so the voice lane now draws and the voice *evidence* still
    reads `None/None`.
-2. **`airway.content_band_hz` can only return `None`.** `nodes/airway.py:298` selects the
-   measurement `band_profile` and reads its `rolloff_hz`; no node writes either. The docstring says
-   so — "or None, which is every run today, the derivative not existing" — so this is a known
-   absence rather than a surprise, and it is the one allowlist entry the value sweep carries. What
-   the allowlist does not record is that any route decision reading a content band reads an absence
-   on every recording.
+2. **`airway.content_band_hz` can only return `None`.** ~~`nodes/airway.py:298` selects the
+   measurement `band_profile` and reads its `rolloff_hz`; no node writes either.~~ **RESOLVED by
+   D3.** PREPROCESS now writes `band_profile` on the un-resampled `recording` stream and the reader
+   returns a measured roll-off; see [band-profile-d3.md](band-profile-d3.md). The route verdict is
+   unchanged and still `NOT_SEPARABLE_BY_THIS_DESIGN` — what changed is that the covariate beside it
+   is a number rather than an absence, so the negative is attributable.
 
 A third candidate, `deviation_type` at `report.py:1310`, is **not** an instance:
 `branches.write_findings` writes it under a variable dict key (`key = "deviation_type" if …`), which
