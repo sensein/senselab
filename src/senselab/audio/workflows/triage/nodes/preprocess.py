@@ -2357,6 +2357,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 "sampling_rate": profile.sampling_rate,
                 "ltas_bands": parameters["ltas_bands"],
                 "ltas_low_hz": parameters["ltas_low_hz"],
+                "n_fft": n_fft,
+                "hop_length": hop_length,
             },
             derived_from=(recording_ids[-1],),
         )

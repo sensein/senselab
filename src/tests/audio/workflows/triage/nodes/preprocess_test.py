@@ -18,6 +18,7 @@ from senselab.audio.tasks.speech_enhancement.residual import compute_residual
 from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
+from senselab.audio.workflows.triage.nodes.airway import content_band_hz
 from senselab.audio.workflows.triage.nodes.common import (
     PITCH_NARROWING_KEYS,
     find_measurement,
@@ -3054,6 +3055,30 @@ class TestTheBandProfileIsMeasuredBeforeTheResample:
         assert measurement.attributes["sampling_rate"] == 48000
         assert measurement.attributes["nyquist_hz"] == 24000.0
 
+    def test_the_transform_is_sized_at_the_recordings_own_rate(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``window_ms`` at 48 kHz is 960 samples, not the 320 the working rate would give.
+
+        The roll-off is correct either way -- the bin spacing is derived from the file's own rate --
+        so nothing else here catches this. What it costs is resolution: sizing the window in samples
+        of the working rate silently thirds it at 48 kHz, which is the opposite of the derivation.
+        """
+        _seed_admit(store, tmp_path, wav_writer, samples=_lowpassed_at_48k(), sampling_rate=48000)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        measurement = find_measurement(store, "band_profile")
+        assert measurement is not None
+        window_ms = float(config.require("band_profile.window_ms"))
+        hop_ms = float(config.require("band_profile.hop_ms"))
+        assert measurement.attributes["n_fft"] == int(48000 * window_ms / 1000.0)
+        assert measurement.attributes["hop_length"] == int(48000 * hop_ms / 1000.0)
+
     def test_a_full_band_file_at_the_same_rate_reports_a_far_higher_edge(
         self,
         store: ProvStore,
@@ -3124,6 +3149,28 @@ class TestTheBandProfileIsMeasuredBeforeTheResample:
             assert edges[0] == pytest.approx(measurement.attributes["ltas_low_hz"])
             assert edges[-1] == pytest.approx(measurement.attributes["nyquist_hz"])
             assert np.all(np.diff(edges) > 0.0)
+
+    def test_airways_content_band_reader_returns_what_this_block_wrote(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The writer and the reader are joined, which is the half a seeded store cannot test.
+
+        ``airway.content_band_hz`` returned None on every run because nothing wrote the measurement
+        it selects. Asserting it against the value PREPROCESS actually wrote is what fails if either
+        side moves: a renamed measurement, a renamed attribute, or the block going unregistered.
+        """
+        _seed_admit(store, tmp_path, wav_writer, samples=_lowpassed_at_48k(), sampling_rate=48000)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        measurement = find_measurement(store, "band_profile")
+        assert measurement is not None
+        assert content_band_hz(store) == measurement.attributes["rolloff_hz"]
+        assert content_band_hz(store) is not None
 
     def test_a_missing_recording_stream_records_the_block_absent_rather_than_raising(
         self,
