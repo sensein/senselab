@@ -215,10 +215,16 @@ in the graph measures whether the input is one.
 
 **Cost.** One STFT on the original file, once. No model.
 
-**Already implemented in senselab?** The core is: `_rolloff_hz`
+**Already implemented in senselab?** The core was: `_rolloff_hz`
 (`src/senselab/audio/workflows/audio_analysis/quality.py:156`) is a cumulative-energy quantile over
-a `torch.stft`, about forty lines. It is a private function in a sibling workflow, not a `tasks/`
-capability, so it would be lifted rather than imported.
+a `torch.stft`, about forty lines. It was a private function in a sibling workflow, not a `tasks/`
+capability.
+
+**BUILT.** Promoted to `senselab/audio/tasks/band_profile/` rather than lifted, and
+`audio_analysis` now calls it too, so the two workflows report one statistic; the rewire is
+bit-identical over 72 cases, so no cache bump is owed. PREPROCESS writes a `band_profile`
+measurement on the `recording` stream with a `band_profile.npz` sidecar carrying the LTAS. The
+decisions and what was verified before building are in [band-profile-d3.md](band-profile-d3.md).
 
 **Ranked third, and honestly.** This does not by itself make the route measurable — see §4.1. What
 it buys is that a negative A7 result becomes *attributable*: a route contrast that fails on files

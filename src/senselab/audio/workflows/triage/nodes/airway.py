@@ -292,8 +292,8 @@ def content_band_hz(store: ProvStore) -> float | None:
         store: The provenance store.
 
     Returns:
-        ``band_profile``'s roll-off, or None — which is every run today, the derivative not
-        existing. Carried as absent rather than omitted so the route negative is attributable.
+        ``band_profile``'s roll-off, or None when PREPROCESS recorded that block absent. Carried
+        rather than omitted so the route negative is attributable to a measured band.
     """
     measurement = find_measurement(store, "band_profile")
     rolloff = None if measurement is None else measurement.attributes.get("rolloff_hz")

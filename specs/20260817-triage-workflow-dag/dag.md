@@ -2295,7 +2295,7 @@ an AIRWAY task.
 graph TD
   ALL["every recording, unconditionally<br/>(run.py:310, 'recording' stream)"] --> DQ
   CLIPQ["span: family == 'clip' + clip_amplitude"] --> DQ
-  LVLQ["level, spectrogram_wideband, band_profile (D3, ABSENT)"] --> DQ
+  LVLQ["level, spectrogram_wideband, band_profile (D3, BUILT)"] --> DQ
   DQ["detect_quality(store, params)"] --> C1["contest per clip contradiction<br/>(built today, quality.py:266-302)"]
   DQ --> C2["occluded_microphone deviation + one PROPOSED span<br/>(the hygiene clause; needs D3)"]
   DQ --> C3["declared_duration_s count — Q5<br/>a sidecar-consistency check, not task completion"]
@@ -2307,7 +2307,10 @@ assertion beside a span rather than an edit to it. Added: the hygiene clause's l
 finding, which proposes at most **one** `family: "quality"` span and only when it fires; and the
 `declared_duration_s` count, whose natural home Q5 is and which several tasks in
 [`expected-patterns.md`](expected-patterns.md) want. The hygiene clause needs `band_profile` (D3),
-which nothing writes, so it emits `NOT_SEPARABLE_BY_THIS_DESIGN` until that exists.
+which PREPROCESS now writes ([band-profile-d3.md](band-profile-d3.md)); what it still lacks is the
+cut, `verdict.tilt_max_db_per_octave`, which is null because no labelled occluded/not verdicts
+exist. So the clause is now blocked on an operating point rather than on an instrument, and QUALITY
+does not read `band_profile` yet.
 
 **State: implemented and running**, one capability of the nine its document now lists. Q1 is built;
 Q2, Q3, Q5–Q9 are not and Q4 moved to the corpus-level node. Three of the unbuilt ones wait on a
