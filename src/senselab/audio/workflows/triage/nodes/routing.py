@@ -244,9 +244,7 @@ def routing(
     by_family = {str(branch) for branch in attributes["declared"]}
 
     unreadable = [str(branch) for branch in attributes.get("unreadable") or ()]
-    critical_absences = {
-        branch: dict((attributes.get("unavailable") or {}).get(branch) or {}) for branch in unreadable
-    }
+    critical_absences = {branch: dict((attributes.get("unavailable") or {}).get(branch) or {}) for branch in unreadable}
     critical = bool(critical_absences)
 
     entered = {
