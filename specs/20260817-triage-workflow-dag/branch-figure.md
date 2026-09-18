@@ -184,6 +184,14 @@ this change forbids a pipeline write to make a figure read better. Left alone an
 branch figure renders the field faithfully: it prints the 0 the branch reported, because printing
 anything else would be the figure deciding.
 
+**Settled 2026-09-17, by deletion.** The lexical path this counted no longer exists: both `buttercup`
+rows became `SYLLABLE_SEQUENCE`, and `_repeated_word`, the `lexical_repetition` production marker,
+`ddk.lexical_repetitions_n` and the unreachable `"repetition"` half of `TRAIN_ROLES` went with it.
+`TRAIN_ROLES` is now `("task_extent",)`. See
+[`ddk-syllable-template.md`](ddk-syllable-template.md). `report.py`'s `BRANCH_MEASURES["SPEECH"]`
+still names `lexical_repetitions_n`; both readers guard with `if key in detail`, so the stale entry
+renders nothing, and removing it is left to whoever next edits that file.
+
 ## What drives this product
 
 Nothing, and that is unchanged from `preprocess_figure`, which `dag.md` already records as being

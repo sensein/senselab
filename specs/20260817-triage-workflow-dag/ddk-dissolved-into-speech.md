@@ -36,11 +36,13 @@ an unexpected disclosure on it would never be scanned. The reference set is wide
 
 `ddk.py` is now an instrument module, not a branch. It keeps every instrument — `ddk_carrier`,
 `ddk_places`, `train_rate_hz`, `dispersion`, `dispersion_by_position`, `trend`, the posteriorgram
-reader and `ppg_evidence` — and keeps the two expectation bodies, `align_ddk` and `_repeated_word`.
-`speech.py` imports them. `align_speech` gained two arms, `SYLLABLE_TRAIN` and `SYLLABLE_SEQUENCE`,
-both served by `align_ddk`'s one shared body with `len(sequence)` as the cycle; the two `buttercup`
-rows keep `ORDERED_TOKENS` and fork to `_repeated_word`, which is the lexical token path the owner
-named.
+reader and `ppg_evidence` — and keeps one expectation body, `align_ddk`. `speech.py` imports them.
+`align_speech` gained two arms, `SYLLABLE_TRAIN` and `SYLLABLE_SEQUENCE`, both served by
+`align_ddk`'s one shared body with `len(sequence)` as the cycle.
+
+This section once described a second body, `_repeated_word`, which the two `buttercup` rows forked
+to as `ORDERED_TOKENS`. Both rows are `SYLLABLE_SEQUENCE` now and that body is deleted; the reason is
+[`ddk-syllable-template.md`](ddk-syllable-template.md).
 
 `SPEECH_EXPECTATIONS` now carries the ten families with their real expectations — the rows
 `DDK_EXPECTATIONS` held — rather than eight generated `NO_LEXICAL` rows and two longhand
@@ -128,7 +130,7 @@ this body.
 that catches a branch overstepping onto another's subject. A branch with two minting families weakens
 it by exactly the amount of the second family, for the benefit of a distinction the span's own
 attributes already carry: every proposal from these bodies names its `role` (`task_extent`,
-`ppg_train`) and its `production` (`syllable_train`, `syllable_sequence`, `lexical_repetition`), so
+`ppg_train`) and its `production` (`syllable_train`, `syllable_sequence`), so
 a reader separating a train from connected speech reads an attribute rather than a family.
 
 What it means for the span axes. `report.py`'s lanes read families, and there is no `ddk` lane and

@@ -20,11 +20,14 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.branches import (
+    BUTTERCUP,
+    LABIAL_LOW,
     SPEECH_EXPECTATIONS,
     UNDETERMINED,
     UNMEASURED_POINTS,
     BranchParams,
     Result,
+    Syllable,
     branch_params,
     dispatch,
     mode_of,
@@ -36,6 +39,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     CYCLES_OR_SYLLABLES_PER_S,
     NO_ENVELOPE,
     NO_PPG,
+    PPG_EXPECTED_NUCLEUS,
     PPG_EXPECTED_PLACE,
     PPG_PLACE_AGREEMENT,
     PPG_RATE,
@@ -116,6 +120,34 @@ def _cv_raster(
         gap = intervals[index] if index < len(intervals) else stop_s + 0.2
         sequence.append((STOP_OF[place], stop_s))
         sequence.append(("aa", max(FRAME_S, gap - stop_s)))
+    return _raster(sequence)
+
+
+BUTTERCUP_NUCLEI = ("ah", "er", "ah")
+"""/bʌ-tər-kʌp/: the nucleus of each of its three syllables, in the posteriorgram's ARPAbet."""
+
+
+def _buttercup_raster(
+    repeats: int, *, nuclei: Sequence[str] = BUTTERCUP_NUCLEI, coda: bool = True, lead_s: float = 0.2
+) -> np.ndarray:
+    """A raster of ``buttercup`` repetitions: /b/+/t/+/k/ onsets, and the coda /p/ of "cup".
+
+    Args:
+        repeats: How many times the word is said.
+        nuclei: The three nuclei, so a test can substitute one without touching the onsets.
+        coda: Whether the final /p/ of "cup" is realised, which opens no syllable of its own.
+        lead_s: Silence before the first onset.
+
+    Returns:
+        The raster.
+    """
+    sequence: list[tuple[str, float]] = [("<silent>", lead_s)]
+    for _ in range(repeats):
+        for stop, nucleus in zip(("b", "t", "k"), nuclei):
+            sequence.extend([(stop, 0.05), (nucleus, 0.15)])
+        if coda:
+            sequence.append(("p", 0.05))
+        sequence.append(("<silent>", 0.05))
     return _raster(sequence)
 
 
@@ -561,43 +593,109 @@ class TestTheEventWalkNoLongerDependsOnTheSmoothingWindowsParity:
         assert onsets == 20 if complete else onsets < 20
 
 
-class TestButtercupIsServedByTheConsensusWords:
-    """The one lexical DDK family: the recognisers produce the count directly."""
+class TestButtercupIsAThreeSyllableTemplate:
+    """The defect the template fixes: a global vowel set finds two of buttercup's three syllables."""
 
-    def test_the_repeated_word_becomes_one_span_over_its_own_hull(
+    def test_every_one_of_its_three_syllables_is_found_including_the_rhotic_one(self, ddk_config: TriageConfig) -> None:
+        """/bʌ/ /tər/ /kʌp/ is three units per repetition; a low-vowel set drops the middle one."""
+        reading = _reading(_buttercup_raster(6), ddk_config, BUTTERCUP)
+        assert [(unit.consonant, unit.vowel) for unit in reading.units[:3]] == [("b", "ah"), ("t", "er"), ("k", "ah")]
+        assert len(reading.units) == 18
+
+    def test_the_declared_template_is_what_admits_the_rhotic_nucleus(self, ddk_config: TriageConfig) -> None:
+        """Extraction is permissive over the classes the template names, and over no others.
+
+        ``/pa/`` names only ``low``, so the same raster read under that template loses the /t/ unit —
+        which is what a single global vowel set did to buttercup under every template.
+        """
+        under_pa = _reading(_buttercup_raster(6), ddk_config, (LABIAL_LOW,))
+        assert [(unit.consonant, unit.vowel) for unit in under_pa.units[:2]] == [("b", "ah"), ("k", "ah")]
+        assert len(under_pa.units) == 12
+
+    def test_the_coda_p_of_cup_opens_no_syllable_and_is_counted_as_none(self, ddk_config: TriageConfig) -> None:
+        """A consonant with no following nucleus yields no unit; coda modelling is deliberately absent."""
+        with_coda = _reading(_buttercup_raster(6), ddk_config, BUTTERCUP)
+        without = _reading(_buttercup_raster(6, coda=False), ddk_config, BUTTERCUP)
+        assert len(with_coda.units) == len(without.units) == 18
+        assert "p" not in {unit.consonant for unit in with_coda.units}
+
+    def test_the_nucleus_conformance_is_per_position_against_the_template(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """Ten ``buttercup`` tokens are one span, derived from the transcript and every word."""
-        words = [("buttercup", (1.0 + 0.4 * index, 1.3 + 0.4 * index)) for index in range(10)]
+        """Said as asked, buttercup reads low-rhotic-low at its three positions and scores 1.0."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-buttercup",
-            envelope=_train_envelope(6.0, (1.0, 5.0), 2.5, 0.2),
-            spans=[(1.0, 5.0)],
-            words=words,
+            posteriorgram=_buttercup_raster(6),
         )
-        result = _run(store, ddk_config, tmp_path)
-        [span] = _spans_of(store)
-        assert span.attributes["production"] == "lexical_repetition"
-        assert span.attributes["token"] == "buttercup"
-        assert span.attributes["repeats_n"] == 10
-        assert span.extent == pytest.approx((1.0, 4.9))
-        [counts] = _measurements(store, "counts")
-        assert counts.attributes["entries"]["expected_event_count"] == {"found": 10, "declared": 10}
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
+        [nucleus] = _measurements(store, PPG_EXPECTED_NUCLEUS)
+        assert nucleus.attributes["expected_sequence"] == ["low", "rhotic", "low"]
+        assert nucleus.attributes["value"] == pytest.approx(1.0)
+        assert nucleus.attributes["by_position"] == {"0": 1.0, "1": 1.0, "2": 1.0}
+
+    def test_a_substituted_nucleus_is_a_finding_and_not_a_dropped_unit(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """A "buttercap" keeps all three syllables and scores 2/3, which is the clinical reading."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-buttercup",
+            posteriorgram=_buttercup_raster(6, nuclei=("ah", "ah", "ah")),
+        )
+        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
+        assert _detail(result)["ppg_cv_units_n"] == 18
+        [nucleus] = _measurements(store, PPG_EXPECTED_NUCLEUS)
+        assert nucleus.attributes["value"] == pytest.approx(2.0 / 3.0, abs=0.01)
+        assert nucleus.attributes["by_position"] == {"0": 1.0, "1": 0.0, "2": 1.0}
         assert result.done is True
 
-    def test_the_word_nobody_said_is_a_fail_and_not_a_span(
+    def test_a_pa_recording_is_unaffected_by_any_of_this(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """No token matched is an absence of detected content, and mints nothing."""
+        """The control: a one-position low template reads its own place and nucleus at 1.0."""
+        seed_ddk_store(
+            store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        [place] = _measurements(store, PPG_EXPECTED_PLACE)
+        [nucleus] = _measurements(store, PPG_EXPECTED_NUCLEUS)
+        assert place.attributes["expected_sequence"] == ["labial"]
+        assert place.attributes["value"] == pytest.approx(1.0)
+        assert nucleus.attributes["expected_sequence"] == ["low"]
+        assert nucleus.attributes["value"] == pytest.approx(1.0)
+        assert nucleus.attributes["realised_nuclei"] == ["low"] * 8
+
+    def test_it_counts_the_same_thirty_syllables_pataka_does(self) -> None:
+        """Ten repetitions of three syllables, so the row is structurally the sequential one's."""
+        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].expected_event_count == 30
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].expected_event_count == 30
+        assert SPEECH_EXPECTATIONS["diadochokinesis-v2-buttercup"].declared_duration_s == 5.0
+
+    def test_the_syllable_spans_are_minted_into_speechs_own_family(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """One minting family per branch is what ``dispatch`` enforces; a second would weaken it."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-buttercup",
-            envelope=_train_envelope(6.0, (1.0, 5.0), 2.5, 0.2),
-            spans=[(1.0, 5.0)],
-            words=[("hello", (1.0, 1.4)), ("there", (1.5, 1.9))],
+            posteriorgram=_buttercup_raster(6),
         )
-        result = _run(store, ddk_config, tmp_path)
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
+        minted = [entity for entity in live_entities(store, "span") if entity.attributes.get("role")]
+        assert minted and {entity.attributes["family"] for entity in minted} == {"speech"}
+
+    def test_a_participant_who_said_nothing_at_all_is_still_noticed(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """What the deleted token match answered, the carrier and the CV walk answer without it."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-buttercup",
+            envelope=np.full(int(6.0 * ENVELOPE_HZ), SILENT_DBFS),
+            posteriorgram=_raster([("<silent>", 6.0)]),
+        )
+        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
         assert _spans_of(store) == []
         assert result.done is False
 
@@ -811,10 +909,10 @@ class TestThereIsNoSecondBranchForASyllableTask:
         assert any(reason.node == "SPEECH" and "never ran" in reason.why for reason in folded.reasons)
 
 
-def _reading(frames: np.ndarray, config: TriageConfig) -> PpgReading:
+def _reading(frames: np.ndarray, config: TriageConfig, template: Sequence[Syllable] | None = None) -> PpgReading:
     """The CV walk over one raster, at the packaged segmentation points."""
     ppg = Posteriorgram(frames=frames, phonemes=PHONEME_LABELS, seconds_per_frame=FRAME_S)
-    found = ppg_reading(ppg, branch_params(config))
+    found = ppg_reading(ppg, branch_params(config), template)
     assert found is not None
     return found
 
@@ -862,8 +960,8 @@ class TestThePosteriorgramCvWalk:
         reading = _reading(_raster([("<silent>", 0.2), ("p", 0.05), ("t", 0.05), ("aa", 0.2)]), ddk_config)
         assert [(unit.consonant, unit.vowel) for unit in reading.units] == [("t", "aa")]
 
-    def test_vowel_variation_does_not_cost_a_unit(self, ddk_config: TriageConfig) -> None:
-        """/pa/, /paw/ and /puh/ are the same syllable for this instrument; only the stop is fixed."""
+    def test_nucleus_variation_inside_one_class_does_not_cost_a_unit(self, ddk_config: TriageConfig) -> None:
+        """/pa/, /pah/, /paw/ and /pie/ are the same syllable for this instrument: all ``low``."""
         raster = _raster(
             [
                 ("<silent>", 0.2),
@@ -872,13 +970,13 @@ class TestThePosteriorgramCvWalk:
                 ("p", 0.05),
                 ("ao", 0.2),
                 ("p", 0.05),
-                ("uh", 0.2),
+                ("aw", 0.2),
                 ("p", 0.05),
-                ("uw", 0.2),
+                ("ay", 0.2),
             ]
         )
-        reading = _reading(raster, ddk_config)
-        assert [unit.vowel for unit in reading.units] == ["aa", "ao", "uh", "uw"]
+        reading = _reading(raster, ddk_config, (LABIAL_LOW,))
+        assert [unit.vowel for unit in reading.units] == ["aa", "ao", "aw", "ay"]
         assert reading.train is not None
         assert reading.train.repetitions == 4
 
