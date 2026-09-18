@@ -71,6 +71,14 @@ spectrogram:
   narrowband_window_ms: 20.0           # resolves harmonics; what continuity is measured on
   hop_ms: 5.0                          # shared hop for both
 
+# The recording's own spectral band, measured before the resample to the working rate.
+band_profile:
+  window_ms: 20.0                      # STFT window, at the recording's own rate
+  hop_ms: 5.0                          # frame hop; the profile is a mean over frames
+  rolloff_quantile: 0.95               # CONVENTIONAL cumulative-energy fraction, not fitted
+  ltas_bands: 24                       # SIZE: how many log-spaced bands span ltas_low_hz to Nyquist
+  ltas_low_hz: 50.0                    # bottom edge of the lowest band; below it is rumble, not content
+
 # Auditory filterbank layout.
 gammatone:
   n_channels: 40                       # ERB-spaced channel count
