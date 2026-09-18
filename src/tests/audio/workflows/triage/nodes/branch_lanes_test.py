@@ -567,12 +567,27 @@ class TestItDrawsFromTheStore:
         out = preprocess_figure(routed, tmp_path / "figures", config, run_dir=tmp_path, stem="rec")
         assert _pdf_page_count(out["figure"]) == 1 + 1
 
-    def test_it_refuses_a_store_with_no_conditioned_stream(
+    def test_it_refuses_a_store_with_no_stream_at_all(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path
     ) -> None:
         """Without a time axis there is nothing to draw a proposal against."""
-        with pytest.raises(LookupError, match="no conditioned stream"):
+        with pytest.raises(LookupError, match="no stream"):
             preprocess_figure(store, tmp_path / "figures", config, run_dir=tmp_path, stem="none")
+
+    def test_it_falls_back_to_the_source_recording_when_preprocess_wrote_no_stream(
+        self, store: ProvStore, config: TriageConfig, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """A PREPROCESS that produced no conditioned stream still leaves ADMIT's own axis to draw on.
+
+        ``report()`` has always fallen back to it, so a figure that refused here would drop every
+        evidence page from exactly the runs whose conditioning failed.
+        """
+        seed_preprocess_store(store, duration_s=4.0, yamnet_labels=[["Speech"]], scores_only=("yamnet",))
+        for entity in list(store.entities("stream")):
+            if entity.attributes.get("name") == "plain":
+                store.was_invalidated_by(entity.id, store.activity(node="PREPROCESS", step="drop", parameters={}))
+        out = preprocess_figure(store, tmp_path / "figures", config, run_dir=tmp_path, stem="rec")
+        assert out["figure"].is_file()
 
 
 class TestItOverridesNoPipelineValue:

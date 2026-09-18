@@ -1808,21 +1808,23 @@ def summary_pages(
         ``(name, figure)`` — ``"cover"``, then ``"page01"``, ``"page02"``, …
 
     Raises:
-        LookupError: If no conditioned stream is in the store, since there is nothing to draw
-            against and a blank page would misreport that as a measurement.
+        LookupError: If the store holds no stream at all, since there is then no time axis and a
+            blank page would misreport that as a measurement. The pre-emphasised stream is preferred,
+            then the plain one, then ADMIT's own source recording — the same chain ``report()``
+            resolves, so a run whose conditioning failed keeps its evidence pages.
     """
     import matplotlib.pyplot as plt
 
     style = style or FigureStyle()
     audio = None
-    for name in (_STREAM, _FALLBACK_STREAM):
+    for name in (_STREAM, _FALLBACK_STREAM, _SOURCE_STREAM):
         try:
             _, audio = resolve_stream(store, run_dir, name)
             break
         except LookupError:
             continue
     if audio is None:
-        raise LookupError("no conditioned stream in the store; PREPROCESS must run before FIGURE")
+        raise LookupError("no stream in the store; there is no time axis to draw the pages against")
     sampling_rate = int(audio.sampling_rate)
     samples = audio.waveform.detach().cpu().numpy().astype("float64")
     if samples.ndim > 1:
@@ -2035,7 +2037,7 @@ def preprocess_figure(
         ``{"figure": pdf, "taxonomy_summary": json, "page01": png, ...}`` in page order.
 
     Raises:
-        LookupError: If no conditioned stream is in the store.
+        LookupError: If the store holds no stream at all.
     """
     import matplotlib.pyplot as plt
 
