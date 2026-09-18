@@ -20,7 +20,7 @@ import textwrap
 from dataclasses import dataclass, field, replace
 from math import ceil
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -69,6 +69,10 @@ _STREAM_TITLES: dict[str, str] = {
 # G=gap, the complement PREPROCESS writes so the background between proposals is measured too.
 _MEASURE_CODE = {"amplitude": "E", "continuity": "C", "asr": "A", "gap": "G"}
 _SPAN_ROWS = ("E", "C", "A", "S", "G")
+
+#: Panels every page carries before the per-lane ones: spectrogram, waveform, spans, two rasters,
+#: SQUIM, the consensus-word lane. A lane's panel index is this plus its position in the lane list.
+_SHARED_PANELS = 7
 
 
 _SUMMARY_LABEL_WIDTH = 20
@@ -157,8 +161,8 @@ class FigureStyle:
             row stays present because the label is still part of the file's union.
         asr_rows: How many staggered rows the consensus-word lane uses.
         asr_row_height: The bar height within one word-lane row, in row units.
-        branch_height_ratios: One entry per panel of :func:`branch_figure`'s page, top first:
-            spectrogram, waveform, then one lane per branch in ``BRANCHES`` order.
+        lane_height_ratios: One entry per branch lane, appended to ``height_ratios`` to make the
+            summary page's full stack. One per entry of :data:`SUMMARY_LANES`.
         colour_branch_initial: The fill of an initial span — one a branch named in ``wasDerivedFrom``.
         colour_branch_proposed: The fill of a span a branch proposed. The two fills are the ones
             ``report.py``'s paired lane already uses, so the same pairing reads the same in both
@@ -222,7 +226,7 @@ class FigureStyle:
     asr_rows: int = 4
     asr_row_height: float = 0.52
     span_row_colours: dict[str, str] = field(default_factory=dict)
-    branch_height_ratios: tuple[float, ...] = (0.66, 0.6, 0.5, 0.5, 0.5)
+    lane_height_ratios: tuple[float, ...] = (0.5, 0.5, 0.5, 0.5)
     colour_branch_initial: str = "#dbeafe"
     colour_branch_proposed: str = "#fde9c8"
     colour_branch_link: str = "#6a51a3"
@@ -1772,33 +1776,36 @@ def _page_height_ratios(
     return ratios
 
 
-def preprocess_figure(
+def summary_pages(
     store: ProvStore,
-    figure_dir: Path,
     config: TriageConfig,
     *,
     run_dir: Path,
     style: FigureStyle | None = None,
     stem: str | None = None,
-) -> dict[str, Path]:
-    """Draw PREPROCESS's and TAXONOMY's output from the store, one image per page.
+    cover_prefix: Sequence[str] = (),
+) -> Iterator[tuple[str, Figure]]:
+    """Yield the summary's pages in order: the cover, then one page per ``page_seconds``.
 
-    Reads only what the two nodes left behind and writes nothing back to the store, so it can be
-    re-invoked over a completed run directory. The pipeline configuration is read and never
-    overridden: a panel whose element is absent under the packaged configuration says which
-    derivative is missing and prints the reason the producing node recorded.
+    The single page builder behind both consumers — :func:`preprocess_figure`, which writes them to
+    its own PDF over a completed run directory, and ``report()``, which writes the same pages into
+    ``summary.pdf`` after its decision record. Neither owns the drawing, so the two products cannot
+    drift apart.
+
+    Each figure is yielded unsaved and unclosed. **The caller closes it**, so only one page is ever
+    live at once however long the recording; a caller that keeps them all defeats that.
 
     Args:
-        store: The provenance store, after PREPROCESS and TAXONOMY have run.
-        figure_dir: Where the images are written; created if absent.
+        store: The provenance store, read and never written.
         config: The run's configuration, read for the values the panels annotate.
         run_dir: Where PREPROCESS wrote its streams and derivative sidecars.
-        style: How to draw. Defaults to :class:`FigureStyle`, whose every field governs the drawing
-            alone.
-        stem: The filename stem, defaulting to the run id.
+        style: How to draw. Defaults to :class:`FigureStyle`.
+        stem: The name the page titles carry, defaulting to the run id.
+        cover_prefix: Lines placed above the cover's own blocks, for a caller that has a decision
+            record to lead with.
 
-    Returns:
-        ``{"page01": path, ...}`` in page order.
+    Yields:
+        ``(name, figure)`` — ``"cover"``, then ``"page01"``, ``"page02"``, …
 
     Raises:
         LookupError: If no conditioned stream is in the store, since there is nothing to draw
@@ -1836,8 +1843,8 @@ def preprocess_figure(
     hear = _span_scores(store, "span_hear")
     words, word_sources = _words(store)
     squim = _squim_by_span(store)
-    summary_lines = taxonomy_summary_lines(store, style)
     panel_lines = summary_panel_lines(store, style)
+    lanes = branch_lanes(store)
 
     wideband_title = (
         f"wideband spectrogram ({float(config.require('spectrogram.wideband_window_ms')):.0f} ms window, "
@@ -1851,26 +1858,32 @@ def preprocess_figure(
     hear_rows = _raster_rows(hear, style.top_labels, style.raster_rows_scope, floor)
 
     row_absent = _span_row_absence(absent, spans)
-    # Panel indices, in the order they are unpacked below.
+    # Panel indices, in the order they are unpacked below. A lane with no bar anywhere in the
+    # recording collapses to its note, freeing its height for the lanes that drew something.
     collapsed = [
         index
         for index, empty in ((0, wideband is None), (3, not yamnet), (4, not hear), (5, not squim), (6, not words))
         if empty
     ]
+    collapsed += [
+        _SHARED_PANELS + index for index, lane in enumerate(lanes) if not rows_on_page(lane, (0.0, duration_s))
+    ]
     height_ratios = _page_height_ratios(
-        style, collapsed, {2: len(_SPAN_ROWS), 3: len(yamnet_rows), 4: len(hear_rows), 5: len(style.squim_ranges)}
+        replace(style, height_ratios=style.height_ratios + style.lane_height_ratios),
+        collapsed,
+        {2: len(_SPAN_ROWS), 3: len(yamnet_rows), 4: len(hear_rows), 5: len(style.squim_ranges)},
     )
 
-    figure_dir.mkdir(parents=True, exist_ok=True)
-    written: dict[str, Path] = {}
-    pdf_path = figure_dir / f"{stem or store.run_id}.pdf"
-    pdf = PdfPages(pdf_path)
     cover = plt.figure(figsize=style.figure_inches)
-    title = f"{stem or store.run_id} — whole-file summary"
+    title = f"{stem or store.run_id} — summary"
     cover.suptitle("\n".join(textwrap.wrap(title, width=_TITLE_COLUMNS, break_long_words=True)), fontsize=11)
-    _taxonomy_panel(cover.add_axes((0.06, 0.02, 0.92, 0.86)), cover_lines(store, panel_lines), style)
-    pdf.savefig(cover, dpi=style.dpi)
-    plt.close(cover)
+    _taxonomy_panel(
+        cover.add_axes((0.06, 0.02, 0.92, 0.86)),
+        [*cover_prefix, *cover_lines(store, panel_lines), "", *branch_report_lines(lanes)],
+        style,
+    )
+    yield "cover", cover
+
     for index, window in enumerate(pages(duration_s, style), start=1):
         figure: Figure
         figure, axes = plt.subplots(
@@ -1888,6 +1901,7 @@ def preprocess_figure(
             axis_hear,
             axis_squim,
             axis_asr,
+            *lane_axes,
         ) = axes
 
         # A colorbar is an inset anchored to its own panel's right edge, not a gridspec column.
@@ -1908,7 +1922,7 @@ def preprocess_figure(
                 transform=panel.transAxes,
             )
 
-        timed = [axis_wide, axis_wave, axis_spans, axis_yamnet, axis_hear, axis_squim, axis_asr]
+        timed = list(axes)
 
         _spectrogram_panel(
             axis_wide,
@@ -1968,6 +1982,8 @@ def preprocess_figure(
             style,
             absent.get("consensus_transcript", "no consensus word in the store"),
         )
+        for lane, axis in zip(lanes, lane_axes):
+            _branch_lane_panel(axis, lane, window, style)
 
         for axis in timed:
             axis.set_xlim(*window)
@@ -1977,21 +1993,67 @@ def preprocess_figure(
         for axis in timed[:-1]:
             axis.tick_params(axis="x", labelbottom=False)
         padded = _mark_padding(timed, duration_s, window[1], style)
-        axis_asr.set_xlabel("Time (s)")
+        timed[-1].set_xlabel("Time (s)")
         pad_note = "  ·  padded to a uniform page" if padded else ""
         figure.suptitle(
             f"{stem or store.run_id} — page {index}, {window[0]:.0f}-{window[1]:.0f}s of {duration_s:.2f}s{pad_note}",
             fontsize=10,
         )
-        pdf.savefig(figure, dpi=style.dpi)
-        if style.also_write_pngs:
-            page_path = figure_dir / f"{stem or store.run_id}__page{index:02d}.png"
-            figure.savefig(page_path, dpi=style.dpi)
-            written[f"page{index:02d}"] = page_path
-        plt.close(figure)
+        yield f"page{index:02d}", figure
 
-    pdf.close()
+
+def preprocess_figure(
+    store: ProvStore,
+    figure_dir: Path,
+    config: TriageConfig,
+    *,
+    run_dir: Path,
+    style: FigureStyle | None = None,
+    stem: str | None = None,
+) -> dict[str, Path]:
+    """Draw the summary from the store, one image per page, into a directory of its own.
+
+    Reads only what the graph left behind and writes nothing back, so it can be re-invoked over a
+    completed run directory by hand. The pipeline configuration is read and never overridden: a
+    panel whose element is absent says which derivative is missing and prints the reason the
+    producing node recorded.
+
+    The pages are :func:`summary_pages`' — the same ones ``report()`` puts in ``summary.pdf``. This
+    entry point exists so they can be regenerated without re-running the graph or rebuilding the
+    decision record.
+
+    Args:
+        store: The provenance store, after the graph has run.
+        figure_dir: Where the images are written; created if absent.
+        config: The run's configuration, read for the values the panels annotate.
+        run_dir: Where PREPROCESS wrote its streams and derivative sidecars.
+        style: How to draw. Defaults to :class:`FigureStyle`, whose every field governs the drawing
+            alone.
+        stem: The filename stem, defaulting to the run id.
+
+    Returns:
+        ``{"figure": pdf, "taxonomy_summary": json, "page01": png, ...}`` in page order.
+
+    Raises:
+        LookupError: If no conditioned stream is in the store.
+    """
+    import matplotlib.pyplot as plt
+
+    style = style or FigureStyle()
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, Path] = {}
+    name = stem or store.run_id
+    pdf_path = figure_dir / f"{name}.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for page, figure in summary_pages(store, config, run_dir=run_dir, style=style, stem=stem):
+            pdf.savefig(figure, dpi=style.dpi)
+            if style.also_write_pngs and page != "cover":
+                page_path = figure_dir / f"{name}__{page}.png"
+                figure.savefig(page_path, dpi=style.dpi)
+                written[page] = page_path
+            plt.close(figure)
     written["figure"] = pdf_path
+    summary_lines = taxonomy_summary_lines(store, style)
     (figure_dir / "taxonomy_summary.json").write_text(json.dumps({"lines": summary_lines}, indent=1) + "\n")
     written["taxonomy_summary"] = figure_dir / "taxonomy_summary.json"
     return written
@@ -2009,6 +2071,19 @@ LANE_WITHHELD = "withheld"
 LANE_NO_REPORT = "asked, no report"
 #: ROUTING never decided, so the store cannot say whether the branch was meant to run.
 LANE_UNDECIDED = "undecided"
+
+#: REDACT is a graph edge rather than a routed branch — it takes no ``branch_decision`` and writes a
+#: ``verdict``, not a ``branch_report`` — but its plan is a set of timed spans like any other, so it
+#: draws as a fourth lane rather than as prose a reviewer has to align by eye.
+REDACT_LANE = "REDACT"
+REDACTION_NAME = "redaction"
+
+#: REDACT's own verdict-detail keys the lane reports, the counterpart of ``BRANCH_MEASURES``. Every
+#: one is written by ``redact.py``'s single ``write_verdict`` call.
+REDACT_MEASURES = ("redactions_n", "verified", "survived", "outstanding")
+
+#: The lanes the summary draws, in order.
+SUMMARY_LANES = (*BRANCHES, REDACT_LANE)
 
 #: The attributes a proposal carries to distinguish itself inside its role, in the order preferred.
 _BRANCH_QUALIFIERS = ("label", "production", "attributed_to")
@@ -2207,7 +2282,83 @@ def branch_lanes(store: ProvStore) -> list[BranchLane]:
                 rows=tuple(sorted(rows, key=lambda row: (row.start, row.end, row.key))),
             )
         )
+    lanes.append(_redact_lane(store, sources))
     return lanes
+
+
+def _redact_lane(store: ProvStore, sources: dict[str, list[Entity]]) -> BranchLane:
+    """REDACT's own lane: the spans it planned, each paired to whatever it named as its reason.
+
+    REDACT writes a ``verdict`` rather than a ``branch_report`` and takes no ``branch_decision``, so
+    its two states are read from the verdict alone: one exists and it ran, or none does and the
+    graph never asked it. Its spans carry ``name`` and ``category`` rather than a family and a role,
+    which is why they are built here rather than by the family loop above.
+
+    Args:
+        store: The provenance store.
+        sources: :func:`span_sources`' index.
+
+    Returns:
+        The lane.
+    """
+    verdict: Entity | None = None
+    for entity in store.entities("verdict"):
+        if not store.is_invalidated(entity.id) and entity.attributes.get("node") == REDACT_LANE:
+            verdict = entity
+    spans = [
+        span
+        for span in live_entities(store, "span")
+        if span.attributes.get("name") == REDACTION_NAME and span.extent is not None
+    ]
+    rows: list[BranchRow] = []
+    seen: set[str] = set()
+    for span in sorted(spans, key=lambda span: span.extent or (0.0, 0.0)):
+        extent = span.extent
+        if extent is None:
+            continue
+        category = str(span.attributes.get("category") or "") or _UNLABELLED
+        parents = [parent for parent in sources.get(span.id, []) if parent.extent is not None]
+        rows.append(
+            BranchRow(
+                key=span.id,
+                label=f"{REDACTION_NAME}/{category}",
+                short=category,
+                start=float(extent[0]),
+                end=float(extent[1]),
+                row=BRANCH_PROPOSED_ROW,
+                derived_from=tuple(parent.id for parent in parents),
+            )
+        )
+        for parent in parents:
+            parent_extent = parent.extent
+            if parent.id in seen or parent_extent is None:
+                continue
+            seen.add(parent.id)
+            reading = initial_span_label(parent)
+            rows.append(
+                BranchRow(
+                    key=parent.id,
+                    label=reading,
+                    short=reading,
+                    start=float(parent_extent[0]),
+                    end=float(parent_extent[1]),
+                    row=BRANCH_INITIAL_ROW,
+                )
+            )
+    attributes: Mapping[str, Any] = {} if verdict is None else verdict.attributes
+    return BranchLane(
+        branch=REDACT_LANE,
+        family=REDACTION_NAME,
+        state=LANE_RAN if verdict is not None else LANE_WITHHELD,
+        route_state=None,
+        why=None if verdict is None else str(attributes.get("why")),
+        conformance=attributes.get("outcome"),
+        conformance_of=None if verdict is None else "redaction plan",
+        deviations=(),
+        unmeasured=(),
+        measures=tuple((key, attributes[key]) for key in REDACT_MEASURES if key in attributes),
+        rows=tuple(sorted(rows, key=lambda row: (row.start, row.end, row.key))),
+    )
 
 
 def rows_on_page(lane: BranchLane, window: tuple[float, float]) -> tuple[BranchRow, ...]:
@@ -2243,6 +2394,9 @@ def lane_note(lane: BranchLane, on_page: int) -> str:
     if lane.state == LANE_UNDECIDED:
         return f"ROUTING wrote no decision for {lane.branch}"
     if lane.state == LANE_WITHHELD:
+        # REDACT takes no route: the graph reaches it or does not, and its verdict is the record.
+        if lane.route_state is None:
+            return f"{lane.branch} did not run — the graph never reached it"
         return f"{lane.branch} did not run — route {lane.route_state}: {lane.why}"
     if lane.state == LANE_NO_REPORT:
         return f"{lane.branch} was selected to run and wrote no report"
@@ -2371,7 +2525,8 @@ def branch_report_lines(lanes: Sequence[BranchLane]) -> list[str]:
     lines: list[str] = ["BRANCH REPORTS"]
     for lane in lanes:
         state = lane.state if lane.state != LANE_RAN else f"ran · conformance {lane.conformance}"
-        lines.append(f"  {lane.branch:<8} {str(lane.route_state or 'no decision'):<12} {state}")
+        route = lane.route_state or ("no route" if lane.branch == REDACT_LANE else "no decision")
+        lines.append(f"  {lane.branch:<8} {route:<12} {state}")
         if lane.state != LANE_RAN:
             if lane.why:
                 lines.append(f"      why          {lane.why}")
@@ -2387,148 +2542,3 @@ def branch_report_lines(lanes: Sequence[BranchLane]) -> list[str]:
             f"{paired} naming an initial span"
         )
     return lines
-
-
-def branch_figure(
-    store: ProvStore,
-    figure_dir: Path,
-    config: TriageConfig,
-    *,
-    run_dir: Path,
-    style: FigureStyle | None = None,
-    stem: str | None = None,
-) -> dict[str, Path]:
-    """Draw the branches' output from the store, one image per page.
-
-    The sibling of :func:`preprocess_figure`: the same arguments, the same page width and padded
-    tail, the same return shape, and the same rule that nothing is written back to the store, so it
-    too can be re-invoked over a completed run directory. Where that one draws PREPROCESS's and
-    TAXONOMY's derivatives, this one draws what each branch proposed, over the two panels a proposal
-    is read against — the spectrogram and the waveform its initial spans were cut from.
-
-    Its files take a distinct stem, so both products can be generated into one directory.
-
-    Args:
-        store: The provenance store, after the branches have run.
-        figure_dir: Where the images are written; created if absent.
-        config: The run's configuration, read for the values the panels annotate and never written.
-        run_dir: Where PREPROCESS wrote its streams and derivative sidecars.
-        style: How to draw. Defaults to :class:`FigureStyle`.
-        stem: The filename stem, defaulting to the run id.
-
-    Returns:
-        ``{"figure": pdf, "branch_summary": json, "page01": png, ...}`` in page order.
-
-    Raises:
-        LookupError: If no conditioned stream is in the store, since there is then no time axis to
-            draw a proposal against and a blank page would misreport that as a measurement.
-    """
-    import matplotlib.pyplot as plt
-
-    style = style or FigureStyle()
-    audio = None
-    for name in (_STREAM, _FALLBACK_STREAM):
-        try:
-            _, audio = resolve_stream(store, run_dir, name)
-            break
-        except LookupError:
-            continue
-    if audio is None:
-        raise LookupError("no conditioned stream in the store; PREPROCESS must run before FIGURE")
-    sampling_rate = int(audio.sampling_rate)
-    samples = audio.waveform.detach().cpu().numpy().astype("float64")
-    if samples.ndim > 1:
-        samples = samples.mean(axis=0)
-    duration_s = len(samples) / float(sampling_rate)
-
-    absent = _absent_reasons(store)
-    envelope = _npz(run_dir, store, "energy_envelope", "envelope_dbfs")
-    floor_array = _npz(run_dir, store, "energy_envelope", "floor_dbfs")
-    floor_db = float(floor_array[0]) if floor_array is not None and len(floor_array) else None
-    wideband = _npz(run_dir, store, "spectrogram_wideband", "spectrogram")
-    hop_s = float(config.require("spectrogram.hop_ms")) / 1000.0
-    trace, cut_level, cut_percentile = _continuity(store, run_dir)
-    lanes = branch_lanes(store)
-    report_lines = branch_report_lines(lanes)
-
-    wideband_title = (
-        f"wideband spectrogram ({float(config.require('spectrogram.wideband_window_ms')):.0f} ms window, "
-        f"{float(config.require('spectrogram.hop_ms')):.0f} ms hop) — the signal each proposal is a claim about"
-    )
-    collapsed = [index for index, empty in ((0, wideband is None),) if empty]
-    collapsed += [2 + index for index, lane in enumerate(lanes) if not rows_on_page(lane, (0.0, duration_s))]
-    height_ratios = _page_height_ratios(replace(style, height_ratios=style.branch_height_ratios), collapsed)
-
-    figure_dir.mkdir(parents=True, exist_ok=True)
-    written: dict[str, Path] = {}
-    name = f"{stem or store.run_id}-{_BRANCH_STEM_SUFFIX}"
-    pdf_path = figure_dir / f"{name}.pdf"
-    pdf = PdfPages(pdf_path)
-    cover = plt.figure(figsize=style.figure_inches)
-    title = f"{stem or store.run_id} — branch outputs"
-    cover.suptitle("\n".join(textwrap.wrap(title, width=_TITLE_COLUMNS, break_long_words=True)), fontsize=11)
-    _taxonomy_panel(cover.add_axes((0.06, 0.02, 0.92, 0.86)), report_lines, style)
-    pdf.savefig(cover, dpi=style.dpi)
-    plt.close(cover)
-    for index, window in enumerate(pages(duration_s, style), start=1):
-        figure: Figure
-        figure, axes = plt.subplots(
-            len(height_ratios),
-            1,
-            figsize=style.figure_inches,
-            constrained_layout=True,
-            gridspec_kw={"height_ratios": height_ratios},
-        )
-        axis_wide, axis_wave, *lane_axes = axes
-        _spectrogram_panel(
-            axis_wide,
-            wideband,
-            hop_s,
-            sampling_rate,
-            window,
-            wideband_title,
-            style,
-            absent.get("spectrogram_wideband", "spectrogram_wideband is absent from the store"),
-        )
-        _waveform_panel(
-            axis_wave,
-            samples,
-            sampling_rate,
-            envelope,
-            floor_db,
-            trace,
-            window,
-            style,
-            k_db=float(config.require("spans.k_db")),
-            cut_level=cut_level,
-            cut_percentile=cut_percentile,
-            continuity_absent=absent.get("continuity_trace", "continuity_trace is absent from the store"),
-        )
-        for lane, axis in zip(lanes, lane_axes):
-            _branch_lane_panel(axis, lane, window, style)
-
-        timed = list(axes)
-        for axis in timed:
-            axis.set_xlim(*window)
-            axis.tick_params(axis="x", labelsize=style.tick_fontsize)
-        for axis in timed[:-1]:
-            axis.tick_params(axis="x", labelbottom=False)
-        padded = _mark_padding(timed, duration_s, window[1], style)
-        timed[-1].set_xlabel("Time (s)")
-        pad_note = "  ·  padded to a uniform page" if padded else ""
-        figure.suptitle(
-            f"{name} — page {index}, {window[0]:.0f}-{window[1]:.0f}s of {duration_s:.2f}s{pad_note}",
-            fontsize=10,
-        )
-        pdf.savefig(figure, dpi=style.dpi)
-        if style.also_write_pngs:
-            page_path = figure_dir / f"{name}__page{index:02d}.png"
-            figure.savefig(page_path, dpi=style.dpi)
-            written[f"page{index:02d}"] = page_path
-        plt.close(figure)
-
-    pdf.close()
-    written["figure"] = pdf_path
-    (figure_dir / "branch_summary.json").write_text(json.dumps({"lines": report_lines}, indent=1) + "\n")
-    written["branch_summary"] = figure_dir / "branch_summary.json"
-    return written
