@@ -180,11 +180,11 @@ class TestItDrawsFromTheStore:
         assert sorted(out) == ["figure", "taxonomy_summary"]
         assert _pdf_page_count(out["figure"]) == 1 + 1  # cover, then one window
 
-    def test_it_refuses_a_store_with_no_conditioned_stream(
+    def test_it_refuses_a_store_with_no_stream_at_all(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path
     ) -> None:
         """A blank page would misreport a missing stream as something measured."""
-        with pytest.raises(LookupError, match="no conditioned stream"):
+        with pytest.raises(LookupError, match="no stream"):
             preprocess_figure(store, tmp_path / "figures", config, run_dir=tmp_path, stem="none")
 
 
