@@ -1641,7 +1641,7 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
     )
     outcomes = (
         "; ".join(
-            f"{branch}={_shown(decision.get('verdict'))}"
+            f"{branch}={_shown(decision.get('conformance'))}"
             for branch, decision in sorted(
                 routing.items(), key=lambda item: BRANCHES.index(item[0]) if item[0] in BRANCHES else len(BRANCHES)
             )
@@ -2001,7 +2001,7 @@ def _decision_blocks(document: dict[str, Any]) -> list[str]:
         if not decision["will_run"]:
             continue
         measures = [f"{key}={_shown(detail[key])}" for key in BRANCH_MEASURES.get(branch, ()) if key in detail]
-        flags = [str(flag) for flag in decision.get("flags") or []]
+        flags = [str(flag) for flag in decision.get("flag_gates") or []]
         if measures or flags:
             lines.append(f"  {branch}: " + "; ".join([*measures, *flags]))
     if len(lines) == findings_start:
