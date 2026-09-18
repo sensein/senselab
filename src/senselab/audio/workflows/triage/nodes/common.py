@@ -632,8 +632,8 @@ BRANCH_MEASURES: dict[str, tuple[str, ...]] = {
         "ppg_cv_units_n",
         "ppg_interval_trend_s_per_step",
         "ppg_expected_place_fraction",
+        "ppg_expected_nucleus_fraction",
         "ppg_place_agreement",
-        "lexical_repetitions_n",
     ),
     "VOICE": ("spans_n", "phonation_s", "longest_span_s"),
 }
