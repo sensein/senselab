@@ -2034,7 +2034,8 @@ compares the transcript against what was asked. Steps 3–9 (corroborate, diariz
 PII, quality, proximity) are orthogonal to the two modes and run under both.
 
 - **`align_speech`** adds the comparison. Its 31 rows are four `Pattern` kinds: `ORDERED_TOKENS`
-  (read text, passages, Stroop, the `hey` families, both `buttercup` families), `FREE_RESPONSE`
+  (read text, passages, Stroop, the `hey` families — the `buttercup` families left it on 2026-09-17,
+  see [`ddk-syllable-template.md`](ddk-syllable-template.md)), `FREE_RESPONSE`
   (`free-speech*`, `story-recall*`, `cinderella-story`, `productive-vocabulary`,
   `picture-description*`, `open-response-questions`), `ITEM_LIST` (`animal-fluency`, both
   `random-item-generation`), and `NO_LEXICAL` for the eight non-`buttercup` syllable-repetition
@@ -2196,8 +2197,7 @@ graph TD
   TR["train_rate_hz — modulation spectrum<br/>NOT Praat extract_speech_rate"] --> AL
   TR --> DE
   SW["spectrogram_wideband, 5 ms window / 5 ms hop"] -->|"burst place, /p/ /t/ /k/"| AL
-  CONS3["consensus words (buttercup only)"] --> AL
-  CONS3 --> DE
+  CONS3["consensus words"] --> DE
   AL --> ALOUT["ONE PROPOSED span: the train, role task_extent;<br/>onsets as counts, place errors as deviations"]
   DE --> DEOUT["one PROPOSED span per repetition train,<br/>acoustic and lexical; done = UNDETERMINED"]
 ```

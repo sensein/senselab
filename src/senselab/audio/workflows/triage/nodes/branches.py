@@ -488,6 +488,31 @@ class Pattern(Enum):
     SYLLABLE_SEQUENCE = "syllable_sequence"
 
 
+class Syllable(NamedTuple):
+    """One position of a syllable template: what opens the syllable and what its nucleus is.
+
+    Attributes:
+        place: The place of articulation the onset stop is, a key of ``branch.ddk_stop_places``.
+        nucleus: The vowel class the nucleus is, a key of ``branch.ddk_nucleus_classes``.
+    """
+
+    place: str
+    nucleus: str
+
+
+LABIAL_LOW = Syllable("labial", "low")
+ALVEOLAR_LOW = Syllable("alveolar", "low")
+ALVEOLAR_RHOTIC = Syllable("alveolar", "rhotic")
+VELAR_LOW = Syllable("velar", "low")
+"""The four syllable positions the ten ``diadochokinesis-*`` instructions are built from."""
+
+PATAKA = (LABIAL_LOW, ALVEOLAR_LOW, VELAR_LOW)
+"""/pa-ta-ka/: three onsets across the three places, every nucleus low."""
+
+BUTTERCUP = (LABIAL_LOW, ALVEOLAR_RHOTIC, VELAR_LOW)
+"""/bʌ-tər-kʌp/: the same three places, and a rhotic middle nucleus no low-vowel set holds."""
+
+
 @dataclass(frozen=True)
 class Expectation:
     """What one instruction asked for, as data. One row per in-family (branch, family) pair.
@@ -499,8 +524,9 @@ class Expectation:
         expected_event_count: How many events the instruction asks for, when it counts them.
         declared_duration_s: How long the instruction runs, when it is timed rather than counted.
         label_set: Which entry of ``branch.label_sets`` names this task's own sound.
-        sequence: The places of articulation the syllable train cycles through, in order. One place for a
-            single-syllable train, three for a sequential one; its length is the cycle.
+        sequence: The syllable template the train cycles through, one :class:`Syllable` per position
+            in order. One position for a single-syllable train, three for a sequential one; its
+            length is the cycle.
         declared_direction: Which way a pitch sweep is asked to go.
         declared_route: Nose or mouth, where the instruction prescribes one.
         route_from_index: Whether the route is carried by the task's trailing index.
@@ -524,7 +550,7 @@ class Expectation:
     expected_event_count: int | None = None
     declared_duration_s: float | None = None
     label_set: str | None = None
-    sequence: tuple[str, ...] | None = None
+    sequence: tuple[Syllable, ...] | None = None
     declared_direction: str | None = None
     declared_route: str | None = None
     route_from_index: bool = False
@@ -570,9 +596,10 @@ class Expectation:
         """
         values = dict(mapping)
         values["pattern"] = Pattern(values["pattern"])
-        for name in ("tokens", "sequence"):
-            if values.get(name) is not None:
-                values[name] = tuple(values[name])
+        if values.get("tokens") is not None:
+            values["tokens"] = tuple(values["tokens"])
+        if values.get("sequence") is not None:
+            values["sequence"] = tuple(Syllable(str(place), str(nucleus)) for place, nucleus in values["sequence"])
         if values.get("unviable") is not None:
             values["unviable"] = tuple((str(pair[0]), str(pair[1])) for pair in values["unviable"])
         return cls(**values)
@@ -663,36 +690,39 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
         repetition_from_category=True,
         unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
     ),
-    "diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("labial",), expected_event_count=10),
-    "diadochokinesis-ta": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("alveolar",), expected_event_count=10),
-    "diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("velar",), expected_event_count=10),
+    "diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=(LABIAL_LOW,), expected_event_count=10),
+    "diadochokinesis-ta": Expectation(
+        pattern=Pattern.SYLLABLE_TRAIN, sequence=(ALVEOLAR_LOW,), expected_event_count=10
+    ),
+    "diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=(VELAR_LOW,), expected_event_count=10),
     "diadochokinesis-v2-puh": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN, sequence=("labial",), declared_duration_s=5.0
+        pattern=Pattern.SYLLABLE_TRAIN, sequence=(LABIAL_LOW,), declared_duration_s=5.0
     ),
     "diadochokinesis-v2-tuh": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN, sequence=("alveolar",), declared_duration_s=5.0
+        pattern=Pattern.SYLLABLE_TRAIN, sequence=(ALVEOLAR_LOW,), declared_duration_s=5.0
     ),
-    "diadochokinesis-v2-kuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=("velar",), declared_duration_s=5.0),
-    "diadochokinesis-pataka": Expectation(
-        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), expected_event_count=30
+    "diadochokinesis-v2-kuh": Expectation(
+        pattern=Pattern.SYLLABLE_TRAIN, sequence=(VELAR_LOW,), declared_duration_s=5.0
     ),
+    "diadochokinesis-pataka": Expectation(pattern=Pattern.SYLLABLE_SEQUENCE, sequence=PATAKA, expected_event_count=30),
     "diadochokinesis-v2-puhtuhkuh": Expectation(
-        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=("labial", "alveolar", "velar"), declared_duration_s=5.0
+        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=PATAKA, declared_duration_s=5.0
     ),
     "diadochokinesis-buttercup": Expectation(
-        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), expected_event_count=10
+        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=BUTTERCUP, expected_event_count=30
     ),
     "diadochokinesis-v2-buttercup": Expectation(
-        pattern=Pattern.ORDERED_TOKENS, tokens=("buttercup",), declared_duration_s=5.0
+        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=BUTTERCUP, declared_duration_s=5.0
     ),
 }
 """SPEECH's 31 in-family rows: ``LEXICAL_SPEECH`` (21) plus ``SYLLABLE_REPETITION`` (10).
 
-The ten syllable-repetition rows are the instruction each ``diadochokinesis-*`` task actually gives:
-a train of one place, a cycle of three, or ten repetitions of a word. Every non-lexical row names
-the place its instruction asks for, so a one-syllable train and a sequential one are read by the
-same body with ``len(sequence)`` as the cycle. The two ``buttercup`` rows name a word instead and
-take the lexical route. ``specs/20260817-triage-workflow-dag/ddk-dissolved-into-speech.md``.
+The ten syllable-repetition rows are the instruction each ``diadochokinesis-*`` task actually gives,
+as a syllable template: one position for a train of one syllable, three for a cycle of three. Every
+row names both the place and the nucleus class its instruction asks for at each position, so a
+one-syllable train and a sequential one are read by the same body with ``len(sequence)`` as the
+cycle. ``specs/20260817-triage-workflow-dag/ddk-dissolved-into-speech.md`` and
+``branch-ddk-ppg-instrument.md``.
 """
 
 AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
@@ -979,18 +1009,6 @@ def _label_sets(value: Any) -> dict[str, tuple[str, ...]]:  # noqa: ANN401 — o
     return {str(name): tuple(str(label) for label in labels) for name, labels in value.items()}
 
 
-def _labels(value: Any) -> tuple[str, ...]:  # noqa: ANN401 — one config leaf
-    """A label list as a tuple of strings.
-
-    Args:
-        value: The leaf.
-
-    Returns:
-        The labels.
-    """
-    return tuple(str(label) for label in value)
-
-
 POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "smoothing_window_s": float,
     "peak_prominence_db": float,
@@ -1027,7 +1045,7 @@ POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "ddk_interval_tolerance": float,
     "ddk_min_repetitions": int,
     "ddk_stop_places": _label_sets,
-    "ddk_vowel_phonemes": _labels,
+    "ddk_nucleus_classes": _label_sets,
 }
 """Every ``branch.*`` key, and the type its value is read as. The one declaration of both.
 
@@ -1176,7 +1194,7 @@ PARAM_KEYS = (
     "ddk_interval_tolerance",
     "ddk_min_repetitions",
     "ddk_stop_places",
-    "ddk_vowel_phonemes",
+    "ddk_nucleus_classes",
 )
 """Every key the ``branch`` config section holds, in the order the section declares them.
 

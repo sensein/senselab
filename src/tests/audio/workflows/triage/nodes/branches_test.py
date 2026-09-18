@@ -45,6 +45,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Proposal,
     Result,
     SpectrogramBlock,
+    Syllable,
     branch_params,
     content_coverage,
     contest,
@@ -444,9 +445,9 @@ class TestTheExpectationTableIsData:
         """A syllable train is a speaking task, so its row says what the instruction asked for."""
         assert set(SYLLABLE_REPETITION) <= set(SPEECH_EXPECTATIONS)
         assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].pattern is Pattern.SYLLABLE_TRAIN
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("labial",)
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == (Syllable("labial", "low"),)
         assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].pattern is Pattern.SYLLABLE_SEQUENCE
-        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].pattern is Pattern.ORDERED_TOKENS
+        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].pattern is Pattern.SYLLABLE_SEQUENCE
 
     def test_every_row_round_trips_through_plain_data(self) -> None:
         """All 48, field for field, so the table can be recorded in a run and read back."""
