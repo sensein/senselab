@@ -161,15 +161,18 @@ class FigureStyle:
             row stays present because the label is still part of the file's union.
         asr_rows: How many staggered rows the consensus-word lane uses.
         asr_row_height: The bar height within one word-lane row, in row units.
-        lane_height_ratios: One entry per branch lane, appended to ``height_ratios`` to make the
-            summary page's full stack. One per entry of :data:`SUMMARY_LANES`.
-        colour_branch_initial: The fill of an initial span — one a branch named in ``wasDerivedFrom``.
-        colour_branch_proposed: The fill of a span a branch proposed. The two fills are the ones
-            ``report.py``'s paired lane already uses, so the same pairing reads the same in both
-            products.
-        colour_branch_link: The connector drawn from a proposal to the initial span it names.
-        branch_row_height: A branch lane's bar height, in row units.
-        branch_link_linewidth: The connector's width.
+        span_axis_height_ratio: The span axis's declared height, appended to ``height_ratios`` to
+            make the summary page's full stack. Like a raster it grows past this with its row count
+            rather than compressing its rows.
+        colour_branch_initial: The fill of the shared initial row — the spans every proposal below
+            was derived from.
+        lane_colours: One fill per lane of :data:`SUMMARY_LANES`, cycled. A lane's bars and its
+            connectors take the same one, so a connector crossing an intervening row can be
+            followed by colour to the row it lands in.
+        branch_row_height: A bar's height within its row, in row units.
+        branch_link_linewidth: A connector's width.
+        branch_link_alpha: A connector's opacity. Connectors are drawn behind every bar and below
+            full opacity, so a dense derivation never obscures the spans it relates.
     """
 
     page_seconds: float = 20.0
@@ -226,12 +229,12 @@ class FigureStyle:
     asr_rows: int = 4
     asr_row_height: float = 0.52
     span_row_colours: dict[str, str] = field(default_factory=dict)
-    lane_height_ratios: tuple[float, ...] = (0.5, 0.5, 0.5, 0.5)
+    span_axis_height_ratio: float = 0.62
     colour_branch_initial: str = "#dbeafe"
-    colour_branch_proposed: str = "#fde9c8"
-    colour_branch_link: str = "#6a51a3"
+    lane_colours: tuple[str, ...] = ("#fdae6b", "#74c476", "#9e9ac8", "#fc9272")
     branch_row_height: float = 0.56
-    branch_link_linewidth: float = 0.8
+    branch_link_linewidth: float = 0.7
+    branch_link_alpha: float = 0.75
 
     def row_colour(self, code: str) -> str:
         """The colour for one span-source row.
@@ -1860,20 +1863,24 @@ def summary_pages(
     hear_rows = _raster_rows(hear, style.top_labels, style.raster_rows_scope, floor)
 
     row_absent = _span_row_absence(absent, spans)
-    # Panel indices, in the order they are unpacked below. A lane with no bar anywhere in the
-    # recording collapses to its note, freeing its height for the lanes that drew something.
+    # Panel indices, in the order they are unpacked below. The span axis is never collapsed: its
+    # rows carry each lane's run state, and a collapsed row cannot say a branch did not run.
     collapsed = [
         index
         for index, empty in ((0, wideband is None), (3, not yamnet), (4, not hear), (5, not squim), (6, not words))
         if empty
     ]
-    collapsed += [
-        _SHARED_PANELS + index for index, lane in enumerate(lanes) if not rows_on_page(lane, (0.0, duration_s))
-    ]
+    axis_rows = len(span_axis_rows(lanes))
     height_ratios = _page_height_ratios(
-        replace(style, height_ratios=style.height_ratios + style.lane_height_ratios),
+        replace(style, height_ratios=(*style.height_ratios, style.span_axis_height_ratio)),
         collapsed,
-        {2: len(_SPAN_ROWS), 3: len(yamnet_rows), 4: len(hear_rows), 5: len(style.squim_ranges)},
+        {
+            2: len(_SPAN_ROWS),
+            3: len(yamnet_rows),
+            4: len(hear_rows),
+            5: len(style.squim_ranges),
+            _SHARED_PANELS: axis_rows,
+        },
     )
 
     cover = plt.figure(figsize=style.figure_inches)
@@ -1903,7 +1910,7 @@ def summary_pages(
             axis_hear,
             axis_squim,
             axis_asr,
-            *lane_axes,
+            axis_spans_by_branch,
         ) = axes
 
         # A colorbar is an inset anchored to its own panel's right edge, not a gridspec column.
@@ -1984,8 +1991,7 @@ def summary_pages(
             style,
             absent.get("consensus_transcript", "no consensus word in the store"),
         )
-        for lane, axis in zip(lanes, lane_axes):
-            _branch_lane_panel(axis, lane, window, style)
+        _span_axis_panel(axis_spans_by_branch, lanes, window, style)
 
         for axis in timed:
             axis.set_xlim(*window)
@@ -2363,11 +2369,25 @@ def _redact_lane(store: ProvStore, sources: dict[str, list[Entity]]) -> BranchLa
     )
 
 
-def rows_on_page(lane: BranchLane, window: tuple[float, float]) -> tuple[BranchRow, ...]:
-    """The lane's bars that reach a page, whether or not they fit inside it.
+def rows_on_window(rows: Sequence[BranchRow], window: tuple[float, float]) -> tuple[BranchRow, ...]:
+    """The bars that reach a page, whether or not they fit inside it.
 
     A span crossing a page boundary is on both pages and is drawn clipped to each, so its extent is
     never restated as the page's edge.
+
+    Args:
+        rows: The bars to filter.
+        window: The page's ``(start, end)``.
+
+    Returns:
+        The bars, in the order given.
+    """
+    t0, t1 = window
+    return tuple(row for row in rows if row.end > t0 and row.start < t1)
+
+
+def rows_on_page(lane: BranchLane, window: tuple[float, float]) -> tuple[BranchRow, ...]:
+    """One lane's bars that reach a page.
 
     Args:
         lane: The lane.
@@ -2376,8 +2396,7 @@ def rows_on_page(lane: BranchLane, window: tuple[float, float]) -> tuple[BranchR
     Returns:
         The bars, in the lane's own order.
     """
-    t0, t1 = window
-    return tuple(row for row in lane.rows if row.end > t0 and row.start < t1)
+    return rows_on_window(lane.rows, window)
 
 
 def lane_note(lane: BranchLane, on_page: int) -> str:
@@ -2409,66 +2428,123 @@ def lane_note(lane: BranchLane, on_page: int) -> str:
     return ""
 
 
-def _lane_title(lane: BranchLane) -> str:
-    """One lane's own heading, so a page read on its own says what the lane is.
+def initial_rows(lanes: Sequence[BranchLane]) -> tuple[BranchRow, ...]:
+    """The initial spans every lane draws from, as one deduplicated population.
+
+    Each lane carries its own copy of the parents its proposals name, because a lane is readable on
+    its own. The span axis draws them once: an initial span parenting proposals in two branches is
+    one bar with a connector to each, which is the fact the four-lane layout could not show.
 
     Args:
-        lane: The lane.
+        lanes: :func:`branch_lanes`' result.
 
     Returns:
-        The title.
+        The distinct initial rows, earliest first.
     """
-    head = f"{lane.branch} — {lane.family} spans"
-    if lane.route_state is not None:
-        head += f" · route {lane.route_state}"
-    if lane.state == LANE_RAN:
-        head += f" · conformance {lane.conformance} of {lane.conformance_of}"
-    else:
-        head += f" · {lane.state}"
-    return head + " — initial over proposed, linked by wasDerivedFrom"
+    seen: dict[str, BranchRow] = {}
+    for lane in lanes:
+        for row in lane.initial:
+            seen.setdefault(row.key, row)
+    return tuple(sorted(seen.values(), key=lambda row: (row.start, row.end, row.key)))
 
 
-def _branch_lane_panel(axis: Axes, lane: BranchLane, window: tuple[float, float], style: FigureStyle) -> None:
-    """One branch's two-row lane, each proposal joined to the spans it names.
+def span_axis_rows(lanes: Sequence[BranchLane]) -> list[str]:
+    """The axis's row labels, top first: the shared initial row, then one per lane.
 
-    A connector is drawn only where both ends are on the page, which is the rule the shared token
-    renderer already applies: a derivation naming a bar this page does not carry draws nothing
-    rather than a line to an edge.
+    Args:
+        lanes: :func:`branch_lanes`' result.
+
+    Returns:
+        The labels, in draw order.
+    """
+    return [BRANCH_INITIAL_ROW, *(lane.branch for lane in lanes)]
+
+
+def parent_anchor(left: float, right: float, lane_index: int, lane_count: int) -> float:
+    """Where on a shared initial bar one lane's connectors leave it.
+
+    Every lane leaving a parent from its centre makes the connectors collinear, and the last drawn
+    paints over the rest: a parent feeding three branches then looks like a parent feeding one. Each
+    lane departs from its own fraction of the parent's width instead, so the fan is visible and a
+    line can be followed to the row it lands in.
+
+    Args:
+        left: The parent bar's drawn left edge.
+        right: Its drawn right edge.
+        lane_index: The lane's position in :data:`SUMMARY_LANES`.
+        lane_count: How many lanes the axis carries.
+
+    Returns:
+        The departure point, strictly inside the bar so the connector still reads as leaving it.
+    """
+    return left + (right - left) * (lane_index + 1) / (lane_count + 1)
+
+
+def _lane_colour(index: int, style: FigureStyle) -> str:
+    """The fill one lane's bars and connectors share.
+
+    Args:
+        index: The lane's position in :data:`SUMMARY_LANES`.
+        style: The drawing configuration.
+
+    Returns:
+        The colour, cycled when there are more lanes than colours.
+    """
+    return style.lane_colours[index % len(style.lane_colours)]
+
+
+def _span_axis_panel(axis: Axes, lanes: Sequence[BranchLane], window: tuple[float, float], style: FigureStyle) -> None:
+    """One axis: the initial spans on the top row, each branch's proposals on a row of its own.
+
+    A connector runs from a proposal to the initial span it names in ``wasDerivedFrom``, never to
+    the one it overlaps, and is drawn only where both ends are on the page — the rule the shared
+    token renderer already applies. Connectors take their lane's own colour and sit behind every
+    bar, so one crossing an intervening row can be followed to the row it lands in.
+
+    A row with no bar on this page carries its lane's note instead, which is what keeps a branch
+    that did not run distinguishable from one that ran and proposed nothing.
 
     Args:
         axis: The panel.
-        lane: The lane.
+        lanes: :func:`branch_lanes`' result.
         window: The page's ``(start, end)``.
         style: The drawing configuration.
     """
     from matplotlib.patches import Rectangle
 
     t0, t1 = window
+    labels = span_axis_rows(lanes)
+    n_rows = len(labels)
+    axis.set_title(
+        "proposed spans by branch over the initial spans they were derived from — "
+        "a connector is a wasDerivedFrom edge, never an overlap",
+        fontsize=style.title_fontsize,
+    )
     axis.set_xlim(t0, t1)
-    axis.set_title(_lane_title(lane), fontsize=style.title_fontsize)
-    on_page = rows_on_page(lane, window)
-    note = lane_note(lane, len(on_page))
-    if note:
-        _absent_panel(axis, window, note, style)
-        return
-    axis.set_yticks([0, 1])
-    axis.set_yticklabels([BRANCH_PROPOSED_ROW, BRANCH_INITIAL_ROW], fontsize=style.tick_fontsize)
-    axis.set_ylim(-0.6, 1.6)
+    axis.set_yticks(range(n_rows))
+    axis.set_yticklabels(list(reversed(labels)), fontsize=style.tick_fontsize)
+    axis.set_ylim(-0.5, n_rows - 0.5)
     axis.tick_params(axis="y", length=0)
-    axis.axhline(0.5, color="0.85", linewidth=0.5, zorder=0)
+    for boundary in range(n_rows - 1):
+        axis.axhline(boundary + 0.5, color="0.85", linewidth=0.5, zorder=0)
+
     renderer = _renderer(axis)
     points_per_second = _axis_points_per_second(axis, window, renderer)
+    # Row 0 of the label list is drawn at the top, so its y is n_rows - 1.
+    y_of = {label: n_rows - 1 - index for index, label in enumerate(labels)}
     placed: dict[str, tuple[float, float, float]] = {}
-    for row in on_page:
-        initial = row.row == BRANCH_INITIAL_ROW
-        y = 1.0 if initial else 0.0
+
+    def _bar(row: BranchRow, y: float, colour: str) -> None:
+        """Draw one span's bar, clipped to the page, and caption it if it fits."""
         left, right = max(row.start, t0), min(row.end, t1)
+        if right <= left:
+            return
         axis.add_patch(
             Rectangle(
                 (left, y - style.branch_row_height / 2),
                 right - left,
                 style.branch_row_height,
-                facecolor=style.colour_branch_initial if initial else style.colour_branch_proposed,
+                facecolor=colour,
                 edgecolor="0.25",
                 linewidth=0.6,
                 zorder=3,
@@ -2479,21 +2555,48 @@ def _branch_lane_panel(axis: Axes, lane: BranchLane, window: tuple[float, float]
         for caption in dict.fromkeys((row.label, row.short)):
             if _fit_cell_text(axis, (left + right) / 2, y, caption, budget, style, renderer):
                 break
-    for row in on_page:
-        child = placed.get(row.key)
-        if row.row != BRANCH_PROPOSED_ROW or child is None:
-            continue
-        for parent_key in row.derived_from:
-            parent = placed.get(parent_key)
-            if parent is None:
-                continue
-            axis.plot(
-                [(child[1] + child[2]) / 2, (parent[1] + parent[2]) / 2],
-                [child[0] + style.branch_row_height / 2, parent[0] - style.branch_row_height / 2],
-                color=style.colour_branch_link,
-                linewidth=style.branch_link_linewidth,
-                zorder=5,
+
+    for row in rows_on_window(initial_rows(lanes), window):
+        _bar(row, y_of[BRANCH_INITIAL_ROW], style.colour_branch_initial)
+    for index, lane in enumerate(lanes):
+        y = y_of[lane.branch]
+        on_page = [row for row in rows_on_page(lane, window) if row.row == BRANCH_PROPOSED_ROW]
+        for row in on_page:
+            _bar(row, y, _lane_colour(index, style))
+        note = lane_note(lane, len(on_page))
+        if note:
+            axis.text(
+                t0 + (t1 - t0) * 0.004,
+                y,
+                note,
+                ha="left",
+                va="center",
+                fontsize=style.absent_fontsize,
+                style="italic",
+                color="0.4",
+                zorder=4,
             )
+
+    # Connectors last and behind the bars: a dense derivation must never hide a span.
+    for index, lane in enumerate(lanes):
+        colour = _lane_colour(index, style)
+        for row in rows_on_page(lane, window):
+            child = placed.get(row.key)
+            if row.row != BRANCH_PROPOSED_ROW or child is None:
+                continue
+            for parent_key in row.derived_from:
+                parent = placed.get(parent_key)
+                if parent is None:
+                    continue
+                axis.plot(
+                    [(child[1] + child[2]) / 2, parent_anchor(parent[1], parent[2], index, len(lanes))],
+                    [child[0] + style.branch_row_height / 2, parent[0] - style.branch_row_height / 2],
+                    color=colour,
+                    linewidth=style.branch_link_linewidth,
+                    alpha=style.branch_link_alpha,
+                    zorder=2,
+                    solid_capstyle="butt",
+                )
 
 
 def _measure_text(value: Any) -> str:  # noqa: ANN401 — anything a report attribute can hold
