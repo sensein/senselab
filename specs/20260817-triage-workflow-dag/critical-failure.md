@@ -111,7 +111,8 @@ run. The audio may be perfect. No new threshold is introduced by this choice.
 
 QUALITY still runs. It is the terminal node every recording reaches whatever routed, it reads stored
 outputs rather than the routing decision, and withholding it would weaken an existing path for no
-stated reason. It is not a branch; no branch report is written on this path.
+stated reason. It is not a branch, so its report is the only `branch_report` on this path: none of
+AIRWAY, SPEECH or VOICE writes one, which is what "no branch reports" means here.
 
 ## The four states a branch can be in
 
@@ -151,4 +152,14 @@ adds a route. Only an undeclared recording with no gate firing gets here.
 * ADMIT's refusal path. A critical failure is evaluated after PREPROCESS and cannot reach a
   recording ADMIT failed: the runner never calls `routing` on that path.
 * `route_state` and `BRANCH_ROUTE_STATES`. The content reading is what it was; only execution moved.
-* `span_longest`'s `0.0`-for-absent reader, noted above.
+* `span_longest`'s `0.0`-for-absent reader, noted above. Fixing it would change what
+  `voice.sustained` reads on every recording with no amplitude span, which is a routing change with
+  no measurement behind it; it belongs in its own change.
+* `_route_states`' per-branch `unavailable`, which fires on *any* unreadable gate rather than all of
+  them. That is the conservative reading of the content, it is not what decides the short-circuit,
+  and changing it would move a state every consumer of `routes` already reads.
+* REPORT's `routing` JSON gains no structural `withheld_critical` key. The state reaches the
+  rendered product through `why`, which the report already prints verbatim and which is controlled
+  vocabulary for exactly this purpose.
+* The figure. It draws the four `BRANCH_ROUTE_STATES`, which are unchanged; a withheld run is a
+  fact about execution, not about the reading the figure shows.
