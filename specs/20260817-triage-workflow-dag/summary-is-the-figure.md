@@ -129,3 +129,51 @@ Carried forward from the previous pass and unchanged: the four run states, the `
 pairing rather than extent overlap, branch-level facts on the cover rather than inside a time page,
 `key in attributes` rather than `.get(...) is not None`, and the short-label fallback that keeps a
 narrow bar captioned.
+
+## The span axis — one axis, not four lanes
+
+Owner, 2026-09-17, having looked at the rendered PDF: *"just keep the preprocessing figure and
+adjust the span axes to initial spans and one row per proposed spans from different branches."*
+
+The four per-branch lanes, each with its own initial and proposed rows, become **one axis**: the
+initial spans on the top row, then one row per lane — AIRWAY, SPEECH, VOICE, REDACT.
+
+It is more compact, and it is truer to the structure. Every proposal derives from the same initial
+population, so the four-lane layout drew that population up to four times and could not show that
+one parent fed two branches: the fact appeared as two unrelated bars in two unrelated panels.
+`initial_rows` deduplicates by entity id across every lane, so the shared parent is one bar.
+
+### Connectors from one parent to several rows
+
+This is the case that makes the layout worth making, and it is also where it first went wrong.
+
+Drawn naively — every connector leaving the parent's centre — the lines from one parent to three
+branch rows are **collinear**. They overlap exactly, and the last drawn paints over the rest, so a
+parent feeding three branches renders as a parent feeding one. The render showed this: what should
+have been an orange, a green and a lavender line was one grey-lavender line.
+
+`parent_anchor` fixes it. Each lane leaves the parent at its own fraction of the bar's width,
+`(lane_index + 1) / (lane_count + 1)` — strictly inside the bar, evenly spread, symmetric about its
+centre, and deterministic. The fan is then visible at any bar width.
+
+Three further rules keep a dense derivation readable:
+
+- **Colour follows the lane.** A lane's bars and its connectors share one fill, so a connector
+  crossing two intervening rows can be followed by colour to the row it lands in. `lane_colours` has
+  one entry per lane and a test pins that they are distinct.
+- **Connectors sit behind every bar** (`zorder=2` against the bars' `3`) and below full opacity, so
+  a derivation never obscures the spans it relates. A connector crossing a row disappears under that
+  row's bars and re-emerges, which reads correctly: it is passing through, not landing.
+- **A connector is drawn only where both ends are on the page**, unchanged from the paired lane.
+
+### A branch that did not run
+
+The distinction survives, and the axis is where it is said. Each lane keeps a row whatever its
+state; a row with no bar on this page carries its lane's note instead — *did not run — route
+declined*, *ran and proposed no voice span*, *was selected to run and wrote no report*, *ROUTING
+wrote no decision*. That is the same four-state vocabulary as before, now drawn in the row rather
+than in a panel title.
+
+Consequently **the span axis is never collapsed**, unlike the spectrogram and the rasters above it:
+a collapsed row cannot carry its note, and the note is the finding. A mutation dropping rows for
+lanes that did not run fails nine tests.

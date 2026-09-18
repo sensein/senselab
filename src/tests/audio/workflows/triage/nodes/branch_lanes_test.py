@@ -29,9 +29,12 @@ from senselab.audio.workflows.triage.nodes.figure import (
     FigureStyle,
     branch_lanes,
     branch_report_lines,
+    initial_rows,
     lane_note,
+    parent_anchor,
     preprocess_figure,
     rows_on_page,
+    span_axis_rows,
 )
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
@@ -53,7 +56,7 @@ def _envelope_spans(store: ProvStore) -> list[Entity]:
 def _run_branch(
     store: ProvStore,
     branch: str,
-    proposals: list[tuple[str, tuple[float, float], str, dict[str, Any]]],
+    proposals: list[tuple[str, tuple[float, float], Any, dict[str, Any]]],
     *,
     kind: str,
     detail: dict[str, Any],
@@ -61,7 +64,11 @@ def _run_branch(
     deviations: tuple[str, ...] = (),
     unmeasured: tuple[str, ...] = (),
 ) -> None:
-    """Mint one branch's spans and write its report, through the only writers of either."""
+    """Mint one branch's spans and write its report, through the only writers of either.
+
+    A proposal's third element is the entity id it derives from, or a tuple of them for a proposal
+    naming more than one parent.
+    """
     activity = store.activity(node=branch, step="propose", parameters={})
     agent = software_agent(store)
     store.was_associated_with(activity, agent)
@@ -70,7 +77,10 @@ def _run_branch(
         store,
         activity,
         agent,
-        [mint(role, extent, source, **attributes) for role, extent, source, attributes in proposals],
+        [
+            mint(role, extent, *((sources,) if isinstance(sources, str) else tuple(sources)), **attributes)
+            for role, extent, sources, attributes in proposals
+        ],
     )
     write_report(
         store,
@@ -295,6 +305,121 @@ class TestABranchThatDidNotRunIsNotABranchThatFoundNothing:
         )
         [lane] = [lane for lane in branch_lanes(routed) if lane.branch == "AIRWAY"]
         assert lane_note(lane, len(rows_on_page(lane, (0.0, 20.0)))) == ""
+
+
+class TestTheSpanAxisIsOneAxis:
+    """One initial row over one row per branch, rather than four lanes each repeating the parents."""
+
+    def test_the_rows_are_the_initial_population_then_one_per_lane(self, routed: ProvStore) -> None:
+        """The layout the owner asked for, read off the structure rather than the pixels."""
+        lanes = branch_lanes(routed)
+        assert span_axis_rows(lanes) == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
+
+    def test_an_initial_span_shared_by_two_branches_is_one_bar(self, routed: ProvStore) -> None:
+        """The case the four-lane layout could not show: one parent, proposals in two branches."""
+        first, _second = _envelope_spans(routed)
+        _run_branch(
+            routed,
+            "AIRWAY",
+            [("cough_event", (1.1, 1.4), first.id, {"label": "cough"})],
+            kind="airway",
+            detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
+        )
+        _run_branch(
+            routed,
+            "VOICE",
+            [("task_extent", (1.5, 1.9), first.id, {"production": "sustained"})],
+            kind="voice",
+            detail={"spans_n": 1, "phonation_s": 0.4, "longest_span_s": 0.4, "notes": []},
+        )
+        lanes = branch_lanes(routed)
+        assert [row.key for row in initial_rows(lanes)] == [first.id]
+        parents = {lane.branch: {p for row in lane.proposed for p in row.derived_from} for lane in lanes}
+        assert parents["AIRWAY"] == parents["VOICE"] == {first.id}
+
+    def test_two_branches_off_one_parent_keep_their_own_edges(self, routed: ProvStore) -> None:
+        """One bar, two connectors: the shared row must not merge the two derivations into one."""
+        first, _second = _envelope_spans(routed)
+        _run_branch(
+            routed,
+            "AIRWAY",
+            [("cough_event", (1.1, 1.4), first.id, {"label": "cough"})],
+            kind="airway",
+            detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
+        )
+        _run_branch(
+            routed,
+            "SPEECH",
+            [("speech_run_0", (1.5, 1.9), first.id, {"attributed_to": "SPEAKER_00", "nontarget": False})],
+            kind="speech",
+            detail={"speaker_count": 1, "words_n": 2, "speech_s": 0.4, "nontarget_speech_s": 0.0, "notes": []},
+        )
+        lanes = {lane.branch: lane for lane in branch_lanes(routed)}
+        assert lanes["AIRWAY"].proposed[0].derived_from == (first.id,)
+        assert lanes["SPEECH"].proposed[0].derived_from == (first.id,)
+
+    def test_the_initial_row_is_deduplicated_across_lanes(self, routed: ProvStore) -> None:
+        """Two lanes naming the same two parents give two bars, not four."""
+        first, second = _envelope_spans(routed)
+        _run_branch(
+            routed,
+            "AIRWAY",
+            [("cough_event", (1.1, 1.4), (first.id, second.id), {"label": "cough"})],
+            kind="airway",
+            detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
+        )
+        _run_branch(
+            routed,
+            "VOICE",
+            [("task_extent", (4.1, 4.4), (first.id, second.id), {"production": "sustained"})],
+            kind="voice",
+            detail={"spans_n": 1, "phonation_s": 0.3, "longest_span_s": 0.3, "notes": []},
+        )
+        lanes = branch_lanes(routed)
+        assert sorted(row.key for row in initial_rows(lanes)) == sorted((first.id, second.id))
+
+    def test_the_initial_row_is_empty_when_nothing_names_a_span(self, routed: ProvStore) -> None:
+        """A proposal derived only from a measurement adds no bar to the shared row."""
+        measurement = next(entity for entity in live_entities(routed, "measurement") if entity.attributes.get("name"))
+        _run_branch(
+            routed,
+            "AIRWAY",
+            [("breath_run", (1.1, 1.8), measurement.id, {"label": "breath"})],
+            kind="airway",
+            detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
+        )
+        assert initial_rows(branch_lanes(routed)) == ()
+
+    def test_each_lane_leaves_a_shared_parent_at_its_own_point(self) -> None:
+        """Collinear connectors overlap, and the last drawn hides the rest.
+
+        A parent feeding three branches would then look like a parent feeding one, which is the
+        whole claim this layout exists to make.
+        """
+        anchors = [parent_anchor(1.0, 2.0, index, len(SUMMARY_LANES)) for index in range(len(SUMMARY_LANES))]
+        assert len(set(anchors)) == len(SUMMARY_LANES)
+        assert anchors == sorted(anchors)
+
+    def test_a_departure_point_stays_inside_the_parent_bar(self) -> None:
+        """A connector leaving outside the bar would not read as leaving that bar."""
+        for index in range(len(SUMMARY_LANES)):
+            anchor = parent_anchor(3.0, 3.4, index, len(SUMMARY_LANES))
+            assert 3.0 < anchor < 3.4
+
+    def test_the_fan_is_symmetric_about_the_parent_s_centre(self) -> None:
+        """No lane is privileged with the centre; the spread is even across the bar."""
+        anchors = [parent_anchor(0.0, 1.0, index, len(SUMMARY_LANES)) for index in range(len(SUMMARY_LANES))]
+        assert [round(anchor + mirrored, 9) for anchor, mirrored in zip(anchors, reversed(anchors))] == [1.0] * len(
+            anchors
+        )
+
+    def test_every_lane_keeps_its_own_row_even_when_it_did_not_run(self, routed: ProvStore) -> None:
+        """The consolidation may not drop a row; the row is where "did not run" is said."""
+        lanes = branch_lanes(routed)
+        withheld = [lane for lane in lanes if lane.state == LANE_WITHHELD]
+        assert withheld, "the fixture routes VOICE away, which is what this asserts about"
+        assert span_axis_rows(lanes) == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
+        assert all(lane_note(lane, 0) for lane in withheld)
 
 
 class TestThePairingFollowsTheDerivationEdge:
@@ -597,12 +722,12 @@ class TestItOverridesNoPipelineValue:
         """A size, a height or a colour belongs with FigureStyle's other fields and nowhere else."""
         fields = set(FigureStyle().__dataclass_fields__)
         assert {
-            "lane_height_ratios",
+            "span_axis_height_ratio",
             "colour_branch_initial",
-            "colour_branch_proposed",
-            "colour_branch_link",
+            "lane_colours",
             "branch_row_height",
             "branch_link_linewidth",
+            "branch_link_alpha",
         } <= fields
 
     def test_the_two_paired_rows_are_spelled_as_the_report_spells_them(self) -> None:
@@ -611,10 +736,13 @@ class TestItOverridesNoPipelineValue:
 
         assert (BRANCH_INITIAL_ROW, BRANCH_PROPOSED_ROW) == (report._INITIAL_ROW, report._PROPOSED_ROW)
 
-    def test_the_lane_fills_are_the_report_s_own(self) -> None:
+    def test_the_initial_fill_is_the_report_s_own(self) -> None:
         """A reader who has seen one product's pairing must not have to relearn the other's."""
         from senselab.audio.workflows.triage.nodes import report
 
-        style = FigureStyle()
-        assert style.colour_branch_initial == report._INITIAL_FILL
-        assert style.colour_branch_proposed == report._PROPOSED_FILL
+        assert FigureStyle().colour_branch_initial == report._INITIAL_FILL
+
+    def test_every_lane_can_take_a_colour_of_its_own(self) -> None:
+        """The colours are what make a connector crossing a row followable to the row it lands in."""
+        assert len(FigureStyle().lane_colours) >= len(SUMMARY_LANES)
+        assert len(set(FigureStyle().lane_colours)) == len(FigureStyle().lane_colours)
