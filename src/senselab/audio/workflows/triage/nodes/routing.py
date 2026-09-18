@@ -242,7 +242,7 @@ def routing(
                 "branch": branch,
                 "will_run": will_run,
                 "route_state": state,
-                "unavailable_gates": list((attributes.get("unavailable") or {}).get(branch) or ()),
+                "unavailable_gates": dict((attributes.get("unavailable") or {}).get(branch) or {}),
                 "flag_gates": list((attributes.get("flags") or {}).get(branch) or ()),
                 "declared": by_declaration,
                 "forced_by_declaration": forced_by_declaration,

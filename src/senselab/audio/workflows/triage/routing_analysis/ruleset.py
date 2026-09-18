@@ -31,7 +31,7 @@ from enum import Enum
 from typing import Any, Iterable, Mapping, Sequence
 
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.routing_analysis.detectors import Detector, detector_value
+from senselab.audio.workflows.triage.routing_analysis.detectors import Detector, detector_value, evidence_blocks
 from senselab.audio.workflows.triage.routing_analysis.families import DECLARED_KIND, SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.routing_analysis.features import RecordingFeatures
 from senselab.audio.workflows.triage.routing_analysis.report import (
@@ -191,8 +191,11 @@ class RouteEvaluation:
         agreed: ``routed`` and ``declared`` both.
         missed: Declared and not routed.
         extra: Routed and not declared.
-        unavailable: Per branch, the gates whose feature could not be read, whether or not another
-            gate routed the branch anyway. Only branches with such a gate are keyed.
+        unavailable: Per branch, each gate whose feature could not be read and the reason it could
+            not, whether or not another gate routed the branch anyway. Only branches with such a
+            gate are keyed. The reason is the node's own recorded absence for the block that would
+            have written the evidence, so an unread gate states why rather than only that it was
+            unread.
         flags: Per branch, the flag gates that fired. A flag annotates a branch and never routes
             it, so it is absent from every other field here. Only branches with a fired flag are
             keyed.
@@ -208,7 +211,7 @@ class RouteEvaluation:
     agreed: tuple[str, ...]
     missed: tuple[str, ...]
     extra: tuple[str, ...]
-    unavailable: Mapping[str, tuple[str, ...]]
+    unavailable: Mapping[str, Mapping[str, str]]
     flags: Mapping[str, tuple[str, ...]]
     state: RouteState
     gate_outcomes: Mapping[str, GateOutcome]
@@ -415,6 +418,32 @@ def gate_outcome_of(value: float | None, gate: Gate) -> GateOutcome:
     return GateOutcome.FIRED if fired else GateOutcome.SILENT
 
 
+UNRECORDED_ABSENCE = "no absence recorded for"
+"""How a reason reads when the evidence is missing and no node recorded a reason for its block."""
+
+NO_DECLARED_BLOCK = "the gate names no block this graph writes"
+"""How a reason reads when the gate's own reader cannot be traced to a block at all."""
+
+
+def unavailable_reason(features: RecordingFeatures, gate: Gate) -> str:
+    """Why one gate could not be read, in the words the node that failed to write its evidence used.
+
+    Args:
+        features: The recording's extracted evidence, carrying each node's own recorded absences.
+        gate: The gate, whose reader names the blocks that would have written what it reads.
+
+    Returns:
+        ``"<block>: <reason>"`` for every block of the gate's evidence a node recorded an absence
+        for; otherwise a statement that no absence was recorded for the blocks it needs, which is
+        itself a fact about the store rather than an invented value.
+    """
+    blocks = evidence_blocks(gate.feature)
+    if not blocks:
+        return NO_DECLARED_BLOCK
+    recorded = [f"{block}: {features.absent[block]}" for block in blocks if block in features.absent]
+    return "; ".join(recorded) if recorded else f"{UNRECORDED_ABSENCE} {', '.join(blocks)}"
+
+
 def evaluate_gate(features: RecordingFeatures, gate: Gate) -> GateOutcome:
     """Whether a gate fired, stayed silent, or could not be read at all.
 
@@ -447,14 +476,18 @@ def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvalu
     declared = ruleset.reference_branches(features.family)
     outcomes: dict[str, GateOutcome] = {}
     routed: list[str] = []
-    unavailable: dict[str, tuple[str, ...]] = {}
+    unavailable: dict[str, dict[str, str]] = {}
     flags: dict[str, tuple[str, ...]] = {}
     for branch in BRANCHES:
         names = ruleset.branch_gates.get(branch, ())
         states = {name: _outcome(features, ruleset, outcomes, name) for name in names}
         if GateOutcome.FIRED in states.values():
             routed.append(branch)
-        unread = tuple(name for name, state in states.items() if state is GateOutcome.UNAVAILABLE)
+        unread = {
+            name: unavailable_reason(features, ruleset.gates[name])
+            for name, state in states.items()
+            if state is GateOutcome.UNAVAILABLE
+        }
         if unread:
             unavailable[branch] = unread
         raised = tuple(
@@ -735,7 +768,7 @@ def branches_on(evaluation: RouteEvaluation, axis: str) -> tuple[str, ...]:
     """
     field = _KEYED_AXES.get(axis)
     if field is not None:
-        keyed: Mapping[str, tuple[str, ...]] = getattr(evaluation, field)
+        keyed: Mapping[str, Any] = getattr(evaluation, field)
         return tuple(branch for branch in BRANCHES if branch in keyed)
     branches: tuple[str, ...] = getattr(evaluation, axis)
     return branches

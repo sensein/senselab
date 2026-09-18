@@ -228,6 +228,9 @@ class RecordingFeatures:
         peaks: ``{peak_key: score}`` for every tracked label on every stream and classifier.
         classifier_streams: Which ``<stream>|<classifier>`` summaries were present at all.
         kind_state: TAXONOMY's own state per kind, so its current behaviour can be measured too.
+        absent: Every derivative a node recorded as absent, block name to the reason it recorded.
+            PREPROCESS writes one entry per block it could not run; the mapping is what lets an
+            unreadable gate state why rather than only that it was unread.
         verdicts: Each node's own record — a deciding node's outcome, or a reporting node's
             conformance, spelled ``conformance=<value>`` so the two are never mistaken for each other.
         n_entities: How many entity records the store held, as a parse sanity check.
@@ -260,6 +263,7 @@ class RecordingFeatures:
     peaks: dict[str, float] = field(default_factory=dict)
     classifier_streams: list[str] = field(default_factory=list)
     kind_state: dict[str, str] = field(default_factory=dict)
+    absent: dict[str, str] = field(default_factory=dict)
     verdicts: dict[str, str] = field(default_factory=dict)
     n_entities: int = 0
 
@@ -1109,6 +1113,8 @@ def extract_features(
             features.kind_state[str(attributes.get("kind"))] = str(attributes.get("state"))
         elif prov_type == "verdict":
             features.verdicts[str(attributes.get("node"))] = str(attributes.get("outcome"))
+            for block, reason in (attributes.get("absent") or {}).items():
+                features.absent[str(block)] = str(reason)
         elif prov_type == "branch_report":
             features.verdicts[str(attributes.get("node"))] = f"conformance={attributes.get('conformance')}"
         elif prov_type == "stream" and attributes.get("name") == "recording":

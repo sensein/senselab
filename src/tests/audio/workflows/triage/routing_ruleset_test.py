@@ -10,6 +10,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     AT_LEAST,
     FAMILY_SETS,
     ROUTE_STATES,
+    UNRECORDED_ABSENCE,
     GateOutcome,
     RouteState,
     Ruleset,
@@ -287,11 +288,33 @@ class TestAMissingMeasurementIsNotANegative:
         record = _features("voluntary-cough", span_label_set_stats={})
         assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.UNAVAILABLE
 
+    def test_an_unreadable_gate_carries_the_reason_the_node_recorded(self, ruleset: Ruleset) -> None:
+        """PREPROCESS already wrote why the block is missing; the gate states it rather than guess.
+
+        Without this an unread gate says only that it was unread, which is "never judged" with no
+        way to tell a model that raised from a block that was never reached.
+        """
+        record = _features(
+            "breath-sounds",
+            residual={},
+            absent={"residual": "ValueError: FRCRN enhancement unavailable: RuntimeError: worker timed out"},
+        )
+        reason = evaluate_routes(record, ruleset).unavailable["AIRWAY"]["airway.breath"]
+        assert reason == "residual: ValueError: FRCRN enhancement unavailable: RuntimeError: worker timed out"
+
+    def test_an_unreadable_gate_with_no_recorded_absence_says_that_rather_than_inventing_one(
+        self, ruleset: Ruleset
+    ) -> None:
+        """Nothing having recorded a reason is itself a fact about the store, not a blank."""
+        record = _features("breath-sounds", residual={})
+        reason = evaluate_routes(record, ruleset).unavailable["AIRWAY"]["airway.breath"]
+        assert reason == f"{UNRECORDED_ABSENCE} residual"
+
     def test_an_unreadable_gate_is_named_rather_than_counted_as_silent(self, ruleset: Ruleset) -> None:
         """A breath recording with no residual and no span statistic is unmeasured, not empty."""
         record = _features("breath-sounds", residual={}, span_label_set_stats={})
         result = evaluate_routes(record, ruleset)
-        assert result.unavailable["AIRWAY"] == ("airway.breath", "airway.cough")
+        assert tuple(result.unavailable["AIRWAY"]) == ("airway.breath", "airway.cough")
         assert result.routed == ()
         assert result.missed == ("AIRWAY",)
         assert result.gate_outcomes["airway.breath"] is GateOutcome.UNAVAILABLE
@@ -312,7 +335,7 @@ class TestAMissingMeasurementIsNotANegative:
         )
         result = evaluate_routes(record, ruleset)
         assert result.routed == ("AIRWAY",)
-        assert result.unavailable["AIRWAY"] == ("airway.breath",)
+        assert tuple(result.unavailable["AIRWAY"]) == ("airway.breath",)
 
     def test_the_tally_counts_unavailable_separately_from_a_silent_gate(self, ruleset: Ruleset) -> None:
         """Collapsing the two would report a broken store as a negative measurement."""
@@ -581,7 +604,7 @@ class TestTheCoughGateIsSetConditioned:
         assert evaluate_gate(measured, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
         assert evaluate_gate(unmeasured, ruleset.gates["airway.cough"]) is GateOutcome.UNAVAILABLE
         assert evaluate_routes(measured, ruleset).unavailable == {}
-        assert evaluate_routes(unmeasured, ruleset).unavailable["AIRWAY"] == ("airway.cough",)
+        assert tuple(evaluate_routes(unmeasured, ruleset).unavailable["AIRWAY"]) == ("airway.cough",)
 
 
 class TestQualityIsATerminalNodeAndNotABranch:
@@ -648,14 +671,14 @@ class TestThePosteriorgramGateRoutesWithoutATranscript:
         )
         result = evaluate_routes(record, ruleset)
         assert result.routed == ("AIRWAY",)
-        assert result.unavailable["AIRWAY"] == ("airway.breath",)
+        assert tuple(result.unavailable["AIRWAY"]) == ("airway.breath",)
 
     def test_airway_still_routes_on_the_residual_with_no_posteriorgram(self, ruleset: Ruleset) -> None:
         """The converse: each gate covers the population the other cannot read."""
         record = _features("respiration-and-cough-threequickbreaths", residual={"energy_fraction": 0.5}, ppg={})
         result = evaluate_routes(record, ruleset)
         assert result.routed == ("AIRWAY",)
-        assert result.unavailable["AIRWAY"] == ("airway.ppg_silent_fraction",)
+        assert tuple(result.unavailable["AIRWAY"]) == ("airway.ppg_silent_fraction",)
 
     def test_no_posteriorgram_is_not_a_silent_fraction_of_zero(self, ruleset: Ruleset) -> None:
         """An absent sidecar leaves the gate unread, which is not the gate staying silent."""
