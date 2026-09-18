@@ -127,6 +127,10 @@ The distinction is load-bearing and each state is readable off the store:
 Without `withheld_critical` the last two are the same row: a branch the ruleset declined and a
 branch nobody asked both read as `will_run: false, route_state: declined`.
 
+REPORT needed no change to show this. It renders each decision's `why` verbatim, and `why` is a
+controlled vocabulary, so `route_declined_withheld_critical` reaches the rendered product as soon as
+ROUTING writes it — which is the reason the state went into `why` and not only into a boolean.
+
 ## The no-hint-no-gate case
 
 `routing.py`'s `empty_set` can still be true on a non-critical recording: no gate fired, the stem
