@@ -7,13 +7,19 @@ declaration never rewrites the reading, never removes a branch and never relaxes
 verdict is always a ``pass``: this node reaches no conclusion about the recording, and an empty
 execution set is recorded on the decisions for VERDICT to read rather than flagged here.
 
+One reading withholds every branch: a **critical failure**, where some branch's whole gate set was
+unreadable, so the ruleset formed no opinion about that branch at all. No branch runs then, the
+declaration adds none, and each decision names the absence that caused it. What makes a failure
+critical, and why it is branch-wise rather than file-wise, is in
+``specs/20260817-triage-workflow-dag/critical-failure.md``.
+
 A failure to evaluate the ruleset fails the node, because the ruleset is what decides execution.
 ``specs/20260912-ruleset-in-pipeline/design.md`` holds the staging that brought it here.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +64,13 @@ class RoutingResult(NodeResult):
         empty_set: Whether no branch runs at all.
         route_state: What the ruleset made of the whole recording — ``routed``, ``empty`` or
             ``unexplained``.
+        critical: Whether the run hit a critical failure, so no branch was selected whatever the
+            gates and the declaration said.
+        critical_absences: Per branch not one of whose gates could be read, each gate and the
+            absence the node that failed to write its evidence recorded. Empty when ``critical``
+            is False.
+        defaulted: The branch the configured default added, empty when none was configured or none
+            was needed.
     """
 
     runs: tuple[str, ...]
@@ -66,6 +79,9 @@ class RoutingResult(NodeResult):
     declared: tuple[str, ...]
     empty_set: bool
     route_state: str
+    critical: bool = False
+    critical_absences: dict[str, dict[str, str]] = field(default_factory=dict)
+    defaulted: tuple[str, ...] = ()
 
 
 def _declared_tags(hint: AudioHints | None) -> list[str]:
@@ -146,16 +162,22 @@ def _route_states(attributes: dict[str, Any]) -> dict[str, str]:
     return states
 
 
-def _why(state: str, forced_by_declaration: bool) -> str:
+def _why(state: str, forced_by_declaration: bool, *, withheld_critical: bool, defaulted: bool) -> str:
     """One decision's reason, in controlled vocabulary.
 
     Args:
         state: The branch's route state, one of :data:`BRANCH_ROUTE_STATES`.
         forced_by_declaration: Whether the branch runs only because the declaration named it.
+        withheld_critical: Whether the branch was withheld by a critical failure.
+        defaulted: Whether the branch runs only because it is the configured default.
 
     Returns:
         The reason.
     """
+    if withheld_critical:
+        return f"route_{state}_withheld_critical"
+    if defaulted:
+        return f"route_{state}_by_default"
     return f"route_{state}_forced_by_declaration" if forced_by_declaration else f"route_{state}"
 
 
@@ -184,16 +206,21 @@ def routing(
             holds ADMIT's ``recording`` stream, whose path carries the declared task.
         source: The stream the pass is running over; ``None`` means the conditioned stream. Recorded
             on every decision so a second pass over another stream stays tellable apart.
-        config: The triage configuration, read for ``taxonomy.ruleset`` and
-            ``routing.hint_branch_map``.
+        config: The triage configuration, read for ``taxonomy.ruleset``,
+            ``routing.hint_branch_map`` and ``routing.default_branch``.
         hint: What the recording was declared to contain, if anything.
         run_dir: The run directory the store's sidecar paths are relative to. ROUTING writes no
             sidecars of its own; the reader resolves the evidence's against it.
 
+    A critical failure overrides both sources. Where some branch's every gate was unreadable, no
+    branch runs: the content reading is recorded on each decision unchanged, ``withheld_critical``
+    says why none of them was acted on, and the absence that caused it travels to VERDICT.
+
     Returns:
         The branches that run, those that do not, those the declaration added, every branch the
-        declaration named, whether the set is empty, and what the ruleset made of the recording as a
-        whole.
+        declaration named, whether the set is empty, what the ruleset made of the recording as a
+        whole, whether the run was critical and the absences behind it, and the branch the
+        configured default added.
 
     Raises:
         ValueError: When the ruleset or the membership rule cannot be loaded from the configuration.
@@ -216,6 +243,19 @@ def routing(
     declared_family = str(attributes["family"])
     by_family = {str(branch) for branch in attributes["declared"]}
 
+    unreadable = [str(branch) for branch in attributes.get("unreadable") or ()]
+    critical_absences = {
+        branch: dict((attributes.get("unavailable") or {}).get(branch) or {}) for branch in unreadable
+    }
+    critical = bool(critical_absences)
+
+    entered = {
+        branch: states[branch] == ROUTED or branch in by_family or bool(tags_by_branch.get(branch))
+        for branch in BRANCHES
+    }
+    default = str(config.get("routing.default_branch") or "")
+    defaulted = default if not critical and not any(entered.values()) and default in BRANCHES else ""
+
     activity = store.activity(node=NODE, step=None, parameters={"config_hash": config.config_hash, "stream": stream})
     store.was_associated_with(activity, software)
     store.used(activity, measurement_id)
@@ -232,8 +272,10 @@ def routing(
         hint_tags = tags_by_branch.get(branch, [])
         by_ruleset = state == ROUTED
         by_declaration = branch in by_family or bool(hint_tags)
-        forced_by_declaration = by_declaration and not by_ruleset
-        will_run = by_ruleset or forced_by_declaration
+        by_default = branch == defaulted
+        forced_by_declaration = by_declaration and not by_ruleset and not critical
+        will_run = not critical and (by_ruleset or by_declaration or by_default)
+        withheld_critical = critical
 
         decision_id = store.entity(
             prov_type="branch_decision",
@@ -251,7 +293,9 @@ def routing(
                 "hint_tags": hint_tags,
                 "unmapped_tags": unmapped,
                 "bad_map_values": bad_values,
-                "why": _why(state, forced_by_declaration),
+                "why": _why(state, forced_by_declaration, withheld_critical=critical, defaulted=by_default),
+                "withheld_critical": withheld_critical,
+                "critically_unreadable": branch in critical_absences,
                 "stream": stream,
             },
         )
@@ -271,7 +315,13 @@ def routing(
             forced.append(branch)
 
     empty_set = not runs
-    if empty_set:
+    if critical:
+        named = "; ".join(
+            f"{branch}: " + ", ".join(f"{gate} ({reason})" for gate, reason in sorted(gates.items()))
+            for branch, gates in sorted(critical_absences.items())
+        )
+        why = f"no branch runs; every gate of {', '.join(sorted(critical_absences))} was unreadable — {named}"
+    elif empty_set:
         why = f"no branch runs ({route_state}); " + ", ".join(declined)
     else:
         why = "runs: " + ", ".join(runs)
@@ -293,6 +343,9 @@ def routing(
             "empty_set": empty_set,
             "route_state": route_state,
             "routes": dict(states),
+            "critical": critical,
+            "critical_absences": {branch: dict(gates) for branch, gates in critical_absences.items()},
+            "defaulted": [defaulted] if defaulted else [],
         },
     )
     view.append(verdict_id)
@@ -306,4 +359,7 @@ def routing(
         declared=tuple(declared),
         empty_set=empty_set,
         route_state=route_state,
+        critical=critical,
+        critical_absences=critical_absences,
+        defaulted=(defaulted,) if defaulted else (),
     )

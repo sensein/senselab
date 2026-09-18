@@ -52,6 +52,13 @@ REPORT_NODE = "REPORT"
 NO_NODE = "no node implements this branch"
 """The note a branch with no implementation carries, selected or not."""
 
+WITHHELD_CRITICAL = "withheld: a critical measurement was absent and the run went straight to VERDICT"
+"""The note every branch carries when ROUTING short-circuited the run.
+
+A branch is ``SKIPPED`` for three different reasons and the state alone says none of them apart, so
+this is what keeps a withheld run distinguishable from a route the ruleset declined.
+"""
+
 STORE_FILE = "store.jsonl"
 LOG_FILE = "run.json"
 RUN_SUBDIR = "run"
@@ -271,7 +278,10 @@ def _drive_branches(
     :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES` that no node implements is recorded
     ``SKIPPED`` carrying :data:`NO_NODE`, selected or not, so naming it in an execution set is a
     record rather than a crash. A failed ROUTING call likewise
-    leaves every branch ``SKIPPED``: no branch has an authorised decision to act on. A branch that
+    leaves every branch ``SKIPPED``: no branch has an authorised decision to act on. A ROUTING call
+    that completed and found a critical failure leaves every branch ``SKIPPED`` carrying
+    :data:`WITHHELD_CRITICAL`, which is the same state for a different reason and is why the note
+    exists. A branch that
     raises is still recorded ``ERRORED`` and its siblings still run: none of them reads another's
     output. REDACT is a step of SPEECH and runs only when SPEECH ran and its scan found PII. QUALITY
     is the terminal node every recording reaches whatever routing selected, so it is called on every
@@ -308,6 +318,7 @@ def _drive_branches(
     _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
     routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
     selected = set(routed.runs) if routed is not None else set()
+    withheld = WITHHELD_CRITICAL if routed is not None and routed.critical else None
     branches: dict[str, Callable[[], BranchResult]] = {
         "AIRWAY": lambda: airway(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
         "SPEECH": lambda: speech(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir, enrollment=enrollment),
@@ -320,7 +331,7 @@ def _drive_branches(
         elif branch in selected:
             _attempt(outcomes, branch, call)
         else:
-            outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED)
+            outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED, note=withheld)
     _attempt(outcomes, QUALITY, lambda: quality(store, _SOURCE_STREAM, config, hint, run_dir=run_dir))
     if "SPEECH" in selected and _speech_found_pii(store):
         redacted = _attempt(

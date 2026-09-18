@@ -536,3 +536,144 @@ class TestItReadsTheLiveStore:
         recorded = find_measurement(store, RULESET_ROUTING)
         assert recorded is not None
         assert recorded.attributes["gate_outcomes"]
+
+
+_ASR_FAILED = "consensus_transcript: both asr blocks failed: whisper OSError, nemo CalledProcessError"
+
+
+class TestACriticalFailureWithholdsEveryBranch:
+    """A branch the ruleset could form no opinion about at all short-circuits the run to VERDICT.
+
+    ``specs/20260817-triage-workflow-dag/critical-failure.md`` derives which absence is critical and
+    why the unit is the branch rather than the file.
+    """
+
+    def test_both_asr_blocks_failing_withholds_every_branch(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """SPEECH names one gate; losing the consensus leaves the ruleset no opinion to act on."""
+        reads(_evaluation(state=RouteState.UNEXPLAINED, unavailable={"SPEECH": {"speech.lexical": _ASR_FAILED}}))
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.critical is True
+        assert result.runs == ()
+        assert result.critical_absences == {"SPEECH": {"speech.lexical": _ASR_FAILED}}
+
+    def test_the_verdict_names_the_missing_measurement(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A short-circuit that did not say what was missing would swallow the recording."""
+        reads(_evaluation(state=RouteState.UNEXPLAINED, unavailable={"SPEECH": {"speech.lexical": _ASR_FAILED}}))
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert "consensus_transcript" in result.verdict.why
+        assert "speech.lexical" in result.verdict.why
+        assert "SPEECH" in result.verdict.why
+
+    def test_the_declaration_adds_no_route_on_a_critical_failure(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A declared route here would be the graph routing on evidence it does not have."""
+        reads(
+            _evaluation(
+                state=RouteState.UNEXPLAINED,
+                declared=["VOICE"],
+                family="voice",
+                unavailable={"SPEECH": {"speech.lexical": _ASR_FAILED}},
+            )
+        )
+        result = routing(store, None, _map(tmp_path), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
+        assert result.runs == ()
+        assert result.forced == ()
+        decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
+        assert decisions["VOICE"]["declared"] is True
+        assert decisions["VOICE"]["will_run"] is False
+        assert decisions["AIRWAY"]["declared"] is True
+        assert decisions["AIRWAY"]["will_run"] is False
+
+    def test_a_withheld_branch_is_distinguishable_from_a_declined_one(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """``will_run: false`` alone reads the same for a branch nobody asked and one nobody could."""
+        reads(_evaluation(state=RouteState.UNEXPLAINED, unavailable={"SPEECH": {"speech.lexical": _ASR_FAILED}}))
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
+        assert decisions["VOICE"]["withheld_critical"] is True
+        assert decisions["VOICE"]["why"] == "route_declined_withheld_critical"
+        assert decisions["VOICE"]["critically_unreadable"] is False
+        assert decisions["SPEECH"]["critically_unreadable"] is True
+
+    def test_the_content_reading_is_recorded_unchanged(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A short-circuit withholds execution; it rewrites no route state."""
+        reads(_evaluation(["VOICE"], unavailable={"SPEECH": {"speech.lexical": _ASR_FAILED}}))
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
+        assert decisions["VOICE"]["route_state"] == "routed"
+        assert decisions["VOICE"]["will_run"] is False
+        assert decisions["SPEECH"]["route_state"] == "unavailable"
+
+    def test_one_unreadable_gate_beside_readable_siblings_is_not_critical(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """AIRWAY names four gates over four blocks; three opinions are still a route."""
+        reads(_evaluation(["VOICE"], unavailable={"AIRWAY": {"airway.bracketed_event": _ASR_FAILED}}))
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.critical is False
+        assert result.runs == ("VOICE",)
+
+    def test_a_measured_nothing_is_not_a_critical_failure(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A gate that read a number and stayed silent is an opinion, not an absence."""
+        reads(_evaluation(state=RouteState.EMPTY))
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.critical is False
+        assert result.critical_absences == {}
+        assert result.empty_set is True
+
+    def test_a_gateless_branch_is_never_critical(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A branch that names no gate was never asked, so nothing about it could fail to be read."""
+        reads(_evaluation(["SPEECH"], unavailable={"VOICE": {"voice.glide": _ASR_FAILED}}))
+        result = routing(store, None, _gateless(tmp_path, "VOICE"), run_dir=tmp_path)
+        assert result.critical is False
+        assert result.runs == ("SPEECH",)
+
+
+class TestTheDefaultBranchShipsInert:
+    """``routing.default_branch`` is null, so an empty route set stays an honest empty."""
+
+    def test_nothing_is_routed_by_default_under_the_packaged_config(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """Picking a branch nobody measured would turn a visible ruleset gap into a branch report."""
+        reads(_evaluation(state=RouteState.UNEXPLAINED))
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.runs == ()
+        assert result.defaulted == ()
+        assert result.empty_set is True
+
+    def test_a_configured_default_adds_exactly_that_branch(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """A campaign that can answer the question for its own corpus says so in the config."""
+        path = tmp_path / "default.yaml"
+        path.write_text("routing:\n  default_branch: VOICE\n")
+        reads(_evaluation(state=RouteState.UNEXPLAINED))
+        result = routing(store, None, load_triage_config(path), run_dir=tmp_path)
+        assert result.runs == ("VOICE",)
+        assert result.defaulted == ("VOICE",)
+        voice = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "VOICE")
+        assert voice.attributes["why"] == "route_declined_by_default"
+
+    def test_a_configured_default_never_overrides_a_critical_failure(
+        self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
+    ) -> None:
+        """The short-circuit is not an empty route set; a default here would defeat it."""
+        path = tmp_path / "default.yaml"
+        path.write_text("routing:\n  default_branch: VOICE\n")
+        reads(_evaluation(state=RouteState.UNEXPLAINED, unavailable={"SPEECH": {"speech.lexical": _ASR_FAILED}}))
+        result = routing(store, None, load_triage_config(path), run_dir=tmp_path)
+        assert result.runs == ()
+        assert result.defaulted == ()
