@@ -2407,11 +2407,15 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         _squim_for("squim", state.get("span_ids") or [])
 
     def _mark_unmeasured(activity: str, agent_id: str, span: Entity, name: str, reason: str) -> str:
-        """Record one span as attempted but unmeasured, so its absence is a fact, not a silence."""
+        """Record one span as attempted but unmeasured, so its absence is a fact, not a silence.
+
+        The assertion names the span it stands for, so a reader joins it to the span the same way it
+        joins a scored window, and the classifier's denominator counts both.
+        """
         assertion_id = store.entity(
             prov_type="assertion",
             extent=span.extent,
-            attributes={"verb": "measure", "name": name, "unmeasured": reason},
+            attributes={"verb": "measure", "name": name, "span_id": span.id, "unmeasured": reason},
         )
         store.was_generated_by(assertion_id, activity)
         store.was_attributed_to(assertion_id, agent_id)
