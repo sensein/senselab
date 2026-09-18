@@ -45,6 +45,32 @@ GATE_CLOSED_BELOW = math.inf
 SPAN_COUNT_STATISTIC = "span_count"
 """The statistic every label and label-set distribution carries, zero where nothing carried it."""
 
+CONSENSUS_BLOCK = "consensus_transcript"
+"""The PREPROCESS block whose absence leaves every word- and transcript-reading source unreadable."""
+
+SOURCE_BLOCKS: Mapping[str, tuple[str, ...]] = {
+    "words": (CONSENSUS_BLOCK,),
+    "bracketed_set": (CONSENSUS_BLOCK,),
+    "onomatopoeic": (CONSENSUS_BLOCK,),
+    "transcript_repeat": (CONSENSUS_BLOCK,),
+    "residual": ("residual",),
+    "ppg": ("ppg_posteriorgram",),
+    "praat": ("praat_features",),
+    "phonation": ("phonation_tracks",),
+    "level": ("level",),
+    "disruptions": ("disruptions_file",),
+    "silence": ("silence",),
+    "squim": ("squim",),
+    "span_longest": ("spans",),
+    "span_total": ("spans",),
+    "span_count": ("spans",),
+    "span_stat": ("spans",),
+}
+"""Each fixed feature source, and the PREPROCESS blocks whose absence would leave it unwritten."""
+
+SPAN_CLASSIFIER_BLOCKS: Mapping[str, str] = {classifier: name for name, classifier in SPAN_CLASSIFIERS.items()}
+"""Each per-span classifier, and the PREPROCESS block that writes its windows."""
+
 CONSOLIDATION_FLOOR = 0.2
 """``taxonomy.consolidation_floor`` in ``data/config/default.yaml``, marked in every score grid."""
 
@@ -599,6 +625,35 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         right = detector_value(features, Detector(detector.name, detector.kind, arguments[1], detector.unit, ()))
         return None if left is None or right is None else left - right
     raise ValueError(f"unknown detector source {source!r}")
+
+
+def evidence_blocks(reader: tuple[Any, ...]) -> tuple[str, ...]:
+    """The PREPROCESS blocks whose absence would leave one feature reader unwritten.
+
+    Args:
+        reader: A reader path, as :func:`detector_value` takes it.
+
+    Returns:
+        The block names, nearest producer first, empty when the reader names no block this knows.
+    """
+    source, *arguments = reader
+    fixed = SOURCE_BLOCKS.get(str(source))
+    if fixed is not None:
+        return fixed
+    if source in ("span_label_stat", "span_label_set_stat"):
+        classifier = str(arguments[0]).partition(".")[0]
+        block = SPAN_CLASSIFIER_BLOCKS.get(classifier)
+        return (block,) if block is not None else ()
+    if source in ("peak", "peak_set", "peak_label", "stream_peak_max"):
+        stream, classifier = str(arguments[0]), str(arguments[1])
+        if stream == "plain":
+            return (f"{classifier}_windows", f"{classifier}_scores")
+        if stream in ("enhanced", "residual"):
+            return (f"{stream}_{classifier}", "residual")
+        return ()
+    if source in ("ratio", "difference", "gated"):
+        return tuple(dict.fromkeys(block for argument in arguments[:2] for block in evidence_blocks(tuple(argument))))
+    return ()
 
 
 def _label_statistic(table: dict[str, float], key: str, polarity: str) -> float | None:

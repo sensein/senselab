@@ -47,7 +47,7 @@ def _evaluation(
     routed: Sequence[str] = (),
     *,
     state: RouteState = RouteState.ROUTED,
-    unavailable: Mapping[str, tuple[str, ...]] | None = None,
+    unavailable: Mapping[str, Mapping[str, str]] | None = None,
     flags: Mapping[str, tuple[str, ...]] | None = None,
     gate_outcomes: Mapping[str, GateOutcome] | None = None,
     declared: Sequence[str] = (),
@@ -106,13 +106,18 @@ class TestTheRulesetDecides:
     def test_a_branch_whose_gates_could_not_be_read_is_unavailable_and_still_withheld(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
-        """A gate that was never measured did not decline; that is recorded, not turned into a run."""
-        reads(_evaluation(["SPEECH"], unavailable={"VOICE": ("voice.glide",)}))
+        """A gate that was never measured did not decline; that is recorded, not turned into a run.
+
+        The reason travels with the gate name: a branch withheld because nothing could be read is
+        accountable only if the store says what was not written.
+        """
+        reason = "yamnet_windows: ValueError: windows.yamnet.default_threshold has no value"
+        reads(_evaluation(["SPEECH"], unavailable={"VOICE": {"voice.glide": reason}}))
         result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
         assert "VOICE" not in result.runs
         voice = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "VOICE")
         assert voice.attributes["route_state"] == "unavailable"
-        assert voice.attributes["unavailable_gates"] == ["voice.glide"]
+        assert voice.attributes["unavailable_gates"] == {"voice.glide": reason}
 
     def test_a_fired_flag_is_recorded_on_the_branch_it_annotates(
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
@@ -186,7 +191,7 @@ class TestAGatelessBranchIsUngatedAndNotDeclined:
         self, store: ProvStore, tmp_path: Path, reads: Callable[[RouteEvaluation], None]
     ) -> None:
         """A feature that could not be read is a fact about the store, never a missing gate list."""
-        reads(_evaluation([], unavailable={"VOICE": ("voice.glide",)}))
+        reads(_evaluation([], unavailable={"VOICE": {"voice.glide": "yamnet_windows: unmeasured"}}))
         routing(store, None, load_triage_config(), run_dir=tmp_path)
         decisions = {e.attributes["branch"]: e.attributes for e in live_entities(store, "branch_decision")}
         assert decisions["VOICE"]["route_state"] == "unavailable"
