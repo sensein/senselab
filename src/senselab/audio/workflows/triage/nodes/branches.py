@@ -1009,18 +1009,6 @@ def _label_sets(value: Any) -> dict[str, tuple[str, ...]]:  # noqa: ANN401 — o
     return {str(name): tuple(str(label) for label in labels) for name, labels in value.items()}
 
 
-def _labels(value: Any) -> tuple[str, ...]:  # noqa: ANN401 — one config leaf
-    """A label list as a tuple of strings.
-
-    Args:
-        value: The leaf.
-
-    Returns:
-        The labels.
-    """
-    return tuple(str(label) for label in value)
-
-
 POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "smoothing_window_s": float,
     "peak_prominence_db": float,
