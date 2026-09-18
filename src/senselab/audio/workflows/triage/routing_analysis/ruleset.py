@@ -392,7 +392,10 @@ def gate_value(features: RecordingFeatures, gate: Gate) -> float | None:
     """
     if gate.feature[0] == TRANSCRIPT_REPEAT:
         return float(max_token_repeat(features.transcript)) if features.consensus_present else None
-    return detector_value(features, Detector(name=gate.name, kind="", reader=gate.feature, unit="", thresholds=()))
+    return detector_value(
+        features,
+        Detector(name=gate.name, kind="", reader=gate.feature, unit="", thresholds=(), polarity=_POLARITY[gate.op]),
+    )
 
 
 def gate_outcome_of(value: float | None, gate: Gate) -> GateOutcome:

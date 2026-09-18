@@ -161,25 +161,59 @@ on a gap span yields `yamnet.cough_labels.span_count = 1` — the cough **was** 
 `peak_over_floor_db_max` is still absent from the finite sample, and under the fix above the gate
 reads a definite non-fire on a recording where a cough was detected.
 
+Measured directly, one cough-labelled span per run, `airway.cough` = `at_least 50.0` dB:
+
+| span `measure` | `…cough_labels.span_count` | `…peak_over_floor_db_max` | gate |
+| --- | --- | --- | --- |
+| `amplitude` | 1.0 | 60.0 | fired |
+| `gap` | 1.0 | absent | unavailable |
+| `asr` | 1.0 | absent | unavailable |
+| `continuity` | 1.0 | absent | unavailable |
+
+So it is three of the four span classes, not two of three: `_measure_fields` writes
+`peak_over_floor_db` only for `amplitude`, and the `float("nan")` an ASR span's in-memory `Span`
+carries never becomes an entity attribute at all. The fix above does not mask this — the count is
+one, not zero, so the empty-sample path is not taken and the gate still admits it could not read.
+
 Recommendation, with the evidence, is in the report accompanying this change. The short form:
 the gate's stated intent is "loudest cough-labelled span", and that intent is only true across
 span classes if `peak_over_floor_db` is measured on every span class. Anything short of that is a
-gate that reads a quantity two of three span classes do not have. This changes what the gate
+gate that reads a quantity three of four span classes do not have. This changes what the gate
 *means*, so it is not a repair and is not made here.
 
 ### Shape C: a span explicitly recorded as not measured is folded into the negatives
 
 `preprocess.py::_mark_unmeasured` records a span it could not score as an `assertion` carrying an
-`unmeasured` reason. `extract_features` absorbs assertions only when `name == "squim"`. So for
-every other measurement, a span explicitly recorded as *not measured* leaves no trace in the
-features at all, and the span is simply one of the negatives.
+`unmeasured` reason. It is reached from eight call sites across `_span_hear` and `_span_yamnet`,
+with reasons including `yamnet_scores_absent`, `no_covering_window`, `no_native_window` and the
+exception type of whatever raised. `extract_features` absorbs assertions only when
+`name == "squim"`. So for every other measurement, a span explicitly recorded as *not measured*
+leaves no trace in the features at all, and the span is simply one of the negatives.
+
+This is the item that bears directly on the fix above. Shape A now turns a zero count into a
+definite non-fire, and that non-fire is only as strong as the denominator behind it. If YAMNet
+scored eleven of fourteen spans and the other three are `_mark_unmeasured` assertions nobody reads,
+`yamnet.cough_labels.span_count = 0` states "nothing carried the cough set" on eleven spans while
+reading as though it were fourteen.
+
+The precedent for the repair is already in the same file: `_squim_statistics` writes
+`<population>.n` beside `<population>.unmeasured`, counting the assertions that carry an
+`unmeasured` key. Recommended shape: absorb `span_yamnet` and `span_hear` assertions the same way,
+so `RecordingFeatures` carries how many spans each per-span classifier could not score, and a
+set-conditioned gate's zero count can be qualified by it.
 
 ### Two adjacent items
 
 `RouteState` has no unavailable member. When the emptiness bypass itself is unreadable,
-`evaluate_routes` falls through to `UNEXPLAINED`, which that enum's own docstring calls "a charge
-against the ruleset" — for something the ruleset could not read.
+`evaluate_emptiness` returns `UNAVAILABLE` and `evaluate_routes` falls through to `UNEXPLAINED`,
+which that enum's own docstring calls "a charge against the ruleset" — for something the ruleset
+could not read. Recommended: a fourth member. `ROUTE_STATES` is derived from the enum, so the
+tallies pick it up; what moves is the `states` key set the `FamilyTally` contract promises, and
+the tests that assert all keys are present and sum to `recordings`.
 
 `vocabulary.py` defaults `route_state` to `UNAVAILABLE` for any branch with no `branch_decision`
 entity. That is a different fact — "no decision was recorded for this branch" — sharing one token
-with "the gates could not be read".
+with "the gates could not be read". A reader of `file_verdict.routes` cannot currently tell a
+branch ROUTING judged unreadable from one it never judged, which is the same "never judged"
+problem item 5 addresses, one layer up. Pre-alpha allows the outright fix: a separate member for
+the defaulted case.

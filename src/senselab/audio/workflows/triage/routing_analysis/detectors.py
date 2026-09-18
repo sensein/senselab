@@ -42,6 +42,9 @@ GATE_CLOSED = -1.0
 GATE_CLOSED_BELOW = math.inf
 """The same, for a ``below``-polarity detector, where a small value is what fires."""
 
+SPAN_COUNT_STATISTIC = "span_count"
+"""The statistic every label and label-set distribution carries, zero where nothing carried it."""
+
 CONSOLIDATION_FLOOR = 0.2
 """``taxonomy.consolidation_floor`` in ``data/config/default.yaml``, marked in every score grid."""
 
@@ -508,6 +511,8 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
     """
     source, *arguments = detector.reader
     if source == "words":
+        if not features.consensus_present:
+            return None
         return float(features.words.get(arguments[0], 0))
     if source == "bracketed_set":
         if not features.consensus_present:
@@ -524,10 +529,7 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         prefix = peak_key(stream, classifier, "")
         return max((score for key, score in features.peaks.items() if key.startswith(prefix)), default=0.0)
     if source == "residual":
-        if not features.residual:
-            return None
-        value = features.residual.get(arguments[0])
-        return None if value is None else float(value)
+        return _optional(features.residual, arguments[0])
     if source == "span_longest":
         return float(features.span_longest_s.get(arguments[0], 0.0))
     if source == "span_total":
@@ -569,9 +571,9 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
     if source == "span_stat":
         return _optional(features.span_stats, arguments[0])
     if source == "span_label_stat":
-        return _optional(features.span_label_stats, arguments[0])
+        return _label_statistic(features.span_label_stats, arguments[0], detector.polarity)
     if source == "span_label_set_stat":
-        return _optional(features.span_label_set_stats, arguments[0])
+        return _label_statistic(features.span_label_set_stats, arguments[0], detector.polarity)
     if source == "squim":
         return _optional(features.squim, arguments[0])
     if source == "level":
@@ -597,6 +599,30 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         right = detector_value(features, Detector(detector.name, detector.kind, arguments[1], detector.unit, ()))
         return None if left is None or right is None else left - right
     raise ValueError(f"unknown detector source {source!r}")
+
+
+def _label_statistic(table: dict[str, float], key: str, polarity: str) -> float | None:
+    """One label or label-set distribution statistic, telling an empty sample from an absent one.
+
+    Args:
+        table: The per-label or per-set statistics.
+        key: ``"<classifier>.<name>.<statistic>"``.
+        polarity: The reader's firing side, so an empty sample closes against either comparison.
+
+    Returns:
+        The value; :data:`GATE_CLOSED` or :data:`GATE_CLOSED_BELOW` when the group's own
+        ``span_count`` is zero, which is the group having been measured and carried nothing; and
+        None when no ``span_count`` was written for it at all, which is the classifier not having
+        run.
+    """
+    value = _optional(table, key)
+    if value is not None:
+        return value
+    prefix, _, _ = key.rpartition(".")
+    count = table.get(f"{prefix}.{SPAN_COUNT_STATISTIC}")
+    if count is None or float(count) != 0.0:
+        return None
+    return GATE_CLOSED if polarity == "above" else GATE_CLOSED_BELOW
 
 
 def _optional(table: dict[str, float], key: str) -> float | None:
