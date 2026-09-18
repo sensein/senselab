@@ -93,7 +93,13 @@ owner's stated intent — a substitution is a finding, not a rejection.
 Checked, not assumed: after this change **no syllable family uses it**. The member stays, because
 SPEECH's own lexical families use it heavily — `harvard-sentences-list`, `cape-v-sentences`,
 `cape-v-sentences-v2`, `rainbow-passage`, `caterpillar-passage`, `word-color-stroop`, `loudness`,
-`loudness-v2` — eight rows. `align_ddk` no longer branches on a pattern at all.
+`loudness-v2` — eight rows.
+
+`align_ddk` no longer branches on `ORDERED_TOKENS`, and the only pattern it still reads is
+`SYLLABLE_SEQUENCE`, which is what turns on the burst-spectrum place cycle
+(`syllable_sequence_mismatch`, `realised_cycles`, `sequence_collapse_fraction`) and the
+cycles-or-syllables rate unit. `buttercup` gains that path by becoming a sequence; the six
+single-position families keep the one-syllable path they had, unchanged.
 
 ## What was measured and not implemented
 
