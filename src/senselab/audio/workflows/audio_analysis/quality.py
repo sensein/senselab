@@ -44,6 +44,7 @@ import numpy as np
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.band_profile import rolloff_hz
 from senselab.audio.tasks.quality_control.metrics import (
     peak_snr_from_spectral_metric,
     proportion_clipped_metric,
@@ -72,6 +73,8 @@ QUALITY_ANALYSIS_HOP_S = 0.25
 # concentration (~1-2 kHz) even for full-band speech and would flag every recording as
 # band-limited. A high percentile tracks the actual top of the spectrum.
 _ROLLOFF_PCT = 0.95
+_ROLLOFF_MIN_SAMPLES = 256
+_ROLLOFF_MAX_N_FFT = 2048
 
 QUALITY_SIGNALS: tuple[str, ...] = (
     "snr_brouhaha_db",
@@ -159,36 +162,22 @@ def _rolloff_hz(slice_audio: Audio) -> Optional[float]:
     Reported as a frequency rather than as ``1 - rolloff / nyquist``: the inversion turns a
     measurement into a badness score, and it hard-codes "band-limited is bad", which is a
     task-dependent judgement. L2 compares it against Nyquist.
+
+    The quantile itself is :func:`senselab.audio.tasks.band_profile.rolloff_hz`, shared with the
+    triage workflow's ``band_profile`` derivative so the two report one statistic. The transform
+    size is this workflow's own: an analysis window here is a slice of arbitrary length, so it is
+    sized to the slice rather than to a configured duration.
     """
-    wf = slice_audio.waveform
-    if wf is None or wf.numel() == 0:
+    waveform = slice_audio.waveform
+    if waveform is None or waveform.numel() == 0:
         return None
-    y = wf.mean(dim=0) if wf.shape[0] > 1 else wf[0]
-    y = y.detach().to(torch.float32).reshape(-1)
-    n = int(y.shape[-1])
-    if n < 256:
+    n = int(waveform.shape[-1])
+    if n < _ROLLOFF_MIN_SAMPLES:
         return None
-    n_fft = min(2048, 1 << int(math.floor(math.log2(n))))
-    if n_fft < 256:
+    n_fft = min(_ROLLOFF_MAX_N_FFT, 1 << int(math.floor(math.log2(n))))
+    if n_fft < _ROLLOFF_MIN_SAMPLES:
         return None
-    spec = torch.stft(
-        y,
-        n_fft=n_fft,
-        hop_length=n_fft // 4,
-        window=torch.hann_window(n_fft, device=y.device),
-        center=True,
-        return_complex=True,
-    )
-    power = (spec.abs() ** 2).mean(dim=1)  # avg over frames → per-frequency-bin energy
-    total = float(power.sum().item())
-    if total <= 0:
-        # No energy at all: the spectrum has no upper edge to report. A missing measurement, not
-        # a measured zero.
-        return None
-    cumulative = torch.cumsum(power, dim=0) / total
-    idx = int(torch.searchsorted(cumulative, torch.tensor(_ROLLOFF_PCT)).item())
-    idx = min(idx, power.shape[0] - 1)
-    return float(idx * slice_audio.sampling_rate / n_fft)
+    return rolloff_hz(slice_audio, quantile=_ROLLOFF_PCT, n_fft=n_fft, hop_length=n_fft // 4)
 
 
 def _finite_or_none(value: SupportsFloat | None) -> Optional[float]:

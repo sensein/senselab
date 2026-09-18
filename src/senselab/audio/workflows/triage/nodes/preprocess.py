@@ -29,6 +29,7 @@ import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.data_structures.audio_hints import ExpectedSpeech
+from senselab.audio.tasks.band_profile import band_profile
 from senselab.audio.tasks.classification.api import classify_audios
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.tasks.classification.yamnet import SpanTooShortForYAMNet, span_yamnet_input
@@ -2303,6 +2304,65 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         derivatives["disruptions_file"] = entity_id
         view.append(entity_id)
 
+    def _band_profile() -> None:
+        """The content band and long-term average spectrum over the ORIGINAL recording (D3).
+
+        Taken on the un-resampled stream because that is the only place the answer exists: every
+        other spectral derivative is computed after the resample to the working rate and reports
+        that rate's ceiling whatever the file held. The container's declared ``sampling_rate``,
+        which ADMIT records, is not the content's band either.
+        """
+        if not recording_ids:
+            raise LookupError("no recording stream in the store")
+        _check_recording_unchanged(store.get_entity(recording_ids[-1]))
+        source_hz = int(source.sampling_rate)
+        parameters: dict[str, Any] = {
+            "window_ms": float(config.require("band_profile.window_ms")),
+            "hop_ms": float(config.require("band_profile.hop_ms")),
+            "rolloff_quantile": float(config.require("band_profile.rolloff_quantile")),
+            "ltas_bands": int(config.require("band_profile.ltas_bands")),
+            "ltas_low_hz": float(config.require("band_profile.ltas_low_hz")),
+        }
+        n_fft = int(source_hz * parameters["window_ms"] / 1000.0)
+        hop_length = max(1, int(source_hz * parameters["hop_ms"] / 1000.0))
+        activity = _step(
+            "band_profile", {**parameters, "n_fft": n_fft, "hop_length": hop_length}, (recording_ids[-1],), software
+        )
+        profile = band_profile(
+            source,
+            quantile=parameters["rolloff_quantile"],
+            n_fft=n_fft,
+            hop_length=hop_length,
+            ltas_low_hz=parameters["ltas_low_hz"],
+            ltas_bands=parameters["ltas_bands"],
+        )
+        relative = "derivatives/band_profile.npz"
+        np.savez(
+            run_dir / relative,
+            band_edges_hz=profile.band_edges_hz,
+            band_centre_hz=profile.band_centre_hz,
+            level_db=profile.level_db,
+        )
+        entity_id = _measurement(
+            store,
+            activity,
+            software,
+            name="band_profile",
+            signal="recording",
+            attributes={
+                **path_attributes(relative, run_dir),
+                "rolloff_hz": profile.rolloff_hz,
+                "rolloff_quantile": profile.quantile,
+                "nyquist_hz": profile.nyquist_hz,
+                "sampling_rate": profile.sampling_rate,
+                "ltas_bands": parameters["ltas_bands"],
+                "ltas_low_hz": parameters["ltas_low_hz"],
+            },
+            derived_from=(recording_ids[-1],),
+        )
+        derivatives["band_profile"] = entity_id
+        view.append(entity_id)
+
     def _squim_for(name: str, span_ids: list[str]) -> None:
         """One objective-head measure assertion per span in ``span_ids``; refusals recorded, never padded."""
         if not span_ids:
@@ -3138,6 +3198,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ("hear_windows", lambda: _windows("hear")),
         ("level", _level),
         ("disruptions_file", _disruptions_file),
+        ("band_profile", _band_profile),
         ("asr_crisperwhisper", lambda: _asr("asr_crisperwhisper", _crisperwhisper_model, "native", None)),
         (
             "asr_qwen",

@@ -3002,3 +3002,162 @@ class TestTheDiarizationBlock:
         assert find_measurement(store, RESIDUAL_DIARIZATION) is None
         assert set(result.absent) & {"plain_diarization", RESIDUAL_DIARIZATION} == {RESIDUAL_DIARIZATION}
         assert "residual" in _absent_map(store)[RESIDUAL_DIARIZATION]
+
+
+def _lowpassed_at_48k(cutoff_hz: float = 4000.0, sampling_rate: int = 48000) -> np.ndarray:
+    """2 s of broadband noise filtered to stop at ``cutoff_hz``, stored at ``sampling_rate``.
+
+    An 8 kHz-sourced file stored at 48 kHz is exactly this shape: the container declares 48000 and
+    the content stops far below it.
+    """
+    from scipy.signal import butter, sosfiltfilt
+
+    rng = np.random.default_rng(3)
+    noise = rng.standard_normal(int(2.0 * sampling_rate))
+    sos = butter(10, cutoff_hz, btype="low", fs=sampling_rate, output="sos")
+    filtered = np.asarray(sosfiltfilt(sos, noise))
+    return (0.5 * filtered / np.abs(filtered).max()).astype(np.float32)
+
+
+def _full_band_at_48k(sampling_rate: int = 48000) -> np.ndarray:
+    """2 s of broadband noise carrying energy right up to Nyquist."""
+    rng = np.random.default_rng(4)
+    noise = rng.standard_normal(int(2.0 * sampling_rate))
+    return (0.5 * noise / np.abs(noise).max()).astype(np.float32)
+
+
+class TestTheBandProfileIsMeasuredBeforeTheResample:
+    """D3. The content's band, not the container's declared rate and not the working rate's ceiling."""
+
+    def test_a_band_limited_file_reports_its_content_band_not_its_declared_rate(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Noise stopping at 4 kHz, stored at 48 kHz, must read ~4 kHz and nowhere near 24000.
+
+        This is the whole point of the derivative and the one assertion no other measurement in the
+        store can make. Three wrong answers are each excluded by a bound here: 24000 is Nyquist of
+        the declared rate, 48000 is the declared rate itself, and 8000 is the ceiling every other
+        spectral derivative reports because it is computed after the resample.
+        """
+        _seed_admit(store, tmp_path, wav_writer, samples=_lowpassed_at_48k(), sampling_rate=48000)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        measurement = find_measurement(store, "band_profile")
+        assert measurement is not None, _absent_map(store).get("band_profile")
+        rolloff = measurement.attributes["rolloff_hz"]
+        assert 3600.0 <= rolloff <= 4400.0, f"content stops at 4 kHz; read {rolloff}"
+        assert measurement.attributes["sampling_rate"] == 48000
+        assert measurement.attributes["nyquist_hz"] == 24000.0
+
+    def test_a_full_band_file_at_the_same_rate_reports_a_far_higher_edge(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The contrast, not the absolute: the same container, and the reading follows the content.
+
+        Held above 8000 deliberately. A block reading the resampled ``plain`` stream cannot report
+        this number at all -- its Nyquist is 8000 -- so this bound is what makes the previous test's
+        4 kHz a measurement of content rather than an artefact of a low ceiling.
+        """
+        _seed_admit(store, tmp_path, wav_writer, samples=_full_band_at_48k(), sampling_rate=48000)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        measurement = find_measurement(store, "band_profile")
+        assert measurement is not None, _absent_map(store).get("band_profile")
+        assert measurement.attributes["rolloff_hz"] > 8000.0
+
+    def test_the_reading_names_the_original_recording_stream(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``recording``, because ``plain`` is where the band information has already been destroyed."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_lowpassed_at_48k(), sampling_rate=48000)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        measurement = find_measurement(store, "band_profile")
+        assert measurement is not None
+        assert measurement.attributes["signal"] == "recording"
+
+    def test_the_measurement_names_a_sidecar_that_reads_back(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A derivative that omits its path reads back as None on every store; the vector must land.
+
+        Asserting the file exists is not enough -- an unrecorded path is the defect, and it is
+        invisible unless the attribute itself is the thing followed to the file.
+        """
+        _seed_admit(store, tmp_path, wav_writer, samples=_lowpassed_at_48k(), sampling_rate=48000)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        measurement = find_measurement(store, "band_profile")
+        assert measurement is not None
+        relative = measurement.attributes.get("path")
+        assert relative, "the sidecar path is unrecorded; every reader would see None"
+        sidecar = Path(relative)
+        if not sidecar.is_absolute():
+            sidecar = tmp_path / sidecar
+        assert sidecar.is_file(), f"{relative} does not exist"
+        with np.load(sidecar) as loaded:
+            bands = int(measurement.attributes["ltas_bands"])
+            assert loaded["level_db"].shape == (bands,)
+            assert loaded["band_centre_hz"].shape == (bands,)
+            assert loaded["band_edges_hz"].shape == (bands + 1,)
+            edges = loaded["band_edges_hz"]
+            assert edges[0] == pytest.approx(measurement.attributes["ltas_low_hz"])
+            assert edges[-1] == pytest.approx(measurement.attributes["nyquist_hz"])
+            assert np.all(np.diff(edges) > 0.0)
+
+    def test_a_missing_recording_stream_records_the_block_absent_rather_than_raising(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No stream to measure is an absence with a reason, never a failed run."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        retired = store.activity(node="TEST", step="retire_the_recording", parameters={})
+        for entity in list(store.entities("stream")):
+            if entity.attributes.get("name") == "recording":
+                store.was_invalidated_by(entity.id, retired)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert find_measurement(store, "band_profile") is None
+        assert "band_profile" in _absent_map(store)
+
+    def test_an_unreadable_recording_records_the_block_absent_rather_than_raising(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The file ADMIT digested is gone, so the profile has no signal it can be attributed to."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        source = _audio(tmp_path)
+        assert source.waveform is not None
+        (tmp_path / "input.wav").unlink()
+        preprocess(store, source, config, run_dir=tmp_path)
+        assert find_measurement(store, "band_profile") is None
+        assert "band_profile" in _absent_map(store)
