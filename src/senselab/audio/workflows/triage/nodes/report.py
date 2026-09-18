@@ -39,6 +39,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     resolve_stream,
     span_sources,
 )
+from senselab.audio.workflows.triage.nodes.figure import FigureStyle, branch_lanes, summary_pages
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
     GRAPH_ORDER,
@@ -50,7 +51,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "REPORT"
 SUMMARY_STEM = "summary"
 FORMATS = ("png", "pdf")
-REPORT_SCHEMA_VERSION = "triage-summary/v6"
+REPORT_SCHEMA_VERSION = "triage-summary/v7"
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
@@ -1280,6 +1281,48 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
     }
 
 
+def _lane_records(store: ProvStore) -> list[dict[str, Any]]:
+    """The summary's lanes as data: what each drew, and which span each proposal came from.
+
+    The machine-readable counterpart of the lanes the pages draw, so the pairing a page shows as a
+    connector can be checked without reading pixels. One record per declared lane, present whether
+    or not the lane drew anything, because "did not run" is a finding.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        One record per lane, in :data:`~senselab.audio.workflows.triage.nodes.figure.SUMMARY_LANES`
+        order.
+    """
+    return [
+        {
+            "lane": lane.branch,
+            "family": lane.family,
+            "state": lane.state,
+            "route_state": lane.route_state,
+            "why": lane.why,
+            "conformance": lane.conformance,
+            "conformance_of": lane.conformance_of,
+            "deviations": list(lane.deviations),
+            "unmeasured": list(lane.unmeasured),
+            "measures": dict(lane.measures),
+            "spans": [
+                {
+                    "entity_id": row.key,
+                    "label": row.label,
+                    "row": row.row,
+                    "start_s": row.start,
+                    "end_s": row.end,
+                    "derived_from": list(row.derived_from),
+                }
+                for row in lane.rows
+            ],
+        }
+        for lane in branch_lanes(store)
+    ]
+
+
 def _report_document(
     store: ProvStore,
     marks: dict[str, list[Entity]],
@@ -1355,6 +1398,7 @@ def _report_document(
             ],
             "transcript_scan": {"complete": scanned, "note": scan_note or None},
             "preprocess_absences": _absences(store),
+            "lanes": _lane_records(store),
         },
         "artifacts": {
             "summary": {"path": f"{SUMMARY_STEM}.{summary_format}", "format": summary_format},
@@ -2042,37 +2086,28 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
                 pages.savefig(figure)
                 pyplot.close(figure)
 
+            # The decision record leads: it is what a reviewer reads first, and it is the whole
+            # product on a file with no axis to draw. The evidence follows it.
+            for page in _text_pages(_decision_blocks(document)):
+                _save(_text_figure(page, title, figsize=_LETTER_LANDSCAPE_IN))
             if audio is None:
                 _save(
                     _text_figure(
                         [*header.values(), "", "REPORT-ONLY: " + _NO_AXIS], title, figsize=_LETTER_LANDSCAPE_IN
                     )
                 )
-            else:
-                duration_s = audio.waveform.shape[-1] / audio.sampling_rate
-                windows = _timeline_windows(duration_s)
-                if not windows:
-                    _save(
-                        _text_figure(
-                            [*header.values(), "", "REPORT-ONLY: " + _NO_POSITIVE_DURATION],
-                            title,
-                            figsize=_LETTER_LANDSCAPE_IN,
-                        )
+            elif audio.waveform.shape[-1] / audio.sampling_rate <= 0.0:
+                _save(
+                    _text_figure(
+                        [*header.values(), "", "REPORT-ONLY: " + _NO_POSITIVE_DURATION],
+                        title,
+                        figsize=_LETTER_LANDSCAPE_IN,
                     )
-                else:
-                    for window, page_panels in zip(windows, _paginate_panels(panels, windows)):
-                        _save(
-                            plot_aligned_panels(
-                                audio,
-                                page_panels,
-                                title=_timeline_title(title, window, len(windows)),
-                                header=header,
-                                time_limits=window,
-                                figsize=_LETTER_LANDSCAPE_IN,
-                            )
-                        )
-            for page in _text_pages(_decision_blocks(document)):
-                _save(_text_figure(page, title, figsize=_LETTER_LANDSCAPE_IN))
+                )
+            else:
+                style = FigureStyle(figure_inches=_LETTER_LANDSCAPE_IN)
+                for _name, figure in summary_pages(store, config, run_dir=run_dir, style=style, stem=store.run_id):
+                    _save(figure)
         return
 
     if audio is None:
