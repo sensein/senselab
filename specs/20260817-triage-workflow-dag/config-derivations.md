@@ -387,6 +387,41 @@ Spectrograms 5 ms and 20 ms window, 5 ms hop -- benchmarks/preprocess-params.md.
 glottal period is 11.4 ms, so 10 ms resolves neither harmonics (150 Hz against 88 Hz spacing) nor
 pulses (0.88 of a period). Two windows rather than a compromise between them.
 
+## band_profile
+
+The recording's own spectral band, measured on the `recording` stream at its own rate, before the
+resample to the working rate. D3 of
+[preprocess-derivatives-for-expected-patterns.md](preprocess-derivatives-for-expected-patterns.md).
+
+band_profile.window_ms 20.0 and hop_ms 5.0 -- the narrowband geometry already derived under
+[spectrogram](#spectrogram), reused rather than re-reasoned. This measurement is a mean over frames,
+so neither frequency resolution nor frame count is scarce and the window is not a sensitive choice;
+what matters is that the same geometry is applied at the recording's own rate, which makes the bin
+spacing proportional -- 50 Hz at 48 kHz against 50 Hz at 16 kHz, the same 20 ms window resolving the
+same harmonic spacing at either rate. Taking the 16 kHz narrowband window's *sample count* instead
+would silently halve the resolution at 48 kHz.
+
+band_profile.rolloff_quantile 0.95 -- CONVENTIONAL, and this is the whole derivation. Spectral
+roll-off is a standard descriptor and 0.85 and 0.95 are both in common use; 0.95 is the one that
+reads as "where the band stops" rather than "where the bulk sits", and it is already the value the
+sibling `audio_analysis` workflow takes its `rolloff_95_hz` at (`_ROLLOFF_PCT`), so the two report
+the same statistic. It is NOT fitted: no labelled band-limit verdicts exist over this corpus, and if
+they did the thing to fit would be a cut on the roll-off, not the quantile that defines it.
+
+band_profile.ltas_bands 24 -- a SIZE, not a threshold, in the same class as `gammatone.n_channels`
+and `yamnet.top_k`. 24 log-spaced bands from 50 Hz to Nyquist is 2.7 bands per octave at 48 kHz and
+3.3 at 16 kHz, which keeps the vector short enough to sit in one npz beside a scalar and leaves
+several points per octave for a slope to be fitted from, should the occlusion cut
+(`verdict.tilt_max_db_per_octave`) ever be measured. Log spacing rather than linear because the
+quantity anyone would take off this vector is a tilt in dB per OCTAVE, and octaves are log-spaced.
+
+band_profile.ltas_low_hz 50.0 -- the bottom edge, taken from the in-tree precedent rather than
+chosen here: Praat's own LTAS slope measure as this repo already calls it starts at 50 Hz
+(`praat_parselmouth.py:799`, `"Get slope", 50, 1000, 1000, 4000`). Below 50 Hz a recording carries
+DC offset, handling noise and room rumble, none of which is content, and all of which would drag the
+lowest band's level and any slope taken through it. The top edge is not a key: it is Nyquist, which
+is a property of the file, not a decision.
+
 ## gammatone
 
 The auditory filterbank's channel layout.
@@ -1536,9 +1571,15 @@ verdict.min_contrast_db: null
 
 verdict.tilt_max_db_per_octave: null
   Moved from `branch.tilt_max_db_per_octave`: "the tilt below which a recording *reads as* occluded"
-  is a judgement about the recording. Still unset for the reason recorded on 2026-09-04: the design
-  names `band_profile` as an owed derivative (D3), so the instrument this cut would be taken on does
-  not exist yet. A default on a nonexistent instrument would be worse than a null. Read by no code.
+  is a judgement about the recording. The reason recorded on 2026-09-04 -- that `band_profile` (D3)
+  did not exist, so the instrument this cut would be taken on did not either -- EXPIRED when D3 was
+  built. The instrument now exists: `band_profile` writes an `ltas_bands`-long log-spaced level
+  vector with its band edges, from which a slope in dB per octave is arithmetic. Still null, for a
+  different and narrower reason: a cut needs labelled verdicts and there are none. What would settle
+  it is a set of recordings independently judged occluded and not -- a hand over the microphone, a
+  phone face-down, a pocket -- with the slope measured on each; the cut is then wherever the two
+  distributions separate, if they do. Until then a default would be an unmeasured decision on a
+  freshly built instrument, which is exactly what this file exists to prevent. Read by no code.
 
 verdict.level_min_dbfs: null
   Moved from `branch.level_min_dbfs`: "the level below which a recording carries no production at
@@ -1897,7 +1938,8 @@ UNSET, and why -- benchmarks/open.md carries each of these:
   verdict.min_contrast_db: how far two deliberate effort levels must differ to be a contrast. The
     one key in the branch/verdict split that nothing could be reasoned for -- see [verdict](#verdict).
   verdict.tilt_max_db_per_octave: the occlusion reading. The instrument it would be taken on,
-    `band_profile`, is itself owed (D3).
+    `band_profile` (D3), now exists; what is missing is labelled occluded/not verdicts to cut on --
+    see [verdict](#verdict).
   verdict.level_min_dbfs: duplicated by the ruleset's live `emptiness.peak_floor`; left unset so the
     two do not become two answers to one question.
 
