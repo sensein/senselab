@@ -12,6 +12,7 @@ from typing import Sequence
 
 from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
+    CRITICAL_ABSENCE,
     DECLINED,
     ROUTED,
     TASK,
@@ -749,3 +750,99 @@ class TestReasonsCarryEveryContribution:
         assert folded.triage is Triage.DISCARD
         assert folded.reasons[0].node == "ADMIT"
         assert {"PREPROCESS", "AIRWAY"} <= {reason.node for reason in folded.reasons}
+
+
+_CONSENSUS_GONE = {"SPEECH": {"speech.lexical": "consensus_transcript: both asr blocks failed"}}
+
+
+class TestACriticalAbsenceFlagsAndNamesItself:
+    """A short-circuited run reaches the fold; it must not reach it silently."""
+
+    def test_the_reason_names_the_branch_the_gate_and_the_recorded_absence(self) -> None:
+        """A file the graph refused to route must say which measurement it was refused over."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="unexplained",
+            critical_absences=_CONSENSUS_GONE,
+        )
+        why = next(reason.why for reason in folded.reasons if reason.why.startswith(CRITICAL_ABSENCE))
+        assert "SPEECH" in why
+        assert "speech.lexical" in why
+        assert "consensus_transcript" in why
+        assert "both asr blocks failed" in why
+
+    def test_it_flags_rather_than_discarding(self) -> None:
+        """Neither discard ground is a claim about a measurement that failed to be taken."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="unexplained",
+            critical_absences=_CONSENSUS_GONE,
+        )
+        assert folded.triage is Triage.FLAG
+        assert folded.discard_ground is None
+        assert folded.critical_absences == _CONSENSUS_GONE
+
+    def test_an_admit_refusal_still_wins(self) -> None:
+        """The existing refusal path is not weakened by a ground that only ever flags."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.FAIL, None, "decode failure")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="unexplained",
+            critical_absences=_CONSENSUS_GONE,
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == "unmeasurable"
+
+    def test_an_ordinary_run_carries_no_critical_absence(self) -> None:
+        """A branch partly unreadable is not a critical failure and must not read as one."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_decisions(AIRWAY=ROUTED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.critical_absences == {}
+        assert not any(reason.why.startswith(CRITICAL_ABSENCE) for reason in folded.reasons)
+
+
+class TestAWithheldBranchIsNotAnUnselectedOne:
+    """Four states, and the two that share ``will_run: false`` need a second field to separate."""
+
+    def test_the_branch_view_separates_withheld_from_not_selected(self) -> None:
+        """Without this a branch nobody could ask reads exactly like one nobody wanted."""
+        withheld = replace(_all_declined()["VOICE"], withheld_critical=True)
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions={**_all_declined(), "VOICE": withheld},
+            ran={},
+            hint_claims={},
+            route_state="unexplained",
+            critical_absences=_CONSENSUS_GONE,
+        )
+        assert folded.branches["VOICE"]["withheld_critical"] is True
+        assert folded.branches["AIRWAY"]["withheld_critical"] is False
+        assert folded.branches["VOICE"]["will_run"] is False
+        assert folded.branches["AIRWAY"]["will_run"] is False
+
+    def test_a_branch_that_ran_and_found_nothing_stays_distinct_from_both(self) -> None:
+        """It reported; the two withheld states did not, and no report is what says so."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("VOICE", "voice")],
+            branch_decisions=_decisions(VOICE=ROUTED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.findings["VOICE"] == "absent"
+        assert folded.branches["VOICE"]["withheld_critical"] is False
+        assert folded.branches["VOICE"]["will_run"] is True
