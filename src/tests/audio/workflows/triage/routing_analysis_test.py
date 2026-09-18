@@ -34,6 +34,7 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     _check_staged,
     build_catalogue,
     detector_value,
+    evidence_blocks,
     load_detector_profile,
 )
 from senselab.audio.workflows.triage.routing_analysis.families import (
@@ -2051,3 +2052,113 @@ def test_invalidated_ids_reads_only_the_retirement_edges(tmp_path: Path) -> None
     """The first pass answers which entities are live, and decodes nothing else."""
     path = _two_consolidations(tmp_path / "run" / "store.jsonl", retired_first=True)
     assert invalidated_ids(path) == {"measurement-old"}
+
+
+def _coverage_store(path: Path, *, unread: Sequence[str] = (), invalidated: Sequence[str] = ()) -> Path:
+    """Four spans YAMNet either scored with no tracked label, or recorded as attempted and unread.
+
+    Args:
+        path: Where to write it.
+        unread: The spans YAMNet recorded as unmeasured instead of scoring.
+        invalidated: The spans a later activity retired.
+
+    Returns:
+        The path.
+    """
+    names = ("span-p", "span-q", "span-r", "span-s")
+    lines = [_entity("stream", "stream-1", {"name": "recording"}, [0.0, 10.0])]
+    for index, name in enumerate(names):
+        start = float(index * 2)
+        lines.append(_entity("span", name, {"measure": "amplitude", "peak_over_floor_db": 40.0}, [start, start + 1.0]))
+        if name in unread:
+            lines.append(
+                _entity(
+                    "assertion",
+                    f"unread-{name}",
+                    {"verb": "measure", "name": "span_yamnet", "span_id": name, "unmeasured": "no_covering_window"},
+                    [start, start + 1.0],
+                )
+            )
+        else:
+            lines.append(
+                _entity(
+                    "measurement",
+                    f"yam-{name}",
+                    {"name": "span_yamnet", "span_id": name, "raw_scores": {"Speech": 0.9}},
+                    [start, start + 1.0],
+                )
+            )
+    lines.extend(_relation("wasInvalidatedBy", name, "activity-1") for name in invalidated)
+    return _write_store(path, lines)
+
+
+def _coverage(
+    tmp_path: Path, tag: str, unread: Sequence[str] = (), invalidated: Sequence[str] = ()
+) -> RecordingFeatures:
+    """The coverage fixture, extracted under the shipped membership rule.
+
+    Args:
+        tmp_path: The test's temporary directory.
+        tag: A directory name, so two variants do not share a store.
+        unread: The spans YAMNet recorded as unmeasured.
+        invalidated: The spans a later activity retired.
+
+    Returns:
+        The record.
+    """
+    return extract_features(
+        _coverage_store(tmp_path / tag / "run" / "store.jsonl", unread=unread, invalidated=invalidated),
+        "sub-5_ses-1_task-voluntary-cough",
+        str(tmp_path / tag),
+        "voluntary-cough",
+        "voluntary-cough",
+        PACKAGED_MEMBERSHIPS,
+        onomatopoeic=PACKAGED_ONOMATOPOEIA,
+    )
+
+
+def test_a_measured_nothing_and_a_partly_unread_nothing_carry_different_denominators(tmp_path: Path) -> None:
+    """The set count is zero on both; only the coverage says one of them is a claim about two spans.
+
+    Without it, ``yamnet.cough_labels.span_count == 0`` reads as a definite non-fire over four spans
+    on a recording where YAMNet never read two of them.
+    """
+    whole = _coverage(tmp_path, "whole")
+    partial = _coverage(tmp_path, "partial", unread=("span-r", "span-s"))
+    assert whole.span_label_set_stats["yamnet.cough_labels.span_count"] == pytest.approx(0.0)
+    assert partial.span_label_set_stats["yamnet.cough_labels.span_count"] == pytest.approx(0.0)
+    assert whole.span_coverage == {"yamnet.n": 4.0, "yamnet.unmeasured": 0.0}
+    assert partial.span_coverage == {"yamnet.n": 4.0, "yamnet.unmeasured": 2.0}
+
+
+def test_a_set_whose_only_candidates_were_unread_is_not_a_classifier_that_never_ran(tmp_path: Path) -> None:
+    """Every span unmeasured: no set count at all, and a coverage that says why there is none."""
+    none_read = _coverage(tmp_path, "none", unread=("span-p", "span-q", "span-r", "span-s"))
+    assert "yamnet.cough_labels.span_count" not in none_read.span_label_set_stats
+    assert none_read.span_coverage == {"yamnet.n": 4.0, "yamnet.unmeasured": 4.0}
+    assert not [key for key in none_read.span_coverage if key.startswith("hear.")], (
+        "HeAR neither scored nor attempted a span, so it is absent rather than a measured zero"
+    )
+
+
+def test_the_denominator_counts_live_spans_only(tmp_path: Path) -> None:
+    """A retired span is out of the numerator and the denominator alike."""
+    record = _coverage(tmp_path, "retired", unread=("span-s",), invalidated=("span-p", "span-s"))
+    assert record.span_coverage == {"yamnet.n": 2.0, "yamnet.unmeasured": 0.0}
+
+
+def test_an_assertion_that_is_no_span_classifier_reading_is_not_coverage(tmp_path: Path) -> None:
+    """The coverage reads the per-span classifiers' own unmeasured assertions and nothing else."""
+    record = _coverage(tmp_path, "squim")
+    assert record.span_coverage["yamnet.unmeasured"] == pytest.approx(0.0)
+    assert record.squim["all.n"] == pytest.approx(0.0)
+
+
+def test_a_reader_can_take_the_denominator_beside_the_count(tmp_path: Path) -> None:
+    """The coverage is reachable by a reader, and traces to the block that would have written it."""
+    partial = _coverage(tmp_path, "reader", unread=("span-r", "span-s"))
+    reader = ("span_coverage", "yamnet.unmeasured")
+    assert detector_value(partial, Detector("d", "airway", reader, "spans", ())) == pytest.approx(2.0)
+    absent = Detector("d", "airway", ("span_coverage", "hear.n"), "spans", ())
+    assert detector_value(partial, absent) is None
+    assert evidence_blocks(reader) == ("span_yamnet",)

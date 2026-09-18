@@ -600,6 +600,8 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         return _label_statistic(features.span_label_stats, arguments[0], detector.polarity)
     if source == "span_label_set_stat":
         return _label_statistic(features.span_label_set_stats, arguments[0], detector.polarity)
+    if source == "span_coverage":
+        return _optional(features.span_coverage, arguments[0])
     if source == "squim":
         return _optional(features.squim, arguments[0])
     if source == "level":
@@ -640,7 +642,7 @@ def evidence_blocks(reader: tuple[Any, ...]) -> tuple[str, ...]:
     fixed = SOURCE_BLOCKS.get(str(source))
     if fixed is not None:
         return fixed
-    if source in ("span_label_stat", "span_label_set_stat"):
+    if source in ("span_label_stat", "span_label_set_stat", "span_coverage"):
         classifier = str(arguments[0]).partition(".")[0]
         block = SPAN_CLASSIFIER_BLOCKS.get(classifier)
         return (block,) if block is not None else ()

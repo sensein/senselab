@@ -217,3 +217,61 @@ with "the gates could not be read". A reader of `file_verdict.routes` cannot cur
 branch ROUTING judged unreadable from one it never judged, which is the same "never judged"
 problem item 5 addresses, one layer up. Pre-alpha allows the outright fix: a separate member for
 the defaulted case.
+
+---
+
+## 6. The three items above, resolved
+
+Written 2026-09-18, against `931ea104`. Items 5's Shape C and the two adjacent items are no longer
+recommendations: each is implemented, and this section records what shape it took and what was
+decided where the recommendation left a choice open.
+
+### 6.1 The denominator: `span_coverage`
+
+`_mark_unmeasured` now writes `span_id` into the assertion's attributes, the way a scored
+`span_<classifier>` window already does. Without it the assertion can only be joined to its span by
+extent, and extent is not a key: `_squim_statistics` gets away with an extent join because it
+collapses to one measure per extent and never counts spans.
+
+`extract_features` absorbs an assertion whose `name` is a per-span classifier and that carries an
+`unmeasured` key, and `_span_coverage` reduces the result to two numbers per classifier, keyed the
+way `_squim_statistics` keys its own:
+
+```
+yamnet.n            spans the classifier reached, scored and unread together
+yamnet.unmeasured   how many of those it could not score
+```
+
+Both are restricted to live spans, so a retired span is out of the numerator and the denominator
+alike. A classifier that reached no live span at all is keyed with neither, which keeps
+`7afe18e2`'s distinction intact one level up: an absent pair is "this classifier never ran", a
+present `unmeasured: 0.0` is "it read every span".
+
+`detector_value` gained a `span_coverage` source and `evidence_blocks` routes it to the block that
+would have written it, so the denominator is readable by the same machinery that reads the count.
+No detector and no gate reads it. That is deliberate — see below.
+
+### 6.2 Does an unmeasured span make a gate unreadable?
+
+**No, on the evidence available.** The counts are carried and the gate stays readable.
+
+The alternative is a rule of the form "a set count is unreadable when more than *p* of the
+classifier's spans were unread". Every value of *p* is a decision about how much missing evidence
+makes a negative untrustworthy, and nobody has measured that. This repository already has two
+defects from literals that were never fitted (a silhouette coefficient read as a probability; a
+2→10 dB HNR ramp under which ordinary voiced speech read as partly voiced), and a proportion cut
+here would be a third of the same kind — worse, on the routing path, where it would silently
+convert definite non-fires into unavailable gates on real recordings.
+
+There is also a reason to prefer carrying the counts even once *p* is measured. A gate that reports
+`UNAVAILABLE` on a partly-read classifier destroys the count it did read; a gate that fires or
+stays silent with the coverage recorded beside it keeps both facts, and the reader that wants to
+discount the negative can. `UNAVAILABLE` is the right answer when nothing was read; it is a lossy
+answer when eleven of fourteen spans were.
+
+What would change this: a measured relationship between unread proportion and the error rate of the
+resulting routing decision, over a corpus with known content. That is a sweep, not a judgement, and
+the mechanism to run it now exists — `span_coverage` is in every features shard.
+
+**What this changes on real recordings: nothing.** No gate reads the new keys, and no existing key
+changed value. The features shard gains one field.
