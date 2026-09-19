@@ -96,6 +96,40 @@ stops new runs writing the reading unbounded in the first place.
 The tolerance was **not** widened. `test_an_extent_this_branch_composed_itself_still_raises` pins
 that: a word run 100 ms past the decode still raises, with the fix in place.
 
+## How the failure presents
+
+It is not a crash. `run.py`'s `_attempt` records the raise as `SPEECH: ERRORED` and the graph
+continues: VERDICT still folds, REPORT still renders, and the file comes out `flag` with a
+plausible-looking report that is silently missing one branch — and with it the PII scan, the
+speaker count and the task conformance. A 20-recording corpus smoke on ORCD
+(`triage_design_20260919/smoke_out/`, full graph, CPU) lost one of 20 this way, on a
+`free-speech-1` recording whose turn ended 0.096 s / **1530.5 samples** past the decode. That is
+the shape to look for when auditing a finished corpus: a `flag` whose node table has one `errored`
+row, not a missing output.
+
+## Two things the tolerance is not
+
+**It is not moving to `data/`.** `clamp_extent`'s bound is already in the units the evidence is in —
+`(end - duration) * sampling_rate > 1.0`, and the message reports `1530.500 samples`. It is not a
+seconds literal. It is also not a fitted threshold: one sample period is the width of the last
+sample, so an end inside it names the same sample boundary the decode ends on. The `data/` rule is
+for values that were fitted from measured verdicts and could have come out otherwise; a value that
+could not have come out otherwise belongs where it is, and putting it in a config would advertise
+it as tunable — which is the one change this defect must not produce.
+
+**It is not widened.** The 1530-sample overshoot is not absorbed by a looser clamp; it never
+reaches `clamp_extent` any more, because the reading is bounded where it is taken and bounded again
+where it is read. `test_an_extent_this_branch_composed_itself_still_raises` holds the tolerance at
+one sample for everything SPEECH composes itself.
+
+## The bounding leaves a trace
+
+A turn bound back is not erased. PREPROCESS records `segments_bounded_n`, `segments_past_end_n` and
+`max_overshoot_s` on the `<stream>_diarization` measurement; SPEECH records the same three in its
+report's `diarization` detail and adds a note naming the furthest reach. A reader can therefore
+still ask "did the decode run short of the turns this branch was handed", which is the question the
+raise used to answer by destroying the branch.
+
 ## What else composes an extent the same way
 
 An audit of the other branches found none of them exposed to *this* failure, because none of them
