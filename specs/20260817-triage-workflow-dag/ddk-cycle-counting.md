@@ -150,6 +150,64 @@ The deviation's meaning in `branch-conventions.md` — *a produced syllable that
 sequence expected* — is unchanged; what changed is that "the one the sequence expected" is now
 established by the scan rather than assumed from the index.
 
+## The `task_extent` a syllable task proposes
+
+Every other SPEECH family proposes a `task_extent`: `_speech_free_response` over the hull of
+PREPROCESS's ASR spans, `_speech_ordered` over the aligned structure units, `_speech_item_list` over
+the item words. `align_ddk` proposed one too — but **only from the envelope instrument**, and only
+when `ddk_carrier` returned a span. Both of its early returns (absent envelope derivative; no
+carrier cleared the length guard) fell through with the `ppg_train` span alone and nothing saying
+where the task was performed. That is not a rare corner: the ceiling diagnosis in
+`branch-ddk-ppg-instrument.md` found 74 of 105 no-train declared-DDK recordings had CV units
+present, and the ASR transcripts confirm the task *was* performed on them.
+
+`cv_task_extent` fills that gap. It mints a `task_extent` off the CV instrument when the envelope
+instrument minted none, and `align_ddk` drops it when the envelope instrument did — two spans of
+that role would make `syllable_detail`'s `trains_n` report two trains over one performance. The role
+string is `task_extent`, the same one the other SPEECH roles are distinguished by, and the family is
+`speech`, since DDK dissolved into SPEECH and `BRANCH_FAMILY` has no `ddk`.
+
+### Which extent, and why
+
+Three candidates, which differ exactly where `consumed < 1.0` — 0.62–0.75 on the sequence families,
+so on most sequence recordings:
+
+1. **The hull of the complete cycles**, first cycle start to last cycle end.
+2. **The hull of the train** the syllable-level instrument found.
+3. **The hull of every CV unit**, first unit's onset to last unit's end.
+
+**Chosen: (3), the hull of every CV unit.** The deciding argument is what the role already means
+elsewhere in SPEECH. `_speech_free_response` puts `task_extent` over where the *response* was
+produced, not over the part of it that matched — a subject who answers off-topic still gets a
+`task_extent` over what they said. A `task_extent` is a boundary, not a score.
+
+Under that convention (1) is wrong: on a sequence recording it would exclude the quarter to third of
+produced syllables that no complete cycle consumed, and a reader would take a span covering 62% of
+an unbroken performance as the extent of the task. Those excluded `/pa/`s are the subject attempting
+the task — that they collapsed the sequence is the clinical finding, not evidence that they stopped
+performing it. (2) is wrong for a related reason: the train is the longest stretch whose intervals
+stayed inside `ddk_interval_tolerance`, which is a segmentation by *regularity*. A performance
+interrupted by one hesitation has a train covering half of it, and irregularity is a measurement the
+branch already reports rather than a reason to shorten the extent.
+
+(3) is the only one of the three that never excludes produced material.
+
+**What a reader should take the span to assert:** *between these times, the subject produced
+consonant-vowel syllables in response to a syllable-repetition instruction.* It asserts nothing
+about whether they were correct, regular, or continuous — the span is not claiming every instant
+inside it holds speech. The three hulls disagreeing is itself informative, so the span carries
+`cycles` and `consumed` beside `syllables_n`: a `task_extent` with `consumed` at 0.62 says the
+extent is right and two fifths of what happened inside it was not the requested sequence.
+
+### When none is proposed
+
+No `task_extent` is minted when the CV instrument found **neither a complete cycle nor a train**.
+The gate is on evidence that the task was performed; the extent, once the gate opens, is generous.
+Separating the two is deliberate — an extent invented over an unperformed task is worse than a
+missing span, and a span narrowed to only the provably-correct part is a score wearing a boundary's
+clothes. Out of family (`template is None`) there are no cycles to count, so the gate is the train
+alone. The span also names its evidence, the posteriorgram entity, as `propose_span` requires.
+
 ## What is not changed
 
 - `ppg_rate_hz`, `ppg_repetitions`, `ppg_period_s`, `ppg_jitter_over_median`, `ppg_cv_units_n`,

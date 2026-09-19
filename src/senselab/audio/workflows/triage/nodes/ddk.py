@@ -744,6 +744,10 @@ class CycleScan:
         return round(self.cycles * self.length / self.units, 3)
 
 
+NO_CYCLES = CycleScan(length=0, units=0, matched=(), starts=(), ends=(), insertions=())
+"""The scan of a recording nothing was scanned over: no template, or no CV unit."""
+
+
 def cycle_scan(realised: Sequence[str], expected: Sequence[str]) -> CycleScan:
     """Count complete repeats of one expected cycle in a realised series, skipping insertions.
 
@@ -873,7 +877,7 @@ def cycle_evidence(
     template: Sequence[Syllable],
     declared_syllables: int | None,
     evidence: Sequence[str],
-) -> list[Finding]:
+) -> tuple[list[Finding], CycleScan]:
     """What the repeat count has to say about one series of CV units.
 
     Args:
@@ -886,11 +890,11 @@ def cycle_evidence(
         evidence: The entity ids the units were read off.
 
     Returns:
-        The cycle rate measurement and the nucleus conformance beside it, or an empty list when the
-        walk found no unit to scan.
+        The cycle rate measurement and the nucleus conformance beside it, and the scan both were
+        read off. No finding and an empty scan when the walk found no unit.
     """
     if not units:
-        return []
+        return [], NO_CYCLES
     places = unit_places(units, params.point("ddk_stop_places") or {})
     scan = cycle_scan(places, [position.place for position in template])
     rate_hz, gap_cv = cycle_rate(cycle_gaps(scan, units))
@@ -928,6 +932,38 @@ def cycle_evidence(
             support_syllables=len(scan.matched),
             realised_nuclei=nuclei,
         ),
+    ], scan
+
+
+def cv_task_extent(reading: PpgReading, scan: CycleScan, evidence: Sequence[str]) -> list[Proposal]:
+    """The ``task_extent`` the CV instrument proposes when the envelope instrument proposed none.
+
+    Args:
+        reading: What the CV walk read.
+        scan: What the repeat count found over its units.
+        evidence: The entity ids the units were read off.
+
+    Returns:
+        One span over the hull of every CV unit, or none when the instrument found neither a
+        complete cycle nor a train — which is no evidence the task was performed, and an extent over
+        an unperformed task is the error this gate exists to avoid.
+    """
+    units = reading.units
+    if not units or not (scan.cycles or reading.train is not None):
+        return []
+    extent = (units[0].start_s, units[-1].end_s)
+    if not extent[1] > extent[0]:
+        return []
+    return [
+        speech_span(
+            "task_extent",
+            extent,
+            *evidence,
+            production="syllable_task_from_ppg",
+            syllables_n=len(units),
+            cycles=scan.cycles,
+            consumed=scan.consumed,
+        )
     ]
 
 
@@ -951,9 +987,11 @@ def ppg_evidence(
         declared_syllables: The instruction's own syllable count, or None when it declares none.
 
     Returns:
-        The one train span this instrument proposes and the findings it takes. An absent
-        posteriorgram yields no span and one measurement that has no value; a posteriorgram the walk
-        could not run over yields neither, because ``params.missing`` is where that is already said.
+        The spans this instrument proposes — its train, and the ``task_extent``
+        :func:`cv_task_extent` mints, which :func:`align_ddk` drops when the envelope instrument
+        minted one of its own — and the findings it takes. An absent posteriorgram yields no span
+        and one measurement that has no value; a posteriorgram the walk could not run over yields
+        neither, because ``params.missing`` is where that is already said.
     """
     if reading is None:
         return [], [_absent(PPG, PPG_RATE)]
@@ -961,11 +999,17 @@ def ppg_evidence(
         return [], []
     evidence = _evidence(reads.ppg_id)
     findings: list[Finding] = [count(PPG_UNITS, len(reading.units), None, *evidence)]
+    scan = NO_CYCLES
     if template:
-        findings.extend(cycle_evidence(reading.units, params, template, declared_syllables, evidence))
+        cycle_findings, scan = cycle_evidence(reading.units, params, template, declared_syllables, evidence)
+        findings.extend(cycle_findings)
+    task_extent = cv_task_extent(reading, scan, evidence)
     train = reading.train
     if train is None:
-        return [], [*findings, measured(PPG_RATE, None, None, None, *evidence, unit=SYLLABLES_PER_S, reason=NO_TRAIN)]
+        return task_extent, [
+            *findings,
+            measured(PPG_RATE, None, None, None, *evidence, unit=SYLLABLES_PER_S, reason=NO_TRAIN),
+        ]
 
     extent = train.extent
     extents = [unit.extent for unit in train.units]
@@ -1028,7 +1072,7 @@ def ppg_evidence(
         jitter_over_median=round(train.jitter, 3),
         cv_units_n=len(reading.units),
     )
-    return [span], findings
+    return [span, *task_extent], findings
 
 
 def _with_ppg(done: Done, reading: PpgReading | None) -> Done:
@@ -1061,11 +1105,14 @@ def align_ddk(
 ) -> Result:
     """Evaluate one declared ``SYLLABLE_REPETITION`` task against what its instruction asked for.
 
-    Spans proposed: **one**, the train, as ``task_extent``. An individual syllable is not a span —
-    rate, interval dispersion and sequence collapse are statistics over the onset series, and one
-    span per syllable would add roughly thirty spans per recording carrying no measurement of their
-    own. The onsets travel as a ``counts`` entry, and a syllable that is not the one the sequence
-    expected travels as a ``syllable_sequence_mismatch`` deviation with its own extent.
+    Spans proposed: at most one ``task_extent`` and at most one ``ppg_train``. The envelope
+    instrument mints the ``task_extent`` when it found a carrier; :func:`cv_task_extent` mints it
+    off the CV units when the envelope instrument found none, and is dropped when it did. An
+    individual syllable is not a span — rate, interval dispersion and sequence collapse are
+    statistics over the onset series, and one span per syllable would add roughly thirty spans per
+    recording carrying no measurement of their own. The onsets travel as a ``counts`` entry, and a
+    syllable that is not the one the sequence expected travels as a ``syllable_sequence_mismatch``
+    deviation with its own extent.
 
     Args:
         expectation: The row SPEECH holds for this family, whose pattern is ``SYLLABLE_TRAIN`` or
@@ -1185,7 +1232,8 @@ def align_ddk(
         attributes.update(production="syllable_sequence", realised_cycles=cycles, resolved_n=len(resolved))
         done = bool(onsets) and cycles >= 1
 
-    components = [speech_span("task_extent", extent, *carrier, **attributes), *cv_spans]
+    carried = [proposal for proposal in cv_spans if proposal.role not in TRAIN_ROLES]
+    components = [speech_span("task_extent", extent, *carrier, **attributes), *carried]
     recording_extent = stream_extent(store)
     if recording_extent is not None and touches_edge(extent, recording_extent):
         findings.append(deviation("truncation", extent[0], extent[1], *carrier, *stream_ids(store)))
