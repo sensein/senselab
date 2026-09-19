@@ -35,6 +35,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurements,
     initial_span_label,
     live_entities,
+    proposed_span_label,
     report_entities,
     resolve_stream,
     span_role_kind,
@@ -766,15 +767,7 @@ def _panels(
     panels += _airway_hear_raster(store)
     panels += _derived_lane(
         "speech spans",
-        [
-            (
-                span,
-                f"{span.attributes.get('attributed_to') or 'unattributed'}"
-                + (" nontarget" if span.attributes.get("nontarget") else ""),
-            )
-            for span in _spans_of_family(store, "speech")
-            if span.extent is not None
-        ],
+        [(span, proposed_span_label(span)[0]) for span in _spans_of_family(store, "speech") if span.extent is not None],
         sources,
     )
     words = [word for word in _words(store) if word.extent is not None]
@@ -1246,7 +1239,7 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
         elif branch == "REDACT" and entity.prov_type == "span":
             description = f"redaction: {entity.attributes.get('category')}"
         elif branch == "SPEECH" and entity.prov_type == "span":
-            description = f"speech span: {entity.attributes.get('attributed_to') or 'unattributed'}"
+            description = f"speech span: {proposed_span_label(entity)[0]}"
         by_branch[branch].append(
             {
                 "entity_id": entity.id,
@@ -1279,7 +1272,7 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
             if branch == "AIRWAY":
                 description = f"airway source span: {envelope_span_label(span)}"
             elif branch == "SPEECH":
-                description = f"speech span: {span.attributes.get('attributed_to') or 'unattributed'}"
+                description = f"speech span: {proposed_span_label(span)[0]}"
             elif branch == "VOICE":
                 description = f"voice span: {_voice_span_label(span)}"
             else:

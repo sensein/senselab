@@ -2444,3 +2444,67 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
         )
         drawn = {text.get_text() for text in self._placed(self._words_axis(figure, panels))}
         assert drawn <= {f"word{index}" for index in range(40)} | {"alice", "bob"}
+
+
+class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
+    """A span that was never attributed is not a span whose attribution failed."""
+
+    def _ppg_train(self, store: ProvStore) -> None:
+        """Mint the SPEECH proposal DDK writes for a syllable train read off the posteriorgram."""
+        from senselab.audio.workflows.triage.nodes.branches import PROPOSERS, propose_spans
+
+        parent = next(entity.id for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
+        activity = store.activities("SPEECH")[0].id
+        mint = PROPOSERS["SPEECH"]
+        propose_spans(
+            store,
+            activity,
+            software_agent(store),
+            [mint("ppg_train", (1.0, 2.6), parent, production="syllable_train_from_ppg")],
+        )
+
+    @pytest.fixture
+    def with_train(self, store: ProvStore, tmp_path: Path) -> ProvStore:
+        """The seeded store plus one ``ppg_train`` span, which no diarizer ever looked at."""
+        _seed_report_store(store, tmp_path, full=True)
+        self._ppg_train(store)
+        return store
+
+    def test_the_lane_caption_names_the_span_rather_than_a_missing_speaker(
+        self, with_train: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``unattributed`` on a span never diarized reads as a diarizer that failed."""
+        panels = _capture_panels(monkeypatch)
+        report(with_train, tmp_path / "summary", _png(tmp_path))
+        captions = [token["text"] for tokens in _lane_rows(panels[0], "speech spans").values() for token in tokens]
+        train = [caption for caption in captions if "syllable_train_from_ppg" in caption]
+        assert train, captions
+        assert not any("unattributed" in caption for caption in captions), captions
+
+    def test_the_branch_evidence_description_names_the_span_too(self, with_train: ProvStore, tmp_path: Path) -> None:
+        """The JSON a consumer audits carries the same reading the lane draws."""
+        payload = json.loads(report(with_train, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        descriptions = {item["description"] for item in payload["evidence"]["branches"]["SPEECH"]}
+        assert "speech span: ppg_train/syllable_train_from_ppg" in descriptions
+        assert not any("unattributed" in description for description in descriptions), descriptions
+
+    def test_a_diarized_span_still_captions_itself_with_its_speaker(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Narrowing what ``unattributed`` meant may not cost the attributed span its speaker."""
+        from senselab.audio.workflows.triage.nodes.branches import PROPOSERS, propose_spans
+
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        parent = next(entity.id for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
+        propose_spans(
+            store,
+            store.activities("SPEECH")[0].id,
+            software_agent(store),
+            [PROPOSERS["SPEECH"]("task_extent", (1.0, 2.6), parent, attributed_to="SPEAKER_00")],
+        )
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        descriptions = {item["description"] for item in payload["evidence"]["branches"]["SPEECH"]}
+        assert "speech span: task_extent/SPEAKER_00" in descriptions
+        captions = [token["text"] for tokens in _lane_rows(panels[0], "speech spans").values() for token in tokens]
+        assert any("SPEAKER_00" in caption for caption in captions), captions
