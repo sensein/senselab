@@ -424,6 +424,39 @@ class FileVerdict:
     llm_redaction: dict[str, Any] = field(default_factory=dict)
     critical_absences: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    def record(self) -> dict[str, Any]:
+        """Every decision point of this fold, as JSON-ready values.
+
+        Categorical throughout — outcomes, states, type names and config paths, never transcript
+        text or a detected string — so a corpus of these is aggregable without reopening a store.
+
+        Returns:
+            The decision, keyed as :class:`FileVerdict` names its fields.
+        """
+        return {
+            "triage": self.triage.value,
+            "release": self.release.value,
+            "discard_ground": self.discard_ground,
+            "declared_family": self.declared_family,
+            "findings": dict(self.findings),
+            "conformance": dict(self.conformance),
+            "conformance_of": dict(self.conformance_of),
+            "deviations": {node: list(names) for node, names in self.deviations.items()},
+            "unmeasured": {node: list(names) for node, names in self.unmeasured.items()},
+            "routes": dict(self.routes),
+            "route_state": self.route_state,
+            "agreement": dict(self.agreement),
+            "hints": dict(self.hints),
+            "branches": dict(self.branches),
+            "bad_map_values": dict(self.bad_map_values),
+            "llm_redaction": dict(self.llm_redaction),
+            "critical_absences": {branch: dict(gates) for branch, gates in self.critical_absences.items()},
+            "ran": {node: state.value for node, state in self.ran.items()},
+            "reasons": [
+                {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why} for r in self.reasons
+            ],
+        }
+
 
 def _found(reported: bool, spans_n: int) -> str:
     """What a branch found, read off the spans it proposed rather than off any conclusion of its own.
