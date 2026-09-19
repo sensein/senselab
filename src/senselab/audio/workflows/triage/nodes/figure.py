@@ -2634,20 +2634,20 @@ def _span_axis_panel(axis: Axes, lanes: Sequence[BranchLane], window: tuple[floa
     axis.set_title(SPAN_AXIS_TITLE, fontsize=style.title_fontsize)
     axis.set_xlim(t0, t1)
     axis.set_yticks(range(n_rows))
-    axis.set_yticklabels([row.tick for row in reversed(axis_rows)], fontsize=style.tick_fontsize)
+    axis.set_yticklabels([line.tick for line in reversed(axis_rows)], fontsize=style.tick_fontsize)
     axis.set_ylim(-0.5, n_rows - 0.5)
     axis.tick_params(axis="y", length=0)
 
     # Row 0 of the row list is drawn at the top, so its y is n_rows - 1.
     y_of_index = [n_rows - 1 - index for index in range(n_rows)]
-    y_of_row = {(row.block, row.role): y_of_index[index] for index, row in enumerate(axis_rows)}
-    for index, row in enumerate(axis_rows):
+    y_of_row = {(line.block, line.role): y_of_index[index] for index, line in enumerate(axis_rows)}
+    for index, line in enumerate(axis_rows):
         y = y_of_index[index]
-        band = style.colour_branch_input_band if row.lane_index < 0 else _block_band_colour(row.lane_index, style)
+        band = style.colour_branch_input_band if line.lane_index < 0 else _block_band_colour(line.lane_index, style)
         axis.add_patch(Rectangle((t0, y - 0.5), t1 - t0, 1.0, facecolor=band, edgecolor="none", zorder=0.1))
         if index + 1 == n_rows:
             continue
-        crosses_block = axis_rows[index + 1].block != row.block
+        crosses_block = axis_rows[index + 1].block != line.block
         axis.axhline(
             y - 0.5,
             color=style.colour_span_axis_block_rule if crosses_block else style.colour_span_axis_rule,
@@ -2703,13 +2703,14 @@ def _span_axis_panel(axis: Axes, lanes: Sequence[BranchLane], window: tuple[floa
         _note(y_of_row[(BRANCH_INITIAL_ROW, "")], initial_note)
 
     for index, lane in enumerate(lanes):
+        roles = lane_roles(lane)
         on_page = [row for row in rows_on_page(lane, window) if row.row == BRANCH_PROPOSED_ROW]
         for row in on_page:
             # The role is on the y-axis now, so the bar spends its width on what the role does not say.
             _bar(row, y_of_row[(lane.branch, row.role)], _lane_colour(index, style), captions=(row.short, row.label))
         note = lane_note(lane, len(on_page))
         if note:
-            _note(y_of_row[(lane.branch, lane_roles(lane)[0] if lane_roles(lane) else "")], note)
+            _note(y_of_row[(lane.branch, roles[0] if roles else "")], note)
 
     # Connectors last and behind the bars: a dense derivation must never hide a span.
     for index, lane in enumerate(lanes):

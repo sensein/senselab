@@ -1697,13 +1697,13 @@ class TestALaneOfSeveralSpanKindsDrawsARowPerKind:
     speaker and the speaker is the same. The role is what separates them and it was being dropped.
     """
 
-    def _speech_spans(self, store: ProvStore, proposals: Sequence[tuple[str, tuple[float, float], dict[str, Any]]]):
+    def _speech_spans(
+        self, store: ProvStore, proposals: Sequence[tuple[str, tuple[float, float], dict[str, Any]]]
+    ) -> None:
         """Mint SPEECH proposals through the only writer of one, each derived from a live span."""
         from senselab.audio.workflows.triage.nodes.branches import PROPOSERS, propose_spans
 
-        parent = next(
-            entity.id for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes
-        )
+        parent = next(entity.id for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
         activity = store.activities("SPEECH")[0].id
         agent = software_agent(store)
         mint = PROPOSERS["SPEECH"]
@@ -1774,6 +1774,18 @@ class TestALaneOfSeveralSpanKindsDrawsARowPerKind:
         _seed_report_store(store, tmp_path, full=True)
         report(store, tmp_path / "summary", _png(tmp_path))
         assert list(_lane_rows(panels[0], "airway")) == ["proposed", "initial"]
+
+    def test_the_json_carries_the_row_each_proposal_is_drawn_on(self, many_roles: ProvStore, tmp_path: Path) -> None:
+        """The lane records are what the page draws, checkable without pixels — the sub-row included.
+
+        The seeder's own speech span is hand-built and carries no role, which is why ``unroled`` is
+        here: a span with no role takes a row saying so rather than joining another kind's.
+        """
+        payload = json.loads(report(many_roles, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        [speech] = [lane for lane in payload["evidence"]["lanes"] if lane["lane"] == "SPEECH"]
+        proposed = [span for span in speech["spans"] if span["row"] == "proposed"]
+        assert {span["role"] for span in proposed} == {"task_extent", "phrase_run", "structure", "unroled"}
+        assert all(span["role"] == "" for span in speech["spans"] if span["row"] == "initial")
 
     def test_the_initial_row_still_holds_every_parent_once(
         self, many_roles: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

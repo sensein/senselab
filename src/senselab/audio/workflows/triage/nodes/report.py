@@ -1339,6 +1339,7 @@ def _lane_records(store: ProvStore) -> list[dict[str, Any]]:
                     "entity_id": row.key,
                     "label": row.label,
                     "row": row.row,
+                    "role": row.role,
                     "start_s": row.start,
                     "end_s": row.end,
                     "derived_from": list(row.derived_from),
