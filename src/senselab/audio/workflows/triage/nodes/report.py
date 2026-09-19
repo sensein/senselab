@@ -2127,7 +2127,9 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
                 )
             else:
                 style = FigureStyle(figure_inches=_LETTER_LANDSCAPE_IN)
-                for _name, figure in summary_pages(store, config, run_dir=run_dir, style=style, stem=store.run_id):
+                for _name, figure in summary_pages(
+                    store, config, run_dir=run_dir, style=style, stem=store.run_id, decision_record=True
+                ):
                     _save(figure)
         return
 
