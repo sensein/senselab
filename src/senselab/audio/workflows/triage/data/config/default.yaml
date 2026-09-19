@@ -281,36 +281,28 @@ branch:
   modulation_band_hz: [1.0, 10.0]      # [lo, hi] band the envelope modulation peak is searched in
   rate_prominence_min: 2.0             # modulation peak over its own band mean that makes a rate readable
   train_min_s: 1.0                     # shortest carrier span that can hold a syllable train
-  burst_window_ms: 20.0                # window after a syllable onset the burst spectrum is taken over
-  place_margin_db: 3.0                 # dB the leading place band must beat the next by to be resolved
+  burst_window_ms: 20.0                # shortest stop burst and aspiration, which is the decode's minimum phone duration
   effort_split_hz: 1000.0              # split the low and high spectral balance of an effort token is taken at
   gap_off_task_min_s: 1.0              # shortest gap reported as off-task extent
-  # place of articulation -> [lo, hi] band its burst energy concentrates in. Data, not schema: a
-  # campaign may add a place. The three shipped entries are the classical burst templates.
-  place_centroid_bands_hz:
-    labial: [500.0, 1500.0]
-    velar: [1500.0, 3000.0]
-    alveolar: [3000.0, 8000.0]
   label_sets:
     cough: [Cough]
     breath: [Breathe]
-  # The posteriorgram CV instrument. Segmentation and vocabulary only: it reports a rate, it does
-  # not judge one. Derivations in specs/20260817-triage-workflow-dag/config-derivations.md.
-  ddk_interval_tolerance: 3.0          # factor an inter-onset interval may differ from its stretch's running median
-  ddk_min_repetitions: 4               # CV onsets a contiguous regular stretch needs before it is a train
-  # place of articulation -> the stop phonemes that ARE that place, in the posteriorgram's ARPAbet
-  # spelling. Data, not schema, and the one place vocabulary `place_centroid_bands_hz` and
-  # `Expectation.sequence` already use; the stop set the CV walk reads is this mapping's union.
-  ddk_stop_places:
+  # The posteriorgram template decode's equivalence classes. Vocabulary only: it reports mass, it
+  # does not judge it. Derivations in specs/20260817-triage-workflow-dag/config-derivations.md.
+  # consonant class -> the phonemes that ARE that class, in the posteriorgram's ARPAbet spelling.
+  # Data, not schema: a campaign may add a class, and `DATA_MAP_PATHS` carries the key so an
+  # override adding one is admitted. A template position scores this class's summed posterior mass.
+  phoneme_place_classes:
     labial: [p, b]
-    alveolar: [t, d]
+    alveolar: [t, d, r]
     velar: [k, g]
-  # nucleus class -> the phonemes that ARE that class, in the posteriorgram's ARPAbet spelling.
-  # Data, not schema, and the same idiom `ddk_stop_places` uses. A syllable template position
-  # (`branches.Syllable`) names one of these keys; the CV walk admits the union of the classes the
-  # declared template names, and conformance is checked per position against the class it named.
-  ddk_nucleus_classes:
-    low: [aa, ae, ah, ao, aw, ay]
+  # vowel class -> the phonemes that ARE that class. A total partition of the ten ARPAbet vowels:
+  # height, with rhoticity carried as its own class rather than folded into a height. Diphthongs
+  # are classified by their first target. Data, not schema, and in `DATA_MAP_PATHS` likewise.
+  phoneme_vowel_classes:
+    close: [iy, ih, uw, uh]
+    mid: [ey, ow]
+    open: [aa, ae, ah, ao, aw, ay, eh, oy]
     rhotic: [er]
 
 # What VERDICT does with what the reporting nodes report. A branch reports and VERDICT decides, so

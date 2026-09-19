@@ -1338,21 +1338,9 @@ branch.train_min_s: 1.0
 
 branch.burst_window_ms: 20.0
   The stop burst and its aspiration occupy the first 10-25 ms after release (Blumstein & Stevens,
-  1979), and 20 ms is the conventional burst-analysis window. Published convention.
-
-branch.place_centroid_bands_hz:
-  labial [500, 1500], velar [1500, 3000], alveolar [3000, 8000]
-  The classical three burst-spectrum templates: labial diffuse-falling with energy concentrated
-  low, velar compact mid-frequency, alveolar diffuse-rising with energy concentrated high
-  (Blumstein & Stevens, 1979). 8000 is the graph's own sampling ceiling, not a band edge anyone
-  measured. **This is a textbook triple and explicitly not a fit on this corpus's microphones** —
-  the 2026-09-04 note saying so is still correct, and the change is that a conventional triple now
-  ships instead of a null, so the measurement is testable against something. A data mapping
-  (`DATA_MAP_PATHS`), so a campaign may add a place without editing the installed package.
-
-branch.place_margin_db: 3.0
-  A factor of two in power: the conventional "distinguishable" step between the leading band and
-  the next.
+  1979), and 20 ms is the conventional burst-analysis window. Published convention. Its consumer
+  changed on 2026-09-19: it fed the burst-spectrum place instrument, which is gone, and it now
+  derives the decode's minimum phone duration `D` (below).
 
 branch.effort_split_hz: 1000.0
   The 1 kHz division of the published spectral-balance measures — the alpha ratio and the
@@ -1372,61 +1360,88 @@ branch.label_sets
   without editing the installed package. Whether HeAR's `Baby Cough` and `Throat Clear` belong in
   the cough set is a question this split does not answer and does not pretend to.
 
-branch.ddk_interval_tolerance: 3.0
-  A SEGMENTATION parameter, not a classifier threshold. It bounds how far one inter-onset interval
-  may sit from its stretch's running median before the stretch is cut, and its whole job is to stop
-  a degenerate stretch -- two onsets two seconds apart and one a tenth of a second later -- being
-  reported as one train. **It separates nothing.** Measured on the b2ai corpus at
-  `/orcd/scratch/bcs/002/satra/clipfix_20260913` on 2026-09-16 over 597 declared-DDK recordings
-  across the five DDK families against connected-speech and non-speech controls: interval jitter
-  does not distinguish the two populations at all (DDK 0.16-0.17, connected speech 0.15-0.18), so no
-  value of this key would. What does distinguish them is the rate (DDK 2.94-4.54 Hz, connected
-  speech 0.92-1.37 Hz), and the branch reports that rate rather than cutting on it. **Corpus-
-  informed**: 3.0 is the value that, on that corpus, left the regularity term nearly inert, which is
-  what a segmentation guard should be. Say so rather than presenting it as reasoned from physics.
-
-branch.ddk_min_repetitions: 4
-  The floor for calling a contiguous stretch a repetition train. Three onsets are two intervals,
-  which is the fewest a median and a deviation are defined over but too few for either to mean
-  anything; four onsets are three intervals. From the arithmetic of the statistic, not from a fit.
-
-branch.ddk_stop_places:
-  labial [p, b], alveolar [t, d], velar [k, g]
-  Read off the task definition, not fitted. The DDK stimuli across all five families are stop plus
+branch.phoneme_place_classes:
+  labial [p, b], alveolar [t, d, r], velar [k, g]
+  Read off the task definition, not fitted. The DDK stimuli across all ten families are stop plus
   mid or back vowel -- /pa/ /ta/ /ka/ /pataka/ and buttercup's /b^t3rk^p/ -- so which phonemes open a
   DDK syllable follows from what the instruction asks for. The voiced partner of each stop is in the
-  set because the posteriorgram's argmax confuses the voicing contrast far more readily than the
-  place one, and losing a syllable to /b/-for-/p/ costs a repetition while keeping it costs nothing:
-  both map to the same place. The place vocabulary is deliberately the one
-  `branch.place_centroid_bands_hz` and `Expectation.sequence` already use, so the two place
-  instruments and the expectation table compare without a translation layer. A data mapping
-  (`DATA_MAP_PATHS`), so a campaign may add a place without editing the installed package. The stop
-  SET the CV walk reads is this mapping's union; there is no second key spelling it.
+  class because the posteriorgram confuses the voicing contrast far more readily than the place one:
+  measured over all 7,994 declared-DDK recordings (Slurm job 23105390), the argmax raster's stop
+  voicing agrees with the stimulus on 81.7% (`-pa`) to 96.5% (`-v2-kuh`) of units inside a complete
+  cycle. Under the decode the class is summed rather than collapsed, so both partners' mass counts
+  and the confusion costs nothing at all.
+  `r` is in `alveolar` for buttercup's flap: "butter"'s /t/ is an intervocalic flap /3/ in American
+  English, ARPAbet-40 carries no flap symbol, and the flap therefore surfaces as `t`, `d` or `r` --
+  three spellings of one segment, all three now in the class. This is an allophonic admission and
+  the rule it follows is stated in ddk-template-decode.md (owner's decision 3): a class admits a
+  spelling when a STIMULUS phoneme has more than one ARPAbet spelling in the realisation the
+  stimulus prescribes. It is not a licence to widen a class toward whatever the posteriorgram reads.
+  The cost, stated rather than hidden: a genuine /r/ would score as an alveolar position. None of
+  the ten DDK stimuli asks for one, so on this family set it cannot fire.
+  A data mapping (`DATA_MAP_PATHS`), so a campaign may add a class without editing the installed
+  package. Two shipped documents claimed that of its predecessor `branch.ddk_stop_places` while the
+  schema rejected such an override; the key is in the set now and the claim is true.
 
-branch.ddk_nucleus_classes:
-  low [aa, ae, ah, ao, aw, ay], rhotic [er]
-  Read off the phonetic category, not fitted: `low` is the six a-initial ARPAbet vowels, the low and
-  open-mid nuclei; `rhotic` is the one r-coloured vowel, which is buttercup's middle nucleus. The
-  shape is `branch.ddk_stop_places`' -- class -> the phonemes that ARE that class -- so the two share
-  one idiom and one accessor type. A syllable template position (`branches.Syllable`) names one of
-  these keys; the CV walk admits the UNION of the classes the declared template names, and
-  conformance is then checked per position against the class that position named. Any member of a
-  class satisfies it, which is how the phonemic variation across /pa/, /pah/ and /paw/ is tolerated
-  rather than penalised. This replaced one global vowel list, `branch.ddk_vowel_phonemes:
-  [aa, ah, ao, ow, uh, uw]`, which held no rhotic and therefore found 2 of buttercup's 3 syllables on
-  every recording.
+branch.phoneme_vowel_classes:
+  close [iy, ih, uw, uh], mid [ey, ow], open [aa, ae, ah, ao, aw, ay, eh, oy], rhotic [er]
+  Read off the phonetic category, not fitted, and a TOTAL partition of the ten ARPAbet vowel
+  symbols: a template that is a phoneme sequence must classify every vowel, where the predecessor
+  `branch.ddk_nucleus_classes` classified only the six a-initial vowels and `er` and left the other
+  eight in no class. Diphthongs are classified by their first target, which is the standard
+  convention. `open` holds exactly the six a-initial vowels the predecessor's `low` class held plus
+  `eh` and `oy`, so **for every phoneme any DDK template names the membership is byte-identical to
+  what shipped before** -- the extension makes the inventory total, it does not move the DDK
+  reading.
+  `eh` and `oy` in `open` is a choice rather than a consequence: /E/ and the /O/ onset of /OI/ are
+  open-mid by the same reading that puts `ah` /^/ and `ao` /O/ there. Unobservable on the ten DDK
+  families; the owner settled it on 2026-09-19 rather than leave it to be settled later under
+  pressure.
+  `er` is kept OUT of `open` and carried as its own class because rhoticity is a second dimension,
+  not a height, and merging it would make positions 1, 3 and 5 of buttercup's template the same
+  class -- three interchangeable vowel slots. Measured: the rhotic position is reached on 79.0% of
+  `-buttercup` recordings with a median realised mass of 0.67.
   **Corpus-confirmed, not corpus-derived.** On 150 recordings per family, stop->next-run pairs off
   the argmax raster: /pa/ /ta/ /ka/ /pataka/ are `ah` and `aa` throughout, and buttercup's three most
-  common pairs are its three syllables -- /k/->ah 19.7%, /t/->er 14.2%, /b/->ah 10.1%. On 1,800
-  recordings at tol=1.5, widening the global set from [aa ah ao ow uh uw] to [aa ae ah ao aw ay]
-  moved sensitivity 0.633 -> 0.693 at unchanged specificity (0.950 -> 0.949); `ow`, `uh` and `uw`
-  never appear in the top 14 post-stop nuclei. Those numbers say the phonetic category is the right
-  one; they are not where its membership came from.
-  NOT IMPLEMENTED, and why -- strict adjacency: requiring the nucleus run to be immediately adjacent
-  to the stop run costs sensitivity (0.693 -> 0.605) and shortens median trains 6 -> 5, buying
-  specificity 0.949 -> 0.995. Since the DDK dissolution there is no DDK routing, so this instrument
-  only ever runs in-family on the ten declared families and specificity is close to irrelevant. The
-  intervening-run gap is admitting genuine units. See ddk-syllable-template.md.
+  common pairs are its three syllables -- /k/->ah 19.7%, /t/->er 14.2%, /b/->ah 10.1%. Those numbers
+  say the phonetic category is the right one; they are not where its membership came from.
+  A data mapping (`DATA_MAP_PATHS`), on the same footing and for the same reason.
+
+WITHDRAWN 2026-09-19 -- `branch.ddk_interval_tolerance`, `branch.ddk_min_repetitions`:
+  Both belonged to the regularity segmentation the template decode replaces. The decode segments by
+  the template, so there is no contiguous regular stretch to cut and no minimum length for one to
+  clear. `ddk_interval_tolerance`'s own entry recorded that it "separates nothing" -- interval
+  jitter did not distinguish DDK from connected speech at any value -- which is the strongest
+  possible argument for deleting rather than re-deriving it.
+
+WITHDRAWN 2026-09-19 -- `branch.place_centroid_bands_hz`, `branch.place_margin_db`:
+  Both belonged to `ddk_places`, the burst-spectrum place instrument, which was their only consumer
+  in `src/` and which is removed entirely. The owner: "if it's only ddk, then the counting/matching
+  is sufficient. remove the burst instrument." The measurement argument beside it: the burst
+  spectrum degrades in noisier recordings, so an agreement covariate built on it is least
+  interpretable exactly where a check would matter. `place_centroid_bands_hz` leaves `DATA_MAP_PATHS`
+  with the key.
+
+NOT SHIPPED, and why -- the decode's two parameters:
+  `D`, the chain length that enforces a minimum phone duration, and the emission floor are both
+  DERIVED AT READ TIME and neither is a config key.
+  `D = ceil(branch.burst_window_ms / (1000 * seconds_per_frame))`, off the posteriorgram's own frame
+  period. Measured across all 7,994 declared-DDK posteriorgrams: median 10.00 ms, min 10.00 ms, max
+  10.26 ms, so `D = 2` everywhere on this corpus. It is a floor against degenerate traversal, not a
+  duration model, and must stay as small as the frame rate allows so it never binds against real
+  production: the fastest clinically reported /pataka/ rate is about 8 cycles/s, which is 48
+  phones/s, which is 21 ms per phone. `D = 2` (20 ms) sits just under that and `D = 3` would make
+  that rate structurally undecodable, which is the argument against ever tuning it upward.
+  The emission floor is `np.finfo(dtype).smallest_subnormal` off the posteriorgram entity's own
+  recorded `dtype`. The sidecar stores float16, whose smallest positive subnormal is 5.960e-08, so a
+  posterior below that is stored as exactly zero and its log is -inf. The floor is the smallest
+  value the recorded data can distinguish from zero -- a storage fact, not a tuning knob, and one
+  that moves on its own if the sidecar's dtype ever moves.
+
+NOT SHIPPED, and why -- a threshold on per-position realised mass:
+  This is what a `syllable_sequence_mismatch` deviation would need and it has no derivation. The
+  deviation type is deleted rather than kept writerless (ddk-template-decode.md, owner's decision
+  4); `branches_test.py`'s closure guard refuses a declared type nobody emits, so writerless was
+  never an available state.
 
 NOT SHIPPED, and why -- the DDK rate plausibility band:
   An earlier draft of this instrument carried `branch.ddk_rate_band_hz: [1.5, 8.0]` as an acceptance
