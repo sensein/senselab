@@ -12,9 +12,16 @@ it. Implementation follows this document.
 The code this describes replacing is `src/senselab/audio/workflows/triage/nodes/ddk.py`; the
 documents it supersedes are [`branch-ddk-ppg-instrument.md`](branch-ddk-ppg-instrument.md),
 [`ddk-syllable-template.md`](ddk-syllable-template.md) and
-[`ddk-cycle-counting.md`](ddk-cycle-counting.md). It preserves
-[`ddk-task-extent-precedence.md`](ddk-task-extent-precedence.md) and
+[`ddk-cycle-counting.md`](ddk-cycle-counting.md). It supersedes the union rule of
+[`ddk-task-extent-precedence.md`](ddk-task-extent-precedence.md) (decision 6) and preserves
 [`ddk-instrument-over-asr.md`](ddk-instrument-over-asr.md) intact.
+
+**One decision here has since been reversed.** The envelope fallback for `task_extent` — decision 6
+below, and the second row of both tables in this document — is removed by
+[`ddk-envelope-mints-no-extent.md`](ddk-envelope-mints-no-extent.md). The envelope mints no
+`task_extent`; where the decode reads no repetition, none is proposed. Everything else here stands,
+the modulation-rate channel included. The paragraphs arguing for the fallback are left as written so
+the reversal is legible.
 
 ## The owner's design, in the owner's words
 
@@ -683,6 +690,11 @@ posteriorgram derivative is absent, and deleting the envelope side outright woul
 fallback is the carrier at 2.237–4.114 (1.88 s) rather than `hull(onsets)`'s 0.0986 s, so where the
 fallback fires at all it fires 19× wider than what shipped before `fe9167db`.
 
+> **Reversed.** The second row is gone;
+> [`ddk-envelope-mints-no-extent.md`](ddk-envelope-mints-no-extent.md) holds the ruling and the
+> measurement. 49 of 7,994 declared-DDK recordings have no posteriorgram (0.61%) and all 49 carry
+> zero `word` entities, so what the fallback protected was not coverage of produced speech.
+
 **"The instrument did not run" versus "it ran and found nothing".** Three states stay distinct and
 each keeps its own record:
 
@@ -1019,7 +1031,7 @@ which is the shape every prior DDK change already took — the prototype sweeps 
 |---|---|---|
 | 1 | the acceptance test A1–A4 as a throwaway sweep against stored derivatives; the A5 listening sample collected or explicitly declined | ORCD, not the package |
 | 2 | the owner reads the per-family table, the buttercup per-position distribution, and the `-v2-tuh` offset, and settles the nine questions — **done, 2026-09-19; see *The owner's decisions*** | — |
-| 3 | one commit: the decode replaces the CV walk, the train finder and the cycle scan; `BRANCH_MEASURES["SPEECH"]` is rewritten; `Expectation.sequence` becomes a phoneme tuple; the burst place path and the envelope onset channel are deleted; the `task_extent` becomes the decoded repetition span with the carrier extent as its fallback | package |
+| 3 | one commit: the decode replaces the CV walk, the train finder and the cycle scan; `BRANCH_MEASURES["SPEECH"]` is rewritten; `Expectation.sequence` becomes a phoneme tuple; the burst place path and the envelope onset channel are deleted; the `task_extent` becomes the decoded repetition span, and the carrier extent stops being able to be one (`ddk-envelope-mints-no-extent.md`; the fallback this row originally described was removed before the reprocess) | package |
 | 4 | corpus reprocess. **Every stored DDK reading changes**, so the report/figure fixtures and any cached artefact keyed on the old names are invalidated deliberately, not incidentally | — |
 
 Stage 3 is one commit because splitting it would leave the tree in a state where `cycle_scan` exists
@@ -1110,6 +1122,11 @@ is what a later reader will want.
    |---|---|---|
    | the decode completed at least one repetition | first repetition's start … last repetition's end | `syllable_task_from_decode` |
    | it did not, and the envelope found a carrier | the carrier span's own extent | `syllable_train` / `syllable_sequence` |
+
+   > **Reversed by the owner, same day.** *"if there is no posteriorgram, there is likely no speech.
+   > i don't think any DDKs have no posteriorgram."* The second row is removed and the first is the
+   > whole rule; see [`ddk-envelope-mints-no-extent.md`](ddk-envelope-mints-no-extent.md). The
+   > modulation-rate channel this decision kept is unaffected and still reported.
 
    What is given up against the merged rule: on a recording where both read the task and the
    envelope carrier reaches past the decoded repetitions, the extent no longer stretches to include
