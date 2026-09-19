@@ -111,13 +111,9 @@ TASK_EXTENT = "task_extent"
 """The role that says where the declared task was performed. Exactly one may survive a recording."""
 
 TASK_FROM_DECODE = "syllable_task_from_decode"
-"""The extent is the decoded repetition span: first repetition's start to last repetition's end."""
+"""The extent is the decoded repetition span: first repetition's start to last repetition's end.
 
-TASK_FROM_ENVELOPE = "syllable_train"
-"""The fallback extent, where the decode had no reading: the carrier span's own extent. One place."""
-
-TASK_FROM_ENVELOPE_SEQUENCE = "syllable_sequence"
-"""The same, where the declared template repeats more than one syllable."""
+The only production a ``task_extent`` on this family carries. The envelope mints none."""
 
 NO_REPETITIONS = "the decode completed no repetition of the declared template"
 NO_ENVELOPE = "the energy envelope is absent; the syllable train's only rate instrument could not be read"
@@ -884,52 +880,27 @@ def decode_evidence(
     return findings
 
 
-def task_extent_span(
-    decode: Decode | None,
-    decode_ids: Sequence[str],
-    carrier_extent: tuple[float, float] | None,
-    carrier_ids: Sequence[str],
-    *,
-    sequence: bool,
-) -> Proposal | None:
-    """The one ``task_extent`` this family leaves behind.
-
-    The decoded repetition span when the decode has one, and the envelope carrier's own extent
-    otherwise. Precedence and not a union: the decode reads the phonetic sequence, so where it has
-    a reading it is the instrument that knows where the task was. The envelope stays as the fallback
-    because the decode has no reading at all when the posteriorgram derivative is absent, and
-    dropping it would take the extent away from those recordings.
+def task_extent_span(decode: Decode | None, decode_ids: Sequence[str]) -> Proposal | None:
+    """The one ``task_extent`` this family leaves behind: the decoded repetition span.
 
     Args:
         decode: What the decode read, or None when the posteriorgram is absent.
         decode_ids: The entity ids it was read off.
-        carrier_extent: The envelope carrier's extent, or None when no carrier was found.
-        carrier_ids: The entity ids the carrier was read off.
-        sequence: Whether the declared template repeats more than one syllable.
 
     Returns:
-        The span, or None when neither instrument read the task.
+        The span, or None when the decode read no repetition of the declared template.
     """
     extent = None if decode is None else decode.extent
-    if decode is not None and extent is not None:
-        return speech_span(
-            TASK_EXTENT,
-            extent,
-            *decode_ids,
-            production=TASK_FROM_DECODE,
-            repetitions=decode.count,
-            syllables_n=decode.syllables,
-            filler_fraction=decode.filler_fraction,
-        )
-    if carrier_extent is None:
+    if decode is None or extent is None:
         return None
     return speech_span(
         TASK_EXTENT,
-        carrier_extent,
-        *carrier_ids,
-        production=TASK_FROM_ENVELOPE_SEQUENCE if sequence else TASK_FROM_ENVELOPE,
-        repetitions=None,
-        syllables_n=None,
+        extent,
+        *decode_ids,
+        production=TASK_FROM_DECODE,
+        repetitions=decode.count,
+        syllables_n=decode.syllables,
+        filler_fraction=decode.filler_fraction,
     )
 
 
@@ -964,13 +935,14 @@ def align_ddk(
 ) -> Result:
     """Evaluate one declared ``SYLLABLE_REPETITION`` task against what its instruction asked for.
 
-    Spans proposed: exactly one ``task_extent``, or none when neither instrument read the task.
-    :func:`task_extent_span` decides which instrument mints it;
-    ``specs/20260817-triage-workflow-dag/ddk-task-extent-precedence.md`` and
-    ``ddk-template-decode.md`` hold why. An individual repetition is not a span: the rate, the
-    period dispersion and the per-position mass are statistics over the decoded repetition series,
-    and one span per repetition would add roughly ten spans per recording carrying no measurement
-    of their own. The repetition starts and periods travel as ``counts`` entries.
+    Spans proposed: exactly one ``task_extent``, or none when the decode read no repetition.
+    :func:`task_extent_span` mints it and the posteriorgram is the only instrument that can;
+    ``specs/20260817-triage-workflow-dag/ddk-envelope-mints-no-extent.md`` holds why, and
+    ``ddk-task-extent-precedence.md`` what it superseded. An individual repetition is not a span:
+    the rate, the period dispersion and the per-position mass are statistics over the decoded
+    repetition series, and one span per repetition would add roughly ten spans per recording
+    carrying no measurement of their own. The repetition starts and periods travel as ``counts``
+    entries.
 
     Args:
         expectation: The row SPEECH holds for this family, whose pattern is ``SYLLABLE_TRAIN`` or
@@ -1019,7 +991,7 @@ def align_ddk(
                 )
             )
 
-    span = task_extent_span(decode, ppg_ids, carrier_extent, carrier_ids, sequence=sequence)
+    span = task_extent_span(decode, ppg_ids)
     components = [] if span is None else [span]
     if span is not None:
         extent = (span.start, span.end)
