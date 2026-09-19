@@ -60,7 +60,7 @@ def _features(family: str, **overrides: object) -> RecordingFeatures:
         residual={"energy_fraction": 0.0},
         span_longest_s={"amplitude": 0.0},
         span_stats={"all.peak_over_floor_db_max": 0.0},
-        span_label_set_stats={"yamnet.cough_labels.span_count": 0.0},
+        span_label_set_stats={"yamnet.cough_labels.span_count": 0.0, "yamnet.cough_labels.peak_over_floor_db_n": 0.0},
         ppg={"silent_fraction": 0.0, "segment_rate_per_s": 0.0},
         classifier_streams=["plain|yamnet"],
     )
@@ -273,14 +273,36 @@ class TestAMissingMeasurementIsNotANegative:
         assert evaluate_gate(record, ruleset.gates["airway.breath"]) is GateOutcome.UNAVAILABLE
 
     def test_a_label_set_that_ran_and_carried_nothing_reads_silent_not_unavailable(self, ruleset: Ruleset) -> None:
-        """A measured count of zero cough-labelled spans is a definite non-fire.
+        """A measured count of zero measurable cough-labelled spans is a definite non-fire.
 
         ``airway.cough`` names ``peak_over_floor_db_max``, which an empty sample has no value for.
-        The count beside it is the measurement, and it says the classifier ran and nothing carried
-        the set -- which the gate must read as a reason not to fire, not as a reason it could not
-        be read.
+        ``peak_over_floor_db_n`` is that sample's own size, and a zero there says the classifier ran
+        and nothing it could measure carried the set -- which the gate must read as a reason not to
+        fire, not as a reason it could not be read.
         """
-        record = _features("voluntary-cough", span_label_set_stats={"yamnet.cough_labels.span_count": 0.0})
+        record = _features(
+            "voluntary-cough",
+            span_label_set_stats={
+                "yamnet.cough_labels.span_count": 0.0,
+                "yamnet.cough_labels.peak_over_floor_db_n": 0.0,
+            },
+        )
+        assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
+
+    def test_a_label_set_carried_only_by_spans_with_no_level_still_reads_silent(self, ruleset: Ruleset) -> None:
+        """A cough label on a gap span is a candidate with no decibel, and closes the gate.
+
+        The group's ``span_count`` counts it and the decibel sample does not, so the count the gate
+        consults must be the sample's own. Reading ``span_count`` here made the gate unavailable on
+        a recording where the classifier had done its job.
+        """
+        record = _features(
+            "voluntary-cough",
+            span_label_set_stats={
+                "yamnet.cough_labels.span_count": 1.0,
+                "yamnet.cough_labels.peak_over_floor_db_n": 0.0,
+            },
+        )
         assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
 
     def test_a_label_set_never_written_at_all_still_reads_unavailable(self, ruleset: Ruleset) -> None:
@@ -619,12 +641,18 @@ class TestTheCoughGateIsSetConditioned:
     def test_the_two_reasons_the_gate_reads_no_decibel_are_told_apart(self, ruleset: Ruleset) -> None:
         """Every instrument running and finding no cough is not the same as no instrument running.
 
-        The per-span classifier writes ``<classifier>.<set>.span_count`` for every declared set on
-        every recording, so its presence is what separates the two. Present and zero: the set was
-        measured and nothing carried it, and the gate must not fire. Absent: nothing measured it,
-        and the gate cannot be read.
+        The per-span classifier writes ``<classifier>.<set>.peak_over_floor_db_n`` for every
+        declared set on every recording, so its presence is what separates the two. Present and
+        zero: the sample was taken and held nothing, and the gate must not fire. Absent: nothing
+        measured it, and the gate cannot be read.
         """
-        measured = _features("voluntary-cough", span_label_set_stats={"yamnet.cough_labels.span_count": 0.0})
+        measured = _features(
+            "voluntary-cough",
+            span_label_set_stats={
+                "yamnet.cough_labels.span_count": 0.0,
+                "yamnet.cough_labels.peak_over_floor_db_n": 0.0,
+            },
+        )
         unmeasured = _features("voluntary-cough", span_label_set_stats={})
         assert evaluate_gate(measured, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
         assert evaluate_gate(unmeasured, ruleset.gates["airway.cough"]) is GateOutcome.UNAVAILABLE

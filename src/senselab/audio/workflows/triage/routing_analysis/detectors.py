@@ -31,7 +31,11 @@ from typing import Any, Iterable, Mapping, Sequence
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from senselab.audio.workflows.triage.routing_analysis.features import SPAN_CLASSIFIERS, RecordingFeatures
+from senselab.audio.workflows.triage.routing_analysis.features import (
+    PEAK_OVER_FLOOR_STATISTIC,
+    SPAN_CLASSIFIERS,
+    RecordingFeatures,
+)
 from senselab.audio.workflows.triage.routing_analysis.labels import FAMILIES, LABEL_SETS, peak_key
 from senselab.audio.workflows.triage.routing_analysis.tables import read_header
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
@@ -44,6 +48,9 @@ GATE_CLOSED_BELOW = math.inf
 
 SPAN_COUNT_STATISTIC = "span_count"
 """The statistic every label and label-set distribution carries, zero where nothing carried it."""
+
+PEAK_OVER_FLOOR_COUNT_STATISTIC = f"{PEAK_OVER_FLOOR_STATISTIC}_n"
+"""The sample size under the ``peak_over_floor_db`` keys, which counts amplitude spans alone."""
 
 CONSENSUS_BLOCK = "consensus_transcript"
 """The PREPROCESS block whose absence leaves every word- and transcript-reading source unreadable."""
@@ -661,22 +668,28 @@ def evidence_blocks(reader: tuple[Any, ...]) -> tuple[str, ...]:
 def _label_statistic(table: dict[str, float], key: str, polarity: str) -> float | None:
     """One label or label-set distribution statistic, telling an empty sample from an absent one.
 
+    The count consulted is the one the requested statistic is taken over:
+    :data:`PEAK_OVER_FLOOR_COUNT_STATISTIC` for a ``peak_over_floor_db`` statistic, whose sample is
+    the amplitude spans of the group, and :data:`SPAN_COUNT_STATISTIC` otherwise.
+
     Args:
         table: The per-label or per-set statistics.
         key: ``"<classifier>.<name>.<statistic>"``.
         polarity: The reader's firing side, so an empty sample closes against either comparison.
 
     Returns:
-        The value; :data:`GATE_CLOSED` or :data:`GATE_CLOSED_BELOW` when the group's own
-        ``span_count`` is zero, which is the group having been measured and carried nothing; and
-        None when no ``span_count`` was written for it at all, which is the classifier not having
-        run.
+        The value; :data:`GATE_CLOSED` or :data:`GATE_CLOSED_BELOW` when the statistic's own count
+        is zero, which is the group having been measured and carried nothing; and None when no
+        count was written for it at all, which is the classifier not having run.
     """
     value = _optional(table, key)
     if value is not None:
         return value
-    prefix, _, _ = key.rpartition(".")
-    count = table.get(f"{prefix}.{SPAN_COUNT_STATISTIC}")
+    prefix, _, statistic = key.rpartition(".")
+    denominator = (
+        PEAK_OVER_FLOOR_COUNT_STATISTIC if statistic.startswith(PEAK_OVER_FLOOR_STATISTIC) else SPAN_COUNT_STATISTIC
+    )
+    count = table.get(f"{prefix}.{denominator}")
     if count is None or float(count) != 0.0:
         return None
     return GATE_CLOSED if polarity == "above" else GATE_CLOSED_BELOW
