@@ -19,7 +19,9 @@ from senselab.audio.workflows.triage.vocabulary import (
     UNAVAILABLE,
     UNDETERMINED,
     UNEXPLAINED_CONTENT,
+    UNJUDGED,
     UNREAD_DECLARATION,
+    UNREADABLE_EMPTINESS,
     BranchDecision,
     BranchReport,
     Conformance,
@@ -171,6 +173,25 @@ class TestDiscardIsNarrow:
         assert folded.triage is Triage.FLAG
         assert folded.discard_ground is None
         assert any(reason.why == UNEXPLAINED_CONTENT for reason in folded.reasons)
+
+    def test_an_unreadable_bypass_flags_under_its_own_ground(self) -> None:
+        """Nothing routed and no bypass to read still flags, and says which of the two it was.
+
+        It is not a discard: neither discard ground is a claim about a measurement that was never
+        taken. It is not ``unexplained`` either, which would charge the ruleset for evidence the
+        run failed to produce.
+        """
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="unreadable",
+        )
+        assert folded.triage is Triage.FLAG
+        assert folded.discard_ground is None
+        assert any(reason.why == UNREADABLE_EMPTINESS for reason in folded.reasons)
+        assert not any(reason.why == UNEXPLAINED_CONTENT for reason in folded.reasons)
 
     def test_the_two_grounds_are_told_apart_by_their_ground_not_by_their_axis(self) -> None:
         """Both discard; a consumer that cannot tell them apart treats an empty file as a broken one."""
@@ -424,9 +445,35 @@ class TestTheRoutingIsReportedBeside:
             hint_claims={"VOICE": True},
             route_state=ROUTED,
         )
-        assert folded.routes["VOICE"] == UNAVAILABLE
+        assert folded.routes["VOICE"] == UNJUDGED
         assert folded.findings["VOICE"] == "uncertain"
         assert folded.triage is not Triage.DISCARD
+
+    def test_a_branch_routing_never_judged_is_told_from_one_whose_gates_were_unreadable(self) -> None:
+        """Two different facts that shared one token: no decision written, and a decision of unavailable.
+
+        ``unavailable`` is ROUTING's own reading -- it looked, and every gate of the branch was
+        unreadable. A branch with no decision entity at all was never looked at. Both resolve the
+        agreement table the same way and neither is a claim about the recording, which is exactly
+        why one token for both was unreadable rather than harmless.
+        """
+        judged = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_decisions(VOICE=UNAVAILABLE),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        never = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions={},
+            ran={},
+            hint_claims={"VOICE": True},
+            route_state=ROUTED,
+        )
+        assert judged.routes["VOICE"] == UNAVAILABLE
+        assert never.routes["VOICE"] == UNJUDGED
+        assert judged.routes["VOICE"] != never.routes["VOICE"]
 
     def test_a_routed_branch_that_never_concluded_reads_uncertain(self) -> None:
         """A branch asked to look and silent has not established an absence."""

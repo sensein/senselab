@@ -62,8 +62,8 @@ class RoutingResult(NodeResult):
         forced: The branches that run only because the declaration named them, in branch order.
         declared: Every branch the declaration named, whether or not content routed it too.
         empty_set: Whether no branch runs at all.
-        route_state: What the ruleset made of the whole recording — ``routed``, ``empty`` or
-            ``unexplained``.
+        route_state: What the ruleset made of the whole recording, one of
+            :data:`~senselab.audio.workflows.triage.vocabulary.FILE_ROUTE_STATES`.
         critical: Whether the run hit a critical failure, so no branch was selected whatever the
             gates and the declaration said.
         critical_absences: Per branch not one of whose gates could be read, each gate and the

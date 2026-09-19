@@ -299,14 +299,18 @@ class TestTheTwoPathsAgree:
         assert live.routed == ()
         assert live.state is RouteState.EMPTY
 
-    def test_an_unreadable_bypass_leaves_the_recording_unexplained(self, config: TriageConfig, tmp_path: Path) -> None:
-        """A stream summary absent from the store is not a stream that scored zero."""
+    def test_an_unreadable_bypass_leaves_the_recording_unreadable(self, config: TriageConfig, tmp_path: Path) -> None:
+        """A stream summary absent from the store is not a stream that scored zero.
+
+        Nor is it content the ruleset failed to account for: ``UNEXPLAINED`` is a charge against the
+        ruleset, and the ruleset was never shown anything to be charged for.
+        """
         run_dir = _run_dir(tmp_path)
         store = ProvStore(run_id="live-evidence-bare")
         store.entity(prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", "path": f"{STEM}.wav"})
         live = evaluate_live_routes(store, config, run_dir=run_dir)
         _assert_same(live, _from_disk(store, config, run_dir))
-        assert live.state is RouteState.UNEXPLAINED
+        assert live.state is RouteState.UNREADABLE
 
 
 class TestWhatTheReaderReads:

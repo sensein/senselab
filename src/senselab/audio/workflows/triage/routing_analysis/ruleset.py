@@ -78,16 +78,19 @@ class RouteState(Enum):
     """What the ruleset made of one recording. Exactly one member holds for every evaluation.
 
     Only :attr:`UNEXPLAINED` is a charge against the ruleset: it is content no gate could account
-    for. :attr:`EMPTY` is a charge against the recording, and :attr:`ROUTED` is neither.
+    for. :attr:`EMPTY` is a charge against the recording, :attr:`UNREADABLE` is a charge against the
+    run — nothing routed and the emptiness bypass could not be read, so whether the recording
+    carried anything is unknown rather than answered — and :attr:`ROUTED` is none of the three.
     """
 
     ROUTED = "routed"
     EMPTY = "empty"
     UNEXPLAINED = "unexplained"
+    UNREADABLE = "unreadable"
 
 
 ROUTE_STATES: tuple[str, ...] = tuple(state.value for state in RouteState)
-"""Every state's name, in declaration order, so a tally can carry all three whether or not seen."""
+"""Every state's name, in declaration order, so a tally can carry all four whether or not seen."""
 
 
 @dataclass(frozen=True)
@@ -199,7 +202,7 @@ class RouteEvaluation:
         flags: Per branch, the flag gates that fired. A flag annotates a branch and never routes
             it, so it is absent from every other field here. Only branches with a fired flag are
             keyed.
-        state: Which of the three outcomes this recording had.
+        state: Which of the four outcomes this recording had.
         gate_outcomes: Every gate's outcome, by gate name. Every gate is evaluated on every
             recording, so this is never empty for a ruleset that declares one.
     """
@@ -231,7 +234,7 @@ class FamilyTally:
         extra: Per branch, how many were routed and not declared.
         unavailable: Per branch, how many carried an unreadable gate for it.
         flagged: Per branch, how many carried a fired flag gate for it.
-        states: How many landed in each :class:`RouteState`, keyed by its value. All three keys are
+        states: How many landed in each :class:`RouteState`, keyed by its value. All four keys are
             present whether or not the family carried one, and they sum to ``recordings``.
     """
 
@@ -503,7 +506,9 @@ def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvalu
     are evaluated beside them without contributing to ``routed``. Emptiness is a bypass rather than
     a precondition: it is consulted only where no gate fired, so a gate firing on a recording the
     emptiness rule would have called empty routes it normally. That disagreement is a reading of the
-    emptiness rule, not something the evaluation suppresses.
+    emptiness rule, not something the evaluation suppresses. A bypass that could not be read at all
+    is :attr:`RouteState.UNREADABLE`, never :attr:`RouteState.UNEXPLAINED`: the ruleset is not
+    charged with content it was never shown.
 
     Args:
         features: The recording's extracted evidence.
@@ -539,10 +544,14 @@ def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvalu
 
     if routed:
         state = RouteState.ROUTED
-    elif evaluate_emptiness(features, ruleset.emptiness) is GateOutcome.FIRED:
-        state = RouteState.EMPTY
     else:
-        state = RouteState.UNEXPLAINED
+        bypass = evaluate_emptiness(features, ruleset.emptiness)
+        if bypass is GateOutcome.FIRED:
+            state = RouteState.EMPTY
+        elif bypass is GateOutcome.UNAVAILABLE:
+            state = RouteState.UNREADABLE
+        else:
+            state = RouteState.UNEXPLAINED
 
     return RouteEvaluation(
         stem=features.stem,
