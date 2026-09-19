@@ -451,11 +451,16 @@ from them.** Four things they establish:
    instrument's hull already asserted — while covering 71–81 % of the recording rather than (A)'s
    41 %.
 
-**And what they do not establish.** `-pa` at 11 and `-v2-puh` at 14 may be over-wrapping; nothing here
-separates a real eleventh repetition from a spurious one, and only listening would. The per-recording
-agreement with the shipped scan is loose — exact agreement on 7–24 % of recordings and within one on
-13–46 % — which is what a systematic recovery of missed repetitions looks like and is also what an
-over-count would look like. Distinguishing them is the acceptance test's job.
+**And what they do not establish.** `-pa` at 11 and `-v2-puh` at 14 may be over-wrapping; nothing
+here separates a real eleventh repetition from a spurious one, and only listening would. The
+per-recording agreement with the shipped scan is loose, which is what a systematic recovery of
+missed repetitions looks like and is also what an over-count would look like. The acceptance test
+below narrows it — the extra repetitions lie inside the shipped instrument's own hull at a rate both
+instruments agree on — without closing it.
+
+**These figures are the prototype's, on 400 recordings per family.** The landed instrument's own
+readings over all 7,989 are in the acceptance section below and supersede this table wherever the
+two differ.
 
 ## Counts are heuristics, not targets
 
@@ -710,67 +715,198 @@ What the corpus comparison should demonstrate, in four parts. All four run over 
 recordings, paired per recording against the shipped instrument replayed on the same stored
 derivative — the shape jobs 23105513, 23096468 and 23107265 already use.
 
-### A1 — sequence realisation where the shipped instrument was structurally blind
+### The run that was scored, and how to reproduce it
 
-The one part of this that is a capability claim rather than an agreement claim. On both `buttercup`
-families, the decode must place frames at position 6 (the coda `/p/`) and position 3 (the rhotic
-`/er/`) on a majority of recordings, and the realised mass at each must be materially above the
-emission floor. Report the full distribution per position; the criterion is **"non-degenerate where
-the shipped instrument is structurally zero"**, not a pass mark.
+Two sweeps over **all 7,994 declared-DDK recordings**, joined per recording by stem, on
+`mit_preemptable`: Slurm **23119278** runs the landed decode from this commit's own source tree, and
+Slurm **23119279** replays the **shipped** CV walk and cycle scan from the frozen pre-change
+snapshot at `checks_20260916/code`, both off the same stored `ppg_posteriorgram` sidecars. Both
+printed the resolved `ddk.py` path as their first line, so neither can have read the other's code.
+7,989 recordings carry a readable posteriorgram; 49 have no sidecar and are rows with a `status`
+rather than silent omissions. Scripts, sbatch files and per-recording rows:
+`/orcd/scratch/bcs/002/satra/ddkdecode_20260919/`.
 
-*Present reading, job 23109184:* coda `p` 0.77 and rhotic `er` 0.57 median realised mass, against
-0.78–0.83 for the positions the shipped instrument does read. Job 23107265 over all 7,994 gives the
-coda reached on 78.4 % / 68.9 % of the two families with a median 150 ms of frames.
+### A1 — sequence realisation where the shipped instrument was structurally blind — **met**
 
-### A2 — no regression where the shipped instrument is known-good
+The capability claim. On both buttercup families the decode must place frames at position 6 (the
+coda `/p/`) and position 3 (the rhotic `/er/`) on a majority of recordings, with realised mass
+materially above the emission floor. The shipped instrument reads both on **0 %** by construction.
 
-The six single-position families are the control, and `ddk-cycle-counting.md` establishes why:
-`i % 1 == 0` always, so the phase defect cannot bite there and the shipped scan agrees with itself.
-Requirement: the per-recording difference `decoded − shipped` is centred on zero on `-pa`, `-ta` and
-`-v2-tuh` — the families whose shipped `consumed` is 1.00, meaning every detected unit was
-consumed by a complete cycle. **A systematic offset is a defect to explain, not a tolerance to
-widen.** Present reading, as median decoded minus median shipped rather than the median per-recording
-difference the criterion asks for: +1, +1, +4. The `-v2-tuh` offset is unexplained and is the single
-clearest thing to resolve before landing.
+`-buttercup`, n = 895; `-v2-buttercup`, n = 701. Every position is reached on **99.2 %** and
+**98.4 %** of recordings respectively — the decode completes at least one repetition on all but
+those — and the realised mass per position is:
 
-### A3 — inter-repetition timing
+| position | 0 `b` | 1 `ah` | 2 `t` | 3 `er` | 4 `k` | 5 `ah` | 6 `p` |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `-buttercup` median | 0.78 | 0.78 | 0.69 | **0.53** | 0.81 | 0.82 | **0.76** |
+| `-buttercup` p10 | 0.60 | 0.54 | 0.41 | **0.07** | 0.66 | 0.69 | **0.56** |
+| `-v2-buttercup` median | 0.79 | 0.79 | 0.71 | **0.56** | 0.85 | 0.84 | **0.77** |
+| `-v2-buttercup` p10 | 0.57 | 0.55 | 0.46 | **0.04** | 0.69 | 0.67 | **0.56** |
 
-The quantity the owner named — *"the gaps between repeats"* — and the corpus answers a question
-about it that changes what should be reported. **Measured: DDK has essentially no inter-repetition
-silence.** Under the topology with an explicit silence state (job 23107265), the gap from the end of
-one repetition to the start of the next exceeded one frame on only 3.7 %–37.6 % of repetition pairs
-and its median was **0.000 s** in every one of the ten families. The train is continuous; the
-"gap between repeats" that exists to be measured is the **period**, start of one repetition to start
-of the next.
+The coda is not marginal evidence: at 0.76/0.77 it is the fourth-strongest position of the seven,
+above the flap at 0.69/0.71. The rhotic is the weakest position in both families and its p10 of
+0.07/0.04 is the one place the distribution reaches the floor — which is the honest reading, since
+`er` is the position most often produced as a plain `ah`, and the instrument says so by degrading
+continuously rather than by dropping the syllable.
 
-Requirement: the decode reports a period distribution per family whose median falls **inside
-`branch.modulation_band_hz: [1.0, 10.0]`** — the one external check available that is not a corpus
-fit, since that band's derivation is published DDK rates and already in `config-derivations.md`. A
-family whose median period lands outside it is a defect in the decode, not a finding about the
-corpus. Present reading: 1.78–4.17 cycles/s and 3.45–5.99 syllables/s, all inside.
+Median occupancy at the coda is **0.780 s** (`-buttercup`) and **0.611 s** (`-v2-buttercup`) summed
+across the completed repetitions. **The criterion is non-degeneracy where the shipped instrument is
+structurally zero, not a pass mark, and it is met at every position.**
 
-Report beside it, as a covariate and not as a criterion: the coefficient of variation of the periods,
-and the least-squares trend in seconds per repetition, which are `dispersion` and `trend`
-unchanged (`ddk.py:326, 345`) applied to the new interval series.
+### A2 — no regression where the shipped instrument is known-good — **not met as written, and explained**
 
-### A4 — coverage is monotone
+The criterion: the per-recording difference `decoded − shipped` is centred on zero on `-pa`, `-ta`
+and `-v2-tuh`, the three families whose shipped `consumed` is 1.00. **It is not.**
 
-The shipped instrument reports nothing on a known set of recordings where the task was performed —
-105 diagnosed in `branch-ddk-ppg-instrument.md`, of which 74 had CV units whose *timing* failed the
-regularity test. Requirement: the set of recordings on which the decode reports a repetition count
-**contains** the set on which the shipped instrument reports cycles, and the added recordings are the
-ones the shipped instrument left silent rather than a different set. Like the `task_extent` union in
-`ddk-task-extent-precedence.md`, this can only add coverage, so a regression can only ever be an
-over-report — which is the failure the design can tolerate and the one A5 exists to bound.
+| control family | n | median | mean | p10 | p25 | p75 | p90 | within one |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `-pa` | 884 | **+2** | +2.62 | 0 | 0 | +4 | +7 | 44.1 % |
+| `-ta` | 888 | **+2** | +2.30 | 0 | 0 | +4 | +6 | 45.3 % |
+| `-v2-tuh` | 701 | **+3** | +3.91 | 0 | +2 | +6 | +8 | 24.7 % |
+
+Across all ten families the per-recording median offset is +2 (`-pa`, `-ta`, `-ka`,
+`-v2-buttercup`), +3 (`-v2-puh`, `-v2-tuh`, `-v2-kuh`) or +4 (`-pataka`, `-v2-puhtuhkuh`,
+`-buttercup`). The offset is systematic and positive everywhere, and the design says a systematic
+offset is a defect to explain rather than a tolerance to widen. What follows is the explanation.
+
+**Where the extra repetitions are.** They are inside the span the shipped instrument itself
+asserts. Taking the **shipped instrument's own CV hull** and dividing by the decoded period gives
+how many repetitions fit inside it — a quantity that reads nothing off the decode's extent:
+
+| family | period s | shipped hull s | fit in it | decoded | shipped | decoded ÷ fit | shipped ÷ fit |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `-pa` | 0.290 | 3.70 | 11.4 | 11 | 10 | **0.96** | 0.79 |
+| `-ta` | 0.275 | 3.41 | 11.2 | 11 | 10 | **0.97** | 0.83 |
+| `-ka` | 0.300 | 3.54 | 10.7 | 10 | 8 | **0.92** | 0.70 |
+| `-v2-puh` | 0.248 | 3.74 | 15.2 | 14 | 10 | **0.95** | 0.69 |
+| `-v2-tuh` | 0.251 | 3.64 | 14.3 | 14 | 10 | **0.99** | 0.75 |
+| `-v2-kuh` | 0.270 | 3.72 | 13.5 | 12 | 8 | **0.94** | 0.62 |
+| `-pataka` | 0.550 | 6.03 | 10.2 | 10 | 6 | **0.96** | 0.54 |
+| `-v2-puhtuhkuh` | 0.516 | 3.95 | 7.4 | 7 | 3 | **0.97** | 0.41 |
+| `-buttercup` | 0.540 | 5.79 | 10.1 | 10 | 6 | **0.93** | 0.56 |
+| `-v2-buttercup` | 0.546 | 4.00 | 7.1 | 7 | 4 | **0.92** | 0.62 |
+
+The decode reports 0.92–0.99 of what fits inside the shipped instrument's own hull. The shipped scan
+reports 0.41–0.83 of it. **The decode is not finding repetitions somewhere the shipped instrument
+did not look; the shipped instrument is reporting fewer repetitions than fit inside the span it
+itself asserts.**
+
+**And the two instruments agree about the rate.** The per-recording ratio of the decoded cycle rate
+to the shipped instrument's own cycle rate has p25 = 1.00 on every family and a median of 1.02–1.06
+on nine of the ten (`-v2-puhtuhkuh` 1.50). Neither count enters that quantity. Given a shared hull
+and a shared rate, the count is arithmetic — and the shipped instrument's own count is only
+0.79–0.91 of its own rate over its own hull, against the decode's 0.92–0.99.
+
+**`consumed = 1.00` does not mean what the criterion assumed.** For a one-position template
+`consumed` is `cycles / units`, so it measures how many of the units the walk *found* it consumed,
+never how many were there. All three control families read 1.00 while missing 17–25 % of what fits
+inside their own hull, which is why they looked like a control and are not one.
+
+**What this does and does not establish.** It locates the disagreement in the shipped instrument
+rather than in the decode, and it does so without reading the decode's extent. It does **not** prove
+the decode's extra repetitions are real: `fit` is computed at the decoded period, so a systematically
+short period would inflate `fit` and the decoded count together. The period is checked independently
+only by A3's physiological band, which is far too wide to separate an 11 from a 14. **A5 is what
+would settle it and A5 does not exist.**
+
+#### The `-v2-tuh` offset, resolved
+
+The design flagged `-v2-tuh` at +4 as unexplained and the clearest thing to resolve before landing.
+Measured over all 7,989 recordings rather than the 400/family subset, the per-recording median
+offset is **+3**, and the resolution is that **it is not a `-v2-tuh` anomaly at all**:
+
+- `-v2-tuh` and `-ta` are the same template shape over hulls of nearly the same length (3.64 s
+  against 3.41 s) inside recordings of the same length (5.09 s and 5.09 s).
+- `-v2-tuh` is produced **faster**: period 0.251 s against `-ta`'s 0.275 s, 3.99 syllables/s against
+  3.57. So **14.3** repetitions fit inside its hull where 11.2 fit inside `-ta`'s.
+- The decode reports 14 and 11, tracking that density. The shipped scan reports **10 on both**,
+  because its argmax CV pairing needs a vowel run to win the argmax between two stops and loses more
+  of them as the rate rises. Its `shipped ÷ fit` is 0.75 on `-v2-tuh` against 0.83 on `-ta`, which
+  is exactly that ordering.
+- The same ordering holds for the two v2 single-syllable families the design did not flag:
+  `-v2-puh` 0.69 and `-v2-kuh` 0.62, both denser than their v1 counterparts, both at +3.
+
+So the offset ranks with syllable density across all ten families; the shipped instrument is the
+side whose count does not track its own hull at its own rate; and **`-v2-tuh` is the densest of the
+three nominal control families and therefore shows the largest control offset.** Nothing about
+`-v2-tuh` needs a separate explanation, and nothing in the decode is specific to it.
+
+### A3 — inter-repetition timing — **met**
+
+Requirement: the decode reports a period distribution per family whose median falls inside
+`branch.modulation_band_hz: [1.0, 10.0]` — the one external check available that is not a corpus
+fit, because that band's derivation is published DDK rates.
+
+| family | cycles/s | syllables/s | in band | period CV | trend s per repetition |
+|---|---:|---:|:--:|---:|---:|
+| `-pa` | 3.45 | 3.45 | yes | 0.325 | +0.001 |
+| `-ta` | 3.57 | 3.57 | yes | 0.307 | +0.001 |
+| `-ka` | 3.27 | 3.27 | yes | 0.376 | +0.001 |
+| `-v2-puh` | 4.00 | 4.00 | yes | 0.316 | +0.001 |
+| `-v2-tuh` | 3.99 | 3.99 | yes | 0.285 | +0.001 |
+| `-v2-kuh` | 3.70 | 3.70 | yes | 0.399 | +0.002 |
+| `-pataka` | 1.82 | 5.45 | yes | 0.104 | +0.002 |
+| `-v2-puhtuhkuh` | 1.92 | 5.76 | yes | 0.083 | +0.008 |
+| `-buttercup` | 1.85 | 5.55 | yes | 0.101 | +0.006 |
+| `-v2-buttercup` | 1.82 | 5.45 | yes | 0.071 | +0.006 |
+
+All ten medians are in band, at 1.82–4.00 cycles/s and 3.27–5.76 syllables/s. The CV and the trend
+are reported beside it as covariates and no criterion reads them; the three-position families' CV of
+0.07–0.10 against the single-position families' 0.29–0.40 is what a longer repetition unit does to a
+coefficient of variation, not a finding about motor control.
+
+### A4 — coverage is monotone — **met, with three exceptions named**
+
+Requirement: the set of recordings on which the decode reports a repetition contains the set on
+which the shipped instrument reports cycles.
+
+| | recordings |
+|---|---:|
+| joined, readable posteriorgram | 7,989 |
+| decode reports at least one repetition | **7,859** |
+| shipped reports at least one cycle | 7,470 |
+| shipped reports a cycle **or** a train | 7,763 |
+| shipped cycles **not** in the decode's set | **3** |
+| shipped cycle-or-train **not** in the decode's set | 5 |
+| the decode adds over shipped cycles | **392** |
+
+Containment holds on 7,467 of 7,470 — 99.96 %. The three exceptions are named rather than rounded
+away: all three are shipped readings of **exactly one cycle** off 1 or 3 CV units — `-buttercup`
+3 units over a 3.27 s hull, `-v2-tuh` 1 unit over a 0.26 s hull, `-v2-buttercup` 3 units over a
+0.46 s hull inside a 1.3 s recording. The decode charges 69–95 % of those recordings to filler and
+completes no repetition. These are the weakest reading the shipped instrument can produce, and one
+cycle off one unit is the case `ddk-cycle-counting.md` already describes as structurally
+unfalsifiable on a one-position template.
+
+The zero-reading rate is where the coverage gain shows:
+
+| family | decode reads 0 | shipped reads 0 |
+|---|---:|---:|
+| `-pa` | 0.7 % | 3.2 % |
+| `-ta` | 0.5 % | 1.4 % |
+| `-ka` | 0.7 % | 4.2 % |
+| `-v2-puh` | 1.7 % | 3.6 % |
+| `-v2-tuh` | 1.4 % | 2.1 % |
+| `-v2-kuh` | 1.7 % | 4.6 % |
+| `-pataka` | 0.4 % | 5.0 % |
+| `-v2-puhtuhkuh` | 2.0 % | 15.9 % |
+| `-buttercup` | 0.8 % | 8.6 % |
+| `-v2-buttercup` | 1.6 % | 13.3 % |
 
 ### A5 — the listening check that does not exist, named so that it is not pretended away
 
-**Nothing above distinguishes a recovered repetition from a spurious one.** A2's control bounds it on
-the families where the shipped instrument is trusted; A3's band bounds it physiologically; neither
-is ground truth. What would settle it is hand-counted repetitions on a modest sample — 30–50
-recordings stratified across the decoded-minus-shipped difference, weighted toward the tails — and
-that sample does not exist. Until it does, **A1–A4 are the whole of the acceptance test and the
-design should not claim more from them than agreement-where-trusted plus capability-where-blind.**
+**Nothing in A1–A4 distinguishes a recovered repetition from a spurious one.** A1 is a capability
+claim about positions the shipped instrument cannot reach and says nothing about any count. A2
+locates the count disagreement in the shipped instrument, but computes what fits from the decode's
+own period, so a systematically short period would inflate both sides together. A3 bounds the rate
+physiologically against a published band far too wide to separate an 11 from a 14. A4 is monotone
+by construction and can only ever fail as an over-report.
+
+What would settle it is hand-counted repetitions on a modest sample — 30–50 recordings stratified
+across the decoded-minus-shipped difference, weighted toward the tails — and **that sample does not
+exist and was not collected.** A1–A4 are the whole of the acceptance test; they establish
+capability-where-blind, agreement-about-rate, timing-in-band and coverage-that-only-grows, and they
+must not be presented as standing in for A5.
 
 ### Explicitly not in the acceptance test
 
@@ -1041,11 +1177,16 @@ is what a later reader will want.
 - **The brief's per-recording drop count.** *"~1 stop dropped per repetition, 10 across 29 CV units"*
   was not reproduced; the corpus-level statement it corresponds to — shipped `consumed` at 0.69–0.75
   on the sequence families — is in `ddk-cycle-counting.md` and is consistent with it.
-- **Whether the decode's added repetitions are real.** A4 is monotone by construction and A2 bounds
-  the single-position families; nothing here bounds the three-position families, where the decode
-  adds the most. Only A5 would.
-- **`-v2-tuh` +4 and `-v2-puh` +4 against the shipped scan.** Unexplained. The v2 rows are timed
-  (`declared_duration_s: 5.0`) rather than counted, so there is no declaration to read it against.
+- **Whether the decode's added repetitions are real.** Still the open question, and the one A5
+  would settle. A2's measurement over all 7,989 recordings narrows it usefully — the extra
+  repetitions lie inside the shipped instrument's own hull, at a rate both instruments agree on,
+  and the shipped count is the one that does not track its own hull — but `fit` is computed at the
+  decoded period, so a systematically short period would inflate both sides together. Nothing here
+  rules that out.
+- **`-v2-tuh` against the shipped scan.** No longer unexplained: see *A2 → The `-v2-tuh` offset,
+  resolved*. The per-recording median offset over the full corpus is +3, it is not specific to
+  `-v2-tuh`, and it ranks with syllable density across all ten families. What remains open is the
+  previous bullet, which is about every family and not about this one.
 - **Whether `D` should be derived per recording or per corpus.** It is computed from each
   recording's own `seconds_per_frame`, which is 10.00 ms at the median and 10.26 ms at the maximum
   across 7,994 recordings — so `ceil(20 / spf)` is 2 everywhere on this corpus and the question has
