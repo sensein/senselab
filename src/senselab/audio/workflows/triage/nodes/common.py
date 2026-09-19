@@ -10,6 +10,7 @@ decision about the recording is made.
 from __future__ import annotations
 
 import platform
+import re
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -641,6 +642,14 @@ BRANCH_MEASURES: dict[str, tuple[str, ...]] = {
 UNLABELLED = "unlabelled"
 """What a span reading falls back to when the producer stamped none."""
 
+UNROLED = "unroled"
+"""What :func:`span_role_kind` falls back to for a span carrying no role."""
+
+ENVELOPE_SPAN_KIND = "envelope"
+"""What an envelope span is, as a reader who has never seen PREPROCESS's vocabulary needs it named."""
+
+_ROLE_INDEX = re.compile(r"_\d+$")
+
 
 def report_entities(store: ProvStore) -> dict[str, Entity]:
     """The latest live ``branch_report`` entity per node, keyed by node name.
@@ -708,8 +717,24 @@ def initial_span_label(span: Entity) -> str:
         proposer stamped, or :data:`UNLABELLED`.
     """
     if "peak_over_floor_db" in span.attributes:
-        return envelope_span_label(span)
+        reading = envelope_span_label(span)
+        return reading if reading == UNLABELLED else f"{ENVELOPE_SPAN_KIND} {reading}"
     family, role = span.attributes.get("family"), span.attributes.get("role")
     if family and role:
         return f"{family}/{role}"
     return str(family or span.attributes.get("name") or "") or UNLABELLED
+
+
+def span_role_kind(span: Entity) -> str:
+    """What kind of thing one proposed span is, with any per-instance index dropped.
+
+    Args:
+        span: A span a branch proposed.
+
+    Returns:
+        The role with a trailing ``_<number>`` removed, so the many spans one proposer mints per
+        realised unit collapse onto the one kind they all are, or :data:`UNROLED` when the span
+        carries no role.
+    """
+    role = str(span.attributes.get("role") or "")
+    return _ROLE_INDEX.sub("", role) or UNROLED

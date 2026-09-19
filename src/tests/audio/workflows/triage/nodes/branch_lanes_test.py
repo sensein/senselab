@@ -197,7 +197,7 @@ class TestTheLaneReadsWhatTheBranchesWrote:
         )
         [lane] = [lane for lane in branch_lanes(routed) if lane.branch == "AIRWAY"]
         [initial] = lane.initial
-        assert (initial.label, initial.short) == ("20 dB", "20 dB")
+        assert (initial.label, initial.short) == ("envelope 20 dB", "envelope 20 dB")
 
     def test_only_the_measures_the_report_carries_are_read(self, routed: ProvStore) -> None:
         """SPEECH's syllable keys are written only on an in-family align run; absent is not None."""
@@ -313,7 +313,7 @@ class TestTheSpanAxisIsOneAxis:
     def test_the_rows_are_the_initial_population_then_one_per_lane(self, routed: ProvStore) -> None:
         """The layout the owner asked for, read off the structure rather than the pixels."""
         lanes = branch_lanes(routed)
-        assert span_axis_rows(lanes) == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
+        assert [row.block for row in span_axis_rows(lanes)] == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
 
     def test_an_initial_span_shared_by_two_branches_is_one_bar(self, routed: ProvStore) -> None:
         """The case the four-lane layout could not show: one parent, proposals in two branches."""
@@ -418,7 +418,7 @@ class TestTheSpanAxisIsOneAxis:
         lanes = branch_lanes(routed)
         withheld = [lane for lane in lanes if lane.state == LANE_WITHHELD]
         assert withheld, "the fixture routes VOICE away, which is what this asserts about"
-        assert span_axis_rows(lanes) == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
+        assert [row.block for row in span_axis_rows(lanes)] == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
         assert all(lane_note(lane, 0) for lane in withheld)
 
 
@@ -488,7 +488,7 @@ class TestThePairingFollowsTheDerivationEdge:
             detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
         )
         [lane] = [lane for lane in branch_lanes(routed) if lane.branch == "AIRWAY"]
-        assert [row.label for row in lane.initial] == ["20 dB"]
+        assert [row.label for row in lane.initial] == ["envelope 20 dB"]
 
     def test_a_derivation_naming_something_that_is_not_a_span_draws_no_initial_row(self, routed: ProvStore) -> None:
         """A proposal derived from a measurement has no initial span, and inventing one would lie."""
