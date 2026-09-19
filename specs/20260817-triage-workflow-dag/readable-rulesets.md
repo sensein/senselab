@@ -275,3 +275,56 @@ the mechanism to run it now exists — `span_coverage` is in every features shar
 
 **What this changes on real recordings: nothing.** No gate reads the new keys, and no existing key
 changed value. The features shard gains one field.
+
+### 6.3 `RouteState.UNREADABLE`
+
+`evaluate_emptiness` has always distinguished three outcomes — `FIRED` (every named stream under
+the floor), `SILENT` (at least one at or over it) and `UNAVAILABLE` (a named stream's summary is not
+in the store). `evaluate_routes` tested only `is GateOutcome.FIRED`, so the third collapsed into the
+second and the recording was recorded `UNEXPLAINED`, which the enum's own docstring calls a charge
+against the ruleset. The ruleset was never shown anything to be charged for.
+
+The enum now carries a fourth member and the bypass is read once into a three-way branch. The three
+non-routed states are told apart on one axis, the bypass reading, with the branch gates silent in
+all three:
+
+| bypass | state | whose fault |
+| --- | --- | --- |
+| `FIRED` | `EMPTY` | the recording's — it carried nothing |
+| `SILENT` | `UNEXPLAINED` | the ruleset's — content no gate accounted for |
+| `UNAVAILABLE` | `UNREADABLE` | the run's — the evidence was never written |
+
+`ROUTE_STATES` is derived from the enum, so `tally_families` and `gate_matrix`'s family rows carry
+the fourth key without a change; what moved is the key set `FamilyTally.states` promises, and the
+tests asserting those keys were updated rather than loosened — `test_every_tally_carries_all_four_
+states_and_they_sum` still asserts the exact key list and the exact sum.
+
+**What this changes on real recordings.** A recording that used to be recorded `unexplained` because
+its `enhanced|yamnet` or `residual|yamnet` summary was missing is now recorded `unreadable`. The
+**triage axis does not move**: `fold_file_verdict` flags on the new state too, under
+`UNREADABLE_EMPTINESS` rather than `UNEXPLAINED_CONTENT`. What changes is which reason is recorded
+and which corpus column the recording lands in — and that is the point, because the `unexplained`
+count is read as the ruleset's error rate, and recordings whose evidence was never written were
+inflating it.
+
+Three test fixtures turned out to be in this class already: `routing_ruleset_test._features`
+carries `classifier_streams=["plain|yamnet"]` and neither bypass stream, so every record it builds
+with nothing routed was `UNEXPLAINED` under the old code purely because the bypass was unreadable.
+The tests that meant "unexplained" now build their records through `_classified`, which carries both
+streams; the ones that only incidentally asserted the state now assert `UNREADABLE`, which is what
+their fixture actually describes.
+
+### 6.4 `UNJUDGED`: a branch ROUTING never judged
+
+`fold_file_verdict` defaulted `routes[branch]` to `UNAVAILABLE` for any branch with no
+`branch_decision` entity. `UNAVAILABLE` is a value ROUTING writes, and it means something specific:
+ROUTING looked, and every gate of that branch was unreadable. "No decision was recorded at all" is a
+different fact, and a reader of `file_verdict.routes` could not tell the two apart.
+
+The defaulted case is now `UNJUDGED`, a fifth member of `BRANCH_ROUTE_STATES` and the only one that
+is never written by ROUTING — it is the fold's own reading of a decision that is absent.
+
+**What this changes on real recordings.** `file_verdict.routes` reports `unjudged` where it
+reported `unavailable`, for branches with no decision entity. `_agreement` resolves both to
+`resolved`, as it did before and for the same reason — neither made a claim to agree or disagree
+with — so no agreement row, no flag, no triage and no release outcome moves.
