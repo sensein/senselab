@@ -969,18 +969,6 @@ def _band(value: Any) -> tuple[float, float]:  # noqa: ANN401 — one config lea
     return float(lo), float(hi)
 
 
-def _bands(value: Any) -> dict[str, tuple[float, float]]:  # noqa: ANN401 — one config leaf
-    """A name-to-``[lo, hi]`` config mapping as a mapping of pairs.
-
-    Args:
-        value: The leaf.
-
-    Returns:
-        Each name's band.
-    """
-    return {str(name): _band(band) for name, band in value.items()}
-
-
 def _label_sets(value: Any) -> dict[str, tuple[str, ...]]:  # noqa: ANN401 — one config leaf
     """A label-set mapping as a mapping of tuples.
 
@@ -1021,15 +1009,11 @@ POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "rate_prominence_min": float,
     "train_min_s": float,
     "burst_window_ms": float,
-    "place_centroid_bands_hz": _bands,
-    "place_margin_db": float,
     "effort_split_hz": float,
     "gap_off_task_min_s": float,
     "label_sets": _label_sets,
-    "ddk_interval_tolerance": float,
-    "ddk_min_repetitions": int,
-    "ddk_stop_places": _label_sets,
-    "ddk_nucleus_classes": _label_sets,
+    "phoneme_place_classes": _label_sets,
+    "phoneme_vowel_classes": _label_sets,
 }
 """Every ``branch.*`` key, and the type its value is read as. The one declaration of both.
 
@@ -1170,15 +1154,11 @@ PARAM_KEYS = (
     "rate_prominence_min",
     "train_min_s",
     "burst_window_ms",
-    "place_margin_db",
     "effort_split_hz",
     "gap_off_task_min_s",
-    "place_centroid_bands_hz",
     "label_sets",
-    "ddk_interval_tolerance",
-    "ddk_min_repetitions",
-    "ddk_stop_places",
-    "ddk_nucleus_classes",
+    "phoneme_place_classes",
+    "phoneme_vowel_classes",
 )
 """Every key the ``branch`` config section holds, in the order the section declares them.
 

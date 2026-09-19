@@ -4,11 +4,11 @@ Not a branch. :func:`align_speech` serves the ten ``SYLLABLE_REPETITION`` famili
 :func:`align_ddk`, which evaluates one of them against what its instruction asked for, and every
 measurement below is a SPEECH measurement taken by this module's instruments.
 
-The design is ``specs/20260817-triage-workflow-dag/branch-ddk.md`` (D1–D6); the ported bodies are
-``expected-patterns.md``; what porting decided, and the two places this module departs from either,
-is ``specs/20260817-triage-workflow-dag/branch-ddk-implementation.md``; why the branch became this
-module is ``ddk-dissolved-into-speech.md``; why sequence conformance counts repeats rather than
-scoring positions is ``ddk-cycle-counting.md``.
+The design is ``specs/20260817-triage-workflow-dag/branch-ddk.md`` (D1-D6); the ported bodies are
+``expected-patterns.md``; what porting decided is ``branch-ddk-implementation.md``; why the branch
+became this module is ``ddk-dissolved-into-speech.md``. The posteriorgram instrument is a cyclic
+decode of the token's phoneme sequence and its design, its parameters and the owner's decisions on
+it are ``ddk-template-decode.md``.
 """
 
 from __future__ import annotations
@@ -29,25 +29,19 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Pattern,
     Proposal,
     Result,
-    SpectrogramBlock,
-    Syllable,
     acquisition_covariates,
     amplitude_spans,
-    band_power,
     branch_params,
     count,
     declared_duration_count,
     derivative_arrays,
     deviation,
     duration,
-    events_in_span,
-    hull,
     measured,
     mode_of,
     overlaps,
     propose_spans,
     read_envelope_track,
-    read_spectrogram_block,
     speech_span,
     stream_extent,
     stream_ids,
@@ -63,74 +57,71 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.utils.prov_store import Entity, ProvStore
 
 RATE = "ddk_syllable_rate_from_envelope_modulation_hz"
-"""The one rate measurement, named for the instrument that took it."""
+"""The envelope modulation channel's rate, named for the instrument that took it.
+
+It reads periodicity without segmenting anything, which is why it survived the peak walk it used to
+share a carrier with."""
 
 ENVELOPE = "energy_envelope"
-WIDEBAND = "spectrogram_wideband"
 PPG = "ppg_posteriorgram"
 
-PPG_RATE = "ddk_syllable_rate_from_ppg_cv_onsets_hz"
+PPG_RATE = "ddk_syllable_rate_from_ppg_decode_hz"
 """The second rate measurement, named for the instrument that took it. Not a substitute for
-:data:`RATE`: the two read different signals and are reported side by side."""
+:data:`RATE`: the two read different signals -- phonetic identity and amplitude -- and are reported
+side by side."""
 
-PPG_UNITS = "ddk_cv_unit_count"
-PPG_DISPERSION = "ddk_ppg_interval_dispersion"
-PPG_CYCLE_RATE = "ddk_cycle_rate_from_ppg_places_hz"
-"""How fast the declared cycle repeated, counted over the CV places rather than scored per position.
-For a one-position template a cycle is a syllable, so this and :data:`PPG_RATE` measure one thing."""
+PPG_REPETITIONS = "ddk_repetition_count_from_ppg_decode"
+"""How many repetitions of the declared template the decode completed.
 
-PPG_CYCLE_NUCLEUS = "ddk_cycle_nucleus_fraction"
-PPG_PLACE_AGREEMENT = "ddk_place_agreement_ppg_vs_burst"
+Zero is a reading and not an absence: the value is 0 and the per-position mass sits beside it."""
+
+PPG_MASS = "ddk_position_realised_mass"
+"""How much of the posterior the expected class held where the decode placed each position.
+
+The primary sequence-realisation measurement. Defined at every position the decode reached, it
+degrades continuously, and it is honestly ambiguous between produced differently and read poorly."""
+
+PPG_DISPERSION = "ddk_ppg_period_dispersion"
 
 INSTRUMENT_READING = "ddk_cv_instrument_reading"
-"""The CV instrument's own reading of what was produced over the extent it covers.
+"""The posteriorgram instrument's own reading of what was produced over the extent it covers.
 
-Its value is the realised place series, one entry per CV unit. Written beside the consensus
-transcript, never in place of it; ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md``
-holds why the recogniser text is neither replaced nor withheld."""
+Its value is the per-position realised mass of each completed repetition. Written beside the
+consensus transcript, never in place of it; ``ddk-instrument-over-asr.md`` holds why the recogniser
+text is neither replaced nor withheld."""
 
 TRANSCRIPT_CLAIM = "lexical_transcript"
 """What a contradicted consensus word claims, and what the contest is against."""
 
 CONTRADICTED = "instrument_contradicted"
-"""Why that claim is contested: the CV instrument covers the word's extent and read syllables."""
+"""Why that claim is contested: the instrument covers the word's extent and read repetitions."""
 
 CV_AUTHORITY = "cv_instrument"
 """Which instrument is authoritative over the contested extent, on a declared syllable task."""
 
-UNRESOLVED = "unresolved"
-"""The place a burst spectrum did not separate, or the nucleus class no declared class holds, which
-is not a substitution."""
-
 SYLLABLES_PER_S = "syllables_per_s"
 CYCLES_PER_S = "cycles_per_s"
 CYCLES_OR_SYLLABLES_PER_S = "cycles_or_syllables_per_s"
-"""A sequential train modulates at the cycle rate as well as the syllable rate; the peak is one of
-the two and the harmonic-equality tolerance that would separate them is unmeasured, so the unit is
-carried as ambiguous rather than resolved by assumption."""
+"""A sequential train modulates at the cycle rate as well as the syllable rate; the envelope peak is
+one of the two and the harmonic-equality tolerance that would separate them is unmeasured, so the
+unit is carried as ambiguous. The decode's own two rates travel beside it, so which one the peak
+matched is checkable per recording."""
 
 TASK_EXTENT = "task_extent"
 """The role that says where the declared task was performed. Exactly one may survive a recording."""
 
-TASK_FROM_PPG = "syllable_task_from_ppg"
-"""The extent is the CV instrument's hull; the envelope instrument read no carrier."""
+TASK_FROM_DECODE = "syllable_task_from_decode"
+"""The extent is the decoded repetition span: first repetition's start to last repetition's end."""
 
 TASK_FROM_ENVELOPE = "syllable_train"
-"""The extent is the envelope instrument's; the CV instrument had no readable reading. One place."""
+"""The fallback extent, where the decode had no reading: the carrier span's own extent. One place."""
 
 TASK_FROM_ENVELOPE_SEQUENCE = "syllable_sequence"
-"""The same, where the declared template cycles through more than one place."""
+"""The same, where the declared template repeats more than one syllable."""
 
-TASK_FROM_BOTH = "syllable_task_from_both"
-"""The extent is the hull of both instruments' readings, because both read the task."""
-
-NO_TRAIN = "no syllable train was found"
+NO_REPETITIONS = "the decode completed no repetition of the declared template"
 NO_ENVELOPE = "the energy envelope is absent; the syllable train's only rate instrument could not be read"
 NO_PPG = "the phonetic posteriorgram is absent; the CV instrument could not be read"
-PPG_PLACE_NOT_AUTHORITY = (
-    "the posteriorgram's place per onset is a reported reading, not the place decision; nothing has "
-    "measured its agreement with the burst spectrum on rapid nonsense syllables"
-)
 
 
 # --------------------------------------------------------------------- what the two modes read
@@ -148,41 +139,14 @@ class DdkReads:
     Attributes:
         envelope: The energy envelope and its global floor, or None when the derivative is absent.
         envelope_id: That measurement's entity id, for the derivation.
-        wideband: The wideband spectrogram, or None when it or the working rate is absent.
-        wideband_id: That measurement's entity id.
         ppg: The phonetic posteriorgram, or None when the derivative is absent.
-        ppg_id: That measurement's entity id, for the derivation of everything the CV walk reads.
+        ppg_id: That measurement's entity id, for the derivation of everything the decode reads.
     """
 
     envelope: EnvelopeTrack | None = None
     envelope_id: str | None = None
-    wideband: SpectrogramBlock | None = None
-    wideband_id: str | None = None
     ppg: Posteriorgram | None = None
     ppg_id: str | None = None
-
-
-def working_rate(store: ProvStore, source: str) -> float | None:
-    """The rate the spectrogram's hop and bin centres are in, which the derivative does not record.
-
-    Args:
-        store: The provenance store.
-        source: The stream the derivatives were taken over.
-
-    Returns:
-        The rate in Hz from that stream entity, or from the envelope measurement, which PREPROCESS
-        writes at the same resampled rate; None when neither carrier is in the store.
-    """
-    streams = [
-        entity
-        for entity in live_entities(store, "stream")
-        if entity.attributes.get("name") == source and entity.attributes.get("sampling_rate")
-    ]
-    if streams:
-        return float(streams[-1].attributes["sampling_rate"])
-    envelope = find_measurement(store, ENVELOPE)
-    rate = None if envelope is None else envelope.attributes.get("sampling_rate")
-    return None if rate is None else float(rate)
 
 
 def read_ddk(store: ProvStore, run_dir: Path, source: str) -> DdkReads:
@@ -197,17 +161,13 @@ def read_ddk(store: ProvStore, run_dir: Path, source: str) -> DdkReads:
         The reads. A derivative that never reached the store, or whose sidecar is gone, is None
         rather than an error: an absent instrument is an absence, never a negative reading.
     """
+    del source
     envelope = find_measurement(store, ENVELOPE)
-    wideband = find_measurement(store, WIDEBAND)
     posteriorgram = find_measurement(store, PPG)
-    rate = working_rate(store, source)
-    block = None if rate is None else read_spectrogram_block(store, run_dir, WIDEBAND, rate)
     frames = read_posteriorgram(store, run_dir)
     return DdkReads(
         envelope=read_envelope_track(store, run_dir),
         envelope_id=None if envelope is None else envelope.id,
-        wideband=block,
-        wideband_id=None if block is None or wideband is None else wideband.id,
         ppg=frames,
         ppg_id=None if frames is None or posteriorgram is None else posteriorgram.id,
     )
@@ -238,7 +198,7 @@ def _evidence(*ids: str | None) -> tuple[str, ...]:
     return tuple(entity_id for entity_id in ids if entity_id is not None)
 
 
-# --------------------------------------------------------------------- the instruments
+# --------------------------------------------------------------------- the envelope instrument
 
 
 def ddk_carrier(store: ProvStore, params: BranchParams, envelope: EnvelopeTrack) -> tuple[Entity | None, float | None]:
@@ -271,63 +231,11 @@ def ddk_carrier(store: ProvStore, params: BranchParams, envelope: EnvelopeTrack)
     return best, best_rate
 
 
-def ddk_places(
-    onsets: Sequence[tuple[float, float]], params: BranchParams, wideband: SpectrogramBlock | None
-) -> list[str]:
-    """D6. Each syllable's place of articulation, from the burst spectrum at its onset.
-
-    Args:
-        onsets: The syllable extents, in order.
-        params: The operating points.
-        wideband: The wideband spectrogram, or None when it is absent.
-
-    Returns:
-        One place per onset, or :data:`UNRESOLVED` where the leading band did not beat the next by
-        the declared margin — and for every onset when the spectrogram is absent, which reads the
-        keys not at all, or when one of the three keys is unmeasured.
-    """
-    if wideband is None:
-        return [UNRESOLVED] * len(onsets)
-    places: list[str] = []
-    burst_ms = params.point("burst_window_ms")
-    bands = params.point("place_centroid_bands_hz")
-    margin = params.point("place_margin_db")
-    if burst_ms is None or bands is None or margin is None:
-        # The same reading an absent spectrogram gets: the place could not be resolved. A branch
-        # does not refuse over an unmeasured point, and the ask is recorded in `params.missing`.
-        return [UNRESOLVED] * len(onsets)
-    window_s = burst_ms / 1000.0
-    for start, _ in onsets:
-        burst = (start, start + window_s)
-        energies = {place: band_power(wideband, burst, lo, hi) for place, (lo, hi) in bands.items()}
-        finite = {place: value for place, value in energies.items() if np.isfinite(value) and value > 0.0}
-        if len(finite) < 2:
-            places.append(UNRESOLVED)
-            continue
-        ranked = sorted(finite.items(), key=lambda item: item[1], reverse=True)
-        margin_db = 10.0 * float(np.log10(ranked[0][1] / ranked[1][1]))
-        places.append(ranked[0][0] if margin_db >= margin else UNRESOLVED)
-    return places
-
-
-def intervals_of(onsets: Sequence[tuple[float, float]]) -> list[float]:
-    """The inter-onset intervals of a train, in seconds.
-
-    Args:
-        onsets: The syllable extents, in order.
-
-    Returns:
-        One interval per consecutive pair.
-    """
-    starts = [start for start, _ in onsets]
-    return [float(second - first) for first, second in zip(starts, starts[1:])]
-
-
 def dispersion(intervals: Sequence[float]) -> float | None:
     """D3. The coefficient of variation of an interval sequence.
 
     Args:
-        intervals: The inter-onset intervals.
+        intervals: The inter-repetition periods.
 
     Returns:
         The sample standard deviation over the mean, or None when the sequence is shorter than the
@@ -343,13 +251,10 @@ def dispersion(intervals: Sequence[float]) -> float | None:
 
 
 def trend(intervals: Sequence[float]) -> float | None:
-    """D3. How the interval changes across the train: seconds per syllable step.
-
-    Negative is festination and positive is slowing; no threshold names either, because naming one
-    would be an operating point nobody has measured.
+    """D3. How the interval changes across the train: seconds per repetition step.
 
     Args:
-        intervals: The inter-onset intervals.
+        intervals: The inter-repetition periods.
 
     Returns:
         The least-squares slope, or None when the sequence is shorter than the two points a slope is
@@ -361,127 +266,172 @@ def trend(intervals: Sequence[float]) -> float | None:
     return float(np.polyfit(np.arange(values.size, dtype=float), values, 1)[0])
 
 
-def dispersion_by_position(intervals: Sequence[float], cycle: int) -> dict[str, float | None]:
-    """D3. One dispersion per position in the cycle, for a sequential train.
-
-    In ``/pa-ta-ka/`` the envelope onset lands differently relative to the release for each place,
-    so the within-cycle intervals are unequal by measurement convention and a pooled dispersion has
-    a floor set by syllable identity rather than by motor control.
-
-    Args:
-        intervals: The inter-onset intervals.
-        cycle: How many syllables one cycle holds.
-
-    Returns:
-        ``{position: dispersion}``, empty when the cycle is not positive.
-    """
-    if cycle <= 0:
-        return {}
-    return {str(position): dispersion(intervals[position::cycle]) for position in range(cycle)}
+# --------------------------------------------------------------------- the posteriorgram decode
 
 
-# --------------------------------------------------------------------- the posteriorgram instrument
-
-
-CONSONANT = "C"
-VOWEL = "V"
-OTHER = "O"
-"""The three classes a frame's argmax phoneme falls into for the CV walk."""
+OTHER_CLASS = "other"
+"""The part of the partition holding every phoneme no template position names, silence included."""
 
 
 @dataclass(frozen=True)
 class Posteriorgram:
-    """The stored phonetic posteriorgram, as the CV walk reads it.
+    """The stored phonetic posteriorgram, as the template decode reads it.
 
     Attributes:
         frames: The posteriorgram, ``(frame, phoneme)``.
         phonemes: The phoneme axis's labels, in the array's own order.
         seconds_per_frame: The frame period, in seconds.
+        dtype: The dtype the sidecar recorded the array under.
     """
 
     frames: np.ndarray
     phonemes: tuple[str, ...]
     seconds_per_frame: float
-
-
-@dataclass(frozen=True)
-class PhonemeRun:
-    """One maximal stretch of frames sharing an argmax phoneme.
-
-    Attributes:
-        label: The phoneme.
-        start_s: Where the run starts, in seconds.
-        end_s: Where it ends, in seconds.
-    """
-
-    label: str
-    start_s: float
-    end_s: float
-
-
-@dataclass(frozen=True)
-class CvUnit:
-    """One consonant run followed by a vowel run: the syllable the walk counts.
-
-    Attributes:
-        consonant: The stop the unit opens on.
-        vowel: The nucleus it resolves to.
-        start_s: The consonant run's start, which is the unit's onset.
-        end_s: The vowel run's end.
-    """
-
-    consonant: str
-    vowel: str
-    start_s: float
-    end_s: float
+    dtype: str = "float16"
 
     @property
-    def extent(self) -> tuple[float, float]:
-        """The unit's extent, in the ``(start, end)`` form every other instrument here carries."""
-        return (self.start_s, self.end_s)
+    def emission_floor(self) -> float:
+        """The smallest value the recorded data distinguishes from zero."""
+        try:
+            return float(np.finfo(np.dtype(self.dtype)).smallest_subnormal)
+        except TypeError:
+            return float(np.finfo(np.float16).smallest_subnormal)
 
 
 @dataclass(frozen=True)
-class SyllableTrain:
-    """A contiguous stretch of CV onsets whose intervals stayed regular.
+class Visit:
+    """One unbroken stay at one template position.
 
     Attributes:
-        units: The units it spans, in order.
-        repetitions: How many onsets it holds.
-        period_s: The median inter-onset interval.
-        rate_hz: One over that period.
-        jitter: The population standard deviation of the intervals over their median.
+        position: Which template position, by index.
+        first: The first frame charged to it.
+        last: The last frame charged to it.
     """
 
-    units: tuple[CvUnit, ...]
-    repetitions: int
-    period_s: float
-    rate_hz: float
-    jitter: float
+    position: int
+    first: int
+    last: int
+
+
+@dataclass(frozen=True)
+class Decode:
+    """What the cyclic decode read off one posteriorgram against one template.
+
+    Attributes:
+        template: The template's phonemes, in order.
+        classes: The equivalence class each position scores the summed mass of, in the same order.
+        repetitions: One ``(first frame, last frame)`` per completed repetition, in time order.
+        realised_mass: The mean class mass over the frames charged to each position, one per
+            position, or None for a position no completed repetition reached.
+        occupancy: How many frames each position held across every completed repetition.
+        filler_frames: How many frames the decode charged to a filler state.
+        frames: How many frames were decoded.
+        seconds_per_frame: The frame period, for turning any of the above into seconds.
+        score_per_frame: The path's total log-likelihood over the frame count.
+        per_repetition_mass: The per-position realised mass of each completed repetition, in time
+            order, one inner tuple per repetition.
+        vowel_classes: Which of the class names are vowel classes, so a syllable can be counted
+            without the decode reaching back into the configuration it was built from.
+        readable: Whether the decode could run at all; False when a class vocabulary is unmeasured.
+    """
+
+    template: tuple[str, ...] = ()
+    classes: tuple[str, ...] = ()
+    repetitions: tuple[tuple[int, int], ...] = ()
+    realised_mass: tuple[float | None, ...] = ()
+    occupancy: tuple[int, ...] = ()
+    filler_frames: int = 0
+    frames: int = 0
+    seconds_per_frame: float = 0.0
+    score_per_frame: float | None = None
+    per_repetition_mass: tuple[tuple[float | None, ...], ...] = ()
+    vowel_classes: tuple[str, ...] = ()
+    readable: bool = True
 
     @property
-    def extent(self) -> tuple[float, float]:
-        """The train's extent: its first onset to its last unit's end."""
-        return (self.units[0].start_s, self.units[-1].end_s)
+    def count(self) -> int:
+        """How many repetitions completed."""
+        return len(self.repetitions)
+
+    @property
+    def extent(self) -> tuple[float, float] | None:
+        """The first completed repetition's start to the last one's end, in seconds.
+
+        A boundary and not a mask: every filler frame between the first and last repetition lies
+        inside it. None when no repetition completed.
+        """
+        if not self.repetitions:
+            return None
+        start = self.repetitions[0][0] * self.seconds_per_frame
+        end = (self.repetitions[-1][1] + 1) * self.seconds_per_frame
+        return (start, end) if end > start else None
+
+    @property
+    def starts_s(self) -> list[float]:
+        """Where each completed repetition started, in seconds."""
+        return [round(first * self.seconds_per_frame, 3) for first, _ in self.repetitions]
+
+    @property
+    def periods_s(self) -> list[float]:
+        """The elapsed time between the starts of consecutive repetitions, in seconds."""
+        starts = [first * self.seconds_per_frame for first, _ in self.repetitions]
+        return [round(second - first, 4) for first, second in zip(starts, starts[1:])]
+
+    @property
+    def period_s(self) -> float | None:
+        """The median period, or None when fewer than two repetitions completed."""
+        periods = self.periods_s
+        if not periods:
+            return None
+        median = float(np.median(periods))
+        return round(median, 4) if median > 0.0 else None
+
+    @property
+    def filler_fraction(self) -> float | None:
+        """The share of decoded frames no template position held, or None over no frames."""
+        if self.frames <= 0:
+            return None
+        return round(self.filler_frames / self.frames, 3)
+
+    @property
+    def vowel_positions(self) -> int:
+        """How many of the template's positions are a vowel, which is its syllable count."""
+        return sum(1 for name in self.classes if name in set(self.vowel_classes))
+
+    @property
+    def syllables(self) -> int:
+        """How many syllables the completed repetitions hold, the unit a declared count is in."""
+        return self.count * self.vowel_positions
+
+    @property
+    def rate_hz(self) -> float | None:
+        """Syllables per second over the median period, or None when no period is defined."""
+        period = self.period_s
+        if period is None or not self.vowel_positions:
+            return None
+        return round(self.vowel_positions / period, 3)
+
+    @property
+    def cycle_rate_hz(self) -> float | None:
+        """Repetitions per second over the median period, or None when no period is defined."""
+        period = self.period_s
+        return None if period is None else round(1.0 / period, 3)
+
+    @property
+    def occupancy_s(self) -> list[float | None]:
+        """How long each position was held in total, in seconds."""
+        return [round(frames * self.seconds_per_frame, 3) for frames in self.occupancy]
 
 
-@dataclass(frozen=True)
-class PpgReading:
-    """What the CV walk read off one posteriorgram.
+NO_DECODE = Decode()
+"""The decode of a recording nothing was decoded over: no template declared."""
 
-    Attributes:
-        units: Every CV unit the walk found, in order.
-        train: The train with the most repetitions, or None when none reached the minimum.
-        readable: Whether the walk could run at all; False when a point it needs is unmeasured.
-    """
-
-    units: tuple[CvUnit, ...]
-    train: SyllableTrain | None
-    readable: bool
+UNREADABLE = Decode(readable=False)
+"""The decode that could not run: a class vocabulary is unmeasured and ``params.missing`` names it."""
 
 
 def read_posteriorgram(store: ProvStore, run_dir: Path) -> Posteriorgram | None:
-    """The stored posteriorgram, its phoneme axis and its frame period.
+    """The stored posteriorgram, its phoneme axis, its frame period and its recorded dtype.
 
     Args:
         store: The provenance store.
@@ -500,7 +450,12 @@ def read_posteriorgram(store: ProvStore, run_dir: Path) -> Posteriorgram | None:
     period = _frame_period(arrays.get("seconds_per_frame"), measurement.attributes.get("seconds_per_frame"))
     if period is None or frames.ndim != 2 or frames.shape[0] == 0 or frames.shape[1] != len(labels):
         return None
-    return Posteriorgram(frames=frames, phonemes=labels, seconds_per_frame=period)
+    return Posteriorgram(
+        frames=frames,
+        phonemes=labels,
+        seconds_per_frame=period,
+        dtype=str(measurement.attributes.get("dtype") or "float16"),
+    )
 
 
 def _frame_period(stored: Any, declared: Any) -> float | None:  # noqa: ANN401 — two carriers of one scalar
@@ -522,526 +477,244 @@ def _frame_period(stored: Any, declared: Any) -> float | None:  # noqa: ANN401 �
     return None
 
 
-def phoneme_runs(ppg: Posteriorgram) -> list[PhonemeRun]:
-    """The argmax raster collapsed into maximal runs of one phoneme.
+def phoneme_classes(*mappings: dict[str, tuple[str, ...]]) -> dict[str, str]:
+    """The class vocabularies as one phoneme-to-class lookup.
 
     Args:
-        ppg: The posteriorgram.
+        *mappings: ``branch.phoneme_place_classes`` and ``branch.phoneme_vowel_classes``.
 
     Returns:
-        One run per stretch of consecutive frames sharing an argmax phoneme, in time order. Adjacent
-        runs carry different labels by construction, which is why the CV walk needs no lookahead.
-    """
-    indices = np.asarray(np.argmax(ppg.frames, axis=1), dtype=int)
-    if indices.size == 0:
-        return []
-    edges = [0, *(int(index) for index in np.flatnonzero(indices[1:] != indices[:-1]) + 1), int(indices.size)]
-    period = ppg.seconds_per_frame
-    return [
-        PhonemeRun(label=ppg.phonemes[int(indices[first])], start_s=first * period, end_s=last * period)
-        for first, last in zip(edges, edges[1:])
-    ]
-
-
-def stop_phonemes(stop_places: dict[str, tuple[str, ...]]) -> dict[str, str]:
-    """The stop set as one phoneme-to-place lookup.
-
-    Args:
-        stop_places: ``branch.ddk_stop_places``: each place and the phonemes that are it.
-
-    Returns:
-        Each stop phoneme mapped to its place. The stop set the walk reads is this mapping's keys,
-        so the set and the place vocabulary are one declaration and cannot drift apart.
-    """
-    return {phoneme: place for place, phonemes in stop_places.items() for phoneme in phonemes}
-
-
-def nucleus_classes(classes: dict[str, tuple[str, ...]]) -> dict[str, str]:
-    """The nucleus vocabulary as one phoneme-to-class lookup.
-
-    Args:
-        classes: ``branch.ddk_nucleus_classes``: each class and the phonemes that are it.
-
-    Returns:
-        Each nucleus phoneme mapped to its class. A phoneme two classes both name resolves to the
-        first in declaration order.
+        Each phoneme mapped to its class. A phoneme two classes both name resolves to the first in
+        declaration order, mappings in the order given.
     """
     lookup: dict[str, str] = {}
-    for name, phonemes in classes.items():
-        for phoneme in phonemes:
-            lookup.setdefault(phoneme, name)
+    for mapping in mappings:
+        for name, phonemes in mapping.items():
+            for phoneme in phonemes:
+                lookup.setdefault(phoneme, name)
     return lookup
 
 
-def admitted_nuclei(classes: dict[str, tuple[str, ...]], template: Sequence[Syllable] | None) -> tuple[str, ...]:
-    """The nuclei the CV walk admits: the union of the classes the declared template names.
+def min_phone_frames(seconds_per_frame: float, burst_window_ms: float) -> int:
+    """``D``: how many frames one template position's state chain is.
 
     Args:
-        classes: ``branch.ddk_nucleus_classes``.
-        template: The declared syllable template, or None when no row declares one.
+        seconds_per_frame: The posteriorgram's own frame period.
+        burst_window_ms: ``branch.burst_window_ms``.
 
     Returns:
-        Every phoneme of every class the template names, in the vocabulary's declaration order.
-        Every class when the template is None, which is the widest the vocabulary allows.
+        How many frames the burst window spans, at least one. Derived at read time from the stored
+        frame period, so it is not a configuration point of its own.
     """
-    named = {position.nucleus for position in template} if template else set(classes)
-    return tuple(phoneme for name, phonemes in classes.items() if name in named for phoneme in phonemes)
+    if seconds_per_frame <= 0.0:
+        return 1
+    return max(1, int(np.ceil(burst_window_ms / (1000.0 * seconds_per_frame))))
 
 
-def phoneme_class(label: str, places: dict[str, str], nuclei: Sequence[str]) -> str:
-    """Which of the three classes one phoneme falls into.
+def class_masses(ppg: Posteriorgram, classes: Sequence[str], lookup: dict[str, str]) -> np.ndarray:
+    """The posterior mass each named class holds per frame, and what is left over.
 
     Args:
-        label: The phoneme.
-        places: The stop-to-place lookup :func:`stop_phonemes` built.
-        nuclei: The nuclei the declared template admits, from :func:`admitted_nuclei`.
+        ppg: The posteriorgram.
+        classes: The distinct class names the template's positions belong to, in a fixed order.
+        lookup: Each phoneme's class, from :func:`phoneme_classes`.
 
     Returns:
-        :data:`CONSONANT`, :data:`VOWEL` or :data:`OTHER`.
+        ``(frame, len(classes) + 1)``, the last column being the mass outside every named class.
     """
-    if label in places:
-        return CONSONANT
-    return VOWEL if label in nuclei else OTHER
+    named = list(classes)
+    indicator = np.zeros((len(ppg.phonemes), len(named) + 1), dtype=float)
+    index = {name: position for position, name in enumerate(named)}
+    for column, phoneme in enumerate(ppg.phonemes):
+        indicator[column, index.get(lookup.get(phoneme, OTHER_CLASS), len(named))] = 1.0
+    return np.asarray(ppg.frames @ indicator, dtype=float)
 
 
-def cv_units(runs: Sequence[PhonemeRun], places: dict[str, str], nuclei: Sequence[str]) -> list[CvUnit]:
-    """The consonant-vowel syllables in a run sequence.
-
-    Each consonant run is scanned forward: the first vowel run closes a unit whose onset is the
-    consonant run's own start, and the first further consonant run ends the scan with nothing
-    emitted. Runs alternate by construction, so the scan carries no window and no lookahead point.
+def arcs(positions: int, chain: int) -> tuple[np.ndarray, np.ndarray]:
+    """The decode's topology as a padded predecessor table.
 
     Args:
-        runs: The phoneme runs, in time order.
-        places: The stop-to-place lookup.
-        nuclei: The nuclei the declared template admits, from :func:`admitted_nuclei`.
+        positions: How many template positions, ``N``.
+        chain: How many sub-states one position is, ``D``.
 
     Returns:
-        The units, in onset order. Empty on material that holds no stops. A consonant with no
-        following nucleus — a coda, such as the ``p`` of ``buttercup`` — closes no unit and is
-        therefore counted as none.
+        ``(predecessors, valid)``, both ``(states, width)``. Row ``s`` holds the states an arc runs
+        from into ``s``, padded, with ``valid`` False where the entry is padding.
     """
-    classes = [phoneme_class(run.label, places, nuclei) for run in runs]
-    units: list[CvUnit] = []
-    for index, run in enumerate(runs):
-        if classes[index] != CONSONANT:
+    states = positions * (chain + 1)
+
+    def sub(position: int, step: int) -> int:
+        return position * chain + step
+
+    def filler(position: int) -> int:
+        return positions * chain + position
+
+    preds: list[list[int]] = [[] for _ in range(states)]
+    for position in range(positions):
+        previous = (position - 1) % positions
+        preds[sub(position, 0)].extend([sub(previous, chain - 1), filler(previous)])
+        for step in range(1, chain):
+            preds[sub(position, step)].append(sub(position, step - 1))
+        preds[sub(position, chain - 1)].append(sub(position, chain - 1))
+        preds[filler(position)].extend([sub(position, chain - 1), filler(position)])
+    width = max(len(entry) for entry in preds)
+    table = np.zeros((states, width), dtype=int)
+    valid = np.zeros((states, width), dtype=bool)
+    for state, entry in enumerate(preds):
+        table[state, : len(entry)] = entry
+        valid[state, : len(entry)] = True
+    return table, valid
+
+
+def viterbi(emissions: np.ndarray, positions: int, chain: int) -> np.ndarray:
+    """The best legal path through the cyclic topology, as one state per frame.
+
+    Args:
+        emissions: ``(frame, state)`` log-likelihoods.
+        positions: How many template positions.
+        chain: How many sub-states one position is.
+
+    Returns:
+        The state index per frame. The path may start and end in any state, so a recording that
+        begins mid-performance is decodable and a trailing partial repetition is simply not one.
+    """
+    table, valid = arcs(positions, chain)
+    total, states = emissions.shape
+    rows = np.arange(states)
+    score = emissions[0].copy()
+    back = np.zeros((total, states), dtype=int)
+    for frame in range(1, total):
+        candidates = np.where(valid, score[table], -np.inf)
+        best = candidates.argmax(axis=1)
+        back[frame] = table[rows, best]
+        score = candidates[rows, best] + emissions[frame]
+    path = np.zeros(total, dtype=int)
+    path[-1] = int(score.argmax())
+    for frame in range(total - 1, 0, -1):
+        path[frame - 1] = back[frame, path[frame]]
+    return path
+
+
+def visits(path: np.ndarray, positions: int, chain: int) -> list[Visit]:
+    """The path's unbroken stays at template positions, in time order.
+
+    Args:
+        path: The state per frame.
+        positions: How many template positions.
+        chain: How many sub-states one position is.
+
+    Returns:
+        One :class:`Visit` per stay. A frame in a filler state closes the stay it follows and opens
+        none of its own.
+    """
+    found: list[Visit] = []
+    for frame, state in enumerate(int(value) for value in path):
+        if state >= positions * chain:
             continue
-        for ahead in range(index + 1, len(runs)):
-            if classes[ahead] == VOWEL:
-                units.append(
-                    CvUnit(consonant=run.label, vowel=runs[ahead].label, start_s=run.start_s, end_s=runs[ahead].end_s)
-                )
-                break
-            if classes[ahead] == CONSONANT:
-                break
-    return units
+        position = state // chain
+        if found and found[-1].position == position and found[-1].last == frame - 1:
+            found[-1] = Visit(position, found[-1].first, frame)
+        else:
+            found.append(Visit(position, frame, frame))
+    return found
 
 
-def syllable_trains(units: Sequence[CvUnit], tolerance: float, min_repetitions: int) -> list[SyllableTrain]:
-    """Every maximal contiguous stretch of CV onsets whose intervals stayed regular.
+def repetitions_of(found: Sequence[Visit], positions: int) -> list[tuple[Visit, ...]]:
+    """The completed repetitions among a visit sequence.
 
     Args:
-        units: The CV units, in onset order.
-        tolerance: The factor an interval may differ from its stretch's running median by.
-        min_repetitions: The onsets a stretch needs before it is reported as a train.
+        found: The visits, in time order.
+        positions: How many template positions one repetition holds.
 
     Returns:
-        The trains, in time order. The stretches do not overlap: the interval that ended one is
-        where the next is tried from.
+        One tuple of visits per repetition that ran position 0 through position ``N-1`` in order. A
+        leading partial repetition and a trailing one are each simply not completed.
     """
-    intervals = np.asarray(intervals_of([unit.extent for unit in units]), dtype=float)
-    trains: list[SyllableTrain] = []
-    first = 0
-    while first < intervals.size:
-        reach, last = first, first + 1
-        while last <= intervals.size:
-            segment = intervals[first:last]
-            median = float(np.median(segment))
-            if median <= 0.0 or float(segment.max()) > median * tolerance or float(segment.min()) < median / tolerance:
-                break
-            reach, last = last, last + 1
-        if reach == first:
-            first += 1
-            continue
-        segment = intervals[first:reach]
-        median = float(np.median(segment))
-        if reach - first + 1 >= min_repetitions:
-            trains.append(
-                SyllableTrain(
-                    units=tuple(units[first : reach + 1]),
-                    repetitions=reach - first + 1,
-                    period_s=median,
-                    rate_hz=1.0 / median,
-                    jitter=float(np.std(segment) / median),
-                )
-            )
-        first = reach
-    return trains
+    complete: list[tuple[Visit, ...]] = []
+    open_run: list[Visit] = []
+    for visit in found:
+        if visit.position == 0:
+            open_run = [visit]
+        elif open_run and visit.position == open_run[-1].position + 1:
+            open_run.append(visit)
+        else:
+            open_run = []
+        if len(open_run) == positions:
+            complete.append(tuple(open_run))
+            open_run = []
+    return complete
 
 
-def ppg_reading(
-    ppg: Posteriorgram | None, params: BranchParams, template: Sequence[Syllable] | None = None
-) -> PpgReading | None:
-    """Run the CV walk and the train finder over one posteriorgram.
-
-    Extraction is permissive: the walk admits any nucleus in the union of the classes ``template``
-    names, and :func:`cycle_evidence` then counts how many complete repeats of the template the
-    realised place series holds.
+def decode_template(ppg: Posteriorgram | None, params: BranchParams, template: Sequence[str] | None) -> Decode | None:
+    """Decode one posteriorgram against one template's phoneme sequence.
 
     Args:
         ppg: The posteriorgram, or None when the derivative is absent.
-        params: The operating points.
-        template: The declared syllable template, or None when no row declares one.
+        params: The operating points, for the class vocabularies and the burst window.
+        template: The declared phoneme sequence, or None when no row declares one.
 
     Returns:
-        The reading, or None when the derivative is absent, which is an absent instrument and not a
-        negative reading. A reading whose ``readable`` is False is the same absence for a different
-        reason: a segmentation point nobody has measured, which ``params.missing`` names.
+        The decode, or None when the derivative is absent, which is an absent instrument and not a
+        negative reading. :data:`UNREADABLE` when a class vocabulary is unmeasured, which
+        ``params.missing`` already names. :data:`NO_DECODE` when no template was declared.
     """
     if ppg is None:
         return None
-    stop_places = params.point("ddk_stop_places")
-    classes = params.point("ddk_nucleus_classes")
-    tolerance = params.point("ddk_interval_tolerance")
-    minimum = params.point("ddk_min_repetitions")
-    if stop_places is None or classes is None or tolerance is None or minimum is None:
-        return PpgReading(units=(), train=None, readable=False)
-    units = cv_units(phoneme_runs(ppg), stop_phonemes(stop_places), admitted_nuclei(classes, template))
-    trains = syllable_trains(units, tolerance, minimum)
-    longest = max(trains, key=lambda train: train.repetitions, default=None)
-    return PpgReading(units=tuple(units), train=longest, readable=True)
-
-
-def unit_places(units: Sequence[CvUnit], stop_places: dict[str, tuple[str, ...]]) -> list[str]:
-    """The place of articulation the posteriorgram read for each unit's consonant.
-
-    Args:
-        units: The CV units.
-        stop_places: ``branch.ddk_stop_places``.
-
-    Returns:
-        One place per unit, :data:`UNRESOLVED` for a consonant the mapping does not name.
-    """
-    lookup = stop_phonemes(stop_places)
-    return [lookup.get(unit.consonant, UNRESOLVED) for unit in units]
-
-
-def unit_nuclei(units: Sequence[CvUnit], classes: dict[str, tuple[str, ...]]) -> list[str]:
-    """The nucleus class the posteriorgram read for each unit's vowel.
-
-    Args:
-        units: The CV units.
-        classes: ``branch.ddk_nucleus_classes``.
-
-    Returns:
-        One class per unit, :data:`UNRESOLVED` for a nucleus the vocabulary does not name.
-    """
-    lookup = nucleus_classes(classes)
-    return [lookup.get(unit.vowel, UNRESOLVED) for unit in units]
-
-
-@dataclass(frozen=True)
-class CycleScan:
-    """Which units of a realised series formed complete repeats of the cycle asked for.
-
-    Attributes:
-        length: How many positions one cycle holds; ``len(expected)``.
-        units: How many units were scanned.
-        matched: ``(unit index, cycle position)`` for every unit inside a completed cycle, in order.
-        starts: The unit index each completed cycle opened on.
-        ends: The unit index each completed cycle closed on, paired with :attr:`starts`.
-        insertions: ``(unit index, awaited position)`` for every unit the scan passed over while a
-            cycle was open — after one of its positions had matched, whether or not it went on to
-            close. A unit before any position has matched is lead-in and is none of these.
-    """
-
-    length: int
-    units: int
-    matched: tuple[tuple[int, int], ...]
-    starts: tuple[int, ...]
-    ends: tuple[int, ...]
-    insertions: tuple[tuple[int, int], ...]
-
-    @property
-    def cycles(self) -> int:
-        """How many complete repeats of the cycle the series holds."""
-        return len(self.starts)
-
-    @property
-    def consumed(self) -> float | None:
-        """The fraction of scanned units the complete cycles account for, or None over no units."""
-        if self.units <= 0:
-            return None
-        return round(self.cycles * self.length / self.units, 3)
-
-
-NO_CYCLES = CycleScan(length=0, units=0, matched=(), starts=(), ends=(), insertions=())
-"""The scan of a recording nothing was scanned over: no template, or no CV unit."""
-
-
-def cycle_scan(realised: Sequence[str], expected: Sequence[str]) -> CycleScan:
-    """Count complete repeats of one expected cycle in a realised series, skipping insertions.
-
-    Args:
-        realised: One reading per unit, in order.
-        expected: What one cycle asks for at each of its positions; length one for a
-            single-syllable train.
-
-    Returns:
-        The scan. Empty when ``expected`` is, which is the out-of-family case.
-    """
-    if not expected:
-        return CycleScan(length=0, units=len(realised), matched=(), starts=(), ends=(), insertions=())
-    matched: list[tuple[int, int]] = []
-    starts: list[int] = []
-    ends: list[int] = []
-    insertions: list[tuple[int, int]] = []
-    open_matched: list[tuple[int, int]] = []
-    open_skipped: list[tuple[int, int]] = []
-    position = 0
-    for index, value in enumerate(realised):
-        if value == expected[position]:
-            open_matched.append((index, position))
-            position += 1
-            if position == len(expected):
-                starts.append(open_matched[0][0])
-                ends.append(index)
-                matched.extend(open_matched)
-                insertions.extend(open_skipped)
-                open_matched, open_skipped = [], []
-                position = 0
-        elif position > 0:
-            open_skipped.append((index, position))
-    insertions.extend(open_skipped)
-    return CycleScan(
-        length=len(expected),
-        units=len(realised),
-        matched=tuple(matched),
-        starts=tuple(starts),
-        ends=tuple(ends),
-        insertions=tuple(insertions),
+    places = params.point("phoneme_place_classes")
+    vowels = params.point("phoneme_vowel_classes")
+    window_ms = params.point("burst_window_ms")
+    if places is None or vowels is None or window_ms is None:
+        return UNREADABLE
+    if not template:
+        return NO_DECODE
+    lookup = phoneme_classes(places, vowels)
+    classes = tuple(lookup.get(phoneme, OTHER_CLASS) for phoneme in template)
+    named = tuple(dict.fromkeys(name for name in classes if name != OTHER_CLASS))
+    masses = class_masses(ppg, named, lookup)
+    column = {name: index for index, name in enumerate(named)}
+    per_position = np.stack([masses[:, column.get(name, masses.shape[1] - 1)] for name in classes], axis=1)
+    chain = min_phone_frames(ppg.seconds_per_frame, float(window_ms))
+    floor = ppg.emission_floor
+    tiers = np.log(np.maximum(per_position, floor))
+    filler = np.log(np.maximum(masses[:, -1], floor))
+    emissions = np.concatenate(
+        [np.repeat(tiers, chain, axis=1), np.repeat(filler[:, None], len(template), axis=1)], axis=1
+    )
+    path = viterbi(emissions, len(template), chain)
+    complete = repetitions_of(visits(path, len(template), chain), len(template))
+    charged: list[list[float]] = [[] for _ in template]
+    per_repetition: list[tuple[float | None, ...]] = []
+    occupancy = [0] * len(template)
+    for run in complete:
+        row: list[float | None] = []
+        for visit in run:
+            values = per_position[visit.first : visit.last + 1, visit.position]
+            charged[visit.position].extend(float(value) for value in values)
+            occupancy[visit.position] += visit.last - visit.first + 1
+            row.append(round(float(values.mean()), 3) if values.size else None)
+        per_repetition.append(tuple(row))
+    total = int(emissions.shape[0])
+    return Decode(
+        template=tuple(template),
+        classes=classes,
+        repetitions=tuple((run[0].first, run[-1].last) for run in complete),
+        realised_mass=tuple(round(float(np.mean(values)), 3) if values else None for values in charged),
+        occupancy=tuple(occupancy),
+        filler_frames=int(np.count_nonzero(path >= len(template) * chain)),
+        frames=total,
+        seconds_per_frame=ppg.seconds_per_frame,
+        score_per_frame=round(float(emissions[np.arange(total), path].sum() / total), 4) if total else None,
+        per_repetition_mass=tuple(per_repetition),
+        vowel_classes=tuple(vowels),
+        readable=True,
     )
 
 
-def cycle_gaps(scan: CycleScan, units: Sequence[CvUnit]) -> list[float]:
-    """The elapsed time between the onsets consecutive cycles opened on.
-
-    Args:
-        scan: The scan :func:`cycle_scan` returned.
-        units: The units it scanned, in the same order.
-
-    Returns:
-        One gap per consecutive pair of cycle starts, in seconds.
-    """
-    onsets = [units[index].start_s for index in scan.starts if index < len(units)]
-    return [float(second - first) for first, second in zip(onsets, onsets[1:])]
-
-
-def cycle_rate(gaps: Sequence[float]) -> tuple[float | None, float | None]:
-    """The rate a cycle repeated at and how uniform that repetition was.
-
-    Args:
-        gaps: The gaps between consecutive cycle starts, from :func:`cycle_gaps`.
-
-    Returns:
-        The reciprocal of the median gap in hertz, and the population deviation of the gaps over
-        that median. Both None when no gap is available or the median is not positive.
-    """
-    values = np.asarray(gaps, dtype=float)
-    if values.size == 0:
-        return None, None
-    median = float(np.median(values))
-    if median <= 0.0:
-        return None, None
-    return round(1.0 / median, 3), round(float(np.std(values) / median), 3)
-
-
-def cycle_nucleus_fraction(
-    scan: CycleScan, nuclei: Sequence[str], expected: Sequence[Syllable]
-) -> tuple[float | None, dict[str, Any]]:
-    """How often a unit inside a complete cycle carried the nucleus class its own position names.
-
-    Args:
-        scan: The scan, whose ``matched`` carries the position each unit took.
-        nuclei: The nucleus class read for each unit, in unit order.
-        expected: The syllable template, one entry per cycle position.
-
-    Returns:
-        The fraction over the units the scan matched, and the same fraction per position. Both are
-        empty when the scan matched none.
-    """
-    if not scan.matched or not expected:
-        return None, {}
-    hits = sum(1 for index, position in scan.matched if nuclei[index] == expected[position].nucleus)
-    by_position: dict[str, Any] = {}
-    for position in range(len(expected)):
-        at = [nuclei[index] for index, taken in scan.matched if taken == position]
-        held = sum(1 for value in at if value == expected[position].nucleus)
-        by_position[str(position)] = None if not at else round(held / len(at), 3)
-    return round(hits / len(scan.matched), 3), by_position
-
-
-def place_agreement(ppg_places: Sequence[str], burst_places: Sequence[str]) -> tuple[float | None, int]:
-    """How often the two place instruments read the same place for one onset.
-
-    Args:
-        ppg_places: The posteriorgram's place per unit.
-        burst_places: :func:`ddk_places`' place per unit, over the same extents.
-
-    Returns:
-        The fraction agreeing over the units both instruments resolved, and how many those were.
-        ``(None, 0)`` when they resolved none in common.
-    """
-    both = [
-        (ppg_place, burst_place)
-        for ppg_place, burst_place in zip(ppg_places, burst_places)
-        if ppg_place != UNRESOLVED and burst_place != UNRESOLVED
-    ]
-    if not both:
-        return None, 0
-    return round(sum(1 for ppg, burst in both if ppg == burst) / len(both), 3), len(both)
-
-
-def cycle_evidence(
-    units: Sequence[CvUnit],
-    params: BranchParams,
-    template: Sequence[Syllable],
-    declared_syllables: int | None,
-    evidence: Sequence[str],
-) -> tuple[list[Finding], CycleScan]:
-    """What the repeat count has to say about one series of CV units.
-
-    Args:
-        units: Every CV unit the walk found, in onset order. Not the train's subset: the count
-            tolerates the irregularity the train finder rejects, so restricting it to a regular
-            stretch would discard the repeats it exists to recover.
-        params: The operating points, for the place vocabulary.
-        template: The syllable template the declared instruction cycles through.
-        declared_syllables: The instruction's own syllable count, or None when it declares none.
-        evidence: The entity ids the units were read off.
-
-    Returns:
-        The cycle rate measurement and the nucleus conformance beside it, and the scan both were
-        read off. No finding and an empty scan when the walk found no unit.
-    """
-    if not units:
-        return [], NO_CYCLES
-    places = unit_places(units, params.point("ddk_stop_places") or {})
-    scan = cycle_scan(places, [position.place for position in template])
-    rate_hz, gap_cv = cycle_rate(cycle_gaps(scan, units))
-    extent = (units[0].start_s, units[-1].end_s)
-    nuclei = unit_nuclei(units, params.point("ddk_nucleus_classes") or {})
-    fraction, by_position = cycle_nucleus_fraction(scan, nuclei, template)
-    return [
-        measured(
-            PPG_CYCLE_RATE,
-            extent[0],
-            extent[1],
-            rate_hz,
-            *evidence,
-            unit=CYCLES_PER_S,
-            cycles=scan.cycles,
-            gap_cv=gap_cv,
-            consumed=scan.consumed,
-            insertions_n=len(scan.insertions),
-            syllables_n=len(units),
-            declared_syllables=declared_syllables,
-            declared_cycles=None if declared_syllables is None else declared_syllables // len(template),
-            expected_sequence=[position.place for position in template],
-            realised_places=places,
-            cycle_start_s=[round(units[index].start_s, 3) for index in scan.starts],
-            reading=PPG_PLACE_NOT_AUTHORITY,
-        ),
-        measured(
-            PPG_CYCLE_NUCLEUS,
-            extent[0],
-            extent[1],
-            fraction,
-            *evidence,
-            expected_sequence=[position.nucleus for position in template],
-            by_position=by_position,
-            support_syllables=len(scan.matched),
-            realised_nuclei=nuclei,
-        ),
-    ], scan
-
-
-def cv_covered_extent(reading: PpgReading, scan: CycleScan) -> tuple[float, float] | None:
-    """The extent the CV instrument covers, or None when it covers nothing it can stand behind.
-
-    Args:
-        reading: What the CV walk read.
-        scan: What the repeat count found over its units.
-
-    Returns:
-        The hull of every CV unit, or None when the instrument found neither a complete cycle nor a
-        train — which is no evidence the task was performed, and an extent over an unperformed task
-        is the error this gate exists to avoid.
-    """
-    units = reading.units
-    if not units or not (scan.cycles or reading.train is not None):
-        return None
-    extent = (units[0].start_s, units[-1].end_s)
-    return extent if extent[1] > extent[0] else None
-
-
-def cv_task_extent(reading: PpgReading, scan: CycleScan, evidence: Sequence[str]) -> list[Proposal]:
-    """The ``task_extent`` the CV instrument proposes over the hull it covers.
-
-    Args:
-        reading: What the CV walk read.
-        scan: What the repeat count found over its units.
-        evidence: The entity ids the units were read off.
-
-    Returns:
-        One span over :func:`cv_covered_extent`, or none when that gate holds.
-    """
-    extent = cv_covered_extent(reading, scan)
-    if extent is None:
-        return []
-    return [
-        speech_span(
-            TASK_EXTENT,
-            extent,
-            *evidence,
-            production=TASK_FROM_PPG,
-            syllables_n=len(reading.units),
-            cycles=scan.cycles,
-            consumed=scan.consumed,
-        )
-    ]
-
-
-def merged_task_extent(envelope: Proposal, cv: Proposal | None) -> Proposal:
-    """The one ``task_extent`` two instruments that both read the task leave behind.
-
-    Args:
-        envelope: The ``task_extent`` the envelope instrument minted off its carrier.
-        cv: The ``task_extent`` :func:`cv_task_extent` minted, or None when the CV instrument had
-            no readable reading.
-
-    Returns:
-        The envelope's own span when the CV instrument read nothing, and otherwise one span over
-        the hull of both, carrying the CV instrument's measurements and naming the envelope's
-        extent and syllable count beside them.
-    """
-    if cv is None:
-        return envelope
-    return cv._replace(
-        start=min(cv.start, envelope.start),
-        end=max(cv.end, envelope.end),
-        derived_from=tuple(dict.fromkeys((*cv.derived_from, *envelope.derived_from))),
-        attributes={
-            **cv.attributes,
-            "production": TASK_FROM_BOTH,
-            "envelope_syllables_n": envelope.attributes.get("syllables_n"),
-            "envelope_extent_s": [round(envelope.start, 3), round(envelope.end, 3)],
-        },
-    )
+# --------------------------------------------------------------------- what the decode has to say
 
 
 def contradicted_words(store: ProvStore, extent: tuple[float, float]) -> list[Entity]:
-    """The consensus words the CV instrument's covered extent contradicts, in index order.
+    """The consensus words the instrument's covered extent contradicts, in index order.
 
     Args:
         store: The provenance store.
@@ -1055,14 +728,8 @@ def contradicted_words(store: ProvStore, extent: tuple[float, float]) -> list[En
     return [word for word in lexical_words(store) if overlaps(word_hull(word), extent)]
 
 
-def instrument_authority(
-    store: ProvStore,
-    reading: PpgReading,
-    scan: CycleScan,
-    params: BranchParams,
-    evidence: Sequence[str],
-) -> list[Finding]:
-    """The CV instrument's reading recorded as authoritative, and each word it contradicts.
+def instrument_authority(store: ProvStore, decode: Decode, evidence: Sequence[str]) -> list[Finding]:
+    """The decode's reading recorded as authoritative, and each word it contradicts.
 
     Additive only: no word is invalidated, no transcript is rewritten, and no text is copied into
     a finding. ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md`` holds why, and
@@ -1070,35 +737,31 @@ def instrument_authority(
 
     Args:
         store: The provenance store, for the consensus words.
-        reading: What the CV walk read.
-        scan: What the repeat count found over its units.
-        params: The operating points, for the place and nucleus vocabularies.
-        evidence: The entity ids the units were read off.
+        decode: What the decode read.
+        evidence: The entity ids it was read off.
 
     Returns:
-        One :data:`INSTRUMENT_READING` measurement over the covered extent and one ``contest``
-        per contradicted word, or nothing at all when the instrument covers nothing.
+        One :data:`INSTRUMENT_READING` measurement over the decoded extent and one ``contest`` per
+        contradicted word, or nothing at all when no repetition completed.
     """
-    extent = cv_covered_extent(reading, scan)
+    extent = decode.extent
     if extent is None:
         return []
     words = contradicted_words(store, extent)
-    places = unit_places(reading.units, params.point("ddk_stop_places") or {})
-    nuclei = unit_nuclei(reading.units, params.point("ddk_nucleus_classes") or {})
     findings: list[Finding] = [
         measured(
             INSTRUMENT_READING,
             extent[0],
             extent[1],
-            places,
+            [list(row) for row in decode.per_repetition_mass],
             *evidence,
             *(word.id for word in words),
             authority=CV_AUTHORITY,
             supersedes=TRANSCRIPT_CLAIM,
-            nuclei=nuclei,
-            onsets_s=[round(unit.start_s, 3) for unit in reading.units],
-            cv_units_n=len(reading.units),
-            cycles=scan.cycles,
+            positions=list(decode.template),
+            classes=list(decode.classes),
+            onsets_s=decode.starts_s,
+            repetitions=decode.count,
             contradicted_words_n=len(words),
             contradicted_word_ids=[word.id for word in words],
         )
@@ -1116,132 +779,177 @@ def instrument_authority(
     return findings
 
 
-def ppg_evidence(
+def decode_evidence(
     store: ProvStore,
     reads: DdkReads,
     params: BranchParams,
-    reading: PpgReading | None,
-    template: Sequence[Syllable] | None,
-    declared_syllables: int | None = None,
-) -> tuple[list[Proposal], list[Finding]]:
-    """Everything the CV instrument has to say about one recording, in both modes.
+    decode: Decode | None,
+    declared_event_count: int | None = None,
+) -> list[Finding]:
+    """Everything the posteriorgram instrument has to say about one recording.
+
+    The decoded repetition count and the declared count are written beside each other and nothing
+    folds them: no conformance term reads the pair, no score and no gate. ``ddk-template-decode.md``
+    holds the owner's ruling that counts are heuristics and not targets.
 
     Args:
         store: The provenance store, for the acquisition covariates the rate is read against.
-        reads: The derivatives, for the posteriorgram's entity id and the burst instrument.
-        params: The operating points.
-        reading: What the CV walk read, or None when the posteriorgram is absent.
-        template: The syllable template the declared instruction cycles through, or None out of
-            family.
-        declared_syllables: The instruction's own syllable count, or None when it declares none.
+        reads: The derivatives, for the posteriorgram's entity id.
+        params: The operating points, for the burst window the chain length is derived from.
+        decode: What the decode read, or None when the posteriorgram is absent.
+        declared_event_count: The instruction's own syllable count, or None when it declares none.
 
     Returns:
-        The spans this instrument proposes — its train, and the ``task_extent``
-        :func:`cv_task_extent` mints over its hull, which :func:`align_ddk` merges with the
-        envelope instrument's when that one read a carrier too — and the findings it takes. An
-        absent posteriorgram yields no span and one measurement that has no value; a posteriorgram
-        the walk could not run over yields neither, because ``params.missing`` is where that is
-        already said.
+        The findings. An absent posteriorgram yields one measurement that has no value; a decode
+        that could not run yields none at all, because ``params.missing`` is where that is already
+        said.
     """
-    if reading is None:
-        return [], [_absent(PPG, PPG_RATE)]
-    if not reading.readable:
-        return [], []
+    if decode is None:
+        return [_absent(PPG, PPG_RATE)]
+    if not decode.readable or not decode.template:
+        return []
     evidence = _evidence(reads.ppg_id)
-    findings: list[Finding] = [count(PPG_UNITS, len(reading.units), None, *evidence)]
-    scan = NO_CYCLES
-    if template:
-        cycle_findings, scan = cycle_evidence(reading.units, params, template, declared_syllables, evidence)
-        findings.extend(cycle_findings)
-    task_extent = cv_task_extent(reading, scan, evidence)
-    findings.extend(instrument_authority(store, reading, scan, params, evidence))
-    train = reading.train
-    if train is None:
-        return task_extent, [
-            *findings,
-            measured(PPG_RATE, None, None, None, *evidence, unit=SYLLABLES_PER_S, reason=NO_TRAIN),
-        ]
-
-    extent = train.extent
-    extents = [unit.extent for unit in train.units]
-    intervals = intervals_of(extents)
-    cycle = len(template) if template else 1
+    extent = decode.extent
+    window_ms = params.point("burst_window_ms")
+    floor = None if reads.ppg is None else reads.ppg.emission_floor
+    chain = None if reads.ppg is None or window_ms is None else min_phone_frames(reads.ppg.seconds_per_frame, window_ms)
+    start, end = (None, None) if extent is None else extent
+    per_repetition = (
+        None
+        if not decode.vowel_positions or declared_event_count is None
+        else (declared_event_count // decode.vowel_positions)
+    )
+    findings: list[Finding] = [
+        measured(
+            PPG_REPETITIONS,
+            start,
+            end,
+            decode.count,
+            *evidence,
+            declared_event_count=declared_event_count,
+            declared_repetitions=per_repetition,
+            repetition_start_s=decode.starts_s,
+            filler_fraction=decode.filler_fraction,
+            score_per_frame=decode.score_per_frame,
+            frames=decode.frames,
+            min_phone_frames=chain,
+        ),
+        measured(
+            PPG_MASS,
+            start,
+            end,
+            list(decode.realised_mass),
+            *evidence,
+            positions=list(decode.template),
+            classes=list(decode.classes),
+            occupancy_frames=list(decode.occupancy),
+            occupancy_s=decode.occupancy_s,
+            repetitions=decode.count,
+            emission_floor=floor,
+        ),
+        count("expected_event_count", decode.syllables, declared_event_count, *evidence),
+    ]
+    if extent is None:
+        findings.append(measured(PPG_RATE, None, None, None, *evidence, unit=SYLLABLES_PER_S, reason=NO_REPETITIONS))
+        return findings
+    periods = decode.periods_s
     findings.extend(
         [
             measured(
                 PPG_RATE,
                 extent[0],
                 extent[1],
-                round(train.rate_hz, 3),
+                decode.rate_hz,
                 *evidence,
                 unit=SYLLABLES_PER_S,
-                period_s=round(train.period_s, 4),
-                jitter_over_median=round(train.jitter, 3),
-                repetitions=train.repetitions,
-                cv_units_n=len(reading.units),
+                period_s=decode.period_s,
+                cycle_rate_hz=decode.cycle_rate_hz,
+                repetitions=decode.count,
                 **acquisition_covariates(store, extent),
             ),
             measured(
                 PPG_DISPERSION,
                 extent[0],
                 extent[1],
-                dispersion(intervals),
+                dispersion(periods),
                 *evidence,
-                support_intervals=len(intervals),
-                trend_s_per_step=trend(intervals),
-                by_position=dispersion_by_position(intervals, cycle),
+                support_intervals=len(periods),
+                trend_s_per_step=trend(periods),
             ),
-            count("ppg_cv_onset_s", [round(start, 3) for start, _ in extents], None, *evidence),
-            count("ppg_inter_onset_interval_s", [round(value, 3) for value in intervals], None, *evidence),
+            count("ppg_repetition_start_s", decode.starts_s, None, *evidence),
+            count("ppg_repetition_period_s", periods, None, *evidence),
         ]
     )
+    findings.extend(instrument_authority(store, decode, evidence))
+    return findings
 
-    stop_places = params.point("ddk_stop_places") or {}
-    places = unit_places(train.units, stop_places)
-    if reads.wideband is not None:
-        agreement, support = place_agreement(places, ddk_places(extents, params, reads.wideband))
-        findings.append(
-            measured(
-                PPG_PLACE_AGREEMENT,
-                extent[0],
-                extent[1],
-                agreement,
-                *_evidence(reads.ppg_id, reads.wideband_id),
-                support_onsets=support,
-                reading=PPG_PLACE_NOT_AUTHORITY,
-            )
+
+def task_extent_span(
+    decode: Decode | None,
+    decode_ids: Sequence[str],
+    carrier_extent: tuple[float, float] | None,
+    carrier_ids: Sequence[str],
+    *,
+    sequence: bool,
+) -> Proposal | None:
+    """The one ``task_extent`` this family leaves behind.
+
+    The decoded repetition span when the decode has one, and the envelope carrier's own extent
+    otherwise. Precedence and not a union: the decode reads the phonetic sequence, so where it has
+    a reading it is the instrument that knows where the task was. The envelope stays as the fallback
+    because the decode has no reading at all when the posteriorgram derivative is absent, and
+    dropping it would take the extent away from those recordings.
+
+    Args:
+        decode: What the decode read, or None when the posteriorgram is absent.
+        decode_ids: The entity ids it was read off.
+        carrier_extent: The envelope carrier's extent, or None when no carrier was found.
+        carrier_ids: The entity ids the carrier was read off.
+        sequence: Whether the declared template repeats more than one syllable.
+
+    Returns:
+        The span, or None when neither instrument read the task.
+    """
+    extent = None if decode is None else decode.extent
+    if decode is not None and extent is not None:
+        return speech_span(
+            TASK_EXTENT,
+            extent,
+            *decode_ids,
+            production=TASK_FROM_DECODE,
+            repetitions=decode.count,
+            syllables_n=decode.syllables,
+            filler_fraction=decode.filler_fraction,
         )
-
-    span = speech_span(
-        "ppg_train",
-        extent,
-        *evidence,
-        production="syllable_train_from_ppg",
-        repetitions=train.repetitions,
-        rate_hz=round(train.rate_hz, 3),
-        period_s=round(train.period_s, 4),
-        jitter_over_median=round(train.jitter, 3),
-        cv_units_n=len(reading.units),
+    if carrier_extent is None:
+        return None
+    return speech_span(
+        TASK_EXTENT,
+        carrier_extent,
+        *carrier_ids,
+        production=TASK_FROM_ENVELOPE_SEQUENCE if sequence else TASK_FROM_ENVELOPE,
+        repetitions=None,
+        syllables_n=None,
     )
-    return [span, *task_extent], findings
 
 
-def _with_ppg(done: Done, reading: PpgReading | None) -> Done:
-    """Fold the CV instrument into a conformance the other instrument reached.
+def _with_decode(done: Done, decode: Decode | None) -> Done:
+    """Fold the posteriorgram instrument into a conformance the other instrument reached.
 
     Args:
         done: What the envelope instrument concluded.
-        reading: What the CV walk read, or None when the posteriorgram is absent or unreadable.
+        decode: What the decode read, or None when the posteriorgram is absent or unreadable.
 
     Returns:
-        The conformance. An absent or unreadable instrument changes nothing. A train found where the
-        instruction asked for one is conformance whichever instrument found it, so either suffices.
-        A readable instrument that found no train, where the other found none either, is a task
-        non-conformance rather than an unanswered question.
+        The conformance. An absent or unreadable instrument changes nothing. A repetition found
+        where the instruction asked for one is conformance whichever instrument found it, so either
+        suffices. A readable instrument that completed no repetition, where the other found no
+        carrier either, is a task non-conformance rather than an unanswered question. A collapsed
+        sequence, a weak position and fewer repetitions than declared are none of them ``false``.
     """
-    if reading is None or not reading.readable:
+    if decode is None or not decode.readable:
         return done
-    return True if reading.train is not None or done is True else False
+    return True if decode.count >= 1 or done is True else False
 
 
 # --------------------------------------------------------------------- the one mode
@@ -1256,148 +964,84 @@ def align_ddk(
 ) -> Result:
     """Evaluate one declared ``SYLLABLE_REPETITION`` task against what its instruction asked for.
 
-    Spans proposed: at most one ``task_extent`` and at most one ``ppg_train``. Each instrument
-    mints a ``task_extent`` over what it read — the envelope instrument off its carrier, the CV
-    instrument off its unit hull — and :func:`merged_task_extent` leaves one span over the hull of
-    both. ``specs/20260817-triage-workflow-dag/ddk-task-extent-precedence.md`` holds why. An
-    individual syllable is not a span — rate, interval dispersion and sequence collapse are
-    statistics over the onset series, and one span per syllable would add roughly thirty spans per
-    recording carrying no measurement of their own. The onsets travel as a ``counts`` entry, and a
-    syllable that is not the one the sequence expected travels as a ``syllable_sequence_mismatch``
-    deviation with its own extent.
+    Spans proposed: exactly one ``task_extent``, or none when neither instrument read the task.
+    :func:`task_extent_span` decides which instrument mints it;
+    ``specs/20260817-triage-workflow-dag/ddk-task-extent-precedence.md`` and
+    ``ddk-template-decode.md`` hold why. An individual repetition is not a span: the rate, the
+    period dispersion and the per-position mass are statistics over the decoded repetition series,
+    and one span per repetition would add roughly ten spans per recording carrying no measurement
+    of their own. The repetition starts and periods travel as ``counts`` entries.
 
     Args:
         expectation: The row SPEECH holds for this family, whose pattern is ``SYLLABLE_TRAIN`` or
-            ``SYLLABLE_SEQUENCE`` and whose ``sequence`` is its syllable template.
+            ``SYLLABLE_SEQUENCE`` and whose ``sequence`` is its phoneme template.
         store: The provenance store.
         params: The operating points.
         reads: The derivatives, loaded by :func:`speech`.
 
     Returns:
-        Whether the expected patterns were found, the one train span, and the findings.
+        Whether the expected patterns were found, the one task extent, and the findings.
     """
-    template = expectation.sequence
-    reading = ppg_reading(reads.ppg, params, template)
-    cv_spans, cv_findings = ppg_evidence(store, reads, params, reading, template, expectation.expected_event_count)
+    decode = decode_template(reads.ppg, params, expectation.sequence)
+    ppg_findings = decode_evidence(store, reads, params, decode, expectation.expected_event_count)
     declared = declared_duration_count(store, expectation.declared_duration_s)
+    ppg_ids = _evidence(reads.ppg_id)
+    sequence = expectation.pattern is Pattern.SYLLABLE_SEQUENCE
+    findings: list[Finding] = []
+    carrier_extent: tuple[float, float] | None = None
+    carrier_ids: tuple[str, ...] = ()
+    done: Done = UNDETERMINED
+
     if reads.envelope is None:
-        return Result(_with_ppg(UNDETERMINED, reading), cv_spans, [_absent(ENVELOPE), *cv_findings, *declared])
-
-    train, rate_hz = ddk_carrier(store, params, reads.envelope)
-    if train is None or train.extent is None:
-        # No carrier has two causes and they are not the same report: no span held a readable train,
-        # or the length guard's own boundary is unmeasured and no span could clear it. Only the
-        # first is a reading of the recording, so only the first answers the conformance question.
-        unmeasured_gate = params.point("train_min_s") is None
-        return Result(
-            _with_ppg(UNDETERMINED if unmeasured_gate else False, reading),
-            cv_spans,
-            [count("expected_event_count", 0, expectation.expected_event_count), *cv_findings, *declared],
-        )
-
-    onsets = events_in_span(reads.envelope, train, params)
-    extent = hull(onsets) or train.extent
-    starts = [round(start, 3) for start, _ in onsets]
-    intervals = intervals_of(onsets)
-    span_s = duration(extent)
-    recording_s = duration(stream_extent(store))
-    cycle = template if template and expectation.pattern is Pattern.SYLLABLE_SEQUENCE else None
-    places_expected = None if cycle is None else [position.place for position in cycle]
-    unit = CYCLES_OR_SYLLABLES_PER_S if cycle else SYLLABLES_PER_S
-
-    carrier = _evidence(train.id, reads.envelope_id, reads.wideband_id)
-    findings: list[Finding] = [
-        count("expected_event_count", len(onsets), expectation.expected_event_count, *carrier),
-        measured(
-            RATE,
-            extent[0],
-            extent[1],
-            rate_hz,
-            *carrier,
-            unit=unit,
-            onset_rate_hz=None if span_s <= 0.0 else round(len(onsets) / span_s, 3),
-            support_syllables=len(onsets),
-            **acquisition_covariates(store, extent),
-        ),
-        count("inter_onset_interval_s", [round(value, 3) for value in intervals], None, *carrier),
-        count("syllable_onset_s", starts, expectation.expected_event_count, *carrier),
-        measured(
-            "interval_dispersion",
-            extent[0],
-            extent[1],
-            dispersion(intervals),
-            *carrier,
-            support_intervals=len(intervals),
-            trend_s_per_step=trend(intervals),
-            by_position={} if cycle is None else dispersion_by_position(intervals, len(cycle)),
-        ),
-        measured(
-            "train_fraction_of_recording",
-            extent[0],
-            extent[1],
-            None if recording_s <= 0.0 else round(span_s / recording_s, 3),
-            *carrier,
-            *stream_ids(store),
-            train_s=round(span_s, 3),
-            recording_s=round(recording_s, 3),
-        ),
-    ]
-
-    attributes: dict[str, Any] = {"syllables_n": len(onsets), "production": TASK_FROM_ENVELOPE}
-    # `ddk_carrier` only returns a span whose rate was readable, so a `rate_hz is not None` clause
-    # here would be vacuous; the syllable count is the whole condition.
-    done: Done = len(onsets) > 0
-    if places_expected is not None:
-        places = ddk_places(onsets, params, reads.wideband)
-        if reads.wideband is None:
-            findings.append(measured("syllable_place", extent[0], extent[1], None, *carrier, unavailable=WIDEBAND))
-        scan = cycle_scan(places, places_expected)
-        for index, awaited in scan.insertions:
-            if places[index] == UNRESOLVED:
-                continue
-            findings.append(
-                deviation(
-                    "syllable_sequence_mismatch",
-                    onsets[index][0],
-                    onsets[index][1],
-                    *carrier,
-                    expected=places_expected[awaited],
-                    measured=places[index],
-                )
-            )
-        resolved = [place for place in places if place != UNRESOLVED]
-        cycles = scan.cycles
-        if resolved:
-            dominant = max(set(resolved), key=resolved.count)
+        findings.append(_absent(ENVELOPE))
+    else:
+        train, rate_hz = ddk_carrier(store, params, reads.envelope)
+        if train is None or train.extent is None:
+            # No carrier has two causes and they are not the same report: no span held a readable
+            # train, or the length guard's own boundary is unmeasured and no span could clear it.
+            # Only the first is a reading of the recording, so only the first answers conformance.
+            done = UNDETERMINED if params.point("train_min_s") is None else False
+        else:
+            carrier_extent, carrier_ids = train.extent, _evidence(train.id, reads.envelope_id)
+            done = True
             findings.append(
                 measured(
-                    "sequence_collapse_fraction",
-                    extent[0],
-                    extent[1],
-                    round(resolved.count(dominant) / len(resolved), 3),
-                    *carrier,
-                    dominant_place=dominant,
-                    support_syllables=len(resolved),
+                    RATE,
+                    carrier_extent[0],
+                    carrier_extent[1],
+                    rate_hz,
+                    *carrier_ids,
+                    unit=CYCLES_OR_SYLLABLES_PER_S if sequence else SYLLABLES_PER_S,
+                    decoded_syllable_rate_hz=None if decode is None else decode.rate_hz,
+                    decoded_cycle_rate_hz=None if decode is None else decode.cycle_rate_hz,
+                    **acquisition_covariates(store, carrier_extent),
                 )
             )
-        findings.append(count("realised_cycles", cycles, None, *carrier))
-        attributes.update(production=TASK_FROM_ENVELOPE_SEQUENCE, realised_cycles=cycles, resolved_n=len(resolved))
-        done = bool(onsets) and cycles >= 1
 
-    carried = [proposal for proposal in cv_spans if proposal.role != TASK_EXTENT]
-    cv_extent = next((proposal for proposal in cv_spans if proposal.role == TASK_EXTENT), None)
-    envelope_extent = speech_span(TASK_EXTENT, extent, *carrier, **attributes)
-    task_extent = merged_task_extent(envelope_extent, cv_extent)
-    components = [task_extent, *carried]
-    recording_extent = stream_extent(store)
-    task_span = (task_extent.start, task_extent.end)
-    if recording_extent is not None and touches_edge(task_span, recording_extent):
+    span = task_extent_span(decode, ppg_ids, carrier_extent, carrier_ids, sequence=sequence)
+    components = [] if span is None else [span]
+    if span is not None:
+        extent = (span.start, span.end)
+        span_s = duration(extent)
+        recording_s = duration(stream_extent(store))
         findings.append(
-            deviation("truncation", task_span[0], task_span[1], *task_extent.derived_from, *stream_ids(store))
+            measured(
+                "train_fraction_of_recording",
+                extent[0],
+                extent[1],
+                None if recording_s <= 0.0 else round(span_s / recording_s, 3),
+                *span.derived_from,
+                *stream_ids(store),
+                train_s=round(span_s, 3),
+                recording_s=round(recording_s, 3),
+                production=span.attributes.get("production"),
+            )
         )
-    findings.extend(cv_findings)
-    findings.extend(declared)
-    return Result(_with_ppg(done, reading), components, findings)
+        recording_extent = stream_extent(store)
+        if recording_extent is not None and touches_edge(extent, recording_extent):
+            findings.append(deviation("truncation", extent[0], extent[1], *span.derived_from, *stream_ids(store)))
+
+    return Result(_with_decode(done, decode), components, [*findings, *ppg_findings, *declared])
 
 
 # --------------------------------------------------------------------- what SPEECH reports
@@ -1443,8 +1087,9 @@ def syllable_detail(result: Result) -> dict[str, Any]:
         result: What :func:`align_ddk` returned.
 
     Returns:
-        The detail mapping, carrying rates and regularity as measurements and no normative reading
-        of either. ``report.py``'s ``BRANCH_MEASURES["SPEECH"]`` names these keys.
+        The detail mapping, carrying rates, regularity and per-position realisation as measurements
+        and no normative reading of any of them. ``common.py``'s ``BRANCH_MEASURES["SPEECH"]`` names
+        these keys, and nothing here folds the decoded count against the declared one.
     """
     trains = [component for component in result.components if component.role == TASK_EXTENT]
     return {
@@ -1453,22 +1098,17 @@ def syllable_detail(result: Result) -> dict[str, Any]:
         "train_fraction": _value(result.deviations, "train_fraction_of_recording"),
         "modulation_peak_hz": _value(result.deviations, RATE),
         "modulation_unit": _covariate(result.deviations, RATE, "unit"),
-        "interval_dispersion": _value(result.deviations, "interval_dispersion"),
-        "interval_trend_s_per_step": _covariate(result.deviations, "interval_dispersion", "trend_s_per_step"),
-        "ppg_rate_hz": _value(result.deviations, PPG_RATE),
-        "ppg_repetitions": _covariate(result.deviations, PPG_RATE, "repetitions"),
+        "ppg_syllable_rate_hz": _value(result.deviations, PPG_RATE),
+        "ppg_cycle_rate_hz": _covariate(result.deviations, PPG_RATE, "cycle_rate_hz"),
+        "ppg_repetitions": _value(result.deviations, PPG_REPETITIONS),
+        "ppg_declared_event_count": _covariate(result.deviations, PPG_REPETITIONS, "declared_event_count"),
         "ppg_period_s": _covariate(result.deviations, PPG_RATE, "period_s"),
-        "ppg_jitter_over_median": _covariate(result.deviations, PPG_RATE, "jitter_over_median"),
-        "ppg_cv_units_n": _covariate(result.deviations, PPG_RATE, "cv_units_n"),
-        "ppg_interval_trend_s_per_step": _covariate(result.deviations, PPG_DISPERSION, "trend_s_per_step"),
-        "ppg_cycles": _covariate(result.deviations, PPG_CYCLE_RATE, "cycles"),
-        "ppg_declared_cycles": _covariate(result.deviations, PPG_CYCLE_RATE, "declared_cycles"),
-        "ppg_cycle_rate_hz": _value(result.deviations, PPG_CYCLE_RATE),
-        "ppg_cycle_gap_cv": _covariate(result.deviations, PPG_CYCLE_RATE, "gap_cv"),
-        "ppg_cycle_consumed": _covariate(result.deviations, PPG_CYCLE_RATE, "consumed"),
-        "ppg_cycle_insertions_n": _covariate(result.deviations, PPG_CYCLE_RATE, "insertions_n"),
-        "ppg_place_agreement": _value(result.deviations, PPG_PLACE_AGREEMENT),
+        "ppg_period_cv": _value(result.deviations, PPG_DISPERSION),
+        "ppg_period_trend_s_per_step": _covariate(result.deviations, PPG_DISPERSION, "trend_s_per_step"),
+        "ppg_positions": _covariate(result.deviations, PPG_MASS, "positions"),
+        "ppg_realised_mass": _value(result.deviations, PPG_MASS),
+        "ppg_occupancy_s": _covariate(result.deviations, PPG_MASS, "occupancy_s"),
+        "ppg_filler_fraction": _covariate(result.deviations, PPG_REPETITIONS, "filler_fraction"),
+        "ppg_score_per_frame": _covariate(result.deviations, PPG_REPETITIONS, "score_per_frame"),
         "ppg_contradicted_words_n": _covariate(result.deviations, INSTRUMENT_READING, "contradicted_words_n"),
-        "ppg_cycle_nucleus_fraction": _value(result.deviations, PPG_CYCLE_NUCLEUS),
-        "ppg_trains_n": sum(1 for component in result.components if component.role == "ppg_train"),
     }
