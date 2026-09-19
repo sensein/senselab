@@ -44,6 +44,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     hull,
     measured,
     mode_of,
+    overlaps,
     propose_spans,
     read_envelope_track,
     read_spectrogram_block,
@@ -55,7 +56,9 @@ from senselab.audio.workflows.triage.nodes.branches import (
 )
 from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
+    lexical_words,
     live_entities,
+    word_hull,
 )
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -78,6 +81,22 @@ For a one-position template a cycle is a syllable, so this and :data:`PPG_RATE` 
 
 PPG_CYCLE_NUCLEUS = "ddk_cycle_nucleus_fraction"
 PPG_PLACE_AGREEMENT = "ddk_place_agreement_ppg_vs_burst"
+
+INSTRUMENT_READING = "ddk_cv_instrument_reading"
+"""The CV instrument's own reading of what was produced over the extent it covers.
+
+Its value is the realised place series, one entry per CV unit. Written beside the consensus
+transcript, never in place of it; ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md``
+holds why the recogniser text is neither replaced nor withheld."""
+
+TRANSCRIPT_CLAIM = "lexical_transcript"
+"""What a contradicted consensus word claims, and what the contest is against."""
+
+CONTRADICTED = "instrument_contradicted"
+"""Why that claim is contested: the CV instrument covers the word's extent and read syllables."""
+
+CV_AUTHORITY = "cv_instrument"
+"""Which instrument is authoritative over the contested extent, on a declared syllable task."""
 
 UNRESOLVED = "unresolved"
 """The place a burst spectrum did not separate, or the nucleus class no declared class holds, which
@@ -935,6 +954,25 @@ def cycle_evidence(
     ], scan
 
 
+def cv_covered_extent(reading: PpgReading, scan: CycleScan) -> tuple[float, float] | None:
+    """The extent the CV instrument covers, or None when it covers nothing it can stand behind.
+
+    Args:
+        reading: What the CV walk read.
+        scan: What the repeat count found over its units.
+
+    Returns:
+        The hull of every CV unit, or None when the instrument found neither a complete cycle nor a
+        train — which is no evidence the task was performed, and an extent over an unperformed task
+        is the error this gate exists to avoid.
+    """
+    units = reading.units
+    if not units or not (scan.cycles or reading.train is not None):
+        return None
+    extent = (units[0].start_s, units[-1].end_s)
+    return extent if extent[1] > extent[0] else None
+
+
 def cv_task_extent(reading: PpgReading, scan: CycleScan, evidence: Sequence[str]) -> list[Proposal]:
     """The ``task_extent`` the CV instrument proposes when the envelope instrument proposed none.
 
@@ -944,15 +982,10 @@ def cv_task_extent(reading: PpgReading, scan: CycleScan, evidence: Sequence[str]
         evidence: The entity ids the units were read off.
 
     Returns:
-        One span over the hull of every CV unit, or none when the instrument found neither a
-        complete cycle nor a train — which is no evidence the task was performed, and an extent over
-        an unperformed task is the error this gate exists to avoid.
+        One span over :func:`cv_covered_extent`, or none when that gate holds.
     """
-    units = reading.units
-    if not units or not (scan.cycles or reading.train is not None):
-        return []
-    extent = (units[0].start_s, units[-1].end_s)
-    if not extent[1] > extent[0]:
+    extent = cv_covered_extent(reading, scan)
+    if extent is None:
         return []
     return [
         speech_span(
@@ -960,11 +993,87 @@ def cv_task_extent(reading: PpgReading, scan: CycleScan, evidence: Sequence[str]
             extent,
             *evidence,
             production="syllable_task_from_ppg",
-            syllables_n=len(units),
+            syllables_n=len(reading.units),
             cycles=scan.cycles,
             consumed=scan.consumed,
         )
     ]
+
+
+def contradicted_words(store: ProvStore, extent: tuple[float, float]) -> list[Entity]:
+    """The consensus words the CV instrument's covered extent contradicts, in index order.
+
+    Args:
+        store: The provenance store.
+        extent: The extent the instrument covers.
+
+    Returns:
+        Every live lexical consensus word whose hull shares any interval with it. The hull rather
+        than the fitted extent, because it is the read that misses no word; bracketed tokens are
+        not a claim that a word was said and are left alone.
+    """
+    return [word for word in lexical_words(store) if overlaps(word_hull(word), extent)]
+
+
+def instrument_authority(
+    store: ProvStore,
+    reading: PpgReading,
+    scan: CycleScan,
+    params: BranchParams,
+    evidence: Sequence[str],
+) -> list[Finding]:
+    """The CV instrument's reading recorded as authoritative, and each word it contradicts.
+
+    Additive only: no word is invalidated, no transcript is rewritten, and no text is copied into
+    a finding. ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md`` holds why, and
+    which consumers this reaches.
+
+    Args:
+        store: The provenance store, for the consensus words.
+        reading: What the CV walk read.
+        scan: What the repeat count found over its units.
+        params: The operating points, for the place and nucleus vocabularies.
+        evidence: The entity ids the units were read off.
+
+    Returns:
+        One :data:`INSTRUMENT_READING` measurement over the covered extent and one ``contest``
+        per contradicted word, or nothing at all when the instrument covers nothing.
+    """
+    extent = cv_covered_extent(reading, scan)
+    if extent is None:
+        return []
+    words = contradicted_words(store, extent)
+    places = unit_places(reading.units, params.point("ddk_stop_places") or {})
+    nuclei = unit_nuclei(reading.units, params.point("ddk_nucleus_classes") or {})
+    findings: list[Finding] = [
+        measured(
+            INSTRUMENT_READING,
+            extent[0],
+            extent[1],
+            places,
+            *evidence,
+            *(word.id for word in words),
+            authority=CV_AUTHORITY,
+            supersedes=TRANSCRIPT_CLAIM,
+            nuclei=nuclei,
+            onsets_s=[round(unit.start_s, 3) for unit in reading.units],
+            cv_units_n=len(reading.units),
+            cycles=scan.cycles,
+            contradicted_words_n=len(words),
+            contradicted_word_ids=[word.id for word in words],
+        )
+    ]
+    findings.extend(
+        Finding(
+            "contest",
+            TRANSCRIPT_CLAIM,
+            *word_hull(word),
+            {"reason": CONTRADICTED, "authority": CV_AUTHORITY, "index": int(word.attributes["index"])},
+            (word.id, *evidence),
+        )
+        for word in words
+    )
+    return findings
 
 
 def ppg_evidence(
@@ -1004,6 +1113,7 @@ def ppg_evidence(
         cycle_findings, scan = cycle_evidence(reading.units, params, template, declared_syllables, evidence)
         findings.extend(cycle_findings)
     task_extent = cv_task_extent(reading, scan, evidence)
+    findings.extend(instrument_authority(store, reading, scan, params, evidence))
     train = reading.train
     if train is None:
         return task_extent, [
@@ -1310,6 +1420,7 @@ def syllable_detail(result: Result) -> dict[str, Any]:
         "ppg_cycle_consumed": _covariate(result.deviations, PPG_CYCLE_RATE, "consumed"),
         "ppg_cycle_insertions_n": _covariate(result.deviations, PPG_CYCLE_RATE, "insertions_n"),
         "ppg_place_agreement": _value(result.deviations, PPG_PLACE_AGREEMENT),
+        "ppg_contradicted_words_n": _covariate(result.deviations, INSTRUMENT_READING, "contradicted_words_n"),
         "ppg_cycle_nucleus_fraction": _value(result.deviations, PPG_CYCLE_NUCLEUS),
         "ppg_trains_n": sum(1 for component in result.components if component.role == "ppg_train"),
     }
