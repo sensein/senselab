@@ -2637,7 +2637,32 @@ class TestSpeakerActivity:
             ScriptLine(text="unattributed", start=1.0, end=2.0),
             ScriptLine(speaker="SPEAKER_02", start=2.0, end=2.0),
         ]
-        assert diarized_segments(lines) == [(0.0, 1.0, "SPEAKER_00")]
+        turns = diarized_segments(lines, 3.0)
+        assert turns.segments == [(0.0, 1.0, "SPEAKER_00")]
+        assert (turns.bounded_n, turns.past_end_n, turns.max_overshoot_s) == (0, 0, 0.0)
+
+    def test_a_turn_reaching_past_the_audio_is_bound_to_it_and_the_reach_recorded(self) -> None:
+        """The diarizer times a short file's turns on its padded window; the file is still the bound."""
+        lines = [ScriptLine(speaker="SPEAKER_00", start=0.2, end=9.970344)]
+        turns = diarized_segments(lines, 6.710625)
+        assert turns.segments == [(0.2, 6.710625, "SPEAKER_00")]
+        assert turns.bounded_n == 1
+        assert turns.max_overshoot_s == pytest.approx(3.259719)
+
+    def test_a_turn_beginning_past_the_audio_names_no_region_and_is_dropped(self) -> None:
+        """A turn wholly inside the padding is the model's window, not a voice in this recording."""
+        lines = [
+            ScriptLine(speaker="SPEAKER_00", start=0.2, end=2.0),
+            ScriptLine(speaker="SPEAKER_01", start=6.9, end=9.9),
+        ]
+        turns = diarized_segments(lines, 6.710625)
+        assert turns.segments == [(0.2, 2.0, "SPEAKER_00")]
+        assert (turns.bounded_n, turns.past_end_n) == (0, 1)
+
+    def test_the_bounded_turns_are_what_the_speaker_totals_are_taken_over(self) -> None:
+        """An unbounded turn would count speech time the recording does not hold."""
+        turns = diarized_segments([ScriptLine(speaker="SPEAKER_00", start=0.0, end=9.970344)], 5.0)
+        assert speaker_activity(turns.segments)["speech_s"] == pytest.approx(5.0)
 
 
 class TestTheDiarizationBlock:

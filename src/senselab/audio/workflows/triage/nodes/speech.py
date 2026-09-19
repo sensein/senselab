@@ -88,6 +88,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
 )
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
+    bound_reading,
     clamp_extent,
     consensus_words,
     find_measurement,
@@ -1524,10 +1525,17 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         notes.append("no whole-file diarization derivative is in the store; this branch reads one and runs none")
     else:
         store.used(diarize_act, read.measurement_id)
+        bounded_n = 0
+        max_overshoot_s = 0.0
+        past_end_n = 0
         for start, end, label in read.segments:
-            extent = clamp_extent((start, end), plain)
-            if extent[1] <= extent[0]:
+            extent = bound_reading((start, end), plain)
+            if extent is None:
+                past_end_n += 1
                 continue
+            if extent[1] < end:
+                bounded_n += 1
+                max_overshoot_s = max(max_overshoot_s, end - extent[1])
             speaker_id = store.entity(
                 prov_type="speaker",
                 extent=extent,
@@ -1545,7 +1553,15 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "model": read.model,
             "exclusive": read.exclusive,
             "n_segments": len(speaker_segments),
+            "segments_bounded_n": bounded_n,
+            "segments_past_end_n": past_end_n,
+            "max_overshoot_s": max_overshoot_s,
         }
+        if bounded_n or past_end_n:
+            notes.append(
+                f"the derivative's diarizer reached past this stream's decode: {bounded_n} turn(s) bound back, "
+                f"{past_end_n} dropped, the furthest by {max_overshoot_s:.3f}s"
+            )
         if read.n_speakers != speaker_count:
             notes.append(f"the derivative records {read.n_speakers} speaker(s) and its segments carry {speaker_count}")
 
