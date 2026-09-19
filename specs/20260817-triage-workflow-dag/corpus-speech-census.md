@@ -57,6 +57,13 @@ The same check over the other store trees on this scratch — `triage_battery_pr
 `triage_battery_20260908`, 388 stores each — finds the same three nodes and no `pii` entity. No
 corpus-scale run of the branches exists on this filesystem.
 
+**Two corrections to descriptions of this run that were circulating while the census was being
+taken.** First, the `pii` entities are **not** present: 0 of them across 62,578 stores, verified by
+a full pass that also implements the word-level string-recovery path (§1a). Second, QUALITY **did**
+run: it has activities in 60,202 stores and 59,936 live verdicts, added by a later
+`QUALITY/clip_consistency` pass whose timestamps sit a week after the original run. The nodes that
+never ran are `routing`, AIRWAY, SPEECH, VOICE, REDACT and VERDICT. Six of the ten, not seven.
+
 ### The one thing that was measured rather than read
 
 Section 1 below reports a **fresh PII scan run today over the transcripts those stores hold**. It is

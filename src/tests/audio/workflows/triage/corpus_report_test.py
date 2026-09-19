@@ -177,3 +177,38 @@ class TestRendering:
         """A run that produced nothing must still produce a readable report."""
         rendered = render_markdown(aggregate(decisions(tmp_path)), tmp_path)
         assert "No decisions were read." in rendered
+
+
+class TestDuration:
+    """How long the recording is, counted beside what the graph decided about it."""
+
+    def test_buckets_run_from_the_shortest_edge_upward(self, tmp_path: Path) -> None:
+        """An unusually short recording is a different finding from a task attempted and failed."""
+        for stem, seconds in (("sub-a", 0.4), ("sub-b", 2.0), ("sub-c", 45.0), ("sub-d", 300.0)):
+            _write_row(tmp_path, stem, _verdict(), duration_s=seconds)
+        report = aggregate(decisions(tmp_path))
+        assert list(report.durations) == ["0-1s", "1-3s", "30-60s", ">=60s"]
+
+    def test_a_header_that_gave_no_duration_is_counted_last_not_dropped(self, tmp_path: Path) -> None:
+        """A recording nobody could time is still a recording of the corpus."""
+        _write_row(tmp_path, "sub-a", _verdict(), duration_s=None)
+        _write_row(tmp_path, "sub-b", _verdict(), duration_s=12.0)
+        report = aggregate(decisions(tmp_path))
+        assert list(report.durations)[-1] == "unknown"
+        assert report.durations["unknown"] == 1
+
+    def test_triage_is_cross_tabbed_against_duration(self, tmp_path: Path) -> None:
+        """The corpus question is whether the short recordings are the ones that flag."""
+        _write_row(tmp_path, "sub-a", _verdict(Triage.FLAG), duration_s=0.5)
+        _write_row(tmp_path, "sub-b", _verdict(Triage.FLAG), duration_s=0.7)
+        _write_row(tmp_path, "sub-c", _verdict(Triage.PASS), duration_s=20.0)
+        report = aggregate(decisions(tmp_path))
+        assert report.triage_by_duration["0-1s"] == {"flag": 2}
+        assert report.triage_by_duration["10-30s"] == {"pass": 1}
+
+    def test_a_row_without_a_decision_still_reaches_its_duration_bucket(self, tmp_path: Path) -> None:
+        """A run that raised is counted where its duration puts it, not nowhere."""
+        _write_row(tmp_path, "sub-a", None, duration_s=0.2)
+        report = aggregate(decisions(tmp_path))
+        assert report.durations["0-1s"] == 1
+        assert report.triage_by_duration["0-1s"] == {UNREAD: 1}
