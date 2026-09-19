@@ -45,7 +45,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Proposal,
     Result,
     SpectrogramBlock,
-    Syllable,
     branch_params,
     content_coverage,
     contest,
@@ -338,7 +337,7 @@ class TestAFindingNamesTheEvidenceItWasReadOff:
         agent = store.agent(agent_type="software", version="test")
         findings = [
             count("syllables", 12, 12, "span-1", "envelope-1"),
-            count("realised_cycles", 4, None, "span-1", "wideband-1"),
+            count("ppg_repetition_start_s", [0.2, 0.5], None, "span-1", "wideband-1"),
         ]
         [entity_id] = write_findings(store, activity, agent, findings, signal="plain")
         assert store.derived_from(entity_id) == ["span-1", "envelope-1", "wideband-1"], "union, first-seen order"
@@ -445,7 +444,7 @@ class TestTheExpectationTableIsData:
         """A syllable train is a speaking task, so its row says what the instruction asked for."""
         assert set(SYLLABLE_REPETITION) <= set(SPEECH_EXPECTATIONS)
         assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].pattern is Pattern.SYLLABLE_TRAIN
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == (Syllable("labial", "low"),)
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("p", "aa")
         assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].pattern is Pattern.SYLLABLE_SEQUENCE
         assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].pattern is Pattern.SYLLABLE_SEQUENCE
 
@@ -468,7 +467,12 @@ class TestTheExpectationTableIsData:
         assert AIRWAY_EXPECTATIONS["breath-sounds"].as_mapping()["unviable"] == [["route", "as `fivebreaths`"]]
 
     def test_the_v1_v2_pairs_differ_in_exactly_the_field_the_design_names(self) -> None:
-        """Written as data the pair cannot drift; written as two functions it repeatedly did."""
+        """Written as data the pair cannot drift; written as two functions it repeatedly did.
+
+        The DDK pair gained a third difference when the template became the token's phonemes: the
+        v2 stimulus says "puh" where v1 says "pa", which is a different vowel. The place-and-height
+        template could not record that and the two rows were identical; the phoneme template can.
+        """
 
         def difference(a: Expectation, b: Expectation) -> set[str]:
             return {f.name for f in fields(Expectation) if getattr(a, f.name) != getattr(b, f.name)}
@@ -478,7 +482,9 @@ class TestTheExpectationTableIsData:
         free = difference(SPEECH_EXPECTATIONS["free-speech"], SPEECH_EXPECTATIONS["free-speech-v2"])
         assert "anti_pattern" in free
         ddk = difference(SPEECH_EXPECTATIONS["diadochokinesis-pa"], SPEECH_EXPECTATIONS["diadochokinesis-v2-puh"])
-        assert ddk == {"expected_event_count", "declared_duration_s"}
+        assert ddk == {"expected_event_count", "declared_duration_s", "sequence"}
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("p", "aa")
+        assert SPEECH_EXPECTATIONS["diadochokinesis-v2-puh"].sequence == ("p", "ah")
 
     def test_the_pending_declaration_rows_are_not_in_the_dispatch_table(self) -> None:
         """CAPE-V and loudness are ``LEXICAL_SPEECH``, so ``align_voice`` must not reach them."""
@@ -648,8 +654,10 @@ class TestEveryOperatingPointIsAConfigKey:
     def test_every_key_ships_a_value_and_point_reads_it_without_refusing(self) -> None:
         """The design fitted every key; none may still ship null, and ``point`` never raises for one."""
         config = load_triage_config()
-        numeric = [key for key in PARAM_KEYS if key != "label_sets"]
-        assert len(numeric) == 35
+        mappings = {key for key in PARAM_KEYS if f"{PARAM_SECTION}.{key}" in DATA_MAP_PATHS}
+        numeric = [key for key in PARAM_KEYS if key not in mappings]
+        assert mappings == {"label_sets", "phoneme_place_classes", "phoneme_vowel_classes"}
+        assert len(numeric) == 29
         params = branch_params(config)
         for key in numeric:
             assert config.values[PARAM_SECTION][key] is not None, key
@@ -699,14 +707,14 @@ class TestEveryOperatingPointIsAConfigKey:
     def test_a_tuple_valued_key_comes_back_as_a_tuple(self) -> None:
         """YAML gives a list; the body's arithmetic wants two floats."""
         assert _params(modulation_band_hz=[1.5, 9.0]).point("modulation_band_hz") == (1.5, 9.0)
-        assert _params(place_centroid_bands_hz={"labial": [200, 900]}).point("place_centroid_bands_hz") == {
-            "labial": (200.0, 900.0)
+        assert _params(phoneme_place_classes={"labial": ["p", "b"]}).point("phoneme_place_classes") == {
+            "labial": ("p", "b")
         }
 
     def test_a_count_key_comes_back_as_an_integer(self) -> None:
         """``point("echo_ngram_n")`` indexes a slice; a float there is a TypeError at the call site."""
         assert isinstance(_params(echo_ngram_n=3).point("echo_ngram_n"), int)
-        assert isinstance(_params(ddk_min_repetitions=4).point("ddk_min_repetitions"), int)
+        assert isinstance(_params(echo_ngram_n=3.0).point("echo_ngram_n"), int)
 
 
 # --------------------------------------------------------------------- the shared helpers
