@@ -52,15 +52,19 @@ ROUTED = "routed"
 DECLINED = "declined"
 UNAVAILABLE = "unavailable"
 UNGATED = "ungated"
+UNJUDGED = "unjudged"
 
-BRANCH_ROUTE_STATES = (ROUTED, DECLINED, UNAVAILABLE, UNGATED)
-"""What the ruleset made of one branch: a gate fired, every gate was silent, none could be read, or
-the branch configures no gate at all and the ruleset never looked."""
+BRANCH_ROUTE_STATES = (ROUTED, DECLINED, UNAVAILABLE, UNGATED, UNJUDGED)
+"""What the ruleset made of one branch: a gate fired, every gate was silent, none could be read, the
+branch configures no gate at all and the ruleset never looked, or ROUTING recorded no decision for
+the branch and so never judged it. Only :data:`UNJUDGED` is a statement about ROUTING rather than
+about the branch; the first four are all things ROUTING read and wrote down."""
 
 EMPTY = "empty"
 UNEXPLAINED = "unexplained"
+UNREADABLE = "unreadable"
 
-FILE_ROUTE_STATES = (ROUTED, EMPTY, UNEXPLAINED)
+FILE_ROUTE_STATES = (ROUTED, EMPTY, UNEXPLAINED, UNREADABLE)
 """What the ruleset made of the whole recording, mirroring
 :class:`~senselab.audio.workflows.triage.routing_analysis.ruleset.RouteState`."""
 
@@ -151,6 +155,10 @@ BAD_MAP_VALUES = "routing.hint_branch_map names a branch this graph does not rou
 
 UNEXPLAINED_CONTENT = (
     "no branch routed and the recording was not measurably empty; the ruleset could not account for what is in it"
+)
+
+UNREADABLE_EMPTINESS = (
+    "no branch routed and the emptiness bypass could not be read; whether the recording carried anything is unknown"
 )
 
 UNREAD_DECLARATION = (
@@ -373,7 +381,8 @@ class FileVerdict:
         declared_family: The task family the recording declares, or None. In the product because the
             fold is task-aware: which flag grounds applied depends on it.
         routes: What the ruleset made of each branch, one of :data:`BRANCH_ROUTE_STATES`. Present
-            always, beside ``findings``.
+            always, beside ``findings``. A branch ROUTING wrote no decision for is
+            :data:`UNJUDGED`, which is this fold's own reading and never a value ROUTING wrote.
         route_state: What it made of the whole recording, one of :data:`FILE_ROUTE_STATES`, or None
             when ``routing`` wrote no evaluation.
         agreement: ``agree`` | ``mismatch`` | ``resolved`` | ``not_run`` per branch.
@@ -481,10 +490,11 @@ def _agreement(route: str, reported: bool, found_state: str) -> str:
 
     Returns:
         ``not_run`` when the branch left no report, ``agree`` or ``mismatch`` against a route the
-        ruleset could read, and ``resolved`` where it could not. Two routes fall to ``resolved`` and
-        neither reaches the ``routed`` or ``declined`` arms: :data:`UNAVAILABLE`, a branch whose
-        gates were all unreadable, and :data:`UNGATED`, a branch that names no gate. Neither made a
-        claim to agree or disagree with, for different reasons.
+        ruleset could read, and ``resolved`` where it could not. Three routes fall to ``resolved``
+        and none reaches the ``routed`` or ``declined`` arms: :data:`UNAVAILABLE`, a branch whose
+        gates were all unreadable; :data:`UNGATED`, a branch that names no gate; and
+        :data:`UNJUDGED`, a branch ROUTING recorded no decision for. None made a claim to agree or
+        disagree with, for three different reasons.
     """
     if not reported:
         return NOT_RUN
@@ -560,7 +570,9 @@ def fold_file_verdict(
     The two discard grounds are read off different things. ``unmeasurable`` is ADMIT's own fail;
     ``acoustically_empty`` is the ruleset's :data:`EMPTY` state, which is the emptiness bypass having
     read every tracked stream peak under its floor. A recording nothing routed that was *not* empty
-    is :data:`UNEXPLAINED`, which flags rather than discards.
+    is :data:`UNEXPLAINED`, and one whose bypass could not be read at all is :data:`UNREADABLE`.
+    Both flag rather than discard, under their own grounds: the ruleset failing to account for
+    content and the run failing to produce the evidence are not the same report.
 
     Args:
         node_verdicts: Every deciding node's conclusion, in graph order, one per node.
@@ -601,7 +613,7 @@ def fold_file_verdict(
     branches_seen = list(dict.fromkeys([*branch_decisions, *by_branch, *claims]))
 
     routes = {
-        branch: branch_decisions[branch].route_state if branch in branch_decisions else UNAVAILABLE
+        branch: branch_decisions[branch].route_state if branch in branch_decisions else UNJUDGED
         for branch in branches_seen
     }
     findings = {branch: _found(branch in by_branch, spans.get(branch, 0)) for branch in branches_seen}
@@ -645,6 +657,8 @@ def fold_file_verdict(
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, UNREAD_DECLARATION))
     if route_state == UNEXPLAINED:
         reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, UNEXPLAINED_CONTENT))
+    if route_state == UNREADABLE:
+        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, UNREADABLE_EMPTINESS))
     absences = {branch: dict(gates) for branch, gates in (critical_absences or {}).items()}
     if absences:
         named = "; ".join(
