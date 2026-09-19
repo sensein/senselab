@@ -21,14 +21,16 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 
-from senselab.audio.data_structures import Audio
+from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes import speech as speech_module
 from senselab.audio.workflows.triage.nodes.common import live_entities
+from senselab.audio.workflows.triage.nodes.ddk import CV_AUTHORITY, INSTRUMENT_READING, TRANSCRIPT_CLAIM
 from senselab.audio.workflows.triage.nodes.redact import _pii_marked_words, redact
-from senselab.audio.workflows.triage.nodes.speech import speech
+from senselab.audio.workflows.triage.nodes.speech import _hypotheses, speech
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
@@ -296,3 +298,221 @@ class TestRedactRunsOverSpeechsOwnStore:
             assert SENTINEL.encode() not in blob
             for entity_id in ids:
                 assert entity_id.encode() not in blob
+
+
+DDK_TASK = "diadochokinesis-pa"
+"""The declared family that makes the CV instrument the authority over the recogniser text."""
+
+DDK_WORDS = ["papapapa", "pataca", SENTINEL, "pataca"]
+"""What a recogniser makes of a /pa/ train, with one identifying word said inside it."""
+
+PPG_FRAME_S = 0.01
+PPG_REPEATS = 8
+PPG_LEAD_S = 0.2
+PPG_STOP_S = 0.05
+PPG_VOWEL_S = 0.2
+
+
+def _pa_raster() -> np.ndarray:
+    """A one-hot posteriorgram of eight /pa/ syllables, covering roughly 0.2 s to 2.2 s.
+
+    Returns:
+        The raster, ``(frame, phoneme)``, one-hot on the phoneme of each run.
+    """
+    runs = [("<silent>", PPG_LEAD_S)]
+    for _ in range(PPG_REPEATS):
+        runs.extend([("p", PPG_STOP_S), ("aa", PPG_VOWEL_S)])
+    indices: list[int] = []
+    for label, seconds in runs:
+        indices.extend([PHONEME_LABELS.index(label)] * max(1, int(round(seconds / PPG_FRAME_S))))
+    frames = np.zeros((len(indices), len(PHONEME_LABELS)), dtype=float)
+    frames[np.arange(len(indices)), indices] = 1.0
+    return frames
+
+
+def _seed_ppg(store: ProvStore, tmp_path: Path) -> None:
+    """PREPROCESS's posteriorgram derivative, which the CV instrument is the only reader of.
+
+    Args:
+        store: The store to seed.
+        tmp_path: The run directory the sidecar path is relative to.
+    """
+    raster = _pa_raster()
+    (tmp_path / "derivatives").mkdir(exist_ok=True)
+    np.savez(
+        tmp_path / "derivatives" / "ppg_posteriorgram.npz",
+        posteriorgram=raster.astype(np.float16),
+        phonemes=np.asarray(PHONEME_LABELS, dtype=np.str_),
+        seconds_per_frame=np.float64(PPG_FRAME_S),
+        duration_s=np.float64(raster.shape[0] * PPG_FRAME_S),
+        sampling_rate=np.int64(16000),
+    )
+    activity = store.activity(node="PREPROCESS", step="ppg", parameters={})
+    entity_id = store.entity(
+        prov_type="measurement",
+        extent=(0.0, raster.shape[0] * PPG_FRAME_S),
+        attributes={
+            "name": "ppg_posteriorgram",
+            "signal": "enhanced",
+            "path": "derivatives/ppg_posteriorgram.npz",
+            "frames": int(raster.shape[0]),
+            "n_phonemes": int(raster.shape[1]),
+            "phonemes": list(PHONEME_LABELS),
+            "seconds_per_frame": PPG_FRAME_S,
+            "layout": "frames_by_phonemes",
+        },
+    )
+    store.was_generated_by(entity_id, activity)
+
+
+def _texts_the_store_holds(store: ProvStore) -> list[str]:
+    """The consensus transcript and every recogniser's own transcript, in the branch's own order.
+
+    Args:
+        store: The store SPEECH read.
+
+    Returns:
+        ``[consensus text, *per-source transcripts]``, read off the store rather than reconstructed.
+    """
+    [consensus] = [
+        entity
+        for entity in live_entities(store, "measurement")
+        if entity.attributes.get("name") == "consensus_transcript"
+    ]
+    names = [str(row["name"]) for row in consensus.attributes["sources"]]
+    hypotheses = _hypotheses(store, names)
+    return [str(consensus.attributes["text"]), *(str(hypotheses[name].attributes["transcript"]) for name in names)]
+
+
+def _ddk_store(
+    store: ProvStore,
+    tmp_path: Path,
+    seed_preprocess_store: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    hint: AudioHints | None,
+) -> tuple[ProvStore, list[str]]:
+    """One DDK-shaped store with the real SPEECH branch run over it, and the texts it scanned.
+
+    Args:
+        store: The empty store.
+        tmp_path: The run directory.
+        seed_preprocess_store: T1's shared seeder.
+        monkeypatch: The patcher.
+        hint: The declaration, or None to run the same content undeclared.
+
+    Returns:
+        ``(store, the texts handed to scan_for_pii)``.
+    """
+    seed_preprocess_store(store, duration_s=DURATION_S, words=_place(DDK_WORDS))
+    _seed_level(store, tmp_path)
+    _seed_ppg(store, tmp_path)
+    scanned = _stub_speech_pii(monkeypatch, [("PERSON", SENTINEL)])
+    speech(store, "plain", _config(tmp_path), hint, run_dir=tmp_path)
+    return store, scanned
+
+
+@pytest.fixture(name="ddk_run")
+def _ddk_run(
+    store: ProvStore,
+    tmp_path: Path,
+    seed_preprocess_store: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[ProvStore, list[str]]:
+    """A declared /pa/ recording whose recogniser text the CV instrument contradicts.
+
+    Args:
+        store: The empty store.
+        tmp_path: The run directory.
+        seed_preprocess_store: T1's shared seeder.
+        monkeypatch: The patcher.
+
+    Returns:
+        ``(store, the texts handed to scan_for_pii)``.
+    """
+    return _ddk_store(
+        store,
+        tmp_path,
+        seed_preprocess_store,
+        monkeypatch,
+        hint=AudioHints(metadata={"task_token": DDK_TASK}),
+    )
+
+
+class TestTheSyllableInstrumentDoesNotNarrowThePiiScan:
+    """The safety pin. A declared DDK task may carry anything a participant said, PII included.
+
+    The CV instrument is recorded as the authority over what was *produced*; it is not allowed to
+    change what the detectors are *given*. Suppressing or replacing recogniser text before the
+    scan would be a disclosure path, and this is the test that fails instead of one opening.
+    ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md`` holds the constraint.
+    """
+
+    def test_the_instrument_really_did_contradict_this_recordings_words(
+        self, ddk_run: tuple[ProvStore, list[str]]
+    ) -> None:
+        """The control. Without a live contradiction every assertion below is vacuously true."""
+        contradicted, _ = ddk_run
+        [reading] = [
+            entity
+            for entity in live_entities(contradicted, "measurement")
+            if entity.attributes.get("name") == INSTRUMENT_READING
+        ]
+        assert reading.attributes["authority"] == CV_AUTHORITY
+        assert reading.attributes["contradicted_words_n"] == len(DDK_WORDS)
+        contests = [
+            entity
+            for entity in live_entities(contradicted, "assertion")
+            if entity.attributes.get("verb") == "contest" and entity.attributes.get("claim") == TRANSCRIPT_CLAIM
+        ]
+        assert len(contests) == len(DDK_WORDS)
+
+    def test_the_scan_was_handed_the_consensus_text_and_every_recogniser_transcript(
+        self, ddk_run: tuple[ProvStore, list[str]]
+    ) -> None:
+        """Exactly the store's own strings, in the branch's own order, and nothing removed."""
+        contradicted, scanned = ddk_run
+        assert scanned == _texts_the_store_holds(contradicted)
+
+    def test_the_scan_saw_the_identifying_word_inside_the_contradicted_extent(
+        self, ddk_run: tuple[ProvStore, list[str]]
+    ) -> None:
+        """The whole hazard in one assertion: a name said during a DDK task still reaches PII."""
+        _, scanned = ddk_run
+        assert scanned
+        assert all(SENTINEL in text for text in scanned)
+
+    def test_the_declared_run_scans_byte_for_byte_what_the_undeclared_run_scans(
+        self,
+        ddk_run: tuple[ProvStore, list[str]],
+        tmp_path: Path,
+        seed_preprocess_store: Callable[..., None],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The same content, declared and undeclared. Only the declared run marks anything."""
+        _, declared_texts = ddk_run
+        _, undeclared_texts = _ddk_store(
+            ProvStore(run_id="undeclared"), tmp_path, seed_preprocess_store, monkeypatch, hint=None
+        )
+        assert declared_texts == undeclared_texts
+
+    def test_the_contradicted_word_is_still_marked_for_redaction(self, ddk_run: tuple[ProvStore, list[str]]) -> None:
+        """A contest beside a word is not a withdrawal of it; REDACT's reader still finds it."""
+        contradicted, _ = ddk_run
+        marked = _pii_marked_words(contradicted)
+        texts = {str(contradicted.get_entity(word_id).attributes.get("text")) for word_id in marked}
+        assert texts == {SENTINEL}
+
+    def test_the_released_transcript_still_masks_it(
+        self, ddk_run: tuple[ProvStore, list[str]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End to end: the syllable reading changed nothing about what is released."""
+        contradicted, _ = ddk_run
+        _stub_redact_pii_clean(monkeypatch)
+        result = redact(
+            contradicted, "recording", _config(tmp_path), run_dir=tmp_path, artifacts_dir=_release(tmp_path)
+        )
+        assert result.verdict.outcome is Outcome.PASS
+        text = result.artifacts["transcript"].read_text()
+        assert SENTINEL not in text
+        assert text.split() == ["papapapa", "pataca", "[PERSON]", "pataca"]

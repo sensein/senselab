@@ -640,6 +640,7 @@ BRANCH_MEASURES: dict[str, tuple[str, ...]] = {
         "ppg_cycle_insertions_n",
         "ppg_cycle_nucleus_fraction",
         "ppg_place_agreement",
+        "ppg_contradicted_words_n",
     ),
     "VOICE": ("spans_n", "phonation_s", "longest_span_s"),
 }
