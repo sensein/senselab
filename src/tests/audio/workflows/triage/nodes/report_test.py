@@ -1701,6 +1701,135 @@ class TestInitialAndUpdatedSpansShareALane:
         assert y0 < y1
 
 
+class TestALaneOfSeveralSpanKindsDrawsARowPerKind:
+    """SPEECH mints a task extent, the phrase runs inside it and the structure spans over both.
+
+    Drawn on one row they were overlapping bars carrying the same caption, since the caption is the
+    speaker and the speaker is the same. The role is what separates them and it was being dropped.
+    """
+
+    def _speech_spans(
+        self, store: ProvStore, proposals: Sequence[tuple[str, tuple[float, float], dict[str, Any]]]
+    ) -> None:
+        """Mint SPEECH proposals through the only writer of one, each derived from a live span."""
+        from senselab.audio.workflows.triage.nodes.branches import PROPOSERS, propose_spans
+
+        parent = next(entity.id for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
+        activity = store.activities("SPEECH")[0].id
+        agent = software_agent(store)
+        mint = PROPOSERS["SPEECH"]
+        propose_spans(
+            store,
+            activity,
+            agent,
+            [mint(role, extent, parent, **attributes) for role, extent, attributes in proposals],
+        )
+
+    @pytest.fixture
+    def many_roles(self, store: ProvStore, tmp_path: Path) -> ProvStore:
+        """Three SPEECH roles over one another, all attributed to the same speaker."""
+        _seed_report_store(store, tmp_path, full=True)
+        self._speech_spans(
+            store,
+            [
+                ("task_extent", (1.0, 2.6), {"attributed_to": "SPEAKER_00"}),
+                ("phrase_run_0", (1.1, 1.7), {"attributed_to": "SPEAKER_00", "run_index": 0}),
+                ("phrase_run_1", (1.9, 2.5), {"attributed_to": "SPEAKER_00", "run_index": 1}),
+                ("structure_0", (1.1, 2.5), {"attributed_to": "SPEAKER_00", "structure_index": 0}),
+            ],
+        )
+        return store
+
+    def test_the_roles_land_on_rows_of_their_own(
+        self, many_roles: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The defect: four spans over one another, all captioned SPEAKER_00, all on one row."""
+        panels = _capture_panels(monkeypatch)
+        report(many_roles, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "speech spans")
+        assert {"task_extent", "phrase_run", "structure"} <= set(rows)
+        assert "proposed" not in rows
+
+    def test_the_two_phrase_runs_share_the_one_row_their_kind_has(
+        self, many_roles: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A row per span, rather than a row per kind of span, would be no more readable."""
+        panels = _capture_panels(monkeypatch)
+        report(many_roles, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "speech spans")
+        assert len(rows["phrase_run"]) == 2
+
+    def test_no_two_tokens_of_one_row_cover_the_same_time(
+        self, many_roles: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stated as the invariant: a row may hold many bars, never two over one another."""
+        panels = _capture_panels(monkeypatch)
+        report(many_roles, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "speech spans")
+        for name, tokens in rows.items():
+            if name == "initial":
+                continue
+            overlapping = [
+                (first["text"], second["text"])
+                for index, first in enumerate(tokens)
+                for second in tokens[index + 1 :]
+                if first["start"] < second["end"] and second["start"] < first["end"]
+            ]
+            assert overlapping == [], name
+
+    def test_a_lane_of_one_kind_keeps_the_single_proposed_row(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AIRWAY mints one kind here, so its lane must be untouched by the split."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert list(_lane_rows(panels[0], "airway")) == ["proposed", "initial"]
+
+    def test_the_json_carries_the_row_each_proposal_is_drawn_on(self, many_roles: ProvStore, tmp_path: Path) -> None:
+        """The lane records are what the page draws, checkable without pixels — the sub-row included.
+
+        The seeder's own speech span is hand-built and carries no role, which is why ``unroled`` is
+        here: a span with no role takes a row saying so rather than joining another kind's.
+        """
+        payload = json.loads(report(many_roles, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        [speech] = [lane for lane in payload["evidence"]["lanes"] if lane["lane"] == "SPEECH"]
+        proposed = [span for span in speech["spans"] if span["row"] == "proposed"]
+        assert {span["role"] for span in proposed} == {"task_extent", "phrase_run", "structure", "unroled"}
+        assert all(span["role"] == "" for span in speech["spans"] if span["row"] == "initial")
+
+    def test_the_initial_row_still_holds_every_parent_once(
+        self, many_roles: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Splitting the proposals may not split the row that says what they were made from."""
+        panels = _capture_panels(monkeypatch)
+        report(many_roles, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "speech spans")
+        assert len(rows["initial"]) == 1
+        assert rows["initial"][0]["text"].startswith("envelope ")
+
+    def test_a_split_lane_with_no_derivation_separates_its_rows_by_label(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The segments fallback keys rows on the label, so the kind has to reach the label."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        self._speech_spans(
+            store,
+            [
+                ("task_extent", (1.0, 2.6), {"attributed_to": "SPEAKER_00"}),
+                ("phrase_run_0", (1.1, 1.7), {"attributed_to": "SPEAKER_00", "run_index": 0}),
+            ],
+        )
+        parent = next(entity for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
+        store.was_invalidated_by(parent.id, store.activities("PREPROCESS")[0].id)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        lane = _lane_panel(panels[0], "speech spans")
+        assert lane["type"] == "segments"
+        assert len({segment["label"] for segment in lane["segments"]}) == len(lane["segments"])
+        assert all(" · " in segment["label"] for segment in lane["segments"])
+
+
 class TestElementIdsNameLiveEvidenceOnly:
     """A join key to a withdrawn element credits a claim to evidence that no longer stands."""
 

@@ -37,6 +37,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     live_entities,
     report_entities,
     resolve_stream,
+    span_role_kind,
     span_sources,
 )
 from senselab.audio.workflows.triage.nodes.figure import FigureStyle, branch_lanes, summary_pages
@@ -364,10 +365,30 @@ def _lane(name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"type": "segments", "segments": entries, "name": name, "height_ratio": 0.6}] if entries else []
 
 
+def _role_qualified(span: Entity, label: str, roles: tuple[str, ...]) -> str:
+    """One span's caption on a lane drawing more than one kind of span.
+
+    Args:
+        span: The span.
+        label: What the lane captions it with.
+        roles: Every role kind the lane draws.
+
+    Returns:
+        The label, prefixed by the span's role kind when the lane draws more than one — a
+        ``segments`` lane's rows are its distinct labels, so without the prefix two roles sharing a
+        caption share a row and overlap there.
+    """
+    return f"{span_role_kind(span)} · {label}" if len(roles) > 1 else label
+
+
 def _derived_lane(
     name: str, entries: list[tuple[Entity, str]], sources: dict[str, list[Entity]]
 ) -> list[dict[str, Any]]:
     """One span lane, paired with the spans its own spans were derived from when there are any.
+
+    A branch that mints more than one kind of span gets a row per kind, so a ``task_extent`` and the
+    phrase runs inside it are separable bars rather than one bar drawn over another. A branch that
+    mints one kind keeps the single ``proposed`` row it always had.
 
     Args:
         name: The lane's name, drawn as the panel's y-label.
@@ -377,18 +398,24 @@ def _derived_lane(
     Returns:
         A one-element list holding the panel, or an empty list. With no derivation to show the
         panel is the ``segments`` lane :func:`_lane` builds and nothing else; with one it is a
-        two-row ``tokens`` lane whose lower row holds what the lane draws and whose upper row holds
-        the spans those were derived from, each pair joined by the edge that relates them.
+        ``tokens`` lane whose lower rows hold what the lane draws and whose upper row holds the
+        spans those were derived from, each pair joined by the edge that relates them.
     """
+    roles = tuple(dict.fromkeys(span_role_kind(span) for span, _ in entries))
     paired = [(span, label, sources.get(span.id, [])) for span, label in entries]
     if not any(parents for _, _, parents in paired):
-        return _lane(name, _segments((span.extent, label) for span, label in entries if span.extent is not None))
+        return _lane(
+            name,
+            _segments(
+                (span.extent, _role_qualified(span, label, roles)) for span, label in entries if span.extent is not None
+            ),
+        )
     tokens: list[dict[str, Any]] = [
         {
             "text": label,
             "start": float(span.extent[0]),
             "end": float(span.extent[1]),
-            "row": _PROPOSED_ROW,
+            "row": _PROPOSED_ROW if len(roles) < 2 else span_role_kind(span),
             "color": _PROPOSED_FILL,
             "key": span.id,
             "derived_from": [parent.id for parent in parents],
@@ -1312,6 +1339,7 @@ def _lane_records(store: ProvStore) -> list[dict[str, Any]]:
                     "entity_id": row.key,
                     "label": row.label,
                     "row": row.row,
+                    "role": row.role,
                     "start_s": row.start,
                     "end_s": row.end,
                     "derived_from": list(row.derived_from),

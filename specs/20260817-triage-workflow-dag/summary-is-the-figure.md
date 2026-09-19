@@ -177,3 +177,102 @@ than in a panel title.
 Consequently **the span axis is never collapsed**, unlike the spectrogram and the rasters above it:
 a collapsed row cannot carry its note, and the note is the finding. A mutation dropping rows for
 lanes that did not run fails nine tests.
+
+## A branch is one block of rows, not one stacked row
+
+Owner, 2026-09-18, reading the rendered summary: *"the last added panel seems to be showing
+multiple speech outputs in a single lane."*
+
+### What was on the page
+
+One row per lane put every span a branch minted on one y. SPEECH mints four kinds — `task_extent`
+over the whole response, `phrase_run_{index}` inside it, `structure_{index}` over the realised
+stimulus units, and, since DDK's train landed in the `speech` family, `ppg_train`. They nest by
+construction, so they were four rectangles drawn over one another. Worse, the caption did not
+separate them: `_proposed_span_label` captions a proposal `role/qualifier`, and the qualifier for
+all four is the same speaker, so the render read
+`phrase_run_0/SPEAKEstructure_0/SPEAKER_00hrase_run_1/SPEAKER_0task_extent/SPEAKER_00` — four
+captions written into the same pixels. VOICE had it too, with `task_extent` and `phonation` both
+captioned `sustained`.
+
+### The treatment: a sub-row per role kind, inside one banded block
+
+The constraint was to keep one visual block per branch. A lane is therefore a **block of sub-rows,
+one per kind of span it proposed**, held together by a band drawn behind the whole block in a very
+light tint of that lane's own colour. Bars, connectors and band share a hue, which is also what
+answers "which row does this connector land in" without following the line.
+
+**The kind is the role with any trailing `_<number>` stripped** (`span_role_kind`, in `common.py`
+so both renderers read it the same way). A proposer that mints one span per realised unit numbers
+the role — `phrase_run_0`, `phrase_run_1`, `structure_0` — and the number distinguishes the spans,
+not the kind. Keying on the raw role would have been a row per span, which is not more readable
+than a row per branch; keying on the kind is three rows for SPEECH's runs and structures however
+many of each there are. Spans of one kind are disjoint by construction in every proposer, which is
+what makes one row per kind sufficient rather than merely tidier.
+
+**A lane with one kind is the single row it always was**, tick label and all. The role earns a place
+in the tick only once the block is more than one line, where it is the only thing distinguishing
+them: `SPEECH · phrase_run`. A withheld branch, which proposes nothing, is one row, so the
+four-state vocabulary above is untouched.
+
+**The kind leaves the caption once it is on the axis.** The bar now tries `short` (the qualifier)
+before `label` (`role/qualifier`), so the width is spent on what the row label does not already
+say. This is also why `SPEAKER_00` is now legible where `phrase_run_0/SPEAKER_00` was not.
+
+REDACT's spans carry `name` and `category` rather than a role; they are all one kind of thing — a
+planned redaction — differing by the category the caption already carries, so the lane takes
+`REDACTION_NAME` as its kind and stays one row.
+
+### The same defect in `report()`'s PNG form
+
+`report.format: png` does not go through the span axis; it draws `_derived_lane`'s token lanes, and
+those stacked roles in one `proposed` row for exactly the same reason. They now take the role kind
+as the token row, under the same rule — one kind keeps the single `proposed` row, so AIRWAY's lane
+is unchanged. The `segments` fallback (taken only when nothing in the lane has a live parent) keys
+its rows on the label, so there the kind is prefixed to the label instead.
+
+## The initial row now says what it is
+
+Owner, same reading: *"unclear what the initial lane does."*
+
+Four things were wrong with it, all found by looking at the render rather than at the code:
+
+1. **Its tick said `initial`**, one word with no referent, sitting above four branch names. It read
+   as a fifth branch. It now says `initial spans` over `what branches read`.
+2. **Its bars said `20 dB`** — PREPROCESS's own reading of an envelope span, which states a level
+   and never states what was measured over what. `initial_span_label` now names the kind before the
+   reading: `envelope 20 dB`. The family/role form it returns for a branch-minted parent already
+   named its kind and is unchanged.
+3. **It was drawn exactly like a branch row.** It now carries a band of its own and the rule below
+   it is the heavier between-block rule, so the input zone and the output zone are one visible
+   split. The panel title names both zones rather than describing the whole thing at once.
+4. **It went silent when it held nothing.** An empty row with no note cannot be told from a row
+   whose bars are all on another page — the same distinction `lane_note` draws for a branch, which
+   the initial row did not have. `initial_row_note` gives it one.
+
+### What the render showed, after
+
+Eight rows where there were five: the input band, AIRWAY (one kind), SPEECH split four ways
+(`task_extent`, `phrase_run`, `structure`, `ppg_train`), VOICE split two ways (`task_extent`,
+`phonation`), REDACT carrying its did-not-run note. Every caption legible, no bar over another, the
+title fitting the page width. The panel's declared height already grows with its row count
+(`_page_height_ratios`, `raster_row_ratio`), so the split costs nothing that has to be configured.
+
+### What was not done
+
+- **`BranchRow.row` still has its two values.** The zone (`initial`/`proposed`) is the pairing, and
+  `summary.json`'s lane records key on it. The sub-row is a separate field, `role`, and the lane
+  records carry it too — the JSON is the machine-readable counterpart of what the page draws, so a
+  page drawing a row per role and a record not saying which row would no longer be that.
+- **`report.py`'s speech caption is still `attributed_to or 'unattributed'`.** With the role on the
+  row this no longer collides, but it reads wrongly for DDK's `ppg_train`, which carries a
+  `production` and no speaker and therefore captions itself *unattributed* — suggesting a diarizer
+  that failed rather than a span that is not a diarized run. `figure.py`'s `_proposed_span_label`
+  already falls back through `label`, `production`, `attributed_to` and gets this right. Aligning
+  the two is a caption-vocabulary change in a non-default product, not one of the two defects, and
+  is left.
+- **No packing within a kind.** Two spans of one kind overlapping in time would still collide. No
+  proposer writes that, and inventing rows for a case nobody produces would be a layout fitted to
+  nothing.
+- **`nodes/ddk.py` and `BRANCH_MEASURES` untouched**, being concurrently edited. DDK's `ppg_train`
+  is picked up by the shared rule with no per-branch knowledge, so it needs neither.

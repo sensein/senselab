@@ -23,14 +23,17 @@ from senselab.audio.workflows.triage.nodes.figure import (
     LANE_RAN,
     LANE_UNDECIDED,
     LANE_WITHHELD,
+    SPAN_AXIS_TITLE,
     SUMMARY_LANES,
     BranchLane,
     BranchRow,
     FigureStyle,
     branch_lanes,
     branch_report_lines,
+    initial_row_note,
     initial_rows,
     lane_note,
+    lane_roles,
     parent_anchor,
     preprocess_figure,
     rows_on_page,
@@ -197,7 +200,7 @@ class TestTheLaneReadsWhatTheBranchesWrote:
         )
         [lane] = [lane for lane in branch_lanes(routed) if lane.branch == "AIRWAY"]
         [initial] = lane.initial
-        assert (initial.label, initial.short) == ("20 dB", "20 dB")
+        assert (initial.label, initial.short) == ("envelope 20 dB", "envelope 20 dB")
 
     def test_only_the_measures_the_report_carries_are_read(self, routed: ProvStore) -> None:
         """SPEECH's syllable keys are written only on an in-family align run; absent is not None."""
@@ -319,7 +322,7 @@ class TestTheSpanAxisIsOneAxis:
     def test_the_rows_are_the_initial_population_then_one_per_lane(self, routed: ProvStore) -> None:
         """The layout the owner asked for, read off the structure rather than the pixels."""
         lanes = branch_lanes(routed)
-        assert span_axis_rows(lanes) == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
+        assert [row.block for row in span_axis_rows(lanes)] == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
 
     def test_an_initial_span_shared_by_two_branches_is_one_bar(self, routed: ProvStore) -> None:
         """The case the four-lane layout could not show: one parent, proposals in two branches."""
@@ -424,8 +427,164 @@ class TestTheSpanAxisIsOneAxis:
         lanes = branch_lanes(routed)
         withheld = [lane for lane in lanes if lane.state == LANE_WITHHELD]
         assert withheld, "the fixture routes VOICE away, which is what this asserts about"
-        assert span_axis_rows(lanes) == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
+        assert [row.block for row in span_axis_rows(lanes)] == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
         assert all(lane_note(lane, 0) for lane in withheld)
+
+
+def _row_of(lanes: list[BranchLane]) -> dict[str, int]:
+    """Which axis row each proposed span is drawn on, keyed by span id."""
+    position = {(row.block, row.role): index for index, row in enumerate(span_axis_rows(lanes))}
+    return {row.key: position[(lane.branch, row.role)] for lane in lanes for row in lane.proposed}
+
+
+def _overlaps(first: BranchRow, second: BranchRow) -> bool:
+    """Whether two bars cover any of the same recording time."""
+    return first.start < second.end and second.start < first.end
+
+
+class TestABranchIsOneBlockOfRowsRatherThanOneStackedRow:
+    """The branch stays one visual block; the kinds of span inside it stop being drawn over one another."""
+
+    @pytest.fixture
+    def many_roles(self, routed: ProvStore) -> ProvStore:
+        """SPEECH's real shape: a task extent, the phrase runs inside it, and a structure span."""
+        first, second = _envelope_spans(routed)
+        _run_branch(
+            routed,
+            "SPEECH",
+            [
+                ("task_extent", (1.0, 5.0), (first.id, second.id), {"attributed_to": "SPEAKER_00"}),
+                ("phrase_run_0", (1.2, 2.4), first.id, {"attributed_to": "SPEAKER_00", "run_index": 0}),
+                ("phrase_run_1", (3.0, 4.8), first.id, {"attributed_to": "SPEAKER_00", "run_index": 1}),
+                ("structure_0", (1.2, 4.8), first.id, {"attributed_to": "SPEAKER_00", "structure_index": 0}),
+            ],
+            kind="speech",
+            detail={"speaker_count": 1, "words_n": 2, "speech_s": 4.0, "nontarget_speech_s": 0.0, "notes": []},
+        )
+        _run_branch(
+            routed,
+            "AIRWAY",
+            [("cough_event", (1.1, 1.8), first.id, {"label": "cough"})],
+            kind="airway",
+            detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
+        )
+        return routed
+
+    def test_two_roles_covering_the_same_time_are_two_rows(self, many_roles: ProvStore) -> None:
+        """The defect: a task extent and a phrase run inside it drew as one bar over another."""
+        lanes = branch_lanes(many_roles)
+        [speech] = [lane for lane in lanes if lane.branch == "SPEECH"]
+        drawn = _row_of(lanes)
+        extent = next(row for row in speech.proposed if row.role == "task_extent")
+        run = next(row for row in speech.proposed if row.role == "phrase_run")
+        assert _overlaps(extent, run), "the fixture must put them over one another for this to assert anything"
+        assert drawn[extent.key] != drawn[run.key]
+
+    def test_no_two_overlapping_proposals_of_one_branch_share_a_row(self, many_roles: ProvStore) -> None:
+        """Stated as the invariant rather than as the one pair that first showed it broken."""
+        lanes = branch_lanes(many_roles)
+        drawn = _row_of(lanes)
+        collisions = [
+            (first.label, second.label)
+            for lane in lanes
+            for first in lane.proposed
+            for second in lane.proposed
+            if first.key < second.key and _overlaps(first, second) and drawn[first.key] == drawn[second.key]
+        ]
+        assert collisions == []
+
+    def test_the_indexed_spans_of_one_kind_share_one_row(self, many_roles: ProvStore) -> None:
+        """``phrase_run_0`` and ``phrase_run_1`` are one kind; a row apiece would be a row per span."""
+        lanes = branch_lanes(many_roles)
+        drawn = _row_of(lanes)
+        [speech] = [lane for lane in lanes if lane.branch == "SPEECH"]
+        runs = [row for row in speech.proposed if row.role == "phrase_run"]
+        assert len(runs) == 2
+        assert len({drawn[row.key] for row in runs}) == 1
+        assert lane_roles(speech) == ("task_extent", "phrase_run", "structure")
+
+    def test_a_branchs_rows_are_contiguous(self, many_roles: ProvStore) -> None:
+        """One block: no other branch's row may fall between two of a branch's own."""
+        blocks = [row.block for row in span_axis_rows(branch_lanes(many_roles))]
+        runs = [block for index, block in enumerate(blocks) if index == 0 or blocks[index - 1] != block]
+        assert runs == list(dict.fromkeys(blocks))
+        assert runs == [BRANCH_INITIAL_ROW, *SUMMARY_LANES]
+
+    def test_a_branch_that_minted_one_kind_is_the_single_row_it_always_was(self, many_roles: ProvStore) -> None:
+        """AIRWAY proposed one kind here, so nothing about its row may have moved."""
+        rows = [row for row in span_axis_rows(branch_lanes(many_roles)) if row.block == "AIRWAY"]
+        assert [row.tick for row in rows] == ["AIRWAY"]
+
+    def test_a_branch_that_did_not_run_is_still_exactly_one_row(self, many_roles: ProvStore) -> None:
+        """Four run states, and the row a withheld branch says so in may not be lost to the split."""
+        lanes = branch_lanes(many_roles)
+        withheld = [lane for lane in lanes if lane.state == LANE_WITHHELD]
+        assert withheld, "the fixture routes VOICE away, which is what this asserts about"
+        rows = span_axis_rows(lanes)
+        for lane in withheld:
+            assert [row.tick for row in rows if row.block == lane.branch] == [lane.branch]
+            assert lane_note(lane, 0)
+
+    def test_a_row_of_a_split_block_names_its_branch_as_well_as_its_kind(self, many_roles: ProvStore) -> None:
+        """A bare ``phrase_run`` row would not say whose it is once the block is more than one line."""
+        rows = [row for row in span_axis_rows(branch_lanes(many_roles)) if row.block == "SPEECH"]
+        assert len(rows) > 1
+        assert all(row.tick.startswith("SPEECH") and row.role in row.tick for row in rows)
+
+    def test_the_kind_leaves_the_caption_once_it_is_on_the_axis(self, many_roles: ProvStore) -> None:
+        """The bar's width is spent on what the row label does not already say."""
+        lanes = branch_lanes(many_roles)
+        [speech] = [lane for lane in lanes if lane.branch == "SPEECH"]
+        assert {row.short for row in speech.proposed} == {"SPEAKER_00"}
+
+
+class TestTheInitialRowExplainsItself:
+    """The owner could not tell what the initial lane did; it now says what it holds and what its bars are."""
+
+    def test_its_tick_says_more_than_the_bare_word(self, routed: ProvStore) -> None:
+        """``initial`` alongside four branch names reads as a fifth branch."""
+        [row] = [row for row in span_axis_rows(branch_lanes(routed)) if row.block == BRANCH_INITIAL_ROW]
+        assert row.tick != BRANCH_INITIAL_ROW
+        assert "what branches read" in row.tick
+
+    def test_an_initial_bar_names_the_kind_of_thing_it_is(self, routed: ProvStore) -> None:
+        """A bar reading ``20 dB`` says a level and never says what was measured over what."""
+        first = _envelope_spans(routed)[0]
+        _run_branch(
+            routed,
+            "AIRWAY",
+            [("cough_event", (1.1, 1.8), first.id, {"label": "cough"})],
+            kind="airway",
+            detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
+        )
+        [initial] = initial_rows(branch_lanes(routed))
+        assert initial.label.startswith("envelope ")
+        assert initial.label.endswith(" dB")
+
+    def test_the_row_is_never_silent_when_it_holds_nothing(self, routed: ProvStore) -> None:
+        """An empty row with no note cannot be told from a row whose bars are on another page."""
+        lanes = branch_lanes(routed)
+        assert initial_rows(lanes) == ()
+        assert "wasDerivedFrom" in initial_row_note(lanes, 0)
+
+    def test_it_says_when_its_bars_are_all_on_another_page(self, routed: ProvStore) -> None:
+        """The two absences are different facts, exactly as they are for a branch row."""
+        first = _envelope_spans(routed)[0]
+        _run_branch(
+            routed,
+            "AIRWAY",
+            [("cough_event", (1.1, 1.8), first.id, {"label": "cough"})],
+            kind="airway",
+            detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
+        )
+        lanes = branch_lanes(routed)
+        assert "none on this page" in initial_row_note(lanes, 0)
+        assert initial_row_note(lanes, 1) == ""
+
+    def test_the_panel_title_names_both_zones(self) -> None:
+        """A reader who cannot see the split from the bars can read it off the title."""
+        assert "top band" in SPAN_AXIS_TITLE
+        assert "one line per span role" in SPAN_AXIS_TITLE
 
 
 class TestThePairingFollowsTheDerivationEdge:
@@ -494,7 +653,7 @@ class TestThePairingFollowsTheDerivationEdge:
             detail={"labelled_n": 1, "contested_n": 0, "merged_n": 1, "notes": []},
         )
         [lane] = [lane for lane in branch_lanes(routed) if lane.branch == "AIRWAY"]
-        assert [row.label for row in lane.initial] == ["20 dB"]
+        assert [row.label for row in lane.initial] == ["envelope 20 dB"]
 
     def test_a_derivation_naming_something_that_is_not_a_span_draws_no_initial_row(self, routed: ProvStore) -> None:
         """A proposal derived from a measurement has no initial span, and inventing one would lie."""

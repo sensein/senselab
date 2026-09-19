@@ -41,6 +41,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     live_entities,
     report_entities,
     resolve_stream,
+    span_role_kind,
     span_sources,
 )
 from senselab.audio.workflows.triage.nodes.taxonomy import SUMMARISED_CLASSIFIERS
@@ -173,6 +174,16 @@ class FigureStyle:
         branch_link_linewidth: A connector's width.
         branch_link_alpha: A connector's opacity. Connectors are drawn behind every bar and below
             full opacity, so a dense derivation never obscures the spans it relates.
+        branch_block_tint: How far a lane's colour is blended toward white for the band behind its
+            block of sub-rows, ``0`` leaving the lane's own colour and ``1`` leaving white. Every
+            lane is banded in its own hue: the band is what makes one branch's several sub-rows read
+            as one thing and tells a reader which block a connector of that colour lands in.
+        colour_branch_input_band: The band behind the initial row, which marks it as the axis's
+            input zone rather than a fifth branch.
+        colour_span_axis_rule: The rule between two sub-rows of one block.
+        colour_span_axis_block_rule: The rule between two blocks, and under the input zone.
+        span_axis_rule_linewidth: The width of a rule inside a block.
+        span_axis_block_rule_linewidth: The width of a rule between blocks.
     """
 
     page_seconds: float = 20.0
@@ -235,6 +246,12 @@ class FigureStyle:
     branch_row_height: float = 0.56
     branch_link_linewidth: float = 0.7
     branch_link_alpha: float = 0.75
+    branch_block_tint: float = 0.88
+    colour_branch_input_band: str = "#eef3fb"
+    colour_span_axis_rule: str = "0.92"
+    colour_span_axis_block_rule: str = "0.55"
+    span_axis_rule_linewidth: float = 0.4
+    span_axis_block_rule_linewidth: float = 0.9
 
     def row_colour(self, code: str) -> str:
         """The colour for one span-source row.
@@ -2071,6 +2088,17 @@ def preprocess_figure(
 BRANCH_INITIAL_ROW = "initial"
 BRANCH_PROPOSED_ROW = "proposed"
 
+#: What the initial row holds, in words a reader who has not read the graph can act on.
+_INITIAL_ROW_GLOSS = "a span its branch minted from nothing upstream"
+_INITIAL_ROW_TICK = "initial spans\nwhat branches read"
+
+#: The panel's own account of its two zones, so neither row band has to be inferred from its bars.
+SPAN_AXIS_TITLE = (
+    "top band: the spans branches read, as their own producer captioned them"
+    "  ·  below: one band per branch, one line per span role\n"
+    "a connector is a wasDerivedFrom edge drawn in the branch's colour, never an overlap"
+)
+
 #: A branch wrote a report, so it ran. What it found is a separate question the lane answers.
 LANE_RAN = "ran"
 #: ROUTING decided against the branch, so no node was called and nothing of its own is in the store.
@@ -2115,6 +2143,8 @@ class BranchRow:
         start: The span's start, in recording seconds.
         end: Its end.
         row: :data:`BRANCH_PROPOSED_ROW` or :data:`BRANCH_INITIAL_ROW`.
+        role: What kind of span this is inside its branch — the sub-row it is drawn on. Empty on an
+            initial row, which belongs to no branch.
         derived_from: The ids this span names in ``wasDerivedFrom``, empty on an initial row.
     """
 
@@ -2124,7 +2154,28 @@ class BranchRow:
     start: float
     end: float
     row: str
+    role: str = ""
     derived_from: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SpanAxisRow:
+    """One drawn line of the span axis.
+
+    Attributes:
+        block: The visual block the line belongs to — :data:`BRANCH_INITIAL_ROW`, or a lane's branch
+            name. Consecutive lines sharing a block are one branch's contribution.
+        role: The kind of span drawn on this line, empty on the initial row and on a lane that
+            proposed nothing.
+        lane_index: The lane's position in :data:`SUMMARY_LANES`, or ``-1`` on the initial row. It
+            is what binds a line to its lane's colour and to its connectors' departure point.
+        tick: The y-tick text.
+    """
+
+    block: str
+    role: str
+    lane_index: int
+    tick: str
 
 
 @dataclass(frozen=True)
@@ -2255,6 +2306,7 @@ def branch_lanes(store: ProvStore) -> list[BranchLane]:
                     start=float(extent[0]),
                     end=float(extent[1]),
                     row=BRANCH_PROPOSED_ROW,
+                    role=span_role_kind(span),
                     derived_from=tuple(parent.id for parent in parents),
                 )
             )
@@ -2334,6 +2386,7 @@ def _redact_lane(store: ProvStore, sources: dict[str, list[Entity]]) -> BranchLa
                 start=float(extent[0]),
                 end=float(extent[1]),
                 row=BRANCH_PROPOSED_ROW,
+                role=REDACTION_NAME,
                 derived_from=tuple(parent.id for parent in parents),
             )
         )
@@ -2448,16 +2501,58 @@ def initial_rows(lanes: Sequence[BranchLane]) -> tuple[BranchRow, ...]:
     return tuple(sorted(seen.values(), key=lambda row: (row.start, row.end, row.key)))
 
 
-def span_axis_rows(lanes: Sequence[BranchLane]) -> list[str]:
-    """The axis's row labels, top first: the shared initial row, then one per lane.
+def lane_roles(lane: BranchLane) -> tuple[str, ...]:
+    """The kinds of span one lane proposed, in the order they first appear on the timeline.
+
+    Args:
+        lane: The lane.
+
+    Returns:
+        One entry per distinct role kind, and an empty tuple for a lane that proposed nothing.
+    """
+    return tuple(dict.fromkeys(row.role for row in lane.proposed))
+
+
+def initial_row_note(lanes: Sequence[BranchLane], on_page: int) -> str:
+    """What the initial row says about itself, whether or not it drew a bar on this page.
+
+    Args:
+        lanes: :func:`branch_lanes`' result.
+        on_page: How many initial bars reach this page.
+
+    Returns:
+        The note. The row is never silent: a reader who cannot see what it holds cannot tell an
+        input nobody derived from from an input that is simply on another page.
+    """
+    total = len(initial_rows(lanes))
+    if not total:
+        return f"no branch named a span in wasDerivedFrom — every bar below is {_INITIAL_ROW_GLOSS}"
+    if not on_page:
+        return f"{_plural(total, 'span')} branches read, none on this page"
+    return ""
+
+
+def span_axis_rows(lanes: Sequence[BranchLane]) -> tuple[SpanAxisRow, ...]:
+    """The axis's rows, top first: the shared initial row, then one block per lane.
+
+    A lane is one block of sub-rows, one per kind of span it proposed, so two spans a branch minted
+    under different roles over overlapping time are two bars a reader can tell apart rather than one
+    bar painted over another. A lane that proposed one kind, or none at all, is the single row it
+    always was.
 
     Args:
         lanes: :func:`branch_lanes`' result.
 
     Returns:
-        The labels, in draw order.
+        The rows, in draw order.
     """
-    return [BRANCH_INITIAL_ROW, *(lane.branch for lane in lanes)]
+    rows = [SpanAxisRow(block=BRANCH_INITIAL_ROW, role="", lane_index=-1, tick=_INITIAL_ROW_TICK)]
+    for index, lane in enumerate(lanes):
+        roles = lane_roles(lane) or ("",)
+        for role in roles:
+            tick = lane.branch if len(roles) == 1 else f"{lane.branch} · {role}"
+            rows.append(SpanAxisRow(block=lane.branch, role=role, lane_index=index, tick=tick))
+    return tuple(rows)
 
 
 def parent_anchor(left: float, right: float, lane_index: int, lane_count: int) -> float:
@@ -2493,16 +2588,37 @@ def _lane_colour(index: int, style: FigureStyle) -> str:
     return style.lane_colours[index % len(style.lane_colours)]
 
 
+def _block_band_colour(index: int, style: FigureStyle) -> tuple[float, float, float]:
+    """The band drawn behind one lane's block of sub-rows.
+
+    Args:
+        index: The lane's position in :data:`SUMMARY_LANES`.
+        style: The drawing configuration.
+
+    Returns:
+        The lane's own colour blended toward white by ``style.branch_block_tint``, as RGB.
+    """
+    from matplotlib.colors import to_rgb
+
+    tint = style.branch_block_tint
+    return tuple(channel + (1.0 - channel) * tint for channel in to_rgb(_lane_colour(index, style)))  # type: ignore[return-value]
+
+
 def _span_axis_panel(axis: Axes, lanes: Sequence[BranchLane], window: tuple[float, float], style: FigureStyle) -> None:
-    """One axis: the initial spans on the top row, each branch's proposals on a row of its own.
+    """One axis: the initial spans on the top row, then one block of sub-rows per branch.
+
+    A branch's block carries one sub-row per kind of span it proposed, tinted in the branch's own
+    colour, so two spans it minted under different roles over overlapping time are two bars rather
+    than one bar painted over another.
 
     A connector runs from a proposal to the initial span it names in ``wasDerivedFrom``, never to
     the one it overlaps, and is drawn only where both ends are on the page — the rule the shared
     token renderer already applies. Connectors take their lane's own colour and sit behind every
-    bar, so one crossing an intervening row can be followed to the row it lands in.
+    bar, so one crossing an intervening row can be followed to the block it lands in.
 
-    A row with no bar on this page carries its lane's note instead, which is what keeps a branch
-    that did not run distinguishable from one that ran and proposed nothing.
+    A block with no bar on this page carries its lane's note instead, which is what keeps a branch
+    that did not run distinguishable from one that ran and proposed nothing. The initial row says
+    what it holds on the same terms.
 
     Args:
         axis: The panel.
@@ -2513,28 +2629,37 @@ def _span_axis_panel(axis: Axes, lanes: Sequence[BranchLane], window: tuple[floa
     from matplotlib.patches import Rectangle
 
     t0, t1 = window
-    labels = span_axis_rows(lanes)
-    n_rows = len(labels)
-    axis.set_title(
-        "proposed spans by branch over the initial spans they were derived from — "
-        "a connector is a wasDerivedFrom edge, never an overlap",
-        fontsize=style.title_fontsize,
-    )
+    axis_rows = span_axis_rows(lanes)
+    n_rows = len(axis_rows)
+    axis.set_title(SPAN_AXIS_TITLE, fontsize=style.title_fontsize)
     axis.set_xlim(t0, t1)
     axis.set_yticks(range(n_rows))
-    axis.set_yticklabels(list(reversed(labels)), fontsize=style.tick_fontsize)
+    axis.set_yticklabels([line.tick for line in reversed(axis_rows)], fontsize=style.tick_fontsize)
     axis.set_ylim(-0.5, n_rows - 0.5)
     axis.tick_params(axis="y", length=0)
-    for boundary in range(n_rows - 1):
-        axis.axhline(boundary + 0.5, color="0.85", linewidth=0.5, zorder=0)
+
+    # Row 0 of the row list is drawn at the top, so its y is n_rows - 1.
+    y_of_index = [n_rows - 1 - index for index in range(n_rows)]
+    y_of_row = {(line.block, line.role): y_of_index[index] for index, line in enumerate(axis_rows)}
+    for index, line in enumerate(axis_rows):
+        y = y_of_index[index]
+        band = style.colour_branch_input_band if line.lane_index < 0 else _block_band_colour(line.lane_index, style)
+        axis.add_patch(Rectangle((t0, y - 0.5), t1 - t0, 1.0, facecolor=band, edgecolor="none", zorder=0.1))
+        if index + 1 == n_rows:
+            continue
+        crosses_block = axis_rows[index + 1].block != line.block
+        axis.axhline(
+            y - 0.5,
+            color=style.colour_span_axis_block_rule if crosses_block else style.colour_span_axis_rule,
+            linewidth=style.span_axis_block_rule_linewidth if crosses_block else style.span_axis_rule_linewidth,
+            zorder=0.2,
+        )
 
     renderer = _renderer(axis)
     points_per_second = _axis_points_per_second(axis, window, renderer)
-    # Row 0 of the label list is drawn at the top, so its y is n_rows - 1.
-    y_of = {label: n_rows - 1 - index for index, label in enumerate(labels)}
     placed: dict[str, tuple[float, float, float]] = {}
 
-    def _bar(row: BranchRow, y: float, colour: str) -> None:
+    def _bar(row: BranchRow, y: float, colour: str, *, captions: tuple[str, ...]) -> None:
         """Draw one span's bar, clipped to the page, and caption it if it fits."""
         left, right = max(row.start, t0), min(row.end, t1)
         if right <= left:
@@ -2552,30 +2677,40 @@ def _span_axis_panel(axis: Axes, lanes: Sequence[BranchLane], window: tuple[floa
         )
         placed[row.key] = (y, left, right)
         budget = (right - left) * points_per_second
-        for caption in dict.fromkeys((row.label, row.short)):
+        for caption in dict.fromkeys(captions):
             if _fit_cell_text(axis, (left + right) / 2, y, caption, budget, style, renderer):
                 break
 
-    for row in rows_on_window(initial_rows(lanes), window):
-        _bar(row, y_of[BRANCH_INITIAL_ROW], style.colour_branch_initial)
+    def _note(y: float, text: str) -> None:
+        """Say in the row itself what the row holds, where it holds no bar to say it."""
+        axis.text(
+            t0 + (t1 - t0) * 0.004,
+            y,
+            text,
+            ha="left",
+            va="center",
+            fontsize=style.absent_fontsize,
+            style="italic",
+            color="0.4",
+            zorder=4,
+        )
+
+    initial_on_page = rows_on_window(initial_rows(lanes), window)
+    for row in initial_on_page:
+        _bar(row, y_of_row[(BRANCH_INITIAL_ROW, "")], style.colour_branch_initial, captions=(row.label, row.short))
+    initial_note = initial_row_note(lanes, len(initial_on_page))
+    if initial_note:
+        _note(y_of_row[(BRANCH_INITIAL_ROW, "")], initial_note)
+
     for index, lane in enumerate(lanes):
-        y = y_of[lane.branch]
+        roles = lane_roles(lane)
         on_page = [row for row in rows_on_page(lane, window) if row.row == BRANCH_PROPOSED_ROW]
         for row in on_page:
-            _bar(row, y, _lane_colour(index, style))
+            # The role is on the y-axis now, so the bar spends its width on what the role does not say.
+            _bar(row, y_of_row[(lane.branch, row.role)], _lane_colour(index, style), captions=(row.short, row.label))
         note = lane_note(lane, len(on_page))
         if note:
-            axis.text(
-                t0 + (t1 - t0) * 0.004,
-                y,
-                note,
-                ha="left",
-                va="center",
-                fontsize=style.absent_fontsize,
-                style="italic",
-                color="0.4",
-                zorder=4,
-            )
+            _note(y_of_row[(lane.branch, roles[0] if roles else "")], note)
 
     # Connectors last and behind the bars: a dense derivation must never hide a span.
     for index, lane in enumerate(lanes):
