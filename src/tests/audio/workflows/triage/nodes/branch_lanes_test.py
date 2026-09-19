@@ -229,7 +229,13 @@ class TestTheLaneReadsWhatTheBranchesWrote:
             "ppg_jitter_over_median": 0.08,
             "ppg_cv_units_n": 17,
             "ppg_interval_trend_s_per_step": 0.001,
-            "ppg_expected_place_fraction": 0.94,
+            "ppg_cycles": 8,
+            "ppg_declared_cycles": 10,
+            "ppg_cycle_rate_hz": 1.7,
+            "ppg_cycle_gap_cv": 0.41,
+            "ppg_cycle_consumed": 0.94,
+            "ppg_cycle_insertions_n": 2,
+            "ppg_cycle_nucleus_fraction": 0.91,
             "ppg_place_agreement": 0.88,
         }
         _run_branch(
