@@ -120,7 +120,6 @@ DEVIATION_TYPES = {
     "repeated_item": "an item repeated where the task expected each once",
     "stimulus_mismatch": "a lexical word that is not the word the stimulus expected",
     "sweep_direction_mismatch": "a pitch sweep running against its declared direction",
-    "syllable_sequence_mismatch": "a syllable whose place is not the one its cycle position expects",
     "truncation": "a production the recording does not contain the end of",
 }
 """Every deviation type a branch may report, and what each observes.
@@ -488,29 +487,22 @@ class Pattern(Enum):
     SYLLABLE_SEQUENCE = "syllable_sequence"
 
 
-class Syllable(NamedTuple):
-    """One position of a syllable template: what opens the syllable and what its nucleus is.
+PA = ("p", "aa")
+TA = ("t", "aa")
+KA = ("k", "aa")
+PUH = ("p", "ah")
+TUH = ("t", "ah")
+KUH = ("k", "ah")
+PATAKA = ("p", "aa", "t", "aa", "k", "aa")
+PUHTUHKUH = ("p", "ah", "t", "ah", "k", "ah")
+BUTTERCUP = ("b", "ah", "t", "er", "k", "ah", "p")
+"""The nine phoneme sequences the ten ``diadochokinesis-*`` instructions prescribe, in ARPAbet.
 
-    Attributes:
-        place: The place of articulation the onset stop is, a key of ``branch.ddk_stop_places``.
-        nucleus: The vowel class the nucleus is, a key of ``branch.ddk_nucleus_classes``.
-    """
-
-    place: str
-    nucleus: str
-
-
-LABIAL_LOW = Syllable("labial", "low")
-ALVEOLAR_LOW = Syllable("alveolar", "low")
-ALVEOLAR_RHOTIC = Syllable("alveolar", "rhotic")
-VELAR_LOW = Syllable("velar", "low")
-"""The four syllable positions the ten ``diadochokinesis-*`` instructions are built from."""
-
-PATAKA = (LABIAL_LOW, ALVEOLAR_LOW, VELAR_LOW)
-"""/pa-ta-ka/: three onsets across the three places, every nucleus low."""
-
-BUTTERCUP = (LABIAL_LOW, ALVEOLAR_RHOTIC, VELAR_LOW)
-"""/bʌ-tər-kʌp/: the same three places, and a rhotic middle nucleus no low-vowel set holds."""
+One entry per phoneme and no syllable layer, so ``buttercup``'s coda has a position of its own.
+Every entry's derivation is the stimulus text; the decode matches each against the equivalence class
+its phoneme belongs to rather than against the phoneme itself.
+``specs/20260817-triage-workflow-dag/ddk-template-decode.md``.
+"""
 
 
 @dataclass(frozen=True)
@@ -524,9 +516,9 @@ class Expectation:
         expected_event_count: How many events the instruction asks for, when it counts them.
         declared_duration_s: How long the instruction runs, when it is timed rather than counted.
         label_set: Which entry of ``branch.label_sets`` names this task's own sound.
-        sequence: The syllable template the train cycles through, one :class:`Syllable` per position
-            in order. One position for a single-syllable train, three for a sequential one; its
-            length is the cycle.
+        sequence: The phoneme sequence the train repeats, one ARPAbet phoneme per position in
+            order. Two positions for a single-syllable train, six or seven for a sequential one;
+            its length is one repetition.
         declared_direction: Which way a pitch sweep is asked to go.
         declared_route: Nose or mouth, where the instruction prescribes one.
         route_from_index: Whether the route is carried by the task's trailing index.
@@ -550,7 +542,7 @@ class Expectation:
     expected_event_count: int | None = None
     declared_duration_s: float | None = None
     label_set: str | None = None
-    sequence: tuple[Syllable, ...] | None = None
+    sequence: tuple[str, ...] | None = None
     declared_direction: str | None = None
     declared_route: str | None = None
     route_from_index: bool = False
@@ -599,7 +591,7 @@ class Expectation:
         if values.get("tokens") is not None:
             values["tokens"] = tuple(values["tokens"])
         if values.get("sequence") is not None:
-            values["sequence"] = tuple(Syllable(str(place), str(nucleus)) for place, nucleus in values["sequence"])
+            values["sequence"] = tuple(str(phoneme) for phoneme in values["sequence"])
         if values.get("unviable") is not None:
             values["unviable"] = tuple((str(pair[0]), str(pair[1])) for pair in values["unviable"])
         return cls(**values)
@@ -690,23 +682,15 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
         repetition_from_category=True,
         unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
     ),
-    "diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=(LABIAL_LOW,), expected_event_count=10),
-    "diadochokinesis-ta": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN, sequence=(ALVEOLAR_LOW,), expected_event_count=10
-    ),
-    "diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=(VELAR_LOW,), expected_event_count=10),
-    "diadochokinesis-v2-puh": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN, sequence=(LABIAL_LOW,), declared_duration_s=5.0
-    ),
-    "diadochokinesis-v2-tuh": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN, sequence=(ALVEOLAR_LOW,), declared_duration_s=5.0
-    ),
-    "diadochokinesis-v2-kuh": Expectation(
-        pattern=Pattern.SYLLABLE_TRAIN, sequence=(VELAR_LOW,), declared_duration_s=5.0
-    ),
+    "diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=PA, expected_event_count=10),
+    "diadochokinesis-ta": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=TA, expected_event_count=10),
+    "diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=KA, expected_event_count=10),
+    "diadochokinesis-v2-puh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=PUH, declared_duration_s=5.0),
+    "diadochokinesis-v2-tuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=TUH, declared_duration_s=5.0),
+    "diadochokinesis-v2-kuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=KUH, declared_duration_s=5.0),
     "diadochokinesis-pataka": Expectation(pattern=Pattern.SYLLABLE_SEQUENCE, sequence=PATAKA, expected_event_count=30),
     "diadochokinesis-v2-puhtuhkuh": Expectation(
-        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=PATAKA, declared_duration_s=5.0
+        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=PUHTUHKUH, declared_duration_s=5.0
     ),
     "diadochokinesis-buttercup": Expectation(
         pattern=Pattern.SYLLABLE_SEQUENCE, sequence=BUTTERCUP, expected_event_count=30
@@ -718,11 +702,11 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
 """SPEECH's 31 in-family rows: ``LEXICAL_SPEECH`` (21) plus ``SYLLABLE_REPETITION`` (10).
 
 The ten syllable-repetition rows are the instruction each ``diadochokinesis-*`` task actually gives,
-as a syllable template: one position for a train of one syllable, three for a cycle of three. Every
-row names both the place and the nucleus class its instruction asks for at each position, so a
-one-syllable train and a sequential one are read by the same body with ``len(sequence)`` as the
-cycle. ``specs/20260817-triage-workflow-dag/ddk-dissolved-into-speech.md`` and
-``branch-ddk-ppg-instrument.md``.
+as the token's phoneme sequence: two positions for a train of one syllable, six or seven for a
+sequential one. A one-syllable train and a sequential one are read by the same body with
+``len(sequence)`` as one repetition.
+``specs/20260817-triage-workflow-dag/ddk-template-decode.md``,
+``ddk-dissolved-into-speech.md`` and ``branch-ddk-ppg-instrument.md``.
 """
 
 AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
@@ -985,18 +969,6 @@ def _band(value: Any) -> tuple[float, float]:  # noqa: ANN401 — one config lea
     return float(lo), float(hi)
 
 
-def _bands(value: Any) -> dict[str, tuple[float, float]]:  # noqa: ANN401 — one config leaf
-    """A name-to-``[lo, hi]`` config mapping as a mapping of pairs.
-
-    Args:
-        value: The leaf.
-
-    Returns:
-        Each name's band.
-    """
-    return {str(name): _band(band) for name, band in value.items()}
-
-
 def _label_sets(value: Any) -> dict[str, tuple[str, ...]]:  # noqa: ANN401 — one config leaf
     """A label-set mapping as a mapping of tuples.
 
@@ -1037,15 +1009,11 @@ POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "rate_prominence_min": float,
     "train_min_s": float,
     "burst_window_ms": float,
-    "place_centroid_bands_hz": _bands,
-    "place_margin_db": float,
     "effort_split_hz": float,
     "gap_off_task_min_s": float,
     "label_sets": _label_sets,
-    "ddk_interval_tolerance": float,
-    "ddk_min_repetitions": int,
-    "ddk_stop_places": _label_sets,
-    "ddk_nucleus_classes": _label_sets,
+    "phoneme_place_classes": _label_sets,
+    "phoneme_vowel_classes": _label_sets,
 }
 """Every ``branch.*`` key, and the type its value is read as. The one declaration of both.
 
@@ -1186,15 +1154,11 @@ PARAM_KEYS = (
     "rate_prominence_min",
     "train_min_s",
     "burst_window_ms",
-    "place_margin_db",
     "effort_split_hz",
     "gap_off_task_min_s",
-    "place_centroid_bands_hz",
     "label_sets",
-    "ddk_interval_tolerance",
-    "ddk_min_repetitions",
-    "ddk_stop_places",
-    "ddk_nucleus_classes",
+    "phoneme_place_classes",
+    "phoneme_vowel_classes",
 )
 """Every key the ``branch`` config section holds, in the order the section declares them.
 

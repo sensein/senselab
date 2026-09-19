@@ -46,7 +46,8 @@ DATA_MAP_PATHS = frozenset(
     {
         "airway.route_by_task_index",
         "branch.label_sets",
-        "branch.place_centroid_bands_hz",
+        "branch.phoneme_place_classes",
+        "branch.phoneme_vowel_classes",
         "routing.hint_branch_map",
         "verdict.conformance_flags_by_family",
         "voice.f0_range_by_population",

@@ -147,23 +147,19 @@ _SYLLABLE_DETAIL = {
     "train_fraction": 0.4,
     "modulation_peak_hz": 5.5,
     "modulation_unit": "syllables_per_s",
-    "interval_dispersion": 0.12,
-    "interval_trend_s_per_step": 0.003,
-    "ppg_trains_n": 1,
-    "ppg_rate_hz": 5.4,
-    "ppg_repetitions": 14,
-    "ppg_period_s": 0.185,
-    "ppg_jitter_over_median": 0.08,
-    "ppg_cv_units_n": 28,
-    "ppg_interval_trend_s_per_step": 0.001,
-    "ppg_cycles": 9,
-    "ppg_declared_cycles": 10,
+    "ppg_syllable_rate_hz": 5.4,
     "ppg_cycle_rate_hz": 1.8,
-    "ppg_cycle_gap_cv": 0.37,
-    "ppg_cycle_consumed": 0.96,
-    "ppg_cycle_insertions_n": 1,
-    "ppg_place_agreement": 0.88,
-    "ppg_cycle_nucleus_fraction": 0.9,
+    "ppg_repetitions": 9,
+    "ppg_declared_event_count": 30,
+    "ppg_period_s": 0.556,
+    "ppg_period_cv": 0.12,
+    "ppg_period_trend_s_per_step": 0.001,
+    "ppg_positions": ["b", "ah", "t", "er", "k", "ah", "p"],
+    "ppg_realised_mass": [0.78, 0.78, 0.69, 0.57, 0.81, 0.83, 0.77],
+    "ppg_occupancy_s": [0.42, 0.9, 0.38, 0.5, 0.4, 0.95, 0.35],
+    "ppg_filler_fraction": 0.32,
+    "ppg_score_per_frame": -0.61,
+    "ppg_contradicted_words_n": 2,
 }
 """What ``ddk.syllable_detail`` returns for an in-family syllable task, as ``speech()`` merges it."""
 
@@ -1497,34 +1493,31 @@ class TestTheSyllableMeasuresReachThePage:
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "modulation_peak_hz=5.5" in blocks
         assert "modulation_unit=syllables_per_s" in blocks
-        assert "interval_dispersion=0.12" in blocks
+        assert "ppg_period_cv=0.12" in blocks
 
     def test_every_ppg_field_the_instrument_measures_reaches_the_page(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The PPG instrument's nine readings are the branch's own evidence and reached nothing."""
+        """The decode's readings are the branch's own evidence and once reached nothing."""
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True, syllable=True)
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
         expected = {
-            "ppg_trains_n=1",
-            "ppg_rate_hz=5.4",
-            "ppg_repetitions=14",
-            "ppg_period_s=0.185",
-            "ppg_jitter_over_median=0.08",
-            "ppg_cv_units_n=28",
-            "ppg_interval_trend_s_per_step=0.001",
-            "ppg_cycles=9",
-            "ppg_declared_cycles=10",
+            "ppg_syllable_rate_hz=5.4",
             "ppg_cycle_rate_hz=1.8",
-            "ppg_cycle_gap_cv=0.37",
-            "ppg_cycle_consumed=0.96",
-            "ppg_cycle_insertions_n=1",
-            "ppg_cycle_nucleus_fraction=0.9",
-            "ppg_place_agreement=0.88",
+            "ppg_repetitions=9",
+            "ppg_declared_event_count=30",
+            "ppg_period_s=0.556",
+            "ppg_period_cv=0.12",
+            "ppg_period_trend_s_per_step=0.001",
+            "ppg_filler_fraction=0.32",
+            "ppg_score_per_frame=-0.61",
+            "ppg_contradicted_words_n=2",
         }
         assert expected <= set(blocks.split())
+        assert "ppg_positions=" in blocks
+        assert "ppg_realised_mass=" in blocks
 
     def test_the_pdf_decision_pages_measured_findings_name_them_too(self, store: ProvStore, tmp_path: Path) -> None:
         """Both readers of ``BRANCH_MEASURES`` were blind to these, not just the branch-detail one."""
@@ -1535,7 +1528,7 @@ class TestTheSyllableMeasuresReachThePage:
         assert "SPEECH: " in findings
         named = {token.strip("; ") for token in findings.split()}
         assert "trains_n=1" in named, "the train count itself, not the ppg_ prefixed one"
-        assert "ppg_rate_hz=5.4" in named
+        assert "ppg_syllable_rate_hz=5.4" in named
 
     def test_a_recording_that_ran_no_syllable_body_carries_none_of_the_keys(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1546,7 +1539,7 @@ class TestTheSyllableMeasuresReachThePage:
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "trains_n" not in blocks
-        assert "ppg_rate_hz" not in blocks
+        assert "ppg_syllable_rate_hz" not in blocks
 
 
 class TestInitialAndUpdatedSpansShareALane:
@@ -2449,8 +2442,8 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
 class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
     """A span that was never attributed is not a span whose attribution failed."""
 
-    def _ppg_train(self, store: ProvStore) -> None:
-        """Mint the SPEECH proposal DDK writes for a syllable train read off the posteriorgram."""
+    def _decoded_task(self, store: ProvStore) -> None:
+        """Mint the SPEECH proposal DDK writes for a task extent read off the posteriorgram."""
         from senselab.audio.workflows.triage.nodes.branches import PROPOSERS, propose_spans
 
         parent = next(entity.id for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
@@ -2460,14 +2453,14 @@ class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
             store,
             activity,
             software_agent(store),
-            [mint("ppg_train", (1.0, 2.6), parent, production="syllable_train_from_ppg")],
+            [mint("task_extent", (1.0, 2.6), parent, production="syllable_task_from_decode")],
         )
 
     @pytest.fixture
     def with_train(self, store: ProvStore, tmp_path: Path) -> ProvStore:
-        """The seeded store plus one ``ppg_train`` span, which no diarizer ever looked at."""
+        """The seeded store plus one decoded ``task_extent``, which no diarizer ever looked at."""
         _seed_report_store(store, tmp_path, full=True)
-        self._ppg_train(store)
+        self._decoded_task(store)
         return store
 
     def test_the_lane_caption_names_the_span_rather_than_a_missing_speaker(
@@ -2477,7 +2470,7 @@ class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
         panels = _capture_panels(monkeypatch)
         report(with_train, tmp_path / "summary", _png(tmp_path))
         captions = [token["text"] for tokens in _lane_rows(panels[0], "speech spans").values() for token in tokens]
-        train = [caption for caption in captions if "syllable_train_from_ppg" in caption]
+        train = [caption for caption in captions if "syllable_task_from_decode" in caption]
         assert train, captions
         assert not any("unattributed" in caption for caption in captions), captions
 
@@ -2485,7 +2478,7 @@ class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
         """The JSON a consumer audits carries the same reading the lane draws."""
         payload = json.loads(report(with_train, tmp_path / "summary", _png(tmp_path))["json"].read_text())
         descriptions = {item["description"] for item in payload["evidence"]["branches"]["SPEECH"]}
-        assert "speech span: ppg_train/syllable_train_from_ppg" in descriptions
+        assert "speech span: task_extent/syllable_task_from_decode" in descriptions
         assert not any("unattributed" in description for description in descriptions), descriptions
 
     def test_a_diarized_span_still_captions_itself_with_its_speaker(

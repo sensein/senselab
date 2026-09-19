@@ -23,7 +23,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Finding,
     Proposal,
     Result,
-    Syllable,
     branch_params,
     dispatch,
     merge,
@@ -621,18 +620,10 @@ class TestASyllableFamilyIsEvaluatedAsTheTrainItsInstructionAsksFor:
 
     def test_the_row_carries_the_instructions_own_expectation(self) -> None:
         """A syllable family's row says what it asks for; ``no lexical content`` is not a task."""
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == (Syllable("labial", "low"),)
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("p", "aa")
         assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].expected_event_count == 10
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence == (
-            Syllable("labial", "low"),
-            Syllable("alveolar", "low"),
-            Syllable("velar", "low"),
-        )
-        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].sequence == (
-            Syllable("labial", "low"),
-            Syllable("alveolar", "rhotic"),
-            Syllable("velar", "low"),
-        )
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence == ("p", "aa", "t", "aa", "k", "aa")
+        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].sequence == ("b", "ah", "t", "er", "k", "ah", "p")
 
     def test_a_lexical_word_on_a_syllable_train_is_not_a_departure(self, tmp_path: Path) -> None:
         """The removed claim: a word here was an ``off_task_extent``, which is what the owner rejected."""
