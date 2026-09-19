@@ -337,7 +337,7 @@ class TestAFindingNamesTheEvidenceItWasReadOff:
         agent = store.agent(agent_type="software", version="test")
         findings = [
             count("syllables", 12, 12, "span-1", "envelope-1"),
-            count("realised_cycles", 4, None, "span-1", "wideband-1"),
+            count("ppg_repetition_start_s", [0.2, 0.5], None, "span-1", "wideband-1"),
         ]
         [entity_id] = write_findings(store, activity, agent, findings, signal="plain")
         assert store.derived_from(entity_id) == ["span-1", "envelope-1", "wideband-1"], "union, first-seen order"
