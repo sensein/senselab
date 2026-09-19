@@ -184,6 +184,34 @@ walk never runs.
 The safety argument above is the second, independent reason, and it bites only on the undeclared
 case: any-train would be the arm that could de-route SPEECH.
 
+## Verification
+
+Twenty-one regression tests, each proven to fail against code that does not carry the behaviour it
+pins. The full revert — the implementation restored to its parent commit with the tests kept — is
+an `ImportError` on `CONTRADICTED` / `CV_AUTHORITY` at collection, which is what an unfixed tree
+gives and says nothing per test, so the record below is by targeted mutation. Each row is one
+mutation applied to product code alone; the clean tree runs all 116 tests in these three files
+green.
+
+| Mutation | What it changes | Tests it kills |
+| --- | --- | --- |
+| M1 un-wired | drop the `instrument_authority` call from `ppg_evidence` | the reading, its extent, the contests, the outside-word control, the deviation-kind check, the report key, the gate-count pin, the interlock's control — 9, including the pre-existing `BRANCH_MEASURES` contract test |
+| M2 bracketed | `contradicted_words` reads `consensus_words`, not `lexical_words` | the contest list, the bracketed-token control, the outside-word control, the report key, the gate-count pin — 5 |
+| M3 no gate | `cv_covered_extent` drops the cycle-or-train half of its gate | the no-cycle-no-train claim, plus the pre-existing `cv_task_extent` gate test — 2 |
+| M4 text leak | the contest carries `text=` instead of `index=` | the contest payload, the no-text pin — 2 |
+| M5 narrow scan | SPEECH withholds contested words from `scan_for_pii` | **all five safety pins**: the scanned list, the sentinel, the declared-vs-undeclared equality, the PII marking, the released transcript |
+| M6 invalidate | `instrument_authority` retires the words it contradicts | the survive-verbatim pin, the deviation-kind check, the gate-count pin, the released transcript |
+| M7 any train | `align_speech` sends every declared family to `align_ddk` | the declared-lexical control |
+| M8 undeclared is DDK | `declared_task_family` falls back to a DDK family | the undeclared control, the gate-count pin |
+| M9 deviation | the contest is written as a `lexical_content` deviation | the contest list, the deviation-kind check, the gate-count pin, the interlock's control |
+| M10 discount gate | `features.py` subtracts contested words from `words["lexical"]` | both routing-gate pins in `live_evidence_test.py` |
+
+M5 and M10 are the two forbidden designs written out and shown to fail. M6 is the third — deleting
+rather than marking — and it fails on the released transcript, which is the outcome that matters.
+
+No operating point was added, so `data/config/default.yaml` and
+[`config-derivations.md`](config-derivations.md) are unchanged.
+
 ## What was deliberately not done
 
 - **No lexical consumer discounts anything.** Every candidate is either unreachable on a declared
