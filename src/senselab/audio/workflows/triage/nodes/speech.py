@@ -55,7 +55,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Pattern,
     Proposal,
     Result,
-    asr_spans,
     branch_params,
     content_coverage,
     contest,
@@ -1099,11 +1098,15 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
         cut = points.point(
             "echo_overlap_max" if expectation.anti_pattern == "verbatim_prompt" else "verbatim_overlap_max"
         )
+        # `verbatim_source` reassigns the conformance term from coverage, so an unreadable stimulus
+        # leaves that term unmeasured. Under `verbatim_prompt` the stimulus underwrites a deviation
+        # and nothing else, so its absence is recorded and the response reading stands.
+        term_from_stimulus = expectation.anti_pattern == "verbatim_source"
         if read is None:
             findings.append(unviable(f"anti_pattern_{expectation.anti_pattern}", f"{STIMULUS_MEASUREMENT} is absent"))
-            done = UNDETERMINED
+            done = UNDETERMINED if term_from_stimulus else done
         elif ngram_n is None:
-            done = UNDETERMINED
+            done = UNDETERMINED if term_from_stimulus else done
         else:
             stimulus_id, alignment = read
             source = [token.key for token in alignment.expected]
