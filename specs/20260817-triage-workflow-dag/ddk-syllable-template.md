@@ -42,18 +42,19 @@ One entry per syllable position, carrying **both** the onset place and the nucle
 `branch.ddk_nucleus_classes` maps class → phonemes, in the shape `branch.ddk_stop_places` already
 uses for place → stops, so the two share one idiom and one accessor type.
 
-## Extraction permissive, conformance positional
+## Extraction permissive, conformance by repeat count
 
 **Extraction** admits any nucleus in the **union** of the classes the declared template names
-(`admitted_nuclei`), so all three buttercup syllables are found. **Conformance** is then checked
-**per position** against the template — place and nucleus class both, as
-`ddk_expected_place_fraction` and `ddk_expected_nucleus_fraction`, each with its own `by_position`.
+(`admitted_nuclei`), so all three buttercup syllables are found.
 
-`syllable_detail` reports the new one as `ppg_expected_nucleus_fraction`. **`report.py`'s
-`BRANCH_MEASURES["SPEECH"]` does not name it yet**, so the summary does not print it; both readers
-select with `if key in detail`, so nothing breaks and nothing is fabricated. Adding it, and removing
-the stale `lexical_repetitions_n` entry beside it, is one line each in a file this change
-deliberately did not touch.
+> **Superseded, 2026-09-18.** This section originally read *"conformance positional"*: conformance
+> was checked per position against the template, as `ddk_expected_place_fraction` and
+> `ddk_expected_nucleus_fraction`. Both are gone. Comparing unit *i* against
+> `expected[i % len(expected)]` assumes the first detected unit is cycle position 0 and that no unit
+> was missed, and neither holds. The replacement counts complete repeats of the template with a
+> greedy scan that skips unmatched units as insertions, and the nucleus check is scored against the
+> position the scan established rather than the index. [`ddk-cycle-counting.md`](ddk-cycle-counting.md)
+> is the whole of that change; `BRANCH_MEASURES["SPEECH"]` names the new keys.
 
 This preserves the property the flat list had: `/pa/`, `/pah/` and `/paw/` all satisfy `low`, so
 phonemic variation inside a class costs nothing. A substituted place or nucleus is a **finding**, not
@@ -97,7 +98,8 @@ SPEECH's own lexical families use it heavily — `harvard-sentences-list`, `cape
 
 `align_ddk` no longer branches on `ORDERED_TOKENS`, and the only pattern it still reads is
 `SYLLABLE_SEQUENCE`, which is what turns on the burst-spectrum place cycle
-(`syllable_sequence_mismatch`, `realised_cycles`, `sequence_collapse_fraction`) and the
+(`syllable_sequence_mismatch`, `realised_cycles`, `sequence_collapse_fraction` — all three now
+read through the repeat scan of [`ddk-cycle-counting.md`](ddk-cycle-counting.md)) and the
 cycles-or-syllables rate unit. `buttercup` gains that path by becoming a sequence; the six
 single-position families keep the one-syllable path they had, unchanged.
 
