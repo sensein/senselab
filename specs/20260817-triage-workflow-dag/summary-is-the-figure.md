@@ -264,15 +264,35 @@ title fitting the page width. The panel's declared height already grows with its
   `summary.json`'s lane records key on it. The sub-row is a separate field, `role`, and the lane
   records carry it too — the JSON is the machine-readable counterpart of what the page draws, so a
   page drawing a row per role and a record not saying which row would no longer be that.
-- **`report.py`'s speech caption is still `attributed_to or 'unattributed'`.** With the role on the
-  row this no longer collides, but it reads wrongly for DDK's `ppg_train`, which carries a
-  `production` and no speaker and therefore captions itself *unattributed* — suggesting a diarizer
-  that failed rather than a span that is not a diarized run. `figure.py`'s `_proposed_span_label`
-  already falls back through `label`, `production`, `attributed_to` and gets this right. Aligning
-  the two is a caption-vocabulary change in a non-default product, not one of the two defects, and
-  is left.
+- **~~`report.py`'s speech caption is still `attributed_to or 'unattributed'`.~~** Done
+  2026-09-19; see [the caption alignment](#the-speech-caption-says-what-the-span-is) below.
 - **No packing within a kind.** Two spans of one kind overlapping in time would still collide. No
   proposer writes that, and inventing rows for a case nobody produces would be a layout fitted to
   nothing.
 - **`nodes/ddk.py` and `BRANCH_MEASURES` untouched**, being concurrently edited. DDK's `ppg_train`
   is picked up by the shared rule with no per-branch knowledge, so it needs neither.
+
+
+## The speech caption says what the span is
+
+Written 2026-09-19.
+
+`report.py` captioned every speech span `attributed_to or 'unattributed'`. DDK's `ppg_train` carries
+a `production` and no speaker, so it captioned itself *unattributed* — which reads as a diarizer
+that ran and failed, not as a span no diarizer ever looked at. The same string reached three places:
+the `speech spans` lane and both `description` sites in `_branch_evidence`.
+
+`figure.py`'s `_proposed_span_label` already read the role and fell back through `label`,
+`production`, `attributed_to`. It is now `common.proposed_span_label`, beside `envelope_span_label`,
+`initial_span_label` and `span_role_kind`, and both renderers call it — so the page and the JSON
+cannot drift apart into two vocabularies for one span. `_BRANCH_QUALIFIERS` moves with it as
+`BRANCH_QUALIFIERS`.
+
+| span | caption before | caption after |
+| --- | --- | --- |
+| DDK's `ppg_train` | `unattributed` | `ppg_train/syllable_train_from_ppg` |
+| a diarized `task_extent` | `SPEAKER_00` | `task_extent/SPEAKER_00` |
+| a speech span carrying no role and no qualifier | `unattributed` | `unlabelled` |
+
+The attributed span keeps its speaker and gains the role that was on its row anyway, which is what
+`figure.py` has drawn since the sub-row split. Nothing else about the lane or the JSON moves.

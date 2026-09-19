@@ -41,6 +41,12 @@ from senselab.audio.workflows.triage.routing_analysis.labels import (
 SPAN_MEASURES: tuple[str, ...] = ("amplitude", "continuity", "gap")
 """The span measures PREPROCESS proposes, each counted and timed separately."""
 
+PEAK_OVER_FLOOR_MEASURE = "amplitude"
+"""The one span measure PREPROCESS writes a ``peak_over_floor_db`` attribute on."""
+
+PEAK_OVER_FLOOR_STATISTIC = "peak_over_floor_db"
+"""The statistic family taken over :data:`PEAK_OVER_FLOOR_MEASURE` spans and no other."""
+
 SQUIM_METRICS: tuple[str, ...] = ("pesq", "si_sdr", "stoi")
 """The three objective heads a ``squim`` assertion carries."""
 
@@ -204,7 +210,9 @@ class RecordingFeatures:
             carrying that per-span classifier label. A span carries every label in its own top K
             that also clears the floor, so it contributes to each of them. Only labels in
             :data:`~senselab.audio.workflows.triage.routing_analysis.labels.TRACKED_LABELS` that at
-            least one live span carries appear at all.
+            least one live span carries appear at all. ``span_count`` is over every measure;
+            the ``peak_over_floor_db`` keys are over :data:`PEAK_OVER_FLOOR_MEASURE` spans alone,
+            counted by ``peak_over_floor_db_n``, which is written whether or not one qualified.
         span_label_set_stats: The same two families of keys over the named unions in
             :data:`~senselab.audio.workflows.triage.routing_analysis.labels.LABEL_SETS`, keyed
             ``"<classifier>.<set>.…"``. A span counts toward a set when any member of that set is
@@ -834,18 +842,21 @@ def _extent_key(extent: Sequence[float]) -> tuple[float, float]:
 
 
 def _finite_peaks(spans: Sequence[dict[str, Any]]) -> list[float]:
-    """The ``peak_over_floor_db`` of every span that carries a finite one.
+    """The ``peak_over_floor_db`` of every span the statistic is defined on.
 
     Args:
-        spans: The spans.
+        spans: The spans, each carrying ``measure`` and ``peak_db``.
 
     Returns:
-        The sample, in span order.
+        The sample, in span order, over the :data:`PEAK_OVER_FLOOR_MEASURE` spans carrying a finite
+        level. A span of any other measure is not in the population, whatever it carries.
     """
     return [
         float(span["peak_db"])
         for span in spans
-        if span["peak_db"] is not None and math.isfinite(float(span["peak_db"]))
+        if span["measure"] == PEAK_OVER_FLOOR_MEASURE
+        and span["peak_db"] is not None
+        and math.isfinite(float(span["peak_db"]))
     ]
 
 
@@ -882,6 +893,11 @@ def _span_labels(
 def _distribution(prefix: str, selected: Sequence[dict[str, Any]]) -> dict[str, float]:
     """One group of spans reduced to the keys a span-label detector reads.
 
+    ``span_count`` is over every span in the group, whatever its measure. The
+    ``peak_over_floor_db`` keys are over the :data:`PEAK_OVER_FLOOR_MEASURE` spans in it, and
+    ``peak_over_floor_db_n`` is written whether or not the group holds one, so the decibel family
+    carries its own denominator beside the group's count.
+
     Args:
         prefix: ``"<classifier>.<label>"`` or ``"<classifier>.<set>"``.
         selected: The spans in the group.
@@ -889,9 +905,13 @@ def _distribution(prefix: str, selected: Sequence[dict[str, Any]]) -> dict[str, 
     Returns:
         ``{"<prefix>.span_count": n}`` and ``{"<prefix>.peak_over_floor_db_<statistic>": value}``.
     """
-    out = {f"{prefix}.span_count": float(len(selected))}
-    for key, value in value_stats(_finite_peaks(selected)).items():
-        out[f"{prefix}.peak_over_floor_db_{key}"] = value
+    levels = _finite_peaks(selected)
+    out = {
+        f"{prefix}.span_count": float(len(selected)),
+        f"{prefix}.{PEAK_OVER_FLOOR_STATISTIC}_n": float(len(levels)),
+    }
+    for key, value in value_stats(levels).items():
+        out[f"{prefix}.{PEAK_OVER_FLOOR_STATISTIC}_{key}"] = value
     return out
 
 
@@ -913,8 +933,13 @@ def _label_span_statistics(
     written and reads zero where nothing did. A classifier that scored no span at all yields none
     of those keys: the absent count is what says nothing measured the set, and a zero count is what
     says something did and found nothing. How many spans that zero is a statement about is in
-    :func:`_span_coverage`, which is the denominator under every key this writes. A set no span
-    carried has no ``peak_over_floor_db`` sample and so no key for one.
+    :func:`_span_coverage`, which is the denominator under every key this writes.
+
+    A group's ``span_count`` counts the spans carrying the label whatever measure they are;
+    ``peak_over_floor_db_n`` counts the :data:`PEAK_OVER_FLOOR_MEASURE` spans among them, which is
+    the sample the ``peak_over_floor_db`` quantiles are taken over. A group whose whole membership
+    is spans of another measure therefore reads a non-zero ``span_count`` beside a zero
+    ``peak_over_floor_db_n`` and no quantile key at all.
 
     Args:
         spans: The live spans, each carrying ``id`` and ``peak_db``.

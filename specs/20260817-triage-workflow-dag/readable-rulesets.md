@@ -181,6 +181,10 @@ span classes if `peak_over_floor_db` is measured on every span class. Anything s
 gate that reads a quantity three of four span classes do not have. This changes what the gate
 *means*, so it is not a repair and is not made here.
 
+**Resolved 2026-09-19 — and that recommendation was rejected.** The owner ruled against measuring
+a peak over floor on a class that has none; the population is narrowed instead. See
+[section 7](#7-shape-b-resolved-narrow-the-population-do-not-invent-the-measurement).
+
 ### Shape C: a span explicitly recorded as not measured is folded into the negatives
 
 `preprocess.py::_mark_unmeasured` records a span it could not score as an `assertion` carrying an
@@ -328,3 +332,104 @@ is never written by ROUTING — it is the fold's own reading of a decision that 
 reported `unavailable`, for branches with no decision entity. `_agreement` resolves both to
 `resolved`, as it did before and for the same reason — neither made a claim to agree or disagree
 with — so no agreement row, no flag, no triage and no release outcome moves.
+
+---
+
+## 7. Shape B, resolved: narrow the population, do not invent the measurement
+
+Written 2026-09-19, against `3769703d`.
+
+> "it doesn't make sense to have a floor over db span for asr or continuity or gap especially in
+> relation to cough"
+>
+> — the owner, 2026-09-19
+
+The recommendation section 5's Shape B left open — measure `peak_over_floor_db` on every span class,
+so the gate's stated intent becomes true across them — is **rejected**. A gap span is by definition
+a quiet region; a peak over floor there is not a hard measurement, it is a category error, and most
+of all for a cough. The governing rule is the other way round:
+
+**A span-level statistic is computed only over the span classes for which that statistic is
+defined.**
+
+### The two counts, and why both are written
+
+Restricting the whole group would have changed what `span_count` means. A cough label on a gap span
+is still a cough label a classifier put there, and a reader who sees a zero needs to know which
+zero it is. So the group carries two counts, the shape `span_coverage` established in 6.1:
+
+| key | population | what a zero says |
+| --- | --- | --- |
+| `<classifier>.<set>.span_count` | every live span carrying the set, any `measure` | no span carried the set at all |
+| `<classifier>.<set>.peak_over_floor_db_n` | the `amplitude` spans among them | nothing carried it that the decibel sample is defined over |
+
+`peak_over_floor_db_n` is written whether or not the group holds an amplitude span, exactly as
+`span_count` is written whether or not anything carried the set. Without it the two zeros are one
+key, and the dB family has no denominator of its own.
+
+`_label_statistic` now consults the count the requested statistic is taken over:
+`peak_over_floor_db_n` for a `peak_over_floor_db_*` statistic, `span_count` otherwise. That is what
+turns the defect into a definite non-fire — the empty-sample path is reached because the dB sample
+is empty, not because the group is.
+
+### The population is the measure, not the attribute
+
+`_finite_peaks` filters on `span["measure"] == PEAK_OVER_FLOOR_MEASURE` before it filters on the
+value being finite. Today the two agree — no non-amplitude span carries the attribute — so the
+measure test changes no number in the shipped pipeline. It is there because the ruling is about the
+population and not about which attributes a producer happens to write: a level written on a gap span
+by some later change is still not a peak over floor, and must stay out of the sample.
+`src/tests/audio/workflows/triage/routing_analysis_test.py::test_the_decibel_population_is_the_measure_not_the_attribute`
+pins that by writing one.
+
+### No threshold moves
+
+`airway.cough` stays at `at_least 50.0` dB. The cut was fitted on amplitude spans and it now reads
+amplitude spans, which is the same population it was fitted on — narrowing removed spans that were
+never in the fit and never carried a value. Widening the measurement, the rejected option, is what
+would have owed a refit.
+
+### What this changes on real recordings
+
+Measured over one cough-labelled span per run, `airway.cough` = `at_least 50.0` dB:
+
+| span `measure` | `span_count` | `peak_over_floor_db_n` | `peak_over_floor_db_max` | gate, before | gate, after |
+| --- | --- | --- | --- | --- | --- |
+| `amplitude`, 60 dB | 1.0 | 1.0 | 60.0 | fired | fired |
+| `amplitude`, 40 dB | 1.0 | 1.0 | 40.0 | silent | silent |
+| `gap` | 1.0 | 0.0 | absent | unavailable | silent |
+| `asr` | 1.0 | 0.0 | absent | unavailable | silent |
+| `continuity` | 1.0 | 0.0 | absent | unavailable | silent |
+
+Three of the four span classes move from `unavailable` to `silent`. AIRWAY stops being reported as
+unreadable on recordings where the per-span classifier ran and returned a verdict; those recordings
+join the population `airway.breath`, `airway.bracketed_event` and `airway.ppg_silent_fraction` are
+already read over. No gate that could be read before reads differently, and no amplitude-span
+reading changes.
+
+### Where a cough genuinely on a gap span is still visible
+
+It does not vanish. The store holds the `span_yamnet` measurement naming that span id and its raw
+scores, unchanged; `span|yamnet|Cough` in `RecordingFeatures.peaks` still carries the score, because
+the peak is taken over every scored span whatever its measure; and the group's own `span_count`
+counts it. What it no longer does is manufacture a decibel-shaped absence. A reader asking "did
+anything cough-labelled turn up" reads `span_count`; a reader asking "how loud was it" reads
+`peak_over_floor_db_n` first and gets the honest answer that nothing measurable was in the group.
+
+Under the owner's reading a cough-labelled gap span is a labelling artefact — the classifier put a
+cough on a region defined as containing no peak — and the pair of counts is what makes that
+artefact readable as one, instead of as a gate that could not be read.
+
+### The sweep for the same shape elsewhere
+
+`_span_statistics` takes the same dB family per `measure` and over `all`. It shares `_finite_peaks`,
+so `gap.peak_over_floor_db_*` and `continuity.peak_over_floor_db_*` are not written — as before the
+change, since no span of those classes carried a finite level — and `all.peak_over_floor_db_*` is
+the amplitude spans' distribution, which is what it already was. Every catalogued `span_stat` reader
+names `amplitude.*` explicitly. `_squim_statistics` is keyed by `all` / `amplitude` / `gap`, and
+STOI, PESQ and SI-SDR are defined over a quiet region as much as a loud one, so no population there
+is wrong. `span_longest`, `span_total` and `span_count` are durations and counts, defined on every
+class. AIRWAY's `<label_set>_peak_over_floor_db` recomputes the level off the envelope track over an
+event's own extent rather than reading a span attribute, so it measures whatever region it is given
+rather than borrowing a statistic. `report.py::_envelope_spans` selects on the attribute's presence,
+which is the amplitude spans exactly.
