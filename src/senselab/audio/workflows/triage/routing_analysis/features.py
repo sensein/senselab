@@ -209,6 +209,12 @@ class RecordingFeatures:
             :data:`~senselab.audio.workflows.triage.routing_analysis.labels.LABEL_SETS`, keyed
             ``"<classifier>.<set>.…"``. A span counts toward a set when any member of that set is
             one of the labels it carries, and it counts once however many members qualify.
+        span_coverage: ``{"<classifier>.n": spans attempted, "<classifier>.unmeasured": spans it
+            could not score}`` per per-span classifier, the denominator under every
+            ``span_label_stats`` and ``span_label_set_stats`` key that classifier wrote. A
+            classifier that neither scored nor attempted a live span is not keyed at all, so an
+            absent pair is the classifier never having run and a present ``unmeasured`` of zero is
+            it having read every span. Keyed as :attr:`squim` keys its own ``n`` and ``unmeasured``.
         squim: ``{"<population>.<metric>.<statistic>": value}`` over the per-span SQUIM
             assertions, plus ``<population>.n`` and ``<population>.unmeasured``.
         level: The whole-file ``level`` measurement's scalars.
@@ -253,6 +259,7 @@ class RecordingFeatures:
     span_stats: dict[str, float] = field(default_factory=dict)
     span_label_stats: dict[str, float] = field(default_factory=dict)
     span_label_set_stats: dict[str, float] = field(default_factory=dict)
+    span_coverage: dict[str, float] = field(default_factory=dict)
     squim: dict[str, float] = field(default_factory=dict)
     level: dict[str, float] = field(default_factory=dict)
     disruptions: dict[str, float] = field(default_factory=dict)
@@ -905,8 +912,9 @@ def _label_span_statistics(
     members for, whether or not a span carried that set, so ``<classifier>.<set>.span_count`` is
     written and reads zero where nothing did. A classifier that scored no span at all yields none
     of those keys: the absent count is what says nothing measured the set, and a zero count is what
-    says something did and found nothing. A set no span carried has no ``peak_over_floor_db``
-    sample and so no key for one.
+    says something did and found nothing. How many spans that zero is a statement about is in
+    :func:`_span_coverage`, which is the denominator under every key this writes. A set no span
+    carried has no ``peak_over_floor_db`` sample and so no key for one.
 
     Args:
         spans: The live spans, each carrying ``id`` and ``peak_db``.
@@ -941,6 +949,35 @@ def _label_span_statistics(
         for set_name, selected in sorted(by_set.items()):
             per_set.update(_distribution(f"{classifier}.{set_name}", selected))
     return per_label, per_set
+
+
+def _span_coverage(
+    spans: Sequence[dict[str, Any]],
+    span_scores: Mapping[str, dict[str, dict[str, float]]],
+    unmeasured: Mapping[str, set[str]],
+) -> dict[str, float]:
+    """The denominator under each per-span classifier's label and label-set distributions.
+
+    Args:
+        spans: The live spans, each carrying ``id``.
+        span_scores: ``{classifier: {span_id: {label: max score}}}``.
+        unmeasured: ``{classifier: {span_id}}`` for every span the classifier recorded as attempted
+            and unmeasured.
+
+    Returns:
+        ``{"<classifier>.n": attempted, "<classifier>.unmeasured": unread}`` per classifier that
+        reached at least one live span, and nothing at all for one that reached none.
+    """
+    live = {str(span["id"]) for span in spans}
+    out: dict[str, float] = {}
+    for classifier in SPAN_CLASSIFIERS.values():
+        scored = live & set(span_scores.get(classifier) or ())
+        unread = live & set(unmeasured.get(classifier) or ())
+        if not scored and not unread:
+            continue
+        out[f"{classifier}.n"] = float(len(scored | unread))
+        out[f"{classifier}.unmeasured"] = float(len(unread))
+    return out
 
 
 def _span_statistics(spans: Sequence[dict[str, Any]], duration_s: float | None) -> dict[str, float]:
@@ -1078,6 +1115,7 @@ def extract_features(
     live_spans: list[dict[str, Any]] = []
     squim: list[tuple[tuple[float, float], dict[str, Any]]] = []
     span_scores: dict[str, dict[str, dict[str, float]]] = {}
+    unmeasured_spans: dict[str, set[str]] = {}
 
     for record in read_store(store_path):
         prov_type = record.get("prov_type")
@@ -1105,10 +1143,16 @@ def extract_features(
                         "corroborated": len(attributes.get("corroborated_by") or []),
                     }
                 )
-        elif prov_type == "assertion" and attributes.get("name") == "squim":
-            extent = record.get("extent")
-            if extent is not None:
-                squim.append((_extent_key(extent), attributes))  # type: ignore[arg-type]
+        elif prov_type == "assertion":
+            assertion_name = str(attributes.get("name") or "")
+            unmeasured_classifier = SPAN_CLASSIFIERS.get(assertion_name)
+            span_id = attributes.get("span_id")
+            if assertion_name == "squim":
+                extent = record.get("extent")
+                if extent is not None:
+                    squim.append((_extent_key(extent), attributes))  # type: ignore[arg-type]
+            elif unmeasured_classifier is not None and attributes.get("unmeasured") is not None and span_id is not None:
+                unmeasured_spans.setdefault(unmeasured_classifier, set()).add(str(span_id))
         elif prov_type == "kind":
             features.kind_state[str(attributes.get("kind"))] = str(attributes.get("state"))
         elif prov_type == "verdict":
@@ -1157,6 +1201,7 @@ def extract_features(
     features.span_label_stats, features.span_label_set_stats = _label_span_statistics(
         live_spans, span_scores, memberships
     )
+    features.span_coverage = _span_coverage(live_spans, span_scores, unmeasured_spans)
     features.squim = _squim_statistics(squim, {span["extent"]: span["measure"] for span in live_spans})
     features.classifier_streams = sorted(set(features.classifier_streams))
     for kind_name in ("speech", "airway", "voice"):

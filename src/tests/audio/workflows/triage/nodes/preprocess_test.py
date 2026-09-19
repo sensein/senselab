@@ -920,6 +920,32 @@ class TestSpanQuality:
         assert unmeasured_by_extent[amplitude_span.extent] == "no_covering_window"
         assert unmeasured_by_extent[native_gap.extent] == "no_native_window"
 
+    def test_an_unmeasured_assertion_names_the_span_it_stands_for(
+        self,
+        store: ProvStore,
+        span_quality_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A span the classifier could not read joins to that span the way a scored window does.
+
+        The denominator under every ``<classifier>.<set>.span_count`` is the spans the classifier
+        reached; without the id on the assertion, the unread ones cannot be counted into it.
+        """
+        _seed_admit(store, tmp_path, wav_writer, samples=_samples_with_a_long_gap())
+        _stub_models(monkeypatch, yamnet=[])
+        preprocess(store, _audio(tmp_path), span_quality_config, run_dir=tmp_path)
+        spans = {e.id for e in live_entities(store, "span") if e.attributes.get("family") is None}
+        assert spans
+        unread = [
+            e
+            for e in live_entities(store, "assertion")
+            if e.attributes.get("name") == "span_yamnet" and e.attributes.get("unmeasured")
+        ]
+        assert unread
+        assert {str(e.attributes.get("span_id")) for e in unread} == spans
+
 
 class TestCoveringWindowAttribution:
     """The overlap-weighted mean, pinned directly against hand-computed numbers."""

@@ -200,7 +200,7 @@ class TestContentRoutesWithoutTheInstruction:
         assert result.missed == ("VOICE",)
         assert result.agreed == ()
         assert result.extra == ()
-        assert result.state is RouteState.UNEXPLAINED
+        assert result.state is RouteState.UNREADABLE
 
     def test_speech_routes_on_lexical_words_alone_when_one_recogniser_disagreed(self, ruleset: Ruleset) -> None:
         """The harvard case: nine lexical words, three agreed, unambiguous read speech."""
@@ -352,28 +352,33 @@ class TestAMissingMeasurementIsNotANegative:
         assert row.unavailable["AIRWAY"] == 1
         assert row.routed["AIRWAY"] == 0
         assert row.missed["AIRWAY"] == 2
-        assert row.states["unexplained"] == 2
+        assert row.states["unreadable"] == 2
+        assert row.states["unexplained"] == 0
 
 
 class TestARecordingRoutesToNothing:
     """The unexplained count is a first-class output, and the only one that indicts the ruleset."""
 
     def test_the_tally_counts_the_unexplained_per_family(self, ruleset: Ruleset) -> None:
-        """Two families, one unexplained each, counted where the owner asked to read them."""
+        """Two families, one unexplained each, counted where the owner asked to read them.
+
+        Every record here carries a readable emptiness bypass over content, so a recording nothing
+        routed really is content the ruleset could not account for rather than evidence it never saw.
+        """
         evaluations = [
-            evaluate_routes(_features("prolonged-vowel"), ruleset),
-            evaluate_routes(_features("prolonged-vowel", span_longest_s={"amplitude": 4.0}), ruleset),
-            evaluate_routes(_features("voluntary-cough"), ruleset),
+            evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset),
+            evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3, span_longest_s={"amplitude": 4.0}), ruleset),
+            evaluate_routes(_classified("voluntary-cough", 0.9, 0.3), ruleset),
         ]
         tallies = tally_families(evaluations)
-        assert tallies["prolonged-vowel"].states == {"routed": 1, "empty": 0, "unexplained": 1}
+        assert tallies["prolonged-vowel"].states == {"routed": 1, "empty": 0, "unexplained": 1, "unreadable": 0}
         assert tallies["prolonged-vowel"].routed["VOICE"] == 1
         assert tallies["prolonged-vowel"].agreed["VOICE"] == 1
         assert tallies["voluntary-cough"].states["unexplained"] == 1
         assert tallies["voluntary-cough"].declared["AIRWAY"] == 1
         assert set(tallies["voluntary-cough"].declared) == set(BRANCHES)
 
-    def test_every_tally_carries_all_three_states_and_they_sum(self, ruleset: Ruleset) -> None:
+    def test_every_tally_carries_all_four_states_and_they_sum(self, ruleset: Ruleset) -> None:
         """A state a family never reached reads zero rather than being absent from the row."""
         row = tally_families([evaluate_routes(_features("voluntary-cough"), ruleset)])["voluntary-cough"]
         assert list(row.states) == list(ROUTE_STATES)
@@ -491,7 +496,7 @@ class TestAgreementIsAFlagAndNotAGate:
         result = evaluate_routes(record, ruleset)
         assert result.flags == {"SPEECH": ("speech.transcript_agreement",)}
         assert result.routed == ()
-        assert result.state is RouteState.UNEXPLAINED
+        assert result.state is RouteState.UNREADABLE
 
     def test_a_silent_flag_is_absent_rather_than_keyed_empty(self, ruleset: Ruleset) -> None:
         """Only a fired flag is reported, so a branch's absence from the mapping is the negative."""
@@ -556,7 +561,7 @@ class TestEmptinessIsABypassAndNotAPrecondition:
         content = evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset)
         row = tally_families([blank, content])["prolonged-vowel"]
         assert row.recordings == 2
-        assert row.states == {"routed": 0, "empty": 1, "unexplained": 1}
+        assert row.states == {"routed": 0, "empty": 1, "unexplained": 1, "unreadable": 0}
 
     def test_a_gate_firing_on_a_silent_file_routes_it_rather_than_calling_it_empty(self, ruleset: Ruleset) -> None:
         """The gates decide first, so a lexical word in a stream-silent file is SPEECH, not empty."""
@@ -575,7 +580,23 @@ class TestEmptinessIsABypassAndNotAPrecondition:
 
     def test_a_stream_with_no_summary_cannot_be_called_empty(self, ruleset: Ruleset) -> None:
         """An absent classifier summary is not a stream that scored zero."""
-        assert evaluate_routes(_features("prolonged-vowel"), ruleset).state is RouteState.UNEXPLAINED
+        assert evaluate_routes(_features("prolonged-vowel"), ruleset).state is not RouteState.EMPTY
+
+    def test_an_unreadable_bypass_is_not_charged_to_the_ruleset(self, ruleset: Ruleset) -> None:
+        """Nothing routed and no bypass to read is a fact about the run, not about the ruleset.
+
+        ``UNEXPLAINED`` is the one state the enum calls a charge against the ruleset, so a recording
+        whose emptiness bypass was never written must not land there: the ruleset was shown no
+        content it failed to account for. The three are told apart on one axis -- the bypass reading
+        -- with the branch gates silent in all three.
+        """
+        unreadable = evaluate_routes(_features("prolonged-vowel"), ruleset)
+        empty = evaluate_routes(_classified("prolonged-vowel", 0.001, 0.0), ruleset)
+        unexplained = evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset)
+        assert (unreadable.routed, empty.routed, unexplained.routed) == ((), (), ())
+        assert unreadable.state is RouteState.UNREADABLE
+        assert empty.state is RouteState.EMPTY
+        assert unexplained.state is RouteState.UNEXPLAINED
 
 
 class TestTheCoughGateIsSetConditioned:
