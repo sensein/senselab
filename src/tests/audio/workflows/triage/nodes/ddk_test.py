@@ -24,6 +24,7 @@ from senselab.audio.workflows.triage.config import (
     UnknownConfigKey,
     load_triage_config,
 )
+from senselab.audio.workflows.triage.nodes import ddk
 from senselab.audio.workflows.triage.nodes.branches import (
     BUTTERCUP,
     DEVIATION_TYPES,
@@ -831,10 +832,10 @@ class TestTheTaskExtentIsTheDecodedRepetitionSpan:
         [span] = _spans_of(store)
         assert store.derived_from(span.id) == [ids["ppg_posteriorgram"]]
 
-    def test_the_envelope_carrier_is_the_fallback_where_the_decode_has_no_reading(
+    def test_a_carrier_the_decode_never_read_proposes_no_task_extent(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """Without it an absent posteriorgram would take the extent away from the recording."""
+        """An amplitude carrier is not phonetic evidence, so it cannot say where the task was."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pa",
@@ -842,9 +843,60 @@ class TestTheTaskExtentIsTheDecodedRepetitionSpan:
             spans=[(1.0, 5.0)],
         )
         _run(store, ddk_config, tmp_path)
-        [span] = _spans_of(store)
-        assert span.attributes["production"] == "syllable_train"
-        assert span.extent == pytest.approx((1.0, 5.0))
+        assert _spans_of(store) == []
+        assert [span.attributes.get("production") for span in _spans_of(store)] == []
+
+    def test_no_task_extent_carries_a_production_the_envelope_minted(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The two envelope productions are gone outright, not left unreachable behind a branch."""
+        assert not hasattr(ddk, "TASK_FROM_ENVELOPE")
+        assert not hasattr(ddk, "TASK_FROM_ENVELOPE_SEQUENCE")
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
+            spans=[(1.0, 5.0)],
+        )
+        _run(store, ddk_config, tmp_path)
+        productions = {span.attributes.get("production") for span in live_entities(store, "span")}
+        assert productions & {"syllable_train", "syllable_sequence"} == set()
+
+    def test_the_absent_decode_reads_as_an_absent_instrument_not_as_found_nothing(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Both propose no extent, and the two states stay told apart by their own records."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
+            spans=[(1.0, 5.0)],
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        assert _spans_of(store) == []
+        [absent] = _measurements(store, PPG_RATE)
+        assert absent.attributes["unavailable"] == "ppg_posteriorgram"
+        assert "reason" not in absent.attributes
+        assert _measurements(store, PPG_REPETITIONS) == []
+
+    def test_a_decode_that_read_nothing_still_reads_as_found_nothing(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The other side of the same distinction, on the same seeded carrier."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
+            spans=[(1.0, 5.0)],
+            posteriorgram=_raster([("<silent>", 6.0)]),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        assert _spans_of(store) == []
+        [rate] = _measurements(store, PPG_RATE)
+        assert rate.attributes["reason"] == NO_REPETITIONS
+        assert "unavailable" not in rate.attributes
+        [repetitions] = _measurements(store, PPG_REPETITIONS)
+        assert repetitions.attributes["value"] == 0
 
     def test_the_decode_takes_precedence_over_a_carrier_that_also_read_the_task(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -971,10 +1023,10 @@ class TestTheEnvelopeChannelIsTheModulationSpectrumAndNothingElse:
         entries = {key for counts in _measurements(store, "counts") for key in counts.attributes["entries"]}
         assert entries & {"syllable_onset_s", "inter_onset_interval_s", "realised_cycles"} == set()
 
-    def test_the_carrier_extent_is_the_fallback_rather_than_the_hull_of_its_onsets(
+    def test_the_rate_is_read_over_the_carrier_and_mints_nothing_from_it(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """The hull of one event is that event, which is how a 0.0986 s extent shipped."""
+        """The carrier locates the modulation reading and nothing else; no span comes off it."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pataka",
@@ -982,8 +1034,9 @@ class TestTheEnvelopeChannelIsTheModulationSpectrumAndNothingElse:
             spans=[(2.237, 4.114)],
         )
         _run(store, ddk_config, tmp_path)
-        [span] = _spans_of(store)
-        assert span.extent == pytest.approx((2.237, 4.114))
+        [rate] = _measurements(store, RATE)
+        assert rate.extent == pytest.approx((2.237, 4.114))
+        assert _spans_of(store) == []
 
     def test_a_carrier_with_no_readable_modulation_is_no_carrier(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -1008,11 +1061,14 @@ class TestTheEnvelopeChannelIsTheModulationSpectrumAndNothingElse:
             stem="sub-a_ses-1_task-diadochokinesis-pa",
             envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
             spans=[(1.0, 5.0)],
+            posteriorgram=_cv_raster(["labial"] * 17, [0.25] * 16, lead_s=1.0),
         )
-        _run(store, ddk_config, tmp_path)
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        [span] = _spans_of(store)
+        assert span.extent is not None
         [fraction] = _measurements(store, "train_fraction_of_recording")
-        assert fraction.attributes["train_s"] == pytest.approx(4.0, abs=0.05)
-        assert fraction.attributes["value"] == pytest.approx(4.0 / 6.0, abs=0.01)
+        assert fraction.attributes["train_s"] == pytest.approx(span.extent[1] - span.extent[0], abs=0.001)
+        assert fraction.attributes["value"] == pytest.approx(fraction.attributes["train_s"] / 6.0, abs=0.001)
 
 
 class TestTheBurstPlaceInstrumentIsGone:

@@ -19,6 +19,7 @@ from senselab.audio.data_structures import (
     SpeakerEmbeddingProvenance,
     TargetSpeakerEmbedding,
 )
+from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
@@ -2155,6 +2156,56 @@ def _seed_train_envelope(
     store.was_generated_by(span_id, preprocess)
 
 
+def _seed_pa_posteriorgram(
+    store: ProvStore, tmp_path: Path, *, repetitions: int = 8, lead_s: float = 1.0, period_s: float = 0.25
+) -> None:
+    """Write a one-hot posteriorgram of a /pa/ train, which is what the decode mints an extent off.
+
+    Args:
+        store: The store to seed.
+        tmp_path: The run directory the sidecar goes under.
+        repetitions: How many /pa/ syllables the train holds.
+        lead_s: Silence before the first onset.
+        period_s: The interval from each onset to the next.
+    """
+    frame_s = 0.01
+    stop_s = 0.05
+    sequence: list[tuple[str, float]] = [("<silent>", lead_s)]
+    for _ in range(repetitions):
+        sequence.extend([("p", stop_s), ("aa", period_s - stop_s)])
+    indices: list[int] = []
+    for label, seconds in sequence:
+        indices.extend([PHONEME_LABELS.index(label)] * max(1, int(round(seconds / frame_s))))
+    frames = np.zeros((len(indices), len(PHONEME_LABELS)), dtype=np.float16)
+    frames[np.arange(len(indices)), indices] = 1.0
+    (tmp_path / "derivatives").mkdir(exist_ok=True)
+    np.savez(
+        tmp_path / "derivatives" / "ppg_posteriorgram.npz",
+        posteriorgram=frames,
+        phonemes=np.asarray(PHONEME_LABELS, dtype=np.str_),
+        seconds_per_frame=np.float64(frame_s),
+        duration_s=np.float64(frames.shape[0] * frame_s),
+        sampling_rate=np.int64(SR),
+    )
+    preprocess = store.activity(node="PREPROCESS", step="seed-ppg", parameters={})
+    entity_id = store.entity(
+        prov_type="measurement",
+        extent=(0.0, frames.shape[0] * frame_s),
+        attributes={
+            "name": "ppg_posteriorgram",
+            "signal": "enhanced",
+            "path": "derivatives/ppg_posteriorgram.npz",
+            "frames": int(frames.shape[0]),
+            "n_phonemes": int(frames.shape[1]),
+            "phonemes": list(PHONEME_LABELS),
+            "seconds_per_frame": frame_s,
+            "dtype": "float16",
+            "layout": "frames_by_phonemes",
+        },
+    )
+    store.was_generated_by(entity_id, preprocess)
+
+
 class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
     """The DDK branch is dissolved: SPEECH evaluates the train, and no second branch reports."""
 
@@ -2172,7 +2223,11 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
     def test_a_declared_diadochokinesis_pa_gets_a_syllable_train_conformance(
         self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The owner's case: /pa pa pa/ is a speaking task and SPEECH says whether it happened."""
+        """The owner's case: /pa pa pa/ is a speaking task and SPEECH says whether it happened.
+
+        No posteriorgram, so no instrument located the task: the modulation channel still reports
+        its rate and the carrier still answers conformance, and no ``task_extent`` is manufactured.
+        """
         _seed_speech_store(store, tmp_path, words=[])
         _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
@@ -2180,7 +2235,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         detail = _report_entity(store, "SPEECH").attributes
         assert detail["expectation"]["mode"] == "align"
         assert detail["expectation"]["task_family"] == "diadochokinesis-pa"
-        assert detail["trains_n"] == 1
+        assert detail["trains_n"] == 0
         assert detail["modulation_peak_hz"] == pytest.approx(5.0, abs=0.5)
         assert detail["modulation_unit"] == "syllables_per_s"
         assert result.report.conformance is True
@@ -2192,10 +2247,13 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         """One minting family per branch: the train is SPEECH's, told apart by its own attributes."""
         _seed_speech_store(store, tmp_path, words=[])
         _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
+        _seed_pa_posteriorgram(store, tmp_path)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", syllable_config, self._declared("diadochokinesis-pa"), run_dir=tmp_path)
         trains = [
-            entity for entity in live_entities(store, "span") if entity.attributes.get("production") == "syllable_train"
+            entity
+            for entity in live_entities(store, "span")
+            if entity.attributes.get("production") == "syllable_task_from_decode"
         ]
         assert [entity.attributes["family"] for entity in trains] == ["speech"]
         assert trains[0].attributes["role"] == "task_extent"
@@ -2222,7 +2280,11 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
     def test_a_diadochokinesis_buttercup_recording_takes_the_syllable_body(
         self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``buttercup`` is three syllables, so the train comes from the carrier, not from the words."""
+        """``buttercup`` is three syllables, so the words are not what the body reads.
+
+        The carrier's modulation is a cycle rate as much as a syllable rate, which is why the unit
+        stays ambiguous, and why an extent is never taken off it.
+        """
         _seed_speech_store(store, tmp_path, words=["buttercup"] * 10)
         _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
@@ -2230,13 +2292,9 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         detail = _report_entity(store, "SPEECH").attributes
         assert detail["expectation"]["task_family"] == "diadochokinesis-buttercup"
         assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].expected_event_count == 30
-        assert detail["trains_n"] == 1
-        [train] = [
-            entity
-            for entity in live_entities(store, "span")
-            if entity.attributes.get("production") == "syllable_sequence"
-        ]
-        assert train.attributes["syllables_n"] is None
+        assert detail["trains_n"] == 0
+        assert detail["modulation_unit"] == "cycles_or_syllables_per_s"
+        assert not [entity for entity in live_entities(store, "span") if entity.attributes.get("role") == "task_extent"]
         assert result.report.in_family is True
 
     def test_a_non_ddk_lexical_recording_carries_no_syllable_measures(

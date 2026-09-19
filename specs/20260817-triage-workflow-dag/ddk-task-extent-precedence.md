@@ -5,6 +5,25 @@ differ. Landed 2026-09-19. The code is `src/senselab/audio/workflows/triage/node
 (`cv_task_extent`, `merged_task_extent`, `align_ddk`). No operating point is introduced; see
 [the no-threshold ruling](#why-no-plausibility-threshold).
 
+> **Superseded, in two steps, and kept for its reasoning and its measurements.**
+>
+> [`ddk-template-decode.md`](ddk-template-decode.md) decision 6 superseded the **union rule**: the
+> template decode produces the extent directly, so there is nothing to merge. It kept the envelope
+> as a fallback, which is case 1 below.
+>
+> [`ddk-envelope-mints-no-extent.md`](ddk-envelope-mints-no-extent.md) then removed **case 1**. The
+> envelope mints no `task_extent` at all; where the decode reads no repetition, none is proposed.
+>
+> None of the three named functions exists any more. What still holds is the *boundary, not a mask*
+> reading of the span, the one-span invariant, and the asymmetry argument in
+> [*Why the union*](#why-the-union-and-not-the-cv-instrument-always-wins) — an instrument making no
+> claim over a region cannot suppress another's claim over it, which is why the surviving modulation
+> rate is still reported. The **29.4%** figure below was measured against the old per-syllable CV
+> walk, whose coverage the decode substantially exceeds, so it describes a gap between two
+> instruments one of which no longer exists; it is not re-measured, and the removal does not rest on
+> it. The defect narrative and the 7,994-recording sweep are the record of why the old walk was
+> replaced and stay as written.
+
 ## The defect
 
 The owner, reading a rendered summary of `sub-004d42e9…_task-diadochokinesis-pataka` (8.66 s):

@@ -129,9 +129,12 @@ this body.
 `dispatch` raises when a branch mints outside `BRANCH_FAMILY[branch]`, and that check is the thing
 that catches a branch overstepping onto another's subject. A branch with two minting families weakens
 it by exactly the amount of the second family, for the benefit of a distinction the span's own
-attributes already carry: every proposal from these bodies names its `role` (`task_extent`,
-`ppg_train`) and its `production` (`syllable_train`, `syllable_sequence`), so
-a reader separating a train from connected speech reads an attribute rather than a family.
+attributes already carry: every proposal from these bodies names its `role` and its `production`, so
+a reader separating a train from connected speech reads an attribute rather than a family. The
+names in that pair have since changed twice — `ppg_train` went with the CV walk
+(`ddk-template-decode.md`) and the two envelope productions with the envelope's extent
+(`ddk-envelope-mints-no-extent.md`), leaving `task_extent` / `syllable_task_from_decode` as the one
+pair this body writes. The argument is about the mechanism, not about those spellings.
 
 What it means for the span axes. `report.py`'s lanes read families, and there is no `ddk` lane and
 never was. A span left in `family="ddk"` after the branch's removal would be drawn by nothing — the
