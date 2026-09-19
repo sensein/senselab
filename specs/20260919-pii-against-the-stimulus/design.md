@@ -55,12 +55,50 @@ correction belongs. VERDICT and REPORT can then separate "this recording disclos
 "the detector flagged the sentence the participant was asked to read", which is what makes a flag
 legible to whoever reads the report.
 
-Stimulus containment is a fact about the text and needs no threshold. A spread-based rule needs one,
-and a threshold needs a derivation and a home in `data/` — that is the open half of this design, and
-it waits on the census's own recommendation.
+Stimulus containment is a fact about the text and needs no threshold.
+
+## The spread rule is wrong, and that is measured
+
+The 66%-of-spans figure above makes a spread cut look like the cheap filter, and it was the first
+rule proposed here. The census tested it and it points the wrong way: among surviving surfaces,
+those seen **only** in fixed-script recordings — definitionally false, every one — are *more*
+concentrated in single-subject surfaces than free-response-only surfaces are, **92.2% against
+85.6%**. Cutting by spread would therefore discard proportionally more of what is real than of what
+is not. No spread threshold is derived, because none should be.
+
+What the corpus supports instead is three rules, none of them statistical:
+
+- **A — the task asks for no words.** 28,719 recordings; a family that elicits no lexical content
+  cannot carry a participant's disclosure. A routing question, not a detector one.
+- **B — the surface is an exact substring of the recording's own `stimulus_text`.** 84.6% of
+  read-task findings are. A SPEECH question, answerable from the alignment already in hand.
+- **C — the surface was condemned by A or B somewhere in the corpus.** A 5,363-surface list read off
+  the corpus rather than chosen.
+
+Together these take **42.9% down to 8.9%** — 5,327 of 60,207 recordings, 48,959 of 152,722 findings
+surviving. Three whole false-positive classes lose every member: structured identifiers on
+alphabetic surfaces, item-list place names, and bracketed event markers.
+
+## Why all three annotate rather than suppress
+
+The asymmetry is the whole argument, and it applies hardest to C. A corpus-wide surface list
+generalises B across recordings, so a name genuinely disclosed in one participant's free response is
+dropped because the same string sits inside a different recording's script. The Rainbow Passage and
+the Caterpillar Passage between them contain ordinary given names and place names; a participant who
+shares one would be silently unredacted by rule C.
+
+So none of A, B or C removes a `pii` entity. Each is recorded on the finding, REDACT keeps redacting
+the unfiltered set, and VERDICT and REPORT read the annotations to decide what to *say*. The 8.9%
+is then a number the reader is shown rather than a number the pipeline enforces, and no true
+positive is ever lost to a rule derived from the corpus it is policing.
+
+Rule A is the one exception worth putting to the owner, because it is the only one that saves real
+compute: not scanning 28,719 recordings at all is cheaper than scanning and annotating them. That
+trades the evidence for the saving, and it is the owner's call rather than this document's.
 
 ## Open
 
-- The spread rule and its derivation.
-- Whether REPORT should show the annotated count, the unannotated count, or both.
+- Whether rule A skips the scan or only annotates it.
+- Whether REPORT shows the annotated count, the unannotated count, or both.
 - Whether the LLM re-read should see the stimulus, so it is not re-deciding the same false positives.
+- The reference standard for the surviving 8.9%: nothing in this census was adjudicated.
