@@ -13,12 +13,15 @@ them was measured afresh rather than read.
 
 1. The 2026-09-08 run stopped after TAXONOMY. **0 PII entities, 0 branch reports, 0 deviations**
    across 62,578 stores — an absent instrument, not a null result.
-2. A fresh scan of the transcripts those stores hold, with the same three detectors the config
-   requires, flags **42.9 % of recordings**. **40.6 % of non-lexical recordings are flagged**, on
-   tasks that contain no words, and **84.6 % of read-task findings are literally substrings of the
-   script the participant was handed.** The detector is over-reaching at scale.
-3. **65.7 % of all findings come from surfaces that recur in ten or more unrelated recordings** —
-   task material, not disclosure. This is the cheapest available filter and needs no model.
+2. A fresh scan of the transcripts those stores hold, with the three detectors the config
+   requires, flags **42.9 % of recordings — and that is not a PII rate.** 40.6 % of *non-lexical*
+   recordings are flagged, on tasks that contain no words at all, and 84.6 % of read-task findings
+   are literally substrings of the script the participant was handed. The detector is over-reaching
+   at scale.
+3. **After a filter built from the corpus's own negative controls, 5,327 of 60,207 recordings —
+   8.9 % — carry a finding that could be a disclosure**, against 25,853 before. 48,959 of 152,722
+   findings survive. **That 8.9 % is the answer to "how many files contain PII", and it is still an
+   upper bound** (§1d).
 4. 4.4 % of recordings show more than one speaker, but the median second speaker has **0.44 s** of
    speech, the two diarized streams agree on 8 % of the cases where either sees one, and only **71
    recordings in the corpus (0.11 %)** have a second voice with five seconds or more.
@@ -85,6 +88,15 @@ never ran are `routing`, AIRWAY, SPEECH, VOICE, REDACT and VERDICT. Six of the t
 Section 1 below reports a **fresh PII scan run today over the transcripts those stores hold**. It is
 not a read of the corpus and is labelled as such throughout. It answers the owner's actual question
 — is the detector over-reaching, and on what — which the stores cannot.
+
+**What "the detector" means here, so nobody reads these numbers as the pipeline's final PII
+behaviour.** Three detectors ran: **Presidio, GLiNER (`nvidia/gliner-pii`) and the rules cascade** —
+exactly the set `pii.required_detectors` names, and exactly what SPEECH would run. They are the
+whole of what is measured below. Three things the pipeline would also do are **not** in these
+numbers: `decide_pii`'s cross-detector corroboration, REDACT's planning and re-scan verification,
+and **REDACT's optional Gemma-4 LLM re-read of the redacted transcript**, which is `enabled: false`
+in the packaged config and did not run. These are the raw detector outputs, which is what an
+over-reach question needs and is not what the graph would finally have recorded.
 
 ### Definitions used
 
@@ -154,7 +166,9 @@ smaller chunk size; its 10,451 texts are included here.)
 **25,853 of 60,207 consensus transcripts — 42.9 % — carry at least one PII finding.** Across all
 three haystacks, 72,513 of 167,629 texts do, and 152,722 spans were returned.
 
-That is not a disclosure rate. Split by the BIDS sidecar's `speech_type`, which records what the
+**That is not a PII rate and must not be quoted as one.** The corrected figure, after the filter
+derived in §1d, is 5,327 recordings — 8.9 %. The rest of this subsection is the evidence for why the
+raw number is what it is. Split by the BIDS sidecar's `speech_type`, which records what the
 participant was asked to produce (consensus haystack, so the denominators are recordings):
 
 | speech_type | scanned | with a finding | rate | spans | spans per recording |
@@ -299,6 +313,134 @@ glyphs in all.
 So a CJK glyph in REPORT is the Qwen backend rendering a non-lexical vocalisation as Chinese
 onomatopoeia on an English recording, and it compounds class 1 above: the detector is then handed a
 string in a script the recording never contained.
+
+### 1d. The corrected count: a filter derived from the corpus's own negative controls
+
+The 42.9 % above is not a PII rate and must not be quoted as one. Per family it is absurd on its
+face — caterpillar-passage 98.7 %, diadochokinesis-buttercup 91.1 %, diadochokinesis-pataka 89.9 %,
+against breath-sounds at 1.8 %, which is the only number in that column behaving the way a PII
+detector should. Two whole expectation classes, **47,884 recordings and 18,309 of them flagged**,
+cannot contain participant PII at all: one asks for no words, the other supplies the words.
+
+#### The filter
+
+Three rules. Two are definitional and carry no threshold; the third is a blocklist read off the
+corpus rather than a number chosen because it looked tidy.
+
+- **A — drop every finding on a recording whose instruction asks for no words.** The
+  `syllable_train`, `syllable_sequence`, `sustained`, `glide`, `event_series`, `event_alternation`
+  and `sound_coverage` families. A sustained vowel cannot carry a disclosure. **Removes 55,657
+  findings.**
+- **B — drop every finding whose surface is a substring of that recording's own `stimulus_text`.**
+  Exact substring on the casefolded text, no fuzziness. Those words were printed on the screen the
+  participant read. **Removes a further 35,589 findings.**
+- **C — drop every finding whose surface was also detected somewhere A or B already condemned.**
+  A and B together are a measured negative-control set spanning 47,884 recordings; a surface that
+  turns up inside it is task material wherever else it turns up. **No threshold is chosen** — the
+  blocklist is whatever the negative controls contain, which is **5,363 distinct surfaces**.
+  **Removes a further 12,517 findings.**
+
+**48,959 of 152,722 findings survive — 32 %.**
+
+#### The recount
+
+| | recordings | rate of 60,207 scanned |
+|---|---:|---:|
+| carry any finding | 25,853 | 0.429 |
+| carry a finding that survives the filter (consensus haystack) | **5,327** | **0.089** |
+| carry a surviving finding on any of the three haystacks | 6,357 | 0.106 |
+
+By expectation class, before and after:
+
+| what the family's instruction allows | scanned | raw | raw rate | kept | kept rate |
+|---|---:|---:|---:|---:|---:|
+| no words asked for | 27,119 | 11,445 | 0.422 | 0 | 0.000 |
+| reads a fixed script | 20,765 | 6,864 | 0.331 | 701 | 0.034 |
+| produces items of a dictated class | 665 | 375 | 0.564 | 338 | 0.508 |
+| may disclose | 11,658 | 7,169 | 0.615 | **4,288** | **0.368** |
+
+By `speech_type`: non-lexical 11,671 → 16 (0.0006); read 6,638 → 685 (0.036); elicited 6,038 →
+3,910 (0.371); recall 1,506 → 716 (0.398). The 16 surviving non-lexical recordings are ones whose
+sidecar `speech_type` and whose family's expectation pattern disagree; they are worth a look on
+their own and are listed in the filtered detail file.
+
+A per-family view of the same, for the families where the correction is largest:
+
+| family | scanned | raw rate | kept rate |
+|---|---:|---:|---:|
+| caterpillar-passage | 594 | 0.987 | 0.108 |
+| diadochokinesis-buttercup | 895 | 0.911 | 0.000 |
+| diadochokinesis-pataka | 893 | 0.899 | 0.000 |
+| cape-v-sentences-v2 | 1,224 | 0.825 | 0.036 |
+| glides-low-to-high | 1,538 | 0.789 | 0.000 |
+| maximum-phonation-time | 2,479 | 0.752 | 0.000 |
+| story-recall | 882 | 0.903 | 0.383 |
+| cinderella-story | 258 | 0.903 | 0.864 |
+| free-speech-v2 | 2,111 | 0.791 | 0.613 |
+| free-speech | 3,064 | 0.705 | 0.485 |
+| harvard-sentences-list | 13,611 | 0.234 | 0.026 |
+| breath-sounds | 278 | 0.018 | 0.000 |
+
+**8.9 % is the corrected answer to "how many files contain PII", and it is an upper bound.** The
+filter removes what is false by construction. It does not adjudicate anything, and three residual
+classes are visible in the surviving set: the item-list families (random-item-generation 8,898
+surviving findings, random-item-generation-v2 4,294, animal-fluency 632) where the produced content
+is dictated task material, the narrative-recall families (cinderella-story 3,594) where character
+names from the story survive because those families carry no `stimulus_text` for rule B to match,
+and 1,336 survivors in harvard-sentences-list plus 576 in cape-v-sentences where an ASR error made
+the surface *not* an exact substring of the script it came from.
+
+#### Why there is no spread threshold in the filter
+
+Surface spread is the strongest single signal over the **raw** set: 100,292 of 152,722 findings —
+66 % — come from surfaces recurring in ten or more distinct recordings, against 14,202 surfaces seen
+in exactly one. It is tempting to add a spread cut as rule D. **The corpus says not to**, and the
+measurement is a second negative control.
+
+After rules A–C, 883 surviving surfaces occur only in fixed-script recordings. Every one of those is
+false — the participant was reading. Against them, 5,054 surviving surfaces occur only in
+free-response recordings, where a true positive is possible. Their subject-spread distributions:
+
+| surface appears in ≥ N distinct subjects | script-only (all false) | free-response-only |
+|---|---:|---:|
+| 1 | 883 (1.000) | 5,054 (1.000) |
+| 2 | 69 (0.078) | 729 (0.144) |
+| 3 | 36 (0.041) | 365 (0.072) |
+| 5 | 11 (0.012) | 183 (0.036) |
+| 10 | 4 (0.005) | 69 (0.014) |
+
+**The known-false residual is more concentrated in single-subject surfaces than the class where a
+disclosure is possible, not less.** A cut at ≥2 subjects would discard 1,863 known-false findings
+and 12,575 findings from the class that can contain a disclosure — it points the wrong way. So no
+spread rule is applied, and the raw-set spread statistic is reported as a description of the task
+material rules A–C already remove, not as a filter of its own. Spread stops discriminating once the
+task material is gone.
+
+The cost of rule C, stated rather than hidden: it removed 12,517 findings over 335 distinct
+surfaces, of which 151 had been seen in exactly one subject. If any true disclosure in this corpus
+uses a surface that also appears as task material somewhere, rule C discards it. The filter is
+tuned for precision, and a recall-oriented reader should work from the unfiltered set.
+
+#### The aggregated set, filtered and unfiltered
+
+Both live in the two places named at the end of §1b, and neither is in this document or the
+repository:
+
+- `pii_filtered_detail.jsonl` — the 48,959 surviving findings with their surfaces, recordings,
+  families and expectation class. **This is the aggregate that was asked for; read it first.**
+- `pii_filtered_surfaces.jsonl` — the 7,990 surviving distinct surfaces, each with the number of
+  distinct *subjects* it appears in. 6,497 appear in exactly one subject, 1,066 in two to four, 427
+  in five or more; the 427 are where the remaining task material sits.
+- `pii_detail.jsonl` and `pii_surfaces_by_spread.jsonl` — the unfiltered set, kept because the
+  comparison is itself the evidence of over-reach.
+- `pii_filter_counts.json` — every count above, including the full per-family table.
+
+Surviving findings by category: PERSON 17,092; DATE_TIME 12,560; NAME 7,483; LOCATION 6,940; MISC
+1,776; LOC 1,708; NRP 519; AGE 474; DATE 159; ORG 112; VEHICLE_IDENTIFIER 92; EMAIL_ADDRESS 21. Every
+structured-identifier category except those last two is gone entirely — `US_SSN`,
+`UNIQUE_IDENTIFIER` and `DEVICE_IDENTIFIER` had no survivor at all, which is the clearest possible
+statement that they were firing on task material. By language, survivors are `en` 45,028 and
+`es-419` 3,931: Spanish is 2 % of the corpus and 8 % of what survives.
 
 
 ---
@@ -612,8 +754,10 @@ Listed so none of it is mistaken for a null result.
 8. **Whether the 71 recordings with a substantive second speaker contain a clinician, a family
    member, a television, or the participant twice.** Nothing was listened to.
 9. **Whether any of the fresh scan's findings is a true positive.** The census establishes that
-   large, identifiable classes of them are false. It establishes nothing about the remainder, and
-   no finding was adjudicated by a person. A precision figure needs a labelled sample.
+   large, identifiable classes of them are false, and §1d removes those classes. It establishes
+   nothing about the 48,959 that survive: no finding was adjudicated by a person, and three residual
+   false classes are still visible in the survivors. 8.9 % is an upper bound, and a precision figure
+   needs a labelled sample.
 10. **Whether the false-positive rate would survive the graph's own corroboration.** SPEECH records
     a finding from any single detector; `decide_pii`'s agreement rule is a separate step this scan
     did not apply. Whether requiring two detectors would remove the classes in §1b is measurable and
@@ -648,13 +792,15 @@ Listed so none of it is mistaken for a null result.
 7. **Is the "no lexical content" reading wanted as a task-verification signal**, given that it fires
    on 95.7 % of breath-sounds and 0 % of animal-fluency by design? It is only meaningful against a
    family's expectation, which is the branch's job.
-8. **Should the PII scan run at all on a family whose instruction asks for no words?** 26,932
-   non-lexical recordings produced 21,353 spans and cannot contain a disclosure. Skipping them is a
-   routing decision, not a detector change, and it removes the largest false-positive class outright.
-9. **Should a finding that is a substring of the recording's own `stimulus_text` be suppressed?**
-   The sidecar carries the script; 84.4 % of read-task findings are literally inside it. This is a
-   cheap, exact, non-statistical filter and it needs an owner's ruling because it is a suppression
-   rule, not a measurement.
+8. **Should rules A, B and C of §1d become pipeline behaviour, and where?** A is a routing
+   decision (do not scan a family that asks for no words — 27,119 recordings, 11,445 of them
+   currently flagged, all false). B is a SPEECH-level suppression against the sidecar's own
+   `stimulus_text`. C is a corpus-level blocklist and therefore belongs to a corpus node, not to a
+   per-recording one. All three are suppression rules, which is a decision rather than a
+   measurement, and none should be adopted without the owner saying so.
+9. **What is the reference standard for the surviving 8.9 %?** The filter is precision-oriented and
+   rule C is known to drop up to 151 single-subject surfaces. A labelled sample — a few hundred
+   adjudicated free-response recordings — would turn an upper bound into a rate.
 10. **Should structured-identifier categories require a digit?** `US_SSN`, `VEHICLE_IDENTIFIER`,
     `UNIQUE_IDENTIFIER` and `DEVICE_IDENTIFIER` currently fire on purely alphabetic surfaces.
 11. **What should happen to a detected span ten or more tokens long?** 4,175 non-lexical spans are
@@ -685,6 +831,8 @@ scratch at `/orcd/scratch/bcs/002/satra/checks_20260916/census/`:
 | `pii_aggregate.py` | the fresh scan's counts, shapes and the surfaces-by-spread file | 1 proc |
 | `pii_final.py` | the fresh scan partitioned by `speech_type`, expectation pattern, language and stimulus containment | 1 proc |
 | `crosstab.py` | multi-speaker against the fresh scan, duration-matched | 1 proc |
+| `pii_filter.py` | rules A/B/C, the recount, and the filtered aggregate | 1 proc |
+| `pii_residual.py` | whether a subject-spread cut is derivable from the fixed-script residual | 1 proc |
 | `sidecars.py` | `language`, `speech_type` and `stimulus_text` from the BIDS sidecars | 16 procs, ~2 min |
 | `cjk.py` | which transcripts carry CJK codepoints, and from which backend | 16 procs |
 | `verify_text.py`, `verify_text2.py` | whether the reconstructed haystack matches the store's own `consensus_transcript.text` | 16 procs |
