@@ -1298,6 +1298,27 @@ class TestAFreeResponseIsReadOffTheWords:
         consensus = find_measurement(store, "consensus_transcript")
         assert consensus is not None and consensus.id in sources
 
+    def test_a_bracketed_token_outside_the_speech_does_not_stretch_the_response(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PREPROCESS builds its candidates from the non-bracketed words; so does this hull.
+
+        A cough at the tail is not part of the response, and letting it set the boundary would
+        inflate every rate measured over that boundary.
+        """
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two", "[cough]"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0), (7.0, 7.5)],
+            duration_s=9.0,
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        extents = [e for e in live_entities(store, "span") if e.attributes.get("role") == "task_extent"]
+        assert len(extents) == 1
+        assert extents[0].extent == pytest.approx((1.0, 2.0)), "the bracketed token is not the response"
+
     def test_the_one_candidate_that_fell_in_a_gap_no_longer_decides_a_ninety_word_response(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
