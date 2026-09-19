@@ -996,11 +996,12 @@ def align_ddk(
         findings.append(_absent(ENVELOPE))
     else:
         train, rate_hz = ddk_carrier(store, params, reads.envelope)
+        unmeasured_gate = params.point("train_min_s") is None
         if train is None or train.extent is None:
             # No carrier has two causes and they are not the same report: no span held a readable
             # train, or the length guard's own boundary is unmeasured and no span could clear it.
             # Only the first is a reading of the recording, so only the first answers conformance.
-            done = UNDETERMINED if params.point("train_min_s") is None else False
+            done = UNDETERMINED if unmeasured_gate else False
         else:
             carrier_extent, carrier_ids = train.extent, _evidence(train.id, reads.envelope_id)
             done = True

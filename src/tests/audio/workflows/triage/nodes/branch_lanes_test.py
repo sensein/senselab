@@ -219,32 +219,30 @@ class TestTheLaneReadsWhatTheBranchesWrote:
             "speech_s": 0.3,
             "nontarget_speech_s": None,
         }
-        assert "ppg_rate_hz" not in dict(lane.measures)
+        assert "ppg_syllable_rate_hz" not in dict(lane.measures)
 
-    def test_the_nine_ppg_measures_reach_the_lane_when_the_report_carries_them(self, routed: ProvStore) -> None:
-        """The CV instrument reports these under SPEECH; the lane must not drop one."""
+    def test_every_ppg_measure_reaches_the_lane_when_the_report_carries_them(self, routed: ProvStore) -> None:
+        """The decode reports these under SPEECH; the lane must not drop one."""
         source = _envelope_spans(routed)[0].id
         ppg = {
-            "ppg_trains_n": 3,
-            "ppg_rate_hz": 5.1,
-            "ppg_repetitions": 17,
-            "ppg_period_s": 0.196,
-            "ppg_jitter_over_median": 0.08,
-            "ppg_cv_units_n": 17,
-            "ppg_interval_trend_s_per_step": 0.001,
-            "ppg_cycles": 8,
-            "ppg_declared_cycles": 10,
+            "ppg_syllable_rate_hz": 5.1,
             "ppg_cycle_rate_hz": 1.7,
-            "ppg_cycle_gap_cv": 0.41,
-            "ppg_cycle_consumed": 0.94,
-            "ppg_cycle_insertions_n": 2,
-            "ppg_cycle_nucleus_fraction": 0.91,
-            "ppg_place_agreement": 0.88,
+            "ppg_repetitions": 8,
+            "ppg_declared_event_count": 30,
+            "ppg_period_s": 0.588,
+            "ppg_period_cv": 0.41,
+            "ppg_period_trend_s_per_step": 0.001,
+            "ppg_positions": ["p", "aa", "t", "aa", "k", "aa"],
+            "ppg_realised_mass": [0.83, 0.76, 0.79, 0.68, 0.81, 0.8],
+            "ppg_occupancy_s": [0.4, 0.9, 0.4, 0.9, 0.4, 0.9],
+            "ppg_filler_fraction": 0.31,
+            "ppg_score_per_frame": -0.58,
+            "ppg_contradicted_words_n": 2,
         }
         _run_branch(
             routed,
             "SPEECH",
-            [("ppg_train", (1.1, 1.9), source, {"production": "syllable_train_from_ppg"})],
+            [("task_extent", (1.1, 1.9), source, {"production": "syllable_task_from_decode"})],
             kind="speech",
             detail={"speaker_count": 1, "words_n": 2, "speech_s": 0.8, "nontarget_speech_s": 0.0, **ppg, "notes": []},
         )

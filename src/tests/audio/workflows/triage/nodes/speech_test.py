@@ -2236,7 +2236,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
             for entity in live_entities(store, "span")
             if entity.attributes.get("production") == "syllable_sequence"
         ]
-        assert train.attributes["syllables_n"] > 1
+        assert train.attributes["syllables_n"] is None
         assert result.report.in_family is True
 
     def test_a_non_ddk_lexical_recording_carries_no_syllable_measures(

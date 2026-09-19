@@ -147,23 +147,19 @@ _SYLLABLE_DETAIL = {
     "train_fraction": 0.4,
     "modulation_peak_hz": 5.5,
     "modulation_unit": "syllables_per_s",
-    "interval_dispersion": 0.12,
-    "interval_trend_s_per_step": 0.003,
-    "ppg_trains_n": 1,
-    "ppg_rate_hz": 5.4,
-    "ppg_repetitions": 14,
-    "ppg_period_s": 0.185,
-    "ppg_jitter_over_median": 0.08,
-    "ppg_cv_units_n": 28,
-    "ppg_interval_trend_s_per_step": 0.001,
-    "ppg_cycles": 9,
-    "ppg_declared_cycles": 10,
+    "ppg_syllable_rate_hz": 5.4,
     "ppg_cycle_rate_hz": 1.8,
-    "ppg_cycle_gap_cv": 0.37,
-    "ppg_cycle_consumed": 0.96,
-    "ppg_cycle_insertions_n": 1,
-    "ppg_place_agreement": 0.88,
-    "ppg_cycle_nucleus_fraction": 0.9,
+    "ppg_repetitions": 9,
+    "ppg_declared_event_count": 30,
+    "ppg_period_s": 0.556,
+    "ppg_period_cv": 0.12,
+    "ppg_period_trend_s_per_step": 0.001,
+    "ppg_positions": ["b", "ah", "t", "er", "k", "ah", "p"],
+    "ppg_realised_mass": [0.78, 0.78, 0.69, 0.57, 0.81, 0.83, 0.77],
+    "ppg_occupancy_s": [0.42, 0.9, 0.38, 0.5, 0.4, 0.95, 0.35],
+    "ppg_filler_fraction": 0.32,
+    "ppg_score_per_frame": -0.61,
+    "ppg_contradicted_words_n": 2,
 }
 """What ``ddk.syllable_detail`` returns for an in-family syllable task, as ``speech()`` merges it."""
 
@@ -1497,34 +1493,31 @@ class TestTheSyllableMeasuresReachThePage:
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "modulation_peak_hz=5.5" in blocks
         assert "modulation_unit=syllables_per_s" in blocks
-        assert "interval_dispersion=0.12" in blocks
+        assert "ppg_period_cv=0.12" in blocks
 
     def test_every_ppg_field_the_instrument_measures_reaches_the_page(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The PPG instrument's nine readings are the branch's own evidence and reached nothing."""
+        """The decode's readings are the branch's own evidence and once reached nothing."""
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True, syllable=True)
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
         expected = {
-            "ppg_trains_n=1",
-            "ppg_rate_hz=5.4",
-            "ppg_repetitions=14",
-            "ppg_period_s=0.185",
-            "ppg_jitter_over_median=0.08",
-            "ppg_cv_units_n=28",
-            "ppg_interval_trend_s_per_step=0.001",
-            "ppg_cycles=9",
-            "ppg_declared_cycles=10",
+            "ppg_syllable_rate_hz=5.4",
             "ppg_cycle_rate_hz=1.8",
-            "ppg_cycle_gap_cv=0.37",
-            "ppg_cycle_consumed=0.96",
-            "ppg_cycle_insertions_n=1",
-            "ppg_cycle_nucleus_fraction=0.9",
-            "ppg_place_agreement=0.88",
+            "ppg_repetitions=9",
+            "ppg_declared_event_count=30",
+            "ppg_period_s=0.556",
+            "ppg_period_cv=0.12",
+            "ppg_period_trend_s_per_step=0.001",
+            "ppg_filler_fraction=0.32",
+            "ppg_score_per_frame=-0.61",
+            "ppg_contradicted_words_n=2",
         }
         assert expected <= set(blocks.split())
+        assert "ppg_positions=" in blocks
+        assert "ppg_realised_mass=" in blocks
 
     def test_the_pdf_decision_pages_measured_findings_name_them_too(self, store: ProvStore, tmp_path: Path) -> None:
         """Both readers of ``BRANCH_MEASURES`` were blind to these, not just the branch-detail one."""
@@ -1535,7 +1528,7 @@ class TestTheSyllableMeasuresReachThePage:
         assert "SPEECH: " in findings
         named = {token.strip("; ") for token in findings.split()}
         assert "trains_n=1" in named, "the train count itself, not the ppg_ prefixed one"
-        assert "ppg_rate_hz=5.4" in named
+        assert "ppg_syllable_rate_hz=5.4" in named
 
     def test_a_recording_that_ran_no_syllable_body_carries_none_of_the_keys(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1546,7 +1539,7 @@ class TestTheSyllableMeasuresReachThePage:
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "trains_n" not in blocks
-        assert "ppg_rate_hz" not in blocks
+        assert "ppg_syllable_rate_hz" not in blocks
 
 
 class TestInitialAndUpdatedSpansShareALane:
