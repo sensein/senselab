@@ -9,6 +9,22 @@ from transcript text, are under `/orcd/scratch/bcs/002/satra/checks_20260916/pii
 branches, so three of the things the census was asked for are not in the stores at all, and one of
 them was measured afresh rather than read.
 
+**Five findings, if you read nothing else.**
+
+1. The 2026-09-08 run stopped after TAXONOMY. **0 PII entities, 0 branch reports, 0 deviations**
+   across 62,578 stores — an absent instrument, not a null result.
+2. A fresh scan of the transcripts those stores hold, with the same three detectors the config
+   requires, flags **42.9 % of recordings**. **40.6 % of non-lexical recordings are flagged**, on
+   tasks that contain no words, and **84.6 % of read-task findings are literally substrings of the
+   script the participant was handed.** The detector is over-reaching at scale.
+3. **65.7 % of all findings come from surfaces that recur in ten or more unrelated recordings** —
+   task material, not disclosure. This is the cheapest available filter and needs no model.
+4. 4.4 % of recordings show more than one speaker, but the median second speaker has **0.44 s** of
+   speech, the two diarized streams agree on 8 % of the cases where either sees one, and only **71
+   recordings in the corpus (0.11 %)** have a second voice with five seconds or more.
+5. The corpus declares **two languages, `en` and `es-419`**, both Latin script. The CJK glyphs seen
+   downstream are a Qwen-ASR artefact on English non-lexical recordings, in 2,774 recordings.
+
 ---
 
 ## 0. What ran, and what therefore cannot be answered from these stores
@@ -117,136 +133,140 @@ where is the detector over-reaching.
 
 **Fidelity caveats, stated up front.** (i) The haystack is reconstructed by joining each store's
 `word` entities in index order. On a 1-in-20 sample (3,129 recordings) that reproduces the store's
-own `consensus_transcript.text` byte for byte in 3,066 cases; the 61 that differ are all cases where
-the stored text applied a bracket override and the reconstruction keeps both the word and the
-bracketed event, so the reconstruction is a superset and can only add findings. (ii) There is no
+own `consensus_transcript.text` byte for byte in 3,066 cases (2 stores carry no stored text). In the
+61 that differ the reconstruction is the longer string, and in every example inspected the cause is
+the same: the stored text applied a bracket override, keeping the bracketed event and dropping the
+competing word, where the reconstruction keeps both. That makes the reconstruction a superset, so it
+can add findings and not lose them — the conservative direction for a false-positive census. It was
+not verified that all 61 have that cause. (ii) There is no
 speaker attribution, so no finding can be assigned to the target speaker or to a second voice.
 (iii) The code is today's, not the 2026-09-08 commit.
 
-**Population and coverage.** Every non-empty transcript the stores hold: the reconstructed consensus
-transcript for each recording, plus each ASR backend's own transcript, which is the same three-way
-haystack SPEECH would scan. 167,629 texts were submitted. **157,178 came back scanned and 10,451 did
-not**: one array shard of sixteen landed on a contended node and every one of its 35 chunks hit the
-600 s subprocess timeout, so `detectors_failed` carries `pii_subprocess` for all of them. That shard
-is a deterministic 1-in-16 stride of the manifest, so the loss is an unbiased ~6 % sample rather than
-a skewed one; it is excluded from both numerator and denominator throughout, and the shard has been
-re-run. Detector failures elsewhere: **none** — all 157,178 scanned texts report
-`detectors_used: [gliner, presidio, rules]` and an empty failure map.
+**Population and coverage.** Every non-empty transcript the stores hold: the reconstructed
+consensus transcript for each recording, plus each ASR backend's own transcript, which is the same
+three-way haystack SPEECH would scan. **167,629 texts, all 167,629 scanned, zero detector
+failures** — every one reports `detectors_used: [gliner, presidio, rules]` and an empty failure map.
+(One array shard of sixteen initially timed out wholesale on a contended node and was re-run at a
+smaller chunk size; its 10,451 texts are included here.)
 
 #### The headline
 
-**24,261 of 56,454 scanned consensus transcripts — 43.0 % — carry at least one PII finding.**
+**25,853 of 60,207 consensus transcripts — 42.9 % — carry at least one PII finding.** Across all
+three haystacks, 72,513 of 167,629 texts do, and 152,722 spans were returned.
 
-That number is not a disclosure rate. Here it is split by the BIDS sidecar's `speech_type`, which
-says what the participant was asked to produce:
+That is not a disclosure rate. Split by the BIDS sidecar's `speech_type`, which records what the
+participant was asked to produce (consensus haystack, so the denominators are recordings):
 
 | speech_type | scanned | with a finding | rate | spans | spans per recording |
 |---|---:|---:|---:|---:|---:|
-| non-lexical | 26,932 | 10,982 | **0.408** | 21,353 | 0.79 |
-| read | 17,944 | 6,218 | 0.347 | 10,390 | 0.58 |
-| elicited | 9,889 | 5,649 | 0.571 | 16,661 | 1.69 |
-| recall | 1,689 | 1,412 | 0.836 | 4,043 | 2.39 |
+| non-lexical | 28,719 | 11,671 | **0.406** | 22,725 | 0.79 |
+| read | 19,165 | 6,638 | 0.346 | 11,055 | 0.58 |
+| elicited | 10,524 | 6,038 | 0.574 | 17,679 | 1.68 |
+| recall | 1,799 | 1,506 | 0.837 | 4,294 | 2.39 |
 
 **Two of those four rows are false by construction.**
 
-**`non-lexical` — 40.8 % on 26,932 recordings that contain no words at all.** These are the
+**`non-lexical` — 40.6 % on 28,719 recordings that contain no words at all.** These are the
 sustained vowels, glides, syllable trains, breaths and coughs. There is nothing to disclose, and
-21,353 spans were returned anyway — 37,939 of the non-lexical spans across all haystacks are
-`PERSON`, 10,951 are `NAME`, and 1,459 are `UNIQUE_IDENTIFIER`. This quantifies over 26,932
+22,725 spans came back anyway. Across all haystacks the non-lexical findings are 40,374 `PERSON`,
+11,622 `NAME`, 1,606 `LOCATION` and 1,554 `UNIQUE_IDENTIFIER`. This quantifies over 28,719
 recordings what a 26-recording sample could only suggest.
 
-**`read` — 34.7 %, on recordings where the participant was handed the words.** The sidecar carries
-`stimulus_text`, so this is testable directly: of the read-task findings on a recording that has a
-stimulus, **25,474 of 30,174 (84.4 %) are literally a substring of the script the participant was
-given to read.** Not a similar phrase — the same characters.
+**`read` — 34.6 %, on recordings where the participant was handed the words.** The sidecar carries
+`stimulus_text`, so this is testable exactly rather than by inference: of the read-task findings on
+a recording that has a stimulus, **27,157 of 32,118 (84.6 %) are literally a substring of the script
+the participant was given to read.** Not a paraphrase — the same characters.
 
-The same partition using the graph's own expectation table rather than the sidecar agrees:
+The same partition using the graph's own expectation table instead of the sidecar agrees:
 
 | what the family's instruction allows | scanned | with a finding | rate | spans/recording |
 |---|---:|---:|---:|---:|
-| no words asked for (syllable / sustained / glide / event) | 25,444 | 10,766 | 0.423 | 0.83 |
-| reads a fixed script (ordered_tokens) | 19,432 | 6,434 | 0.331 | 0.55 |
-| produces items of a dictated class (item_list) | 633 | 356 | 0.562 | **7.47** |
-| may disclose (free_response) | 10,945 | 6,705 | 0.613 | 1.46 |
+| no words asked for (syllable / sustained / glide / event) | 27,119 | 11,445 | 0.422 | 0.83 |
+| reads a fixed script (ordered_tokens) | 20,765 | 6,864 | 0.331 | 0.54 |
+| produces items of a dictated class (item_list) | 665 | 375 | 0.564 | **7.32** |
+| may disclose (free_response) | 11,658 | 7,169 | 0.615 | 1.47 |
 
-Only the last row is a population where a disclosure is even possible, and it is 10,945 of 56,454
-recordings — 19 %. The `item_list` row is the worst spans-per-recording in the corpus at 7.47:
+Only the last row is a population where a disclosure is possible at all, and it is 11,658 of 60,207
+recordings — 19 %. The `item_list` row has the worst spans-per-recording in the corpus at 7.32:
 those families instruct the participant to name animals or arbitrary items, and a produced item is
 not a disclosure.
 
 #### The false-positive classes
 
-Ranked by how much of the total they account for. Each is named by its shape; illustrations are
+Ranked by how much of the total they account for. Each is named by its shape; every illustration is
 synthetic and constructed here, never a detected string.
 
 1. **Non-lexical vocalisation read as a name.** A recogniser given a sustained vowel or a syllable
-   train emits something, and the detector names it. The single largest class. Shapes: 1-token
-   alphabetic `PERSON` (14,924 in the preview slice alone), and **4,175 non-lexical spans of ten
-   tokens or more** — an entire syllable train returned as one `PERSON` span. Synthetic
-   illustration of the shape: `"ba ba ba ba ba ba ba ba ba ba"` → `PERSON`.
+   train emits something, and the detector names it. The largest class by far: 22,725 spans on
+   28,719 recordings that were never asked for a word. The shape is stark — of 79,865 `PERSON`
+   spans, **63,891 are a single alphabetic token**, and **4,430 non-lexical spans are ten tokens or
+   longer**, which is an entire syllable train returned as one `PERSON`. Synthetic illustration:
+   `"ba ba ba ba ba ba ba ba ba ba"` → `PERSON`.
 2. **The carrier word of a syllable task read as a name.** The DDK families are named after a
-   carrier word; the recogniser writes that word repeatedly and both `PERSON` and `NAME` fire on it,
-   on its doubling and on its tripling. Among the 70 surfaces detected in 100 or more distinct
-   recordings, the carrier words and their repetitions are the largest group.
-3. **Disfluency tokens read as names.** The filler tokens a recogniser writes for hesitation are
-   among the most widely spread surfaces in the whole census — the top three surfaces by spread are
-   all fillers, one of them in 972 distinct recordings. Synthetic illustration: `"erm"` → `PERSON`.
-4. **Bracketed event markers read as PII.** The consensus stream carries bracketed non-speech events;
-   **226 spans carry a bracket character and 90 distinct bracketed surfaces were detected**,
-   including a bare event marker returned as `PERSON` and, separately, as `LOCATION`. Synthetic
+   carrier word; the recogniser writes it repeatedly and both `PERSON` and `NAME` fire on it, on its
+   doubling and on its tripling as separate findings. Among the 72 surfaces detected in 100 or more
+   distinct recordings, the carrier words and their repetitions are the largest group.
+3. **Disfluency tokens read as names.** The filler tokens a recogniser writes for hesitation are the
+   most widely spread surfaces in the census: the top three surfaces by spread are all fillers, the
+   first in 972 distinct recordings. Synthetic illustration: `"erm"` → `PERSON`.
+4. **Bracketed event markers read as PII.** The consensus stream carries bracketed non-speech
+   events; **236 spans carry a bracket character across 95 distinct bracketed surfaces**, including
+   a bare event marker returned as `PERSON` and, separately, the same marker as `LOCATION`. Synthetic
    illustration: `"[SNIFF]"` → `PERSON`. This is the brief's "bracketed event" class, confirmed.
-5. **Stimulus text read as disclosure.** 84.4 % of read-task findings are substrings of the script.
-   The `AGE` category is the sharpest case: **712 of its 1,164 spans are inside the stimulus**, i.e.
-   the HIPAA age-over-90 rule firing on a phrase printed in a passage the participant was told to
-   read aloud. Synthetic illustration of the shape: a read passage containing `"ninety-one years
-   old"` → `AGE`.
+5. **Stimulus text read as disclosure.** 84.6 % of read-task findings are substrings of the script.
+   `AGE` is the sharpest case: **769 of its 1,243 spans are inside the stimulus**, i.e. the HIPAA
+   age-over-90 rule firing on a phrase printed in a passage the participant was told to read aloud.
+   Synthetic illustration of the shape: a read passage containing `"ninety-one years old"` → `AGE`.
+   `DATE_TIME` is the same story at volume: 14,717 inside against 12,882 outside.
 6. **Elicited task material read as location.** The item-list families ask for arbitrary items and
-   participants produce place names; `LOC` and `LOCATION` then fire, sometimes returning a whole
-   multi-sentence utterance as one span. `LOC` is almost never inside a stimulus (745 outside, 6
-   inside) because these families have no script — the words are the participant's, and they are
+   participants produce place names, so `LOC` and `LOCATION` fire — sometimes returning a whole
+   multi-sentence utterance as one span. `LOC` is almost never inside a stimulus (794 outside, 6
+   inside) because these families have no script: the words are the participant's, and they are
    still task material rather than disclosure.
-7. **Structured-identifier categories on alphabetic surfaces.** `US_SSN`, `VEHICLE_IDENTIFIER`,
-   `UNIQUE_IDENTIFIER` and `DEVICE_IDENTIFIER` fire on 1-token *alphabetic* surfaces — every one of
-   the 340 `UNIQUE_IDENTIFIER` shapes in the preview slice, 80 of the `VEHICLE_IDENTIFIER` and 7 of
-   the `US_SSN`. A social security number that contains no digit is definitionally not one; this is a
-   format-validation gap, and the cheapest of the seven to close.
+7. **Structured-identifier categories on alphabetic surfaces.** `UNIQUE_IDENTIFIER` is 1,542
+   single-token *alphabetic* surfaces out of 1,561; `VEHICLE_IDENTIFIER` 268 of 400; `US_SSN` 9 of
+   14, with 2 more being two alphabetic tokens. A social security number containing no digit is
+   definitionally not one. This is a format-validation gap and the cheapest of the seven to close.
 
 #### Spread, which is the general-purpose signal
 
 A real disclosure is idiosyncratic; a surface detected across hundreds of unrelated recordings is
-task material. Of **17,771 distinct detected surfaces**, 13,522 appear in exactly one recording, 726
-appear in ten or more, and 70 appear in a hundred or more. **93,687 of 143,740 spans — 65 % — come
-from surfaces that recur across ten or more distinct recordings.** That single statistic is probably
-the most useful filter available before the detector is retuned.
+task material. Of **18,661 distinct detected surfaces**, 14,202 appear in exactly one recording, 767
+in ten or more, and 72 in a hundred or more. **100,292 of 152,722 spans — 65.7 % — come from
+surfaces that recur across ten or more distinct recordings.** That single statistic is probably the
+most useful filter available before the detector is retuned, and it needs no model.
 
-#### Category and source distribution of the fresh scan
+#### Category, source and haystack distribution
 
-By category, over all three haystacks: PERSON 75,205, DATE_TIME 27,735, NAME 22,062, LOCATION
-10,513, MISC 2,098, LOC 1,683, UNIQUE_IDENTIFIER 1,466, AGE 1,164, NRP 1,122, VEHICLE_IDENTIFIER
-379, DATE 155, ORG 105, EMAIL_ADDRESS 22, US_SSN 14, DEVICE_IDENTIFIER 6, PHOTOGRAPHIC_IMAGE 5,
-FAX_NUMBER 2, ACCOUNT_NUMBER 2, LICENSE_NUMBER 1, US_DRIVER_LICENSE 1.
+By category, over all three haystacks: PERSON 79,865; DATE_TIME 29,621; NAME 23,371; LOCATION
+11,125; MISC 2,237; LOC 1,790; UNIQUE_IDENTIFIER 1,561; AGE 1,243; NRP 1,176; VEHICLE_IDENTIFIER
+400; DATE 161; ORG 112; EMAIL_ADDRESS 26; US_SSN 14; DEVICE_IDENTIFIER 8; PHOTOGRAPHIC_IMAGE 5;
+FAX_NUMBER 2; ACCOUNT_NUMBER 2; LICENSE_NUMBER 1; US_DRIVER_LICENSE 1; URL 1.
 
-By source: presidio 57,751; gliner/name 52,869; rules/ner 20,060; gliner/date 3,397;
-rules/gazetteer+ner 2,688; gliner/unique_identifier 1,466; then a long tail of rules-cascade
-combinations. By haystack: consensus 52,447, asr_crisperwhisper 48,034, asr_qwen 43,259 — the three
-are not redundant, and the graph is right to scan all three.
+By source: presidio 61,369; gliner/name 56,195; rules/ner 21,190; gliner/date 3,626;
+rules/gazetteer+ner 2,881; gliner/unique_identifier 1,561; then a long tail of rules-cascade
+combinations. Two detectors produce 77 % of everything.
 
-By declared language: `en` 23,651 of 55,311 scanned (0.428); `es-419` 610 of 1,143 (0.534), at 2.24
-spans per recording against 0.90 for English. An English-only detector cascade on Spanish transcripts
-is a second over-reach worth its own look.
+By haystack: consensus 55,753; asr_crisperwhisper 51,024; asr_qwen 45,945. The three are not
+redundant, and the graph is right to scan all three.
+
+By declared language: `en` 25,202 of 58,994 scanned (0.427), 0.90 spans per recording; `es-419` 651
+of 1,213 (0.537), **2.23 spans per recording**. The cascade loads `en_core_web_lg` and calls
+Presidio with `language="en"`; an English-only cascade on Spanish transcripts is a second over-reach
+worth its own look.
 
 #### Where the full set lives
 
-The detected strings are **not in this document and not in the repository**, and must not be added to
-either — the repository is shared and its history is permanent, and this document is meant to
+The detected strings are **not in this document and not in the repository**, and must not be added
+to either — the repository is shared and its history is permanent, and this document is meant to
 circulate. They live in two places:
 
 - `/orcd/scratch/bcs/002/satra/checks_20260916/pii_census/` on ORCD scratch (mode 700):
   `pii_detail.jsonl` (every finding with its surface, recording, family and haystack) and
   `pii_surfaces_by_spread.jsonl` (each distinct surface with the number of recordings it was
-  detected in, the file to start from when judging the detector).
-- `~/Downloads/pii_census/` on the owner's laptop, the same two files plus the two summaries.
-
+  detected in — the file to start from when judging the detector), plus `pii_summary.json` and
+  `pii_by_expectation.json`.
+- `~/Downloads/pii_census/` on the owner's laptop: the same four files.
 
 ### 1c. Language, and where the CJK glyphs come from
 
@@ -375,24 +395,52 @@ decision on spans too short for the instrument to be trusted on.**
 
 ### Cross-tab against PII
 
-**Cannot be done.** There are no PII findings in the stores (§0). The hypothesis — that a second
-voice in a clinical recording is often a clinician, and that identifying speech comes from there — is
-exactly the thing this corpus cannot test, and the fresh scan in §1 cannot test it either, because
-the fresh scan has no speaker attribution: it reads a transcript, and the transcript does not say who
-said what. Joining a PII finding to a speaker needs SPEECH's own word-to-speaker resolution, which
-requires the branch to run.
+**Against the pipeline's own PII findings: cannot be done** — there are none (§1a). Against the
+fresh scan of §1b it can, with one structural limit: the fresh scan has no speaker attribution. It
+reads a transcript and the transcript does not say who said what, so a finding can be joined to a
+*recording* that has two voices but never to the *voice* that produced it. Joining a finding to a
+speaker needs SPEECH's own word-to-speaker resolution.
 
-The nearest thing the stores support is multi-speaker against *lexical content*, which is a much
-weaker question:
+Over the 59,597 recordings with both a diarization and a scanned consensus transcript:
+
+| | recordings | carry a finding | rate |
+|---|---:|---:|---:|
+| ≥2 speakers (enhanced) | 2,662 | 1,589 | **0.597** |
+| ≤1 speaker | 56,935 | 23,986 | 0.421 |
+| secondary speaker ≥5 s | 67 | 42 | 0.627 |
+
+Taken flat, that is the hypothesis confirmed: a multi-speaker recording is 1.42× as likely to carry
+a finding. **It does not survive controlling for the two confounds this census has already
+established.** Multi-speaker calls concentrate in long recordings (§2 above), findings concentrate
+in long open-ended recordings (§1b), and most findings are false. Restricting to `free_response`
+families — the only ones where a disclosure is possible — and matching on duration quintile:
+
+| duration quintile | ≥2 speakers | ≤1 speaker |
+|---|---:|---:|
+| 0.1–10.7 s | 36/92 = 0.391 | 870/2,217 = 0.392 |
+| 10.7–23.1 s | 99/168 = 0.589 | 1,214/2,141 = 0.567 |
+| 23.1–30.0 s | 159/208 = 0.764 | 1,563/2,101 = 0.744 |
+| 30.0–41.2 s | 168/229 = 0.734 | 1,470/2,080 = 0.707 |
+| 41.2–332.6 s | 269/376 = 0.715 | 1,244/1,933 = 0.644 |
+
+Four of the five quintiles differ by two points or less. Only the longest shows a gap (0.715 against
+0.644), and that quintile is also where diarization is least reliable. Spans per recording are 1.99
+against 1.41, in the same direction and with the same confound.
+
+**The honest reading: the raw 1.42× association is mostly duration, and what survives duration
+matching is small and concentrated in the longest recordings.** This corpus does not support "a
+second voice is where identifying speech comes from" — but it also cannot refute it, because the
+finding set it is being tested against is dominated by false positives and carries no speaker.
+Answering the question properly needs the branch run, which attributes words to speakers, and a
+detector whose findings mean something.
+
+The weaker structural cross-tab, for completeness — multi-speaker against whether the recording has
+any lexical content at all:
 
 | | ≥2 speakers | ≤1 speaker | rate |
 |---|---:|---:|---:|
 | has lexical content | 2,378 | 42,540 | 0.053 |
 | no lexical content | 361 | 16,607 | 0.021 |
-
-Recordings with words in them are 2.5× more likely to be called multi-speaker. That is consistent
-with a real second voice and equally consistent with the duration confound above (lexical families
-are the long ones), and nothing in the store separates the two.
 
 ---
 
