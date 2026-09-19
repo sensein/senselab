@@ -2,7 +2,12 @@
 
 What replaces the per-syllable CV walk, the mechanism that replaces it, every parameter it
 introduces and where each comes from, what it deletes, what it must not break, and what would have
-to be measured before it lands. **Design only. Nothing here is implemented.**
+to be measured before it lands.
+
+**Status.** The design's nine open questions were settled by the owner on 2026-09-19 and their
+answers are in [*The owner's decisions*](#the-owners-decisions-2026-09-19) below, which is
+authoritative wherever it and the body above it disagree. The body has been brought into line with
+it. Implementation follows this document.
 
 The code this describes replacing is `src/senselab/audio/workflows/triage/nodes/ddk.py`; the
 documents it supersedes are [`branch-ddk-ppg-instrument.md`](branch-ddk-ppg-instrument.md),
@@ -145,10 +150,13 @@ Two entries are choices rather than consequences, and both are flagged:
   realised mass of 0.67 (p10 0.17). Merging it into `open` would make positions 1, 3 and 5 of
   buttercup the same class and the template would carry three interchangeable vowel slots.
 
-**The template's `/t/` is a flap.** In "butter" the /t/ is an intervocalic flap /ɾ/ in American
-English. ppgs's ARPAbet-40 inventory has no flap symbol, so it must surface as `t`, `d` or `r`.
-`t` and `d` are both alveolar, so the class absorbs two of the three. **Whether the alveolar class
-should also admit `r` is measurable and is not measured here** — see the open questions.
+**The template's `/t/` is a flap, and the alveolar class admits `r`.** In "butter" the /t/ is an
+intervocalic flap /ɾ/ in American English. ppgs's ARPAbet-40 inventory has no flap symbol, so the
+flap must surface as `t`, `d` or `r`. `t` and `d` were already in the class; `r` is the third
+spelling of the same segment and the owner has admitted it. The principle and every admission it
+licenses are in *The owner's decisions* (3) below: an admission is legitimate when a **stimulus**
+phoneme has more than one ARPAbet spelling in the realisation the stimulus prescribes, and it is
+not a licence to widen a class toward whatever the posteriorgram happens to read.
 
 ---
 
@@ -497,18 +505,36 @@ into apparent participant error. Carrying the posterior mass all the way to the 
 uncertainty where it belongs: a low realised mass is honestly ambiguous between *produced differently*
 and *read poorly*, and the instrument says so rather than choosing.
 
-### What `expected_event_count` should mean
+### What `expected_event_count` means — the owner's ruling
 
-It stays on the row and it stays in the store, and it stops being a target in the one place it still
-reads like one: `count("expected_event_count", len(onsets), expectation.expected_event_count, …)`
-(`ddk.py:1310`) puts a found count beside a declared one **whose units do not match** — the
-declaration is 30 syllables for `-pataka` and the found value is envelope onsets. The pairing is
-legible only because a reader knows both conventions.
+The design proposed renaming it to `declared_event_count` and carrying it as a covariate rather than
+the second half of a `count`. **The owner kept the name**, and gave the reason:
 
-**Proposal.** Rename the declaration to `declared_event_count` and carry it as a **covariate on the
-measurement it qualifies**, not as the second half of a `count`. Then there is no place in the store
-where a found number sits in a slot labelled "expected", and the heuristic reading is the only one
-available. The number itself does not change and neither does any row.
+> "there are certain places where this is true: for example 2 or 3 heys, 3/5 breaths etc. keep
+> expected but use it based on underlying task."
+
+So the field is one name over **two kinds of count**. For a discrete enumerable event the
+instruction names a number for — `loudness`'s 3 "hey"s, `respiration-and-cough-fivebreaths`'s 5
+breaths, `threequickbreaths`'s 3 — the declared number is meaningful and "expected" is the honest
+word. For DDK's rapid repetition it is a rough guide and the rate is the point. Which kind it is
+follows from the underlying task, and **there is no field that says so yet**.
+
+The per-task count-kind property is **owed**. It touches AIRWAY, SPEECH and VOICE and is sequenced
+as its own change after this one. What this work does instead is narrower and is the part that must
+not be got wrong: the declared count stays on the row, the decoded repetition count is reported
+beside it, and **nothing in the decode compares them** — no conformance term, no score, no gate.
+
+The place that still read like a target was
+`count("expected_event_count", len(onsets), expectation.expected_event_count, …)` (`ddk.py:1310`),
+which put a found count beside a declared one **whose units do not match**: 30 syllables declared
+for `-pataka` against a found value that was envelope onsets. That specific pairing goes, not
+because the field was renamed but because the envelope onset channel it counted is retired — the
+declared count now sits beside the decoded repetition count, which is at least a count of the same
+kind of thing, and the `found`/`declared` pair remains descriptive and unfolded.
+
+The debt this accepts, stated plainly: until the count-kind property exists, a reader of a DDK row
+has no field telling them the declared count is a guide rather than a target. The graph does not
+fold it, but the row does not say so.
 
 ---
 
@@ -531,7 +557,8 @@ is what is orphaned and therefore has to change in the same commit.
 | `cycle_gaps`, `cycle_rate`, `cycle_nucleus_fraction` | 826, 840, 859 | the scan's statistics | — |
 | `unit_places`, `unit_nuclei` | 715, 729 | per-unit label lookups | — |
 | `place_agreement`, `cycle_evidence` | 884, 905 | the two-instrument agreement, and the scan's findings | — |
-| `ddk_places` | 274 | **the burst-spectrum place instrument** | `branch.burst_window_ms`, `branch.place_centroid_bands_hz`, `branch.place_margin_db` — `ddk_places` is their **only** consumer (verified: no other call site in `src/`) |
+| `ddk_places` | 274 | **the burst-spectrum place instrument**, removed entirely per decision 7 — both call sites, the agreement covariate at 1202 and the envelope place reading at 1351 | `branch.place_centroid_bands_hz`, `branch.place_margin_db` (deleted; `ddk_places` is their **only** consumer — verified: no other call site in `src/`), `ddk_place_agreement_ppg_vs_burst`, `syllable_place`. `branch.burst_window_ms` survives, re-pointed at `D` |
+| `working_rate`, `DdkReads.wideband`/`wideband_id`, `WIDEBAND` | 165, 159 | the wideband spectrogram DDK read only to run `ddk_places` | none outside DDK — `read_spectrogram_block`, `SpectrogramBlock` and `band_power` survive for `spectral_balance_db` and AIRWAY |
 | `dispersion_by_position` | 364 | one dispersion per cycle position | `ddk_test.py:66, 923` |
 | `events_in_span` **as used by DDK** | `ddk.py:1298` | the envelope peak walk over the carrier | none — `airway.py:359` is the other caller and is untouched |
 
@@ -544,23 +571,24 @@ gate from "a complete cycle or a train" to "a complete repetition".
 
 | key | fate |
 |---|---|
-| `branch.ddk_stop_places` | membership unchanged, role changed from *argmax label map* to *emission class*. **Rename it** — pre-alpha rules out an alias, and `ddk_` no longer describes it. `branch.phoneme_place_classes` |
-| `branch.ddk_nucleus_classes` | replaced by the total four-class partition above. `branch.phoneme_vowel_classes` |
+| `branch.ddk_stop_places` | role changed from *argmax label map* to *emission class*, and `alveolar` gains `r` for buttercup's flap (decision 3). **Renamed** — pre-alpha rules out an alias, and `ddk_` no longer describes it. `branch.phoneme_place_classes`, and in `DATA_MAP_PATHS` |
+| `branch.ddk_nucleus_classes` | replaced by the total four-class partition above. `branch.phoneme_vowel_classes`, and in `DATA_MAP_PATHS` |
 | `branch.ddk_interval_tolerance` | **deleted.** It segmented by regularity; the decode segments by the template. `config-derivations.md` already records that it "separates nothing" |
 | `branch.ddk_min_repetitions` | **deleted.** There is no train to have a minimum length |
 | `branch.burst_window_ms` | **kept**, and its consumer changes: it stops feeding `ddk_places` and starts deriving `D` |
-| `branch.place_centroid_bands_hz`, `branch.place_margin_db` | **deleted** with `ddk_places` |
+| `branch.place_centroid_bands_hz`, `branch.place_margin_db` | **deleted** with `ddk_places` (decision 7). `place_centroid_bands_hz` leaves `DATA_MAP_PATHS` with the key |
 | `branch.train_min_s`, `branch.modulation_band_hz`, `branch.rate_prominence_min` | **kept** — the envelope modulation channel survives (below) |
 | `branch.smoothing_window_s`, `peak_prominence_db`, `trough_return_db`, `event_min_s` | **kept** — AIRWAY reads them |
 
-**A defect found in passing.** `branch.ddk_stop_places` and `branch.ddk_nucleus_classes` are
-described as campaign-overridable data mappings in both `default.yaml:301-313` and
-`ddk-syllable-template.md:42` — *"a campaign may add a place without editing the installed package"* —
-but neither is in `DATA_MAP_PATHS` (`config.py:45-58`), which lists only
-`branch.place_centroid_bands_hz` among the branch place keys. So an override adding a place is
-**rejected as a schema violation today**, contrary to two documents. Their replacements should be
-added to `DATA_MAP_PATHS`, and the same commit should note that the claim was untrue for the
-originals.
+**A defect found in passing, confirmed and fixed here.** `branch.ddk_stop_places` and
+`branch.ddk_nucleus_classes` are described as campaign-overridable data mappings in both
+`default.yaml:301-313` and `ddk-syllable-template.md:42` — *"a campaign may add a place without
+editing the installed package"* — but neither is in `DATA_MAP_PATHS` (`config.py:45-58`), which
+lists only `branch.place_centroid_bands_hz` among the branch place keys. So an override adding a
+place was **rejected as a schema violation**, contrary to two documents. Owner's decision 8:
+`branch.phoneme_place_classes` and `branch.phoneme_vowel_classes` are in `DATA_MAP_PATHS`, and
+`branch.place_centroid_bands_hz` leaves it with the key itself. The claim was untrue for the
+originals from the day both documents were written.
 
 ### Measurements and report keys
 
@@ -574,7 +602,7 @@ originals.
 | `syllable_place` | the "wideband absent" placeholder, deleted with the burst instrument |
 | `sequence_collapse_fraction` | subsumed, and improved: a `/pa-pa-pa/` produced for `/pa-ta-ka/` is now a per-position mass vector with position 0 high and positions 2 and 4 near floor, which says *which* positions collapsed. `dominant_place` needed an argmax over resolved places and is gone with it |
 | `realised_cycles` | replaced by the repetition count |
-| `ppg_train` (span role) and `PPG_RATE`'s five detail keys | **see the open question.** The train was a segmentation by regularity, which `ddk-cycle-counting.md` already argued was the wrong unit to score over. `ppg_rate_hz` — syllables per second — survives with a new derivation: `(vowel positions per template) / (median period)`, needing no train at all |
+| `ppg_train` (span role) and `PPG_RATE`'s five detail keys | **deleted** (owner's decision 5). The train was a segmentation by regularity, which `ddk-cycle-counting.md` already argued was the wrong unit to score over, and the decode's own repetition boundaries are the segmentation. `ppg_rate_hz` — syllables per second — survives with a new derivation: `(vowel positions per template) / (median period)`, needing no train at all |
 
 **`ddk_cv_instrument_reading` survives and must.** `pii_interlock_test.py:459` filters store
 entities by that name to assert the CV instrument leaks no transcript text, and
@@ -590,8 +618,10 @@ place series per CV unit to the realised class series per repetition; it still c
   place class already holds both partners, and summing their mass is what the 81.7 %–96.5 % argmax
   agreement rate was going to be worked around by.
 - **`syllable_sequence_mismatch`.** This loses its only writer and **cannot be re-raised without a
-  threshold on per-position mass, which has no derivation**. See the open questions; the vocabulary
-  entry is in `branches.py:123` and `write_findings` refuses any deviation not in it.
+  threshold on per-position mass, which has no derivation**, so the vocabulary entry
+  (`branches.py:123`) goes with it — owner's decision 4. `write_findings` refuses any deviation not
+  in that vocabulary, and the closure guard in `branches_test.py` refuses any entry in it that
+  nothing writes, so a writerless declaration is not an available state.
 
 ### Readers that must change in the same commit
 
@@ -625,19 +655,28 @@ decode makes a tempting new `false` available (a low path score) and it must not
 `proposal.derived_from` is empty. Every span the decode proposes names the posteriorgram entity, as
 `cv_task_extent` does today.
 
-**The `task_extent` union rule merged in `fe9167db`.** Unchanged in form and in every one of its
-three cases. What changes is the *input on each side*:
+**The `task_extent` is a boundary, not a score, and exactly one survives.** The union rule merged
+in `fe9167db` is superseded — owner's decision 6 — because the decode produces the extent directly.
+What the union protected, and what must not be lost with it, is the *boundary* reading: the extent
+runs from the first completed repetition's start to the last one's end **including every intervening
+filler frame**, and is never a mask over the frames charged to matched positions only. A DDK train
+is continuous (A3 measures the inter-repetition gap at a median 0.000 s in all ten families), so in
+practice the filler inside the span is transition frames rather than silence — but the rule is about
+what the span *means*, not about what it happens to contain.
 
-| | today | under this design |
+The two cases that replace the three:
+
+| | `task_extent` | `production` |
 |---|---|---|
-| CV side | hull of every CV unit, gated on a cycle or a train | hull of the completed repetitions, gated on one completed repetition |
-| envelope side | `hull(onsets)` from the peak walk | **the carrier span's own extent** (see the envelope section) |
-| merge | `min(starts)` … `max(ends)`, `production` `syllable_task_from_both` | unchanged |
+| the decode completed at least one repetition | first repetition's start … last repetition's end | `syllable_task_from_decode` |
+| it did not, and the envelope found a carrier | **the carrier span's own extent** (see the envelope section) | `syllable_train` / `syllable_sequence` |
 
-The monotonicity argument in `ddk-task-extent-precedence.md` — the merged extent contains what each
-instrument alone would have proposed, so no recording loses coverage — is preserved, and the
-envelope-side change strictly improves it: on the recording that motivated that document the carrier
-was 2.237–4.114 (1.88 s) while `hull(onsets)` was 0.0986 s.
+The envelope is a fallback rather than a deletion because the decode has no reading at all when the
+posteriorgram derivative is absent, and deleting the envelope side outright would take the
+`task_extent` away from those recordings — a coverage regression, which is the one failure mode
+`ddk-task-extent-precedence.md` rules out. On the recording that motivated that document the
+fallback is the carrier at 2.237–4.114 (1.88 s) rather than `hull(onsets)`'s 0.0986 s, so where the
+fallback fires at all it fires 19× wider than what shipped before `fe9167db`.
 
 **"The instrument did not run" versus "it ran and found nothing".** Three states stay distinct and
 each keeps its own record:
@@ -843,8 +882,8 @@ which is the shape every prior DDK change already took — the prototype sweeps 
 | stage | what happens | where |
 |---|---|---|
 | 1 | the acceptance test A1–A4 as a throwaway sweep against stored derivatives; the A5 listening sample collected or explicitly declined | ORCD, not the package |
-| 2 | the owner reads the per-family table, the buttercup per-position distribution, and the `-v2-tuh` offset, and settles the open questions below | — |
-| 3 | one commit: the decode replaces the CV walk, the train finder and the cycle scan; `BRANCH_MEASURES["SPEECH"]` is rewritten; `Expectation.sequence` becomes a phoneme tuple; the burst place path and the envelope onset channel are deleted; the envelope's `task_extent` becomes the carrier extent | package |
+| 2 | the owner reads the per-family table, the buttercup per-position distribution, and the `-v2-tuh` offset, and settles the nine questions — **done, 2026-09-19; see *The owner's decisions*** | — |
+| 3 | one commit: the decode replaces the CV walk, the train finder and the cycle scan; `BRANCH_MEASURES["SPEECH"]` is rewritten; `Expectation.sequence` becomes a phoneme tuple; the burst place path and the envelope onset channel are deleted; the `task_extent` becomes the decoded repetition span with the carrier extent as its fallback | package |
 | 4 | corpus reprocess. **Every stored DDK reading changes**, so the report/figure fixtures and any cached artefact keyed on the old names are invalidated deliberately, not incidentally | — |
 
 Stage 3 is one commit because splitting it would leave the tree in a state where `cycle_scan` exists
@@ -856,7 +895,7 @@ pins "every `ppg_` key the table names has a writer", which is the test that wou
 | surface | change |
 |---|---|
 | SPEECH branch report `detail` | twenty of its 27 keys replaced or deleted. `trains_n`, `train_s`, `train_fraction` keep their meanings, and the four non-DDK keys are untouched |
-| the span axis | `ppg_train` disappears (see the open question). `task_extent` stays, one per recording, wider on most and never narrower |
+| the span axis | `ppg_train` disappears. `task_extent` stays, one per recording, and is now the decoded repetition span — so the DDK span axis carries exactly one span |
 | the report's rate rows | two rates instead of five: the decoded syllable rate and the envelope modulation rate. `ppg_cycle_rate_hz`, `ppg_period_s`, `ppg_jitter_over_median`, `onset_rate_hz` go |
 | the new rows | one realised-mass number per template position, printed in template order — which is the first time the report says anything about *which part of the sequence* was realised |
 | VERDICT | `deviations` loses `syllable_sequence_mismatch` on this family; `unmeasured` loses four branch keys and gains none |
@@ -869,39 +908,130 @@ is written down.**
 
 ---
 
-## Open questions for the owner
+## The owner's decisions, 2026-09-19
 
-1. **The vowel-height partition.** `close`/`mid`/`open`/`rhotic` as above, with `eh` and `oy` in
-   `open`? Only `open` and `rhotic` are observable on the ten DDK families, so the rest is a
-   declaration made now to avoid making it later under pressure.
-2. **`er` as its own class.** Keeping rhoticity out of the height dimension is what preserves
-   buttercup's middle-syllable discrimination. Merging it into `open` would give buttercup three
-   interchangeable vowel slots. Confirm.
-3. **Buttercup's flap.** The `/t/` of "butter" is an intervocalic flap with no ARPAbet-40 symbol; it
-   surfaces as `t`, `d` or `r`, and the alveolar class holds the first two. **Should it hold `r`?**
-   Measurable on the corpus and not measured here. Note the present reading already gives that
-   position 0.68–0.69 realised mass, the lowest consonant position in either buttercup row.
-4. **`syllable_sequence_mismatch`.** It loses its only writer and cannot be re-raised without a
-   threshold on per-position mass that has no derivation. Delete the vocabulary entry
-   (`branches.py:123`) outright per the pre-alpha rule, or keep it with no writer?
-5. **`ppg_train` and the regularity segmentation.** The train was a maximal stretch of regular
-   onsets, and `ddk-cycle-counting.md` already argued that scoring over it discards the repeats the
-   instrument exists to recover. Delete the span role and the five `PPG_RATE` detail keys, or keep a
-   regularity segmentation as its own reported span over the decoded periods?
-6. **The burst place instrument.** `ddk_places` existed to be the place *decision* the posteriorgram
-   was not allowed to be. Under the decode there is no place decision, only mass. Confirm that
-   `ddk_places`, `branch.place_centroid_bands_hz` and `branch.place_margin_db` go — they have no
-   other consumer in `src/`.
-7. **`expected_event_count` → `declared_event_count`, as a covariate rather than the second half of
-   a `count`.** The proposal above. It removes the last place in the store where a found number sits
-   in a slot labelled "expected"; it changes no row's value.
-8. **`DATA_MAP_PATHS`.** Two shipped documents say a campaign may add a place or a nucleus class
-   without editing the package, and the config rejects it. Add the replacements to `DATA_MAP_PATHS`?
-9. **Which stream.** The posteriorgram is computed on `enhanced` (`preprocess.py:849, 865`). Under
-   this design the posteriorgram is the *only* phonetic instrument, so enhancement's effect on it
-   matters more than it did. Should a decode over the `plain` stream be measured before landing?
+The nine questions below the design posed are settled. Each is recorded with what it decides and
+what the decision costs, because several of them are choices rather than consequences and the cost
+is what a later reader will want.
 
----
+1. **The vowel-height partition stands as designed** — `close`/`mid`/`open`/`rhotic`, with `eh` and
+   `oy` in `open`. No further investigation. The partition is total, so no phoneme falls outside it,
+   and on the ten DDK families the membership is byte-identical to the shipped `low`/`rhotic` pair.
+
+2. **`er` stays its own class.** Confirmed as designed: rhoticity is a second dimension and merging
+   it into `open` would give buttercup three interchangeable vowel slots.
+
+3. **Allophones are accepted, as a principle and not as one exception.** Where the stimulus's own
+   phonology says a template phoneme is realised as a segment ppgs spells differently, the class
+   admits that spelling. The admissions made, each with the stimulus fact behind it:
+
+   | class | admitted | the stimulus fact |
+   |---|---|---|
+   | `alveolar` | `r` | "butter"'s `/t/` is an intervocalic flap /ɾ/. ARPAbet-40 has no flap symbol, so the flap surfaces as `t`, `d` or `r`; `t` and `d` were already in the class and `r` is the third spelling of the same segment |
+   | `labial` | — | `p` and `b` are the two spellings of the labial stop and both are already in |
+   | `velar` | — | `k` and `g` likewise |
+
+   The principle: an admission is legitimate when a *stimulus* phoneme has more than one ARPAbet
+   spelling in the realisation the stimulus prescribes. It is not a licence to widen a class toward
+   whatever the posteriorgram happens to read. Nothing but buttercup's flap qualifies on these ten
+   families: every other template phoneme is a canonical stop or a vowel with one spelling.
+
+   The cost is stated rather than hidden. `r` in `alveolar` means a genuine `/r/` — which the ten
+   DDK stimuli never ask for — would score as an alveolar position. On this family set that cannot
+   fire; on any other stimulus it could, and the admission would have to be re-read against it.
+
+4. **`syllable_sequence_mismatch` is deleted outright**, vocabulary entry and all, not kept
+   writerless. Its only writer is the envelope place reading that goes with the burst instrument.
+   The deviation guard in `branches_test.py`
+   (`TestTheDeviationVocabularyIsClosed::test_every_declared_deviation_is_emitted`) sweeps the
+   triage tree by AST for `deviation(...)` names and asserts every declared type has an emitter, so
+   an orphaned declaration fails the suite — the guard forces the deletion rather than merely
+   permitting it.
+
+5. **`ppg_train` is replaced by a span over the decoded repetitions**, and the regularity
+   segmentation goes with it. There is no second segmentation to report: the decode's own
+   repetition boundaries are the segmentation.
+
+6. **That repetition span is the DDK `task_extent`, and it is the only one.** This supersedes the
+   union rule merged in `fe9167db` — which was the right fix for the instrument as it stood and
+   becomes unnecessary once the decode produces the extent directly. Together with (5) the DDK span
+   axis reduces to **exactly one span per recording**.
+
+   The property the union protected is preserved and is the load-bearing part: **the extent is a
+   boundary, not a score.** It runs from the first completed repetition's start to the last one's
+   end **including every intervening filler frame**, and is never a mask over the frames charged to
+   matched positions only. `ddk-cycle-counting.md`'s reading of the span — *"between these times,
+   the subject produced consonant-vowel syllables in response to a syllable-repetition
+   instruction"*, asserting nothing about whether every instant inside it holds speech — is
+   unchanged.
+
+   The envelope side is not deleted, it is **demoted to a fallback**, and the reason is coverage:
+   the decode has no reading at all when the posteriorgram derivative is absent, and dropping the
+   envelope outright would remove the `task_extent` from those recordings. So the rule is
+   precedence, in two cases:
+
+   | | `task_extent` | `production` |
+   |---|---|---|
+   | the decode completed at least one repetition | first repetition's start … last repetition's end | `syllable_task_from_decode` |
+   | it did not, and the envelope found a carrier | the carrier span's own extent | `syllable_train` / `syllable_sequence` |
+
+   What is given up against the merged rule: on a recording where both read the task and the
+   envelope carrier reaches past the decoded repetitions, the extent no longer stretches to include
+   that reach. That is the owner's call — the decode reads the phonetic sequence and the carrier
+   reads amplitude, and where the decode has a reading it is the one that knows where the task was.
+
+7. **The burst place instrument is removed entirely.** `ddk_places`, its two operating points
+   `branch.place_centroid_bands_hz` and `branch.place_margin_db`, the
+   `ddk_place_agreement_ppg_vs_burst` covariate and the `syllable_place` placeholder all go, along
+   with both call sites — the agreement covariate and the envelope place reading. The owner's
+   argument: *"if it's only ddk, then the counting/matching is sufficient. remove the burst
+   instrument."* The measurement argument beside it is that the burst spectrum degrades in noisier
+   recordings, so an agreement covariate built on it is least interpretable exactly where a check
+   would matter. `branch.burst_window_ms` is **kept**, with its consumer changed from `ddk_places`
+   to the derivation of `D`.
+
+   DDK stops reading the wideband spectrogram altogether as a consequence. `band_power`,
+   `read_spectrogram_block` and `SpectrogramBlock` all survive for `spectral_balance_db` and for
+   AIRWAY.
+
+8. **The replacement class mappings are added to `DATA_MAP_PATHS`.** `branch.phoneme_place_classes`
+   and `branch.phoneme_vowel_classes` join it; `branch.place_centroid_bands_hz` leaves it with the
+   key itself. The defect the design found in passing is real and confirmed: two shipped documents
+   describe these mappings as campaign-overridable and the schema rejects such an override today.
+
+9. **`expected_event_count` is KEPT, not renamed**, and the owner's refinement changes the design
+   rather than merely declining the proposal:
+
+   > "there are certain places where this is true: for example 2 or 3 heys, 3/5 breaths etc. keep
+   > expected but use it based on underlying task."
+
+   For a discrete enumerable event the instruction names a number for — `loudness`'s 3 "hey"s,
+   `respiration-and-cough-fivebreaths`'s 5 breaths, `threequickbreaths`'s 3 — the count is
+   meaningful and "expected" is the honest word. For DDK's rapid repetition the number is a rough
+   guide and the rate is the point. So the field is one name over two kinds of count, and which
+   kind it is follows from the task.
+
+   **The per-task count-kind property is owed and is not built here.** It touches AIRWAY, SPEECH and
+   VOICE and is sequenced as its own change. What this work does instead:
+
+   - keeps the field and its name;
+   - reports the decoded repetition count beside it;
+   - and makes sure **nothing in the decode compares the two** — no conformance term, no score, no
+     gate — which is the same constraint the *Counts are heuristics, not targets* section above
+     already states, now also a scoping boundary.
+
+   Until the count-kind property exists, a reader of a DDK row has no field telling them the
+   declared count is a guide rather than a target. That is the debt this decision knowingly
+   accepts.
+
+### What was asked and declined
+
+- **A decode over the `plain` stream.** Question 9 of the design asked whether enhancement's effect
+  on the posteriorgram should be measured before landing, now that the posteriorgram is the only
+  phonetic instrument. **No.** The posteriorgram stays on `enhanced` and no `plain`-stream decode is
+  measured or shipped.
+- **Renaming `expected_event_count`.** See (9).
+- **Any further investigation of `eh` and `oy`.** See (1).
 
 ## What could not be established here
 
