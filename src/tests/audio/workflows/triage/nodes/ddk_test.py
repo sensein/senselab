@@ -29,15 +29,24 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Result,
     Syllable,
     branch_params,
+    deviation_names,
     dispatch,
     mode_of,
     propose_spans,
     write_findings,
 )
-from senselab.audio.workflows.triage.nodes.common import BRANCH_MEASURES, live_entities, software_agent
+from senselab.audio.workflows.triage.nodes.common import (
+    BRANCH_MEASURES,
+    lexical_words,
+    live_entities,
+    software_agent,
+)
 from senselab.audio.workflows.triage.nodes.ddk import (
+    CONTRADICTED,
+    CV_AUTHORITY,
     CYCLES_OR_SYLLABLES_PER_S,
     CYCLES_PER_S,
+    INSTRUMENT_READING,
     NO_ENVELOPE,
     NO_PPG,
     PPG_CYCLE_NUCLEUS,
@@ -47,6 +56,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     PPG_UNITS,
     RATE,
     SYLLABLES_PER_S,
+    TRANSCRIPT_CLAIM,
     UNRESOLVED,
     Posteriorgram,
     PpgReading,
@@ -1494,3 +1504,238 @@ class TestTheSyllableTaskAlwaysProposesWhereItWasPerformed:
         assert _spans_of(store, "ddk") == []
         roles = {str(span.attributes["role"]) for span in _spans_of(store)}
         assert roles == {"task_extent", "ppg_train"}
+
+
+PA_TRAIN = (["labial"] * 8, [0.25] * 7)
+"""Eight /pa/ onsets 0.25 s apart, covering roughly 0.2 s to 2.2 s."""
+
+INSIDE = [("papapapa", (0.5, 1.0)), ("pataca", (1.2, 1.8)), ("[cough]", (0.8, 0.9))]
+"""Two recogniser words over the syllable train, and a bracketed token that claims no word."""
+
+OUTSIDE = ("hello", (3.0, 3.5))
+"""A word the instrument's extent does not reach."""
+
+
+def _contest_assertions(store: ProvStore) -> list[Entity]:
+    """Every live contest against the recogniser's lexical claim.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The assertion entities, in write order.
+    """
+    return [
+        entity
+        for entity in live_entities(store, "assertion")
+        if entity.attributes.get("verb") == "contest" and entity.attributes.get("claim") == TRANSCRIPT_CLAIM
+    ]
+
+
+class TestTheCvInstrumentIsTheAuthorityOverTheRecogniserText:
+    """On a declared syllable task the instrument says what was produced and the ASR does not.
+
+    Nothing here deletes, replaces or hides recogniser text: the safety constraint in
+    ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md`` forbids narrowing what the
+    PII scan is given, and the interlock that measures that is in ``pii_interlock_test.py``.
+    """
+
+    def test_the_instruments_reading_is_recorded_and_says_it_is_the_authority(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Without this record the two readings sit side by side and neither claims the task."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_cv_raster(*PA_TRAIN),
+            words=[*INSIDE, OUTSIDE],
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        [reading] = _measurements(store, INSTRUMENT_READING)
+        assert reading.attributes["authority"] == CV_AUTHORITY
+        assert reading.attributes["supersedes"] == TRANSCRIPT_CLAIM
+        assert reading.attributes["value"] == ["labial"] * 8
+        assert reading.attributes["cv_units_n"] == 8
+        assert len(reading.attributes["onsets_s"]) == 8
+
+    def test_the_reading_is_taken_over_the_extent_the_instrument_covers(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The hull of the CV units, so nothing is claimed where the instrument read nothing."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_cv_raster(*PA_TRAIN),
+            words=[*INSIDE, OUTSIDE],
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        [reading] = _measurements(store, INSTRUMENT_READING)
+        assert reading.extent is not None
+        assert reading.extent[0] == pytest.approx(0.2, abs=0.02)
+        assert reading.extent[1] == pytest.approx(2.2, abs=0.05)
+        assert reading.extent[1] < OUTSIDE[1][0]
+
+    def test_every_lexical_word_inside_that_extent_is_contested(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The half that makes the reading legible: which recogniser words it contradicts."""
+        ids = seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_cv_raster(*PA_TRAIN),
+            words=[*INSIDE, OUTSIDE],
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        contested = _contest_assertions(store)
+        assert [entity.attributes["reason"] for entity in contested] == [CONTRADICTED, CONTRADICTED]
+        assert [entity.attributes["authority"] for entity in contested] == [CV_AUTHORITY, CV_AUTHORITY]
+        assert [entity.attributes["index"] for entity in contested] == [0, 1]
+        assert [store.derived_from(entity.id)[0] for entity in contested] == [ids["word-0"], ids["word-1"]]
+
+    def test_a_bracketed_token_inside_the_extent_is_not_contested(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """``[cough]`` never claimed a word was said, so the instrument contradicts nothing."""
+        ids = seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_cv_raster(*PA_TRAIN),
+            words=[*INSIDE, OUTSIDE],
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        derived = {store.derived_from(entity.id)[0] for entity in _contest_assertions(store)}
+        assert ids["word-2"] not in derived
+
+    def test_a_word_outside_the_extent_is_left_alone(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The instrument read nothing there, so it is the authority on nothing there."""
+        ids = seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_cv_raster(*PA_TRAIN),
+            words=[*INSIDE, OUTSIDE],
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        derived = {store.derived_from(entity.id)[0] for entity in _contest_assertions(store)}
+        assert ids["word-3"] not in derived
+        [reading] = _measurements(store, INSTRUMENT_READING)
+        assert reading.attributes["contradicted_words_n"] == 2
+
+    def test_the_contested_words_survive_verbatim_and_stay_live(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Mark, do not delete. A word this pass retired would be a word the PII scan lost."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_cv_raster(*PA_TRAIN),
+            words=[*INSIDE, OUTSIDE],
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        live = live_entities(store, "word")
+        assert [str(word.attributes["text"]) for word in live] == [text for text, _ in [*INSIDE, OUTSIDE]]
+
+    def test_no_contest_carries_the_words_text(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """A second copy of possibly-identifying text is a second thing redaction must cover."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_cv_raster(*PA_TRAIN),
+            words=[*INSIDE, OUTSIDE],
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        blob = " ".join(str(entity.attributes) for entity in _contest_assertions(store))
+        blob += " ".join(str(entity.attributes) for entity in _measurements(store, INSTRUMENT_READING))
+        for text, _ in [*INSIDE, OUTSIDE]:
+            assert text not in blob
+
+    def test_the_contradiction_is_not_a_deviation_and_reaches_no_verdict_fold(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The instrument disagreeing with a recogniser is not a departure by the participant."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_cv_raster(*PA_TRAIN),
+            words=[*INSIDE, OUTSIDE],
+        )
+        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        assert CONTRADICTED not in deviation_names(result.deviations)
+        assert TRANSCRIPT_CLAIM not in deviation_names(result.deviations)
+        assert result.done is True
+
+    def test_an_instrument_that_found_neither_a_cycle_nor_a_train_claims_nothing(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """No evidence the task was performed is no authority over anything the recogniser said."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_raster([("<silent>", 0.5), ("aa", 3.0)]),
+            words=[*INSIDE, OUTSIDE],
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        assert _measurements(store, INSTRUMENT_READING) == []
+        assert _contest_assertions(store) == []
+
+    def test_the_branch_report_carries_how_many_words_the_instrument_contradicted(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The one consumer that gains from this; ``BRANCH_MEASURES`` names the key."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pa",
+            posteriorgram=_cv_raster(*PA_TRAIN),
+            words=[*INSIDE, OUTSIDE],
+        )
+        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        assert _detail(result)["ppg_contradicted_words_n"] == 2
+        assert "ppg_contradicted_words_n" in BRANCH_MEASURES["SPEECH"]
+
+
+class TestOnlyADeclaredSyllableTaskMakesTheInstrumentTheAuthority:
+    """Authority comes from the declaration, never from a train the walk happened to segment."""
+
+    def test_an_undeclared_recording_records_no_reading_and_contests_nothing(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The same syllable raster under no declaration: ``detect_speech``, and no CV walk."""
+        seed_ddk_store(store, stem="recording", posteriorgram=_cv_raster(*PA_TRAIN), words=[*INSIDE, OUTSIDE])
+        _run(store, ddk_config, tmp_path)
+        assert _measurements(store, INSTRUMENT_READING) == []
+        assert _contest_assertions(store) == []
+
+    def test_a_declared_lexical_task_over_the_same_raster_is_untouched(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """A train found incidentally on connected speech overrides no recogniser."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-free-speech",
+            posteriorgram=_cv_raster(*PA_TRAIN),
+            words=[*INSIDE, OUTSIDE],
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "free-speech"}))
+        assert _measurements(store, INSTRUMENT_READING) == []
+        assert _contest_assertions(store) == []
+
+    def test_the_lexical_count_the_routing_gate_reads_is_the_same_on_both(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """``speech.lexical`` is not discounted.
+
+        On the declared case the SPEECH route is already forced by the declaration; on the
+        undeclared case discounting would drop the only gate that routes the branch the PII scan
+        runs in. Either way the count the gate reads is the live lexical word count, untouched.
+        """
+        undeclared = ProvStore(run_id="test-run-undeclared")
+        for target, stem in ((store, "sub-a_ses-1_task-diadochokinesis-pa"), (undeclared, "recording")):
+            seed_ddk_store(target, stem=stem, posteriorgram=_cv_raster(*PA_TRAIN), words=[*INSIDE, OUTSIDE])
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        _run(undeclared, ddk_config, tmp_path)
+        assert len(_contest_assertions(store)) == 2
+        assert _contest_assertions(undeclared) == []
+        assert len(lexical_words(store)) == len(lexical_words(undeclared)) == 3
