@@ -7,7 +7,8 @@ measurement below is a SPEECH measurement taken by this module's instruments.
 The design is ``specs/20260817-triage-workflow-dag/branch-ddk.md`` (D1–D6); the ported bodies are
 ``expected-patterns.md``; what porting decided, and the two places this module departs from either,
 is ``specs/20260817-triage-workflow-dag/branch-ddk-implementation.md``; why the branch became this
-module is ``ddk-dissolved-into-speech.md``.
+module is ``ddk-dissolved-into-speech.md``; why sequence conformance counts repeats rather than
+scoring positions is ``ddk-cycle-counting.md``.
 """
 
 from __future__ import annotations
@@ -71,8 +72,11 @@ PPG_RATE = "ddk_syllable_rate_from_ppg_cv_onsets_hz"
 
 PPG_UNITS = "ddk_cv_unit_count"
 PPG_DISPERSION = "ddk_ppg_interval_dispersion"
-PPG_EXPECTED_PLACE = "ddk_expected_place_fraction"
-PPG_EXPECTED_NUCLEUS = "ddk_expected_nucleus_fraction"
+PPG_CYCLE_RATE = "ddk_cycle_rate_from_ppg_places_hz"
+"""How fast the declared cycle repeated, counted over the CV places rather than scored per position.
+For a one-position template a cycle is a syllable, so this and :data:`PPG_RATE` measure one thing."""
+
+PPG_CYCLE_NUCLEUS = "ddk_cycle_nucleus_fraction"
 PPG_PLACE_AGREEMENT = "ddk_place_agreement_ppg_vs_burst"
 
 UNRESOLVED = "unresolved"
@@ -80,6 +84,7 @@ UNRESOLVED = "unresolved"
 is not a substitution."""
 
 SYLLABLES_PER_S = "syllables_per_s"
+CYCLES_PER_S = "cycles_per_s"
 CYCLES_OR_SYLLABLES_PER_S = "cycles_or_syllables_per_s"
 """A sequential train modulates at the cycle rate as well as the syllable rate; the peak is one of
 the two and the harmonic-equality tolerance that would separate them is unmeasured, so the unit is
@@ -648,9 +653,9 @@ def ppg_reading(
 ) -> PpgReading | None:
     """Run the CV walk and the train finder over one posteriorgram.
 
-    Extraction is permissive and conformance is positional: the walk admits any nucleus in the union
-    of the classes ``template`` names, and :func:`ppg_evidence` then checks each unit's place and
-    nucleus class against the position the template gave it.
+    Extraction is permissive: the walk admits any nucleus in the union of the classes ``template``
+    names, and :func:`cycle_evidence` then counts how many complete repeats of the template the
+    realised place series holds.
 
     Args:
         ppg: The posteriorgram, or None when the derivative is absent.
@@ -704,28 +709,141 @@ def unit_nuclei(units: Sequence[CvUnit], classes: dict[str, tuple[str, ...]]) ->
     return [lookup.get(unit.vowel, UNRESOLVED) for unit in units]
 
 
-def expected_fraction(realised: Sequence[str], expected: Sequence[str]) -> tuple[float | None, dict[str, Any]]:
-    """How far one realised series matched the cycle its instruction asked for, position by position.
+@dataclass(frozen=True)
+class CycleScan:
+    """Which units of a realised series formed complete repeats of the cycle asked for.
+
+    Attributes:
+        length: How many positions one cycle holds; ``len(expected)``.
+        units: How many units were scanned.
+        matched: ``(unit index, cycle position)`` for every unit inside a completed cycle, in order.
+        starts: The unit index each completed cycle opened on.
+        ends: The unit index each completed cycle closed on, paired with :attr:`starts`.
+        insertions: ``(unit index, awaited position)`` for every unit the scan passed over while a
+            cycle was open — after one of its positions had matched, whether or not it went on to
+            close. A unit before any position has matched is lead-in and is none of these.
+    """
+
+    length: int
+    units: int
+    matched: tuple[tuple[int, int], ...]
+    starts: tuple[int, ...]
+    ends: tuple[int, ...]
+    insertions: tuple[tuple[int, int], ...]
+
+    @property
+    def cycles(self) -> int:
+        """How many complete repeats of the cycle the series holds."""
+        return len(self.starts)
+
+    @property
+    def consumed(self) -> float | None:
+        """The fraction of scanned units the complete cycles account for, or None over no units."""
+        if self.units <= 0:
+            return None
+        return round(self.cycles * self.length / self.units, 3)
+
+
+def cycle_scan(realised: Sequence[str], expected: Sequence[str]) -> CycleScan:
+    """Count complete repeats of one expected cycle in a realised series, skipping insertions.
 
     Args:
         realised: One reading per unit, in order.
-        expected: What the instruction asks for at each cycle position; length one for a
+        expected: What one cycle asks for at each of its positions; length one for a
             single-syllable train.
 
     Returns:
-        The fraction of resolved units whose reading is the one its cycle position expected, and the
-        same fraction per position. Both are empty when nothing was resolved.
+        The scan. Empty when ``expected`` is, which is the out-of-family case.
     """
-    resolved = [(index, value) for index, value in enumerate(realised) if value != UNRESOLVED]
-    if not resolved or not expected:
+    if not expected:
+        return CycleScan(length=0, units=len(realised), matched=(), starts=(), ends=(), insertions=())
+    matched: list[tuple[int, int]] = []
+    starts: list[int] = []
+    ends: list[int] = []
+    insertions: list[tuple[int, int]] = []
+    open_matched: list[tuple[int, int]] = []
+    open_skipped: list[tuple[int, int]] = []
+    position = 0
+    for index, value in enumerate(realised):
+        if value == expected[position]:
+            open_matched.append((index, position))
+            position += 1
+            if position == len(expected):
+                starts.append(open_matched[0][0])
+                ends.append(index)
+                matched.extend(open_matched)
+                insertions.extend(open_skipped)
+                open_matched, open_skipped = [], []
+                position = 0
+        elif position > 0:
+            open_skipped.append((index, position))
+    insertions.extend(open_skipped)
+    return CycleScan(
+        length=len(expected),
+        units=len(realised),
+        matched=tuple(matched),
+        starts=tuple(starts),
+        ends=tuple(ends),
+        insertions=tuple(insertions),
+    )
+
+
+def cycle_gaps(scan: CycleScan, units: Sequence[CvUnit]) -> list[float]:
+    """The elapsed time between the onsets consecutive cycles opened on.
+
+    Args:
+        scan: The scan :func:`cycle_scan` returned.
+        units: The units it scanned, in the same order.
+
+    Returns:
+        One gap per consecutive pair of cycle starts, in seconds.
+    """
+    onsets = [units[index].start_s for index in scan.starts if index < len(units)]
+    return [float(second - first) for first, second in zip(onsets, onsets[1:])]
+
+
+def cycle_rate(gaps: Sequence[float]) -> tuple[float | None, float | None]:
+    """The rate a cycle repeated at and how uniform that repetition was.
+
+    Args:
+        gaps: The gaps between consecutive cycle starts, from :func:`cycle_gaps`.
+
+    Returns:
+        The reciprocal of the median gap in hertz, and the population deviation of the gaps over
+        that median. Both None when no gap is available or the median is not positive.
+    """
+    values = np.asarray(gaps, dtype=float)
+    if values.size == 0:
+        return None, None
+    median = float(np.median(values))
+    if median <= 0.0:
+        return None, None
+    return round(1.0 / median, 3), round(float(np.std(values) / median), 3)
+
+
+def cycle_nucleus_fraction(
+    scan: CycleScan, nuclei: Sequence[str], expected: Sequence[Syllable]
+) -> tuple[float | None, dict[str, Any]]:
+    """How often a unit inside a complete cycle carried the nucleus class its own position names.
+
+    Args:
+        scan: The scan, whose ``matched`` carries the position each unit took.
+        nuclei: The nucleus class read for each unit, in unit order.
+        expected: The syllable template, one entry per cycle position.
+
+    Returns:
+        The fraction over the units the scan matched, and the same fraction per position. Both are
+        empty when the scan matched none.
+    """
+    if not scan.matched or not expected:
         return None, {}
-    matched = sum(1 for index, value in resolved if value == expected[index % len(expected)])
+    hits = sum(1 for index, position in scan.matched if nuclei[index] == expected[position].nucleus)
     by_position: dict[str, Any] = {}
     for position in range(len(expected)):
-        at = [value for index, value in resolved if index % len(expected) == position]
-        hits = sum(1 for value in at if value == expected[position])
-        by_position[str(position)] = None if not at else round(hits / len(at), 3)
-    return round(matched / len(resolved), 3), by_position
+        at = [nuclei[index] for index, taken in scan.matched if taken == position]
+        held = sum(1 for value in at if value == expected[position].nucleus)
+        by_position[str(position)] = None if not at else round(held / len(at), 3)
+    return round(hits / len(scan.matched), 3), by_position
 
 
 def place_agreement(ppg_places: Sequence[str], burst_places: Sequence[str]) -> tuple[float | None, int]:
@@ -749,12 +867,77 @@ def place_agreement(ppg_places: Sequence[str], burst_places: Sequence[str]) -> t
     return round(sum(1 for ppg, burst in both if ppg == burst) / len(both), 3), len(both)
 
 
+def cycle_evidence(
+    units: Sequence[CvUnit],
+    params: BranchParams,
+    template: Sequence[Syllable],
+    declared_syllables: int | None,
+    evidence: Sequence[str],
+) -> list[Finding]:
+    """What the repeat count has to say about one series of CV units.
+
+    Args:
+        units: Every CV unit the walk found, in onset order. Not the train's subset: the count
+            tolerates the irregularity the train finder rejects, so restricting it to a regular
+            stretch would discard the repeats it exists to recover.
+        params: The operating points, for the place vocabulary.
+        template: The syllable template the declared instruction cycles through.
+        declared_syllables: The instruction's own syllable count, or None when it declares none.
+        evidence: The entity ids the units were read off.
+
+    Returns:
+        The cycle rate measurement and the nucleus conformance beside it, or an empty list when the
+        walk found no unit to scan.
+    """
+    if not units:
+        return []
+    places = unit_places(units, params.point("ddk_stop_places") or {})
+    scan = cycle_scan(places, [position.place for position in template])
+    rate_hz, gap_cv = cycle_rate(cycle_gaps(scan, units))
+    extent = (units[0].start_s, units[-1].end_s)
+    nuclei = unit_nuclei(units, params.point("ddk_nucleus_classes") or {})
+    fraction, by_position = cycle_nucleus_fraction(scan, nuclei, template)
+    return [
+        measured(
+            PPG_CYCLE_RATE,
+            extent[0],
+            extent[1],
+            rate_hz,
+            *evidence,
+            unit=CYCLES_PER_S,
+            cycles=scan.cycles,
+            gap_cv=gap_cv,
+            consumed=scan.consumed,
+            insertions_n=len(scan.insertions),
+            syllables_n=len(units),
+            declared_syllables=declared_syllables,
+            declared_cycles=None if declared_syllables is None else declared_syllables // len(template),
+            expected_sequence=[position.place for position in template],
+            realised_places=places,
+            cycle_start_s=[round(units[index].start_s, 3) for index in scan.starts],
+            reading=PPG_PLACE_NOT_AUTHORITY,
+        ),
+        measured(
+            PPG_CYCLE_NUCLEUS,
+            extent[0],
+            extent[1],
+            fraction,
+            *evidence,
+            expected_sequence=[position.nucleus for position in template],
+            by_position=by_position,
+            support_syllables=len(scan.matched),
+            realised_nuclei=nuclei,
+        ),
+    ]
+
+
 def ppg_evidence(
     store: ProvStore,
     reads: DdkReads,
     params: BranchParams,
     reading: PpgReading | None,
     template: Sequence[Syllable] | None,
+    declared_syllables: int | None = None,
 ) -> tuple[list[Proposal], list[Finding]]:
     """Everything the CV instrument has to say about one recording, in both modes.
 
@@ -765,6 +948,7 @@ def ppg_evidence(
         reading: What the CV walk read, or None when the posteriorgram is absent.
         template: The syllable template the declared instruction cycles through, or None out of
             family.
+        declared_syllables: The instruction's own syllable count, or None when it declares none.
 
     Returns:
         The one train span this instrument proposes and the findings it takes. An absent
@@ -777,6 +961,8 @@ def ppg_evidence(
         return [], []
     evidence = _evidence(reads.ppg_id)
     findings: list[Finding] = [count(PPG_UNITS, len(reading.units), None, *evidence)]
+    if template:
+        findings.extend(cycle_evidence(reading.units, params, template, declared_syllables, evidence))
     train = reading.train
     if train is None:
         return [], [*findings, measured(PPG_RATE, None, None, None, *evidence, unit=SYLLABLES_PER_S, reason=NO_TRAIN)]
@@ -817,37 +1003,6 @@ def ppg_evidence(
 
     stop_places = params.point("ddk_stop_places") or {}
     places = unit_places(train.units, stop_places)
-    if template:
-        nuclei = unit_nuclei(train.units, params.point("ddk_nucleus_classes") or {})
-        expected_places = [position.place for position in template]
-        fraction, by_position = expected_fraction(places, expected_places)
-        findings.append(
-            measured(
-                PPG_EXPECTED_PLACE,
-                extent[0],
-                extent[1],
-                fraction,
-                *evidence,
-                expected_sequence=expected_places,
-                by_position=by_position,
-                realised_places=places,
-                reading=PPG_PLACE_NOT_AUTHORITY,
-            )
-        )
-        expected_nuclei = [position.nucleus for position in template]
-        fraction, by_position = expected_fraction(nuclei, expected_nuclei)
-        findings.append(
-            measured(
-                PPG_EXPECTED_NUCLEUS,
-                extent[0],
-                extent[1],
-                fraction,
-                *evidence,
-                expected_sequence=expected_nuclei,
-                by_position=by_position,
-                realised_nuclei=nuclei,
-            )
-        )
     if reads.wideband is not None:
         agreement, support = place_agreement(places, ddk_places(extents, params, reads.wideband))
         findings.append(
@@ -924,7 +1079,7 @@ def align_ddk(
     """
     template = expectation.sequence
     reading = ppg_reading(reads.ppg, params, template)
-    cv_spans, cv_findings = ppg_evidence(store, reads, params, reading, template)
+    cv_spans, cv_findings = ppg_evidence(store, reads, params, reading, template, expectation.expected_event_count)
     declared = declared_duration_count(store, expectation.declared_duration_s)
     if reads.envelope is None:
         return Result(_with_ppg(UNDETERMINED, reading), cv_spans, [_absent(ENVELOPE), *cv_findings, *declared])
@@ -997,20 +1152,22 @@ def align_ddk(
         places = ddk_places(onsets, params, reads.wideband)
         if reads.wideband is None:
             findings.append(measured("syllable_place", extent[0], extent[1], None, *carrier, unavailable=WIDEBAND))
-        for index, (onset, place) in enumerate(zip(onsets, places)):
-            target = places_expected[index % len(places_expected)]
-            if place not in (target, UNRESOLVED):
-                findings.append(
-                    deviation(
-                        "syllable_sequence_mismatch", onset[0], onset[1], *carrier, expected=target, measured=place
-                    )
+        scan = cycle_scan(places, places_expected)
+        for index, awaited in scan.insertions:
+            if places[index] == UNRESOLVED:
+                continue
+            findings.append(
+                deviation(
+                    "syllable_sequence_mismatch",
+                    onsets[index][0],
+                    onsets[index][1],
+                    *carrier,
+                    expected=places_expected[awaited],
+                    measured=places[index],
                 )
+            )
         resolved = [place for place in places if place != UNRESOLVED]
-        cycles = sum(
-            1
-            for index in range(len(resolved) - len(places_expected) + 1)
-            if resolved[index : index + len(places_expected)] == places_expected
-        )
+        cycles = scan.cycles
         if resolved:
             dominant = max(set(resolved), key=resolved.count)
             findings.append(
@@ -1098,8 +1255,13 @@ def syllable_detail(result: Result) -> dict[str, Any]:
         "ppg_jitter_over_median": _covariate(result.deviations, PPG_RATE, "jitter_over_median"),
         "ppg_cv_units_n": _covariate(result.deviations, PPG_RATE, "cv_units_n"),
         "ppg_interval_trend_s_per_step": _covariate(result.deviations, PPG_DISPERSION, "trend_s_per_step"),
-        "ppg_expected_place_fraction": _value(result.deviations, PPG_EXPECTED_PLACE),
+        "ppg_cycles": _covariate(result.deviations, PPG_CYCLE_RATE, "cycles"),
+        "ppg_declared_cycles": _covariate(result.deviations, PPG_CYCLE_RATE, "declared_cycles"),
+        "ppg_cycle_rate_hz": _value(result.deviations, PPG_CYCLE_RATE),
+        "ppg_cycle_gap_cv": _covariate(result.deviations, PPG_CYCLE_RATE, "gap_cv"),
+        "ppg_cycle_consumed": _covariate(result.deviations, PPG_CYCLE_RATE, "consumed"),
+        "ppg_cycle_insertions_n": _covariate(result.deviations, PPG_CYCLE_RATE, "insertions_n"),
         "ppg_place_agreement": _value(result.deviations, PPG_PLACE_AGREEMENT),
-        "ppg_expected_nucleus_fraction": _value(result.deviations, PPG_EXPECTED_NUCLEUS),
+        "ppg_cycle_nucleus_fraction": _value(result.deviations, PPG_CYCLE_NUCLEUS),
         "ppg_trains_n": sum(1 for component in result.components if component.role == "ppg_train"),
     }
