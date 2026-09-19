@@ -80,4 +80,43 @@ A uniform random sample of **800** run directories drawn from the 62,521 complet
 (seed 20260919), spanning **219 task families**, replayed through both source trees on
 `mit_preemptable` as an 8-way array (`replay.sbatch`).
 
-RESULTS_PLACEHOLDER
+```
+base rows 800, fixed rows 800, compared 800
+
+BASE:  {'ok': 732, 'errored': 68}
+  SPEECH lost to a raise: 68/800 = 8.50%
+  error types: {'ValueError': 68}   — all 68 the extent clamp
+
+FIXED: {'ok': 800}
+  SPEECH lost to a raise: 0/800 = 0.00%
+
+errored -> ok: 68        ok -> errored: 0
+```
+
+Families recovered, most first: `diadochokinesis-v2-tuh` 8, `diadochokinesis-v2-buttercup` 5,
+`free-speech-v2-3` 4, `diadochokinesis-pataka` 4, `diadochokinesis-v2-puh` 3, `free-speech-v2-2` 3,
+`free-speech-2` 3, `diadochokinesis-v2-kuh` 2, `prolonged-vowel` 2, `story-recall` 2,
+`free-speech-v2-1` 2, `caterpillar-passage` 2, `picture-description` 2, `free-speech-1` 2,
+`diadochokinesis-v2-puhtuhkuh` 2, and a tail of singletons.
+
+What the fixed pass reports instead of raising:
+
+```
+runs that bounded at least one turn:            64/800
+  max_overshoot_s  min 0.0007  p50 0.0612  p90 0.2457  max 0.9430
+runs that dropped a turn wholly past the end:    6/800
+```
+
+**8.50% → 0.00% on 800 recordings, no run that completed before now fails.** The 68 are a lower
+bound on what a corpus pass would lose, because this replay carries no hint: a hint routing more
+recordings into SPEECH's in-family mode would only add. The scoping run's 12–13% was measured on
+30 recordings, three samples of 26, 23 and 30; 8.50% of 800 sits inside that interval's range.
+
+## The other exposure the scan found
+
+748 stores have an `enhanced`/`residual` stream whose decoded length differs from `plain`'s. In
+those, a diarization turn taken on `enhanced` can legitimately reach past `plain` with no padding
+involved at all. `recording` and `plain` never disagree in this corpus, so `speech.py`'s cross-clamp
+of a plain-derived extent against `recording` is not implicated here — but it would be on a corpus
+whose source files are not already 16 kHz.
+
