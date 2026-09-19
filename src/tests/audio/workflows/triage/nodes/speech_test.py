@@ -24,7 +24,7 @@ from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes import speech as speech_module
-from senselab.audio.workflows.triage.nodes.branches import SPEECH_EXPECTATIONS
+from senselab.audio.workflows.triage.nodes.branches import NOT_SEPARABLE_BY_THIS_DESIGN, SPEECH_EXPECTATIONS
 from senselab.audio.workflows.triage.nodes.common import (
     find_branch_report,
     find_measurement,
@@ -1219,6 +1219,157 @@ class TestTheDiarizationIsReadNotRerun:
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         turns = _turn_spans(store)
         assert [turn.attributes["speaker"] for turn in turns] == ["SPEAKER_00", "SPEAKER_01"]
+
+
+def _unsourced_consensus(store: ProvStore) -> str:
+    """Supersede the seeded consensus with one no recognizer contributed to.
+
+    The state of a run whose recognizers all failed: PREPROCESS still folds a consensus, and it
+    names no source. Written as a later measurement of the same name, which is how the store's
+    read rule supersedes.
+
+    Args:
+        store: The store holding the seeded consensus.
+
+    Returns:
+        The new measurement's id.
+    """
+    seeded = find_measurement(store, "consensus_transcript")
+    assert seeded is not None
+    return store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={**seeded.attributes, "sources": [], "n_sources": 0, "word_ids": [], "n_words": 0, "text": ""},
+    )
+
+
+class TestAFreeResponseIsReadOffTheWords:
+    """The second corpus blocker: an `asr`-measure span exists only where ASR disagreed.
+
+    PREPROCESS's ``_novel`` keeps only a candidate with zero overlap against the amplitude spans, so
+    on any recording where someone talks every ASR candidate is absorbed as ``corroborated_by`` and
+    no ``asr`` span survives. The measurement is in
+    ``specs/20260919-free-response-reads-the-words/design.md``.
+    """
+
+    def _declared(self, family: str) -> AudioHints:
+        """A declaration naming one task family and nothing else.
+
+        Args:
+            family: The declared task family.
+
+        Returns:
+            The hints.
+        """
+        return AudioHints(metadata={"task_token": family})
+
+    def test_a_spoken_response_conforms_when_no_asr_span_survived_deduplication(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Twenty words over four seconds is a response, whatever the span table kept."""
+        words = [f"w{index}" for index in range(20)]
+        _seed_speech_store(store, tmp_path, words=words, spans=[(0.5, 4.5, 30.0)], duration_s=5.0)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        assert not [e for e in live_entities(store, "span") if e.attributes.get("measure") == "asr"], (
+            "the fixture must reproduce the deduplicated store, not merely resemble it"
+        )
+        result = speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        assert result.report.conformance is True
+        assert _report_entity(store, "SPEECH").attributes["words_n"] == 20
+
+    def test_the_task_extent_is_the_words_own_hull(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A boundary over where lexical content is, derived from the words and the consensus."""
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two", "three"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0), (3.0, 3.6)],
+            duration_s=5.0,
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        extents = [e for e in live_entities(store, "span") if e.attributes.get("role") == "task_extent"]
+        assert len(extents) == 1
+        assert extents[0].extent == pytest.approx((1.0, 3.6))
+        sources = set(store.derived_from(extents[0].id))
+        assert {word.id for word in live_entities(store, "word")} <= sources
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None and consensus.id in sources
+
+    def test_the_one_candidate_that_fell_in_a_gap_no_longer_decides_a_ninety_word_response(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cluster's second case: one 0.08 s ASR span against 93 words is not a short response.
+
+        That span is the single candidate that happened to fall in a gap and so had zero overlap.
+        Reading the response off it measured the deduplication, not the participant.
+        """
+        words = [f"w{index}" for index in range(93)]
+        extents = [(0.5 + 0.1 * index, 0.5 + 0.1 * index + 0.08) for index in range(93)]
+        _seed_speech_store(store, tmp_path, words=words, word_extents=extents, duration_s=12.0)
+        store.entity(
+            prov_type="span",
+            extent=(0.5, 0.58),
+            attributes={"measure": "asr", "signal": "consensus", "merged_proposals": 1},
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        assert result.report.conformance is True
+        extent = [e for e in live_entities(store, "span") if e.attributes.get("role") == "task_extent"][0].extent
+        assert extent is not None and extent[1] - extent[0] > 9.0
+
+    def test_an_unreadable_stimulus_does_not_erase_a_response_it_does_not_underwrite(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`free-speech` checks the prompt was not echoed; that check is a deviation, not the term."""
+        words = [f"w{index}" for index in range(30)]
+        _seed_speech_store(store, tmp_path, words=words, duration_s=8.0)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", speech_config, self._declared("free-speech"), run_dir=tmp_path)
+        assert SPEECH_EXPECTATIONS["free-speech"].anti_pattern == "verbatim_prompt"
+        assert result.report.conformance is True
+        assert "anti_pattern_verbatim_prompt" in {
+            entity.attributes.get("name") for entity in live_entities(store, "measurement")
+        }
+
+    def test_a_recall_task_stays_undetermined_when_its_source_is_unreadable(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`verbatim_source` reassigns the term from coverage, so no source is no term."""
+        words = [f"w{index}" for index in range(30)]
+        _seed_speech_store(store, tmp_path, words=words, duration_s=8.0)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", speech_config, self._declared("story-recall"), run_dir=tmp_path)
+        assert SPEECH_EXPECTATIONS["story-recall"].anti_pattern == "verbatim_source"
+        assert result.report.conformance == UNDETERMINED
+
+    def test_a_recording_with_no_lexical_word_still_reads_as_no_response(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control: the recognizers ran and found nothing, which is a reading, not an absence."""
+        _seed_speech_store(store, tmp_path, words=[], duration_s=5.0)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        assert result.report.conformance is False
+
+    def test_no_recognizer_reaching_the_consensus_is_undetermined_not_a_failure(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An extractor that produced nothing is not a participant who said nothing."""
+        _seed_speech_store(store, tmp_path, words=[], duration_s=5.0)
+        _unsourced_consensus(store)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        assert result.report.conformance == UNDETERMINED
+        unviable_reads = [
+            entity
+            for entity in live_entities(store, "measurement")
+            if entity.attributes.get("name") == "response"
+            and entity.attributes.get("value") == NOT_SEPARABLE_BY_THIS_DESIGN
+        ]
+        assert unviable_reads, "the absence is written as a reading nobody could take"
 
 
 class TestTheDiarizersReachPastTheDecode:
