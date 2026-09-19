@@ -217,6 +217,46 @@ def _train_envelope(duration_s: float, carrier: tuple[float, float], rate_hz: fl
     return envelope
 
 
+def _one_event_envelope(
+    duration_s: float,
+    carrier: tuple[float, float],
+    rate_hz: float,
+    bump_s: float,
+    *,
+    depth_db: float = 5.0,
+    bump_width_s: float = 0.12,
+    bump_db: float = 20.0,
+) -> np.ndarray:
+    """A carrier whose rate is readable but inside which only one event clears the peak gate.
+
+    The shape ``sub-004d42e9…_task-diadochokinesis-pataka`` holds: a carrier that clears
+    ``train_min_s`` and modulates at a readable rate, whose modulation depth stays under
+    ``peak_prominence_db`` everywhere but one raised-cosine bump. ``hull(onsets)`` over that single
+    event is a small fraction of the carrier, and it is what the envelope instrument proposes.
+
+    Args:
+        duration_s: The recording's duration.
+        carrier: The extent the carrier occupies.
+        rate_hz: The repetition rate the modulation carries.
+        bump_s: Where the one event starts.
+        depth_db: The modulation depth, under ``peak_prominence_db`` so it raises no event.
+        bump_width_s: The bump's width; a raised cosine, since a flat top makes its own trough.
+        bump_db: How far over the floor the bump peaks.
+
+    Returns:
+        The envelope in dBFS, one value per sample at :data:`ENVELOPE_HZ`.
+    """
+    envelope = np.full(int(duration_s * ENVELOPE_HZ), SILENT_DBFS)
+    lo, hi = int(carrier[0] * ENVELOPE_HZ), int(carrier[1] * ENVELOPE_HZ)
+    times = np.arange(lo, hi) / ENVELOPE_HZ
+    envelope[lo:hi] = FLOOR_DBFS + depth_db * (0.5 + 0.5 * np.cos(2.0 * np.pi * rate_hz * (times - carrier[0])))
+    width = int(bump_width_s * ENVELOPE_HZ)
+    start = int(bump_s * ENVELOPE_HZ)
+    bump = 0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(width) / width)
+    envelope[start : start + width] = np.maximum(envelope[start : start + width], FLOOR_DBFS + bump_db * bump)
+    return envelope
+
+
 def _flat_envelope(duration_s: float, carriers: Sequence[tuple[float, float]]) -> np.ndarray:
     """An envelope raised over its floor inside each carrier and constant there.
 
@@ -1473,24 +1513,6 @@ class TestTheSyllableTaskAlwaysProposesWhereItWasPerformed:
         assert len(reading.units) == 1 and reading.train is None
         assert [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"] == []
 
-    def test_the_envelope_carrier_keeps_the_role_when_both_instruments_read_the_task(
-        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
-    ) -> None:
-        """Two ``task_extent`` spans would make ``trains_n`` read two trains on one performance."""
-        seed_ddk_store(
-            store,
-            stem="sub-a_ses-1_task-diadochokinesis-pataka",
-            envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
-            spans=[(1.0, 5.0)],
-            posteriorgram=_cycle_raster(_cycle_places()),
-            wideband=_wideband(6.0, _pataka_slots((1.0, 5.0), 5.0)),
-        )
-        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
-        extents = [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"]
-        assert len(extents) == 1
-        assert extents[0].attributes["production"] == "syllable_sequence"
-        assert _detail(result)["trains_n"] == 1
-
     def test_the_span_is_minted_into_speechs_own_family_like_every_other_role(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
@@ -1504,6 +1526,136 @@ class TestTheSyllableTaskAlwaysProposesWhereItWasPerformed:
         assert _spans_of(store, "ddk") == []
         roles = {str(span.attributes["role"]) for span in _spans_of(store)}
         assert roles == {"task_extent", "ppg_train"}
+
+
+LONG_CV_PLACES = _cycle_places(13)
+"""Thirty-nine syllables of /pa-ta-ka/, a performance no short carrier covers a tenth of."""
+
+LONG_CV_INTERVALS = [0.2] * 5 + [2.5] + [0.2] * (len(LONG_CV_PLACES) - 7)
+"""One pause past ``ddk_interval_tolerance`` early on, so the train is a proper subset of the hull —
+the shape the owner's recording holds, whose train starts 3.9 s after its first syllable."""
+
+
+def _long_cv_raster() -> np.ndarray:
+    """The long performance both instruments are read against.
+
+    Returns:
+        A raster of :data:`LONG_CV_PLACES` whose one early pause splits it into a short stretch and
+        a long regular one.
+    """
+    return _cv_raster(LONG_CV_PLACES, LONG_CV_INTERVALS)
+
+
+class TestTheTaskExtentCoversWhatBothInstrumentsRead:
+    """The extent covers the hull of every syllable either instrument read.
+
+    The defect the owner read off a rendered summary: a 0.10 s ``task_extent`` over a 7.06 s
+    performance, because the envelope instrument minting one suppressed the CV instrument's hull.
+    ``specs/20260817-triage-workflow-dag/ddk-task-extent-precedence.md`` holds the rule and why.
+    """
+
+    def _both_instruments(
+        self,
+        store: ProvStore,
+        seed_ddk_store: Callable[..., Any],
+        **overrides: Any,  # noqa: ANN401
+    ) -> dict[str, str]:
+        """A declared pataka recording both instruments read, the envelope's carrier narrow."""
+        seeded: dict[str, Any] = {
+            "stem": "sub-a_ses-1_task-diadochokinesis-pataka",
+            "duration_s": 11.0,
+            "envelope": _one_event_envelope(11.0, (1.0, 4.0), 5.0, 2.4),
+            "spans": [(1.0, 4.0)],
+            "posteriorgram": _long_cv_raster(),
+        }
+        seeded.update(overrides)
+        return dict(seed_ddk_store(store, **seeded))
+
+    def test_a_cv_hull_far_wider_than_the_envelopes_carrier_is_the_task_extent(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The owner's recording: one envelope onset inside a long carrier, against 39 CV units."""
+        self._both_instruments(store, seed_ddk_store)
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        units = _reading(_long_cv_raster(), ddk_config, SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence).units
+        [extent] = [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"]
+        assert extent.extent == pytest.approx((units[0].start_s, units[-1].end_s), abs=0.001)
+        envelope_s = extent.attributes["envelope_extent_s"]
+        assert envelope_s[1] - envelope_s[0] < 0.5 * (extent.extent[1] - extent.extent[0])
+
+    def test_exactly_one_task_extent_survives_when_both_instruments_read_the_task(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Two spans of that role would make ``trains_n`` report two trains over one performance."""
+        self._both_instruments(store, seed_ddk_store)
+        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        extents = [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"]
+        assert len(extents) == 1
+        assert extents[0].attributes["production"] == "syllable_task_from_both"
+        assert _detail(result)["trains_n"] == 1
+
+    def test_the_merged_extent_names_both_instruments_it_was_read_off(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Under propose-only the derivation is the whole record of where the extent came from."""
+        ids = self._both_instruments(store, seed_ddk_store)
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        [extent] = [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"]
+        assert ids["ppg_posteriorgram"] in store.derived_from(extent.id)
+        assert ids["energy_envelope"] in store.derived_from(extent.id)
+
+    def test_the_ppg_train_is_unchanged_by_the_merge(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The train is a segmentation by regularity, not a task boundary; the merge does not reach it."""
+        self._both_instruments(store, seed_ddk_store)
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        reading = _reading(_long_cv_raster(), ddk_config, SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence)
+        assert reading.train is not None
+        assert reading.train.extent[0] > reading.units[0].start_s, "the train is a proper subset of the hull"
+        [train] = [span for span in _spans_of(store) if span.attributes["role"] == "ppg_train"]
+        assert train.extent == pytest.approx(reading.train.extent, abs=0.001)
+
+    def test_an_envelope_carrier_outside_the_cv_hull_widens_the_extent_rather_than_being_dropped(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Outside its own hull the CV instrument makes no claim, so it suppresses no other reading."""
+        self._both_instruments(
+            store,
+            seed_ddk_store,
+            envelope=_train_envelope(11.0, (4.0, 7.0), 5.0, 0.1),
+            spans=[(4.0, 7.0)],
+            posteriorgram=_cycle_raster(_cycle_places(3)),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        units = _reading(
+            _cycle_raster(_cycle_places(3)), ddk_config, SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence
+        ).units
+        [extent] = [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"]
+        envelope_s = extent.attributes["envelope_extent_s"]
+        assert envelope_s[0] > units[-1].end_s, "the carrier lies wholly after the CV hull"
+        assert extent.extent[0] == pytest.approx(units[0].start_s, abs=0.001)
+        assert extent.extent[1] == pytest.approx(envelope_s[1], abs=0.001)
+
+    def test_a_recording_with_no_readable_cv_reading_still_gets_the_envelopes_extent(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The CV instrument is the authority over what it covers, and it covers nothing here."""
+        raster = _raster([("<silent>", 0.2), ("p", 0.05), ("aa", 0.3), ("<silent>", 0.4)])
+        self._both_instruments(
+            store,
+            seed_ddk_store,
+            envelope=_train_envelope(11.0, (1.0, 5.0), 5.0, 0.1),
+            spans=[(1.0, 5.0)],
+            posteriorgram=raster,
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        reading = _reading(raster, ddk_config, SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence)
+        assert len(reading.units) == 1 and reading.train is None
+        [extent] = [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"]
+        assert extent.attributes["production"] == "syllable_sequence"
+        assert "envelope_extent_s" not in extent.attributes
+        assert extent.extent[0] > 1.0 and extent.extent[1] < 5.0
 
 
 PA_TRAIN = (["labial"] * 8, [0.25] * 7)
