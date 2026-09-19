@@ -2709,6 +2709,33 @@ class TestTheDiarizationBlock:
         agents = [a for a in store.agents("model") if a.model_id == config.require("diarization.model")]
         assert agents and agents[0].commit_sha
 
+    def test_a_turn_past_the_audio_is_bound_in_the_sidecar_and_the_reach_is_on_the_measurement(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A consumer slicing the sidecar must not be handed a region the recording does not hold."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(
+            monkeypatch,
+            enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
+            diarize=_diarizer((0.2, 3.4, "SPEAKER_00")),
+        )
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+
+        measurement = find_measurement(store, ENHANCED_DIARIZATION)
+        assert measurement is not None
+        attrs = measurement.attributes
+        assert attrs["segments_bounded_n"] == 1
+        assert attrs["segments_past_end_n"] == 0
+        assert attrs["max_overshoot_s"] == pytest.approx(0.4)
+        payload = np.load(tmp_path / attrs["path"])
+        assert payload["ends"].tolist() == [pytest.approx(attrs["duration_s"])]
+        assert attrs["speech_s"] == pytest.approx(attrs["duration_s"] - 0.2)
+
     def test_a_two_speaker_recording_reports_two_voices_and_where_the_second_one_is(
         self,
         store: ProvStore,
