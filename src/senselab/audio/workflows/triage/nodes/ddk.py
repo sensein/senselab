@@ -116,8 +116,10 @@ TASK_FROM_PPG = "syllable_task_from_ppg"
 """The extent is the CV instrument's hull; the envelope instrument read no carrier."""
 
 TASK_FROM_ENVELOPE = "syllable_train"
+"""The extent is the envelope instrument's; the CV instrument had no readable reading. One place."""
+
 TASK_FROM_ENVELOPE_SEQUENCE = "syllable_sequence"
-"""The extent is the envelope instrument's carrier; the CV instrument had no readable reading."""
+"""The same, where the declared template cycles through more than one place."""
 
 TASK_FROM_BOTH = "syllable_task_from_both"
 """The extent is the hull of both instruments' readings, because both read the task."""
