@@ -1663,6 +1663,13 @@ class TestTheCvInstrumentIsTheAuthorityOverTheRecogniserText:
             words=[*INSIDE, OUTSIDE],
         )
         result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        subjects = {word.id for word in lexical_words(store)}
+        about_a_word = [
+            finding for finding in result.deviations if subjects & set(finding.derived_from) and finding.start
+        ]
+        kinds = {finding.kind for finding in about_a_word}
+        assert "contest" in kinds
+        assert "deviation" not in kinds
         assert CONTRADICTED not in deviation_names(result.deviations)
         assert TRANSCRIPT_CLAIM not in deviation_names(result.deviations)
         assert result.done is True
@@ -1670,14 +1677,21 @@ class TestTheCvInstrumentIsTheAuthorityOverTheRecogniserText:
     def test_an_instrument_that_found_neither_a_cycle_nor_a_train_claims_nothing(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """No evidence the task was performed is no authority over anything the recogniser said."""
+        """No evidence the task was performed is no authority over anything the recogniser said.
+
+        One CV unit, so the walk read something; no train and, under ``pataka``, no complete cycle,
+        so it read nothing it can stand behind. The word inside it is left alone.
+        """
+        raster = _raster([("<silent>", 0.2), ("p", 0.05), ("aa", 0.3), ("<silent>", 0.4)])
         seed_ddk_store(
             store,
-            stem="sub-a_ses-1_task-diadochokinesis-pa",
-            posteriorgram=_raster([("<silent>", 0.5), ("aa", 3.0)]),
-            words=[*INSIDE, OUTSIDE],
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=raster,
+            words=[("pa", (0.3, 0.5))],
         )
-        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        reading = _reading(raster, ddk_config, SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence)
+        assert len(reading.units) == 1 and reading.train is None
         assert _measurements(store, INSTRUMENT_READING) == []
         assert _contest_assertions(store) == []
 

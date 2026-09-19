@@ -405,3 +405,64 @@ class TestTheRecordedAttributes:
         assert recorded["family"] == "free-speech"
         assert all(isinstance(value, str) for value in recorded["gate_outcomes"].values())
         assert recorded["state"] == RouteState.ROUTED.value
+
+
+class TestAnInstrumentContestChangesNoGate:
+    """SPEECH's syllable instrument contests recogniser words; the routing gate must not move.
+
+    ``speech.lexical`` is the only gate that routes SPEECH, and SPEECH is where the PII scan runs.
+    Discounting a contested word there would drop that branch on an undeclared recording whose text
+    nobody has looked at — the disclosure path
+    ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md`` rules out. This is the test
+    that fails instead.
+    """
+
+    @staticmethod
+    def _contest_every_word(store: ProvStore) -> int:
+        """Write one ``instrument_contradicted`` contest beside every live word.
+
+        Args:
+            store: The store to mark.
+
+        Returns:
+            How many contests were written.
+        """
+        activity = store.activity(node="SPEECH", step="expect", parameters={})
+        words = [word for word in store.entities("word") if not store.is_invalidated(word.id)]
+        for word in words:
+            assertion = store.entity(
+                prov_type="assertion",
+                extent=word.extent,
+                attributes={
+                    "verb": "contest",
+                    "claim": "lexical_transcript",
+                    "reason": "instrument_contradicted",
+                    "authority": "cv_instrument",
+                },
+            )
+            store.was_generated_by(assertion, activity)
+            store.was_derived_from(assertion, word.id)
+        return len(words)
+
+    def test_the_lexical_count_the_gate_reads_is_unchanged(self, config: TriageConfig, tmp_path: Path) -> None:
+        """The count is of live words, and a contest withdraws none of them."""
+        run_dir = _run_dir(tmp_path)
+        store = _base_store(run_dir)
+        arguments = {
+            "run_dir": run_dir,
+            "memberships": span_label_memberships(config),
+            "onomatopoeic": onomatopoeic_vocabulary(config),
+            "stem": STEM,
+        }
+        before = read_live_features(store, **arguments).words  # type: ignore[arg-type]
+        assert self._contest_every_word(store) == 4
+        assert read_live_features(store, **arguments).words == before  # type: ignore[arg-type]
+        assert before["lexical"] == 3
+
+    def test_no_gate_outcome_and_no_route_moves(self, config: TriageConfig, tmp_path: Path) -> None:
+        """The whole evaluation, not just the one feature: a contest routes nothing differently."""
+        run_dir = _run_dir(tmp_path)
+        store = _base_store(run_dir)
+        before = evaluate_live_routes(store, config, run_dir=run_dir)
+        self._contest_every_word(store)
+        _assert_same(evaluate_live_routes(store, config, run_dir=run_dir), before)
