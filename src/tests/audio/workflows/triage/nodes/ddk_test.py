@@ -1402,3 +1402,95 @@ class TestEveryCycleKeyAReaderSelectsHasAWriter:
         assert gone & set(_detail(result)) == set()
         assert _measurements(store, "ddk_expected_place_fraction") == []
         assert _measurements(store, "ddk_expected_nucleus_fraction") == []
+
+
+class TestTheSyllableTaskAlwaysProposesWhereItWasPerformed:
+    """Every other SPEECH family mints a ``task_extent``; the CV instrument mints DDK's.
+
+    Which of the three candidate extents was chosen, and what the span asserts, is
+    ``specs/20260817-triage-workflow-dag/ddk-cycle-counting.md``.
+    """
+
+    def test_a_recording_with_cycles_and_no_envelope_still_says_where_the_task_was(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """No envelope derivative is an absent instrument, not an absent performance."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(_cycle_places()),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        extents = [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"]
+        assert len(extents) == 1
+        assert extents[0].attributes["production"] == "syllable_task_from_ppg"
+        assert extents[0].attributes["cycles"] == PATAKA_CYCLES
+
+    def test_the_extent_is_the_hull_of_every_cv_unit_and_not_only_the_consumed_ones(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """A /pa/ no cycle consumed was still the subject attempting the task, so it is inside."""
+        places = ["labial", "labial", *_cycle_places(3), "labial"]
+        raster = _cycle_raster(places)
+        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pataka", posteriorgram=raster)
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        units = _reading(raster, ddk_config, SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence).units
+        [extent] = [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"]
+        assert extent.attributes["consumed"] < 1.0
+        assert extent.extent == pytest.approx((units[0].start_s, units[-1].end_s), abs=0.001)
+
+    def test_it_names_the_posteriorgram_it_was_read_off(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Under propose-only the derivation is the whole record of where the extent came from."""
+        ids = seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(_cycle_places()),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        [extent] = [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"]
+        assert store.derived_from(extent.id) == [ids["ppg_posteriorgram"]]
+
+    def test_a_recording_with_neither_a_cycle_nor_a_train_proposes_none(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Inventing an extent over a task that was not performed is the error the gate avoids."""
+        raster = _raster([("<silent>", 0.2), ("p", 0.05), ("aa", 0.3), ("<silent>", 0.4)])
+        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pataka", posteriorgram=raster)
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        reading = _reading(raster, ddk_config, SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence)
+        assert len(reading.units) == 1 and reading.train is None
+        assert [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"] == []
+
+    def test_the_envelope_carrier_keeps_the_role_when_both_instruments_read_the_task(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Two ``task_extent`` spans would make ``trains_n`` read two trains on one performance."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
+            spans=[(1.0, 5.0)],
+            posteriorgram=_cycle_raster(_cycle_places()),
+            wideband=_wideband(6.0, _pataka_slots((1.0, 5.0), 5.0)),
+        )
+        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        extents = [span for span in _spans_of(store) if span.attributes["role"] == "task_extent"]
+        assert len(extents) == 1
+        assert extents[0].attributes["production"] == "syllable_sequence"
+        assert _detail(result)["trains_n"] == 1
+
+    def test_the_span_is_minted_into_speechs_own_family_like_every_other_role(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """DDK dissolved into SPEECH, so a ``ddk`` family would be a family no reader knows."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(_cycle_places()),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        assert _spans_of(store, "ddk") == []
+        roles = {str(span.attributes["role"]) for span in _spans_of(store)}
+        assert roles == {"task_extent", "ppg_train"}
