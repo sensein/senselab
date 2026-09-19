@@ -533,7 +533,7 @@ class TestABranchIsOneBlockOfRowsRatherThanOneStackedRow:
 
 
 class TestTheInitialRowExplainsItself:
-    """"unclear what the initial lane does" — the row now says what it holds and what its bars are."""
+    """The owner could not tell what the initial lane did; it now says what it holds and what its bars are."""
 
     def test_its_tick_says_more_than_the_bare_word(self, routed: ProvStore) -> None:
         """``initial`` alongside four branch names reads as a fifth branch."""
