@@ -28,6 +28,7 @@ from matplotlib.backend_bases import RendererBase
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
+from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.text import Text
 
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -93,6 +94,14 @@ class FigureStyle:
         pad_short_pages: Whether a final page shorter than ``page_seconds`` is padded out to it, so
             every image spans the same duration and panels are comparable page to page.
         figure_inches: ``(width, height)`` of one page.
+        cover_margin_in: The cover page's printed margin, in inches, on all four sides. Handed to
+            the same layout engine the evidence pages use, so the cover's axes and its title are
+            placed inside it rather than at hand-tuned figure fractions.
+        cover_title_fontsize: The cover title's point size.
+        cover_title_leading: The vertical space one title line takes, as a multiple of
+            ``cover_title_fontsize``, including the gap between the title and the body below it.
+            The band this reserves is taken off the top of the cover's layout box, so the title
+            sits inside the margin and the body starts under it.
         dpi: Raster resolution.
         height_ratios: One entry per panel, top first.
         spectrogram_dynamic_range_db: Colour floor, in dB below the page's own peak bin.
@@ -190,6 +199,9 @@ class FigureStyle:
     page_seconds: float = 20.0
     pad_short_pages: bool = True
     figure_inches: tuple[float, float] = (11.0, 8.5)
+    cover_margin_in: float = 0.5
+    cover_title_fontsize: float = 11.0
+    cover_title_leading: float = 1.8
     dpi: int = 130
     height_ratios: tuple[float, ...] = (0.66, 0.6, 0.1, 0.1, 0.1, 0.1, 0.34)
     spectrogram_dynamic_range_db: float = 80.0
@@ -910,7 +922,52 @@ def _stream_summary_lines(store: ProvStore, prefix: str, style: FigureStyle) -> 
     return lines
 
 
-def summary_panel_lines(store: ProvStore, style: FigureStyle) -> list[str]:
+def cover_margins(style: FigureStyle) -> tuple[float, float]:
+    """The cover's margin as a fraction of the page, horizontally and vertically.
+
+    Args:
+        style: The drawing configuration.
+
+    Returns:
+        ``(horizontal, vertical)``.
+    """
+    width_in, height_in = style.figure_inches
+    return style.cover_margin_in / width_in, style.cover_margin_in / height_in
+
+
+def cover_body_rect(style: FigureStyle, title_lines: int) -> tuple[float, float, float, float]:
+    """The cover's layout box for everything under the title, in figure fractions.
+
+    Args:
+        style: The drawing configuration.
+        title_lines: How many lines the title wrapped to.
+
+    Returns:
+        ``(left, bottom, width, height)`` for the layout engine.
+    """
+    horizontal, vertical = cover_margins(style)
+    band = title_lines * style.cover_title_fontsize * style.cover_title_leading / (style.figure_inches[1] * 72.0)
+    return horizontal, vertical, 1.0 - 2.0 * horizontal, 1.0 - 2.0 * vertical - band
+
+
+def unreadable_gate_lines(store: ProvStore) -> list[str]:
+    """Why each gate that could not be read could not be read, per branch.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The lines, in print order, or an empty list when every gate was readable.
+    """
+    lines: list[str] = []
+    for entity in _route_decisions(store):
+        branch = str(entity.attributes.get("branch"))
+        for name, reason in sorted((entity.attributes.get("unavailable_gates") or {}).items()):
+            lines.append(f"  {branch:<8} {name:<28} {reason}")
+    return ["GATES THAT COULD NOT BE READ", *lines] if lines else []
+
+
+def summary_panel_lines(store: ProvStore, style: FigureStyle, *, decision_record: bool = False) -> list[str]:
     """The same readout laid out across the page: the classifier blocks side by side in columns.
 
     Every column is padded to :data:`_SUMMARY_COLUMN_WIDTH`, so the longest possible line is a
@@ -919,6 +976,9 @@ def summary_panel_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     Args:
         store: The provenance store.
         style: The drawing configuration.
+        decision_record: Whether a decision record precedes this page. When it does, the route
+            states and gate outcomes are its, and this readout carries only the reason a gate
+            could not be read, which the decision record does not print.
 
     Returns:
         The lines, in print order.
@@ -930,6 +990,12 @@ def summary_panel_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     lines.extend(_stream_summary_lines(store, "enhanced", style))
     lines.append("")
     lines.extend(_stream_summary_lines(store, "residual", style))
+    if decision_record:
+        unreadable = unreadable_gate_lines(store)
+        if unreadable:
+            lines.append("")
+            lines.extend(unreadable)
+        return lines
     lines.append("")
     lines.append("ROUTE STATES AND GATE OUTCOMES")
     lines.extend(route_lines)
@@ -1804,7 +1870,7 @@ def summary_pages(
     run_dir: Path,
     style: FigureStyle | None = None,
     stem: str | None = None,
-    cover_prefix: Sequence[str] = (),
+    decision_record: bool = False,
 ) -> Iterator[tuple[str, Figure]]:
     """Yield the summary's pages in order: the cover, then one page per ``page_seconds``.
 
@@ -1822,8 +1888,11 @@ def summary_pages(
         run_dir: Where PREPROCESS wrote its streams and derivative sidecars.
         style: How to draw. Defaults to :class:`FigureStyle`.
         stem: The name the page titles carry, defaulting to the run id.
-        cover_prefix: Lines placed above the cover's own blocks, for a caller that has a decision
-            record to lead with.
+        decision_record: Whether the caller has already written a decision record ahead of these
+            pages. When it has, the cover drops the blocks that record owns — the route states,
+            the gate outcomes, each branch's route state and conformance, and the branch measures
+            — and keeps only what describes the figure. A caller with no decision record leaves
+            this False and gets the whole cover.
 
     Yields:
         ``(name, figure)`` — ``"cover"``, then ``"page01"``, ``"page02"``, …
@@ -1866,7 +1935,7 @@ def summary_pages(
     hear = _span_scores(store, "span_hear")
     words, word_sources = _words(store)
     squim = _squim_by_span(store)
-    panel_lines = summary_panel_lines(store, style)
+    panel_lines = summary_panel_lines(store, style, decision_record=decision_record)
     lanes = branch_lanes(store)
 
     wideband_title = (
@@ -1901,12 +1970,20 @@ def summary_pages(
         },
     )
 
-    cover = plt.figure(figsize=style.figure_inches)
-    title = f"{stem or store.run_id} — summary"
-    cover.suptitle("\n".join(textwrap.wrap(title, width=_TITLE_COLUMNS, break_long_words=True)), fontsize=11)
+    title_lines = textwrap.wrap(f"{stem or store.run_id} — summary", width=_TITLE_COLUMNS, break_long_words=True)
+    cover = plt.figure(
+        figsize=style.figure_inches,
+        layout=ConstrainedLayoutEngine(rect=cover_body_rect(style, len(title_lines))),
+    )
+    cover.suptitle(
+        "\n".join(title_lines),
+        fontsize=style.cover_title_fontsize,
+        y=1.0 - cover_margins(style)[1],
+        va="top",
+    )
     _taxonomy_panel(
-        cover.add_axes((0.06, 0.02, 0.92, 0.86)),
-        [*cover_prefix, *cover_lines(store, panel_lines), "", *branch_report_lines(lanes)],
+        cover.add_subplot(),
+        [*cover_lines(store, panel_lines), "", *branch_report_lines(lanes, decision_record=decision_record)],
         style,
     )
     yield "cover", cover
@@ -2725,7 +2802,7 @@ def _measure_text(value: Any) -> str:  # noqa: ANN401 — anything a report attr
     return f"{value:.3f}"
 
 
-def branch_report_lines(lanes: Sequence[BranchLane]) -> list[str]:
+def branch_report_lines(lanes: Sequence[BranchLane], *, decision_record: bool = False) -> list[str]:
     """Each branch's own report, as the cover prints it.
 
     These are file-scoped facts — a conformance, a deviation, an unmeasured config point, a count
@@ -2734,6 +2811,9 @@ def branch_report_lines(lanes: Sequence[BranchLane]) -> list[str]:
 
     Args:
         lanes: :func:`branch_lanes`' result.
+        decision_record: Whether a decision record precedes this page. When it does, each branch's
+            route state, conformance and measures are its, and the header keeps only whether the
+            branch ran, without which the block beneath it cannot be read.
 
     Returns:
         The lines, in print order.
@@ -2742,14 +2822,16 @@ def branch_report_lines(lanes: Sequence[BranchLane]) -> list[str]:
     for lane in lanes:
         state = lane.state if lane.state != LANE_RAN else f"ran · conformance {lane.conformance}"
         route = lane.route_state or ("no route" if lane.branch == REDACT_LANE else "no decision")
-        lines.append(f"  {lane.branch:<8} {route:<12} {state}")
+        header = f"  {lane.branch:<8} {lane.state}" if decision_record else f"  {lane.branch:<8} {route:<12} {state}"
+        lines.append(header)
         if lane.state != LANE_RAN:
             if lane.why:
                 lines.append(f"      why          {lane.why}")
             continue
         lines.append(f"      of           {lane.conformance_of}")
-        measures = "  ".join(f"{key}={_measure_text(value)}" for key, value in lane.measures)
-        lines.append(f"      measures     {measures or 'none of its table reached the report'}")
+        if not decision_record:
+            measures = "  ".join(f"{key}={_measure_text(value)}" for key, value in lane.measures)
+            lines.append(f"      measures     {measures or 'none of its table reached the report'}")
         lines.append(f"      deviations   {', '.join(lane.deviations) or 'none'}")
         lines.append(f"      unmeasured   {', '.join(lane.unmeasured) or 'none'}")
         paired = sum(1 for row in lane.proposed if row.derived_from)
