@@ -28,6 +28,7 @@ from matplotlib.backend_bases import RendererBase
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
+from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.text import Text
 
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -1969,8 +1970,10 @@ def summary_pages(
     )
 
     title_lines = textwrap.wrap(f"{stem or store.run_id} — summary", width=_TITLE_COLUMNS, break_long_words=True)
-    cover = plt.figure(figsize=style.figure_inches, layout="constrained")
-    cover.get_layout_engine().set(rect=cover_body_rect(style, len(title_lines)))
+    cover = plt.figure(
+        figsize=style.figure_inches,
+        layout=ConstrainedLayoutEngine(rect=cover_body_rect(style, len(title_lines))),
+    )
     cover.suptitle(
         "\n".join(title_lines),
         fontsize=style.cover_title_fontsize,
