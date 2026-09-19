@@ -161,11 +161,19 @@ where the task was performed. That is not a rare corner: the ceiling diagnosis i
 `branch-ddk-ppg-instrument.md` found 74 of 105 no-train declared-DDK recordings had CV units
 present, and the ASR transcripts confirm the task *was* performed on them.
 
-`cv_task_extent` fills that gap. It mints a `task_extent` off the CV instrument when the envelope
-instrument minted none, and `align_ddk` drops it when the envelope instrument did — two spans of
-that role would make `syllable_detail`'s `trains_n` report two trains over one performance. The role
-string is `task_extent`, the same one the other SPEECH roles are distinguished by, and the family is
-`speech`, since DDK dissolved into SPEECH and `BRANCH_FAMILY` has no `ddk`.
+`cv_task_extent` fills that gap. It mints a `task_extent` off the CV instrument. The role string is
+`task_extent`, the same one the other SPEECH roles are distinguished by, and the family is `speech`,
+since DDK dissolved into SPEECH and `BRANCH_FAMILY` has no `ddk`.
+
+> **Superseded, 2026-09-19.** This document originally had `cv_task_extent` mint its span only
+> "when the envelope instrument minted none", with `align_ddk` dropping it when the envelope
+> instrument did. That precedence was backwards and it was conditioned on presence rather than
+> plausibility: on 33.0% of all declared-DDK recordings the envelope's extent was under half the CV
+> hull, and on the recording that surfaced it, 1.4% of it. The surviving `task_extent` is now the
+> hull of both instruments' readings. See
+> [`ddk-task-extent-precedence.md`](ddk-task-extent-precedence.md) for the rule, the corpus
+> measurement and the out-of-hull case. The one-span invariant named in the next sentence is
+> unchanged and is what `merged_task_extent` preserves.
 
 ### Which extent, and why
 

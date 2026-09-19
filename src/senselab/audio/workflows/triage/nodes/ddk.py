@@ -109,8 +109,20 @@ CYCLES_OR_SYLLABLES_PER_S = "cycles_or_syllables_per_s"
 the two and the harmonic-equality tolerance that would separate them is unmeasured, so the unit is
 carried as ambiguous rather than resolved by assumption."""
 
-TRAIN_ROLES = ("task_extent",)
-"""The roles that are a train."""
+TASK_EXTENT = "task_extent"
+"""The role that says where the declared task was performed. Exactly one may survive a recording."""
+
+TASK_FROM_PPG = "syllable_task_from_ppg"
+"""The extent is the CV instrument's hull; the envelope instrument read no carrier."""
+
+TASK_FROM_ENVELOPE = "syllable_train"
+"""The extent is the envelope instrument's; the CV instrument had no readable reading. One place."""
+
+TASK_FROM_ENVELOPE_SEQUENCE = "syllable_sequence"
+"""The same, where the declared template cycles through more than one place."""
+
+TASK_FROM_BOTH = "syllable_task_from_both"
+"""The extent is the hull of both instruments' readings, because both read the task."""
 
 NO_TRAIN = "no syllable train was found"
 NO_ENVELOPE = "the energy envelope is absent; the syllable train's only rate instrument could not be read"
@@ -974,7 +986,7 @@ def cv_covered_extent(reading: PpgReading, scan: CycleScan) -> tuple[float, floa
 
 
 def cv_task_extent(reading: PpgReading, scan: CycleScan, evidence: Sequence[str]) -> list[Proposal]:
-    """The ``task_extent`` the CV instrument proposes when the envelope instrument proposed none.
+    """The ``task_extent`` the CV instrument proposes over the hull it covers.
 
     Args:
         reading: What the CV walk read.
@@ -989,15 +1001,43 @@ def cv_task_extent(reading: PpgReading, scan: CycleScan, evidence: Sequence[str]
         return []
     return [
         speech_span(
-            "task_extent",
+            TASK_EXTENT,
             extent,
             *evidence,
-            production="syllable_task_from_ppg",
+            production=TASK_FROM_PPG,
             syllables_n=len(reading.units),
             cycles=scan.cycles,
             consumed=scan.consumed,
         )
     ]
+
+
+def merged_task_extent(envelope: Proposal, cv: Proposal | None) -> Proposal:
+    """The one ``task_extent`` two instruments that both read the task leave behind.
+
+    Args:
+        envelope: The ``task_extent`` the envelope instrument minted off its carrier.
+        cv: The ``task_extent`` :func:`cv_task_extent` minted, or None when the CV instrument had
+            no readable reading.
+
+    Returns:
+        The envelope's own span when the CV instrument read nothing, and otherwise one span over
+        the hull of both, carrying the CV instrument's measurements and naming the envelope's
+        extent and syllable count beside them.
+    """
+    if cv is None:
+        return envelope
+    return cv._replace(
+        start=min(cv.start, envelope.start),
+        end=max(cv.end, envelope.end),
+        derived_from=tuple(dict.fromkeys((*cv.derived_from, *envelope.derived_from))),
+        attributes={
+            **cv.attributes,
+            "production": TASK_FROM_BOTH,
+            "envelope_syllables_n": envelope.attributes.get("syllables_n"),
+            "envelope_extent_s": [round(envelope.start, 3), round(envelope.end, 3)],
+        },
+    )
 
 
 def contradicted_words(store: ProvStore, extent: tuple[float, float]) -> list[Entity]:
@@ -1097,10 +1137,11 @@ def ppg_evidence(
 
     Returns:
         The spans this instrument proposes — its train, and the ``task_extent``
-        :func:`cv_task_extent` mints, which :func:`align_ddk` drops when the envelope instrument
-        minted one of its own — and the findings it takes. An absent posteriorgram yields no span
-        and one measurement that has no value; a posteriorgram the walk could not run over yields
-        neither, because ``params.missing`` is where that is already said.
+        :func:`cv_task_extent` mints over its hull, which :func:`align_ddk` merges with the
+        envelope instrument's when that one read a carrier too — and the findings it takes. An
+        absent posteriorgram yields no span and one measurement that has no value; a posteriorgram
+        the walk could not run over yields neither, because ``params.missing`` is where that is
+        already said.
     """
     if reading is None:
         return [], [_absent(PPG, PPG_RATE)]
@@ -1215,9 +1256,10 @@ def align_ddk(
 ) -> Result:
     """Evaluate one declared ``SYLLABLE_REPETITION`` task against what its instruction asked for.
 
-    Spans proposed: at most one ``task_extent`` and at most one ``ppg_train``. The envelope
-    instrument mints the ``task_extent`` when it found a carrier; :func:`cv_task_extent` mints it
-    off the CV units when the envelope instrument found none, and is dropped when it did. An
+    Spans proposed: at most one ``task_extent`` and at most one ``ppg_train``. Each instrument
+    mints a ``task_extent`` over what it read — the envelope instrument off its carrier, the CV
+    instrument off its unit hull — and :func:`merged_task_extent` leaves one span over the hull of
+    both. ``specs/20260817-triage-workflow-dag/ddk-task-extent-precedence.md`` holds why. An
     individual syllable is not a span — rate, interval dispersion and sequence collapse are
     statistics over the onset series, and one span per syllable would add roughly thirty spans per
     recording carrying no measurement of their own. The onsets travel as a ``counts`` entry, and a
@@ -1301,7 +1343,7 @@ def align_ddk(
         ),
     ]
 
-    attributes: dict[str, Any] = {"syllables_n": len(onsets), "production": "syllable_train"}
+    attributes: dict[str, Any] = {"syllables_n": len(onsets), "production": TASK_FROM_ENVELOPE}
     # `ddk_carrier` only returns a span whose rate was readable, so a `rate_hz is not None` clause
     # here would be vacuous; the syllable count is the whole condition.
     done: Done = len(onsets) > 0
@@ -1339,14 +1381,20 @@ def align_ddk(
                 )
             )
         findings.append(count("realised_cycles", cycles, None, *carrier))
-        attributes.update(production="syllable_sequence", realised_cycles=cycles, resolved_n=len(resolved))
+        attributes.update(production=TASK_FROM_ENVELOPE_SEQUENCE, realised_cycles=cycles, resolved_n=len(resolved))
         done = bool(onsets) and cycles >= 1
 
-    carried = [proposal for proposal in cv_spans if proposal.role not in TRAIN_ROLES]
-    components = [speech_span("task_extent", extent, *carrier, **attributes), *carried]
+    carried = [proposal for proposal in cv_spans if proposal.role != TASK_EXTENT]
+    cv_extent = next((proposal for proposal in cv_spans if proposal.role == TASK_EXTENT), None)
+    envelope_extent = speech_span(TASK_EXTENT, extent, *carrier, **attributes)
+    task_extent = merged_task_extent(envelope_extent, cv_extent)
+    components = [task_extent, *carried]
     recording_extent = stream_extent(store)
-    if recording_extent is not None and touches_edge(extent, recording_extent):
-        findings.append(deviation("truncation", extent[0], extent[1], *carrier, *stream_ids(store)))
+    task_span = (task_extent.start, task_extent.end)
+    if recording_extent is not None and touches_edge(task_span, recording_extent):
+        findings.append(
+            deviation("truncation", task_span[0], task_span[1], *task_extent.derived_from, *stream_ids(store))
+        )
     findings.extend(cv_findings)
     findings.extend(declared)
     return Result(_with_ppg(done, reading), components, findings)
@@ -1398,7 +1446,7 @@ def syllable_detail(result: Result) -> dict[str, Any]:
         The detail mapping, carrying rates and regularity as measurements and no normative reading
         of either. ``report.py``'s ``BRANCH_MEASURES["SPEECH"]`` names these keys.
     """
-    trains = [component for component in result.components if component.role in TRAIN_ROLES]
+    trains = [component for component in result.components if component.role == TASK_EXTENT]
     return {
         "trains_n": len(trains),
         "train_s": round(sum(component.end - component.start for component in trains), 3),
