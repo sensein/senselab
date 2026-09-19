@@ -39,6 +39,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurements,
     initial_span_label,
     live_entities,
+    proposed_span_label,
     report_entities,
     resolve_stream,
     span_role_kind,
@@ -2121,9 +2122,6 @@ REDACT_MEASURES = ("redactions_n", "verified", "survived", "outstanding")
 #: The lanes the summary draws, in order.
 SUMMARY_LANES = (*BRANCHES, REDACT_LANE)
 
-#: The attributes a proposal carries to distinguish itself inside its role, in the order preferred.
-_BRANCH_QUALIFIERS = ("label", "production", "attributed_to")
-
 _UNLABELLED = "unlabelled"
 
 #: The stem suffix this product's files take, so both figures can be written into one directory.
@@ -2222,28 +2220,6 @@ class BranchLane:
         return tuple(row for row in self.rows if row.row == BRANCH_INITIAL_ROW)
 
 
-def _proposed_span_label(span: Entity) -> tuple[str, str]:
-    """One proposed span's caption and the shorter one a narrow bar falls back to.
-
-    Args:
-        span: A span of a branch's family.
-
-    Returns:
-        ``(label, short)``. The label is the role every proposer stamps, qualified by whichever of
-        ``label``, ``production`` and ``attributed_to`` the proposal carries a value for and marked
-        ``nontarget`` when it says so; the short form is the qualifier alone, which is the half that
-        distinguishes one proposal from its neighbours.
-    """
-    role = str(span.attributes.get("role") or "")
-    qualifier = next(
-        (str(span.attributes[key]) for key in _BRANCH_QUALIFIERS if span.attributes.get(key) is not None), ""
-    )
-    label = f"{role}/{qualifier}" if role and qualifier else (role or qualifier or _UNLABELLED)
-    if span.attributes.get("nontarget"):
-        return f"{label} nontarget", f"{qualifier or role} nontarget"
-    return label, qualifier or role or _UNLABELLED
-
-
 def _lane_state(decision: Entity | None, report: Entity | None) -> str:
     """Which of the four states the store puts a branch in.
 
@@ -2297,7 +2273,7 @@ def branch_lanes(store: ProvStore) -> list[BranchLane]:
             if extent is None:
                 continue
             parents = [parent for parent in sources.get(span.id, []) if parent.extent is not None]
-            label, short = _proposed_span_label(span)
+            label, short = proposed_span_label(span)
             rows.append(
                 BranchRow(
                     key=span.id,
