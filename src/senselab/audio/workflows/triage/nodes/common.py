@@ -647,6 +647,9 @@ BRANCH_MEASURES: dict[str, tuple[str, ...]] = {
 UNLABELLED = "unlabelled"
 """What a span reading falls back to when the producer stamped none."""
 
+BRANCH_QUALIFIERS: tuple[str, ...] = ("label", "production", "attributed_to")
+"""The attributes a proposal carries to distinguish itself inside its role, in the order preferred."""
+
 UNROLED = "unroled"
 """What :func:`span_role_kind` falls back to for a span carrying no role."""
 
@@ -728,6 +731,28 @@ def initial_span_label(span: Entity) -> str:
     if family and role:
         return f"{family}/{role}"
     return str(family or span.attributes.get("name") or "") or UNLABELLED
+
+
+def proposed_span_label(span: Entity) -> tuple[str, str]:
+    """One proposed span's caption and the shorter one a narrow bar falls back to.
+
+    Args:
+        span: A span a branch proposed.
+
+    Returns:
+        ``(label, short)``. The label is the role every proposer stamps, qualified by whichever of
+        :data:`BRANCH_QUALIFIERS` the proposal carries a value for and marked ``nontarget`` when it
+        says so; the short form is the qualifier alone, which is the half that distinguishes one
+        proposal from its neighbours.
+    """
+    role = str(span.attributes.get("role") or "")
+    qualifier = next(
+        (str(span.attributes[key]) for key in BRANCH_QUALIFIERS if span.attributes.get(key) is not None), ""
+    )
+    label = f"{role}/{qualifier}" if role and qualifier else (role or qualifier or UNLABELLED)
+    if span.attributes.get("nontarget"):
+        return f"{label} nontarget", f"{qualifier or role} nontarget"
+    return label, qualifier or role or UNLABELLED
 
 
 def span_role_kind(span: Entity) -> str:

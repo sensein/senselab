@@ -77,7 +77,7 @@ from senselab.audio.workflows.triage.routing_analysis.report import (
     taxonomy_as_run,
     write_report,
 )
-from senselab.audio.workflows.triage.routing_analysis.ruleset import load_ruleset
+from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, evaluate_gate, load_ruleset
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
 
 
@@ -2162,3 +2162,122 @@ def test_a_reader_can_take_the_denominator_beside_the_count(tmp_path: Path) -> N
     absent = Detector("d", "airway", ("span_coverage", "hear.n"), "spans", ())
     assert detector_value(partial, absent) is None
     assert evidence_blocks(reader) == ("span_yamnet",)
+
+
+UNMEASURABLE_MEASURES = ("gap", "asr", "continuity")
+"""The span classes PREPROCESS writes no ``peak_over_floor_db`` on, which is every one but amplitude."""
+
+
+def _cough_span_store(path: Path, entries: Sequence[tuple[str, float | None]]) -> Path:
+    """A store whose spans each carry a measure, an optional level and a YAMNet ``Cough`` window.
+
+    Args:
+        path: Where to write it.
+        entries: ``(measure, peak_over_floor_db)`` per span, the level omitted where it is None.
+
+    Returns:
+        The path.
+    """
+    lines = [_entity("stream", "stream-1", {"name": "recording"}, [0.0, 20.0])]
+    for index, (measure, peak) in enumerate(entries):
+        span_id = f"span-{index}"
+        attributes: dict[str, Any] = {"measure": measure}
+        if peak is not None:
+            attributes["peak_over_floor_db"] = peak
+        start = 2.0 * index
+        lines.append(_entity("span", span_id, attributes, [start, start + 1.0]))
+        lines.append(
+            _entity(
+                "measurement",
+                f"yam-{index}",
+                {"name": "span_yamnet", "span_id": span_id, "raw_scores": {"Cough": 0.9}},
+                [start, start + 1.0],
+            )
+        )
+    return _write_store(path, lines)
+
+
+def _cough_features(tmp_path: Path, entries: Sequence[tuple[str, float | None]]) -> RecordingFeatures:
+    """The cough-span fixture, extracted under the shipped membership rule.
+
+    Args:
+        tmp_path: The test's temporary directory.
+        entries: ``(measure, peak_over_floor_db)`` per span.
+
+    Returns:
+        The record.
+    """
+    return extract_features(
+        _cough_span_store(tmp_path / "e" / "run" / "store.jsonl", entries),
+        "sub-5_ses-1_task-voluntary-cough",
+        str(tmp_path / "e"),
+        "voluntary-cough",
+        "voluntary-cough",
+        PACKAGED_MEMBERSHIPS,
+        onomatopoeic=PACKAGED_ONOMATOPOEIA,
+    )
+
+
+@pytest.mark.parametrize("measure", UNMEASURABLE_MEASURES)
+def test_a_cough_on_a_span_class_carrying_no_level_writes_no_decibel(tmp_path: Path, measure: str) -> None:
+    """A peak over floor is an amplitude reading; a gap is by definition where there is no peak."""
+    record = _cough_features(tmp_path, [(measure, None)])
+    assert record.span_label_set_stats["yamnet.cough_labels.span_count"] == pytest.approx(1.0)
+    assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_n"] == pytest.approx(0.0)
+    assert "yamnet.cough_labels.peak_over_floor_db_max" not in record.span_label_set_stats
+    assert record.span_label_stats["yamnet.Cough.span_count"] == pytest.approx(1.0)
+    assert record.span_label_stats["yamnet.Cough.peak_over_floor_db_n"] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("measure", UNMEASURABLE_MEASURES)
+def test_a_cough_on_a_span_class_carrying_no_level_is_a_definite_non_fire(tmp_path: Path, measure: str) -> None:
+    """``airway.cough`` must read a measured zero, not an unreadable gate, on a labelled gap."""
+    ruleset = load_ruleset(load_triage_config())
+    record = _cough_features(tmp_path, [(measure, None)])
+    assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
+
+
+def test_a_cough_on_an_amplitude_span_still_fires_at_the_packaged_threshold(tmp_path: Path) -> None:
+    """Narrowing the population changes no threshold: 50 dB was fitted on amplitude spans."""
+    ruleset = load_ruleset(load_triage_config())
+    assert ruleset.gates["airway.cough"].threshold == pytest.approx(50.0)
+    record = _cough_features(tmp_path / "loud", [("amplitude", 60.0)])
+    assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"] == pytest.approx(60.0)
+    assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.FIRED
+    quiet = _cough_features(tmp_path / "quiet", [("amplitude", 40.0)])
+    assert evaluate_gate(quiet, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
+
+
+def test_the_level_is_read_over_the_amplitude_spans_beside_a_labelled_gap(tmp_path: Path) -> None:
+    """A gap carrying the same label joins the count and contributes nothing to the decibels."""
+    record = _cough_features(tmp_path, [("amplitude", 60.0), ("gap", None), ("asr", None)])
+    assert record.span_label_set_stats["yamnet.cough_labels.span_count"] == pytest.approx(3.0)
+    assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_n"] == pytest.approx(1.0)
+    assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"] == pytest.approx(60.0)
+
+
+def test_no_cough_labelled_span_is_told_apart_from_one_nothing_could_measure(tmp_path: Path) -> None:
+    """The two zeros a reader must not confuse: nothing carried the set, and nothing measurable did."""
+    none_carried = _cough_features(tmp_path / "none", [("amplitude", 10.0), ("gap", None)])
+    none_carried.span_label_set_stats = {
+        key: value
+        for key, value in none_carried.span_label_set_stats.items()
+        if not key.startswith("yamnet.cough_labels.")
+    }
+    carried = _cough_features(tmp_path / "carried", [("amplitude", 10.0)])
+    unmeasurable = _cough_features(tmp_path / "gap", [("gap", None)])
+    assert "yamnet.cough_labels.span_count" not in none_carried.span_label_set_stats
+    assert carried.span_label_set_stats["yamnet.cough_labels.span_count"] == pytest.approx(1.0)
+    assert carried.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_n"] == pytest.approx(1.0)
+    assert unmeasurable.span_label_set_stats["yamnet.cough_labels.span_count"] == pytest.approx(1.0)
+    assert unmeasurable.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_n"] == pytest.approx(0.0)
+
+
+def test_the_decibel_population_is_the_measure_not_the_attribute(tmp_path: Path) -> None:
+    """A level written on a gap span is still not a peak over floor, and stays out of the sample."""
+    record = _cough_features(tmp_path, [("amplitude", 30.0), ("gap", 90.0)])
+    assert record.span_label_set_stats["yamnet.cough_labels.span_count"] == pytest.approx(2.0)
+    assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_n"] == pytest.approx(1.0)
+    assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"] == pytest.approx(30.0)
+    assert record.span_stats["all.peak_over_floor_db_max"] == pytest.approx(30.0)
+    assert "gap.peak_over_floor_db_max" not in record.span_stats
