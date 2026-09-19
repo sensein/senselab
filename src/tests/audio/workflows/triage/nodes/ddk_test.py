@@ -39,8 +39,8 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     CYCLES_OR_SYLLABLES_PER_S,
     NO_ENVELOPE,
     NO_PPG,
-    PPG_EXPECTED_NUCLEUS,
-    PPG_EXPECTED_PLACE,
+    PPG_CYCLE_NUCLEUS,
+    PPG_CYCLE_RATE,
     PPG_PLACE_AGREEMENT,
     PPG_RATE,
     PPG_UNITS,
@@ -49,6 +49,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     Posteriorgram,
     PpgReading,
     align_ddk,
+    cycle_scan,
     dispersion,
     dispersion_by_position,
     ppg_reading,
@@ -629,10 +630,11 @@ class TestButtercupIsAThreeSyllableTemplate:
             posteriorgram=_buttercup_raster(6),
         )
         _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
-        [nucleus] = _measurements(store, PPG_EXPECTED_NUCLEUS)
+        [nucleus] = _measurements(store, PPG_CYCLE_NUCLEUS)
         assert nucleus.attributes["expected_sequence"] == ["low", "rhotic", "low"]
         assert nucleus.attributes["value"] == pytest.approx(1.0)
         assert nucleus.attributes["by_position"] == {"0": 1.0, "1": 1.0, "2": 1.0}
+        assert nucleus.attributes["support_syllables"] == 18
 
     def test_a_substituted_nucleus_is_a_finding_and_not_a_dropped_unit(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -645,7 +647,7 @@ class TestButtercupIsAThreeSyllableTemplate:
         )
         result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
         assert _detail(result)["ppg_cv_units_n"] == 18
-        [nucleus] = _measurements(store, PPG_EXPECTED_NUCLEUS)
+        [nucleus] = _measurements(store, PPG_CYCLE_NUCLEUS)
         assert nucleus.attributes["value"] == pytest.approx(2.0 / 3.0, abs=0.01)
         assert nucleus.attributes["by_position"] == {"0": 1.0, "1": 0.0, "2": 1.0}
         assert result.done is True
@@ -653,15 +655,16 @@ class TestButtercupIsAThreeSyllableTemplate:
     def test_a_pa_recording_is_unaffected_by_any_of_this(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """The control: a one-position low template reads its own place and nucleus at 1.0."""
+        """The control: a one-position low template counts every syllable as its own cycle."""
         seed_ddk_store(
             store, stem="sub-a_ses-1_task-diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
         )
         _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
-        [place] = _measurements(store, PPG_EXPECTED_PLACE)
-        [nucleus] = _measurements(store, PPG_EXPECTED_NUCLEUS)
-        assert place.attributes["expected_sequence"] == ["labial"]
-        assert place.attributes["value"] == pytest.approx(1.0)
+        [cycles] = _measurements(store, PPG_CYCLE_RATE)
+        [nucleus] = _measurements(store, PPG_CYCLE_NUCLEUS)
+        assert cycles.attributes["expected_sequence"] == ["labial"]
+        assert cycles.attributes["cycles"] == 8
+        assert cycles.attributes["consumed"] == pytest.approx(1.0)
         assert nucleus.attributes["expected_sequence"] == ["low"]
         assert nucleus.attributes["value"] == pytest.approx(1.0)
         assert nucleus.attributes["realised_nuclei"] == ["low"] * 8
@@ -984,22 +987,23 @@ class TestThePosteriorgramCvWalk:
 class TestThePosteriorgramAnswersTheDeclaredTask:
     """The instrument is task-agnostic; the comparison is against the declared expectation."""
 
-    def test_a_declared_sequence_scores_full_per_position_accuracy(
+    def test_a_declared_sequence_counts_one_cycle_per_realised_repeat(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """/pa-ta-ka/ produced as asked reads 1.0 overall and 1.0 at each of the three positions."""
+        """/pa-ta-ka/ produced as asked yields four complete cycles accounting for every unit."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pataka",
             posteriorgram=_cv_raster(list(CYCLE) * 4, [0.2] * 11),
         )
         _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
-        [place] = _measurements(store, PPG_EXPECTED_PLACE)
-        assert place.attributes["value"] == pytest.approx(1.0)
-        assert place.attributes["by_position"] == {"0": 1.0, "1": 1.0, "2": 1.0}
-        assert place.attributes["expected_sequence"] == list(CYCLE)
+        [cycles] = _measurements(store, PPG_CYCLE_RATE)
+        assert cycles.attributes["cycles"] == 4
+        assert cycles.attributes["consumed"] == pytest.approx(1.0)
+        assert cycles.attributes["insertions_n"] == 0
+        assert cycles.attributes["expected_sequence"] == list(CYCLE)
 
-    def test_a_collapsed_sequence_scores_low_without_failing_conformance(
+    def test_a_collapsed_sequence_completes_no_cycle_without_failing_conformance(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """/pa-pa-pa/ for /pa-ta-ka/ is the clinically meaningful finding, not a task not performed."""
@@ -1009,22 +1013,24 @@ class TestThePosteriorgramAnswersTheDeclaredTask:
             posteriorgram=_cv_raster(["labial"] * 12, [0.2] * 11),
         )
         result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
-        [place] = _measurements(store, PPG_EXPECTED_PLACE)
-        assert place.attributes["value"] == pytest.approx(1.0 / 3.0, abs=0.01)
-        assert place.attributes["by_position"] == {"0": 1.0, "1": 0.0, "2": 0.0}
+        [cycles] = _measurements(store, PPG_CYCLE_RATE)
+        assert cycles.attributes["cycles"] == 0
+        assert cycles.attributes["consumed"] == pytest.approx(0.0)
+        assert cycles.attributes["value"] is None
         assert result.done is True
 
-    def test_a_single_syllable_family_reads_the_place_its_own_instruction_names(
+    def test_a_single_syllable_family_counts_cycles_of_the_place_its_own_instruction_names(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """/ta/ expects alveolar; a train of /pa/ under that instruction scores zero, not one."""
+        """/ta/ expects alveolar; a train of /pa/ under that instruction completes no cycle."""
         seed_ddk_store(
             store, stem="sub-a_ses-1_task-diadochokinesis-ta", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7)
         )
         _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-ta"}))
-        [place] = _measurements(store, PPG_EXPECTED_PLACE)
-        assert place.attributes["expected_sequence"] == ["alveolar"]
-        assert place.attributes["value"] == pytest.approx(0.0)
+        [cycles] = _measurements(store, PPG_CYCLE_RATE)
+        assert cycles.attributes["expected_sequence"] == ["alveolar"]
+        assert cycles.attributes["cycles"] == 0
+        assert cycles.attributes["consumed"] == pytest.approx(0.0)
 
     def test_the_train_span_names_the_posteriorgram_as_its_evidence(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]

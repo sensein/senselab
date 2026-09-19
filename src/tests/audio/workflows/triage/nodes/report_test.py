@@ -156,9 +156,14 @@ _SYLLABLE_DETAIL = {
     "ppg_jitter_over_median": 0.08,
     "ppg_cv_units_n": 28,
     "ppg_interval_trend_s_per_step": 0.001,
-    "ppg_expected_place_fraction": 0.93,
+    "ppg_cycles": 9,
+    "ppg_declared_cycles": 10,
+    "ppg_cycle_rate_hz": 1.8,
+    "ppg_cycle_gap_cv": 0.37,
+    "ppg_cycle_consumed": 0.96,
+    "ppg_cycle_insertions_n": 1,
     "ppg_place_agreement": 0.88,
-    "ppg_expected_nucleus_fraction": 0.9,
+    "ppg_cycle_nucleus_fraction": 0.9,
 }
 """What ``ddk.syllable_detail`` returns for an in-family syllable task, as ``speech()`` merges it."""
 
@@ -1510,7 +1515,13 @@ class TestTheSyllableMeasuresReachThePage:
             "ppg_jitter_over_median=0.08",
             "ppg_cv_units_n=28",
             "ppg_interval_trend_s_per_step=0.001",
-            "ppg_expected_place_fraction=0.93",
+            "ppg_cycles=9",
+            "ppg_declared_cycles=10",
+            "ppg_cycle_rate_hz=1.8",
+            "ppg_cycle_gap_cv=0.37",
+            "ppg_cycle_consumed=0.96",
+            "ppg_cycle_insertions_n=1",
+            "ppg_cycle_nucleus_fraction=0.9",
             "ppg_place_agreement=0.88",
         }
         assert expected <= set(blocks.split())
