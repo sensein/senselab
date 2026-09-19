@@ -34,9 +34,10 @@ from senselab.audio.workflows.triage.nodes.branches import (
     propose_spans,
     write_findings,
 )
-from senselab.audio.workflows.triage.nodes.common import live_entities, software_agent
+from senselab.audio.workflows.triage.nodes.common import BRANCH_MEASURES, live_entities, software_agent
 from senselab.audio.workflows.triage.nodes.ddk import (
     CYCLES_OR_SYLLABLES_PER_S,
+    CYCLES_PER_S,
     NO_ENVELOPE,
     NO_PPG,
     PPG_CYCLE_NUCLEUS,
@@ -46,6 +47,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     PPG_UNITS,
     RATE,
     SYLLABLES_PER_S,
+    UNRESOLVED,
     Posteriorgram,
     PpgReading,
     align_ddk,
@@ -1115,3 +1117,288 @@ class TestThePosteriorgramAnswersTheDeclaredTask:
         [absent] = _measurements(store, PPG_RATE)
         assert absent.attributes["unavailable"] == "ppg_posteriorgram"
         assert absent.attributes["value"] is None
+
+
+PATAKA_CYCLES = 10
+"""Ten repeats of /pa-ta-ka/, which is what the v1 instruction asks for."""
+
+
+def _cycle_places(cycles: int = PATAKA_CYCLES) -> list[str]:
+    """The place series a clean /pa-ta-ka/ train of ``cycles`` repeats realises.
+
+    Args:
+        cycles: How many repeats to lay down.
+
+    Returns:
+        One place per syllable, in template order.
+    """
+    return list(CYCLE) * cycles
+
+
+def _cycle_raster(places: Sequence[str], step_s: float = 0.2) -> np.ndarray:
+    """A CV raster whose onsets are ``step_s`` apart, one per named place.
+
+    Args:
+        places: One place of articulation per syllable.
+        step_s: The interval between consecutive onsets.
+
+    Returns:
+        The raster.
+    """
+    return _cv_raster(list(places), [step_s] * (len(places) - 1))
+
+
+def _cycle_measure(store: ProvStore) -> Entity:
+    """The one cycle-rate measurement the syllable body took.
+
+    Args:
+        store: The provenance store the body wrote to.
+
+    Returns:
+        The measurement entity.
+    """
+    [found] = _measurements(store, PPG_CYCLE_RATE)
+    return found
+
+
+class TestTheCycleCountIsARepeatCountAndNotAPositionalScore:
+    """The defect: ``expected[i % len(expected)]`` assumed phase and assumed completeness.
+
+    ``specs/20260817-triage-workflow-dag/ddk-cycle-counting.md`` is why each of these is pinned.
+    """
+
+    def test_ten_clean_cycles_are_counted_as_ten_and_consume_every_unit(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Thirty units in template order are ten complete repeats accounting for all thirty."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(_cycle_places()),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        cycles = _cycle_measure(store)
+        assert cycles.attributes["cycles"] == PATAKA_CYCLES
+        assert cycles.attributes["syllables_n"] == 3 * PATAKA_CYCLES
+        assert cycles.attributes["consumed"] == pytest.approx(1.0)
+        assert cycles.attributes["insertions_n"] == 0
+
+    def test_a_train_missing_its_first_unit_still_reports_the_cycles_it_contains(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The phase defect itself: one dropped unit made the positional metric read 0.0 here.
+
+        Dropping the leading /pa/ leaves nine intact repeats and a two-unit lead-in. Comparing unit
+        *i* against ``expected[i % 3]`` puts every one of the 29 survivors against the wrong
+        position, so the old reading of a near-perfect production was zero.
+        """
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(_cycle_places()[1:]),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        cycles = _cycle_measure(store)
+        assert cycles.attributes["cycles"] == PATAKA_CYCLES - 1
+        assert cycles.attributes["syllables_n"] == 3 * PATAKA_CYCLES - 1
+        assert cycles.attributes["insertions_n"] == 0
+
+    def test_an_insertion_between_two_cycle_positions_does_not_break_the_cycle(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """A repeated /pa/ inside one repeat is stepped over, not allowed to reset the count."""
+        places = _cycle_places()
+        places.insert(1, "labial")
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(places),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        cycles = _cycle_measure(store)
+        assert cycles.attributes["cycles"] == PATAKA_CYCLES
+        assert cycles.attributes["insertions_n"] == 1
+        assert cycles.attributes["syllables_n"] == 3 * PATAKA_CYCLES + 1
+        assert cycles.attributes["consumed"] == pytest.approx(30 / 31, abs=0.001)
+
+    def test_a_collapsed_train_completes_no_cycle_at_all(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Thirty /pa/ against a /pa-ta-ka/ template is zero repeats, not a third of a score."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(["labial"] * 3 * PATAKA_CYCLES),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        cycles = _cycle_measure(store)
+        assert cycles.attributes["cycles"] == 0
+        assert cycles.attributes["consumed"] == pytest.approx(0.0)
+        assert cycles.attributes["value"] is None
+        assert cycles.attributes["gap_cv"] is None
+
+    def test_the_cycle_rate_is_the_reciprocal_of_the_median_gap_between_cycle_starts(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Three syllables 0.2 s apart is a cycle every 0.6 s, which is 1.667 Hz and no dispersion."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(_cycle_places()),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        cycles = _cycle_measure(store)
+        assert cycles.attributes["unit"] == CYCLES_PER_S
+        assert cycles.attributes["value"] == pytest.approx(1.0 / 0.6, abs=0.02)
+        assert cycles.attributes["gap_cv"] == pytest.approx(0.0, abs=0.02)
+        assert len(cycles.attributes["cycle_start_s"]) == PATAKA_CYCLES
+
+    def test_the_declaration_is_reported_in_both_units_rather_than_restated(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """``expected_event_count`` stays 30 syllables; the cycle measure carries both readings."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(_cycle_places()),
+        )
+        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        cycles = _cycle_measure(store)
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].expected_event_count == 30
+        assert cycles.attributes["declared_syllables"] == 30
+        assert cycles.attributes["declared_cycles"] == 10
+        assert _detail(result)["ppg_cycles"] == 10
+        assert _detail(result)["ppg_declared_cycles"] == 10
+
+    def test_a_recording_whose_timing_defeats_the_train_finder_still_reports_its_cycles(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The scan runs over every unit, so the regularity the train finder wants is not required."""
+        raster = _cv_raster(_cycle_places(2), [0.15, 0.9, 0.15, 0.15, 1.1])
+        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pataka", posteriorgram=raster)
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        assert _reading(raster, ddk_config, SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence).train is None
+        cycles = _cycle_measure(store)
+        assert cycles.attributes["cycles"] == 2
+        assert cycles.attributes["consumed"] == pytest.approx(1.0)
+
+
+class TestTheCycleScanItself:
+    """The scan is the whole of the fix, so its contract is pinned apart from the store."""
+
+    def test_it_advances_through_the_cycle_and_closes_one_repeat_per_pass(self) -> None:
+        """Two clean passes over a three-place template are two cycles and six matched units."""
+        scan = cycle_scan(list(CYCLE) * 2, list(CYCLE))
+        assert scan.cycles == 2
+        assert scan.starts == (0, 3)
+        assert scan.ends == (2, 5)
+        assert scan.matched == ((0, 0), (1, 1), (2, 2), (3, 0), (4, 1), (5, 2))
+        assert scan.consumed == pytest.approx(1.0)
+
+    def test_a_unit_before_the_cycle_opens_is_lead_in_and_not_an_insertion(self) -> None:
+        """Nothing has been matched yet, so there is no position for the unit to have displaced."""
+        scan = cycle_scan(["velar", "alveolar", *CYCLE], list(CYCLE))
+        assert scan.cycles == 1
+        assert scan.starts == (2,)
+        assert scan.insertions == ()
+
+    def test_a_unit_inside_an_open_cycle_is_an_insertion_carrying_the_position_awaited(self) -> None:
+        """The scan knows what it was waiting for, so the deviation need not infer it from an index."""
+        scan = cycle_scan(["labial", "labial", "alveolar", "velar"], list(CYCLE))
+        assert scan.cycles == 1
+        assert scan.insertions == ((1, 1),)
+
+    def test_a_trailing_partial_cycle_is_not_counted(self) -> None:
+        """A repeat that never closed is not a repeat, however many of its positions were reached."""
+        scan = cycle_scan([*CYCLE, "labial", "alveolar"], list(CYCLE))
+        assert scan.cycles == 1
+        assert scan.units == 5
+        assert scan.consumed == pytest.approx(0.6)
+
+    def test_an_unresolved_place_is_stepped_over_rather_than_breaking_the_cycle(self) -> None:
+        """An instrument that could not read one onset has not shown the sequence was departed from."""
+        scan = cycle_scan(["labial", UNRESOLVED, "alveolar", "velar"], list(CYCLE))
+        assert scan.cycles == 1
+        assert scan.insertions == ((1, 1),)
+
+    def test_a_one_position_template_makes_every_matching_unit_its_own_cycle(self) -> None:
+        """A single-position family's cycle is its syllable, so the two measures coincide by design."""
+        scan = cycle_scan(["labial"] * 8, ["labial"])
+        assert scan.cycles == 8
+        assert scan.consumed == pytest.approx(1.0)
+        assert scan.insertions == ()
+
+    def test_an_out_of_family_template_scans_nothing(self) -> None:
+        """No declared cycle is not a cycle of length zero; the scan reports no repeat and no unit."""
+        scan = cycle_scan(list(CYCLE), [])
+        assert scan.cycles == 0
+        assert scan.consumed == pytest.approx(0.0)
+
+
+class TestTheNucleusIsScoredAgainstThePositionTheScanEstablished:
+    """The union of the template's classes is what extraction admits, which is why phase matters."""
+
+    def test_a_buttercup_scores_its_rhotic_at_the_middle_position_the_scan_found(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """The two-class union is the only template where this measurement can be anything but one."""
+        raster = _buttercup_raster(6)
+        seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-buttercup", posteriorgram=raster)
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
+        [nucleus] = _measurements(store, PPG_CYCLE_NUCLEUS)
+        assert nucleus.attributes["value"] == pytest.approx(1.0)
+        assert nucleus.attributes["by_position"] == {"0": 1.0, "1": 1.0, "2": 1.0}
+
+    def test_it_is_one_by_construction_where_the_template_names_a_single_class(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """``admitted_nuclei`` admits only ``low`` for pataka, so no unit can carry anything else."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(_cycle_places()),
+        )
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        [nucleus] = _measurements(store, PPG_CYCLE_NUCLEUS)
+        assert nucleus.attributes["expected_sequence"] == ["low", "low", "low"]
+        assert nucleus.attributes["value"] == pytest.approx(1.0)
+        assert set(nucleus.attributes["realised_nuclei"]) == {"low"}
+
+
+class TestEveryCycleKeyAReaderSelectsHasAWriter:
+    """``BRANCH_MEASURES["SPEECH"]`` is what both products print; a named key with no writer is a hole."""
+
+    def test_the_syllable_body_writes_every_ppg_key_the_table_names(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """Every ``ppg_`` entry of the table is produced by ``syllable_detail`` on an in-family run."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
+            spans=[(1.0, 5.0)],
+            posteriorgram=_cycle_raster(_cycle_places()),
+            wideband=_wideband(6.0, _pataka_slots((1.0, 5.0), 5.0)),
+        )
+        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        detail = _detail(result)
+        named = [key for key in BRANCH_MEASURES["SPEECH"] if key.startswith("ppg_")]
+        assert named, "the table must still name the CV instrument's keys"
+        assert [key for key in named if key not in detail] == []
+        assert [key for key in named if detail[key] is None] == []
+
+    def test_the_removed_positional_keys_are_named_by_neither_reader_nor_writer(
+        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
+    ) -> None:
+        """A reader selecting a key no writer produces prints nothing and says nothing; both go."""
+        seed_ddk_store(
+            store,
+            stem="sub-a_ses-1_task-diadochokinesis-pataka",
+            posteriorgram=_cycle_raster(_cycle_places()),
+        )
+        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        gone = {"ppg_expected_place_fraction", "ppg_expected_nucleus_fraction"}
+        assert gone & set(BRANCH_MEASURES["SPEECH"]) == set()
+        assert gone & set(_detail(result)) == set()
+        assert _measurements(store, "ddk_expected_place_fraction") == []
+        assert _measurements(store, "ddk_expected_nucleus_fraction") == []
