@@ -72,6 +72,210 @@ are keyed on, so it is what is reported here.
 
 ---
 
+## 1. PII
+
+### 1a. What the stores hold: nothing
+
+| question asked | answer from the stores |
+|---|---|
+| recordings with at least one `pii` entity | **0 of 62,578** |
+| rate per family | 0 in all 48 |
+| distribution of `category` | no `pii` entity exists to carry one |
+| distribution of `source` | ditto |
+| distribution of `detectors_used` | ditto |
+| how often `detectors_failed` is non-empty | ditto; and no `pii_scan` measurement exists either |
+| the aggregated set of detected strings | empty |
+
+The SPEECH branch's PII step never ran (§0). This is an absence of the instrument, not a finding of
+no PII.
+
+**The `pii` entity does carry no text — verified from the writer, since no instance exists to
+inspect.** `nodes/speech.py` step 7 writes it with exactly `category`, `source`, `haystack`,
+`sources`, `occurrence`, `occurrences_n`, `detectors_used`, `detectors_failed`, and an extent that
+is the time hull of the words the finding covers. No surface.
+
+**The recovery path the brief describes does exist and was implemented.** A finding's surface is
+recoverable because SPEECH also writes, for each covered word, an `assertion` entity with
+`verb: "label"`, `label: "pii"` and the finding's `category`, joined to the `word` entity by
+`wasDerivedFrom`; the `word` entity carries `text`. The census scanner walks exactly that path
+(`scan_store.py`). It returned zero strings from 62,578 stores because there are no such assertions.
+
+### 1b. What a fresh scan of the stored transcripts finds
+
+**This is a new measurement, not a read of the corpus.** Today's `senselab.text.tasks.pii_detection`
+stack — Presidio + GLiNER (`nvidia/gliner-pii`) + the rules cascade, which is exactly the
+`pii.required_detectors` set the packaged config names — was run on a compute node over the
+transcripts the 2026-09-08 stores hold. It is the only way to answer the owner's actual question:
+where is the detector over-reaching.
+
+**Fidelity caveats, stated up front.** (i) The haystack is reconstructed by joining each store's
+`word` entities in index order. On a 1-in-20 sample (3,129 recordings) that reproduces the store's
+own `consensus_transcript.text` byte for byte in 3,066 cases; the 61 that differ are all cases where
+the stored text applied a bracket override and the reconstruction keeps both the word and the
+bracketed event, so the reconstruction is a superset and can only add findings. (ii) There is no
+speaker attribution, so no finding can be assigned to the target speaker or to a second voice.
+(iii) The code is today's, not the 2026-09-08 commit.
+
+**Population and coverage.** Every non-empty transcript the stores hold: the reconstructed consensus
+transcript for each recording, plus each ASR backend's own transcript, which is the same three-way
+haystack SPEECH would scan. 167,629 texts were submitted. **157,178 came back scanned and 10,451 did
+not**: one array shard of sixteen landed on a contended node and every one of its 35 chunks hit the
+600 s subprocess timeout, so `detectors_failed` carries `pii_subprocess` for all of them. That shard
+is a deterministic 1-in-16 stride of the manifest, so the loss is an unbiased ~6 % sample rather than
+a skewed one; it is excluded from both numerator and denominator throughout, and the shard has been
+re-run. Detector failures elsewhere: **none** — all 157,178 scanned texts report
+`detectors_used: [gliner, presidio, rules]` and an empty failure map.
+
+#### The headline
+
+**24,261 of 56,454 scanned consensus transcripts — 43.0 % — carry at least one PII finding.**
+
+That number is not a disclosure rate. Here it is split by the BIDS sidecar's `speech_type`, which
+says what the participant was asked to produce:
+
+| speech_type | scanned | with a finding | rate | spans | spans per recording |
+|---|---:|---:|---:|---:|---:|
+| non-lexical | 26,932 | 10,982 | **0.408** | 21,353 | 0.79 |
+| read | 17,944 | 6,218 | 0.347 | 10,390 | 0.58 |
+| elicited | 9,889 | 5,649 | 0.571 | 16,661 | 1.69 |
+| recall | 1,689 | 1,412 | 0.836 | 4,043 | 2.39 |
+
+**Two of those four rows are false by construction.**
+
+**`non-lexical` — 40.8 % on 26,932 recordings that contain no words at all.** These are the
+sustained vowels, glides, syllable trains, breaths and coughs. There is nothing to disclose, and
+21,353 spans were returned anyway — 37,939 of the non-lexical spans across all haystacks are
+`PERSON`, 10,951 are `NAME`, and 1,459 are `UNIQUE_IDENTIFIER`. This quantifies over 26,932
+recordings what a 26-recording sample could only suggest.
+
+**`read` — 34.7 %, on recordings where the participant was handed the words.** The sidecar carries
+`stimulus_text`, so this is testable directly: of the read-task findings on a recording that has a
+stimulus, **25,474 of 30,174 (84.4 %) are literally a substring of the script the participant was
+given to read.** Not a similar phrase — the same characters.
+
+The same partition using the graph's own expectation table rather than the sidecar agrees:
+
+| what the family's instruction allows | scanned | with a finding | rate | spans/recording |
+|---|---:|---:|---:|---:|
+| no words asked for (syllable / sustained / glide / event) | 25,444 | 10,766 | 0.423 | 0.83 |
+| reads a fixed script (ordered_tokens) | 19,432 | 6,434 | 0.331 | 0.55 |
+| produces items of a dictated class (item_list) | 633 | 356 | 0.562 | **7.47** |
+| may disclose (free_response) | 10,945 | 6,705 | 0.613 | 1.46 |
+
+Only the last row is a population where a disclosure is even possible, and it is 10,945 of 56,454
+recordings — 19 %. The `item_list` row is the worst spans-per-recording in the corpus at 7.47:
+those families instruct the participant to name animals or arbitrary items, and a produced item is
+not a disclosure.
+
+#### The false-positive classes
+
+Ranked by how much of the total they account for. Each is named by its shape; illustrations are
+synthetic and constructed here, never a detected string.
+
+1. **Non-lexical vocalisation read as a name.** A recogniser given a sustained vowel or a syllable
+   train emits something, and the detector names it. The single largest class. Shapes: 1-token
+   alphabetic `PERSON` (14,924 in the preview slice alone), and **4,175 non-lexical spans of ten
+   tokens or more** — an entire syllable train returned as one `PERSON` span. Synthetic
+   illustration of the shape: `"ba ba ba ba ba ba ba ba ba ba"` → `PERSON`.
+2. **The carrier word of a syllable task read as a name.** The DDK families are named after a
+   carrier word; the recogniser writes that word repeatedly and both `PERSON` and `NAME` fire on it,
+   on its doubling and on its tripling. Among the 70 surfaces detected in 100 or more distinct
+   recordings, the carrier words and their repetitions are the largest group.
+3. **Disfluency tokens read as names.** The filler tokens a recogniser writes for hesitation are
+   among the most widely spread surfaces in the whole census — the top three surfaces by spread are
+   all fillers, one of them in 972 distinct recordings. Synthetic illustration: `"erm"` → `PERSON`.
+4. **Bracketed event markers read as PII.** The consensus stream carries bracketed non-speech events;
+   **226 spans carry a bracket character and 90 distinct bracketed surfaces were detected**,
+   including a bare event marker returned as `PERSON` and, separately, as `LOCATION`. Synthetic
+   illustration: `"[SNIFF]"` → `PERSON`. This is the brief's "bracketed event" class, confirmed.
+5. **Stimulus text read as disclosure.** 84.4 % of read-task findings are substrings of the script.
+   The `AGE` category is the sharpest case: **712 of its 1,164 spans are inside the stimulus**, i.e.
+   the HIPAA age-over-90 rule firing on a phrase printed in a passage the participant was told to
+   read aloud. Synthetic illustration of the shape: a read passage containing `"ninety-one years
+   old"` → `AGE`.
+6. **Elicited task material read as location.** The item-list families ask for arbitrary items and
+   participants produce place names; `LOC` and `LOCATION` then fire, sometimes returning a whole
+   multi-sentence utterance as one span. `LOC` is almost never inside a stimulus (745 outside, 6
+   inside) because these families have no script — the words are the participant's, and they are
+   still task material rather than disclosure.
+7. **Structured-identifier categories on alphabetic surfaces.** `US_SSN`, `VEHICLE_IDENTIFIER`,
+   `UNIQUE_IDENTIFIER` and `DEVICE_IDENTIFIER` fire on 1-token *alphabetic* surfaces — every one of
+   the 340 `UNIQUE_IDENTIFIER` shapes in the preview slice, 80 of the `VEHICLE_IDENTIFIER` and 7 of
+   the `US_SSN`. A social security number that contains no digit is definitionally not one; this is a
+   format-validation gap, and the cheapest of the seven to close.
+
+#### Spread, which is the general-purpose signal
+
+A real disclosure is idiosyncratic; a surface detected across hundreds of unrelated recordings is
+task material. Of **17,771 distinct detected surfaces**, 13,522 appear in exactly one recording, 726
+appear in ten or more, and 70 appear in a hundred or more. **93,687 of 143,740 spans — 65 % — come
+from surfaces that recur across ten or more distinct recordings.** That single statistic is probably
+the most useful filter available before the detector is retuned.
+
+#### Category and source distribution of the fresh scan
+
+By category, over all three haystacks: PERSON 75,205, DATE_TIME 27,735, NAME 22,062, LOCATION
+10,513, MISC 2,098, LOC 1,683, UNIQUE_IDENTIFIER 1,466, AGE 1,164, NRP 1,122, VEHICLE_IDENTIFIER
+379, DATE 155, ORG 105, EMAIL_ADDRESS 22, US_SSN 14, DEVICE_IDENTIFIER 6, PHOTOGRAPHIC_IMAGE 5,
+FAX_NUMBER 2, ACCOUNT_NUMBER 2, LICENSE_NUMBER 1, US_DRIVER_LICENSE 1.
+
+By source: presidio 57,751; gliner/name 52,869; rules/ner 20,060; gliner/date 3,397;
+rules/gazetteer+ner 2,688; gliner/unique_identifier 1,466; then a long tail of rules-cascade
+combinations. By haystack: consensus 52,447, asr_crisperwhisper 48,034, asr_qwen 43,259 — the three
+are not redundant, and the graph is right to scan all three.
+
+By declared language: `en` 23,651 of 55,311 scanned (0.428); `es-419` 610 of 1,143 (0.534), at 2.24
+spans per recording against 0.90 for English. An English-only detector cascade on Spanish transcripts
+is a second over-reach worth its own look.
+
+#### Where the full set lives
+
+The detected strings are **not in this document and not in the repository**, and must not be added to
+either — the repository is shared and its history is permanent, and this document is meant to
+circulate. They live in two places:
+
+- `/orcd/scratch/bcs/002/satra/checks_20260916/pii_census/` on ORCD scratch (mode 700):
+  `pii_detail.jsonl` (every finding with its surface, recording, family and haystack) and
+  `pii_surfaces_by_spread.jsonl` (each distinct surface with the number of recordings it was
+  detected in, the file to start from when judging the detector).
+- `~/Downloads/pii_census/` on the owner's laptop, the same two files plus the two summaries.
+
+
+### 1c. Language, and where the CJK glyphs come from
+
+The BIDS sidecars at
+`/orcd/data/satra/002/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04/` carry `language`
+per recording. All 62,578 recordings have a `_recording-metadata.json`; 9,772 also have an
+`_acoustictask-metadata.json` and 52,806 do not.
+
+**The corpus declares two languages and only two:**
+
+| language | recordings | share |
+|---|---:|---:|
+| `en` | 61,321 | 0.980 |
+| `es-419` | 1,257 | 0.020 |
+
+Both are Latin script. The 1,257 Spanish recordings are spread across 42 of the 48 families, largest
+in harvard-sentences-list (480), cape-v-sentences (90) and free-speech-v2 (72).
+
+**The CJK glyphs are an ASR artefact, not a language.** 2,774 recordings (4.4 %) carry a CJK
+codepoint in at least one transcript. Of those, 2,717 declare `en` and 57 declare `es-419`; **none
+declares a CJK language, because no recording in the corpus does.** The glyphs come from one
+backend: `asr_qwen` in 2,769 of the 2,774, against `asr_crisperwhisper` in 5, and they reach the
+consensus transcript in 1,774. The families are the non-lexical ones —
+respiration-and-cough-cough 438, diadochokinesis-ka 378, diadochokinesis-v2-kuh 334,
+glides-low-to-high 239, respiration-and-cough-v2-hardcough 232 — and the top glyphs are Mandarin
+onomatopoeia for exactly those sounds: the character for *cough* (9,777 occurrences), then the
+characters for a click, a bang and the DDK syllables, plus ideographic punctuation. 276 distinct
+glyphs in all.
+
+So a CJK glyph in REPORT is the Qwen backend rendering a non-lexical vocalisation as Chinese
+onomatopoeia on an English recording, and it compounds class 1 above: the detector is then handed a
+string in a script the recording never contained.
+
+
+---
+
 ## 2. Multiple speakers
 
 ### Which measurement carries it, and why this one
@@ -330,6 +534,111 @@ absolute tail, for comparison: 1,586 recordings (2.5 %) are under 0.5 s and 2,00
 
 ---
 
+## 4. What could not be established
+
+Listed so none of it is mistaken for a null result.
+
+1. **Any PII finding the pipeline itself made.** The scan never ran. The fresh scan in §1 is
+   today's code, not the 2026-09-08 commit, and it carries no speaker attribution, no corroboration
+   rule and no redaction step — it is the detector's raw output, which is what the over-reach
+   question needs and is not what the graph would have recorded.
+2. **Whether a PII finding falls in the target speaker's speech or a second voice's.** Needs SPEECH's
+   word-to-speaker resolution. Nothing in these stores attributes a word to a speaker: the
+   diarization is a time partition with its own labels, and no node joined it to the consensus words.
+3. **Task conformance and deviations, at any value.** Not measured, not UNDETERMINED.
+4. **Truncation / incompleteness.** No instrument ran. The right-edge proxy is named as a proxy in
+   §3.2 and is not a rate for it.
+5. **Whether a recording is acoustically empty in the pipeline's sense.** The emptiness bypass is
+   `routing`'s and `routing` never ran. "No lexical content" is a different claim.
+6. **Why 635 recordings have no diarization and 2,319 have no QUALITY activity.** The stores record
+   the absence, not a reason. The run logs under
+   `/orcd/scratch/bcs/002/satra/triage_full_20260908/logs/` were not read for this census.
+7. **Why 266 QUALITY flag verdicts were invalidated with no replacement.** Observed, unexplained.
+8. **Whether the 71 recordings with a substantive second speaker contain a clinician, a family
+   member, a television, or the participant twice.** Nothing was listened to.
+9. **Whether any of the fresh scan's findings is a true positive.** The census establishes that
+   large, identifiable classes of them are false. It establishes nothing about the remainder, and
+   no finding was adjudicated by a person. A precision figure needs a labelled sample.
+10. **Whether the false-positive rate would survive the graph's own corroboration.** SPEECH records
+    a finding from any single detector; `decide_pii`'s agreement rule is a separate step this scan
+    did not apply. Whether requiring two detectors would remove the classes in §1b is measurable and
+    was not measured here.
+
+## 5. Questions for the owner
+
+1. **Is a branch re-run over the corpus in scope, and at what width?** Everything in §1 and §3.1 is
+   blocked on it. The full graph over 62,578 recordings is a much larger job than the
+   ADMIT/PREPROCESS/TAXONOMY run that produced these stores, and a stratified subset — say 2,000
+   recordings sampled across the 48 families — would answer the conformance and deviation questions
+   with a usable denominator at a small fraction of the cost.
+2. **The four null thresholds.** `windows.yamnet.default_threshold`,
+   `windows.ast.default_threshold`, `windows.hear.default_threshold` and `voice.f0_range_hz` are
+   null, and the consequence is that TAXONOMY concluded `uncertain` on 100 % of the corpus. A re-run
+   that does not fix this produces the same table. Is measuring them the prerequisite to the re-run?
+3. **Which diarization stream is the intended authority?** `enhanced` and `residual` agree on 475 of
+   the 5,788 recordings where either finds a second voice. The config runs both and nothing in the
+   graph reconciles them.
+4. **Is `n_speakers ≥ 2` wanted as a reported measurement at all, given the span-length problem?**
+   The median second speaker is 0.44 s. Either the diarizer needs a minimum-speech floor per speaker
+   before it reports a count, or the count needs to be reported with the secondary duration beside
+   it so a consumer can apply its own floor. Proposing a floor here would be a fitted threshold with
+   nothing fitted.
+5. **Should `truncation` get a non-branch instrument?** It is currently only reachable through a
+   branch that also needs an expectation table and an alignment. A PREPROCESS-level right-censoring
+   measurement (last word, last voiced frame, or last energy against the file end) would make
+   "incomplete" answerable on every recording regardless of routing — but it is a new measurement,
+   not a re-read.
+6. **The 266 invalidated QUALITY flags.** Is that the extension pass working as intended, or a
+   verdict lost in a re-run?
+7. **Is the "no lexical content" reading wanted as a task-verification signal**, given that it fires
+   on 95.7 % of breath-sounds and 0 % of animal-fluency by design? It is only meaningful against a
+   family's expectation, which is the branch's job.
+8. **Should the PII scan run at all on a family whose instruction asks for no words?** 26,932
+   non-lexical recordings produced 21,353 spans and cannot contain a disclosure. Skipping them is a
+   routing decision, not a detector change, and it removes the largest false-positive class outright.
+9. **Should a finding that is a substring of the recording's own `stimulus_text` be suppressed?**
+   The sidecar carries the script; 84.4 % of read-task findings are literally inside it. This is a
+   cheap, exact, non-statistical filter and it needs an owner's ruling because it is a suppression
+   rule, not a measurement.
+10. **Should structured-identifier categories require a digit?** `US_SSN`, `VEHICLE_IDENTIFIER`,
+    `UNIQUE_IDENTIFIER` and `DEVICE_IDENTIFIER` currently fire on purely alphabetic surfaces.
+11. **What should happen to a detected span ten or more tokens long?** 4,175 non-lexical spans are
+    that long. With `redaction.padding_ms: 250` and the planner's merge, a span like that masks a
+    large fraction of the recording. Is a maximum span length a detector rule, a REDACT rule, or
+    neither?
+12. **Is `es-419` in scope for the detector cascade?** 1,257 recordings declare it; the cascade's
+    spaCy pipeline is `en_core_web_lg` and Presidio is invoked with `language="en"`. The Spanish
+    recordings show a higher finding rate (0.534) and 2.5× the spans per recording.
+13. **Is the Qwen backend's Mandarin onomatopoeia on English non-lexical tasks acceptable output?**
+    2,769 recordings are affected and 1,774 carry it into the consensus transcript, where the PII
+    detector then reads it.
+
+---
+
+## 6. How this was produced
+
+All compute via `sbatch` to `mit_preemptable`; nothing ran on the ORCD login node. Scripts on ORCD
+scratch at `/orcd/scratch/bcs/002/satra/checks_20260916/census/`:
+
+| script | what it does | job |
+|---|---|---|
+| `scan_store.py` | one pass over all 62,578 stores: nodes, verdicts, kinds, PII entities, diarization, level, silence, consensus, deviations | 32 procs, 39 s |
+| `extract_text.py` | the transcripts and word boundaries the stores hold | 32 procs, ~60 s |
+| `absences.py` | the PREPROCESS `absent` map and the TAXONOMY kind lines, corpus-wide | 16 procs, 2 min |
+| `probe_pii.py` | whether a PII scan can run on a compute node at all | 1 proc |
+| `pii_scan.py` | the fresh PII scan over every stored transcript | 16-way array × 4 procs |
+| `pii_aggregate.py` | the fresh scan's counts, shapes and the surfaces-by-spread file | 1 proc |
+| `pii_final.py` | the fresh scan partitioned by `speech_type`, expectation pattern, language and stimulus containment | 1 proc |
+| `crosstab.py` | multi-speaker against the fresh scan, duration-matched | 1 proc |
+| `sidecars.py` | `language`, `speech_type` and `stimulus_text` from the BIDS sidecars | 16 procs, ~2 min |
+| `cjk.py` | which transcripts carry CJK codepoints, and from which backend | 16 procs |
+| `verify_text.py`, `verify_text2.py` | whether the reconstructed haystack matches the store's own `consensus_transcript.text` | 16 procs |
+
+Outputs under `/orcd/scratch/bcs/002/satra/checks_20260916/pii_census/` (mode 700). The corpus was
+read and not written.
+
+---
+
 ## Table A — per family: what is in the corpus and the three recording-quality readings
 
 `elicits` is the kind the family's instruction asks for. `n` counts manifest rows; every rate below
@@ -449,76 +758,3 @@ here that is not dominated by spans too short for the instrument.
 | voluntary-cough | 326 | 129 | 195 | 2 | 0.006 | 4 | 0.012 | 0 | 0.0000 |
 | word-color-stroop | 468 | 2 | 410 | 56 | 0.120 | 65 | 0.139 | 7 | 0.0150 |
 | **all** | 61886 | 12122 | 47025 | 2739 | 0.044 | 3524 | 0.057 | 71 | 0.0011 |
-
----
-
-## 4. What could not be established
-
-Listed so none of it is mistaken for a null result.
-
-1. **Any PII finding the pipeline itself made.** The scan never ran. The fresh scan in §1 is a
-   different instrument reading at a different commit with no speaker attribution and no
-   corroboration against the ASR-hypothesis haystacks the graph would also scan.
-2. **Whether a PII finding falls in the target speaker's speech or a second voice's.** Needs SPEECH's
-   word-to-speaker resolution. Nothing in these stores attributes a word to a speaker: the
-   diarization is a time partition with its own labels, and no node joined it to the consensus words.
-3. **Task conformance and deviations, at any value.** Not measured, not UNDETERMINED.
-4. **Truncation / incompleteness.** No instrument ran. The right-edge proxy is named as a proxy in
-   §3.2 and is not a rate for it.
-5. **Whether a recording is acoustically empty in the pipeline's sense.** The emptiness bypass is
-   `routing`'s and `routing` never ran. "No lexical content" is a different claim.
-6. **Why 635 recordings have no diarization and 2,319 have no QUALITY activity.** The stores record
-   the absence, not a reason. The run logs under
-   `/orcd/scratch/bcs/002/satra/triage_full_20260908/logs/` were not read for this census.
-7. **Why 266 QUALITY flag verdicts were invalidated with no replacement.** Observed, unexplained.
-8. **Whether the 71 recordings with a substantive second speaker contain a clinician, a family
-   member, a television, or the participant twice.** Nothing was listened to.
-
-## 5. Questions for the owner
-
-1. **Is a branch re-run over the corpus in scope, and at what width?** Everything in §1 and §3.1 is
-   blocked on it. The full graph over 62,578 recordings is a much larger job than the
-   ADMIT/PREPROCESS/TAXONOMY run that produced these stores, and a stratified subset — say 2,000
-   recordings sampled across the 48 families — would answer the conformance and deviation questions
-   with a usable denominator at a small fraction of the cost.
-2. **The four null thresholds.** `windows.yamnet.default_threshold`,
-   `windows.ast.default_threshold`, `windows.hear.default_threshold` and `voice.f0_range_hz` are
-   null, and the consequence is that TAXONOMY concluded `uncertain` on 100 % of the corpus. A re-run
-   that does not fix this produces the same table. Is measuring them the prerequisite to the re-run?
-3. **Which diarization stream is the intended authority?** `enhanced` and `residual` agree on 475 of
-   the 5,788 recordings where either finds a second voice. The config runs both and nothing in the
-   graph reconciles them.
-4. **Is `n_speakers ≥ 2` wanted as a reported measurement at all, given the span-length problem?**
-   The median second speaker is 0.44 s. Either the diarizer needs a minimum-speech floor per speaker
-   before it reports a count, or the count needs to be reported with the secondary duration beside
-   it so a consumer can apply its own floor. Proposing a floor here would be a fitted threshold with
-   nothing fitted.
-5. **Should `truncation` get a non-branch instrument?** It is currently only reachable through a
-   branch that also needs an expectation table and an alignment. A PREPROCESS-level right-censoring
-   measurement (last word, last voiced frame, or last energy against the file end) would make
-   "incomplete" answerable on every recording regardless of routing — but it is a new measurement,
-   not a re-read.
-6. **The 266 invalidated QUALITY flags.** Is that the extension pass working as intended, or a
-   verdict lost in a re-run?
-7. **Is the "no lexical content" reading wanted as a task-verification signal**, given that it fires
-   on 95.7 % of breath-sounds and 0 % of animal-fluency by design? It is only meaningful against a
-   family's expectation, which is the branch's job.
-
----
-
-## 6. How this was produced
-
-All compute via `sbatch` to `mit_preemptable`; nothing ran on the ORCD login node. Scripts on ORCD
-scratch at `/orcd/scratch/bcs/002/satra/checks_20260916/census/`:
-
-| script | what it does | job |
-|---|---|---|
-| `scan_store.py` | one pass over all 62,578 stores: nodes, verdicts, kinds, PII entities, diarization, level, silence, consensus, deviations | 32 procs, 39 s |
-| `extract_text.py` | the transcripts and word boundaries the stores hold | 32 procs, ~60 s |
-| `absences.py` | the PREPROCESS `absent` map and the TAXONOMY kind lines, corpus-wide | 16 procs, 2 min |
-| `probe_pii.py` | whether a PII scan can run on a compute node at all | 1 proc |
-| `pii_scan.py` | the fresh PII scan over every stored transcript | 16-way array × 4 procs |
-| `pii_aggregate.py` | the fresh scan's counts and shapes, and the surfaces file | 1 proc |
-
-Outputs under `/orcd/scratch/bcs/002/satra/checks_20260916/pii_census/` (mode 700). The corpus was
-read and not written.

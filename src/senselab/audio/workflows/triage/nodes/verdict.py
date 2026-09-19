@@ -441,29 +441,7 @@ def verdict(
             f"folded {len(node_verdicts)} node verdict(s) and {len(reports)} branch report(s) over "
             f"{len(file_verdict.routes)} routed branches"
         ),
-        detail={
-            "triage": file_verdict.triage.value,
-            "release": file_verdict.release.value,
-            "discard_ground": file_verdict.discard_ground,
-            "declared_family": file_verdict.declared_family,
-            "findings": dict(file_verdict.findings),
-            "conformance": dict(file_verdict.conformance),
-            "conformance_of": dict(file_verdict.conformance_of),
-            "deviations": {node: list(names) for node, names in file_verdict.deviations.items()},
-            "unmeasured": {node: list(names) for node, names in file_verdict.unmeasured.items()},
-            "routes": dict(file_verdict.routes),
-            "route_state": file_verdict.route_state,
-            "agreement": dict(file_verdict.agreement),
-            "hints": dict(file_verdict.hints),
-            "branches": dict(file_verdict.branches),
-            "bad_map_values": dict(file_verdict.bad_map_values),
-            "llm_redaction": dict(file_verdict.llm_redaction),
-            "critical_absences": {branch: dict(gates) for branch, gates in file_verdict.critical_absences.items()},
-            "ran": {node: state.value for node, state in file_verdict.ran.items()},
-            "reasons": [
-                {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why} for r in file_verdict.reasons
-            ],
-        },
+        detail=file_verdict.record(),
     )
     return VerdictResult(
         verdict=node_verdict,

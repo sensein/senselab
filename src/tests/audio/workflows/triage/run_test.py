@@ -423,6 +423,46 @@ class TestHappyPath:
         assert sorted(result.released) == ["audio", "transcript"]
         assert all(path.parent == result.artifacts_dir for path in result.released.values())
 
+    def test_the_run_log_carries_every_decision_point(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The log beside the store is the aggregable record: the whole fold, not just its two axes."""
+        graph()
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.file_verdict is not None
+        log = json.loads((result.run_dir / run_module.LOG_FILE).read_text())
+        assert log["decision"] == result.file_verdict.record()
+        for point in (
+            "findings",
+            "conformance",
+            "conformance_of",
+            "deviations",
+            "unmeasured",
+            "routes",
+            "route_state",
+            "agreement",
+            "hints",
+            "branches",
+            "critical_absences",
+            "llm_redaction",
+            "reasons",
+        ):
+            assert point in log["decision"], point
+        assert log["decision"]["triage"] == result.file_verdict.triage.value
+
+    def test_the_verdict_entity_and_the_log_carry_the_same_decision(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """One projection feeds both, so a reader of either never sees a fold the other disagrees with."""
+        graph()
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        store = ProvStore.read_jsonl(result.store_path)
+        written = [e for e in store.entities("verdict") if e.attributes["node"] == "VERDICT"]
+        assert len(written) == 1
+        log = json.loads((result.run_dir / run_module.LOG_FILE).read_text())
+        attributes = written[0].attributes
+        assert {key: attributes[key] for key in log["decision"]} == log["decision"]
+
     def test_the_store_carries_a_host_environment(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
