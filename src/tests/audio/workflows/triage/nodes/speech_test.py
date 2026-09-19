@@ -1221,6 +1221,74 @@ class TestTheDiarizationIsReadNotRerun:
         assert [turn.attributes["speaker"] for turn in turns] == ["SPEAKER_00", "SPEAKER_01"]
 
 
+class TestTheDiarizersReachPastTheDecode:
+    """The corpus blocker: pyannote times its turns on a padded window's grid, not on the file's.
+
+    The measurement is in ``specs/20260919-diarization-turns-past-the-decode/design.md``.
+    """
+
+    def test_a_turn_ending_a_quarter_second_past_the_decode_is_reported_not_raised(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reading this branch did not compose is bounded and reported; the branch still runs."""
+        duration_s = 5.0
+        _seed_speech_store(
+            store, tmp_path, words=["one", "two"], word_extents=[(1.0, 1.3), (2.0, 2.4)], duration_s=duration_s
+        )
+        _seed_diarization(store, tmp_path, [(0.5, duration_s + 0.267125, "SPEAKER_00")])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert result.report.conformance == UNDETERMINED
+        report = _report_entity(store, "SPEECH")
+        assert report.attributes["diarization"]["segments_bounded_n"] == 1
+        assert report.attributes["diarization"]["max_overshoot_s"] == pytest.approx(0.267125)
+        (segment,) = live_entities(store, "speaker")
+        assert segment.extent is not None
+        assert segment.extent[1] == duration_s, "the turn is bounded by the decode, not dropped"
+        assert any("reached past this stream's decode" in note for note in report.attributes["notes"])
+
+    def test_a_turn_lying_wholly_past_the_decode_is_dropped_and_counted(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A turn the padded window invented names no part of this stream, so it names no speaker."""
+        duration_s = 5.0
+        _seed_speech_store(
+            store, tmp_path, words=["one", "two"], word_extents=[(1.0, 1.3), (2.0, 2.4)], duration_s=duration_s
+        )
+        _seed_diarization(
+            store, tmp_path, [(0.5, 2.5, "SPEAKER_00"), (duration_s + 0.1, duration_s + 0.9, "SPEAKER_01")]
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        detail = _report_entity(store, "SPEECH").attributes["diarization"]
+        assert detail["segments_past_end_n"] == 1
+        assert {entity.attributes["speaker"] for entity in live_entities(store, "speaker")} == {"SPEAKER_00"}
+
+    def test_the_branch_still_writes_the_scan_and_the_count_it_used_to_lose(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A raise here left neither `it did not run` nor `it ran and found nothing`; both must survive."""
+        duration_s = 5.0
+        _seed_speech_store(
+            store, tmp_path, words=["one", "two"], word_extents=[(1.0, 1.3), (2.0, 2.4)], duration_s=duration_s
+        )
+        _seed_diarization(store, tmp_path, [(0.5, duration_s + 0.267125, "SPEAKER_00")])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert find_measurement(store, "pii_scan") is not None
+        assert _report_entity(store, "SPEECH").attributes["speaker_count"] == 1
+
+    def test_an_extent_this_branch_composed_itself_still_raises(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bounding a foreign reading does not widen the tolerance on this branch's own arithmetic."""
+        _seed_speech_store(store, tmp_path, words=["one", "two"], word_extents=[(1.0, 1.3), (5.0, 5.6)], duration_s=5.5)
+        _seed_diarization(store, tmp_path, [(0.5, 5.5, "SPEAKER_00")])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        with pytest.raises(ValueError, match="past the"):
+            speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+
+
 class TestTheClampTolerance:
     """F8d: one sample period is a numerical identity; a tenth of a second is an inconsistency."""
 
