@@ -27,6 +27,33 @@ UNREAD = "UNREAD"
 """A recording whose row exists but carries no decision — the run raised before VERDICT folded."""
 
 
+DURATION_EDGES = (1.0, 3.0, 10.0, 30.0, 60.0)
+"""Where the duration buckets divide, in seconds. An unusually short recording is a different
+finding from a task that was attempted and failed, so the two are counted apart."""
+
+UNKNOWN_DURATION = "unknown"
+"""A recording whose header would not give a duration."""
+
+
+def duration_bucket(seconds: float | None) -> str:
+    """Name the bucket one duration falls in.
+
+    Args:
+        seconds: The recording's duration, or None when its header gave none.
+
+    Returns:
+        The bucket's name, as it appears in the report.
+    """
+    if seconds is None:
+        return UNKNOWN_DURATION
+    low = 0.0
+    for edge in DURATION_EDGES:
+        if seconds < edge:
+            return f"{low:g}-{edge:g}s"
+        low = edge
+    return f">={low:g}s"
+
+
 @dataclass(frozen=True)
 class CorpusReport:
     """What a corpus of decisions holds, counted.
@@ -52,6 +79,9 @@ class CorpusReport:
         ran: Node to run state to count.
         families: Declared family to count.
         flagged_families: Declared family to how many of its recordings did not pass.
+        durations: Duration bucket to count, read from each record's header duration.
+        triage_by_duration: Duration bucket to triage outcome counts, so an unusually short
+            recording can be told from a task that was attempted and failed.
     """
 
     files: int = 0
@@ -74,6 +104,8 @@ class CorpusReport:
     ran: dict[str, dict[str, int]] = field(default_factory=dict)
     families: dict[str, int] = field(default_factory=dict)
     flagged_families: dict[str, int] = field(default_factory=dict)
+    durations: dict[str, int] = field(default_factory=dict)
+    triage_by_duration: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def _nested(counters: Mapping[str, Counter[str]]) -> dict[str, dict[str, int]]:
@@ -129,6 +161,8 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
     families: Counter[str] = Counter()
     flagged: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
+    durations: Counter[str] = Counter()
+    by_duration: dict[str, Counter[str]] = {}
     routes: dict[str, Counter[str]] = {}
     findings: dict[str, Counter[str]] = {}
     conformance: dict[str, Counter[str]] = {}
@@ -142,9 +176,13 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
 
     for _name, decision, record in records:
         files += 1
+        raw = record.get("duration_s")
+        bucket = duration_bucket(float(raw) if isinstance(raw, (int, float)) else None)
+        durations[bucket] += 1
         for node in record.get("errors") or {}:
             errored[str(node)] += 1
         if decision is None:
+            by_duration.setdefault(bucket, Counter())[UNREAD] += 1
             unread += 1
             triage[UNREAD] += 1
             continue
@@ -152,6 +190,7 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
         families[family] += 1
         outcome = str(decision.get("triage"))
         triage[outcome] += 1
+        by_duration.setdefault(bucket, Counter())[outcome] += 1
         if outcome != "pass":
             flagged[family] += 1
         release[str(decision.get("release"))] += 1
@@ -205,7 +244,25 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
         ran=_nested(ran),
         families=dict(families.most_common()),
         flagged_families=dict(flagged.most_common()),
+        durations={name: durations[name] for name in sorted(durations, key=_bucket_order)},
+        triage_by_duration={
+            name: dict(by_duration[name].most_common()) for name in sorted(by_duration, key=_bucket_order)
+        },
     )
+
+
+def _bucket_order(name: str) -> float:
+    """Sort duration buckets by their lower edge rather than alphabetically.
+
+    Args:
+        name: The bucket's name.
+
+    Returns:
+        Its lower edge, with the unknown bucket last.
+    """
+    if name == UNKNOWN_DURATION:
+        return float("inf")
+    return float(name.lstrip(">=").split("-")[0].rstrip("s"))
 
 
 def _table(title: str, counts: Mapping[str, int], total: int) -> list[str]:
@@ -280,6 +337,8 @@ def render_markdown(report: CorpusReport, source: Path | str) -> str:
     lines += _table("Discard ground", report.discard_ground, total)
     lines += _table("Declared family", report.families, total)
     lines += _table("Flagged, by declared family", report.flagged_families, total)
+    lines += _table("Duration", report.durations, total)
+    lines += _two_level("Triage by duration", report.triage_by_duration, total)
     lines += ["## Where it was routed", ""]
     lines += _table("File route state", report.route_state, total)
     lines += _two_level("Branch route", report.routes, total)
