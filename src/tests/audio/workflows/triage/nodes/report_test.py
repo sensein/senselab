@@ -2442,8 +2442,8 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
 class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
     """A span that was never attributed is not a span whose attribution failed."""
 
-    def _ppg_train(self, store: ProvStore) -> None:
-        """Mint the SPEECH proposal DDK writes for a syllable train read off the posteriorgram."""
+    def _decoded_task(self, store: ProvStore) -> None:
+        """Mint the SPEECH proposal DDK writes for a task extent read off the posteriorgram."""
         from senselab.audio.workflows.triage.nodes.branches import PROPOSERS, propose_spans
 
         parent = next(entity.id for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
@@ -2453,14 +2453,14 @@ class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
             store,
             activity,
             software_agent(store),
-            [mint("ppg_train", (1.0, 2.6), parent, production="syllable_train_from_ppg")],
+            [mint("task_extent", (1.0, 2.6), parent, production="syllable_task_from_decode")],
         )
 
     @pytest.fixture
     def with_train(self, store: ProvStore, tmp_path: Path) -> ProvStore:
-        """The seeded store plus one ``ppg_train`` span, which no diarizer ever looked at."""
+        """The seeded store plus one decoded ``task_extent``, which no diarizer ever looked at."""
         _seed_report_store(store, tmp_path, full=True)
-        self._ppg_train(store)
+        self._decoded_task(store)
         return store
 
     def test_the_lane_caption_names_the_span_rather_than_a_missing_speaker(
@@ -2470,7 +2470,7 @@ class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
         panels = _capture_panels(monkeypatch)
         report(with_train, tmp_path / "summary", _png(tmp_path))
         captions = [token["text"] for tokens in _lane_rows(panels[0], "speech spans").values() for token in tokens]
-        train = [caption for caption in captions if "syllable_train_from_ppg" in caption]
+        train = [caption for caption in captions if "syllable_task_from_decode" in caption]
         assert train, captions
         assert not any("unattributed" in caption for caption in captions), captions
 
@@ -2478,7 +2478,7 @@ class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
         """The JSON a consumer audits carries the same reading the lane draws."""
         payload = json.loads(report(with_train, tmp_path / "summary", _png(tmp_path))["json"].read_text())
         descriptions = {item["description"] for item in payload["evidence"]["branches"]["SPEECH"]}
-        assert "speech span: ppg_train/syllable_train_from_ppg" in descriptions
+        assert "speech span: task_extent/syllable_task_from_decode" in descriptions
         assert not any("unattributed" in description for description in descriptions), descriptions
 
     def test_a_diarized_span_still_captions_itself_with_its_speaker(
