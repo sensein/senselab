@@ -1,50 +1,34 @@
 """The REDACT node: every PII finding padded, merged, masked with the declared fill, and verified.
 
-REDACT is the last step of the SPEECH branch and runs only when SPEECH's PII scan found something;
-the runner gates on that, and this node refuses an incoherent store — findings with no scan
-measurement — rather than concluding over one. Every non-invalidated ``pii`` entity is redacted
-regardless of speaker. Extents are padded and merged by ``plan_redactions``; the margin is the
-``redaction.padding_ms`` config key and must be a non-negative whole number of milliseconds. What is
-written into an extent is ``redaction.fill``, which ships with no default, at ``redaction.bleep_hz``
-when it is a bleep.
+The last step of the SPEECH branch, run only where SPEECH found PII -- and the scan it plans from
+runs only where the participant said something the task did not ask for, SPEECH gating it on a
+lexical word outside the stimulus or a family that invites disclosure (``nodes/speech.py``, step 7).
+A store carrying findings but no scan measurement is refused rather than concluded over.
 
-**No recognizer runs here.** Verification is a re-scan of the redacted consensus text with the same
-detectors, judged complete by ``pii.required_detectors``: a surviving finding is a fail, an
-incomplete re-scan is a flag. A finding the planner placed and the verifier still sees is remediable
-exactly once — the verifier's words are fed back for a single re-planning pass, and what survives
-that is ``unremediable``. The verdict's ``audio_check`` is the constant ``"bounded"`` on every path:
-the re-scan establishes that the redacted text no longer carries the finding and nothing about the
-audio. See ``specs/20260817-triage-workflow-dag/redact.md``.
+Every non-invalidated ``pii`` entity is redacted regardless of speaker, except one the declared
+stimulus accounts for (:func:`_expected_exemptions`, recorded as an ``exempt``/``expected_speech``
+assertion). Extents are padded by ``redaction.padding_ms`` and merged by ``plan_redactions``, then
+filled with ``redaction.fill`` at ``redaction.bleep_hz`` when that is a bleep. A word carries its
+PII marking through a live ``assertion`` whose ``verb`` is ``"label"`` and ``label`` is ``"pii"``.
 
-An **optional LLM check** re-reads the redacted transcript, off unless ``redaction.llm_check.enabled``
-says otherwise. It iterates — a round that flags something masks its concerns and reviews again, to
-``redaction.llm_check.max_iterations`` — and every round's chain of thought is stored as its own
-``redaction_llm_review`` measurement, which is the point of the step rather than a by-product. It
-**annotates and never decides**: its summary is a ``redaction_llm_annotation`` measurement carrying
-the status, the iteration count, the flagged categories, the model and the commit it loaded, written
-on every path including the ones where it did not run, and this node's outcome is its detector path's
-alone. What an annotation of ``flagged`` or ``absent`` means is VERDICT's, under
-``verdict.llm_redaction_flags``. It is asked only where a release was in prospect — never over an
-outcome the detector path already withheld.
+No recognizer runs here: verification is a re-scan of the redacted consensus text with the same
+detectors, judged complete by ``pii.required_detectors``. A surviving finding is a fail, an
+incomplete re-scan is a flag, and a finding the verifier still sees is re-planned exactly once, what
+survives that being ``unremediable``; ``audio_check`` is the constant ``"bounded"`` on every path.
+An optional LLM check (``redaction.llm_check``) re-reads the redacted transcript for up to
+``max_iterations`` rounds, storing each round's chain of thought as a ``redaction_llm_review``
+measurement and its summary as a ``redaction_llm_annotation`` written on every path, which VERDICT
+reads under ``verdict.llm_redaction_flags``; it annotates and never decides.
 
-Three artifacts are released, not two: the masked audio, the flat redacted transcript, and the
-**redacted consensus stream** as ``consensus.json`` — the consensus structure PREPROCESS built, with
-each surviving word's extent, per-source timings, readings, variants and agreement share, and each
-planned extent folded into one placeholder record carrying its category, its padded bounds and the
-number of words it swallowed but no surface of any kind. One renderer produces both the records and
-the flat text, so the two cannot disagree about what was masked.
+A pass releases three artifacts under ``artifacts_dir``: the masked audio, the flat redacted
+transcript, and the redacted consensus stream as ``consensus.json``, whose records carry each
+surviving word's timings, readings, variants and agreement and fold each planned extent into one
+placeholder with its category, bounds and word count but no surface. One renderer produces both the
+records and the flat text. The masked audio is also a store stream, written under ``run_dir`` and
+registered as ``redacted`` on every path.
 
-The masked audio is a **stream in the store**, written under ``run_dir`` and registered as
-``redacted``, so a consumer resolves it by name the way it resolves ``plain``, ``enhanced`` and
-``residual``. It is registered on every path, pass or not: ``run_dir`` is the store side of the
-disjointness check, never the release side. The released file under ``artifacts_dir`` is written
-only on a pass, and is additional to the stream rather than a replacement for it.
-
-A word carries a PII marking through a live ``assertion`` entity whose ``verb`` is ``"label"``,
-whose ``label`` is ``"pii"``, and which is ``wasDerivedFrom`` the word — the store's shared shape for
-a label. Only a pass produces a released pair; a flag withholds exactly like a fail, and the
-verdict's ``artifacts_withheld`` records it. Artifacts are written into a directory disjoint from the
-run directory, and carry no store element id.
+See ``specs/20260817-triage-workflow-dag/redact.md`` and ``llm-check.md``, and
+``specs/20260919-pii-against-the-stimulus/design.md``.
 """
 
 from __future__ import annotations
@@ -84,19 +68,19 @@ _FILL_KEY = "redaction.fill"
 _BLEEP_HZ_KEY = "redaction.bleep_hz"
 _PADDING_KEY = "redaction.padding_ms"
 _REQUIRED_DETECTORS_KEY = "pii.required_detectors"
-_LABEL_VERB = "label"  # the store's assertion verb, a vocabulary term not a value
+_LABEL_VERB = "label"  # the store's assertion verb for a label
 _PII_LABEL = "pii"  # the marking SPEECH places on a word carrying a finding
-_RESERVED_CATEGORY_CHAR = "+"  # plan_redactions' merge separator; a string, not a threshold
+_RESERVED_CATEGORY_CHAR = "+"  # plan_redactions' merge separator
 _UNPLACED_PLACEHOLDER = "[UNPLACED]"  # a word the store places nowhere; a category-less placeholder
 _AUDIO_CHECK = "bounded"  # what a text re-scan can claim about the audio, on every path
 STREAM_NAME = "redacted"  # the store-held name the masked audio resolves under, beside plain/enhanced/residual
 CONSENSUS_ARTIFACT_SCHEMA = "senselab.triage.redacted_consensus"  # what the JSON artifact claims to be
 CONSENSUS_ARTIFACT_VERSION = 1  # bumped when a record's field set changes
 _TERMINATORS_KEY = "stimulus.sentence_terminators"
-_EXEMPT_VERB = "exempt"  # the store's assertion verb for a redaction deliberately not made
+_EXEMPT_VERB = "exempt"  # the store's assertion verb for a redaction not made
 _EXPECTED_LABEL = "expected_speech"  # what accounted for it: the stimulus the participant was asked to read
 _EXEMPTION_MEASUREMENT = "redaction_exemptions"
-_COVERAGE_TOLERANCE_S = 1e-9  # float slack on an equality, not a margin
+_COVERAGE_TOLERANCE_S = 1e-9  # float slack on an equality
 _LLM_SECTION = "redaction.llm_check"
 _LLM_REVIEW_MEASUREMENT = "redaction_llm_review"
 _LLM_PLACEHOLDER = "[LLM_{category}]"  # what a concern is masked with inside the loop, never in a release
@@ -123,15 +107,10 @@ class _Verification:
         survived: The categories found on the redacted text, sorted; never matched text.
         scan_ran: Whether a complete re-scan happened at all — an empty ``failures`` is not evidence
             that one did.
-        failed: Detectors the **verification** re-scan attempted and that raised. Names only; a
-            failure's message may quote the scanned input.
+        failed: Detectors the verification re-scan attempted and that raised. Names only.
         missing: Detectors ``pii.required_detectors`` names that the verification re-scan never
-            attempted. Kept apart from ``failed`` for the reason the planning scan keeps them apart:
-            "it broke" and "nobody ran it" are different findings, and the second is the silent one.
-            Both are reported in the verdict separately from the planning scan's own ``scan_failed``
-            and ``scan_missing``, because a store whose planning scan was complete and whose
-            verification was not is a different state from the reverse, and an operator reading one
-            pair of keys for both could not tell which half failed.
+            attempted. Reported in the verdict separately from the planning scan's own
+            ``scan_failed`` and ``scan_missing``.
     """
 
     verified: bool
@@ -142,7 +121,7 @@ class _Verification:
 
 
 def _padding_ms(config: TriageConfig) -> int:
-    """The redaction margin, in whole milliseconds, as a validity check rather than a tunable.
+    """The redaction margin, in whole milliseconds.
 
     Args:
         config: The triage configuration.
@@ -152,7 +131,7 @@ def _padding_ms(config: TriageConfig) -> int:
 
     Raises:
         ValueError: If ``redaction.padding_ms`` has no value, is not a number, is not finite, is not
-            integral, or is negative. A negative or fractional margin is refused rather than coerced.
+            integral, or is negative.
     """
     raw = config.require(_PADDING_KEY)
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
@@ -177,8 +156,7 @@ def _scan_evidence(scan: Entity, required: list[str]) -> tuple[list[str], list[s
 
     Returns:
         ``(scanned_by, failed, missing)`` — the detector names that ran, those that were attempted
-        and failed, and those required but never attempted, each sorted. Only names: a failure's
-        message may quote the scanned input.
+        and failed, and those required but never attempted, each sorted. Names only.
     """
     scanned_by = sorted(str(name) for name in scan.attributes.get("scanned_by") or [])
     failed = sorted(str(name) for name in scan.attributes.get("failed") or [])
@@ -199,7 +177,7 @@ def _findings(store: ProvStore) -> list[Entity]:
 
 
 def _extents_from_findings(findings: list[Entity]) -> list[RedactionExtent]:
-    """Every finding, regardless of speaker; the membership check that secures the error path.
+    """Every finding, regardless of speaker, as a redaction extent.
 
     Args:
         findings: The live ``pii`` entities.
@@ -226,19 +204,15 @@ def _extents_from_findings(findings: list[Entity]) -> list[RedactionExtent]:
 
 
 def _verify(transcript_text: str, required: list[str]) -> _Verification:
-    """Re-scan the redacted consensus text with the same detectors.
-
-    No recognizer runs. Re-transcribing would draw a second sample from the recognizers, which is a
-    different measurement of a different signal rather than a check on this one, and the claim about
-    the audio is bounded either way.
+    """Re-scan the redacted consensus text with the same detectors; no recognizer runs.
 
     Args:
         transcript_text: The redacted consensus transcript.
         required: The detector set ``pii.required_detectors`` names.
 
     Returns:
-        What the re-scan established. A finding that survives fails; a re-scan that skipped a
-        required detector did not run, which is not a clean result.
+        What the re-scan established. A re-scan that skipped a required detector counts as not
+        having run.
     """
     scan = scan_for_pii(transcript_text)
     scan = scan[0] if isinstance(scan, list) else scan
@@ -264,7 +238,7 @@ def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
 
 
 def _pii_marking_assertions(store: ProvStore) -> list[Entity]:
-    """Every live ``label``/``pii`` assertion, which is the whole of what the marking read consults.
+    """Every live ``label``/``pii`` assertion.
 
     Args:
         store: The provenance store.
@@ -286,10 +260,8 @@ def _pii_marked_words(store: ProvStore) -> dict[str, dict[str, str]]:
         store: The provenance store.
 
     Returns:
-        A mapping from word entity id to ``{category: assertion id}``. A word nothing marks is
-        absent rather than mapped to an empty mapping. The assertion id is kept so a span the
-        re-plan widened can be derived from the marking that caused it; where two assertions place
-        the same category on one word the earlier is retained, which is the store's write order.
+        A mapping from word entity id to ``{category: assertion id}``; a word nothing marks is
+        absent. Where two assertions place the same category on one word the earlier is retained.
     """
     marked: dict[str, dict[str, str]] = {}
     for assertion in _pii_marking_assertions(store):
@@ -312,8 +284,8 @@ def _matches_surviving(word: Entity, category: str, planned: list[RedactionExten
             the assertion that placed it.
 
     Returns:
-        True when the re-plan should widen to this word. A word a planned extent already covers is
-        excluded, so the re-plan widens what the first pass missed rather than re-planning it.
+        True when the re-plan should widen to this word; a word a planned extent already covers is
+        excluded.
     """
     if category not in marked or word.extent is None:
         return False
@@ -328,9 +300,8 @@ def _word_record(word: Entity) -> dict[str, Any]:
         word: A live ``word`` entity a planned extent does not reach.
 
     Returns:
-        The record. The store's own element id is not in it, and neither is the entity's raw
-        attribute mapping: only the fields named here are copied, so a field PREPROCESS adds later
-        cannot reach a released artifact without this function being edited.
+        The record. Only the fields named here are copied; the store's element id and the entity's
+        raw attribute mapping are not among them.
     """
     attributes = word.attributes
     hull = word_hull(word)
@@ -368,21 +339,17 @@ def _word_record(word: Entity) -> dict[str, Any]:
 def _render(words: list[Entity], planned: list[RedactionExtent]) -> tuple[list[dict[str, Any]], str, int]:
     """The redacted consensus stream, as records and as the flat text derived from them.
 
-    Words are released in stream order. A word overlapping a planned extent is replaced along with
-    its padded-in neighbours, matching what the audio lost; one ``redaction`` record is emitted at
-    the first overlapping position and later overlapping positions are folded into it. A word the
-    store places nowhere overlaps no extent, so it becomes an ``unplaced`` record rather than being
-    released verbatim. A record for a redacted or unplaced position carries **no** ``text``, no
-    ``readings`` and no ``variants``: those are per-recognizer surfaces of the very token the
-    redaction exists to withhold.
+    Words are released in stream order. Every word a planned extent overlaps folds into one
+    ``redaction`` record emitted at the first such position; a word the store places nowhere becomes
+    an ``unplaced`` record. Neither record carries ``text``, ``readings`` or ``variants``.
 
     Args:
         words: PREPROCESS's consensus words, in stream order.
         planned: The padded, merged extents.
 
     Returns:
-        ``(records, text, unplaced_n)``. ``text`` is the join of each record's placeholder or
-        surface, so the flat artifact and the structured one cannot disagree about what was masked.
+        ``(records, text, unplaced_n)``, ``text`` being the join of each record's placeholder or
+        surface.
     """
     records: list[dict[str, Any]] = []
     position: dict[int, int] = {}
@@ -435,9 +402,8 @@ class _Exemption:
         category: Its category.
         extent: Its extent, unpadded.
         word_ids: The consensus words it covers, in stream order.
-        expected_keys: The **stimulus's own** normalised tokens the covered run matched, taken from
-            the prompt rather than from the transcript, so a fault in the matcher cannot put
-            transcript text into the audit record.
+        expected_keys: The stimulus's own normalised tokens the covered run matched, taken from the
+            prompt and never from the transcript.
         prompt: Which ``expected_speech`` entry accounted for it.
         unit: Which structure unit of that entry.
         unit_text: That unit verbatim, as the prompt spelled it.
@@ -462,7 +428,7 @@ def _expected_units(hint: AudioHints | None, *, terminators: str) -> list[tuple[
 
     Returns:
         ``(prompt index, unit text, tokens)`` per unit. Empty when there is no hint or no
-        ``expected_speech``, which is what makes the no-hint path identical to the old behaviour.
+        ``expected_speech``.
     """
     if hint is None or not hint.expected_speech:
         return []
@@ -493,8 +459,7 @@ def _contiguous_run(haystack: Sequence[str], needle: Sequence[str]) -> int | Non
         needle: The covered words' normalised keys.
 
     Returns:
-        The offset of the first occurrence, or None. A run rather than a subsequence: two words the
-        prompt happens to contain in different sentences do not account for them said together.
+        The offset of the first occurrence, or None. A run, not a subsequence.
     """
     if not needle or len(needle) > len(haystack):
         return None
@@ -512,17 +477,10 @@ def _expected_exemptions(
 ) -> list[_Exemption]:
     """Which findings the declared stimulus accounts for.
 
-    A candidate is exempt only when **every** word its extent reaches carries a non-empty normalised
+    A candidate is exempt only when every word its extent reaches carries a non-empty normalised
     key, those words' own hulls span the whole of the extent, and their keys occur in order and
     contiguously inside one declared unit. A finding that reaches every consensus word is never
-    exempt: that is SPEECH's signature for a finding its locator could not place, and a
-    whole-transcript extent would be accounted for by a whole-passage prompt without anything having
-    been matched.
-
-    The span condition is what makes "every word it reaches" trustworthy. SPEECH builds a located
-    finding's extent as the hull of the words it covers, so the covered words' hulls reconstruct it
-    exactly — unless one was missed, and a missed word is one this function would be accounting for
-    without having looked at it. Any extent the identified words do not reach is therefore refused.
+    exempt.
 
     Args:
         findings: The live ``pii`` entities.
@@ -581,11 +539,9 @@ def _expected_survivors(
 ) -> list[str]:
     """The surviving categories that nothing but an exempt word can account for.
 
-    The verifier re-scans the released text, in which an exempt word stands verbatim, so it sees the
-    candidate again. A category is attributed to the exemption only when there is at least one
-    exempt word carrying it that no planned extent covers **and** no non-exempt word carrying it in
-    the same position. With no exemptions the first condition can never hold, so this returns
-    nothing and every survivor is a failure exactly as before.
+    A category is attributed to the exemption only when at least one exempt word carries it that no
+    planned extent covers, and no non-exempt word carries it in the same position. With no
+    exemptions this returns nothing.
 
     Args:
         survived: What the re-scan still saw.
@@ -621,8 +577,7 @@ class _LlmCheck:
             read the transcript and flagged nothing, ``flagged`` when it flagged something.
         iterations: How many reviews ran.
         flagged: The categories the reviewer named, sorted. Categories only; the substrings and the
-            reasoning are in the per-iteration measurements beside it, so nothing VERDICT reads to
-            decide on carries transcript text.
+            reasoning are in the per-iteration measurements beside it.
         model_id: The repo asked, or the empty string when nothing was.
         revision: The commit the reviewer loaded, or None.
         failure: Why it did not run, when it did not.
@@ -639,7 +594,7 @@ class _LlmCheck:
         """The mapping the annotation measurement carries.
 
         Returns:
-            The record, flat, so a report and VERDICT both read it without knowing this class.
+            The record, flat.
         """
         return {
             "status": self.status,
@@ -661,8 +616,7 @@ def _llm_settings(config: TriageConfig) -> dict[str, Any]:
         The settings.
 
     Raises:
-        ValueError: If a key is unmeasured. Reading them together means a run that turns the step on
-            with half a configuration is refused before any model is contacted.
+        ValueError: If a key is unmeasured. They are read together, before any model is contacted.
     """
     names = ("enabled", "model_id", "ref", "max_iterations", "max_new_tokens", "timeout_s")
     return {name: config.require(f"{_LLM_SECTION}.{name}") for name in names}
@@ -677,7 +631,7 @@ def _mask_concerns(text: str, findings: Any) -> str:  # noqa: ANN401 — the bac
 
     Returns:
         The text the next round reviews. A substring the reviewer named but the text does not
-        contain is left alone: nothing is guessed at on the model's behalf.
+        contain is left alone.
     """
     masked = text
     for finding in findings:
@@ -689,19 +643,17 @@ def _mask_concerns(text: str, findings: Any) -> str:  # noqa: ANN401 — the bac
 def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmCheck, list[dict[str, Any]]]:
     """Read the redacted transcript back with the reviewer, bounded, capturing every chain of thought.
 
-    The loop is here rather than in the model: one review per call, and a round that flags something
-    masks it and reviews again, so the reviewer sees the effect of its own concerns. The masking is
-    local to the loop — nothing it produces is released — and whether **any** round flagged is what
-    decides the check, not whether the last one did.
+    One review per call: a round that flags something masks it and reviews again, the masking local
+    to the loop, and whether any round flagged is what decides the check.
 
     Args:
         transcript_text: The redacted transcript, as it would be released.
         settings: :func:`_llm_settings`' mapping.
 
     Returns:
-        ``(check, reviews)`` — the summary and one payload per round, in order. A round that could
-        not run is recorded as such; the first round failing is ``absent``, a later one leaves the
-        flag that already stands and records the failure beside it.
+        ``(check, reviews)`` — the summary and one payload per round, in order. The first round
+        failing is ``absent``; a later one leaves the flag that already stands and records the
+        failure beside it.
     """
     reviews: list[dict[str, Any]] = []
     current = transcript_text
@@ -742,7 +694,7 @@ def _write_artifacts(
     records: list[dict[str, Any]],
     artifacts_dir: Path,
 ) -> dict[str, Path]:
-    """Write the releasable set. Takes no store and no element id, so it cannot embed one.
+    """Write the releasable set; takes no store and no element id.
 
     Args:
         redacted: The verified redacted audio.
@@ -842,8 +794,7 @@ def redact(
         config: The triage configuration.
         hint: What the recording was declared to contain. When it carries ``expected_speech``, a
             PII candidate the declared stimulus accounts for is exempted from redaction and
-            recorded as such. With no hint or no ``expected_speech`` nothing is exempted and
-            the node behaves exactly as it did before.
+            recorded as such; with no hint, nothing is exempted.
         run_dir: The run directory sidecar paths are relative to.
         artifacts_dir: The release directory; must not contain or be contained by ``run_dir``.
 
@@ -855,9 +806,8 @@ def redact(
         ValueError: If ``redaction.fill`` has no value, if ``redaction.padding_ms`` has no usable
             value (see :func:`_padding_ms`), if ``artifacts_dir`` and ``run_dir`` contain one
             another, if any ``redaction.llm_check`` key is unmeasured, if the store carries no PII
-            scan measurement (N15) — an incoherent store, as
-            distinct from a complete store with nothing to scan, which concludes — or if a finding's
-            category is unusable (see :func:`_extents_from_findings`).
+            scan measurement (N15), or if a finding's category is unusable (see
+            :func:`_extents_from_findings`).
         LookupError: If no live stream carries ``source``.
     """
     fill = str(config.require(_FILL_KEY))

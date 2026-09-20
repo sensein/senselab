@@ -1,25 +1,15 @@
 """The family taxonomy ruleset: which branches a recording's own content routes it to.
 
-Every branch's gates are evaluated on every recording. The task instruction is read through the
-family sets in :mod:`~senselab.audio.workflows.triage.routing_analysis.families` into
-:attr:`RouteEvaluation.declared`, which is both the reference standard :attr:`RouteEvaluation.routed`
-is scored against and — in the graph, where ROUTING turns this evaluation into an execution set —
-the second, additive route source. It is never a filter on which gates run: ``routed`` here is the
-content reading alone, and the two stay separable in every consumer.
+Every branch's gates are evaluated on every recording, whatever the task declared. Each gate is one
+feature path, one comparison and one threshold, all read from ``taxonomy.ruleset`` in
+``data/config/default.yaml``: ``branch_gates`` decides entry, ``branch_flags`` annotates a branch
+already entered, and an emptiness bypass is consulted only where no gate fired.
+:attr:`RouteEvaluation.declared` is the family reading of the task instruction — the reference
+standard ``routed`` is scored against offline, and an additive route source in the graph — and is
+never a filter on which gates run.
 
-Every gate is one feature path, one comparison and one threshold, all of them read from
-``taxonomy.ruleset`` in ``data/config/default.yaml``. A gate either routes a branch or flags it:
-``branch_gates`` decides entry, ``branch_flags`` annotates a branch already entered. Behind both,
-one bypass asks whether the recording carried anything at all, and it is consulted only where no
-gate fired. The operating points, which of them are provisional, and the open questions are in
+Operating points, their derivations and the corpus measurements are in
 ``specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md``.
-
-A branch's reference family set may leave out families whose content is exactly what the branch is
-for — ``lexical_speech`` excludes the syllable-repetition families by construction — so
-``excluded_by_construction`` names them per branch and :func:`score_branches` reports the 2x2 both
-with them in the negatives and with them held out of the population. :func:`branch_recall_curves`
-scores every routing gate the way a router is scored, by recall at a fixed over-routing budget;
-``specs/20260911-recall-first-thresholds/design.md`` says why that criterion and not Youden's J.
 """
 
 from __future__ import annotations
@@ -46,7 +36,7 @@ RULESET_PATH = "taxonomy.ruleset"
 """Where the ruleset's data lives in the triage configuration."""
 
 TRANSCRIPT_REPEAT = "transcript_repeat"
-"""The feature source this module reads itself, because no extracted feature carries it."""
+"""The feature source this module reads itself, carried by no extracted feature."""
 
 BRACKETED_SET = "bracketed_set"
 """The feature source whose arguments are a named bracket-token set resolved out of configuration."""
@@ -77,10 +67,8 @@ class GateOutcome(Enum):
 class RouteState(Enum):
     """What the ruleset made of one recording. Exactly one member holds for every evaluation.
 
-    Only :attr:`UNEXPLAINED` is a charge against the ruleset: it is content no gate could account
-    for. :attr:`EMPTY` is a charge against the recording, :attr:`UNREADABLE` is a charge against the
-    run — nothing routed and the emptiness bypass could not be read, so whether the recording
-    carried anything is unknown rather than answered — and :attr:`ROUTED` is none of the three.
+    :attr:`UNEXPLAINED` is content no gate accounted for, :attr:`EMPTY` is a recording that carried
+    nothing, and :attr:`UNREADABLE` is nothing routed with the emptiness bypass itself unreadable.
     """
 
     ROUTED = "routed"
@@ -90,7 +78,7 @@ class RouteState(Enum):
 
 
 ROUTE_STATES: tuple[str, ...] = tuple(state.value for state in RouteState)
-"""Every state's name, in declaration order, so a tally can carry all four whether or not seen."""
+"""Every state's name, in declaration order."""
 
 
 @dataclass(frozen=True)
@@ -132,17 +120,14 @@ class Ruleset:
     Attributes:
         gates: Every gate, by name.
         branch_gates: Branch to its gates, any one of which routes it on any recording.
-        branch_flags: Branch to the gates that annotate it. A flag gate is evaluated and reported
-            and never routes: it is read after a branch is entered, not to enter it.
+        branch_flags: Branch to the gates that annotate it once entered. A flag gate is evaluated
+            and reported and never routes.
         reference_family_set: Branch to the :data:`FAMILY_SETS` entry it is scored against, which
-            is also the mapping a declared task routes through in the graph. No gate is skipped
-            because of it and no route state is rewritten by it.
-        excluded_by_construction: Branch to the :data:`FAMILY_SETS` entry its reference set leaves
-            out although the content is what the branch is for. Those families are neither
-            positives nor negatives: scoring holds them out of the population rather than charging
-            the branch for routing them. A branch with nothing to hold out is absent from the
-            mapping.
-        emptiness: The bypass evaluated after every branch gate, and only where none fired.
+            is also the mapping a declared task routes through in the graph.
+        excluded_by_construction: Branch to the :data:`FAMILY_SETS` entry held out of its scored
+            population, counting as neither positives nor negatives. A branch with nothing to hold
+            out is absent from the mapping.
+        emptiness: The bypass evaluated only where no branch gate fired.
     """
 
     gates: Mapping[str, Gate]
@@ -189,22 +174,16 @@ class RouteEvaluation:
         stem: The recording's BIDS stem.
         family: The task family its stem collapses into.
         routed: The branches a gate fired for, from content alone, in branch order.
-        declared: The branches the family is a reference positive for. The comparison standard for
-            the offline analysis, and the additive route source ROUTING reads in the graph.
+        declared: The branches the family is a reference positive for.
         agreed: ``routed`` and ``declared`` both.
         missed: Declared and not routed.
         extra: Routed and not declared.
-        unavailable: Per branch, each gate whose feature could not be read and the reason it could
-            not, whether or not another gate routed the branch anyway. Only branches with such a
-            gate are keyed. The reason is the node's own recorded absence for the block that would
-            have written the evidence, so an unread gate states why rather than only that it was
-            unread.
-        flags: Per branch, the flag gates that fired. A flag annotates a branch and never routes
-            it, so it is absent from every other field here. Only branches with a fired flag are
-            keyed.
+        unavailable: Per branch, each gate whose feature could not be read and the node's own
+            recorded absence for the block that would have written it. Only branches with such a
+            gate are keyed.
+        flags: Per branch, the flag gates that fired. Only branches with a fired flag are keyed.
         state: Which of the four outcomes this recording had.
-        gate_outcomes: Every gate's outcome, by gate name. Every gate is evaluated on every
-            recording, so this is never empty for a ruleset that declares one.
+        gate_outcomes: Every gate's outcome, by gate name.
     """
 
     stem: str
@@ -234,8 +213,8 @@ class FamilyTally:
         extra: Per branch, how many were routed and not declared.
         unavailable: Per branch, how many carried an unreadable gate for it.
         flagged: Per branch, how many carried a fired flag gate for it.
-        states: How many landed in each :class:`RouteState`, keyed by its value. All four keys are
-            present whether or not the family carried one, and they sum to ``recordings``.
+        states: How many landed in each :class:`RouteState`, keyed by its value. All four keys
+            are always present and sum to ``recordings``.
     """
 
     family: str
@@ -259,8 +238,7 @@ def max_token_repeat(transcript: str) -> int:
 
     Returns:
         The largest per-token count, or 0 when the transcript holds no token. Tokens are lowercased
-        and split on whitespace and punctuation alike, so a token the cap cut in half is a token of
-        its own rather than another instance of the one it came from.
+        and split on whitespace and punctuation alike.
     """
     tokens = _PUNCTUATION.sub(" ", transcript.lower()).split()
     return max(Counter(tokens).values(), default=0)
@@ -371,7 +349,7 @@ def evaluate_emptiness(features: RecordingFeatures, emptiness: Emptiness) -> Gat
     Returns:
         ``FIRED`` when every named stream's highest tracked-label score is under the floor,
         ``SILENT`` when at least one is at or over it, and ``UNAVAILABLE`` when a named stream's
-        summary is not in the store at all, which is not a stream that scored zero.
+        summary is not in the store at all.
     """
     for stream in emptiness.peak_streams:
         name, _, classifier = stream.partition("|")
@@ -405,15 +383,14 @@ def gate_value(features: RecordingFeatures, gate: Gate) -> float | None:
 
 
 def gate_outcome_of(value: float | None, gate: Gate) -> GateOutcome:
-    """Which outcome one already-read number is, so a caller needing both reads the gate once.
+    """Which outcome one already-read number is.
 
     Args:
         value: What :func:`gate_value` read, or None when the evidence is not in the store.
         gate: The gate.
 
     Returns:
-        The outcome. ``UNAVAILABLE`` is not a negative: the measurement the gate needs was never
-        written.
+        The outcome; ``UNAVAILABLE`` when the measurement the gate needs was never written.
     """
     if value is None:
         return GateOutcome.UNAVAILABLE
@@ -437,8 +414,7 @@ def unavailable_reason(features: RecordingFeatures, gate: Gate) -> str:
 
     Returns:
         ``"<block>: <reason>"`` for every block of the gate's evidence a node recorded an absence
-        for; otherwise a statement that no absence was recorded for the blocks it needs, which is
-        itself a fact about the store rather than an invented value.
+        for; otherwise a statement that no absence was recorded for the blocks it needs.
     """
     blocks = evidence_blocks(gate.feature)
     if not blocks:
@@ -467,9 +443,8 @@ def critical_blocks(ruleset: Ruleset) -> tuple[str, ...]:
         ruleset: The loaded ruleset.
 
     Returns:
-        Each block every gate of at least one gated branch reads, once, in sorted order. Derived
-        from the configured ``branch_gates`` and their readers, so a campaign shipping other gates
-        gets other blocks without a code change.
+        Each block every gate of at least one gated branch reads, once, in sorted order, derived
+        from the configured ``branch_gates`` and their readers.
     """
     blocks: set[str] = set()
     for names in ruleset.branch_gates.values():
@@ -488,8 +463,7 @@ def unreadable_branches(evaluation: RouteEvaluation, ruleset: Ruleset) -> tuple[
 
     Returns:
         The branches, in :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES` order. A
-        branch naming no gate is never one: it was never asked. A branch with one readable gate is
-        never one either, however that gate read, because a silent gate is an opinion.
+        branch naming no gate, and a branch with any readable gate, are never included.
     """
     return tuple(
         branch
@@ -502,13 +476,8 @@ def unreadable_branches(evaluation: RouteEvaluation, ruleset: Ruleset) -> tuple[
 def evaluate_routes(features: RecordingFeatures, ruleset: Ruleset) -> RouteEvaluation:
     """Route one recording from its content, then compare that against what its family declares.
 
-    Every branch's gates are evaluated, whatever the task asked for, and every branch's flag gates
-    are evaluated beside them without contributing to ``routed``. Emptiness is a bypass rather than
-    a precondition: it is consulted only where no gate fired, so a gate firing on a recording the
-    emptiness rule would have called empty routes it normally. That disagreement is a reading of the
-    emptiness rule, not something the evaluation suppresses. A bypass that could not be read at all
-    is :attr:`RouteState.UNREADABLE`, never :attr:`RouteState.UNEXPLAINED`: the ruleset is not
-    charged with content it was never shown.
+    Every branch's gates and flag gates are evaluated whatever the task asked for, flags without
+    contributing to ``routed``; emptiness is consulted only where no gate fired.
 
     Args:
         features: The recording's extracted evidence.
@@ -644,10 +613,8 @@ class BranchScore:
 def score_branches(evaluations: Iterable[RouteEvaluation], ruleset: Ruleset) -> dict[str, BranchScore]:
     """Score content-only routing against the reference family sets, one branch at a time.
 
-    Each branch gets two 2x2 tables over the same evaluations. The first counts every recording.
-    The second holds out the branch's construction exclusions — families the reference set leaves
-    out although their content is what the branch is for — because a recording routed there is not
-    an error, and counting it as one charges the branch for behaving correctly.
+    Each branch gets two 2x2 tables over the same evaluations: the first over every recording, the
+    second with the branch's construction exclusions held out of the population.
 
     Args:
         evaluations: The evaluations, in any order.
@@ -736,8 +703,7 @@ def gate_recall(
 
     Returns:
         The report. A recording whose evidence the gate cannot read counts as a non-firing, both at
-        the configured point and along the curve: a router that cannot read a recording does not
-        route it.
+        the configured point and along the curve.
     """
     gate = ruleset.gates[gate_name]
     positives = FAMILY_SETS[ruleset.reference_family_set[branch]]
@@ -785,8 +751,7 @@ def branch_recall_curves(
         budgets: The false-positive rates over the negatives that each point may not exceed.
 
     Returns:
-        One :class:`GateRecall` per gate in ``branch_gates``. Flag gates route nothing and are not
-        reported here.
+        One :class:`GateRecall` per gate in ``branch_gates``; flag gates are not reported here.
     """
     return [
         gate_recall(records, ruleset, branch, name, budgets=budgets)

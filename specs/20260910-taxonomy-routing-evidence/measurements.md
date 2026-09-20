@@ -422,3 +422,21 @@ export LD_LIBRARY_PATH="$(readlink -f ~/orcd/scratch)/miniforge/lib:${LD_LIBRARY
 `sweeps_by_family.json` (2.0 MB), `label_prevalence.json` (0.5 MB), `disagreements.json` (9.9 MB,
 every case with its transcript and evidence), `summary.md` and the 573 MB `features/features.jsonl`
 — stays at `/orcd/scratch/bcs/002/satra/routing_scratch/final_out/`.
+
+## Moved from `routing_analysis/report.py` (2026-09-20)
+
+`BASELINE_RULES` in `report.py` is the four-rule set this analysis was asked to improve on:
+
+| kind | detector | threshold |
+| --- | --- | --- |
+| speech | `speech.words_lexical` | 2.0 |
+| airway | `airway.residual_energy_fraction` | 0.1 |
+| airway | `airway.yamnet_peak.plain` | 0.3 |
+| voice | `voice.yamnet_singing_union.plain` | 0.2 |
+
+Those four thresholds are carried from the brief being answered; none is a fitted floor and nothing
+in `report.py` proposes one. The set leaves **4.9%** of the corpus routed to no branch at all —
+the fall-through `bucket_coverage` counts and `bucket_augmentation` measures each candidate
+detector against. The rules and that figure predate the family-taxonomy ruleset; the shipped gates
+and their operating points are in
+[`../20260817-triage-workflow-dag/family-taxonomy-ruleset.md`](../20260817-triage-workflow-dag/family-taxonomy-ruleset.md).

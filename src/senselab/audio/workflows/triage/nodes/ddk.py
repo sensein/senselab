@@ -1,14 +1,14 @@
 """The syllable-train instrument: its rate, its regularity, and the ten tasks that ask for one.
 
-Not a branch. :func:`align_speech` serves the ten ``SYLLABLE_REPETITION`` families through
-:func:`align_ddk`, which evaluates one of them against what its instruction asked for, and every
-measurement below is a SPEECH measurement taken by this module's instruments.
+An instrument, not a branch: DDK was dissolved into SPEECH, so ``vocabulary.BRANCHES`` is
+``("AIRWAY", "SPEECH", "VOICE")`` and SPEECH's ``align_speech`` serves the ten
+``SYLLABLE_REPETITION`` families through :func:`align_ddk`. Two instruments read the train -- the
+energy envelope's modulation peak, and a probabilistic cyclic decode of the declared phoneme
+template over a phonetic posteriorgram -- and every measurement below is a SPEECH measurement.
 
-The design is ``specs/20260817-triage-workflow-dag/branch-ddk.md`` (D1-D6); the ported bodies are
-``expected-patterns.md``; what porting decided is ``branch-ddk-implementation.md``; why the branch
-became this module is ``ddk-dissolved-into-speech.md``. The posteriorgram instrument is a cyclic
-decode of the token's phoneme sequence and its design, its parameters and the owner's decisions on
-it are ``ddk-template-decode.md``.
+See ``specs/20260817-triage-workflow-dag/branch-ddk.md`` (D1-D6), ``expected-patterns.md``,
+``branch-ddk-implementation.md``, ``ddk-dissolved-into-speech.md``, ``ddk-template-decode.md`` and
+``ddk-envelope-mints-no-extent.md``.
 """
 
 from __future__ import annotations
@@ -57,38 +57,29 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.utils.prov_store import Entity, ProvStore
 
 RATE = "ddk_syllable_rate_from_envelope_modulation_hz"
-"""The envelope modulation channel's rate, named for the instrument that took it.
-
-It reads periodicity without segmenting anything, which is why it survived the peak walk it used to
-share a carrier with."""
+"""The envelope modulation channel's rate, named for the instrument that took it."""
 
 ENVELOPE = "energy_envelope"
 PPG = "ppg_posteriorgram"
 
 PPG_RATE = "ddk_syllable_rate_from_ppg_decode_hz"
-"""The second rate measurement, named for the instrument that took it. Not a substitute for
-:data:`RATE`: the two read different signals -- phonetic identity and amplitude -- and are reported
-side by side."""
+"""The decode's rate, named for the instrument that took it. It reads phonetic identity where
+:data:`RATE` reads amplitude, and the two are reported side by side."""
 
 PPG_REPETITIONS = "ddk_repetition_count_from_ppg_decode"
-"""How many repetitions of the declared template the decode completed.
-
-Zero is a reading and not an absence: the value is 0 and the per-position mass sits beside it."""
+"""How many repetitions of the declared template the decode completed; zero is a value, not an
+absence."""
 
 PPG_MASS = "ddk_position_realised_mass"
-"""How much of the posterior the expected class held where the decode placed each position.
-
-The primary sequence-realisation measurement. Defined at every position the decode reached, it
-degrades continuously, and it is honestly ambiguous between produced differently and read poorly."""
+"""How much of the posterior the expected class held where the decode placed each position, one
+value per position the decode reached."""
 
 PPG_DISPERSION = "ddk_ppg_period_dispersion"
 
 INSTRUMENT_READING = "ddk_cv_instrument_reading"
-"""The posteriorgram instrument's own reading of what was produced over the extent it covers.
-
-Its value is the per-position realised mass of each completed repetition. Written beside the
-consensus transcript, never in place of it; ``ddk-instrument-over-asr.md`` holds why the recogniser
-text is neither replaced nor withheld."""
+"""The posteriorgram instrument's own reading over the extent it covers: the per-position realised
+mass of each completed repetition, written beside the consensus transcript and never in place of it.
+See ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md``."""
 
 TRANSCRIPT_CLAIM = "lexical_transcript"
 """What a contradicted consensus word claims, and what the contest is against."""
@@ -102,35 +93,30 @@ CV_AUTHORITY = "cv_instrument"
 SYLLABLES_PER_S = "syllables_per_s"
 CYCLES_PER_S = "cycles_per_s"
 CYCLES_OR_SYLLABLES_PER_S = "cycles_or_syllables_per_s"
-"""A sequential train modulates at the cycle rate as well as the syllable rate; the envelope peak is
-one of the two and the harmonic-equality tolerance that would separate them is unmeasured, so the
-unit is carried as ambiguous. The decode's own two rates travel beside it, so which one the peak
-matched is checkable per recording."""
+"""The unit of an envelope peak that may be the cycle rate or the syllable rate; the decode's own two
+rates travel beside it."""
 
 TASK_EXTENT = "task_extent"
 """The role that says where the declared task was performed. Exactly one may survive a recording."""
 
 TASK_FROM_DECODE = "syllable_task_from_decode"
-"""The extent is the decoded repetition span: first repetition's start to last repetition's end.
-
-The only production a ``task_extent`` on this family carries. The envelope mints none."""
+"""The extent is the decoded repetition span, first repetition's start to last repetition's end; the
+only production a ``task_extent`` on this family carries."""
 
 NO_REPETITIONS = "the decode completed no repetition of the declared template"
 NO_ENVELOPE = "the energy envelope is absent; the syllable train's only rate instrument could not be read"
 NO_PPG = "the phonetic posteriorgram is absent; the CV instrument could not be read"
 
 
-# --------------------------------------------------------------------- what the two modes read
+# ---------------------------------------------------------------- what the two instruments read
 
 
 @dataclass(frozen=True)
 class DdkReads:
-    """The stored derivatives the syllable body measures over, read once by SPEECH.
+    """The stored derivatives the syllable body measures over, loaded by SPEECH.
 
-    The expectation bodies carry ``(store, params)`` and no run directory, and every sidecar path
-    in the store is relative to one, so the loaders cannot run inside a body. They run in
-    :func:`~senselab.audio.workflows.triage.nodes.speech.speech`, which has the run directory, and
-    their results arrive here.
+    The bodies carry no run directory, so the loaders run in
+    :func:`~senselab.audio.workflows.triage.nodes.speech.speech` and their results arrive here.
 
     Attributes:
         envelope: The energy envelope and its global floor, or None when the derivative is absent.
@@ -146,7 +132,7 @@ class DdkReads:
 
 
 def read_ddk(store: ProvStore, run_dir: Path, source: str) -> DdkReads:
-    """Load every derivative the two modes measure over, each independently absent.
+    """Load every derivative the two instruments measure over, each independently absent.
 
     Args:
         store: The provenance store.
@@ -154,8 +140,7 @@ def read_ddk(store: ProvStore, run_dir: Path, source: str) -> DdkReads:
         source: The stream the derivatives were taken over.
 
     Returns:
-        The reads. A derivative that never reached the store, or whose sidecar is gone, is None
-        rather than an error: an absent instrument is an absence, never a negative reading.
+        The reads; a derivative absent from the store, or whose sidecar is gone, is None.
     """
     del source
     envelope = find_measurement(store, ENVELOPE)
@@ -200,9 +185,7 @@ def _evidence(*ids: str | None) -> tuple[str, ...]:
 def ddk_carrier(store: ProvStore, params: BranchParams, envelope: EnvelopeTrack) -> tuple[Entity | None, float | None]:
     """D1. The longest amplitude span that holds a readable repetition rate, and that rate.
 
-    Envelope-first: the carrier is proposed from amplitude and only then qualified by modulation, so
-    a train whose repetition is irregular is still a train reported with weak structure rather than
-    an absence of data.
+    The carrier is proposed from amplitude and only then qualified by modulation.
 
     Args:
         store: The provenance store.
@@ -234,8 +217,8 @@ def dispersion(intervals: Sequence[float]) -> float | None:
         intervals: The inter-repetition periods.
 
     Returns:
-        The sample standard deviation over the mean, or None when the sequence is shorter than the
-        two values the sample deviation is defined over, or its mean is not positive.
+        The sample standard deviation over the mean, or None on fewer than two intervals or a
+        non-positive mean.
     """
     values = np.asarray(intervals, dtype=float)
     if values.size < 2:
@@ -253,8 +236,7 @@ def trend(intervals: Sequence[float]) -> float | None:
         intervals: The inter-repetition periods.
 
     Returns:
-        The least-squares slope, or None when the sequence is shorter than the two points a slope is
-        defined over.
+        The least-squares slope, or None on fewer than two intervals.
     """
     values = np.asarray(intervals, dtype=float)
     if values.size < 2:
@@ -326,8 +308,7 @@ class Decode:
         score_per_frame: The path's total log-likelihood over the frame count.
         per_repetition_mass: The per-position realised mass of each completed repetition, in time
             order, one inner tuple per repetition.
-        vowel_classes: Which of the class names are vowel classes, so a syllable can be counted
-            without the decode reaching back into the configuration it was built from.
+        vowel_classes: Which of the class names are vowel classes.
         readable: Whether the decode could run at all; False when a class vocabulary is unmeasured.
     """
 
@@ -351,10 +332,9 @@ class Decode:
 
     @property
     def extent(self) -> tuple[float, float] | None:
-        """The first completed repetition's start to the last one's end, in seconds.
+        """The first completed repetition's start to the last one's end, filler frames included.
 
-        A boundary and not a mask: every filler frame between the first and last repetition lies
-        inside it. None when no repetition completed.
+        None when no repetition completed.
         """
         if not self.repetitions:
             return None
@@ -480,8 +460,7 @@ def phoneme_classes(*mappings: dict[str, tuple[str, ...]]) -> dict[str, str]:
         *mappings: ``branch.phoneme_place_classes`` and ``branch.phoneme_vowel_classes``.
 
     Returns:
-        Each phoneme mapped to its class. A phoneme two classes both name resolves to the first in
-        declaration order, mappings in the order given.
+        Each phoneme mapped to its class; a phoneme two classes name takes the first declared.
     """
     lookup: dict[str, str] = {}
     for mapping in mappings:
@@ -499,8 +478,7 @@ def min_phone_frames(seconds_per_frame: float, burst_window_ms: float) -> int:
         burst_window_ms: ``branch.burst_window_ms``.
 
     Returns:
-        How many frames the burst window spans, at least one. Derived at read time from the stored
-        frame period, so it is not a configuration point of its own.
+        How many frames the burst window spans, at least one.
     """
     if seconds_per_frame <= 0.0:
         return 1
@@ -571,8 +549,7 @@ def viterbi(emissions: np.ndarray, positions: int, chain: int) -> np.ndarray:
         chain: How many sub-states one position is.
 
     Returns:
-        The state index per frame. The path may start and end in any state, so a recording that
-        begins mid-performance is decodable and a trailing partial repetition is simply not one.
+        The state index per frame. The path may start and end in any state.
     """
     table, valid = arcs(positions, chain)
     total, states = emissions.shape
@@ -600,8 +577,7 @@ def visits(path: np.ndarray, positions: int, chain: int) -> list[Visit]:
         chain: How many sub-states one position is.
 
     Returns:
-        One :class:`Visit` per stay. A frame in a filler state closes the stay it follows and opens
-        none of its own.
+        One :class:`Visit` per stay; a filler frame closes the stay it follows and opens none.
     """
     found: list[Visit] = []
     for frame, state in enumerate(int(value) for value in path):
@@ -623,8 +599,7 @@ def repetitions_of(found: Sequence[Visit], positions: int) -> list[tuple[Visit, 
         positions: How many template positions one repetition holds.
 
     Returns:
-        One tuple of visits per repetition that ran position 0 through position ``N-1`` in order. A
-        leading partial repetition and a trailing one are each simply not completed.
+        One tuple of visits per repetition that ran position 0 through ``N-1`` in order.
     """
     complete: list[tuple[Visit, ...]] = []
     open_run: list[Visit] = []
@@ -650,9 +625,8 @@ def decode_template(ppg: Posteriorgram | None, params: BranchParams, template: S
         template: The declared phoneme sequence, or None when no row declares one.
 
     Returns:
-        The decode, or None when the derivative is absent, which is an absent instrument and not a
-        negative reading. :data:`UNREADABLE` when a class vocabulary is unmeasured, which
-        ``params.missing`` already names. :data:`NO_DECODE` when no template was declared.
+        The decode; None when the posteriorgram is absent, :data:`UNREADABLE` when a class
+        vocabulary is unmeasured, :data:`NO_DECODE` when no template was declared.
     """
     if ppg is None:
         return None
@@ -717,9 +691,8 @@ def contradicted_words(store: ProvStore, extent: tuple[float, float]) -> list[En
         extent: The extent the instrument covers.
 
     Returns:
-        Every live lexical consensus word whose hull shares any interval with it. The hull rather
-        than the fitted extent, because it is the read that misses no word; bracketed tokens are
-        not a claim that a word was said and are left alone.
+        Every live lexical consensus word whose hull shares any interval with it; bracketed tokens
+        are left alone.
     """
     return [word for word in lexical_words(store) if overlaps(word_hull(word), extent)]
 
@@ -727,9 +700,8 @@ def contradicted_words(store: ProvStore, extent: tuple[float, float]) -> list[En
 def instrument_authority(store: ProvStore, decode: Decode, evidence: Sequence[str]) -> list[Finding]:
     """The decode's reading recorded as authoritative, and each word it contradicts.
 
-    Additive only: no word is invalidated, no transcript is rewritten, and no text is copied into
-    a finding. ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md`` holds why, and
-    which consumers this reaches.
+    Additive only: no word is invalidated, no transcript is rewritten and no text is copied into a
+    finding. See ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md``.
 
     Args:
         store: The provenance store, for the consensus words.
@@ -785,8 +757,7 @@ def decode_evidence(
     """Everything the posteriorgram instrument has to say about one recording.
 
     The decoded repetition count and the declared count are written beside each other and nothing
-    folds them: no conformance term reads the pair, no score and no gate. ``ddk-template-decode.md``
-    holds the owner's ruling that counts are heuristics and not targets.
+    folds them: no conformance term, no score and no gate reads the pair.
 
     Args:
         store: The provenance store, for the acquisition covariates the rate is read against.
@@ -796,9 +767,8 @@ def decode_evidence(
         declared_event_count: The instruction's own syllable count, or None when it declares none.
 
     Returns:
-        The findings. An absent posteriorgram yields one measurement that has no value; a decode
-        that could not run yields none at all, because ``params.missing`` is where that is already
-        said.
+        The findings; an absent posteriorgram yields one measurement with no value, and a decode
+        that could not run yields none.
     """
     if decode is None:
         return [_absent(PPG, PPG_RATE)]
@@ -912,18 +882,16 @@ def _with_decode(done: Done, decode: Decode | None) -> Done:
         decode: What the decode read, or None when the posteriorgram is absent or unreadable.
 
     Returns:
-        The conformance. An absent or unreadable instrument changes nothing. A repetition found
-        where the instruction asked for one is conformance whichever instrument found it, so either
-        suffices. A readable instrument that completed no repetition, where the other found no
-        carrier either, is a task non-conformance rather than an unanswered question. A collapsed
-        sequence, a weak position and fewer repetitions than declared are none of them ``false``.
+        The conformance. An absent or unreadable decode changes nothing; otherwise either
+        instrument finding a repetition is True, and a readable decode that completed none where
+        the envelope found no carrier either is False.
     """
     if decode is None or not decode.readable:
         return done
     return True if decode.count >= 1 or done is True else False
 
 
-# --------------------------------------------------------------------- the one mode
+# ------------------------------------------------------------------ the declared-task body
 
 
 def align_ddk(
@@ -935,14 +903,9 @@ def align_ddk(
 ) -> Result:
     """Evaluate one declared ``SYLLABLE_REPETITION`` task against what its instruction asked for.
 
-    Spans proposed: exactly one ``task_extent``, or none when the decode read no repetition.
-    :func:`task_extent_span` mints it and the posteriorgram is the only instrument that can;
-    ``specs/20260817-triage-workflow-dag/ddk-envelope-mints-no-extent.md`` holds why, and
-    ``ddk-task-extent-precedence.md`` what it superseded. An individual repetition is not a span:
-    the rate, the period dispersion and the per-position mass are statistics over the decoded
-    repetition series, and one span per repetition would add roughly ten spans per recording
-    carrying no measurement of their own. The repetition starts and periods travel as ``counts``
-    entries.
+    Spans proposed: exactly one ``task_extent``, minted by :func:`task_extent_span` off the decode,
+    or none when the decode read no repetition; an individual repetition is not a span, and the
+    repetition starts and periods travel as ``counts`` entries.
 
     Args:
         expectation: The row SPEECH holds for this family, whose pattern is ``SYLLABLE_TRAIN`` or
@@ -970,9 +933,7 @@ def align_ddk(
         train, rate_hz = ddk_carrier(store, params, reads.envelope)
         unmeasured_gate = params.point("train_min_s") is None
         if train is None or train.extent is None:
-            # No carrier has two causes and they are not the same report: no span held a readable
-            # train, or the length guard's own boundary is unmeasured and no span could clear it.
-            # Only the first is a reading of the recording, so only the first answers conformance.
+            # An unmeasured length guard is not a reading of the recording, so it answers nothing.
             done = UNDETERMINED if unmeasured_gate else False
         else:
             carrier_extent, carrier_ids = train.extent, _evidence(train.id, reads.envelope_id)
@@ -1024,7 +985,7 @@ def _value(findings: Sequence[Finding], name: str) -> Any:  # noqa: ANN401
     """The value of the first measurement of one name.
 
     Args:
-        findings: The branch's findings.
+        findings: The findings :func:`align_ddk` returned.
         name: The measurement's name.
 
     Returns:
@@ -1040,7 +1001,7 @@ def _covariate(findings: Sequence[Finding], name: str, key: str) -> Any:  # noqa
     """One covariate of the first measurement of one name.
 
     Args:
-        findings: The branch's findings.
+        findings: The findings :func:`align_ddk` returned.
         name: The measurement's name.
         key: The covariate's key.
 
@@ -1060,9 +1021,8 @@ def syllable_detail(result: Result) -> dict[str, Any]:
         result: What :func:`align_ddk` returned.
 
     Returns:
-        The detail mapping, carrying rates, regularity and per-position realisation as measurements
-        and no normative reading of any of them. ``common.py``'s ``BRANCH_MEASURES["SPEECH"]`` names
-        these keys, and nothing here folds the decoded count against the declared one.
+        The detail mapping: rates, regularity and per-position realisation, under the keys
+        ``common.py``'s ``BRANCH_MEASURES["SPEECH"]`` names.
     """
     trains = [component for component in result.components if component.role == TASK_EXTENT]
     return {

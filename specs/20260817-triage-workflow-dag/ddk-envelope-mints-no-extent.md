@@ -187,3 +187,11 @@ Four targeted mutations against the fixed tree, each restored after:
 | the decoded span stamped `production="syllable_train"` | 3 tests, including SPEECH's own |
 | the absent-posteriorgram `_absent(PPG, PPG_RATE)` record dropped | 2 tests |
 | the surviving `RATE` measurement renamed | 6 tests, four of them the modulation channel's own |
+
+## Moved from `ddk.align_ddk` (2026-09-20)
+
+An individual repetition is not a span, and that is a shape decision rather than an omission. The
+rate, the period dispersion and the per-position realised mass are statistics over the decoded
+repetition *series*; a span per repetition would add roughly ten spans per recording, each carrying
+no measurement of its own. The repetition starts and periods travel as `counts` entries instead, so
+the series is still per-recording checkable.

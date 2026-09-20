@@ -1,13 +1,11 @@
 """Drawing the family x gate matrix as a heatmap.
 
-Everything in :class:`HeatmapStyle` governs the drawing and nothing else: no value here is read by
-the pipeline, by the ruleset, or by the aggregation, and none can change a rate the figure shows.
-The figure is a view of a :class:`~senselab.audio.workflows.triage.routing_analysis.gate_matrix.
-GateMatrix` and computes nothing of its own.
+Everything in :class:`HeatmapStyle` governs the drawing and nothing else. The figure is a view of a
+:class:`~senselab.audio.workflows.triage.routing_analysis.gate_matrix.GateMatrix` and computes
+nothing of its own.
 
-A cell no recording could evaluate has no rate to draw, and it is hatched and left unannotated
-rather than painted at the bottom of the scale: "no recording of this family had this gate
-evaluable" and "the gate never fired" are different facts and read differently here.
+A cell no recording could evaluate is hatched and left unannotated rather than painted at the
+bottom of the scale.
 """
 
 from __future__ import annotations
@@ -53,8 +51,7 @@ class HeatmapStyle:
         fired_cmap: Colormap for the fired-rate panel.
         unavailable_cmap: Colormap for the unavailable-rate panel.
         missing_color: What a cell with no rate to draw is painted.
-        missing_hatch: The hatch drawn over such a cell, so it reads as missing in grayscale and
-            for a reader who cannot separate the two colours.
+        missing_hatch: The hatch drawn over such a cell.
         annotate: Whether each cell carries its rate as text.
         annotate_counts: Whether an annotated cell also carries its ``n``.
         light_text_over: Rate above which a cell's annotation is drawn light rather than dark.
@@ -117,7 +114,7 @@ def panel_values(matrix: GateMatrix, families: tuple[str, ...], panel: str) -> n
 
     Returns:
         A ``len(families) x len(matrix.gates)`` array. A NaN entry is a cell no recording could
-        evaluate, which is not a cell whose rate is zero.
+        evaluate.
     """
     grid = np.full((len(families), len(matrix.gates)), np.nan, dtype=float)
     for row, family in enumerate(families):
@@ -216,8 +213,8 @@ def draw_gate_matrix(
         The figure.
 
     Raises:
-        ValueError: When ``panel`` is not one of :data:`PANELS`, or when the matrix has no axes to
-            draw, which is an empty corpus rather than an empty figure.
+        ValueError: When ``panel`` is not one of :data:`PANELS`, or when the matrix has no axes
+            to draw.
     """
     if panel not in PANELS:
         raise ValueError(f"panel is not one of {PANELS}: {panel!r}")

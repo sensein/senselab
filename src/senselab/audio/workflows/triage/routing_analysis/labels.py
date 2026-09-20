@@ -2,12 +2,10 @@
 
 AudioSet labels are shared by YAMNet and AST; HeAR carries its own eight-label vocabulary.
 
-The airway, cough and breath sets are **not** listed here. They are read from the
-classifier-ontology profile in ``data/classifier_ontology/``, so an AudioSet class enters a set by
-its position in the ontology rather than by having been typed into two files that can drift apart.
-The airway family is the closure of the roots the packaged configuration names in
-``taxonomy.airway_ontology_roots``, minus the nodes no classifier can emit. See
-``specs/20260910-classifier-ontology-mapping/design.md``.
+The airway, cough and breath sets are not listed here: they are read from the classifier-ontology
+profile in ``data/classifier_ontology/``. The airway family is the closure of the roots the
+packaged configuration names in ``taxonomy.airway_ontology_roots``, minus the nodes no classifier
+can emit. See ``specs/20260910-classifier-ontology-mapping/design.md``.
 """
 
 from __future__ import annotations
@@ -23,10 +21,10 @@ from senselab.audio.workflows.triage.classifier_ontology import (
 from senselab.audio.workflows.triage.config import load_triage_config
 
 CLASSIFIERS: tuple[str, ...] = ("yamnet", "ast", "hear")
-"""Every classifier PREPROCESS summarises whole-file, kept apart because their grids differ."""
+"""Every classifier PREPROCESS summarises whole-file, one grid each."""
 
 STREAMS: tuple[str, ...] = ("plain", "enhanced", "residual")
-"""Every signal a classifier was run over, kept apart because their content differs."""
+"""Every signal a classifier was run over."""
 
 AUDIOSET_SPEECH: tuple[str, ...] = (
     "Speech",
@@ -38,7 +36,7 @@ AUDIOSET_SPEECH: tuple[str, ...] = (
 )
 
 _PACKAGED_CONFIG = load_triage_config()
-"""The packaged configuration, read for the airway roots alone; a run's override does not reach here."""
+"""The packaged configuration, read for the airway roots alone."""
 
 AUDIOSET_AIRWAY: tuple[str, ...] = airway_audioset_labels(_PACKAGED_CONFIG)
 """The emittable AudioSet closure of the configured airway roots. Derived; see the module docstring."""
@@ -113,7 +111,7 @@ TRACKED_LABELS: Mapping[str, frozenset[str]] = {
     )
     for classifier in CLASSIFIERS
 }
-"""Every label whose peak the extractor keeps, per classifier. Everything else is dropped."""
+"""Every label whose peak the extractor keeps, per classifier."""
 
 
 def peak_key(stream: str, classifier: str, label: str) -> str:

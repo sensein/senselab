@@ -251,3 +251,57 @@ producing a releasable artifact — that is [`REDACT`](redact.md)'s.
 | key | what is owed |
 | --- | --- |
 | `report.format` | `pdf` (packaged) or `png`; a presentation choice, owed no measurement, but it must be declared rather than defaulted silently. The derivation beside the key records why the earlier `png` default was withdrawn |
+
+## Moved from `report.py` docstrings (2026-09-20)
+
+Rationale that lived inline in `nodes/report.py` and was cut when the module was trimmed to
+describe rather than argue.
+
+### `_assertions_by_source` is an index, not a convenience
+
+The two readers over it ask "what was asserted over this word / this span". The store answers only
+in the forward direction, so without an index each of them walks every assertion for every element
+it renders — cubic in the size of a transcript. The index is built once per report.
+
+### `_paginate_panels` buckets in one linear pass
+
+`plot_aligned_panels` is called once per PDF page over the same full-recording panel list. Without
+the pre-bucketing, every per-item visibility check inside it re-scans the whole recording's items on
+every page: O(pages × items) instead of O(items). `windows` are the fixed, contiguous
+`_TIMELINE_PAGE_SECONDS` pages `_timeline_windows` built, so an item's page index is arithmetic
+rather than a search.
+
+### `_shown` rounds the rendering only
+
+Every figure the page shows is in the JSON at full precision, and the JSON is what a consumer
+reads. `phonation_s: 11.979999999999999` on a page is a binary float's repr leaking into a document
+a human is meant to judge the run by.
+
+### `_scan_state` keeps two absences apart
+
+The marking is what redacts, so a page that renders unmarked words verbatim is trusting the absence
+of a marking. That absence has two causes and they are not the same: SPEECH scanned and found
+nothing, or nobody scanned at all — because routing declined the branch, because SPEECH raised, or
+because every detector failed. REDACT already refuses to release on this distinction (N15, see
+`archive/plan-nodes-2.md`); the summary respects it too, since it is written beside the store and
+read by people.
+
+### The consensus transcript is never redacted
+
+The report is an audit artifact beside the provenance store, not a released derivative. Keeping the
+consensus text and its token lane distinct from the redacted view means a reviewer can assess the
+ASR evidence without mistaking a PII placeholder for a recognizer output. `_redacted_text` governs
+the redacted transcript and its lane only.
+
+### `_report_document` is the single source both products read
+
+Rendering reads the structured object rather than independently reading the store. That makes the
+JSON a first-class companion rather than a text extraction of a PDF, and prevents a later page-only
+change from silently changing a decision claim.
+
+### Open: the legacy top-level fields
+
+`_report_document` still emits `file`, `verdict`, `branches`, `steps`, `llm_check`,
+`llm_annotation` and `transcript` at the top level as duplicates of the `recording`, `decisions`,
+`screening`, `routing` and `evidence` blocks. They were kept so existing consumers could migrate
+deliberately. Pre-alpha policy is to rename and replace outright, so these are owed a removal.

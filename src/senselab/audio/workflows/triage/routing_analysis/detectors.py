@@ -1,23 +1,19 @@
 """The candidate routing detectors and the corpus-derived grid each is swept over.
 
 A detector reads one number out of a :class:`~senselab.audio.workflows.triage.routing_analysis.
-features.RecordingFeatures` and fires when that number is at or above a threshold. No threshold is
-preferred here: every one in a detector's grid is scored, and
-``taxonomy.consolidation_floor`` (0.2) is marked where it falls rather than adopted.
+features.RecordingFeatures` and fires when that number is at or above a threshold. This module
+decides nothing: every threshold in a detector's grid is scored, and
+``taxonomy.consolidation_floor`` is marked where it falls rather than adopted.
 
 No grid is written down. Each is derived at catalogue construction from the detector's own
 distribution over the corpus, read from the dated profile under ``data/detector_profile/``. A
 detector the profile does not cover, or covers as a constant, raises rather than taking a default.
-Two kinds of candidate sit outside the catalogue and carry no grid at all. One declared ahead of
-the sweep that would profile it is staged in :data:`STAGED_DETECTORS`, and the profile that first
-carries it moves it into the catalogue. One a sweep has already measured and that is held for a
-branch to read is in :data:`BRANCH_DETECTORS`, keyed by the branch that reads it; no profile moves
-it anywhere.
+Two kinds of candidate sit outside the catalogue and carry no grid at all: :data:`STAGED_DETECTORS`
+awaits the sweep that will profile it, and :data:`BRANCH_DETECTORS` is held for the branch that
+reads it.
 
-``specs/20260912-detector-grids/design.md`` says which quantiles, why the extremes are in, how a
-count and a gate are handled, and which cut points are pinned regardless of the corpus.
-``specs/20260912-parquet-tables/design.md`` says why the profile is a parquet table and why a
-derived grid stops at what its feature attains.
+The grid derivation is in ``specs/20260912-detector-grids/design.md`` and the profile's table
+format in ``specs/20260912-parquet-tables/design.md``.
 """
 
 from __future__ import annotations
@@ -187,8 +183,7 @@ def _bundled_profile_path() -> Path:
         The last dated profile in the bundled directory.
 
     Raises:
-        FileNotFoundError: If the package ships no profile, which leaves every grid underivable
-            rather than silently defaulted.
+        FileNotFoundError: If the package ships no profile.
     """
     bundled = sorted(PROFILE_DIR.glob(f"*{PROFILE_SUFFIX}"))
     if not bundled:
@@ -245,8 +240,7 @@ def load_detector_profile(path: str | None = None) -> dict[str, Any]:
         The validated profile.
 
     Raises:
-        FileNotFoundError: If ``path`` names a file that does not exist. A named-but-absent profile
-            is an operator error, not a reason to fall back to the bundled one.
+        FileNotFoundError: If ``path`` names a file that does not exist.
         ValueError: If the profile fails validation.
     """
     resolved = _bundled_profile_path() if path is None else Path(path)
@@ -285,8 +279,7 @@ def profile_from_table(table: pa.Table) -> dict[str, Any]:
 
     Returns:
         The profile, in the shape every reader of it expects. A detector's entry carries only the
-        keys its row has a value for, so a ``constant`` entry has no quantile ladder rather than a
-        ladder of zeros.
+        keys its row has a value for.
     """
     profile: dict[str, Any] = dict(read_header(table))
     detectors: dict[str, Any] = {}
@@ -459,8 +452,8 @@ def _check_staged(candidates: Iterable[Detector], catalogue: Iterable[Detector],
         path: Profile path, or ``None`` for the bundled one.
 
     Raises:
-        ValueError: If a staged name is already in the catalogue, or if the newest profile carries
-            it — a profiled detector has a derivable grid and belongs in the catalogue.
+        ValueError: If a staged name is already in the catalogue, or if the newest profile
+            carries it.
     """
     staged = {candidate.name for candidate in candidates}
     repeated = sorted(staged & {candidate.name for candidate in catalogue})
@@ -536,8 +529,7 @@ def detector_value(features: RecordingFeatures, detector: Detector) -> float | N
         detector: The detector.
 
     Returns:
-        The number, or None when the evidence the detector reads is not in the store, which
-        excludes the recording from that detector's scoring rather than counting as a zero.
+        The number, or None when the evidence the detector reads is not in the store.
 
     Raises:
         ValueError: When the detector names a source this function does not implement.
@@ -678,9 +670,8 @@ def _label_statistic(table: dict[str, float], key: str, polarity: str) -> float 
         polarity: The reader's firing side, so an empty sample closes against either comparison.
 
     Returns:
-        The value; :data:`GATE_CLOSED` or :data:`GATE_CLOSED_BELOW` when the statistic's own count
-        is zero, which is the group having been measured and carried nothing; and None when no
-        count was written for it at all, which is the classifier not having run.
+        The value; :data:`GATE_CLOSED` or :data:`GATE_CLOSED_BELOW` when the statistic's own
+        count is zero; and None when no count was written for it at all.
     """
     value = _optional(table, key)
     if value is not None:
@@ -1645,22 +1636,20 @@ _PITCH_TRAJECTORY: tuple[Detector, ...] = (
 )
 """Detectors reading ``RecordingFeatures.phonation``, held for VOICE by
 :data:`BRANCH_DETECTORS`. Each ``_rising``/``_falling`` pair reads one signed key at both
-polarities. ``specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md`` says what each key
-measures, what the corpus sweep found, and why none of them gates."""
+polarities. What each key measures is in
+``specs/20260817-triage-workflow-dag/family-taxonomy-ruleset.md``."""
 
 BRANCH_DETECTORS: Mapping[str, tuple[Detector, ...]] = {"VOICE": _PITCH_TRAJECTORY}
 """Detectors a branch reads, keyed by the branch that reads them.
 
 A branch detector is read *inside* a branch and is never a gate *into* one, so it is absent from
-:data:`DETECTORS` and from ``taxonomy.ruleset.branch_gates``, and carries an empty ``thresholds``.
-:func:`detector_value` reads one like any other. A profile carrying its distribution moves it
-nowhere, which is what tells it apart from :data:`STAGED_DETECTORS`."""
+:data:`DETECTORS` and from ``taxonomy.ruleset.branch_gates`` and carries an empty ``thresholds``.
+A profile carrying its distribution moves it nowhere."""
 
 STAGED_DETECTORS: tuple[Detector, ...] = (_candidate("cough.words_onomatopoeic", "cough", ("onomatopoeic",), "tokens"),)
-"""Candidates awaiting the sweep that will profile them. Each carries an empty ``thresholds`` and is
-absent from :data:`DETECTORS`; :func:`detector_value` reads one like any other, which is what a
-corpus sweep needs to profile it. Once a profile carries one, :func:`_check_staged` raises until it
-is moved into the catalogue."""
+"""Candidates awaiting the sweep that will profile them. Each carries an empty ``thresholds`` and
+is absent from :data:`DETECTORS`; :func:`detector_value` reads one like any other. Once a profile
+carries one, :func:`_check_staged` raises until it is moved into the catalogue."""
 
 _check_staged(STAGED_DETECTORS, _CANDIDATES)
 _check_branch_detectors(BRANCH_DETECTORS, _CANDIDATES, STAGED_DETECTORS)

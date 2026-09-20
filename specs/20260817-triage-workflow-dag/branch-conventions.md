@@ -2,7 +2,7 @@
 
 Rules shared by [`branch-airway.md`](branch-airway.md), [`branch-speech.md`](branch-speech.md),
 [`branch-voice.md`](branch-voice.md), [`branch-ddk.md`](branch-ddk.md) and
-[`branch-quality.md`](branch-quality.md). Stated once so four branches cannot invent four versions.
+[`branch-quality.md`](branch-quality.md). Stated once so the branches cannot invent one version each.
 
 The contract itself is
 [`../20260913-branch-contract-and-hints/design.md`](../20260913-branch-contract-and-hints/design.md).
@@ -307,7 +307,7 @@ A measurement with no stated window is comparable to nothing.
 claimed it and were wrong: a modulation spectrum needs an envelope extraction, a lowpass cutoff, an
 analysis window and a search band; a roll-off is defined relative to something.
 
-## A precondition all four proposing branches share
+## A precondition every proposing branch shares
 
 **`features.py:1079-1091` must gain a `family` filter before any branch-proposed span exists.** It
 appends every live span to `live_spans` with no filter, and `_span_statistics`' `all.*` bucket

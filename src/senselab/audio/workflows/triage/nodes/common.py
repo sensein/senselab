@@ -1,10 +1,11 @@
 """The shapes a triage node returns, and its store conventions.
 
 There are two, because there are two kinds of node. A node that **decides** returns a
-:class:`NodeResult` and writes a ``verdict`` entity. A node that **reports** — the four branches and
-QUALITY — returns a :class:`BranchResult` and writes a ``branch_report`` entity carrying its task
-conformance and its deviations and no outcome. ``vocabulary.fold_file_verdict`` is where every
-decision about the recording is made.
+:class:`NodeResult` and writes a ``verdict`` entity. A node that **reports** — the three branches
+and QUALITY — returns a :class:`BranchResult` and writes a ``branch_report`` entity carrying its
+task conformance and its deviations and no outcome. ``vocabulary.fold_file_verdict`` is where every
+decision about the recording is made. See
+``specs/20260817-triage-workflow-dag/branch-conventions.md``.
 """
 
 from __future__ import annotations
@@ -34,17 +35,16 @@ from senselab.utils.subprocess_venv import venv_environment
 RESERVED_REPORT_KEYS = frozenset(
     {"node", "kind", "conformance", "conformance_of", "deviations", "unmeasured", "in_family", "outcome"}
 )
-"""Attribute names a ``branch_report``'s detail may not carry. ``outcome`` is among them: a
-reporting node has none, and a reader finding one would fold a decision nobody made."""
+"""Attribute names a ``branch_report``'s detail may not carry, ``outcome`` among them."""
 
 MESSAGE_CAP = 200
-"""How much of an exception's message is recorded. The bound on what a message can leak."""
+"""How many characters of an exception's message are recorded."""
 
 STREAM_SUFFIX = ".flac"
 """Container a persisted stream gets. See ``specs/20260907-triage-stream-compression/design.md``."""
 
 HOST_ENV_PACKAGES = ("torch", "torchaudio", "torchcodec", "transformers", "numpy", "scipy", "librosa")
-"""The packages named for the host environment: the ones that decide numerical results.
+"""The packages whose versions are recorded for the host environment.
 
 See ``specs/20260908-triage-prov-bep028/design.md``."""
 
@@ -57,9 +57,7 @@ def describe_exception(error: BaseException) -> str:
 
     Returns:
         The class name alone when the exception carries no message, else the class name and the
-        message's first line truncated to :data:`MESSAGE_CAP` characters with an ellipsis. Only the
-        first line is kept: a multi-line message is a traceback or a dump, and neither belongs in a
-        one-line record.
+        message's first line truncated to :data:`MESSAGE_CAP` characters with an ellipsis.
     """
     name = type(error).__name__
     message = str(error).strip().splitlines()
@@ -145,7 +143,7 @@ def capture_environments(store: ProvStore, used_venvs: dict[str, Path]) -> list[
         store: The provenance store.
         used_venvs: Venv backend name to resolved directory, collected by wrapping the run's node
             execution in :func:`~senselab.utils.subprocess_venv.record_venv_use`. Empty when the run
-            never reached a subprocess venv (e.g. it failed at ADMIT).
+            reached no subprocess venv.
 
     Returns:
         The ids added, host first, then one per venv in name order.
@@ -177,14 +175,14 @@ def write_verdict(
         outcome: What it concluded — an ``Outcome`` for every node, a ``Triage`` for the file fold.
         kind: The kind the node screens, or None.
         why: The reason, in controlled vocabulary — never transcript text.
-        detail: The node's design-named verdict fields.
+        detail: The node's verdict fields.
 
     Returns:
         The verdict entity's id and the vocabulary verdict.
 
     Raises:
         ValueError: If ``detail`` carries any of the reserved keys ``node``, ``outcome``, ``kind``
-            or ``why``, which would let the stored attributes diverge from the returned verdict.
+            or ``why``.
     """
     shadowed = detail.keys() & {"node", "outcome", "kind", "why"}
     if shadowed:
@@ -227,16 +225,14 @@ def write_report(
         deviations: The deviation type names found, sorted and deduplicated.
         unmeasured: The config paths this node asked for and nobody has measured, in read order.
         in_family: Whether the node evaluated a declared task of its own kind.
-        detail: The node's design-named observation fields.
+        detail: The node's observation fields.
 
     Returns:
         The report entity's id and the vocabulary report.
 
     Raises:
         ValueError: If ``conformance_of`` is not a known referent, or if ``detail`` carries any of
-            the reserved keys, which would let the stored attributes diverge from the returned
-            report. ``outcome`` is reserved too and carries no value a reporting node may write: a
-            branch has no outcome, and a reader finding one here would fold a decision nobody made.
+            :data:`RESERVED_REPORT_KEYS`.
     """
     if conformance_of not in CONFORMANCE_REFERENTS:
         raise ValueError(f"conformance_of must be one of {list(CONFORMANCE_REFERENTS)}; got {conformance_of!r}")
@@ -283,9 +279,18 @@ def write_measurement(
 ) -> str:
     """Write one derivative measurement entity with its provenance.
 
-    Shared across nodes: PREPROCESS writes most measurements, but a node further downstream (e.g.
-    TAXONOMY proposing phonation spans from PREPROCESS's own track measurement) writes in the same
-    shape, so both call this rather than each keeping its own copy.
+    Args:
+        store: The provenance store.
+        activity_id: The activity that measured.
+        agent_id: The agent answerable for the measurement.
+        name: The measurement's name, which is how readers find it.
+        signal: The stream it was measured over.
+        attributes: The measurement's own fields.
+        derived_from: Ids this measurement was derived from.
+        extent: The ``(start, end)`` it covers, in seconds, or None for a whole-file measurement.
+
+    Returns:
+        The measurement entity's id.
     """
     entity_id = store.entity(
         prov_type="measurement", extent=extent, attributes={"name": name, "signal": signal, **attributes}
@@ -300,9 +305,6 @@ def write_measurement(
 def clamp_extent(extent: tuple[float, float], audio: Audio) -> tuple[float, float]:
     """Bound an extent's end by the decoded audio, when the overshoot is under one sample period.
 
-    The tolerance is one sample period of ``audio``, which is a numerical identity rather than a
-    tunable: an end within one sample of the last sample names that same sample boundary.
-
     Args:
         extent: The ``(start, end)`` about to be sliced, in seconds.
         audio: The audio being sliced; the length it decoded to is the bound.
@@ -311,8 +313,7 @@ def clamp_extent(extent: tuple[float, float], audio: Audio) -> tuple[float, floa
         The extent, with ``end`` replaced by the audio's duration when it overshot within tolerance.
 
     Raises:
-        ValueError: If ``end`` exceeds the duration by more than one sample period. The message
-            carries bounds only, never any text the extent covers.
+        ValueError: If ``end`` exceeds the duration by more than one sample period.
     """
     start, end = float(extent[0]), float(extent[1])
     sampling_rate = int(audio.sampling_rate)
@@ -331,10 +332,8 @@ def clamp_extent(extent: tuple[float, float], audio: Audio) -> tuple[float, floa
 def bound_reading(extent: tuple[float, float], audio: Audio) -> tuple[float, float] | None:
     """Bound another instrument's reading by the audio this node slices, however far it reaches.
 
-    Distinct from :func:`clamp_extent`, which bounds an extent this node composed itself and refuses
-    an overshoot beyond one sample period. A reading taken by a model on another stream is not this
-    node's arithmetic and its grid is not this node's grid, so a reach past the end is a property of
-    the instrument to report, not an inconsistency to refuse.
+    Any overshoot is truncated rather than refused; :func:`clamp_extent` is the stricter form, for
+    an extent this node composed itself.
 
     Args:
         extent: The ``(start, end)`` the instrument reported, in seconds.
@@ -354,9 +353,6 @@ def bound_reading(extent: tuple[float, float], audio: Audio) -> tuple[float, flo
 def find_measurement(store: ProvStore, name: str) -> Entity | None:
     """The latest non-invalidated measurement entity carrying this name, or None.
 
-    Reads by the store's shared rule: invalidated entities are never returned, and of the survivors
-    the latest write wins — the same rule ``resolve_stream`` applies to streams.
-
     Args:
         store: The provenance store.
         name: The measurement's ``name`` attribute.
@@ -373,9 +369,6 @@ def find_measurement(store: ProvStore, name: str) -> Entity | None:
 def find_verdict(store: ProvStore, node: str) -> Entity | None:
     """The latest non-invalidated verdict entity one node wrote, or None.
 
-    Reads by the store's shared rule, as :func:`find_measurement` does for measurements: an
-    invalidated entity is never returned, and of the survivors the latest write wins.
-
     Args:
         store: The provenance store.
         node: The node's name, as the verdict's ``node`` attribute carries it.
@@ -391,8 +384,6 @@ def find_verdict(store: ProvStore, node: str) -> Entity | None:
 
 def find_branch_report(store: ProvStore, node: str) -> Entity | None:
     """The latest non-invalidated ``branch_report`` entity one node wrote, or None.
-
-    Reads by the store's shared rule, as :func:`find_verdict` does for verdicts.
 
     Args:
         store: The provenance store.
@@ -412,9 +403,7 @@ def find_branch_report(store: ProvStore, node: str) -> Entity | None:
 def find_measurements(store: ProvStore, name: str) -> list[Entity]:
     """Every live measurement entity carrying this name, in write order.
 
-    The plural of :func:`find_measurement`, for a name one node writes many of — the per-window
-    classifications, the per-span formant tracks. Reads by the store's shared rule: an invalidated
-    entity is never returned.
+    The plural of :func:`find_measurement`, for a name one node writes many of.
 
     Args:
         store: The provenance store.
@@ -431,9 +420,6 @@ def find_measurements(store: ProvStore, name: str) -> list[Entity]:
 def live_entities(store: ProvStore, prov_type: PROV_TYPE) -> list[Entity]:
     """Every non-invalidated entity of one type, in write order.
 
-    The store's shared read rule in its simplest form, so no node re-derives the filter and forgets
-    the invalidation check.
-
     Args:
         store: The provenance store.
         prov_type: The entity type to read.
@@ -447,8 +433,8 @@ def live_entities(store: ProvStore, prov_type: PROV_TYPE) -> list[Entity]:
 def consensus_words(store: ProvStore) -> list[Entity]:
     """The consensus stream: every live ``word`` entity, in ``index`` order.
 
-    ``index`` is the position PREPROCESS's consensus emitted the word at, and it is the only order a
-    reader may use; a word's extent is metadata on the position, never a sort key.
+    ``index`` is the position PREPROCESS's consensus emitted the word at, and is the only order a
+    reader may use.
 
     Args:
         store: The provenance store.
@@ -474,9 +460,7 @@ def lexical_words(store: ProvStore) -> list[Entity]:
 def word_hull(word: Entity) -> tuple[float, float]:
     """The hull of a word's per-source timings — every recognizer's placement of it.
 
-    The union of the derived extent and every source's own reading. The fit can place a word
-    outside all of its sources, and pooling can place it outside its own sources' hull, so a
-    consumer that must not miss the word takes the whole of both.
+    The union of the derived extent and every source's own reading.
 
     Args:
         word: A consensus ``word`` entity.
@@ -507,8 +491,6 @@ F0_RANGE_PARAMETER_NAMES = ("search_floor_hz", "search_ceiling_hz", *PITCH_NARRO
 
 def f0_range_parameters(config: TriageConfig) -> dict[str, float]:
     """Read the wide search range and the five narrowing coefficients.
-
-    Every node that derives an F0 range reads them here, so no two can hold values that drift.
 
     Args:
         config: The triage configuration.
@@ -568,9 +550,6 @@ def cpps_settings(config: TriageConfig) -> CppsSettings:
 def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Audio]:
     """Load a stream the graph wrote earlier, by its name.
 
-    Reads by the store's shared rule: invalidated entities are never returned, and of the survivors
-    the latest write wins — the same rule ``find_measurement`` applies to measurements.
-
     Args:
         store: The provenance store.
         run_dir: The run directory sidecar paths are relative to.
@@ -595,12 +574,9 @@ def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Aud
 def write_stream(audio: Audio, run_dir: Path, stem: str) -> tuple[str, AudioWriteReport]:
     """Persist a stream under ``run_dir/streams/<stem><STREAM_SUFFIX>``.
 
-    The one place every node that writes a persisted stream (as opposed to a transient hand-off
-    file a subprocess worker reads and a caller deletes) calls ``Audio.save_to_file``, so the
-    container and the out-of-range policy are decided once. ``out_of_range="normalize"`` never
-    truncates: a peak already at or below +-1 (a genuinely clipped recording, which is content)
-    passes through unchanged, and only a peak the write would otherwise clip is scaled down, with
-    the gain in the returned report -- a caller records it rather than letting it go unaccounted.
+    Written with ``out_of_range="normalize"``, which never truncates: only a peak the write would
+    otherwise clip is scaled down, and the gain comes back in the report. See
+    ``specs/20260907-triage-stream-compression/design.md``.
 
     Args:
         audio: The stream's audio.
@@ -631,9 +607,7 @@ def path_attributes(relative: str, run_dir: Path) -> dict[str, Any]:
     return {"path": relative, **file_attributes(run_dir / relative)}
 
 
-#: The report-detail keys each branch carries, in the order a reader prints them. Named beside
-#: :func:`write_report`, which is what puts them in the store, so a writer and the table of what it
-#: carries cannot drift apart in separate modules.
+#: The report-detail keys each branch carries, in the order a reader prints them.
 BRANCH_MEASURES: dict[str, tuple[str, ...]] = {
     "AIRWAY": ("labelled_n", "contested_n", "merged_n"),
     "SPEECH": (
@@ -673,7 +647,7 @@ UNROLED = "unroled"
 """What :func:`span_role_kind` falls back to for a span carrying no role."""
 
 ENVELOPE_SPAN_KIND = "envelope"
-"""What an envelope span is, as a reader who has never seen PREPROCESS's vocabulary needs it named."""
+"""PREPROCESS's name for an envelope span."""
 
 _ROLE_INDEX = re.compile(r"_\d+$")
 
@@ -697,17 +671,15 @@ def report_entities(store: ProvStore) -> dict[str, Entity]:
 def span_sources(store: ProvStore) -> dict[str, list[Entity]]:
     """Every live span, indexed by the live span it names in ``wasDerivedFrom``.
 
-    Built once per renderer. ``ProvStore.derived_from`` walks every relation, so asking it per span
-    while drawing is quadratic in a store that holds one relation per proposal.
+    Built once per renderer, in one pass over the store's relations.
 
     Args:
         store: The provenance store.
 
     Returns:
         ``{span id: [span it was derived from, ...]}``, in write order. A derivation naming
-        something that is not a live span with an extent — a measurement, a word, an id the store
-        does not hold — contributes nothing, so a span whose whole derivation is such a name is
-        absent from the mapping rather than present with an empty list.
+        anything that is not a live span with an extent contributes nothing; a span whose whole
+        derivation is such a name is absent from the mapping.
     """
     spans = {span.id: span for span in live_entities(store, "span") if span.extent is not None}
     index: dict[str, list[Entity]] = {}
@@ -761,8 +733,7 @@ def proposed_span_label(span: Entity) -> tuple[str, str]:
     Returns:
         ``(label, short)``. The label is the role every proposer stamps, qualified by whichever of
         :data:`BRANCH_QUALIFIERS` the proposal carries a value for and marked ``nontarget`` when it
-        says so; the short form is the qualifier alone, which is the half that distinguishes one
-        proposal from its neighbours.
+        says so; the short form is the qualifier alone.
     """
     role = str(span.attributes.get("role") or "")
     qualifier = next(
@@ -781,9 +752,8 @@ def span_role_kind(span: Entity) -> str:
         span: A span a branch proposed.
 
     Returns:
-        The role with a trailing ``_<number>`` removed, so the many spans one proposer mints per
-        realised unit collapse onto the one kind they all are, or :data:`UNROLED` when the span
-        carries no role.
+        The role with a trailing ``_<number>`` removed, or :data:`UNROLED` when the span carries no
+        role.
     """
     role = str(span.attributes.get("role") or "")
     return _ROLE_INDEX.sub("", role) or UNROLED

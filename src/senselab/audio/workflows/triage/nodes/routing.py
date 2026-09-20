@@ -2,19 +2,15 @@
 
 It measures nothing and classifies nothing. It evaluates the family taxonomy ruleset over the store
 as TAXONOMY left it, records that reading as the ``ruleset_routing`` measurement, and turns it into
-one ``branch_decision`` per branch. A declared task always adds a route to its own branch; the
-declaration never rewrites the reading, never removes a branch and never relaxes a threshold. Its
-verdict is always a ``pass``: this node reaches no conclusion about the recording, and an empty
-execution set is recorded on the decisions for VERDICT to read rather than flagged here.
+one ``branch_decision`` per branch. A declared task adds a route to its own branch and removes none.
+Its verdict is always a ``pass``; an empty execution set is recorded on the decisions for VERDICT to
+read rather than flagged here.
 
 One reading withholds every branch: a **critical failure**, where some branch's whole gate set was
-unreadable, so the ruleset formed no opinion about that branch at all. No branch runs then, the
-declaration adds none, and each decision names the absence that caused it. What makes a failure
-critical, and why it is branch-wise rather than file-wise, is in
-``specs/20260817-triage-workflow-dag/critical-failure.md``.
-
-A failure to evaluate the ruleset fails the node, because the ruleset is what decides execution.
-``specs/20260912-ruleset-in-pipeline/design.md`` holds the staging that brought it here.
+unreadable. No branch runs then, the declaration adds none, and each decision names the absence that
+caused it. See ``specs/20260817-triage-workflow-dag/critical-failure.md``,
+``specs/20260817-triage-workflow-dag/routing.md`` and
+``specs/20260912-ruleset-in-pipeline/design.md``.
 """
 
 from __future__ import annotations
@@ -56,16 +52,14 @@ class RoutingResult(NodeResult):
 
     Attributes:
         runs: The branches that will run, in :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES`
-            order. A branch no node implements can be in it; the runner records that rather than
-            raising.
+            order. A branch no node implements can be in it.
         skipped: The branches that will not.
         forced: The branches that run only because the declaration named them, in branch order.
         declared: Every branch the declaration named, whether or not content routed it too.
         empty_set: Whether no branch runs at all.
         route_state: What the ruleset made of the whole recording, one of
             :data:`~senselab.audio.workflows.triage.vocabulary.FILE_ROUTE_STATES`.
-        critical: Whether the run hit a critical failure, so no branch was selected whatever the
-            gates and the declaration said.
+        critical: Whether the run hit a critical failure, so no branch was selected.
         critical_absences: Per branch not one of whose gates could be read, each gate and the
             absence the node that failed to write its evidence recorded. Empty when ``critical``
             is False.
@@ -140,11 +134,10 @@ def _route_states(attributes: dict[str, Any]) -> dict[str, str]:
         attributes: The ``ruleset_routing`` measurement's attributes.
 
     Returns:
-        One of :data:`~senselab.audio.workflows.triage.vocabulary.BRANCH_ROUTE_STATES` per branch.
-        A branch a gate fired for is ``routed``; one with no fired gate and at least one gate whose
-        feature could not be read is ``unavailable``, which is a branch that was never judged rather
-        than one that declined; one that names no gate at all is ``ungated``, which is a branch the
-        ruleset never looked at; and one whose gates were all silent is ``declined``.
+        One of :data:`~senselab.audio.workflows.triage.vocabulary.BRANCH_ROUTE_STATES` per branch:
+        ``routed`` when a gate fired, ``unavailable`` when no gate fired and at least one gate's
+        feature could not be read, ``ungated`` when the branch names no gate at all, and
+        ``declined`` when its gates were all silent.
     """
     routed = {str(branch) for branch in attributes.get("routed") or ()}
     unreadable = attributes.get("unavailable") or {}
@@ -191,30 +184,22 @@ def routing(
 ) -> RoutingResult:
     """Evaluate the ruleset over the store and turn its reading, with the declaration, into an execution set.
 
-    A branch the ruleset routed runs. A branch the recording's own declaration names **also** runs,
-    whatever the gates made of it, and the decision records the disagreement rather than resolving
-    it. The two sources are additive in one direction only: a declaration adds a route and removes
-    none.
-
-    ``route_state`` is a closed vocabulary: every value written is in
-    :data:`~senselab.audio.workflows.triage.vocabulary.BRANCH_ROUTE_STATES`, and it describes the
-    content reading alone — a declared route never rewrites it.
+    A branch the ruleset routed runs, and so does one the recording's own declaration names. A
+    critical failure overrides both: no branch runs, the content reading is recorded on each
+    decision unchanged, and ``withheld_critical`` says why none of them was acted on.
+    ``route_state`` describes the content reading alone and is always one of
+    :data:`~senselab.audio.workflows.triage.vocabulary.BRANCH_ROUTE_STATES`.
 
     Args:
-        store: The provenance store, holding PREPROCESS's derivatives and TAXONOMY's summaries. Every
-            gate reads one of those, so this node runs after TAXONOMY and not before it. It also
-            holds ADMIT's ``recording`` stream, whose path carries the declared task.
+        store: The provenance store, holding PREPROCESS's derivatives, TAXONOMY's summaries and
+            ADMIT's ``recording`` stream, whose path carries the declared task.
         source: The stream the pass is running over; ``None`` means the conditioned stream. Recorded
-            on every decision so a second pass over another stream stays tellable apart.
+            on every decision.
         config: The triage configuration, read for ``taxonomy.ruleset``,
             ``routing.hint_branch_map`` and ``routing.default_branch``.
         hint: What the recording was declared to contain, if anything.
         run_dir: The run directory the store's sidecar paths are relative to. ROUTING writes no
-            sidecars of its own; the reader resolves the evidence's against it.
-
-    A critical failure overrides both sources. Where some branch's every gate was unreadable, no
-    branch runs: the content reading is recorded on each decision unchanged, ``withheld_critical``
-    says why none of them was acted on, and the absence that caused it travels to VERDICT.
+            sidecars of its own.
 
     Returns:
         The branches that run, those that do not, those the declaration added, every branch the
