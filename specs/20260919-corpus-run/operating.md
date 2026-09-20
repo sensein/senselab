@@ -93,6 +93,25 @@ node and per family with what it is about, deviation types, the config paths nob
 gates no branch could read, the LLM re-read, duration buckets crossed against triage, and every
 contributing verdict. Every share carries its denominator.
 
+### Rebuilding the summaries without re-running the graph
+
+REPORT reads the store and writes nothing back, so a renderer fix after the fact does not need the
+fourteen hours again:
+
+```bash
+RERENDER_REPO=<a checkout holding the fixed renderer> \
+  sbatch /orcd/scratch/bcs/002/satra/triage_design_20260919/rerender.sbatch
+```
+
+200 slices over the run tree, no models, no audio beyond the conditioned stream the panels draw
+over. **Only after the corpus array has finished** — it rewrites summaries in place and would race a
+slice still writing one.
+
+The run id is the one thing a store file does not carry; `ProvStore.read_jsonl` defaults it to the
+literal string `read`, and the summary's title is built from it. `scripts/triage_rerender.py` takes
+it from the run directory's parent, the way `extend.py` does. A tree of summaries all titled `read`
+is that default showing through.
+
 `build_index.py` remains for the operational join — timings, hosts, hint and language, failures and
 node errors — and reads REPORT's `summary.json` rather than the rows.
 
