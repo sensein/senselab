@@ -365,4 +365,3 @@ DDK's implementation status in either direction.
 | `family-taxonomy-ruleset.md:193-198` | same corpus, one gate swept | `LEXICAL_SPEECH`, DDK out of negatives | per threshold, one gate |
 | the challenged precisions | 13 recordings, 3 subjects | declared family, single-label | per branch, tp+fp |
 | `family_routing.parquet` (new) | whatever shard is reduced | declared family, multi-label | per (family, branch), n of the family |
-

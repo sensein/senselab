@@ -819,7 +819,7 @@ praat_features.pitch_excursion_multiplier 1.5 -- senselab's own, and it has no d
 to be written rather than left to look like one. The floor's 1.5 has one (-7.02 semitones); this is
 the same number reused as headroom above p95, and the adversarial case set does not discriminate it:
 sweeping it over 1.0 ... 2.5 gives 13/13 at every step, printed by
-`src/tests/audio/tasks/f0_range_probe.py`. Thirteen is the whole denominator: the probe's fourteen
+`specs/20260817-triage-workflow-dag/f0-range-probe.py`. Thirteen is the whole denominator: the probe's fourteen
 sources include a 45 Hz fry that places no pitch at a 50 Hz floor and is counted as an absence, not
 as a miss. So it is a declared convention whose only measured property is that the result is
 insensitive to it across that span. State both halves --

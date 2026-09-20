@@ -11,7 +11,7 @@ point in ``_branch_config`` is a fixture value, not a fit: the packaged config s
 
 import json
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 import numpy as np
 import pytest
@@ -44,6 +44,8 @@ from senselab.audio.workflows.triage.vocabulary import Outcome, Triage
 from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
+PROV_ASSERTION: Literal["assertion"] = "assertion"
+PROV_MEASUREMENT: Literal["measurement"] = "measurement"
 _ENVELOPE_RATE = 100.0
 """The seeded envelope's sampling rate, in Hz. One sample per 10 ms, as PREPROCESS's own."""
 
@@ -1312,7 +1314,7 @@ class TestEveryLocatedFindingReachesTheStoreWithItsEvidence:
         airway(store, "plain", airway_config, run_dir=tmp_path)
         located = [
             entity
-            for prov_type in ("assertion", "measurement")
+            for prov_type in (PROV_ASSERTION, PROV_MEASUREMENT)
             for entity in live_entities(store, prov_type)
             if entity.extent is not None and _authored_by(store, entity, "AIRWAY")
         ]

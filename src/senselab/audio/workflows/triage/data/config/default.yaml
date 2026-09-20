@@ -99,21 +99,21 @@ yamnet:
 windows:
   yamnet:
     default_threshold: 0.2             # owner-directed: score a label needs to join a window's set
-    label_thresholds: null             # per-label overrides of that default
+    label_thresholds:                  # per-label overrides of that default
     label_top_k: 4                     # owner-directed: how many labels of a window are eligible at all
   ast:
     # AST is REPORTING-ONLY: no ruleset gate reads it, no branch reads it, and TAXONOMY's label
     # summary comes off the raw scores. So these three govern a window fold nothing consumes, and
     # a null here is the decision, not a gap. Do not fit a threshold for them.
-    default_threshold: null            # not needed; nothing downstream reads an AST window label set
-    label_thresholds: null             # as above
+    default_threshold:                 # not needed; nothing downstream reads an AST window label set
+    label_thresholds:                  # as above
     label_top_k: 4                     # as above; inert while the fold has no consumer
     win_length_s: 10.24                # owner-directed 10 s window (1024-frame input)
     hop_s: 10.24                       # non-overlapping until a hop is fitted; a null here stopped AST running
     top_k: 527                         # AudioSet's full label space; a size, not a threshold
   hear:
     default_threshold: 0.2             # as yamnet; the same pair governs both
-    label_thresholds: null             # as above
+    label_thresholds:                  # as above
     label_top_k: 4                     # as above
     hop_s: 2.0                         # non-overlapping 2 s windows; a null here stopped HeAR running
 
@@ -138,7 +138,7 @@ words:
 # The alignment itself needs no cut -- realised, substituted and absent are the aligner's own
 # outcomes -- and every operating point the consumers want is a branch decision over this output.
 stimulus:
-  sentence_terminators: ".?!"          # characters closing a structure unit inside one prompt; orthographic, not fitted
+  sentence_terminators: .?!            # characters closing a structure unit inside one prompt; orthographic, not fitted
 
 # The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
 # read off the recording's own BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`
@@ -147,13 +147,13 @@ stimulus:
 # removes none. Null, because populating it would invent a tag vocabulary nobody fitted. The
 # derivation is in `specs/20260817-triage-workflow-dag/config-derivations.md`.
 routing:
-  hint_branch_map: null                # tag (and metadata.speech_type) -> branch; a tag matching nothing adds nothing
+  hint_branch_map:                     # tag (and metadata.speech_type) -> branch; a tag matching nothing adds nothing
   # The branch to run when no gate fired, no declaration named one, and the run was not critical.
   # Null: nobody has measured which branch a recording no rule accounted for belongs in, and picking
   # one would turn a visible ruleset gap into a branch report that looks like a route. The two ways
   # to get here are already decided — `empty` discards, `unexplained` flags. See
   # `specs/20260817-triage-workflow-dag/critical-failure.md` § the no-hint-no-gate case.
-  default_branch: null
+  default_branch:
 
 # AIRWAY's own vocabulary. `branch.label_sets` splits `labels_of_interest` by the kind each label
 # names, and the two modes read that split rather than these labels directly.
@@ -173,8 +173,8 @@ phonation:
   silence_threshold: 0.1               # Praat's silence threshold
   periods_per_window: 4.5              # Praat's periods_per_window
   period_doubling_factor: 2.0          # the definition of period doubling; an identity, not a threshold
-  hnr_floor_interval_db: null          # near-edge HNR interval; Praat calibrates no dB floor, so this needs a measurement
-  rms_floor_interval: null             # near-edge RMS interval, same
+  hnr_floor_interval_db:               # near-edge HNR interval; Praat calibrates no dB floor, so this needs a measurement
+  rms_floor_interval:                  # near-edge RMS interval, same
 
 # Praat's settings for PREPROCESS's whole-file feature set over the `enhanced` stream. The forty
 # scalars it returns become the `praat_features` measurement's own attributes.
@@ -219,32 +219,32 @@ diarization:
   # 2026-09-20 after the corpus run showed the residual pass had no reader.
   streams: [enhanced]
   exclusive: false                     # keep pyannote's overlapping view; the exclusive partition makes concurrency unreadable
-  min_speakers: null                   # lower bound handed to the clustering; null hands none
-  max_speakers: null                   # upper bound, same -- a cap makes a count above it unreportable
+  min_speakers:                        # lower bound handed to the clustering; null hands none
+  max_speakers:                        # upper bound, same -- a cap makes a count above it unreportable
 
 # VOICE's F0 ranges and task-duration expectations. f0_search_range_hz is also read by PREPROCESS:
 # it is the wide search each recording's own [floor, ceiling] is narrowed from, not a fixed range.
 voice:
   hint_tags: [phonation, humming, sustained-vowel, voice]  # unread as of v2; hints route through routing.hint_branch_map alone
   f0_search_range_hz: [50.0, 600.0]    # wide [min, max] the per-recording range is derived from
-  f0_range_by_population: null         # per declared age and sex, replacing the derived range
-  f0_range_ratio_max: null             # largest F0 ratio a single production may span
-  task_duration_ranges: null           # expected duration per declared task
+  f0_range_by_population:              # per declared age and sex, replacing the derived range
+  f0_range_ratio_max:                  # largest F0 ratio a single production may span
+  task_duration_ranges:                # expected duration per declared task
 
 # SPEECH's enrollment, separation, diarization and non-target settings.
 speech:
-  second_diarizer: null                # which model corroborates pyannote's speaker count
-  target_match_cosine: null            # similarity above which a diarized speaker is the enrolled target
-  speech_test_stoi_floor: null         # STOI floor for a speech span to pass quality
-  speech_test_si_sdr_floor: null       # SI-SDR floor, same
+  second_diarizer:                     # which model corroborates pyannote's speaker count
+  target_match_cosine:                 # similarity above which a diarized speaker is the enrolled target
+  speech_test_stoi_floor:              # STOI floor for a speech span to pass quality
+  speech_test_si_sdr_floor:            # SI-SDR floor, same
   hint_tags: [speech, read-speech]     # unread as of v2; hints route through routing.hint_branch_map alone
-  enrollment_model: null               # speaker-embedding model AND revision enrollment is computed with
-  separation_backend: null             # which separator runs on overlapping speech
-  separation_sound_class: null         # the sound class that separator is asked for
+  enrollment_model:                    # speaker-embedding model AND revision enrollment is computed with
+  separation_backend:                  # which separator runs on overlapping speech
+  separation_sound_class:              # the sound class that separator is asked for
   nontarget:                           # what marks a diarized speaker as not the target
-    level_db: null                     # level difference from the target
-    tilt_db_per_octave: null           # spectral tilt difference
-    d_to_r_db: null                    # direct-to-reverberant ratio difference
+    level_db:                          # level difference from the target
+    tilt_db_per_octave:                # spectral tilt difference
+    d_to_r_db:                         # direct-to-reverberant ratio difference
 
 # Operating points the three branches' expectation matching reads, shared by AIRWAY, SPEECH and
 # VOICE so no two can hold cuts that drift. Every numeric key here is null:
@@ -325,17 +325,17 @@ verdict:
   # declared task family -> whether a non-conformance on it flags, overriding conformance_flags.
   # Data, not schema: a campaign names its own families. Empty ships no family excepted.
   conformance_flags_by_family: {}
-  min_contrast_db: null                # spectral-balance difference two effort levels must differ by to be a contrast
-  tilt_max_db_per_octave: null         # spectral tilt below which a recording reads as occluded
-  level_min_dbfs: null                 # level below which a recording carries no production at all
+  min_contrast_db:                     # spectral-balance difference two effort levels must differ by to be a contrast
+  tilt_max_db_per_octave:              # spectral tilt below which a recording reads as occluded
+  level_min_dbfs:                      # level below which a recording carries no production at all
 
 # The label consolidation. TAXONOMY runs no models: it consolidates PREPROCESS's stored scores.
 taxonomy:
-  speech_labels: null                  # which classifier labels SPEECH reads as acoustic speech evidence
+  speech_labels:                       # which classifier labels SPEECH reads as acoustic speech evidence
   consolidation_floor: 0.2             # owner-directed: consolidation drops a label under this, every classifier
   # The one classifier-ontology profile this run reads: AIRWAY's corroboration, the airway
   # closure below, and the consensus taxonomy's label identity all go through it.
-  classifier_ontology_profile: null   # path to a profile; null takes the packaged latest
+  classifier_ontology_profile:        # path to a profile; null takes the packaged latest
   # AudioSet ontology roots whose subtree IS the airway kind. Both evidence vocabularies come from
   # this one list through the classifier-ontology profile: the AudioSet labels are the closure minus
   # the nodes no classifier can emit, the HeAR labels are those whose mapped node falls inside it.
@@ -359,9 +359,9 @@ taxonomy:
     # branch -> families HELD OUT of its scoring; not negatives, not positives. Null everywhere:
     # no branch's reference set omits families whose content is what the branch is for.
     excluded_by_construction:
-      AIRWAY: null
-      SPEECH: null
-      VOICE: null
+      AIRWAY:
+      SPEECH:
+      VOICE:
     branch_gates:                       # branch -> gates, any one of which routes it, on any recording
       AIRWAY: [airway.breath, airway.cough, airway.bracketed_event, airway.ppg_silent_fraction]
       SPEECH: [speech.lexical]
@@ -414,10 +414,10 @@ taxonomy:
 # SQUIM and disruption tolerances. Every key in this section is currently read by nothing in
 # `src/senselab`: the gate they describe is unimplemented.
 quality:
-  stoi_floor: null                     # STOI below which a span fails on quality
-  pesq_floor: null                     # PESQ below which a span fails on quality
-  disruption_clipped_s_max: null       # clipped seconds a span may carry and still pass
-  disruption_dropout_s_max: null       # dropout seconds a span may carry and still pass
+  stoi_floor:                          # STOI below which a span fails on quality
+  pesq_floor:                          # PESQ below which a span fails on quality
+  disruption_clipped_s_max:            # clipped seconds a span may carry and still pass
+  disruption_dropout_s_max:            # dropout seconds a span may carry and still pass
   clip_contradiction_margin: 0.005     # fraction above a clip's own level an unclipped sample must reach; PREPROCESS withdraws on it, QUALITY audits on it
   clip_edge_guard_samples: 3           # samples each side of a clip span excluded as that run's own decay; PREPROCESS applies it
 

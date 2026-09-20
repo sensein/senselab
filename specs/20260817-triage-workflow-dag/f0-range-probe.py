@@ -1,8 +1,8 @@
 """Regenerate the F0-range tables in ``specs/20260817-triage-workflow-dag/praat-instrument-audit.md``.
 
-Not collected by pytest (the name carries no ``test`` prefix or ``_test`` suffix). Run it with::
+A probe, not a test: it lives beside the document whose tables it regenerates. Run it with::
 
-    uv run python src/tests/audio/tasks/f0_range_probe.py
+    uv run python specs/20260817-triage-workflow-dag/f0-range-probe.py
 
 It prints three tables: the adversarial case set with the range each rule variant derives, the
 shipped rule's range and pinned-contour verdict per case, and the coefficient sweep that is the

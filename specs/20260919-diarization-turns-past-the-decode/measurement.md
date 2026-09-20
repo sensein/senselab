@@ -119,4 +119,3 @@ those, a diarization turn taken on `enhanced` can legitimately reach past `plain
 involved at all. `recording` and `plain` never disagree in this corpus, so `speech.py`'s cross-clamp
 of a plain-derived extent against `recording` is not implicated here — but it would be on a corpus
 whose source files are not already 16 kHz.
-

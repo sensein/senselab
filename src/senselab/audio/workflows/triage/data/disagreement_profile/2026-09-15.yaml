@@ -1,7 +1,7 @@
 # How a routing/declaration disagreement is qualified into one of three findings.
 # Read by `senselab.audio.workflows.triage.routing_analysis.gate_matrix`. Nothing in the pipeline
 # reads this file: it governs reporting only, and no value here can change how a recording routes.
-schema_version: "1"
+schema_version: '1'
 
 # A deciding gate whose reading sits within this fraction of its own threshold is reported as a
 # THRESHOLD question; one outside it as an EVIDENCE question. Relative, so one band covers gates

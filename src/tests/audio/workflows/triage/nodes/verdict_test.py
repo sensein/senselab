@@ -101,7 +101,7 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
         concluded: Sequence[tuple[str, Outcome, str | None]] = (),
         routed: Sequence[str] = (),
         route_state: RouteState = RouteState.ROUTED,
-        unavailable: Mapping[str, tuple[str, ...]] | None = None,
+        unavailable: Mapping[str, Mapping[str, str]] | None = None,
         route: bool = True,
         config: TriageConfig | None = None,
         hint: AudioHints | None = None,

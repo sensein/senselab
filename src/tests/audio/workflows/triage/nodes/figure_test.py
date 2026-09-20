@@ -146,13 +146,15 @@ class TestItDrawsFromTheStore:
     ) -> None:
         """A renderer that mutated the store could not be re-run over a finished run."""
         seed_preprocess_store(store, duration_s=5.0, yamnet_labels=[["Speech"]])
-        before = len(store.to_jsonl().splitlines()) if hasattr(store, "to_jsonl") else None
+        written = tmp_path / "before.jsonl"
+        store.write_jsonl(written)
+        before = len(written.read_text().splitlines())
         entities_before = {entity.id for entity in store.entities("span")}
         preprocess_figure(store, tmp_path / "figures", config, run_dir=tmp_path, stem="rec")
         assert {entity.id for entity in store.entities("span")} == entities_before
         assert not store.activities("FIGURE")
-        if before is not None:
-            assert len(store.to_jsonl().splitlines()) == before
+        store.write_jsonl(tmp_path / "after.jsonl")
+        assert len((tmp_path / "after.jsonl").read_text().splitlines()) == before
 
     def test_padding_changes_no_span_extent(
         self,

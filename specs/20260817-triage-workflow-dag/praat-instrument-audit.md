@@ -330,7 +330,7 @@ range is used instead. Measured over fourteen adversarial cases the full rule pl
 inside its own derived range on all thirteen that track at all (the fourteenth, a 45 Hz fry, is an
 absence at a 50 Hz floor); `2.5 × q3` with the p5 floor misses the register break and `1.5 × p95`
 misses the emphatic peak. The probe that regenerates those rows is
-`src/tests/audio/tasks/f0_range_probe.py` — committed because neither table here states the
+`specs/20260817-triage-workflow-dag/f0-range-probe.py` — committed because neither table here states the
 contamination levels its hum cases were synthesised at, so the cells could not otherwise be
 reproduced from this document.
 

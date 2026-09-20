@@ -1699,6 +1699,7 @@ class TestTheEnvelopeSidecarHoldsMeasurementsOnly:
             assert span.extent is not None
             assert np.isfinite(span.extent).all()
         for span in (e for e in spans if e.attributes["measure"] != "gap"):
+            assert span.extent is not None
             assert span.extent[1] < 2.9, "the burst ends at 1.5 s; a span to 3.0 s is the NaN hangover"
 
 

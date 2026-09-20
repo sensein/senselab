@@ -5,7 +5,7 @@ noncommercial licence, so every test here exercises the routing, input validatio
 audio normalization around the load rather than the load itself.
 """
 
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import pytest
 import torch
@@ -122,8 +122,8 @@ class _FakeProcessor:
     """
 
     def __init__(self) -> None:
-        self.template_calls: List[Dict[str, object]] = []
-        self.decode_calls: List[Dict[str, object]] = []
+        self.template_calls: List[Dict[str, Any]] = []
+        self.decode_calls: List[Dict[str, Any]] = []
         self.batches: List[List[int]] = []
 
     def apply_chat_template(self, conversation: object, **kwargs: object) -> BatchFeature:

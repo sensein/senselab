@@ -215,6 +215,7 @@ def test_the_sampler_choice_matches_upstream_per_mode() -> None:
     ]
     assert len(sampler_name_assignments) == 1, "expected exactly one `sampler_name = ... if ... else ...`"
     if_exp = sampler_name_assignments[0].value
+    assert isinstance(if_exp, ast.IfExp)
     assert isinstance(if_exp.test, ast.Compare)
     assert isinstance(if_exp.test.left, ast.Name) and if_exp.test.left.id == "mode"
     assert isinstance(if_exp.test.comparators[0], ast.Constant)
