@@ -57,7 +57,6 @@ branch:
   trough_return_db: 6.0
   event_min_s: 0.05
   score_min: 0.5
-  breath_coverage_min: 0.5
   gap_off_task_min_s: 1.0
   interval_max_s: 0.5
   effort_split_hz: 1000.0
@@ -882,10 +881,10 @@ class TestTheCoverageFamiliesReadRawHearWindows:
         runs = _proposed(store, "breath_run")
         assert [span.extent for span in runs] == [(0.0, 4.0), (6.0, 8.0)]
 
-    def test_the_covered_fraction_is_measured_against_the_recording(
+    def test_the_covered_fraction_is_measured_against_the_extent_the_instruction_asked_for(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """Six of ten seconds carry breath evidence."""
+        """Six seconds carry breath evidence and the row asks for thirty, so six thirtieths."""
         _seed(
             store,
             tmp_path,
@@ -895,9 +894,49 @@ class TestTheCoverageFamiliesReadRawHearWindows:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         [coverage] = find_measurements(store, "breath_coverage_fraction")
-        assert coverage.attributes["value"] == pytest.approx(0.6)
         assert coverage.attributes["covered_s"] == pytest.approx(6.0)
-        assert result.report.conformance is True
+        assert coverage.attributes["asked_s"] == pytest.approx(30.0)
+        assert coverage.attributes["asked_from"] == "declared_duration_s"
+        assert coverage.attributes["value"] == pytest.approx(0.2)
+        assert result.report.conformance == UNDETERMINED
+
+    def test_the_fraction_reaches_the_report_so_a_reader_sees_what_was_measured(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The store measurement alone is not visibility: the branch report carries it too."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-breath",
+            hear_scores=self._windows((0, 1, 3)),
+            duration_s=10.0,
+        )
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        recorded = _report_entity(store, "AIRWAY").attributes
+        assert recorded["breath_coverage_fraction"] == pytest.approx(0.2)
+        assert recorded["coverage_asked_s"] == pytest.approx(30.0)
+        assert recorded["coverage_asked_from"] == "declared_duration_s"
+
+    def test_a_recording_covered_end_to_end_is_undetermined_too(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """No fraction decides. The gate is gone in both directions, not relaxed in one.
+
+        Every second of this recording carries breath evidence and it is still a third of the
+        thirty the instruction asked for, which is the shape the retired bound was placed on.
+        """
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-breath",
+            hear_scores=self._windows((0, 1, 2, 3, 4)),
+            duration_s=10.0,
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        [coverage] = find_measurements(store, "breath_coverage_fraction")
+        assert coverage.attributes["covered_s"] == pytest.approx(10.0)
+        assert coverage.attributes["value"] == pytest.approx(10.0 / 30.0, abs=5e-4)
+        assert result.report.conformance == UNDETERMINED
 
     def test_the_declared_duration_is_counted_beside_the_measured_one(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -913,10 +952,10 @@ class TestTheCoverageFamiliesReadRawHearWindows:
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _counts(store)["declared_duration_s"] == {"found": 10.0, "declared": 30.0}
 
-    def test_no_window_scoring_the_label_proposes_nothing(
+    def test_no_window_scoring_the_label_proposes_nothing_and_reports_a_zero_fraction(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """An absence of detected content, which is what this branch's FAIL means."""
+        """Nothing is proposed and the zero is reported as a zero, not folded into a verdict."""
         _seed(
             store,
             tmp_path,
@@ -926,7 +965,9 @@ class TestTheCoverageFamiliesReadRawHearWindows:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _proposed(store) == []
-        assert result.report.conformance is False
+        [coverage] = find_measurements(store, "breath_coverage_fraction")
+        assert coverage.attributes["value"] == pytest.approx(0.0)
+        assert result.report.conformance == UNDETERMINED
 
 
 class TestTheAlternationFamilyMatchesBreathBetweenCoughs:
@@ -1064,6 +1105,27 @@ class TestDetectAnnotatesWithoutEvaluating:
         assert contested.attributes["reason"] == "no_raw_score_over_p_score_min"
         assert _report_entity(store, "AIRWAY").attributes["contested_n"] == 1
 
+    def test_a_decided_label_is_matched_in_the_deciding_classifiers_vocabulary(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A HeAR window decides in HeAR spellings, so an AudioSet name there decides nothing.
+
+        ``Breathing`` is the breath kind's YAMNet spelling. Read flat it would contest this span;
+        read in the vocabulary that wrote it, it is not a label this classifier can have decided.
+        """
+        _seed(
+            store,
+            tmp_path,
+            task="harvard-sentences-list",
+            spans=[(1.0, 2.0)],
+            scores=[{"Breathe": 0.1}],
+            labels=[["Breathing"]],
+            envelope=bump(500, (150,)),
+        )
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _assertions(store, "contest") == []
+        assert _report_entity(store, "AIRWAY").attributes["contested_n"] == 0
+
     def test_a_decided_label_the_branch_did_propose_over_is_not_contested(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
@@ -1100,6 +1162,91 @@ class TestBothClassifiersAreOneEvidenceSet:
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert len(_events(store)) == 1
 
+    def test_yamnets_breath_spelling_is_read_where_hear_has_nothing(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """AudioSet has no class called ``Breathe``; the profile says ``Breathing`` is that sound."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-fivebreaths",
+            spans=[(0.0, 5.0)],
+            scores=[{"Breathe": 0.1}],
+            yamnet_scores=[{"Breathing": 0.9}],
+            envelope=bump(500, (250,)),
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert len(_events(store)) == 1
+        assert result.report.conformance is True
+
+    def test_the_rest_of_the_profiles_breath_closure_is_read_too(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """``Snort`` is a descendant of ``Breathing``, so the profile calls it the same sound."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-fivebreaths",
+            spans=[(0.0, 5.0)],
+            scores=[{"Breathe": 0.1}],
+            yamnet_scores=[{"Snort": 0.9}],
+            envelope=bump(500, (250,)),
+        )
+        assert len(_events(store)) == 0
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert len(_events(store)) == 1
+
+    def test_an_audioset_label_outside_the_closure_is_not_breath(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The control: resolution widens the spellings of one sound, not the set of sounds."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-fivebreaths",
+            spans=[(0.0, 5.0)],
+            scores=[{"Breathe": 0.1}],
+            yamnet_scores=[{"Laughter": 0.99, "Speech": 0.99}],
+            envelope=bump(500, (250,)),
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _events(store) == []
+        assert result.report.conformance is False
+
+    def test_a_hear_head_name_on_a_yamnet_window_is_not_read(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Each window is read in its own classifier's vocabulary, not in a flat union of both."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-fivebreaths",
+            spans=[(0.0, 5.0)],
+            scores=[{"Breathe": 0.1}],
+            yamnet_scores=[{"Breathe": 0.99}],
+            envelope=bump(500, (250,)),
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _events(store) == []
+        assert result.report.conformance is False
+
+    def test_the_cough_set_still_reads_yamnets_matching_spelling(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """``Cough`` is spelled the same in both vocabularies and the resolution keeps it so."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-cough",
+            spans=[(0.0, 5.0)],
+            scores=[{"Cough": 0.1}],
+            yamnet_scores=[{"Cough": 0.9}],
+            envelope=bump(500, (250,)),
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert len(_events(store)) == 1
+        assert result.report.conformance is True
+
     def test_a_score_under_the_minimum_from_both_is_not_evidence(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
@@ -1120,7 +1267,10 @@ class TestBothClassifiersAreOneEvidenceSet:
     def test_an_absent_span_hear_pass_is_an_absence_not_a_zero(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A span PREPROCESS's per-span pass never covered has no evidence to read."""
+        """A span PREPROCESS's per-span pass never covered has no evidence to read.
+
+        Neither classifier covered it, so the label search had no instrument at all and says so.
+        """
         _seed(
             store,
             tmp_path,
@@ -1131,7 +1281,9 @@ class TestBothClassifiersAreOneEvidenceSet:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _events(store) == []
-        assert result.report.conformance is False
+        assert result.report.conformance == UNDETERMINED
+        [absence] = find_measurements(store, "event_instrument")
+        assert absence.attributes["absent"] == ["span_hear", "span_yamnet"]
 
 
 def _authored_by(store: ProvStore, entity: Entity, node: str) -> bool:
@@ -1289,14 +1441,20 @@ class TestWhatTheRestructuringKeptFromTheOldBranch:
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _report_entity(store, "AIRWAY").attributes["merged_n"] == 3, "one carrier, five events"
 
-    def test_no_span_at_all_reports_non_conformance(
+    def test_no_span_at_all_reports_an_absent_instrument(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A branch reports; it does not restate PREPROCESS's own reason as an explanation."""
+        """With no span there is no classifier window, so the label search never ran.
+
+        Routing reports ``airway.cough`` unavailable on this same store; the branch agrees with it
+        rather than reporting that the instruction was not followed.
+        """
         _seed(store, tmp_path, task="respiration-and-cough-cough", no_contrast=True, envelope=bump(500, (250,)))
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert result.report.conformance is False
+        assert result.report.conformance == UNDETERMINED
         assert _proposed(store) == []
+        notes = _report_entity(store, "AIRWAY").attributes["notes"]
+        assert "span_hear, span_yamnet" in " ".join(notes)
 
     def test_a_hint_changes_nothing_about_what_was_found(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1304,7 +1462,7 @@ class TestWhatTheRestructuringKeptFromTheOldBranch:
         """A declaration does not supply an absence, and it does not supply a presence either."""
         _seed(store, tmp_path, task="respiration-and-cough-cough", no_contrast=True, envelope=bump(500, (250,)))
         result = airway(store, "plain", airway_config, hint=AudioHints(may_contain=["cough"]), run_dir=tmp_path)
-        assert result.report.conformance is False
+        assert result.report.conformance == UNDETERMINED
         assert result.report.deviations == ()
 
     def test_the_branch_writes_no_flag_verb_at_all(
@@ -1422,6 +1580,39 @@ class TestTheOtherFindingsEachModeOwes:
 class TestAnAbsentInstrumentIsAnAbsence:
     """AIRWAY's gate evidence is unavailable on 56,505 of 62,547 recordings; so may a derivative be."""
 
+    def test_the_alternation_family_reports_an_absent_classifier_too(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """``voluntary-cough`` takes its own matcher, and the guard is not the event series' alone."""
+        _seed(store, tmp_path, task="voluntary-cough", no_contrast=True, envelope=bump(500, (250,)))
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert result.report.conformance == UNDETERMINED
+        [absence] = find_measurements(store, "event_instrument")
+        assert absence.attributes["absent"] == ["span_hear", "span_yamnet"]
+
+    def test_the_out_of_family_mode_counts_nothing_where_no_classifier_ran(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """``detect_airway`` answers UNDETERMINED either way, so the zero counts are what differ.
+
+        A count of zero events asserts the classifiers found none. Nothing ran, so none is written.
+        """
+        _seed(store, tmp_path, task="harvard-sentences-list", no_contrast=True, envelope=bump(500, (250,)))
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert result.report.conformance == UNDETERMINED
+        assert "airway_events" not in _counts(store)
+        [absence] = find_measurements(store, "event_instrument")
+        assert absence.attributes["absent"] == ["span_hear", "span_yamnet"]
+
+    def test_both_absences_are_named_when_neither_instrument_arrived(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The record is what was absent, not the first thing checked for."""
+        _seed(store, tmp_path, task="respiration-and-cough-cough", no_contrast=True)
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        [absence] = find_measurements(store, "event_instrument")
+        assert absence.attributes["absent"] == ["energy_envelope", "span_hear", "span_yamnet"]
+
     def test_no_energy_envelope_leaves_the_task_undetermined(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
@@ -1439,7 +1630,7 @@ class TestAnAbsentInstrumentIsAnAbsence:
         assert recorded["conformance"] == UNDETERMINED
         assert "energy_envelope" in " ".join(recorded["notes"])
         [absence] = find_measurements(store, "event_instrument")
-        assert absence.attributes["absent"] == "energy_envelope"
+        assert absence.attributes["absent"] == ["energy_envelope"]
 
     def test_no_hear_scores_leaves_a_coverage_family_undetermined(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1590,14 +1781,19 @@ class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
     def test_a_declared_branch_that_found_nothing_flags_the_file(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AIRWAY fails, ROUTING recorded the claim, and the fold flags without resolving it present."""
+        """AIRWAY proposed nothing, ROUTING recorded the claim, and the fold flags on the mismatch.
+
+        The two flag families are separable and this pins the separation: with no span there is no
+        classifier window, so conformance is UNDETERMINED and contributes no ground, while the hint
+        mismatch — which reads the proposed spans, not the conformance — still reaches the file.
+        """
         hint_config = _override(tmp_path, "routing:\n  hint_branch_map:\n    cough: AIRWAY\n")
         hint = AudioHints(may_contain=["cough"])
         _seed(store, tmp_path, task="respiration-and-cough-cough", no_contrast=True, envelope=bump(500, (250,)))
         self._empty_reading(monkeypatch)
         routing(store, "plain", hint_config, hint, run_dir=tmp_path)
         branch = airway(store, "plain", hint_config, hint, run_dir=tmp_path)
-        assert branch.report.conformance is False
+        assert branch.report.conformance == UNDETERMINED
 
         folded = verdict(store, None, hint_config, hint, run_dir=tmp_path).file_verdict
         assert folded.triage is Triage.FLAG
@@ -1607,6 +1803,9 @@ class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
         assert any(
             reason.why == "hint mismatch: AIRWAY was declared and did not find it" for reason in folded.reasons
         ), [reason.why for reason in folded.reasons]
+        assert not any("what the instruction asked for did not happen" in reason.why for reason in folded.reasons), [
+            reason.why for reason in folded.reasons
+        ]
 
     def test_the_same_file_with_no_declaration_discards_as_acoustically_empty(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

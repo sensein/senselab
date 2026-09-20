@@ -14,10 +14,11 @@ from __future__ import annotations
 import json
 from functools import partial
 from pathlib import Path
-from typing import Any, NamedTuple, Sequence
+from typing import Any, Mapping, NamedTuple, Sequence
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.label_scores import label_scores
+from senselab.audio.workflows.triage.classifier_ontology import PROFILE_PATH_KEY, corroboration_sets
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
@@ -103,7 +104,74 @@ ROUTE_INDEX_KEY = "airway.route_by_task_index"
 """The config key mapping a task's trailing index to the route its instruction prescribes."""
 
 INSTRUMENT_ABSENT = "event_instrument"
-"""The measurement name recording that the derivative a mode needs never reached the store."""
+"""The measurement name recording that a derivative a mode needs never reached the store."""
+
+COVERAGE_FRACTION = "breath_coverage_fraction"
+"""The measurement naming how much of the extent the instruction asked for carries breath evidence.
+Reported on every ``SOUND_COVERAGE`` row, whatever the fraction, and read by no gate."""
+
+DECLARED_EXTENT = "declared_duration_s"
+"""``asked_from`` on a coverage fraction whose denominator is the instruction's own duration."""
+
+STREAM_EXTENT = "stream_extent"
+"""``asked_from`` on one whose denominator is the recording, the row declaring no duration."""
+
+CLASSIFIER_WINDOWS = ("span_hear", "span_yamnet")
+"""The two per-span window measurements :func:`classifier_windows` collects, which are the whole
+input to the label search. PREPROCESS writes one per (span, classifier) pair and neither of them
+when it proposed no span."""
+
+
+HEAR = "hear"
+"""The ``classifier`` attribute PREPROCESS stamps on a ``span_hear`` window."""
+
+YAMNET = "yamnet"
+"""The ``classifier`` attribute it stamps on a ``span_yamnet`` window."""
+
+
+class LabelSet(NamedTuple):
+    """One kind of sound, in each classifier's own vocabulary.
+
+    Attributes:
+        hear: The HeAR head names, which are what ``branch.label_sets`` declares.
+        yamnet: The AudioSet display names, the union of those heads' corroboration sets.
+    """
+
+    hear: tuple[str, ...]
+    yamnet: tuple[str, ...]
+
+    def by_classifier(self) -> dict[str, tuple[str, ...]]:
+        """The mapping :func:`~...nodes.branches.sounds_like` reads.
+
+        Returns:
+            Classifier name to its spellings.
+        """
+        return {HEAR: self.hear, YAMNET: self.yamnet}
+
+
+def label_sets_by_classifier(params: BranchParams) -> dict[str, LabelSet]:
+    """``branch.label_sets`` resolved into each classifier's own vocabulary.
+
+    The configured value names HeAR heads. YAMNet reports AudioSet display names, so the AudioSet
+    side is the union of those heads' corroboration sets from the packaged ontology profile rather
+    than the HeAR spellings, which AudioSet does not carry.
+
+    Args:
+        params: The operating points, whose config names the profile.
+
+    Returns:
+        Kind to its two vocabularies. Empty when the operating point is unmeasured, which
+        ``params.missing`` already records.
+    """
+    configured = params.point("label_sets")
+    if configured is None:
+        return {}
+    corroborating = corroboration_sets(params.config.get(PROFILE_PATH_KEY))
+    resolved: dict[str, LabelSet] = {}
+    for kind, heads in configured.items():
+        audioset = {name for head in heads for name in corroborating.get(head, frozenset())}
+        resolved[kind] = LabelSet(tuple(heads), tuple(sorted(audioset)))
+    return resolved
 
 
 class Event(NamedTuple):
@@ -347,14 +415,15 @@ def airway_events(
     Returns:
         The events, earliest first.
     """
-    labels = (params.point("label_sets") or {}).get(label_set)
+    resolved_set = label_sets_by_classifier(params).get(label_set)
     minimum = params.point("score_min")
-    if labels is None or minimum is None:
+    if resolved_set is None or minimum is None:
         return []
+    wanted = resolved_set.by_classifier()
     events: list[Event] = []
     for span in spans:
         extent = span.extent
-        if extent is None or not sounds_like(span, windows, labels, minimum):
+        if extent is None or not sounds_like(span, windows, wanted, minimum):
             continue
         resolved = events_in_span(envelope, span, params)
         if resolved:
@@ -364,17 +433,18 @@ def airway_events(
     return sorted(events)
 
 
-def decided_label_sets(span: Entity, windows: Sequence[Entity], label_sets: dict[str, tuple[str, ...]]) -> list[str]:
+def decided_label_sets(span: Entity, windows: Sequence[Entity], label_sets: Mapping[str, LabelSet]) -> list[str]:
     """Which label sets a stored window over this span decided a label from.
 
     The decision is ``labels``, which PREPROCESS writes only where a membership rule exists; the
     measurement is ``raw_scores``, which it always writes. A span carrying the decision and no raw
-    score over the minimum is what :func:`detect_airway` contests.
+    score over the minimum is what :func:`detect_airway` contests. Each window's ``labels`` are in
+    its own classifier's vocabulary and are matched against that classifier's spellings.
 
     Args:
         span: The span.
         windows: The per-span classifier windows.
-        label_sets: Label-set name to the classifier labels that are that sound.
+        label_sets: Kind to its two vocabularies.
 
     Returns:
         The label-set names, sorted.
@@ -383,9 +453,10 @@ def decided_label_sets(span: Entity, windows: Sequence[Entity], label_sets: dict
     for window in windows:
         if window.attributes.get("span_id") != span.id:
             continue
+        classifier = str(window.attributes.get("classifier"))
         for label in window.attributes.get("labels") or []:
-            for name, members in label_sets.items():
-                if str(label) in members:
+            for name, resolved in label_sets.items():
+                if str(label) in resolved.by_classifier().get(classifier, ()):
                     decided.add(name)
     return sorted(decided)
 
@@ -604,17 +675,68 @@ def _events_reading(events: Sequence[Event], params: BranchParams) -> Done:
     return UNDETERMINED if params.point("score_min") is None else False
 
 
-def instrument_absent(name: str) -> Result:
-    """A result for a mode whose only instrument never reached the store.
+def instrument_absent(*names: str) -> Result:
+    """A result for a mode one of whose instruments never reached the store.
 
     Args:
-        name: The absent derivative.
+        *names: The absent derivatives, in the order the mode reads them.
 
     Returns:
-        ``done = UNDETERMINED``, no components, and one measurement recording the absence. An
+        ``done = UNDETERMINED``, no components, and one measurement naming every absence. An
         unavailable measurement is an absence, never a negative.
+
+    Raises:
+        ValueError: If no name is given, which would record an absence of nothing.
     """
-    return Result(UNDETERMINED, [], [measured(INSTRUMENT_ABSENT, None, None, None, absent=name)])
+    if not names:
+        raise ValueError("instrument_absent names the derivatives that are absent")
+    return Result(UNDETERMINED, [], [measured(INSTRUMENT_ABSENT, None, None, None, absent=list(names))])
+
+
+def coverage_denominator(expectation: Expectation, store: ProvStore) -> tuple[float, str]:
+    """How long the extent the instruction asked for is, and where that length came from.
+
+    Args:
+        expectation: The row.
+        store: The provenance store.
+
+    Returns:
+        The length in seconds and :data:`DECLARED_EXTENT` or :data:`STREAM_EXTENT`.
+    """
+    if expectation.declared_duration_s is not None:
+        return float(expectation.declared_duration_s), DECLARED_EXTENT
+    return duration(stream_extent(store)), STREAM_EXTENT
+
+
+def absence_note(names: Sequence[str]) -> str:
+    """The report's note for one :data:`INSTRUMENT_ABSENT` measurement.
+
+    Args:
+        names: The absent derivatives.
+
+    Returns:
+        The note, in the report's controlled vocabulary.
+    """
+    joined = ", ".join(names)
+    return f"the {joined} derivative is absent" if len(names) == 1 else f"the {joined} derivatives are absent"
+
+
+def absent_instruments(envelope: EnvelopeTrack | None, windows: Sequence[Entity]) -> tuple[str, ...]:
+    """Which of the label search's two instruments are absent.
+
+    Args:
+        envelope: The energy envelope, or None.
+        windows: The per-span classifier windows, empty when neither classifier wrote one.
+
+    Returns:
+        The absent derivative names, empty when both instruments are in hand.
+    """
+    missing: list[str] = []
+    if envelope is None:
+        missing.append("energy_envelope")
+    if not windows:
+        missing.extend(CLASSIFIER_WINDOWS)
+    return tuple(missing)
 
 
 def _airway_event_series(
@@ -638,11 +760,11 @@ def _airway_event_series(
     """
     assert expectation.label_set is not None
     envelope = read_envelope_track(store, run_dir)
-    if envelope is None:
-        return instrument_absent("energy_envelope")
+    windows = classifier_windows(store)
+    if envelope is None or not windows:
+        return instrument_absent(*absent_instruments(envelope, windows))
     kind = expectation.label_set
     spans = candidate_spans(store)
-    windows = classifier_windows(store)
     events = airway_events(kind, store, params, spans=amplitude_spans(spans), envelope=envelope, windows=windows)
     evidence = evidence_ids(store, *EVENT_SOURCES)
     graded = silence_windows(store)
@@ -733,16 +855,16 @@ def _airway_alternation(expectation: Expectation, store: ProvStore, params: Bran
     """
     assert expectation.label_set is not None
     envelope = read_envelope_track(store, run_dir)
-    if envelope is None:
-        return instrument_absent("energy_envelope")
+    windows = classifier_windows(store)
+    if envelope is None or not windows:
+        return instrument_absent(*absent_instruments(envelope, windows))
     kind = expectation.label_set
     spans = candidate_spans(store)
-    windows = classifier_windows(store)
     evidence = evidence_ids(store, *EVENT_SOURCES)
     graded = silence_windows(store)
 
     coughs = airway_events(kind, store, params, spans=spans, envelope=envelope, windows=windows)
-    breath_labels = (params.point("label_sets") or {}).get(BREATH) or ()
+    breath_labels = label_sets_by_classifier(params).get(BREATH, LabelSet((), ())).by_classifier()
     breath_minimum = params.point("score_min")
     carriers = (
         []
@@ -804,10 +926,9 @@ def _airway_coverage(
 ) -> Result:
     """One span per merged run of breath-scoring HeAR windows, plus ``task_extent``.
 
-    ``residual.energy_fraction`` is not read here. The residual is ``plain`` minus the enhanced
-    stream and FRCRN is a speech enhancer, so a high fraction means *this is not speech* — which a
-    cough, a glide, room noise and a near-silent file all satisfy. As a routing gate that may be
-    adequate; as this row's presence measurement it is not.
+    Reports the covered fraction and answers :data:`UNDETERMINED`: the design states no viable
+    approach for deciding a sustained breathing task from a duty cycle over HeAR's 2 s grid. The
+    measurement behind that is in ``specs/20260817-triage-workflow-dag/airway-flag-grounds.md``.
 
     Args:
         expectation: The row.
@@ -817,14 +938,14 @@ def _airway_coverage(
         run_dir: The run directory sidecar paths are relative to.
 
     Returns:
-        Whether the covered fraction reached the minimum, the spans, and the findings.
+        :data:`UNDETERMINED`, the spans, and the findings.
     """
     assert expectation.label_set is not None
     scored = hear_score_windows(store, run_dir)
     if scored is None:
         return instrument_absent("hear_scores")
     kind = expectation.label_set
-    labels = (params.point("label_sets") or {}).get(kind) or ()
+    labels = label_sets_by_classifier(params).get(kind, LabelSet((), ())).hear
     minimum = params.point("score_min")
     covered = (
         []
@@ -834,8 +955,8 @@ def _airway_coverage(
         )
     )
     total = sum(duration(extent) for extent in covered)
-    whole = duration(stream_extent(store))
-    coverage = total / whole if whole > 0.0 else 0.0
+    asked_s, asked_from = coverage_denominator(expectation, store)
+    coverage = total / asked_s if asked_s > 0.0 else None
     evidence = evidence_ids(store, "hear_scores")
     graded = silence_windows(store)
 
@@ -853,7 +974,18 @@ def _airway_coverage(
         for index, extent in enumerate(covered)
     ]
     findings: list[Finding] = [
-        measured("breath_coverage_fraction", None, None, rounded(coverage, 3), *evidence, covered_s=rounded(total))
+        measured(
+            COVERAGE_FRACTION,
+            None,
+            None,
+            rounded(coverage, 3),
+            *evidence,
+            covered_s=rounded(total),
+            asked_s=rounded(asked_s),
+            asked_from=asked_from,
+            runs_n=len(covered),
+            windows_n=len(scored),
+        )
     ]
     route, route_reported = route_findings(expectation, store, hint, params)
     findings.extend(route_reported)
@@ -874,8 +1006,7 @@ def _airway_coverage(
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
     findings.extend(off_task_findings(components, candidate_spans(store), params))
-    coverage_min = params.point("breath_coverage_min")
-    return Result(UNDETERMINED if coverage_min is None else coverage >= coverage_min, components, findings)
+    return Result(UNDETERMINED, components, findings)
 
 
 # --------------------------------------------------------------------- the two modes
@@ -943,13 +1074,13 @@ def detect_airway(store: ProvStore, params: BranchParams, *, run_dir: Path | Non
     if run_dir is None:
         raise ValueError("detect_airway reads persisted derivatives and needs the run directory")
     envelope = read_envelope_track(store, run_dir)
-    if envelope is None:
-        return instrument_absent("energy_envelope")
-    spans = candidate_spans(store)
     windows = classifier_windows(store)
+    if envelope is None or not windows:
+        return instrument_absent(*absent_instruments(envelope, windows))
+    spans = candidate_spans(store)
     evidence = evidence_ids(store, *EVENT_SOURCES)
     graded = silence_windows(store)
-    label_sets = params.point("label_sets") or {}
+    label_sets = label_sets_by_classifier(params)
 
     components: list[Proposal] = []
     findings: list[Finding] = []
@@ -1067,8 +1198,11 @@ def _detail(result: Result, spans: Sequence[Entity], params: BranchParams) -> di
         params: The operating points, read for what was asked for and could not be measured.
 
     Returns:
-        ``labelled_n``, ``by_label``, ``contested_n``, ``merged_n``, ``spans_n`` and ``notes``.
-        ``notes`` is what this branch could not measure, in controlled vocabulary; nothing folds it.
+        ``labelled_n``, ``by_label``, ``contested_n``, ``merged_n``, ``spans_n``, ``notes``, and
+        the three coverage fields. ``notes`` is what this branch could not measure, in controlled
+        vocabulary; nothing folds it. :data:`COVERAGE_FRACTION`, ``coverage_asked_s`` and
+        ``coverage_asked_from`` carry what the coverage pattern read, whatever it read, and are
+        None on every mode that takes no coverage.
     """
     events = [proposal for proposal in result.components if proposal.role != TASK_EXTENT]
     by_label: dict[str, int] = {}
@@ -1079,9 +1213,13 @@ def _detail(result: Result, spans: Sequence[Entity], params: BranchParams) -> di
     absent = [
         finding for finding in result.deviations if finding.kind == "measure" and finding.name == INSTRUMENT_ABSENT
     ]
-    notes = [f"the {finding.evidence.get('absent')} derivative is absent" for finding in absent]
+    notes = [absence_note(finding.evidence.get("absent") or ()) for finding in absent]
     if params.missing:
         notes.append(f"branch.* unmeasured: {', '.join(params.missing)}")
+    coverage = next(
+        (finding for finding in result.deviations if finding.kind == "measure" and finding.name == COVERAGE_FRACTION),
+        None,
+    )
     return {
         "labelled_n": len(events),
         "by_label": by_label,
@@ -1089,4 +1227,7 @@ def _detail(result: Result, spans: Sequence[Entity], params: BranchParams) -> di
         "merged_n": sum(int(span.attributes.get("merged_proposals", 1)) for span in spans if span.id in carriers),
         "spans_n": len(result.components),
         "notes": notes,
+        COVERAGE_FRACTION: None if coverage is None else coverage.evidence.get("value"),
+        "coverage_asked_s": None if coverage is None else coverage.evidence.get("asked_s"),
+        "coverage_asked_from": None if coverage is None else coverage.evidence.get("asked_from"),
     }

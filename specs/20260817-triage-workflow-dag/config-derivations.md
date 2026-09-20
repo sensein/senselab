@@ -704,9 +704,11 @@ AIRWAY's own vocabulary: which labels are the branch's subject, and which route 
 index declares. Two keys, both data, both with a derivation; no threshold lives here.
 
 airway.labels_of_interest {Cough, Breathe} -- branch-airway.md's default, from HeAR's eight.
-Vocabulary, not thresholds. `branch.label_sets` is this list split by the kind each label names
+Vocabulary, not thresholds. `branch.label_sets` is this list split by the kind each head names
 (`cough: [Cough]`, `breath: [Breathe]`), and the two modes read that split rather than this list,
-so widening one without the other changes nothing.
+so widening one without the other changes nothing. Both are HeAR spellings; the AudioSet names
+YAMNet reports are derived from them through the classifier-ontology profile rather than listed
+anywhere, which is why `Breathe` does not have to appear in a vocabulary that has no such class.
 
 airway.route_by_task_index {1: nose, 2: mouth, 3: nose, 4: mouth} -- the v1
 `respiration-and-cough-fivebreaths` protocol's index assignment, measured as an exact
@@ -1253,8 +1255,17 @@ branch.score_min: 0.2
   measurement; what changes is that the graph now answers it the same way in both places instead of
   refusing to answer in one.
 
-branch.breath_coverage_min: 0.5
-  A majority. A breathing task asks for breathing throughout the extent.
+branch.breath_coverage_min is **deleted**, not left null.
+
+  It shipped as 0.5, derived as "a majority; a breathing task asks for breathing throughout the
+  extent". That is a prior, not a fit, and the statistic it decided on is a duty cycle over HeAR's
+  non-overlapping 2 s grid, whose measured distribution over 1,096 sustained-breath recordings is
+  flat across [0, 1] with no structure at the bound. Paired within session against the same
+  participants' counted breath tasks, the bound rejected 58.6% of recordings from sessions where
+  every counted task passed and 61.1% where none did. `_airway_coverage` now reports the fraction
+  and answers UNDETERMINED, so no key decides here and a key nothing reads is worse than a missing
+  one. The measurement, the control contrast and the replacement design proposed but not built are
+  in `airway-flag-grounds.md`.
 
 branch.voiced_strength_min: 0.45
   Praat's own default for the voicing threshold in `To Pitch`. A published convention of the
@@ -1353,12 +1364,29 @@ branch.gap_off_task_min_s: 1.0
   a region that did not serve it.
 
 branch.label_sets
-  Unchanged: it maps a label-set name to the classifier labels that ARE that sound, and the two
-  shipped entries are `airway.labels_of_interest` (`[Cough, Breathe]`) split by which kind each
-  label names. No new decision is taken -- the set membership is the one already derived under
-  [airway](#airway) -- and it is a data mapping (`DATA_MAP_PATHS`) so a campaign can add a set
-  without editing the installed package. Whether HeAR's `Baby Cough` and `Throat Clear` belong in
-  the cough set is a question this split does not answer and does not pretend to.
+  It maps a kind to the **HeAR heads** that ARE that sound, and the two shipped entries are
+  `airway.labels_of_interest` (`[Cough, Breathe]`) split by which kind each head names. No new
+  decision is taken -- the membership is the one already derived under [airway](#airway) -- and it
+  is a data mapping (`DATA_MAP_PATHS`) so a campaign can add a kind without editing the installed
+  package. Whether HeAR's `Baby Cough` and `Throat Clear` belong in the cough set is a question
+  this split does not answer and does not pretend to; `airway-flag-grounds.md` measures `Baby
+  Cough` at this cut and declines to add it.
+
+  The AudioSet side is **derived, never configured**. `sounds_like` reads `span_hear` and
+  `span_yamnet` together, and YAMNet reports AudioSet display names, in which there is no class
+  called `Breathe`. Shipping one flat list therefore made the breath search HeAR-only while the
+  cough search read both, because `Cough` happens to be spelled the same in both vocabularies --
+  an asymmetry measured at 142 of 511 event-pattern breath non-conformances in
+  `airway-flag-grounds.md`. `label_sets_by_classifier` now resolves each configured head through
+  the packaged classifier-ontology profile's corroboration set, which the profile's own validator
+  already closes over its node table and refuses to let one spelling denote two nodes. Configuring
+  the AudioSet names instead would be a second place to state the same membership, and the two
+  could then disagree.
+
+  `branch.score_min` is **not** re-derived here. Making YAMNet readable for breath is what brings
+  that key's own recorded debt due -- "one cut across two classifiers whose scales were never
+  compared must be measured" -- and the fit is its own piece of work. `airway-flag-grounds.md`
+  proposes the labels it would be fitted against and states plainly that the 142 are not a claim.
 
 branch.phoneme_place_classes:
   labial [p, b], alveolar [t, d, r], velar [k, g]
