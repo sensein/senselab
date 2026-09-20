@@ -29,9 +29,16 @@ check exist because of it.
 ## Shape and sizing
 
 **400 slices of ~157 recordings, 200 concurrent, on `mit_preemptable`, 8 CPUs and 32 GB each, CPU
-only, 16 h per slice.** Sized on a 20-recording smoke and a 2,291-recording pilot that both ran the
-full graph: median **254 s** per recording, mean 265 s, max 480 s. A slice is therefore ~11.6 h
-against a 16 h limit, and the corpus is **~23 h** of wall clock.
+only, 16 h per slice.**
+
+Sizing, from the 2,273-recording pilot rather than from the smoke that preceded it: median **122.6 s**
+per recording, mean **159.5 s**, max 1,398 s. A slice of ~157 is therefore **~7 h** against a 16 h
+limit, and the corpus is **~14 h** of wall clock at 200 concurrent.
+
+The 20-recording smoke read 254 s median, twice that, and sizing on it would have been wrong by a
+factor of two. A smoke of twenty recordings pays its model loads over twenty recordings; a slice of
+a hundred and fifty-seven amortises the same loads over eight times as many. Size a run on a run of
+its own shape.
 
 The slice count is set by the queue, not by preference: `mit_preemptable`'s QOS caps a user at
 **448 submitted jobs**, and every task of an array counts against it. 1,024 slices and 450 slices
