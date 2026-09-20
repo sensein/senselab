@@ -935,9 +935,60 @@ def cover_margins(style: FigureStyle) -> tuple[float, float]:
     return style.cover_margin_in / width_in, style.cover_margin_in / height_in
 
 
+PAGE_TITLE_FONTSIZE = 10.0
+"""The point size a span page's heading is drawn at."""
+
 MONOSPACE_ADVANCE_EM = 0.6075
 """One monospaced character's advance width, in em, for the face matplotlib resolves ``monospace``
 to. Measured rather than taken from the font's metrics: 0.0675 in per character at 8 pt."""
+
+
+def wrap_measured(figure: Figure, text: str, *, fontsize: float, drawable_in: float) -> str:
+    """Fold text so every line's drawn width fits, measuring rather than counting characters.
+
+    A title is drawn in a proportional face, so a character count cannot say whether it fits. This
+    lays each candidate line out with the figure's own renderer and breaks where it stops fitting,
+    splitting a single over-long word rather than letting it run off the page.
+
+    Args:
+        figure: The figure the text will be drawn on, used for its renderer and its dpi.
+        text: The text to fold.
+        fontsize: The point size it will be drawn at.
+        drawable_in: How many inches wide the text may be.
+
+    Returns:
+        The text with newlines inserted. A line still too wide is one unsplittable character.
+    """
+
+    def drawn_in(candidate: str) -> float:
+        artist = figure.text(0.0, 0.0, candidate, fontsize=fontsize)
+        width = artist.get_window_extent().width / figure.dpi
+        artist.remove()
+        return width
+
+    def split_word(word: str) -> list[str]:
+        pieces, piece = [], ""
+        for character in word:
+            if piece and drawn_in(piece + character) > drawable_in:
+                pieces.append(piece)
+                piece = character
+            else:
+                piece += character
+        return [*pieces, piece] if piece else pieces
+
+    lines: list[str] = []
+    current = ""
+    for word in text.split(" "):
+        for piece in [word] if drawn_in(word) <= drawable_in else split_word(word):
+            candidate = f"{current} {piece}" if current else piece
+            if current and drawn_in(candidate) > drawable_in:
+                lines.append(current)
+                current = piece
+            else:
+                current = candidate
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
 
 
 def monospace_columns(style: FigureStyle, fontsize: float) -> int:
@@ -2119,9 +2170,17 @@ def summary_pages(
         padded = _mark_padding(timed, duration_s, window[1], style)
         timed[-1].set_xlabel("Time (s)")
         pad_note = "  ·  padded to a uniform page" if padded else ""
+        heading = (
+            f"{stem or store.run_id} — page {index}, {window[0]:.0f}-{window[1]:.0f}s of {duration_s:.2f}s{pad_note}"
+        )
         figure.suptitle(
-            f"{stem or store.run_id} — page {index}, {window[0]:.0f}-{window[1]:.0f}s of {duration_s:.2f}s{pad_note}",
-            fontsize=10,
+            wrap_measured(
+                figure,
+                heading,
+                fontsize=PAGE_TITLE_FONTSIZE,
+                drawable_in=style.figure_inches[0] - 2.0 * style.cover_margin_in,
+            ),
+            fontsize=PAGE_TITLE_FONTSIZE,
         )
         yield f"page{index:02d}", figure
 

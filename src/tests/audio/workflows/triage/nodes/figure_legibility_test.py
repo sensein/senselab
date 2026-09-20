@@ -191,3 +191,57 @@ class TestCoverTextFitsThePage:
         folded = _wrapped([long_line])
         assert len(folded) > 1
         assert all(len(line) <= _BLOCK_COLUMNS for line in folded)
+
+
+class TestPageTitleFitsThePage:
+    """A span page's heading names the recording; clipped, it names nothing."""
+
+    @staticmethod
+    def _drawn_in(figure: "plt.Figure", line: str, fontsize: float) -> float:
+        """How wide one line draws, in inches."""
+        artist = figure.text(0.0, 0.0, line, fontsize=fontsize)
+        width = artist.get_window_extent().width / figure.dpi
+        artist.remove()
+        return width
+
+    def test_a_real_stem_is_folded_rather_than_run_off_both_edges(self) -> None:
+        """The stems this corpus carries are longer than a landscape page at 10 pt."""
+        from senselab.audio.workflows.triage.nodes.figure import PAGE_TITLE_FONTSIZE, wrap_measured
+
+        style = FigureStyle()
+        figure = plt.figure(figsize=style.figure_inches)
+        drawable = style.figure_inches[0] - 2.0 * style.cover_margin_in
+        heading = (
+            "sub-00053adb-a1f4-4724-a694-c10e01b8cbe6_ses-33F6D051-4580-43FF-BC3B-14CD8B86CA3D"
+            "_task-diadochokinesis-buttercup_20260919-200235 — page 1, 0-20s of 6.27s"
+        )
+        assert self._drawn_in(figure, heading, PAGE_TITLE_FONTSIZE) > drawable
+        folded = wrap_measured(figure, heading, fontsize=PAGE_TITLE_FONTSIZE, drawable_in=drawable)
+        assert "\n" in folded
+        for line in folded.split("\n"):
+            assert self._drawn_in(figure, line, PAGE_TITLE_FONTSIZE) <= drawable
+        plt.close(figure)
+
+    def test_one_unbroken_word_is_split_rather_than_overflowed(self) -> None:
+        """A stem carries no spaces, so word wrapping alone cannot fold it."""
+        from senselab.audio.workflows.triage.nodes.figure import PAGE_TITLE_FONTSIZE, wrap_measured
+
+        style = FigureStyle()
+        figure = plt.figure(figsize=style.figure_inches)
+        drawable = style.figure_inches[0] - 2.0 * style.cover_margin_in
+        folded = wrap_measured(figure, "A" * 400, fontsize=PAGE_TITLE_FONTSIZE, drawable_in=drawable)
+        assert len(folded.split("\n")) > 1
+        for line in folded.split("\n"):
+            assert self._drawn_in(figure, line, PAGE_TITLE_FONTSIZE) <= drawable
+        plt.close(figure)
+
+    def test_a_heading_that_already_fits_is_left_on_one_line(self) -> None:
+        """Folding a short heading would cost a line of the page for nothing."""
+        from senselab.audio.workflows.triage.nodes.figure import PAGE_TITLE_FONTSIZE, wrap_measured
+
+        style = FigureStyle()
+        figure = plt.figure(figsize=style.figure_inches)
+        drawable = style.figure_inches[0] - 2.0 * style.cover_margin_in
+        heading = "sub-a_task-loudness — page 1, 0-20s of 6.27s"
+        assert wrap_measured(figure, heading, fontsize=PAGE_TITLE_FONTSIZE, drawable_in=drawable) == heading
+        plt.close(figure)
