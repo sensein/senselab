@@ -231,3 +231,43 @@ class TestDuration:
         report = aggregate(decisions(tmp_path))
         assert report.durations["0-1s"] == 1
         assert report.triage_by_duration["0-1s"] == {UNREAD: 1}
+
+
+class TestWhyARecordingDidNotPass:
+    """A flag count that cannot say why is not a decision record."""
+
+    def test_the_family_is_taken_off_a_ground_so_one_ground_is_one_count(self, tmp_path: Path) -> None:
+        """The same conclusion on two families is one ground, not two."""
+        from senselab.audio.workflows.triage.corpus_report import reason_ground
+
+        first = "VOICE reported that what the instruction asked for did not happen on maximum-phonation-time"
+        second = "VOICE reported that what the instruction asked for did not happen on prolonged-vowel"
+        assert reason_ground(first) == reason_ground(second)
+        assert reason_ground(first).endswith("did not happen")
+
+    def test_a_ground_naming_no_family_is_left_whole(self) -> None:
+        """Most grounds carry no family, and must not be truncated at an incidental preposition."""
+        from senselab.audio.workflows.triage.corpus_report import reason_ground
+
+        ground = "mismatch: routing routed VOICE, it found no subject"
+        assert reason_ground(ground) == ground
+
+    def test_grounds_are_counted_per_node_and_exclude_passes(self, tmp_path: Path) -> None:
+        """A passing verdict is not a reason a recording did not pass."""
+        reasons = [
+            NodeVerdict(node="VOICE", outcome=Outcome.FLAG, kind="voice", why="routed VOICE, it found no subject"),
+            NodeVerdict(node="VOICE", outcome=Outcome.FLAG, kind="voice", why="did not happen on prolonged-vowel"),
+            NodeVerdict(node="SPEECH", outcome=Outcome.PASS, kind=None, why="ran and reported"),
+        ]
+        _write_row(tmp_path, "sub-a", _verdict(Triage.FLAG, reasons=reasons))
+        report = aggregate(decisions(tmp_path))
+        assert report.grounds["VOICE"] == {"routed VOICE, it found no subject": 1, "did not happen": 1}
+        assert "SPEECH" not in report.grounds
+
+    def test_the_same_ground_across_recordings_accumulates(self, tmp_path: Path) -> None:
+        """This is the number that says whether one defect is the corpus's flag rate."""
+        for index in range(3):
+            reasons = [NodeVerdict(node="VOICE", outcome=Outcome.FLAG, kind="voice", why="it found no subject")]
+            _write_row(tmp_path, f"sub-{index}", _verdict(Triage.FLAG, reasons=reasons))
+        report = aggregate(decisions(tmp_path))
+        assert report.grounds == {"VOICE": {"it found no subject": 3}}
