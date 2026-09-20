@@ -565,17 +565,20 @@ class TestABranchNeverRefuses:
         ``False`` on the second reads as "the instruction was not met" and reaches the flag column
         indistinguishably from a genuine non-conformance, on the strength of a number nobody chose.
         ``qualifying_phonation``, ``ddk_carrier`` and the airway label search all returned the empty
-        set either way, and all three now separate the two.
+        set either way. DDK and AIRWAY separate the two causes; VOICE no longer needs to, because
+        it answers ``UNDETERMINED`` to both — its qualifiers say where it is safe to measure, and
+        it has no fitted criterion for the absence of phonation to fall back on.
         """
         import inspect
 
         for module, marker in (
-            (voice_module, "unmeasured_gate"),
             (ddk_module, "unmeasured_gate"),
             (airway_module, "_events_reading"),
         ):
             source = inspect.getsource(module)
             assert marker in source, f"{module.__name__} no longer separates the two causes"
+        voice_source = inspect.getsource(voice_module)
+        assert "Result(False" not in voice_source, "VOICE may write no non-conformance at all"
 
     def test_an_unmeasured_point_flags_through_the_fold_rather_than_through_a_raise(self) -> None:
         """Where the refusal went: the branch names the key, and this fold decides about it."""

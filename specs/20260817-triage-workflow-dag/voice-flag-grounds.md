@@ -387,9 +387,10 @@ The control families contribute a further 38 routed-VOICE mismatch flags per 120
 corpus-wide total is **not estimated here**: it depends on VOICE's routing rate in the 42 families
 this sample did not cover, and those rates were not measured.
 
-## The fixes I would make — not made
+## The fixes, as proposed
 
-Listed for approval. I have changed nothing.
+What follows was the proposal. The owner approved 1, 2 and the non-refit half of 3 on
+2026-09-19; what was actually made, and what it moved, is in *What was fixed* below.
 
 **A. The spread qualifier must not be an extreme-value statistic, and must not produce a `False`.**
 Two separable changes, and I would want both:
@@ -427,12 +428,197 @@ The order I would take them: D first (it is additive and makes everything after 
 A.2 (the contract fix), then B and C, and A.1 last, because it is the only one that needs listening
 before it can be chosen.
 
+## What was fixed, and what it moved
+
+The owner approved fixes 1 and 2 outright on 2026-09-19, and the non-refit half of fix 3. All three
+landed in `6a99b5f4`. The same 300 recordings were then re-run on the fixed commit, pinned the same
+way, and paired per recording against the pre-fix pass — so every row below is the same recordings
+on both sides.
+
+| | before | after |
+| --- | --- | --- |
+| commit | `f2729d7c` | `6a99b5f4` |
+| recordings | 300 | 300 (299 paired at first census; the last slice landed after) |
+| pin violations | 0 | 0 |
+| driver row failures | 0 | 0 |
+
+### 1 — a discarded carrier is now reported
+
+`qualifying_phonation` returns a `Qualification` carrying both what qualified and what it discarded,
+and every discarded span becomes a `carrier_rejected` **measurement** — not a deviation, because it
+is a reading of this branch's instrument rather than a departure by the speaker — naming the gate,
+the value read, the bound, and the carrier's length. The branch report carries the same list under
+`carriers_rejected`, so a corpus reader needs no store at all.
+
+```
+  before: 0 rejections recorded, on 0 of 300 recordings
+  after: 1413 rejections recorded, on 207 of 300 recordings
+```
+
+By gate: `production_min_s` 864, `voiced_fraction_min` 386, `f0_spread_max_semitones` 78,
+`dominant_segment_min_fraction` 43, `lexical_separator` 42. The question this document had to answer
+by re-deriving npz sidecars — did the branch find nothing, or throw something away? — is now a field
+in the report.
+
+The glide arm no longer writes `sweep_found: False` about a sweep it located: a sweep discarded by
+`dominant_segment_min_fraction` is recorded with its direction, its length and the fraction it held.
+
+### 2 — conformance is `UNDETERMINED` where the branch could not measure, and never `False`
+
+Taken wider than `prolonged-vowel`, as asked. `_voice_sustained` no longer returns the count-in
+match as the task's conformance; the count-in's absence stays the `omission` deviation it already
+was. Both arms return `UNDETERMINED` when no carrier or no sweep survived. **VOICE now writes no
+`False` at all**, and a test asserts that structurally: these instruments can establish that a
+sustained production happened, not that none did.
+
+```
+family                           n           True          False     UNDETERMINED
+                                     before after   before after   before   after
+glides-high-to-low              30       12    12       18     0        0      18
+glides-low-to-high              30       11    11       19     0        0      19
+high-to-low                     30       12    12       18     0        0      18
+maximum-phonation-time          30        4    20       26     0        0      10
+maximum-phonation-time-v2       30        8    20       22     0        0      10
+prolonged-vowel                 30        4    19       26     0        0      11
+diadochokinesis-pa              30        0     0        0     0       11      11
+loudness                        30        0     0        0     0        7       7
+rainbow-passage                 30        0     0        0     0       19      19
+respiration-and-cough-cough     30        0     0        0     0        2       2
+```
+
+The three sustained families are where the substance is: `True` goes 4 → 20, 8 → 20 and 4 → 19 of
+30. Those are recordings whose sustained phonation the branch was measuring and then throwing away.
+The glide families are unchanged at 12, 11 and 12 — correctly, because `dominant_segment_min_fraction`
+is the part that needs listening and was left alone; their `False` became `UNDETERMINED`.
+
+### 3 — the per-window bound is read off a representative window
+
+`max_windowed_spread` is replaced by `windowed_spreads` and `typical_windowed_spread`. The median
+window's spread is compared against the same `f0_spread_max_semitones = 2.0`. A window carrying
+fewer than two finite values is dropped rather than voting as a spread of zero, and an unreadable
+spread no longer rejects — an unmeasured qualifier could neither admit nor reject.
+
+**No new operating point, and none was needed.** The candidate constant was the fraction of windows
+that must lie within the bound. Derived across the ten strata — positives being the best carrier on
+a sustained in-family recording, negatives the same on connected speech:
+
+```
+ cut   positives kept   negatives kept   Youden J
+ 0.45        60/68            9/44        +0.678   <- empirical optimum
+ 0.50        59/68            9/44        +0.663   <- "a majority", the house convention
+```
+
+The two differ by **one recording in 112**. `median spread ≤ bound` is exactly `within-bound
+fraction ≥ 0.5`, so the majority convention that `voiced_fraction_min`, `continuity_min`,
+`breath_coverage_min` and `dominant_segment_min_fraction` already ship is indistinguishable from the
+fitted optimum here. Adding a config key to encode 0.45 instead would have been a fitted-looking
+number bought for one recording. It was not added.
+
+**The defect's own signature is gone.** Rejection rate against carrier duration, in-family sustained:
+
+```
+carrier duration (s)    max > 2.0 st (before)    median > 2.0 st (after)
+0-2                          0.40                      0.30
+2-5                          0.72                      0.22
+5-10                         0.75                      0.12
+10-20                        0.79                      0.10
+20-100                       0.83                      0.00
+```
+
+Before, the gate was most likely to reject the longest productions — on a task whose measurement is
+how long the vowel was held. After, the relation inverts: a longer sustained production reads as
+more clearly sustained, which is what a qualifier should do.
+
+**The gate still rejects what it is for.** The wobble case is still discarded, pinned by a test, and
+the cost on the control families is small and visible:
+
+```
+family                          routed  before  after  rate before  rate after
+maximum-phonation-time              29      25      9         0.86        0.31
+maximum-phonation-time-v2           27      19      7         0.70        0.26
+prolonged-vowel                     29       6      1         0.21        0.03
+diadochokinesis-pa                  11      11     10         1.00        0.91
+loudness                             7       7      6         1.00        0.86
+rainbow-passage                     19      18     15         0.95        0.79
+respiration-and-cough-cough          2       2      2         1.00        1.00
+```
+
+Three control recordings out of 37 routed ones gained a phonation span they did not have before.
+That is the price of the looser statistic and it is worth naming: on an out-of-family recording
+`detect_voice` evaluates no task, so a spurious span there is a covariate, not an accusation.
+
+### Tests
+
+Nine existing tests encoded the old behaviour and were rewritten to the new contract rather than
+deleted. Fifteen were added. Every fix was mutation-tested — the fix reverted one piece at a time on
+top of the new code, so the suite still imports:
+
+| mutation | undoes | caught by |
+| --- | --- | --- |
+| `M1` median → max | the statistic | 2 tests |
+| `M2` the count-in decides again | conformance | 4 tests |
+| `M3` no carrier → `False` | conformance | 7 tests |
+| `M4` rejections silent | visibility | 3 tests |
+| `M5` glide decides on a discarded sweep | conformance | 3 tests |
+
+No mutation survived. `2038 passed` across `src/tests/audio/workflows/triage/`, ruff clean, mypy
+clean on a purged cache.
+
+## The triple count is VERDICT's, and this is where it arises
+
+Not fixed, as instructed. Three flag records for one no-carrier event, and all three read **one
+number**: `findings[branch]`, the count of spans the branch proposed.
+
+| # | site | condition | text |
+| --- | --- | --- | --- |
+| 1 | `vocabulary.py:712` | `report.conformance is False` | `… reported that what the instruction asked for did not happen on <family>` |
+| 2 | `vocabulary.py:728-731` | `agreement[branch] == MISMATCH`, from `_agreement` (`:511`) reading `findings[branch]` | `mismatch: routing routed VOICE, it found no subject` |
+| 3 | `vocabulary.py:737-740` | `hints[branch] == CLAIMED_NOT_FOUND`, from `_hint_reading` (`:542`) reading the same `findings[branch]` | `hint mismatch: VOICE was declared and did not find it` |
+
+`_found` (`:461`) computes `findings[branch]` once from the span count. `_agreement` and
+`_hint_reading` then each compare it against a different expectation — the ruleset's content route,
+and the stem's declared family. Those two expectations are genuinely different inputs, but on
+VOICE's own families they agree almost perfectly (the ruleset routed VOICE on 29 of 30
+`maximum-phonation-time` recordings and the stem declared it on 30 of 30), so in practice both fire
+together, on the same span count, alongside the branch's own conformance about the same absence.
+
+**Fix 2 already removed one of the three.** With VOICE writing no `False`, ground 1 never fires for
+this branch: 378 flag records became 178, and no recording carries three.
+
+```
+  before: 378 records over 300 recordings; per recording {0: 133, 1: 57, 2: 9, 3: 101}
+  after:  178 records over 300 recordings; per recording {0: 190, 1: 42, 2: 68}
+```
+
+**The smallest honest change** would take the remaining two to one. Measured on the pre-fix data,
+where all three grounds were live, two candidates:
+
+| candidate | change | records | per recording |
+| --- | --- | --- | --- |
+| *merge* — grounds 2 and 3 become one reason naming both disappointed expectations | one `if` in the `for branch in branches_seen` loop | 378 → 277 | no recording carries 3 |
+| *report-gated* — raise 2 and 3 only where the branch left **no report** | one added condition on the same loop | 378 → 129 | at most 1 per recording |
+
+I would take *report-gated*, and the reasoning is the report/decide split this work is built on: a
+branch that filed a report has already stated its conclusion about the recording, and the span count
+is the evidence for that conclusion rather than two further findings about the recording. Where a
+branch is *silent*, the route and the declaration are the only signals there are, and the mismatch
+is the right thing to raise. Both the `agreement` and `hints` tables stay in `FileVerdict.record()`
+either way, so nothing is lost from the decision record — what changes is only what reaches
+`reasons`.
+
+One consequence to see before choosing: combined with fix 2, *report-gated* would leave VOICE
+raising **no flags at all** on this sample. That is defensible today — the branch has no fitted
+criterion for anything it could honestly flag on — but it means VOICE becomes purely descriptive
+until one exists, and that is a decision about the graph rather than a repair, which is why it is
+here and not in the commit.
+
 ## Reproducing this
 
 ```bash
-# on ORCD, from the pinned clone
+# on ORCD, from a pinned clone, with PYTHONPATH pointing at its src
 python voice-flag-grounds-census.py <driver-output-root> census.jsonl
 python voice-flag-grounds-tables.py census.jsonl
+python voice-flag-grounds-compare.py before.jsonl after.jsonl
 ```
 
 The census walks `run/store.jsonl` directly rather than the driver's row files, so a run whose

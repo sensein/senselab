@@ -26,7 +26,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     duration,
     lexical,
     longest_monotone_run,
-    max_windowed_spread,
     overlaps,
     robust_spread,
     semitones,
@@ -37,6 +36,11 @@ from senselab.audio.workflows.triage.nodes.branches import (
 )
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
+
+try:  # the fixed commit replaced the reduction; the probe reads either, so one file spans both
+    from senselab.audio.workflows.triage.nodes.branches import typical_windowed_spread as _spread
+except ImportError:  # pragma: no cover - the pre-fix commit
+    from senselab.audio.workflows.triage.nodes.branches import max_windowed_spread as _spread
 
 CONFIG = load_triage_config(None)
 PARAMS = branch_params(CONFIG)
@@ -86,7 +90,7 @@ def gate_census(evidence: V.Evidence, expectation: Expectation, params: BranchPa
             continue
         vf = float(track.voiced.mean())
         pitch = semitones(np.where(track.voiced, track.f0_hz, np.nan))
-        spread = float("nan") if spread_window_s is None else max_windowed_spread(pitch, track.hop_s, spread_window_s)
+        spread = float("nan") if spread_window_s is None else _spread(pitch, track.hop_s, spread_window_s)
         trace = np.empty(0) if evidence.continuity is None else trace_slice(evidence.continuity, span.extent)
         stat = float(np.median(trace)) if trace.size else 0.0
         rec.update(
@@ -238,6 +242,17 @@ def one(run_dir: Path, store_path: Path, family: str, stem: str) -> dict:
         row["census"] = gate_census(ev, exp or Expectation(pattern=Pattern.SUSTAINED), PARAMS)
         row["pattern"] = "sustained" if exp is not None else "detect"
     row["carriers_n"] = sum(1 for c in row["census"] if c.get("rejected_by") is None)
+    # What the branch itself recorded about the carriers it discarded. Absent before the fix that
+    # added it, so its presence is also the check that the fix reached the store.
+    row["rejections_in_store"] = [
+        {
+            "gate": e.attributes.get("value"),
+            "value_read": e.attributes.get("value_read"),
+            "carrier_s": e.attributes.get("carrier_s"),
+        }
+        for e in store.entities("measurement")
+        if not store.is_invalidated(e.id) and e.attributes.get("name") == "carrier_rejected"
+    ]
     return row
 
 

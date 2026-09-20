@@ -1776,8 +1776,12 @@ def robust_spread(values: np.ndarray) -> float:
     return float(np.percentile(finite, 95.0) - np.percentile(finite, 5.0))
 
 
-def max_windowed_spread(values: np.ndarray, hop_s: float, window_s: float) -> float:
-    """The worst local spread, so a slow drift over a long production does not read as instability.
+def windowed_spreads(values: np.ndarray, hop_s: float, window_s: float) -> np.ndarray:
+    """Every window's local spread, over the windows that carry enough of the series to have one.
+
+    A window holding fewer than two finite values is not a spread of zero, it is no reading: it is
+    dropped rather than voting. The measurement behind that is in
+    ``specs/20260817-triage-workflow-dag/voice-flag-grounds.md``.
 
     Args:
         values: The values, one per hop.
@@ -1785,17 +1789,37 @@ def max_windowed_spread(values: np.ndarray, hop_s: float, window_s: float) -> fl
         window_s: The window, in seconds.
 
     Returns:
-        The largest :func:`robust_spread` over any window, or the whole-series spread when the
-        series is no longer than one window.
+        One :func:`robust_spread` per readable window, in window order; empty when none is readable.
     """
     series = np.asarray(values, dtype=float)
     width = max(2, int(round(window_s / hop_s))) if hop_s > 0.0 else 2
-    if series.size <= width:
-        return robust_spread(series)
-    worst = 0.0
-    for first in range(0, series.size - width + 1):
-        worst = max(worst, robust_spread(series[first : first + width]))
-    return worst
+    starts = [0] if series.size <= width else range(0, series.size - width + 1)
+    readable = [
+        robust_spread(series[first : first + width])
+        for first in starts
+        if np.isfinite(series[first : first + width]).sum() >= 2
+    ]
+    return np.asarray(readable, dtype=float)
+
+
+def typical_windowed_spread(values: np.ndarray, hop_s: float, window_s: float) -> float:
+    """The spread of a representative window, which is what a per-window bound is a bound on.
+
+    The median rather than the maximum: a bound derived for one window, applied to the worst of
+    thousands, is certain to find the tracker noise it was written to tolerate, and the number of
+    windows grows with the duration of the very production being qualified.
+
+    Args:
+        values: The values, one per hop.
+        hop_s: The hop, in seconds.
+        window_s: The window, in seconds.
+
+    Returns:
+        The median of :func:`windowed_spreads`, or NaN when no window is readable — which is an
+        unmeasured qualifier, never a passing or failing one.
+    """
+    spreads = windowed_spreads(values, hop_s, window_s)
+    return float(np.median(spreads)) if spreads.size else float("nan")
 
 
 def longest_monotone_run(values: np.ndarray, tolerance: float) -> tuple[int, int, int] | None:

@@ -8,7 +8,12 @@ and evaluates nothing.
 Both write by ``propose`` only. The subject is PREPROCESS's ``amplitude`` spans qualified by
 ``phonation_tracks`` and ``continuity_trace`` — the same evidence the route was decided on — and
 VOICE mints its own ``family: "voice"`` spans over what qualifies. It waits for no ``phonation``
-span and edits none.
+span and edits none. Every span a qualifier discards is reported as a ``carrier_rejected``
+measurement naming the gate, so a reader can tell an absent production from a discarded one.
+
+Conformance here is ``True`` or :data:`UNDETERMINED` and never ``False``: these instruments can
+establish that a sustained production happened, not that none did. What the grounds for that are
+is in ``specs/20260817-triage-workflow-dag/voice-flag-grounds.md``.
 
 The design is ``specs/20260817-triage-workflow-dag/branch-voice.md``; what porting it decided is
 ``specs/20260817-triage-workflow-dag/branch-voice-implementation.md``.
@@ -46,7 +51,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     duration,
     lexical,
     longest_monotone_run,
-    max_windowed_spread,
     measured,
     mode_of,
     ordered_run,
@@ -59,6 +63,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     touches_edge,
     trace_slice,
     track_slice,
+    typical_windowed_spread,
     unviable,
     voice_span,
     voiced_extent,
@@ -200,7 +205,7 @@ class Carrier:
         span: The amplitude span the production was found inside.
         track: The phonation tracks over it, with voicing already decided.
         voiced_fraction: How much of the carrier the tracker found F0 for.
-        f0_spread_semitones: The worst local F0 spread over it.
+        f0_spread_semitones: The representative local F0 spread over it.
         stationarity: The median spectral continuity over it.
     """
 
@@ -216,19 +221,102 @@ class Carrier:
         Returns:
             The qualifiers, rounded for the store.
         """
+        spread = self.f0_spread_semitones
         return {
             "voiced_fraction": round(self.voiced_fraction, 4),
-            "f0_spread_semitones": round(self.f0_spread_semitones, 3),
+            "f0_spread_semitones": round(spread, 3) if np.isfinite(spread) else None,
             "stationarity": round(self.stationarity, 4),
             "support_frames": int(self.track.voiced.sum()),
         }
 
 
-def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: BranchParams) -> list[Carrier]:
+@dataclass(frozen=True)
+class Rejection:
+    """One amplitude span this branch examined and discarded, and the gate that discarded it.
+
+    A discarded carrier is a reading of the branch's own instrument, not a departure by the
+    speaker, so it is written as a measurement rather than a deviation. Without it the store cannot
+    distinguish a recording holding no sustained phonation from one holding a production a
+    qualifier threw away.
+
+    Attributes:
+        span: The amplitude span that was examined.
+        gate: The operating point that discarded it, by its ``branch.*`` key or role name.
+        value: What was read for that gate, or None where the gate reads no scalar.
+        bound: The value it was read against, or None for the same reason.
+        qualifiers: Whatever else had been measured over the span by the time it was discarded.
+    """
+
+    span: Entity
+    gate: str
+    value: float | None
+    bound: float | None
+    qualifiers: dict[str, Any]
+
+    def finding(self) -> Finding:
+        """This rejection, as the measurement the store records.
+
+        Returns:
+            One ``carrier_rejected`` measurement over the discarded span's own extent.
+        """
+        start, end = self.span.extent or (0.0, 0.0)
+        return measured(
+            "carrier_rejected",
+            start,
+            end,
+            self.gate,
+            self.span.id,
+            value_read=self.value,
+            bound=self.bound,
+            carrier_s=round(end - start, 3),
+            **self.qualifiers,
+        )
+
+    def record(self) -> dict[str, Any]:
+        """This rejection, as the report's own summary of it.
+
+        Returns:
+            The gate, the value and the carrier's length, for a reader who opens no findings.
+        """
+        start, end = self.span.extent or (0.0, 0.0)
+        return {"gate": self.gate, "value_read": self.value, "carrier_s": round(end - start, 3)}
+
+
+@dataclass(frozen=True)
+class Qualification:
+    """What the qualifier made of every amplitude span it was given.
+
+    Attributes:
+        carriers: The spans that qualified, in the order the spans were given.
+        rejected: The spans that did not, each naming the gate that discarded it.
+    """
+
+    carriers: list[Carrier]
+    rejected: list[Rejection]
+
+    def findings(self) -> list[Finding]:
+        """One measurement per discarded carrier.
+
+        Returns:
+            The findings, in the order the spans were given.
+        """
+        return [rejection.finding() for rejection in self.rejected]
+
+    def records(self) -> list[dict[str, Any]]:
+        """The report's summary of what was discarded.
+
+        Returns:
+            One entry per discarded carrier.
+        """
+        return [rejection.record() for rejection in self.rejected]
+
+
+def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: BranchParams) -> Qualification:
     """V1's stationarity qualifier, over PREPROCESS's amplitude spans. One body, three callers.
 
     The subject is ``measure == "amplitude"``, not ``family == "phonation"``: VOICE reads the
-    amplitude spans as evidence and mints its own span over what qualifies.
+    amplitude spans as evidence and mints its own span over what qualifies. Every span it discards
+    is returned beside the ones it keeps, named by the gate that discarded it.
 
     Args:
         evidence: The derivatives and store reads.
@@ -236,45 +324,60 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
         params: The operating points.
 
     Returns:
-        The qualifying carriers, in the order the spans were given.
+        The carriers that qualified and the spans that did not.
     """
     if evidence.tracks is None:
-        return []
+        return Qualification([], [])
     minimum_s = params.point("production_min_s")
     strength_min = params.point("voiced_strength_min")
     if minimum_s is None or strength_min is None:
-        return []
+        return Qualification([], [])
     fraction_min = params.point("voiced_fraction_min")
     spread_window_s = params.point("f0_spread_window_s")
     spread_max = params.point("f0_spread_max_semitones")
     continuity_min = params.point("continuity_min")
     words = lexical(evidence.words)
     out: list[Carrier] = []
+    rejected: list[Rejection] = []
     for span in amplitude_spans(evidence.spans):
         if span.extent is None or duration(span.extent) < minimum_s:
+            rejected.append(Rejection(span, "production_min_s", round(duration(span.extent), 3), minimum_s, {}))
             continue
         if expectation.lexical_separator and any(overlaps(word_extent(word), span.extent) for word in words):
+            rejected.append(Rejection(span, "lexical_separator", None, None, {}))
             continue
         track = track_slice(evidence.tracks, span.extent, strength_min)
         if track.strength.size == 0:
+            rejected.append(Rejection(span, "no_track_over_carrier", None, None, {}))
             continue
         voiced_fraction = float(track.voiced.mean())
         pitch = semitones(np.where(track.voiced, track.f0_hz, np.nan))
-        spread = float("nan") if spread_window_s is None else max_windowed_spread(pitch, track.hop_s, spread_window_s)
+        spread = (
+            float("nan") if spread_window_s is None else typical_windowed_spread(pitch, track.hop_s, spread_window_s)
+        )
         trace = (
             np.empty(0, dtype=float) if evidence.continuity is None else trace_slice(evidence.continuity, span.extent)
         )
         stationarity = float(np.median(trace)) if trace.size else 0.0
-        # A qualifier whose own boundary is unmeasured is not applied: it could neither admit nor
-        # reject this carrier, and rejecting on it would be this branch deciding for want of a
-        # number. The ask is recorded in `params.missing`.
-        if (
-            (fraction_min is None or voiced_fraction >= fraction_min)
-            and (spread_max is None or spread_window_s is None or spread <= spread_max)
-            and (continuity_min is None or stationarity >= continuity_min)
-        ):
-            out.append(Carrier(span, track, voiced_fraction, spread, stationarity))
-    return out
+        carrier = Carrier(span, track, voiced_fraction, spread, stationarity)
+        # A qualifier whose own boundary is unmeasured is not applied, and neither is one whose own
+        # reading is unmeasurable: either could neither admit nor reject this carrier, and rejecting
+        # on one would be this branch deciding for want of a number. The ask is in `params.missing`.
+        if fraction_min is not None and voiced_fraction < fraction_min:
+            rejected.append(
+                Rejection(span, "voiced_fraction_min", round(voiced_fraction, 4), fraction_min, carrier.qualifiers())
+            )
+        elif spread_max is not None and spread_window_s is not None and np.isfinite(spread) and spread > spread_max:
+            rejected.append(
+                Rejection(span, "f0_spread_max_semitones", round(spread, 3), spread_max, carrier.qualifiers())
+            )
+        elif continuity_min is not None and stationarity < continuity_min:
+            rejected.append(
+                Rejection(span, "continuity_min", round(stationarity, 4), continuity_min, carrier.qualifiers())
+            )
+        else:
+            out.append(carrier)
+    return Qualification(out, rejected)
 
 
 def align_voice(
@@ -330,7 +433,9 @@ def _count_in(
 
     Returns:
         Whether the count-in was realised, the span it proposes, and one ``omission`` per token
-        nothing realised.
+        nothing realised. The bool is the count-in's own reading and is no part of the task's
+        conformance: a held vowel carries no lexical content by design, so keying the task to a
+        transcript word would decide it on the one thing the instruction asked not to happen.
     """
     if expectation.tokens is None:
         return True, [], []
@@ -363,29 +468,22 @@ def _voice_sustained(
         params: The operating points.
 
     Returns:
-        The result. :data:`UNDETERMINED` when the tracks are absent, so no boundary can be placed.
+        The result. :data:`UNDETERMINED` whenever no carrier qualified, because this branch's
+        instruments can establish a sustained production but not its absence.
     """
-    count_in_found, components, findings = _count_in(expectation, evidence, params)
+    _, components, findings = _count_in(expectation, evidence, params)
     if evidence.tracks is None:
         findings.append(unviable("phonation_extent", TRACKS_ABSENT))
         return Result(UNDETERMINED, components, findings)
 
-    # The two points the carrier search cannot proceed without are read before it, because an empty
-    # carrier list has two causes and they are not the same report: "no span cleared the qualifier"
-    # is a reading of the recording, "the qualifier's own boundary is unmeasured" is a reading of the
-    # configuration. Folding the second as `False` would claim the task was not performed on the
-    # strength of a number nobody chose.
-    unmeasured_gate = params.point("production_min_s") is None or params.point("voiced_strength_min") is None
-    carriers = sorted(
-        qualifying_phonation(evidence, expectation, params),
-        key=lambda carrier: duration(carrier.span.extent),
-        reverse=True,
-    )
+    qualification = qualifying_phonation(evidence, expectation, params)
+    findings.extend(qualification.findings())
+    carriers = sorted(qualification.carriers, key=lambda carrier: duration(carrier.span.extent), reverse=True)
     findings.append(
         count("attempt_count", len(carriers), expectation.expected_event_count, *(each.span.id for each in carriers))
     )
     if not carriers:
-        return Result(UNDETERMINED if unmeasured_gate else False, components, findings)
+        return Result(UNDETERMINED, components, findings)
 
     carrier = carriers[0]
     assert carrier.span.extent is not None  # noqa: S101 — qualifying_phonation admits no other case
@@ -449,7 +547,7 @@ def _voice_sustained(
                 *evidence.derivations(evidence.file_id),
             )
         )
-    return Result(count_in_found, components, findings)
+    return Result(True, components, findings)
 
 
 def _interruptions(carrier: Carrier, *derived_from: str) -> list[Finding]:
@@ -496,7 +594,8 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
         params: The operating points.
 
     Returns:
-        The result. :data:`UNDETERMINED` when the tracks are absent, so no sweep can be placed.
+        The result. :data:`UNDETERMINED` when the tracks are absent, so no sweep can be placed, and
+        when every sweep this branch located was discarded by a qualifier.
     """
     if evidence.tracks is None:
         return Result(UNDETERMINED, [], [unviable("sweep_extent", TRACKS_ABSENT)])
@@ -510,27 +609,54 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
     dominant_min = params.point("dominant_segment_min_fraction")
 
     best: tuple[Entity, TrackSlice, int, float, tuple[float, float]] | None = None
+    discarded: list[Finding] = []
     for span in amplitude_spans(evidence.spans):
         if span.extent is None or duration(span.extent) < minimum_s:
+            discarded.append(
+                Rejection(span, "production_min_s", round(duration(span.extent), 3), minimum_s, {}).finding()
+            )
             continue
         track = track_slice(evidence.tracks, span.extent, strength_min)
         if track.strength.size == 0:
+            discarded.append(Rejection(span, "no_track_over_carrier", None, None, {}).finding())
             continue
-        if fraction_min is not None and float(track.voiced.mean()) < fraction_min:
+        voiced_fraction = float(track.voiced.mean())
+        if fraction_min is not None and voiced_fraction < fraction_min:
+            discarded.append(
+                Rejection(span, "voiced_fraction_min", round(voiced_fraction, 4), fraction_min, {}).finding()
+            )
             continue
         pitch = semitones(np.where(track.voiced, track.f0_hz, np.nan))
         run = longest_monotone_run(pitch, tolerance)
         if run is None:
+            discarded.append(Rejection(span, "no_monotone_run", None, tolerance, {}).finding())
             continue
         first, last, sign = run
         sweep = (float(track.times_s[first]), float(track.times_s[last]) + track.hop_s)
-        if dominant_min is not None and duration(sweep) / max(duration(span.extent), 1e-9) < dominant_min:
+        held = duration(sweep) / max(duration(span.extent), 1e-9)
+        if dominant_min is not None and held < dominant_min:
+            # The sweep was located. It is recorded with what it measured, because "no sweep was
+            # found" would state more than was read: what happened is that a sweep covered less of
+            # its carrier than the operating point asks, and the carrier's extent is PREPROCESS's.
+            discarded.append(
+                Rejection(
+                    span,
+                    "dominant_segment_min_fraction",
+                    round(held, 4),
+                    dominant_min,
+                    {
+                        "sweep_s": round(duration(sweep), 3),
+                        "direction": "up" if sign > 0 else "down",
+                        "extent_semitones": round(abs(float(pitch[last] - pitch[first])), 2),
+                    },
+                ).finding()
+            )
             continue
         if best is None or duration(sweep) > duration(best[4]):
             best = (span, track, sign, abs(float(pitch[last] - pitch[first])), sweep)
 
     if best is None:
-        return Result(False, [], [count("sweep_found", False, True)])
+        return Result(UNDETERMINED, [], [*discarded, count("sweep_found", False, True)])
 
     span, track, sign, extent_semitones, sweep = best
     direction = "up" if sign > 0 else "down"
@@ -547,6 +673,7 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
     ]
     read_off = (span.id, *evidence.derivations(evidence.tracks_id))
     findings: list[Finding] = [
+        *discarded,
         measured(
             "glide_extent_semitones",
             sweep[0],
@@ -555,7 +682,7 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
             *read_off,
             direction=direction,
             support_frames=int(track.voiced.sum()),
-        )
+        ),
     ]
     if direction != expectation.declared_direction:
         findings.append(
@@ -595,11 +722,12 @@ def detect_voice(store: ProvStore, params: BranchParams, *, run_dir: Path) -> Re
         return Result(UNDETERMINED, [], [unviable("phonation_extent", TRACKS_ABSENT)])
 
     neutral = Expectation(pattern=Pattern.SUSTAINED)
-    carriers = qualifying_phonation(evidence, neutral, params)
+    qualification = qualifying_phonation(evidence, neutral, params)
+    carriers = qualification.carriers
     qualifying_ids = {carrier.span.id for carrier in carriers}
 
     components: list[Proposal] = []
-    findings: list[Finding] = []
+    findings: list[Finding] = qualification.findings()
     for carrier in carriers:
         assert carrier.span.extent is not None  # noqa: S101 — qualifying_phonation admits no other case
         extent = voiced_extent(carrier.span.extent, carrier.track)
@@ -708,6 +836,15 @@ def voice(
     extents = [(proposal.start, proposal.end) for proposal in result.components]
     phonation_s = sum(end - start for start, end in extents)
     longest_span_s = max((end - start for start, end in extents), default=0.0)
+    rejected = [
+        {
+            "gate": str(finding.evidence["value"]),
+            "value_read": finding.evidence.get("value_read"),
+            "carrier_s": finding.evidence.get("carrier_s"),
+        }
+        for finding in findings
+        if finding.kind == "measure" and finding.name == "carrier_rejected"
+    ]
     notes: list[str] = []
     if tracks_absent:
         notes.append(TRACKS_ABSENT)
@@ -733,6 +870,8 @@ def voice(
             "longest_span_s": round(longest_span_s, 3),
             "roles": sorted({proposal.role for proposal in result.components}),
             "phonation_tracks": not tracks_absent,
+            "carriers_rejected": rejected,
+            "carriers_rejected_n": len(rejected),
             "notes": notes,
         },
     )
