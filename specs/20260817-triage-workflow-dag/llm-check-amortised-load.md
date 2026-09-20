@@ -305,23 +305,34 @@ then buys only the multi-round case, and on this corpus no recording had one. **
 is real but it is not free: it requires giving the step a GPU of its own**, which is what the owner's
 separate-pass plan already does.
 
-The same 26 recordings, the same list, the same process, with the shipped
+The same list, the same process, the same card, rerun with the shipped
 `keep_worker_resident: false` — the weights handed back when each check ends:
 
 | | resident | released (shipped) |
 | --- | --- | --- |
-| `PREPROCESS` → `REDACT` completed | 3 of 22 | **every recording so far** |
-| `asr_qwen: CUDA error: out of memory` | 19 of 22 | **0** |
-| recordings that got a model verdict | 1 | 3 of the first 8 |
-| load paid per checked recording | 14.6 s once | 14.6 – 14.9 s each |
+| recordings driven | 22 (job ended) | 26 |
+| `PREPROCESS` completed | 3 | **26** |
+| `asr_qwen: RuntimeError: CUDA error: out of memory` | **19** | **0** |
+| reached REDACT | 3 | 18 |
+| got a model verdict | **1** | **12** |
+| load per checked recording | 14.6 s, once | 14.6 – 15.8 s, each |
+| the step's own span (`ended - started`) | 21.6 s | 19.5 – 23.5 s, median 21.4 s |
+| node errors of any kind | 19 | **0** |
 
-So the release makes the graph survive, and the cost is exactly the one the arena's arm A measured:
-each checked recording pays its own ~14.7 s load. Everything else about the step is unchanged —
-`activity_span_s` 20.4–23.0 s, one round each, 68–134 output tokens, the same 40-hex revision on
-every annotation.
+The released arm is the whole sample working: 26 of 26 completed, 18 reached REDACT, 12 got a model
+verdict — the same 12 of 26 the first run reported — and the whole thing took 3,434 s wall including
+the graph. The resident arm produced one verdict and nineteen failures on the identical list.
 
-(The released arm was still working through its 26 recordings when this was written; the OOM count
-is what matters and it is zero, against 19 in the resident arm on the identical list.)
+The cost of releasing is exactly what arm A predicted: **69.9% of each checked recording's 21.4 s is
+the model load**, paid again every time. That is the price of not having a GPU to spare, and it is
+the thing a dedicated pass stops paying.
+
+Two smaller things this arm settled. The store's records are complete and legible on every path —
+`activity_span_s` 0.0 with `status: not_run` on the six recordings the detector path withheld, a
+real span and a real `load_s` on the twelve that ran, and no activity at all on the eight where the
+runner skipped REDACT, which is the gap `llm-check-first-run.md` already named and this change does
+not close. And the timings are consistent enough to size from: twelve loads spanning 14.6–15.8 s and
+twelve rounds spanning 18.3–22.3 s, on transcripts from 8 to 887 characters.
 
 ## The corpus, re-derived under the gate
 
@@ -462,3 +473,25 @@ refusal was forgotten once per recording and the 23 GB load was re-attempted 13,
 the stall the record was added to prevent. Neither half was wrong; the interaction was. It is now a
 keyword (`forget_failure`), and the test that fails without it runs three checks in a row against a
 worker that cannot start and asserts one load attempt, which is the only shape that can see it.
+
+## Reproducing
+
+```
+/orcd/scratch/bcs/002/satra/llmamort_20260919/
+  env.sh          ffmpeg and uv from the campaign's env_common.sh; the HF home holding gemma-4
+  prep.sbatch     uv sync for the pinned checkout
+  floor.sbatch    work/floor_probe.py — transformers and compressed-tensors, pinned, config only
+  arena2.sbatch   work/arena.py — arm A against arm B over the first run's redacted transcripts
+  memprobe.sbatch work/memprobe.py — what the checkpoint holds on an H100, load and after generate
+  run3.sbatch     work/driver.py — 26 recordings through the whole graph in one process
+  work/           floor_probe.json, arena2.json, memprobe.json, driver.json, driver3.json
+```
+
+Three pinned checkouts, one per measured commit, so nothing ran from a tree another job was using:
+`senselab-llmamort` (the worker), `senselab-llmamort2` (the allocator reporting),
+`senselab-llmamort3` (the residency key). The corpus denominator is a read of
+`decision.ran.REDACT` over `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/rows/`, which
+belongs to a different run and was not written to.
+
+The `driver*.json` files carry counts and timings only; the run directories under `run/` and
+`run3/` carry transcript text and stay on scratch.
