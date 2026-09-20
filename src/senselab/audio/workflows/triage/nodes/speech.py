@@ -55,7 +55,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Pattern,
     Proposal,
     Result,
-    asr_spans,
     branch_params,
     content_coverage,
     contest,
@@ -88,6 +87,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
 )
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
+    bound_reading,
     clamp_extent,
     consensus_words,
     find_measurement,
@@ -678,6 +678,20 @@ def _consensus_id(store: ProvStore) -> str | None:
     return None if consensus is None else consensus.id
 
 
+def _transcribed(store: ProvStore) -> bool:
+    """Whether any recognizer's hypothesis reached the consensus transcript this branch reads.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        False when PREPROCESS wrote no consensus, or wrote one no recognizer contributed to — in
+        both of which the extractor is absent and no reading of the response exists to report.
+    """
+    consensus = find_measurement(store, "consensus_transcript")
+    return consensus is not None and bool(consensus.attributes.get("sources"))
+
+
 def _stimulus(store: ProvStore, hint: AudioHints | None, params: BranchParams) -> tuple[str, StimulusAlignment] | None:
     """PREPROCESS's stimulus alignment, as the three projections a branch reads.
 
@@ -1006,10 +1020,13 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
 ) -> Result:
     """A task prescribing no words: was there a response, and how was it produced?
 
-    Proposes ``task_extent`` over the hull of PREPROCESS's ASR spans, plus one span per phrase run
-    where the family is connected. A family carrying no ``stimulus_text`` — every
+    Proposes ``task_extent`` over the hull of the consensus's lexical words, plus one span per
+    phrase run where the family is connected. A family carrying no ``stimulus_text`` — every
     ``picture-description`` and every ``cinderella-story`` in the corpus — expects nothing lexical,
     so every lexical word is the response rather than a departure from one.
+
+    The response is the words' own hull, not the hull of PREPROCESS's ``asr``-measure spans. See
+    ``specs/20260919-free-response-reads-the-words/design.md``.
 
     Args:
         expectation: The row for this family.
@@ -1021,19 +1038,26 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
         Whether a response was produced, the spans, and the findings.
     """
     points = params
-    runs = asr_spans(live_entities(store, "span"))
     words = lexical_words(store)
-    response = hull([span.extent for span in runs if span.extent is not None])
+    response = hull([word_extent(word) for word in words])
     consensus_id = _consensus_id(store)
+    evidence = [entity_id for entity_id in (consensus_id,) if entity_id is not None]
+    word_ids = tuple(word.id for word in words)
     components: list[Proposal] = []
     findings: list[Finding] = []
-    if response is not None and response[1] > response[0]:
-        components.append(MINT("task_extent", response, *(span.id for span in runs), words_n=len(words)))
+    if response is not None and response[1] > response[0] and evidence:
+        components.append(MINT("task_extent", response, *evidence, *word_ids, words_n=len(words)))
     minimum = points.point("response_min_s")
-    done: Done = UNDETERMINED if minimum is None else (response is not None and duration(response) >= float(minimum))
+    done: Done
+    if not _transcribed(store):
+        findings.append(unviable("response", "no recognizer's hypothesis reached the consensus transcript"))
+        done = UNDETERMINED
+    elif minimum is None:
+        done = UNDETERMINED
+    else:
+        done = response is not None and duration(response) >= float(minimum)
 
     if expectation.connected and response is not None and duration(response) > 0.0:
-        evidence = [entity_id for entity_id in (consensus_id,) if entity_id is not None]
         groups = _phrase_runs(store, points)
         components.extend(
             MINT(f"phrase_run_{index}", extent, *evidence, run_index=index)
@@ -1047,8 +1071,8 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                 response[0],
                 response[1],
                 round(len(words) / duration(response), 3),
-                *(span.id for span in runs),
-                *(word.id for word in words),
+                *evidence,
+                *word_ids,
                 support_words=len(words),
             )
         )
@@ -1061,8 +1085,8 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                     response[0],
                     response[1],
                     round(sum(duration(pause) for pause in pauses) / duration(response), 3),
-                    *(span.id for span in runs),
-                    *(word.id for word in words),
+                    *evidence,
+                    *word_ids,
                     support_pauses=len(pauses),
                 )
             )
@@ -1074,17 +1098,20 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
         cut = points.point(
             "echo_overlap_max" if expectation.anti_pattern == "verbatim_prompt" else "verbatim_overlap_max"
         )
+        # `verbatim_source` reassigns the conformance term from coverage, so an unreadable stimulus
+        # leaves that term unmeasured. Under `verbatim_prompt` the stimulus underwrites a deviation
+        # and nothing else, so its absence is recorded and the response reading stands.
+        term_from_stimulus = expectation.anti_pattern == "verbatim_source"
         if read is None:
             findings.append(unviable(f"anti_pattern_{expectation.anti_pattern}", f"{STIMULUS_MEASUREMENT} is absent"))
-            done = UNDETERMINED
+            done = UNDETERMINED if term_from_stimulus else done
         elif ngram_n is None:
-            done = UNDETERMINED
+            done = UNDETERMINED if term_from_stimulus else done
         else:
             stimulus_id, alignment = read
             source = [token.key for token in alignment.expected]
             produced = [params.p_normalise(word_text(word)) for word in words]
             echo = ngram_echo_fraction(source, produced, int(ngram_n))
-            word_ids = tuple(word.id for word in words)
             findings.append(
                 measured(
                     "verbatim_overlap_fraction", None, None, round(echo, 3), stimulus_id, *word_ids, n=int(ngram_n)
@@ -1096,7 +1123,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                         "stimulus_mismatch",
                         response[0] if response is not None else None,
                         response[1] if response is not None else None,
-                        *(span.id for span in runs),
+                        *word_ids,
                         reading=expectation.anti_pattern,
                         overlap=round(echo, 3),
                     )
@@ -1524,10 +1551,17 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         notes.append("no whole-file diarization derivative is in the store; this branch reads one and runs none")
     else:
         store.used(diarize_act, read.measurement_id)
+        bounded_n = 0
+        max_overshoot_s = 0.0
+        past_end_n = 0
         for start, end, label in read.segments:
-            extent = clamp_extent((start, end), plain)
-            if extent[1] <= extent[0]:
+            extent = bound_reading((start, end), plain)
+            if extent is None:
+                past_end_n += 1
                 continue
+            if extent[1] < end:
+                bounded_n += 1
+                max_overshoot_s = max(max_overshoot_s, end - extent[1])
             speaker_id = store.entity(
                 prov_type="speaker",
                 extent=extent,
@@ -1545,7 +1579,15 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "model": read.model,
             "exclusive": read.exclusive,
             "n_segments": len(speaker_segments),
+            "segments_bounded_n": bounded_n,
+            "segments_past_end_n": past_end_n,
+            "max_overshoot_s": max_overshoot_s,
         }
+        if bounded_n or past_end_n:
+            notes.append(
+                f"the derivative's diarizer reached past this stream's decode: {bounded_n} turn(s) bound back, "
+                f"{past_end_n} dropped, the furthest by {max_overshoot_s:.3f}s"
+            )
         if read.n_speakers != speaker_count:
             notes.append(f"the derivative records {read.n_speakers} speaker(s) and its segments carry {speaker_count}")
 
