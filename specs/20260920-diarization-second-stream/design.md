@@ -54,3 +54,37 @@ provenance.
 - If the residual reading is wanted, the reader is owed: what it would conclude, and which node
   concludes it.
 - Per-activity `started`/`ended` in every store.
+
+## Looking for the rest of the class, and why it could not be settled
+
+The residual diarization was found by accident. Two attempts to find the rest of its class
+systematically both over-report, in opposite directions, and neither is usable as proof.
+
+**By name, statically.** Take every measurement a real store holds (81 distinct, over 40 corpus
+stores) and grep the triage package for each. It names 24 as unreferenced outside `preprocess.py` —
+and the list includes `asr_qwen`, which obviously feeds the consensus, and the AST measurements,
+which TAXONOMY, REPORT and `routing_analysis/detectors.py` all read. The method fails because the
+names are **constructed**: `f"{stream}_{classifier}_scores"` never appears as a literal, so a
+grep for the literal finds nothing and concludes nothing reads it.
+
+**By provenance, from the store's own `used` edges.** Over 120 stores, ask which measurements carry
+a `used` edge from an activity of any node. It names 38 as never used — and the list includes
+`stimulus_alignment`, which SPEECH reads through `find_measurement`, and `praat_features`, `squim`
+and `spectrogram_narrowband`, which REPORT draws on every summary. The method fails because **a node
+may read a measurement without recording that it did**. REPORT is the clearest case: it reads the
+whole store and writes no activity at all, so every panel it draws looks unread.
+
+So the honest position is that this class cannot presently be swept. The one instance proven here
+was proven by reading the consumer — `_read_diarization` returns on the first configured stream, and
+no other module reads a diarization measurement at all — not by either sweep.
+
+**The gap underneath is a provenance gap, not an optimisation one.** A store that cannot answer
+"what did this node read" cannot support the question at all, and that same absence breaks the
+derivation chain a reviewer would follow backwards from a decision to its evidence. Closing it —
+every node recording `used` for the measurements it reads — would make this class sweepable as a
+by-product, and would make the graph's provenance answer a question it currently cannot.
+
+Counted from the two sweeps, the candidates that survive both and are worth checking individually
+are the ones written on every recording: the `residual_*` classifier summaries. Those are read —
+REPORT draws them on the cover under "RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL", confirmed on a
+rendered page. `residual_diarization` is not on that page, and is the one this document removes.
