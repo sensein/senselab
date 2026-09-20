@@ -25,7 +25,9 @@ the status, the iteration count, the flagged categories, the model and the commi
 on every path including the ones where it did not run, and this node's outcome is its detector path's
 alone. What an annotation of ``flagged`` or ``absent`` means is VERDICT's, under
 ``verdict.llm_redaction_flags``. It is asked only where a release was in prospect — never over an
-outcome the detector path already withheld.
+outcome the detector path already withheld. The step's own cost is in the store: the ``llm_check``
+activity carries ``started`` and ``ended`` on every path, and each round's measurement carries
+``elapsed_s``, the ``load_s`` of that round, and the tokens generated.
 
 Three artifacts are released, not two: the masked audio, the flat redacted transcript, and the
 **redacted consensus stream** as ``consensus.json`` — the consensus structure PREPROCESS built, with
@@ -53,6 +55,7 @@ import json
 import math
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -651,6 +654,15 @@ class _LlmCheck:
         }
 
 
+def _stamp() -> str:
+    """Now, as the ISO 8601 UTC string an activity's ``started``/``ended`` carries.
+
+    Returns:
+        The timestamp.
+    """
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _llm_settings(config: TriageConfig) -> dict[str, Any]:
     """Every ``redaction.llm_check`` key, read in one place.
 
@@ -1048,6 +1060,7 @@ def redact(
             )
 
     llm_settings = _llm_settings(config)
+    review_started = _stamp()
     if outcome is not Outcome.PASS:
         llm = _LlmCheck("not_run", 0, (), "", None, "the detector path withheld; there was nothing to release")
         reviews: list[dict[str, Any]] = []
@@ -1064,6 +1077,8 @@ def redact(
             "max_iterations": int(llm_settings["max_iterations"]),
             "enabled": bool(llm_settings["enabled"]),
         },
+        started=review_started,
+        ended=_stamp(),
     )
     store.was_associated_with(review_act, software)
     if llm.status not in ("disabled", "not_run"):

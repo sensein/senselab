@@ -1714,8 +1714,10 @@ def _llm_reviews(store: ProvStore) -> list[dict[str, Any]]:
 
     Returns:
         One record per review, carrying the iteration, whether the model ran, its reasoning
-        verbatim, what it flagged, and the commit it loaded. Empty when the step did not run. The
-        reasoning is the point of the step, so it is carried whole rather than summarised.
+        verbatim, what it flagged, the commit it loaded, and what it cost — the round's wall clock,
+        how much of that was the model load, and how many tokens it generated. Empty when the step
+        did not run. The reasoning is the point of the step, so it is carried whole rather than
+        summarised.
     """
     return [
         {
@@ -1726,6 +1728,9 @@ def _llm_reviews(store: ProvStore) -> list[dict[str, Any]]:
             "failure": entity.attributes.get("failure"),
             "model_id": entity.attributes.get("model_id"),
             "revision": entity.attributes.get("revision"),
+            "elapsed_s": entity.attributes.get("elapsed_s"),
+            "load_s": entity.attributes.get("load_s"),
+            "output_tokens": entity.attributes.get("output_tokens"),
             "entity_id": entity.id,
         }
         for entity in find_measurements(store, "redaction_llm_review")
@@ -1772,7 +1777,10 @@ def _llm_check_lines(check: dict[str, Any] | None, reviews: list[dict[str, Any]]
     if check.get("failure"):
         lines.append(f"{prefix}  did not run: {check['failure']}")
     for review in reviews:
-        lines.append(f"{prefix}  review {_shown(review.get('iteration'))}: available={review.get('available')}")
+        lines.append(
+            f"{prefix}  review {_shown(review.get('iteration'))}: available={review.get('available')} "
+            f"elapsed_s={_shown(review.get('elapsed_s'))} load_s={_shown(review.get('load_s'))}"
+        )
         for finding in review.get("findings") or []:
             lines.append(f"{prefix}    concern [{finding.get('category')}]: {finding.get('why')}")
         for line in str(review.get("reasoning") or "").splitlines():
@@ -2166,9 +2174,7 @@ def _text_figure(lines: list[str], title: str, *, figsize: tuple[float, float] |
     figure = pyplot.figure(figsize=figsize or (14.0, height))
     axis = figure.add_subplot(111)
     axis.axis("off")
-    axis.text(
-        0.03, 0.94, "\n".join(lines), va="top", ha="left", family="monospace", fontsize=_BLOCK_FONTSIZE
-    )
+    axis.text(0.03, 0.94, "\n".join(lines), va="top", ha="left", family="monospace", fontsize=_BLOCK_FONTSIZE)
     figure.suptitle(title)
     return figure
 
