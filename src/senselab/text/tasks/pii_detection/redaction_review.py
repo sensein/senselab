@@ -335,7 +335,7 @@ class _ReviewWorker:
             timeout_s: Wall-clock ceiling on the load.
 
         Raises:
-            RuntimeError: If the worker died, raised, or did not report ready in time.
+            ReviewWorkerError: If the worker died, raised, or did not report ready in time.
         """
         venv_dir = ensure_venv(REVIEW_VENV, REVIEW_REQUIREMENTS, python_version=REVIEW_PYTHON)
         model_path = _staged_snapshot(self.model_id, str(self.revision))
@@ -374,7 +374,7 @@ class _ReviewWorker:
             The worker's reply: ``completion``, ``generate_s`` and ``output_tokens``.
 
         Raises:
-            RuntimeError: If the worker died, raised, or did not answer in time.
+            ReviewWorkerError: If the worker died, raised, or did not answer in time.
         """
         self._send({"text": text, "prompt": _PROMPT, "max_new_tokens": int(max_new_tokens)})
         return self._await(timeout_s)
@@ -404,7 +404,7 @@ class _ReviewWorker:
             payload: The request.
 
         Raises:
-            RuntimeError: If the worker is gone or its stdin will not take the line.
+            ReviewWorkerError: If the worker is gone or its stdin will not take the line.
         """
         if self._process is None or self._process.stdin is None:
             raise ReviewWorkerError("redaction review worker is not running")
@@ -424,7 +424,7 @@ class _ReviewWorker:
             The reply.
 
         Raises:
-            RuntimeError: On a timeout, a dead worker, or a worker-reported exception.
+            ReviewWorkerError: On a timeout, a dead worker, or a worker-reported exception.
         """
         try:
             reply = self._replies.get(timeout=timeout_s)
@@ -505,7 +505,7 @@ def _worker_for(model_id: str, revision: str, timeout_s: int) -> tuple[_ReviewWo
         loading them, which is ``0.0`` when an already-running worker was reused.
 
     Raises:
-        RuntimeError: If a worker could not be started, now or earlier in this process.
+        ReviewWorkerError: If a worker could not be started, now or earlier in this process.
     """
     global _WORKER, _WORKER_KEY, _WORKER_REFUSED
     if _WORKER_REFUSED is not None:
