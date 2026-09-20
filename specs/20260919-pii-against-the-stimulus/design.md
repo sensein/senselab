@@ -124,3 +124,43 @@ on the prompt anyway. That one is scanned, minted and marked — never dropped.
 - Whether REPORT shows the annotated count, the unannotated count, or both.
 - Whether the LLM re-read should see the stimulus, so it is not re-deciding the same false positives.
 - The reference standard for the surviving 8.9%: nothing in this census was adjudicated.
+
+## The gate was blind where no stimulus is declared, measured on the corpus run
+
+Read from 8,212 live rows of the 2026-09-20 corpus run, which carries the gate:
+
+| family stem | reached REDACT | declares a stimulus |
+|---|---:|---:|
+| harvard-sentences-list | 7.5% | 100% |
+| cape-v-sentences | 7.8% | 100% |
+| rainbow-passage | 4.8% | 100% |
+| **diadochokinesis** | **83.5%** | **0%** |
+| prolonged-vowel | 25.9% | 0% |
+| picture-description | 34.7% | 0% |
+| respiration-and-cough | 1.2% | 0% |
+
+**45.8% of recordings declare a stimulus prompt at all.** Where one exists the gate does exactly
+what it was built for: the read families fall to 4.8-7.8%, against the census's finding that 84.6%
+of read-task findings were substrings of the script. Where none exists the gate cannot fire, and
+diadochokinesis sits at 83.5% — reproducing the census's ~91% false-positive rate on carrier words.
+
+A syllable task declares no `stimulus_text`, and its expectation holds the carrier as an **ARPAbet
+sequence** (`("p", "aa")`), which no transcript can be matched against. But the family names it:
+`diadochokinesis-buttercup` asks for "buttercup". So the carrier is taken from the family and joined
+to the stimulus haystack, and the one existing word test then does the rest.
+
+### What the first attempt got wrong
+
+The first version skipped the scan outright for any task asking for no lexical content. That broke
+a test named *the safety-critical invariant*:
+
+> a disclosure spoken over a DDK take must not escape because the instruction asked for nonsense
+> syllables
+
+which is right, and the reason the carrier joins the haystack rather than switching the scan off.
+Thirty repetitions of "pa" are not thirty disclosures; "alice" spoken during the same take still is.
+
+`prolonged-vowel` and `maximum-phonation-time` remain uncovered: they ask for a sustained vowel, so
+there is no carrier orthography to match and whatever ASR writes down is an artefact of a signal
+with no words in it. Naming that case honestly is owed; suppressing it by family is not, for the
+same reason the blanket skip was wrong.

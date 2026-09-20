@@ -699,6 +699,27 @@ def in_stimulus(surface: str, haystack: str | None) -> bool | None:
     return bool(normalised) and normalised in haystack
 
 
+def declared_carrier(task_family: str | None) -> str | None:
+    """The carrier a syllable task asks for, as text, taken from the family that names it.
+
+    A diadochokinetic family declares its carrier in its own name -- ``diadochokinesis-buttercup``
+    asks for "buttercup" -- while its expectation holds the carrier as an ARPAbet sequence, which no
+    transcript can be matched against. Such a recording declares no ``stimulus_text``, so without
+    this the word-level test sees every carrier repetition as a word the task did not ask for.
+
+    Args:
+        task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
+
+    Returns:
+        The carrier, case-folded, or None when the family is not a syllable task.
+    """
+    expectation = SPEECH_EXPECTATIONS.get(str(task_family))
+    if expectation is None or expectation.pattern not in (Pattern.SYLLABLE_SEQUENCE, Pattern.SYLLABLE_TRAIN):
+        return None
+    carrier = str(task_family).rsplit("-", 1)[-1].strip().casefold()
+    return carrier or None
+
+
 def invites_disclosure(task_family: str | None) -> bool:
     """Whether the instruction itself asks the participant to speak freely.
 
@@ -1941,7 +1962,9 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     # The scan runs only where the participant said something the task did not ask for. A recording
     # that produced only the words it was handed has nothing to disclose, and scanning it yields the
     # script back as findings: branch-speech.md §7 and specs/20260919-pii-against-the-stimulus.
-    novel_words = words_outside_stimulus((word_text(word) for word in lexical), stimulus_text)
+    carrier = declared_carrier(declared_family)
+    haystack = " ".join(part for part in (stimulus_text, carrier) if part) or None
+    novel_words = words_outside_stimulus((word_text(word) for word in lexical), haystack)
     open_response = invites_disclosure(declared_family)
     scans: list[PiiScan] = []
     if novel_words or open_response:
@@ -1957,7 +1980,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                 signal="consensus",
                 attributes={
                     "scanned": False,
-                    "why": "every lexical word is in the declared stimulus; the task asked for all of them",
+                    "why": "every lexical word is in the task's own stimulus or carrier; all were asked for",
                     "lexical_words_n": len(lexical),
                     "task_family": declared_family,
                 },
