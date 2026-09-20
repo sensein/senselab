@@ -328,6 +328,29 @@ def clamp_extent(extent: tuple[float, float], audio: Audio) -> tuple[float, floa
     return start, duration
 
 
+def bound_reading(extent: tuple[float, float], audio: Audio) -> tuple[float, float] | None:
+    """Bound another instrument's reading by the audio this node slices, however far it reaches.
+
+    Distinct from :func:`clamp_extent`, which bounds an extent this node composed itself and refuses
+    an overshoot beyond one sample period. A reading taken by a model on another stream is not this
+    node's arithmetic and its grid is not this node's grid, so a reach past the end is a property of
+    the instrument to report, not an inconsistency to refuse.
+
+    Args:
+        extent: The ``(start, end)`` the instrument reported, in seconds.
+        audio: The audio being sliced; the length it decoded to is the bound.
+
+    Returns:
+        The reading bounded by the audio's duration, or None when it names no part of the audio.
+    """
+    start, end = float(extent[0]), float(extent[1])
+    duration = audio.waveform.shape[-1] / int(audio.sampling_rate)
+    if start >= duration:
+        return None
+    end = min(end, duration)
+    return (start, end) if end > start else None
+
+
 def find_measurement(store: ProvStore, name: str) -> Entity | None:
     """The latest non-invalidated measurement entity carrying this name, or None.
 

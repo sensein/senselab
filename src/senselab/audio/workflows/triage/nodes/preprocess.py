@@ -1140,24 +1140,63 @@ def diarization_input(store: ProvStore, run_dir: Path, stream: str) -> tuple[str
     return stream_id, audio
 
 
-def diarized_segments(lines: Sequence[ScriptLine]) -> list[tuple[float, float, str]]:
-    """The diarizer's script lines as timed, labelled segments, in time order.
+@dataclass(frozen=True)
+class DiarizedTurns:
+    """The diarizer's usable turns, bounded by the audio it read, and what bounding cost.
+
+    Attributes:
+        segments: ``(start, end, speaker)`` per usable turn, sorted by start then end.
+        bounded_n: How many turns had their end bound back to the audio's duration.
+        past_end_n: How many turns began at or after the end and were dropped.
+        max_overshoot_s: The largest end-minus-duration that was bound away, in seconds.
+    """
+
+    segments: list[tuple[float, float, str]]
+    bounded_n: int
+    past_end_n: int
+    max_overshoot_s: float
+
+
+def diarized_segments(lines: Sequence[ScriptLine], duration_s: float) -> DiarizedTurns:
+    """The diarizer's script lines as timed, labelled segments bounded by the audio it read.
 
     A line carrying no speaker, no start or no end names no region of the recording and is dropped:
-    it would otherwise enter the count as a speaker with no extent.
+    it would otherwise enter the count as a speaker with no extent. A line reaching past
+    ``duration_s`` is bound back to it, and one beginning at or after it is dropped, on the same
+    rule ``_bound_to_duration`` applies to a recognizer's chunks: an instrument cannot report a
+    region of a recording it was not given.
 
     Args:
         lines: One recording's script lines, as ``diarize_audios`` returned them.
+        duration_s: The duration of the audio the diarizer read, in seconds.
 
     Returns:
-        ``(start, end, speaker)`` per usable line, sorted by start then end.
+        The turns and the bounding's own record.
     """
-    segments = [
-        (float(line.start), float(line.end), str(line.speaker))
-        for line in lines
-        if line.speaker is not None and line.start is not None and line.end is not None and line.end > line.start
-    ]
-    return sorted(segments)
+    segments: list[tuple[float, float, str]] = []
+    bounded_n = 0
+    past_end_n = 0
+    max_overshoot_s = 0.0
+    for line in lines:
+        if line.speaker is None or line.start is None or line.end is None:
+            continue
+        start, end = float(line.start), float(line.end)
+        if end <= start:
+            continue
+        if start >= duration_s:
+            past_end_n += 1
+            continue
+        if end > duration_s:
+            bounded_n += 1
+            max_overshoot_s = max(max_overshoot_s, end - duration_s)
+            end = duration_s
+        segments.append((start, end, str(line.speaker)))
+    return DiarizedTurns(
+        segments=sorted(segments),
+        bounded_n=bounded_n,
+        past_end_n=past_end_n,
+        max_overshoot_s=max_overshoot_s,
+    )
 
 
 def speaker_activity(segments: Sequence[tuple[float, float, str]]) -> dict[str, Any]:
@@ -1224,7 +1263,7 @@ def write_diarization(
     audio: Audio,
     model: PyannoteAudioModel,
     parameters: dict[str, Any],
-    segments: Sequence[tuple[float, float, str]],
+    turns: DiarizedTurns,
 ) -> str:
     """Persist one stream's diarization beside the run and register the measurement that names it.
 
@@ -1248,12 +1287,13 @@ def write_diarization(
         model: The diarizer's spec, for the agent's commit.
         audio: The conditioned audio the model read, for the duration.
         parameters: The settings the diarizer ran under, as the activity records them.
-        segments: ``(start, end, speaker)`` per segment, in time order.
+        turns: The diarizer's turns, already bounded by the audio, and the bounding's record.
 
     Returns:
         The measurement entity's id.
     """
     name = diarization_measurement(signal)
+    segments = turns.segments
     duration_s = audio.waveform.shape[-1] / int(audio.sampling_rate)
     agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
     activity = _activity(store, name, parameters, (stream_id,), agent)
@@ -1282,6 +1322,9 @@ def write_diarization(
             "duration_s": duration_s,
             "sampling_rate": int(audio.sampling_rate),
             "layout": "segments_by_start",
+            "segments_bounded_n": turns.bounded_n,
+            "segments_past_end_n": turns.past_end_n,
+            "max_overshoot_s": turns.max_overshoot_s,
         },
         derived_from=(stream_id,),
     )
@@ -1336,7 +1379,7 @@ def diarization(
         audio=audio,
         model=model,
         parameters=parameters,
-        segments=diarized_segments(lines),
+        turns=diarized_segments(lines, audio.waveform.shape[-1] / int(audio.sampling_rate)),
     )
 
 

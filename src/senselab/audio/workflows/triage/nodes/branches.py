@@ -1332,18 +1332,6 @@ def amplitude_spans(spans: Sequence[Entity]) -> list[Entity]:
     return spans_by_measure(spans, "amplitude")
 
 
-def asr_spans(spans: Sequence[Entity]) -> list[Entity]:
-    """The ASR spans.
-
-    Args:
-        spans: The span entities.
-
-    Returns:
-        The spans whose ``measure`` is ``asr``.
-    """
-    return spans_by_measure(spans, "asr")
-
-
 def gaps(spans: Sequence[Entity]) -> list[Entity]:
     """The gap spans, which are where off-task material is looked for.
 
