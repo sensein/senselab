@@ -121,3 +121,24 @@ The informative absence is untouched: `hint mismatch: X was declared and did not
 ground on all three branches, which is the case where the recording said it held a kind and does not.
 
 **Corpus flag rate: 41.0% → 24.2%.**
+
+## Almost every recording reaches a branch
+
+| route state | recordings | share |
+|---|---:|---:|
+| `routed` | 2,252 | **99.1%** |
+| `unexplained` | 11 | 0.48% |
+| `empty` | 9 | 0.40% |
+| none (ADMIT refused) | 1 | 0.04% |
+
+`empty` is the ruleset reading a recording as measurably empty — eight of the nine are
+`harvard-sentences-list`, a read task with nothing in it, which is the reading one wants.
+
+`unexplained` is the ruleset's own admission: *no branch routed and the recording was not measurably
+empty; the ruleset could not account for what is in it.* Eleven recordings, spread across
+`harvard-sentences-list`, `respiration-and-cough`, `diadochokinesis` and `glides` — no single family
+concentrates them. They flag, through `routing`, so none is silently dropped.
+
+Extrapolated to the corpus that is roughly 300 recordings the ruleset cannot account for, against
+the standing requirement that everything not a critical failure reaches at least one branch. It is
+met on 99.1% and the residue names itself.
