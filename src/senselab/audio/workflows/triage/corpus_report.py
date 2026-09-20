@@ -127,18 +127,27 @@ def decisions(root: Path) -> Iterator[tuple[str, dict[str, Any] | None, dict[str
         root: A directory holding ``*.row.json`` rows, ``run.json`` logs, or both, at any depth.
 
     Yields:
-        The recording's name, its decision or None, and the whole record it came from.
+        The recording's name, its decision or None, and the whole record it came from. One entry per
+        recording: a tree holds a row and a log for the same recording, and counting both would
+        double every total.
     """
-    for path in sorted(list(root.rglob(ROW_GLOB)) + list(root.rglob(LOG_GLOB))):
+    seen: set[str] = set()
+    # Rows first and logs second: a run tree holds both for the same recording, and the row carries
+    # the driver's own fields -- the duration, the timings, the host -- that the log does not.
+    for path in list(sorted(root.rglob(ROW_GLOB))) + list(sorted(root.rglob(LOG_GLOB))):
         try:
             record = json.loads(path.read_text())
         except (OSError, ValueError):
-            yield path.stem, None, {}
-            continue
+            record = None
         if not isinstance(record, dict):
-            yield path.stem, None, {}
+            if path.stem not in seen:
+                seen.add(path.stem)
+                yield path.stem, None, {}
             continue
         name = str(record.get("stem") or Path(str(record.get("source") or path)).stem)
+        if name in seen:
+            continue
+        seen.add(name)
         decision = record.get("decision")
         yield name, decision if isinstance(decision, dict) else None, record
 
