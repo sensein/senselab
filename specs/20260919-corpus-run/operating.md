@@ -48,6 +48,18 @@ wall-clock kill costs one recording.
 sbatch /orcd/scratch/bcs/002/satra/triage_design_20260919/corpus.sbatch
 ```
 
+### Resume is keyed on completion, not on the commit
+
+`complete()` asks whether a recording's row says `ok` and its products are on disk. It does not ask
+which commit produced them. So resubmitting over an existing output root resumes an interrupted run
+— and would skip every recording if the code has changed underneath it, silently returning the old
+run's answers as the new one's.
+
+**A run on new code gets a new output root.** `run/` for the corpus, `pilot/` for the first pilot,
+`pilot2/` for the next, and so on. The commit is recorded in each row and in each slice's log header,
+and the job refuses to start on the wrong checkout, but neither of those saves a run pointed at a
+root full of older answers.
+
 ## Reading the result
 
 Every row carries the whole decision, not just the two axes — `FileVerdict.record()`, the same
