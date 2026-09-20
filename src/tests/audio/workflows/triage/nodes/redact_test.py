@@ -22,7 +22,7 @@ from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeec
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes.common import resolve_stream
-from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME, redact
+from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME, _llm_settings, redact
 from senselab.audio.workflows.triage.nodes.verdict import verdict as verdict_node
 from senselab.audio.workflows.triage.vocabulary import LLM_REDACTION_RESIDUE, Outcome, Release, Triage
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
@@ -1426,6 +1426,13 @@ def _flags(
     )
 
 
+def _count_shutdowns(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Replace the node's worker release with a counter, returning the list it appends to."""
+    released: list[int] = []
+    monkeypatch.setattr(redact_module, "shutdown_review_worker", lambda: released.append(1))
+    return released
+
+
 def _reviews(store: ProvStore) -> list[Entity]:
     """Every captured review measurement, in write order."""
     return [e for e in store.entities("measurement") if e.attributes.get("name") == "redaction_llm_review"]
@@ -1636,6 +1643,66 @@ class TestTheChainOfThoughtIsCaptured:
         assert "concern [LOCATION]: a town with one clinic" in text
         assert "llm check: flagged" in text
         assert f"revision={'a' * 40}" in text, "a chain of thought nobody can attribute to a commit is not evidence"
+
+
+class TestTheWeightsAreReleasedUnlessTheRunSaysOtherwise:
+    """Residency is asked for, never assumed.
+
+    Measured: a resident worker held 70.4 GiB of an 80 GB H100 and PREPROCESS's ASR then hit CUDA
+    OOM on 19 of 22 recordings in the corpus driver's shape. See
+    ``specs/20260817-triage-workflow-dag/llm-check-amortised-load.md``.
+    """
+
+    def test_the_packaged_config_releases_them(self) -> None:
+        """The safe default: nothing else on the card has to live beside 70 GiB it did not ask for."""
+        assert load_triage_config().require("redaction.llm_check.keep_worker_resident") is False
+
+    def test_the_check_releases_the_worker_when_it_ends(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The rounds of one check share a load; the next recording does not inherit the memory."""
+        released = _count_shutdowns(monkeypatch)
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(monkeypatch, [_clean()])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert released == [1], "the check ended and the weights were not handed back"
+
+    def test_a_run_that_asks_for_residency_keeps_them(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A pass with a GPU to itself wants the load amortised across recordings, and may say so."""
+        released = _count_shutdowns(monkeypatch)
+        config = _override(tmp_path, LLM_ON + "    keep_worker_resident: true\n")
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(monkeypatch, [_clean()])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert released == []
+
+    def test_a_check_that_raised_still_releases(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A leak on the failure path is the one that strands 70 GiB with nobody watching."""
+        released = _count_shutdowns(monkeypatch)
+
+        def _boom(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise RuntimeError("the loop blew up")
+
+        monkeypatch.setattr(redact_module, "_llm_rounds", _boom)
+        settings = dict(_llm_settings(_override(tmp_path, LLM_ON)))
+        with pytest.raises(RuntimeError):
+            redact_module._llm_check("text", settings)
+        assert released == [1]
 
 
 class TestTheStepRecordsWhatItCost:

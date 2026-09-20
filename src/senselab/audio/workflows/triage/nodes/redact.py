@@ -78,7 +78,11 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.stimulus import split_prompts
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.text.tasks.pii_detection.api import scan_for_pii
-from senselab.text.tasks.pii_detection.redaction_review import review_payload, review_redacted_text
+from senselab.text.tasks.pii_detection.redaction_review import (
+    review_payload,
+    review_redacted_text,
+    shutdown_review_worker,
+)
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "REDACT"
@@ -676,7 +680,15 @@ def _llm_settings(config: TriageConfig) -> dict[str, Any]:
         ValueError: If a key is unmeasured. Reading them together means a run that turns the step on
             with half a configuration is refused before any model is contacted.
     """
-    names = ("enabled", "model_id", "ref", "max_iterations", "max_new_tokens", "timeout_s")
+    names = (
+        "enabled",
+        "model_id",
+        "ref",
+        "max_iterations",
+        "max_new_tokens",
+        "timeout_s",
+        "keep_worker_resident",
+    )
     return {name: config.require(f"{_LLM_SECTION}.{name}") for name in names}
 
 
@@ -706,6 +718,10 @@ def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmC
     local to the loop — nothing it produces is released — and whether **any** round flagged is what
     decides the check, not whether the last one did.
 
+    Every round of one check shares one loaded model. Whether the *next recording* does is
+    ``redaction.llm_check.keep_worker_resident``: with it unset the weights are released when the
+    check ends, so nothing else on the card has to live beside them.
+
     Args:
         transcript_text: The redacted transcript, as it would be released.
         settings: :func:`_llm_settings`' mapping.
@@ -714,6 +730,23 @@ def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmC
         ``(check, reviews)`` — the summary and one payload per round, in order. A round that could
         not run is recorded as such; the first round failing is ``absent``, a later one leaves the
         flag that already stands and records the failure beside it.
+    """
+    try:
+        return _llm_rounds(transcript_text, settings)
+    finally:
+        if not settings["keep_worker_resident"]:
+            shutdown_review_worker()
+
+
+def _llm_rounds(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmCheck, list[dict[str, Any]]]:
+    """The bounded review / mask / re-review loop itself, without the worker's lifetime.
+
+    Args:
+        transcript_text: The redacted transcript, as it would be released.
+        settings: :func:`_llm_settings`' mapping.
+
+    Returns:
+        :func:`_llm_check`'s pair.
     """
     reviews: list[dict[str, Any]] = []
     current = transcript_text
