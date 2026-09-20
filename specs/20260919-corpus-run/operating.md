@@ -127,3 +127,19 @@ node errors — and reads REPORT's `summary.json` rather than the rows.
 - **Other branches clamp nothing.** `voice.py`, `ddk.py`, `airway.py` and `preprocess.py` all
   compose extents that can run past the decode and, unlike SPEECH, fail silently rather than
   raising. Listed in `specs/20260919-diarization-turns-past-the-decode/design.md`.
+
+## The store is the cache
+
+PREPROCESS is 90.7% of every run — 143.6 s of 158.3 s per recording, measured over 6,221 corpus
+rows — and a re-run recomputes all of it. That is not for want of a cache: every measurement it
+produced is already in the store, content-addressed and joined to the evidence it came from. The
+store is the cache. What is missing is an entry point that reads it.
+
+`extend.py` is that pattern, already written and already used: `read_store(run_root)` takes a
+finished run under its own id, and `extend_clip_amplitudes` and `extend_quality` do further work
+against it without recomputing anything PREPROCESS produced. Its docstring states the property
+plainly — a second call "writes records the store already holds and is a set-union no-op".
+
+What does not exist is the same thing for the branches. A branch-only re-run over finished stores
+would cost the 9.2% rather than the 100%: about two hours for the whole corpus rather than a day.
+Every iteration of branch work since has paid the other 90.7% for nothing.

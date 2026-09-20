@@ -78,11 +78,19 @@ So the honest position is that this class cannot presently be swept. The one ins
 was proven by reading the consumer — `_read_diarization` returns on the first configured stream, and
 no other module reads a diarization measurement at all — not by either sweep.
 
-**The gap underneath is a provenance gap, not an optimisation one.** A store that cannot answer
-"what did this node read" cannot support the question at all, and that same absence breaks the
-derivation chain a reviewer would follow backwards from a decision to its evidence. Closing it —
-every node recording `used` for the measurements it reads — would make this class sweepable as a
-by-product, and would make the graph's provenance answer a question it currently cannot.
+**Correction: the provenance does capture this, and the second sweep asked it the wrong question.**
+It looked only at `used`. The store's largest relation class is `wasDerivedFrom` — 34,713 edges
+against 25,252 `used` over 80 corpus stores — and that is where a node records which evidence
+produced which conclusion. Asking both together, every measurement written by PREPROCESS and
+consumed anywhere inside the graph is reachable.
+
+What the chain does not cover is the one node that deliberately writes nothing. REPORT "reads the
+store in full and never writes", so it records no activity and no relation, and every panel it
+draws — `praat_features`, `squim`, the `residual_*` summaries — looks unread. That is a narrow,
+known consequence of REPORT's contract, not a general gap in the provenance.
+
+So the sweep's residue is: measurements consumed only by REPORT, plus the one instance this document
+removes. Distinguishing the two still needs reading the consumer.
 
 Counted from the two sweeps, the candidates that survive both and are worth checking individually
 are the ones written on every recording: the `residual_*` classifier summaries. Those are read —
