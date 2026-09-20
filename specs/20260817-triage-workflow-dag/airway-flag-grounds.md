@@ -12,7 +12,9 @@ Every `False`, every `claimed_not_found` and every `unavailable` below was trace
 store: which spans AIRWAY was handed, which classifier windows covered them, which gate decided,
 and on what value against what bound.
 
-This document reports and proposes. **Nothing in `src/` is changed by it.**
+This document reported and proposed; the owner then directed all three fixes, made in the
+commit that carries this paragraph. "The fixes, as made" is what shipped and what it moved;
+"The fixes, as proposed" below is the reasoning each was accepted on, kept as written.
 
 ## What was measured
 
@@ -422,7 +424,7 @@ or `UNDETERMINED` ("the instruction asks for 30 s and the recording is 0.4 s") i
 for ADMIT, not a reader keyed to a missing writer. It is flagged here because it is 19.6 % of all
 `False` and it is not what the flag text says it is.
 
-## The two patterns, answered
+## The two patterns, as diagnosed
 
 | pattern | verdict |
 | --- | --- |
@@ -451,7 +453,143 @@ Defects B and C are disjoint (C's 57 are all event-pattern; B's 707 all coverage
 are a subset of the 511 event-pattern breath `False` and disjoint from both. **The three together
 move 906 of the 1,366 `False`, ~1,923 of the projected ~2,899.**
 
-## The fixes, as proposed — none made
+## The fixes, as made
+
+Owner-directed 2026-09-20, in the order C, B, A. The sections below describe each as it was
+proposed; this section is what shipped, what it moved, and the one number that argues for caution.
+
+### What each change is
+
+| | change | file |
+| --- | --- | --- |
+| **C** | `_airway_event_series`, `_airway_alternation` and `detect_airway` check `classifier_windows` as well as `energy_envelope`, and `instrument_absent` records every absent derivative rather than one | `nodes/airway.py` |
+| **B** | `_airway_coverage` returns `UNDETERMINED` and reports the fraction either way; the denominator is the extent the instruction asked for; `branch.breath_coverage_min` is deleted | `nodes/airway.py`, `data/config/default.yaml`, `nodes/branches.py` |
+| **A** | `branch.label_sets` names HeAR heads and `label_sets_by_classifier` resolves each into AudioSet names through the packaged ontology profile; `sounds_like` and `decided_label_sets` read each window in its own classifier's vocabulary | `nodes/airway.py`, `nodes/branches.py` |
+
+**No bound was fitted.** `branch.breath_coverage_min` is deleted rather than lowered, and
+`branch.score_min` is untouched. The gap question of B(b) below is proposed and not built.
+
+### What it moves, over the 6,080 in-family rows
+
+Replayed against the corpus by re-deriving each row's verdict from its own store —
+`airway-flag-grounds-replay.py`, beside this file. Every moved row is attributable to one fix;
+none is unaccounted.
+
+```
+matcher                           n | before               | after
+                                    |  True  False   UND |  True  False   UND
+event/alternation, cough       1311 |  1163    148     0 |  1163    137    11
+event series, breath           3605 |  3094    511     0 |  3236    323    46
+SOUND_COVERAGE, breath         1164 |   389    707    68 |     0      0  1164
+ALL IN-FAMILY                  6080 |  4646   1366    68 |  4399    460  1221
+```
+
+| cause | move | rows |
+| --- | --- | ---: |
+| **A** a YAMNet breath spelling became readable | `False` → `True` | 142 |
+| **B** the coverage gate retired | `False` → `UNDETERMINED` | 707 |
+| **B** the same, in the other direction | `True` → `UNDETERMINED` | 389 |
+| **C** no instrument reached the store | `False` → `UNDETERMINED` | 57 |
+| | unaccounted | **0** |
+
+Per family:
+
+```
+family                                            n |  True  False   UND |  True  False   UND
+breath-sounds                                   134 |   120     14     0 |   126      8     0
+respiration-and-cough-breath                    847 |   263    517    67 |     0      0   847
+respiration-and-cough-cough                     839 |   725    114     0 |   725    103    11
+respiration-and-cough-fivebreaths              1662 |  1374    288     0 |  1445    195    22
+respiration-and-cough-threequickbreaths         812 |   718     94     0 |   735     55    22
+respiration-and-cough-v2-breath                 317 |   126    190     1 |     0      0   317
+respiration-and-cough-v2-hardcough              332 |   303     29     0 |   303     29     0
+respiration-and-cough-v2-threebreaths           338 |   315     23     0 |   325     12     1
+respiration-and-cough-v2-threebreathsmouth      333 |   291     42     0 |   311     21     1
+respiration-and-cough-v2-threebreathsnose       326 |   276     50     0 |   294     32     0
+voluntary-cough                                 140 |   135      5     0 |   135      5     0
+```
+
+`AIRWAY False` falls from **1,366 to 460**, ~2,899 to ~976 at the campaign's 62,578. Fix A moves
+**no** cough-family row: `Cough` was already spelled the same in both vocabularies, and adding
+`Throat clearing` rescues none. `-v2-hardcough` and `voluntary-cough` are unchanged end to end.
+
+### The control contrast, and the caution it carries
+
+Whether the breath test still rejects what it should, measured as "does at least one carrier fire
+for breath", before and after A, on 3,227 recordings from ten families that elicit no breathing
+task and on the breath tasks themselves:
+
+```
+family                                  n         before          after
+maximum-phonation-time                400    172( 43.0%)    245( 61.2%)
+harvard-sentences-list                400     70( 17.5%)     70( 17.5%)
+prolonged-vowel                       400    156( 39.0%)    215( 53.8%)
+free-speech                           400    288( 72.0%)    295( 73.8%)
+glides-low-to-high                    400    139( 34.8%)    167( 41.8%)
+word-color-stroop                     214    133( 62.1%)    150( 70.1%)
+animal-fluency                         81     67( 82.7%)     68( 84.0%)
+diadochokinesis-pataka                400    139( 34.8%)    144( 36.0%)
+rainbow-passage                       400    319( 79.8%)    320( 80.0%)
+cinderella-story                      132    112( 84.8%)    113( 85.6%)
+ALL CONTROLS                         3227   1595( 49.4%)   1787( 55.4%)
+event-series breath families         3605   3094( 85.8%)   3236( 89.8%)
+```
+
+**Say this plainly: the widening is not specific.** It adds 6.0 pp on control material against
+4.0 pp on the breath tasks. Read as a share of the headroom each had left it favours the breath
+tasks — 28.2 % of the remaining negatives there against 11.9 % on controls — but that is a
+consolation, not a discrimination, and it is not what anyone would call a validated widening.
+
+Two things keep this from being an argument against the change. First, these controls are not
+breath-free: a person reading sentences breathes, so a rise here is not by construction a false
+positive and no ground truth here says it is one. The two controls with the least audible
+breathing move least — `harvard-sentences-list` not at all, `diadochokinesis-pataka` by 1.2 pp.
+Second, and decisive: the defect A repairs is not "the breath set is too narrow", it is **"the same
+config declaration means one thing for cough and another for breath"**. `cough: [Cough]` was read
+against two classifiers and `breath: [Breathe]` against one, because of a spelling coincidence in
+AudioSet. Fixing that makes the declaration mean one thing. It does not make the cut right.
+
+**So the 142 are not a claim.** They are what a readable vote moves at a cut nobody has fitted, and
+this table is why the `branch.score_min` derivation below is owed before anyone treats them as
+recovered findings. The standard is the `Baby Cough` non-claim above: co-firing is not evidence.
+
+### Tests
+
+`src/tests/audio/workflows/triage/nodes/airway_test.py` and `branches_test.py`, 2,118 passing in
+the triage suite. Eleven mutants, each applied alone against the test files, all caught:
+
+| mutant | caught |
+| --- | --- |
+| **C1** the event-series guard drops the classifier-window check | yes |
+| **C2** the alternation guard drops it | yes |
+| **C3** the detect guard drops it | yes |
+| **C4** the absence records only its first derivative | yes |
+| **B1** the coverage gate is reinstated at 0.5 | yes |
+| **B2** the denominator reverts to the whole stream | yes |
+| **B3** the fraction never reaches the report detail | yes |
+| **A1** `sounds_like` reads a flat union of every classifier's spellings | yes |
+| **A2** the AudioSet side mirrors the HeAR heads instead of resolving them | yes |
+| **A3** `decided_label_sets` ignores which classifier decided | yes |
+| **A4** the coverage pattern reads the AudioSet side against the HeAR sidecar | yes |
+
+C2, C3 and A3 survived the first pass and are why
+`test_the_alternation_family_reports_an_absent_classifier_too`,
+`test_the_out_of_family_mode_counts_nothing_where_no_classifier_ran` and
+`test_a_decided_label_is_matched_in_the_deciding_classifiers_vocabulary` exist. The harness is
+`airway-flag-grounds-mutants.py`.
+
+Three tests asserted the defects and were rewritten rather than deleted, because each states a
+claim that is still worth pinning:
+
+- `test_the_covered_fraction_is_measured_against_the_recording` → `..._against_the_extent_the_instruction_asked_for`;
+- `test_no_span_at_all_reports_non_conformance` → `..._reports_an_absent_instrument`;
+- `test_an_absent_span_hear_pass_is_an_absence_not_a_zero` kept its name, which was already right, and now asserts it.
+
+The end-to-end fold test keeps its flag: `test_a_declared_branch_that_found_nothing_flags_the_file`
+now pins that the file still flags on the hint mismatch **and** that the conformance ground is not
+among the reasons. That is the separation the two flag families always had and nothing had checked.
+
+## The fixes, as proposed
 
 ### 1 — `branch.label_sets` must be readable by both writers it is tested against
 

@@ -159,6 +159,31 @@ def _span(span_id: str, measure: str, extent: tuple[float, float], **extra: Any)
     )
 
 
+def _window(window_id: str, span_id: str, classifier: str, raw_scores: dict[str, float]) -> Entity:
+    """One per-span classifier window, in the shape PREPROCESS writes.
+
+    Args:
+        window_id: Its id.
+        span_id: The span it was cut from.
+        classifier: ``hear`` or ``yamnet``, which is what selects its vocabulary.
+        raw_scores: The classifier's own scores, in its own label spellings.
+
+    Returns:
+        The entity.
+    """
+    return Entity(
+        id=window_id,
+        prov_type="measurement",
+        extent=(0.0, 2.0),
+        attributes={
+            "name": f"span_{classifier}",
+            "classifier": classifier,
+            "span_id": span_id,
+            "raw_scores": raw_scores,
+        },
+    )
+
+
 def _params(**values: Any) -> BranchParams:  # noqa: ANN401
     """The packaged operating points, with a fixture's own values overriding some of them.
 
@@ -658,7 +683,7 @@ class TestEveryOperatingPointIsAConfigKey:
         mappings = {key for key in PARAM_KEYS if f"{PARAM_SECTION}.{key}" in DATA_MAP_PATHS}
         numeric = [key for key in PARAM_KEYS if key not in mappings]
         assert mappings == {"label_sets", "phoneme_place_classes", "phoneme_vowel_classes"}
-        assert len(numeric) == 29
+        assert len(numeric) == 28
         params = branch_params(config)
         for key in numeric:
             assert config.values[PARAM_SECTION][key] is not None, key
@@ -1106,21 +1131,29 @@ class TestTheThreeInstruments:
     def test_sounds_like_reads_raw_scores_of_this_spans_windows_only(self) -> None:
         """``labels`` is a top-K decision the shipped config leaves unmade; ``raw_scores`` is always there."""
         span = _span("s1", "amplitude", (0.0, 2.0))
-        mine = Entity(
-            id="w1",
-            prov_type="measurement",
-            extent=(0.0, 2.0),
-            attributes={"name": "span_hear", "span_id": "s1", "raw_scores": {"Cough": 0.42, "Speech": 0.01}},
-        )
-        someone_elses = Entity(
-            id="w2",
-            prov_type="measurement",
-            extent=(0.0, 2.0),
-            attributes={"name": "span_hear", "span_id": "s2", "raw_scores": {"Cough": 0.99}},
-        )
-        assert sounds_like(span, [mine, someone_elses], ["Cough"], p_score_min=0.4)
-        assert not sounds_like(span, [mine, someone_elses], ["Cough"], p_score_min=0.5)
-        assert not sounds_like(span, [someone_elses], ["Cough"], p_score_min=0.4)
+        mine = _window("w1", "s1", "hear", {"Cough": 0.42, "Speech": 0.01})
+        someone_elses = _window("w2", "s2", "hear", {"Cough": 0.99})
+        wanted = {"hear": ("Cough",)}
+        assert sounds_like(span, [mine, someone_elses], wanted, p_score_min=0.4)
+        assert not sounds_like(span, [mine, someone_elses], wanted, p_score_min=0.5)
+        assert not sounds_like(span, [someone_elses], wanted, p_score_min=0.4)
+
+    def test_each_window_is_read_in_its_own_classifiers_vocabulary(self) -> None:
+        """One sound, two spellings: the HeAR head on a HeAR window, the AudioSet name on YAMNet's."""
+        span = _span("s1", "amplitude", (0.0, 2.0))
+        hear = _window("w1", "s1", "hear", {"Breathe": 0.9})
+        yamnet = _window("w2", "s1", "yamnet", {"Breathing": 0.9})
+        wanted = {"hear": ("Breathe",), "yamnet": ("Breathing",)}
+        assert sounds_like(span, [hear], wanted, p_score_min=0.5)
+        assert sounds_like(span, [yamnet], wanted, p_score_min=0.5)
+        assert not sounds_like(span, [yamnet], {"hear": ("Breathe",)}, p_score_min=0.5)
+        assert not sounds_like(span, [hear], {"yamnet": ("Breathe",)}, p_score_min=0.5)
+
+    def test_a_window_whose_classifier_the_set_names_nothing_for_contributes_nothing(self) -> None:
+        """A kind a classifier has no spelling for is unreadable there, not a licence to read it flat."""
+        span = _span("s1", "amplitude", (0.0, 2.0))
+        yamnet = _window("w1", "s1", "yamnet", {"Cough": 0.99})
+        assert not sounds_like(span, [yamnet], {"hear": ("Cough",), "yamnet": ()}, p_score_min=0.5)
 
     def test_a_window_with_no_scores_at_all_is_not_a_crash(self) -> None:
         """SQUIM and the classifiers both refuse sometimes, and a refusal carries no scores."""
@@ -1129,9 +1162,14 @@ class TestTheThreeInstruments:
             id="w1",
             prov_type="measurement",
             extent=(0.0, 2.0),
-            attributes={"name": "span_hear", "span_id": "s1", "unmeasured": "no_native_window"},
+            attributes={
+                "name": "span_hear",
+                "classifier": "hear",
+                "span_id": "s1",
+                "unmeasured": "no_native_window",
+            },
         )
-        assert not sounds_like(span, [refused], ["Cough"], p_score_min=0.1)
+        assert not sounds_like(span, [refused], {"hear": ("Cough",)}, p_score_min=0.1)
 
     def test_the_train_rate_finds_a_synthesised_modulation(self) -> None:
         """A 4 Hz envelope modulation reads back as 4 Hz, within the transform's own resolution."""
