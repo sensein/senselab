@@ -49,6 +49,25 @@ class TestReading:
         assert sorted(name for name, _, _ in read) == ["sub-a", "sub-b"]
         assert all(decision is not None for _, decision, _ in read)
 
+    def test_a_recording_with_both_a_row_and_a_log_is_counted_once(self, tmp_path: Path) -> None:
+        """A run tree holds both; counting both doubles every total in the report."""
+        _write_row(tmp_path, "sub-a", _verdict(), duration_s=12.0)
+        log = tmp_path / "out" / "sub-a" / "run.json"
+        log.parent.mkdir(parents=True)
+        log.write_text(json.dumps({"source": "/data/sub-a.wav", "decision": _verdict().record()}))
+        report = aggregate(decisions(tmp_path))
+        assert report.files == 1
+        assert report.triage == {"pass": 1}
+
+    def test_the_row_is_preferred_over_the_log_for_the_same_recording(self, tmp_path: Path) -> None:
+        """Only the row carries the driver's own fields, the header duration among them."""
+        _write_row(tmp_path, "sub-a", _verdict(), duration_s=0.5)
+        log = tmp_path / "out" / "sub-a" / "run.json"
+        log.parent.mkdir(parents=True)
+        log.write_text(json.dumps({"stem": "sub-a", "decision": _verdict().record()}))
+        report = aggregate(decisions(tmp_path))
+        assert report.durations == {"0-1s": 1}
+
     def test_a_row_without_a_decision_is_read_and_counted_unread(self, tmp_path: Path) -> None:
         """A run that raised before VERDICT folded is a file of the corpus, not a file skipped."""
         _write_row(tmp_path, "sub-a", None, ok=False, error="RuntimeError: boom")
