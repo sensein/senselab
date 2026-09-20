@@ -76,6 +76,9 @@ class CorpusReport:
         critical_absences: Branch to gate to count. Any entry is a run that reached no branch.
         llm_redaction: Field to value to count, over REDACT's re-read.
         reasons: ``node|outcome|kind`` to count, over every contributing verdict.
+        grounds: Node to the ground each of its flag verdicts gave, counted. This is what says why a
+            corpus flags: a branch that found nothing and a task that was not done are different
+            grounds and are not comparable as one count.
         ran: Node to run state to count.
         families: Declared family to count.
         flagged_families: Declared family to how many of its recordings did not pass.
@@ -101,11 +104,29 @@ class CorpusReport:
     critical_absences: dict[str, dict[str, int]] = field(default_factory=dict)
     llm_redaction: dict[str, dict[str, int]] = field(default_factory=dict)
     reasons: dict[str, int] = field(default_factory=dict)
+    grounds: dict[str, dict[str, int]] = field(default_factory=dict)
     ran: dict[str, dict[str, int]] = field(default_factory=dict)
     families: dict[str, int] = field(default_factory=dict)
     flagged_families: dict[str, int] = field(default_factory=dict)
     durations: dict[str, int] = field(default_factory=dict)
     triage_by_duration: dict[str, dict[str, int]] = field(default_factory=dict)
+
+
+def reason_ground(why: str) -> str:
+    """One reason's ground, with the recording's own family taken off the end.
+
+    A node says what it concluded and, where the conclusion is about a task, which task. Counting the
+    whole sentence over a corpus splits one ground across as many families as declared it, so the
+    family is removed and counted separately.
+
+    Args:
+        why: The reason, as the node wrote it.
+
+    Returns:
+        The ground.
+    """
+    head, separator, _ = str(why).rpartition(" on ")
+    return head if separator and head else str(why)
 
 
 def _nested(counters: Mapping[str, Counter[str]]) -> dict[str, dict[str, int]]:
@@ -170,6 +191,7 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
     families: Counter[str] = Counter()
     flagged: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
+    grounds: dict[str, Counter[str]] = {}
     durations: Counter[str] = Counter()
     by_duration: dict[str, Counter[str]] = {}
     routes: dict[str, Counter[str]] = {}
@@ -231,6 +253,8 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
         for reason in decision.get("reasons") or []:
             if isinstance(reason, dict):
                 reasons[f"{reason.get('node')}|{reason.get('outcome')}|{reason.get('kind')}"] += 1
+                if str(reason.get("outcome")) != "pass" and reason.get("why"):
+                    grounds.setdefault(str(reason.get("node")), Counter())[reason_ground(str(reason["why"]))] += 1
 
     return CorpusReport(
         files=files,
@@ -250,6 +274,7 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
         critical_absences=_nested(absences),
         llm_redaction=_nested(redaction),
         reasons=dict(reasons.most_common()),
+        grounds=_nested(grounds),
         ran=_nested(ran),
         families=dict(families.most_common()),
         flagged_families=dict(flagged.most_common()),
@@ -363,6 +388,7 @@ def render_markdown(report: CorpusReport, source: Path | str) -> str:
     lines += _two_level("Node run state", report.ran, total)
     lines += ["## Redaction and reasons", ""]
     lines += _two_level("LLM re-read", report.llm_redaction, total)
+    lines += _two_level("Why a recording did not pass", report.grounds, total)
     lines += _table("Contributing verdicts (node|outcome|kind)", report.reasons, total)
     if report.conformance_by_family:
         lines += ["## Conformance by declared family", ""]
