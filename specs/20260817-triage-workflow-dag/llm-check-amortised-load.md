@@ -398,8 +398,8 @@ including one that fails if a timing ever reaches the annotation.
 
 ### Mutations
 
-Twenty, each applied to the shipped source, run against the named suite, and reverted.
-**Nineteen caught.**
+Twenty-two, each applied to the shipped source, run against the named suite, and reverted.
+**Twenty-one caught.**
 
 | | mutation | caught by |
 | --- | --- | --- |
@@ -423,6 +423,8 @@ Twenty, each applied to the shipped source, run against the named suite, and rev
 | M18 | the worker is always released, so a dedicated pass cannot amortise either | redact suite |
 | M19 | the release is not on the failure path | redact suite |
 | M20 | the packaged config asks for residency | redact suite |
+| M21 | releasing between recordings also forgets a refused load | redact suite |
+| M22 | the refusal is cleared however shutdown was asked for | worker suite |
 
 **M14 is not catchable by this suite, by construction, and saying so is more useful than pretending
 otherwise.** `torch.cuda.empty_cache()` lives inside the worker *script* — the string the fake
@@ -432,7 +434,16 @@ The behaviour itself was measured on the GPU instead, and the measurement is why
 code comment was weakened: emptying returns 1.31 GiB of 71.66, because the rest is allocated rather
 than cached.
 
-One mutation was not caught on the first attempt and is worth recording as a lesson about the tests
-rather than about the code: M4 survived, because the only unmarked line the fake worker wrote was
-prose, which the JSON parse rejects whether the marker is checked or not. A well-formed object that
-is *not* a reply is what makes the marker load-bearing, and the test now writes one.
+Two are worth recording as lessons about the tests rather than about the code.
+
+**M4 survived its first attempt**, because the only unmarked line the fake worker wrote was prose,
+which the JSON parse rejects whether the marker is checked or not. A well-formed object that is
+*not* a reply is what makes the marker load-bearing, and the test now writes one.
+
+**M21 and M22 exist because adding the residency key introduced a defect that every test then
+passing failed to see.** `shutdown_review_worker()` cleared the recorded start-up refusal — that is
+what it is for — and the node now calls it after every check, so on a host with no reachable GPU the
+refusal was forgotten once per recording and the 23 GB load was re-attempted 13,600 times: exactly
+the stall the record was added to prevent. Neither half was wrong; the interaction was. It is now a
+keyword (`forget_failure`), and the test that fails without it runs three checks in a row against a
+worker that cannot start and asserts one load attempt, which is the only shape that can see it.
