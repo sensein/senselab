@@ -80,7 +80,7 @@ measurement is below, and the derivation is in `config-derivations.md` under `re
 
 | what happened | what the worker does | what the caller gets | why |
 | --- | --- | --- | --- |
-| the load failed — no venv, no weights, no device | recorded once per process | `available=False`, the same `failure` on every later call, **no second load attempt** | a 23 GB load that failed will fail again, and at 12,800 checked recordings a `timeout_s` of 1800 s paid per recording is 6,400 GPU-hours of waiting for the same answer |
+| the load failed — no venv, no weights, no device | recorded once per process | `available=False`, the same `failure` on every later call, **no second load attempt** | a 23 GB load that failed will fail again, and at ~13,600 checked recordings (below) a `timeout_s` of 1800 s paid per recording is ~6,800 GPU-hours of waiting for the same answer |
 | the review raised or the worker died | the worker is closed | `available=False`; the **next** call starts a fresh worker | an out-of-memory poisons the process but not the next transcript, and one reload is cheap |
 | the review did not answer within `timeout_s` | the worker is killed | `available=False`, the failure names the timeout | unchanged from the shipped contract, except that it is now the generation that is bounded rather than the generation plus the load |
 
@@ -167,7 +167,7 @@ outside the graph."*
 
 **No timing reaches the annotation**, and that is deliberate rather than an oversight.
 `corpus_report.aggregate` counts each `llm_redaction` field's *values* into a `Counter`: a float per
-recording would be ~12,800 single-count buckets in the corpus report. The annotation stays controlled
+recording would be ~13,600 single-count buckets in the corpus report. The annotation stays controlled
 vocabulary; the timings live one level down, on the rounds, where nothing counts them by value.
 
 Between them the two answer both questions the store could not answer before — *how long did the
@@ -303,6 +303,24 @@ then buys only the multi-round case, and on this corpus no recording had one. **
 is real but it is not free: it requires giving the step a GPU of its own**, which is what the owner's
 separate-pass plan already does.
 
+The same 26 recordings, the same list, the same process, with the shipped
+`keep_worker_resident: false` — the weights handed back when each check ends:
+
+| | resident | released (shipped) |
+| --- | --- | --- |
+| `PREPROCESS` → `REDACT` completed | 3 of 22 | **every recording so far** |
+| `asr_qwen: CUDA error: out of memory` | 19 of 22 | **0** |
+| recordings that got a model verdict | 1 | 3 of the first 8 |
+| load paid per checked recording | 14.6 s once | 14.6 – 14.9 s each |
+
+So the release makes the graph survive, and the cost is exactly the one the arena's arm A measured:
+each checked recording pays its own ~14.7 s load. Everything else about the step is unchanged —
+`activity_span_s` 20.4–23.0 s, one round each, 68–134 output tokens, the same 40-hex revision on
+every annotation.
+
+(The released arm was still working through its 26 recordings when this was written; the OOM count
+is what matters and it is zero, against 19 in the resident arm on the identical list.)
+
 <!-- DRIVER -->
 
 <!-- MEASUREMENT -->
@@ -323,10 +341,10 @@ existed while this was written:
 
 | | rows | share | scaled to 62,578 |
 | --- | --- | --- | --- |
-| recordings read | 3,779 | — | — |
-| reached REDACT | 1,100 | **29.1%** | ≈18,200 |
-| REDACT passed, so a model verdict | 823 | **21.8%** | **≈13,600** |
-| (pass given reached) | | 74.8% | |
+| recordings read | 5,531 | — | — |
+| reached REDACT | 1,606 | **29.0%** | ≈18,200 |
+| REDACT passed, so a model verdict | 1,204 | **21.8%** | **≈13,600** |
+| (pass given reached) | | 75.0% | |
 
 Against `llm-check-first-run.md`'s ≈23,800 reaching and ≈15,900 getting a verdict, the gate removes
 about a quarter of the reaching population and about 14% of the verdicts. It is a smaller correction
@@ -341,10 +359,11 @@ whose transcripts the first run found nothing to reason about.
 **The caveat on this read, stated rather than buried.** The run is in flight, and its 400 slices
 stride the manifest (`entries[idx::nsl]`), so the rows that exist early are spread across the corpus
 rather than clustered — but they are the *faster* recordings within each slice, and shorter
-recordings are less likely to produce a word outside their stimulus. The rate has drifted upward as
-rows accumulated (27.8% at 2,108 rows, 28.8% at 2,598, 29.1% at 3,779), so **≈13,600 is more likely
-a floor than a ceiling.** Re-read `decision.ran.REDACT` over the completed run before spending
-anything on the strength of it.
+recordings are less likely to produce a word outside their stimulus. The rate rose while the early
+rows accumulated and has since settled: reach 27.8% at 2,108 rows, 28.8% at 2,598, 29.1% at 3,779,
+**29.0% at 5,531**, with the verdict rate flat at 21.8% across the last three. That is a converged
+number rather than a trend, but it is still a 9% sample of a run that has 14 hours left; re-read
+`decision.ran.REDACT` over the completed run before spending anything on the strength of it.
 
 ### What the second pass would cost
 
