@@ -138,10 +138,12 @@ class ReviewResult:
 #                              "peak_reserved_mib": int, "resident_mib": int}
 # Stop request (stdin):       {"stop": True}
 #
-# The worker empties the CUDA caching allocator after each generation and reports what it held
-# before and holds after. A process that keeps the weights must not also keep every transient
-# buffer one generation touched: the allocator never returns blocks to the driver on its own, and
-# this worker does not share an address space with the graph that needs the rest of the card. See
+# The worker empties the CUDA caching allocator after each generation, so ``resident_mib`` is what
+# it holds *between* reviews rather than its high-water mark, and reports both. A worker that
+# outlives a call also outlives its memory, and it does not share an address space with the graph
+# that wants the rest of the card, so the steady-state figure is the one a second process has to
+# live beside. What that figure is for this checkpoint, and why emptying the cache moves it far
+# less than it looks like it should, is measured in
 # ``specs/20260817-triage-workflow-dag/llm-check-amortised-load.md``.
 #
 # Every reply carries the ``_WORKER_MARKER`` prefix, so a library writing to the real stdout cannot

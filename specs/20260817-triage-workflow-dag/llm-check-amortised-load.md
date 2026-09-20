@@ -82,14 +82,64 @@ release still stands, the annotation still carries `status: absent` with `revisi
 failure string, and the `available: false` measurement is still in the store. What changed is only
 how many times the graph pays to discover it.
 
-### What it costs to hold
+### What it costs to hold — the thing that nearly made this not worth having
 
-The worker holds the weights for the process's lifetime — ~23 GB of device memory on the QAT
-checkpoint — from the first recording that reaches the check to the end of the slice. On the 80 GB
-cards this account can reach that sits alongside the rest of the graph without contention; on a
-smaller card it is a real constraint, and `shutdown_review_worker()` is the way to hand it back
-early. The worker also exits on its own when its stdin reaches EOF, so a killed or preempted parent
-does not leave 23 GB resident on a shared node.
+A worker kept alive keeps a GPU. How much of one turned out to be the most surprising measurement
+here, and it changed the code.
+
+Measured on an H100 80 GB, loading the QAT checkpoint directly and generating 64 tokens twice:
+
+| | GiB |
+| --- | --- |
+| the checkpoint on disk | 21.67 |
+| parameters resident after load (`int32` packed weights + `bfloat16` scales) | 19.04 |
+| allocator **allocated** after load | 19.08 |
+| allocator **reserved** after load | 23.07 |
+| allocator reserved after one 64-token generation | **71.66** |
+| …after `torch.cuda.empty_cache()` | **70.35** |
+| …after a second generation, then emptied again | 70.35 |
+| nvidia-smi, whole process, steady state | **72,735 MiB** |
+
+Two things fall out of that, one of them good news and one of them the reason this section exists.
+
+**The w4a16 packing does survive the load on the GPU.** `llm-check-first-run.md` measured the CPU
+path decompressing to `bfloat16` after load — "the QAT variant does not buy 23 GB of host memory" —
+and the obvious fear was that the same happened on device. At load it does not: the resident
+parameter dtypes are 3.66 G `int32` and 2.90 G `bfloat16`, 19.04 GiB, close to the packed size on
+disk, and the card reads 24.2 GB.
+
+**But the first forward pass costs 51 GiB that never comes back.** After one generation the
+allocator holds 71.66 GiB, and `empty_cache()` returns **1.31 GiB** of it — so the other 70.35 GiB
+is *allocated*, not merely cached, and a second generation adds nothing further. The CPU behaviour
+the first run measured is not absent on GPU; it is deferred to first use. A warm worker's true
+steady-state footprint on this checkpoint is **~70 GiB, not ~23 GB**, and the arena saw exactly that
+held flat across all twelve reviews.
+
+That is a property of the checkpoint's runtime, not of the amortisation: the per-round path reached
+the same peak and only avoided holding it by exiting. What the amortisation changes is that the peak
+is now held continuously rather than for twenty seconds at a time.
+
+The worker still empties the allocator after each generation. It is free, it does return the
+transient 1.3 GiB, and it is what makes `resident_mib` mean "what this worker holds between reviews"
+rather than "its high-water mark" — which is the number that decides whether anything else fits on
+the card. Both readings reach the round's measurement in the store beside the timings, because after
+this exercise it is plain that **memory, not time, is the binding constraint on this step**, and the
+store should be able to answer it without an `nvidia-smi` outside the run.
+
+**What this means for where the step should run.** On an 80 GB card a resident worker leaves about
+8 GB for everything else, which is not enough for the rest of the triage graph. So the amortisation
+argues for the step running as its **own pass over stored redacted transcripts** — which is already
+the owner's plan — rather than co-resident with the graph inside the corpus driver. Running it in
+the driver still works and is still ~5× cheaper than the shipped path, but only with a GPU it does
+not have to share.
+
+The obvious next thing to try, and deliberately not tried here because it changes numerics and needs
+its own measurement, is loading with `run_compressed=True` so the packed weights are used in place
+rather than materialised: that is the difference between a ~24 GB worker and a ~72 GB one.
+
+`shutdown_review_worker()` remains the way to hand it all back. The worker also exits on its own
+when its stdin reaches EOF, so a killed or preempted parent does not leave the weights on a shared
+node.
 
 ## The step now records its own cost
 
@@ -99,8 +149,8 @@ outside the graph."*
 | where | what it carries |
 | --- | --- |
 | the `REDACT`/`llm_check` activity | `started` and `ended`, ISO 8601 with a zone, **on every path** — disabled and not-run included, so a stamp is never the thing that distinguishes them |
-| each `redaction_llm_review` measurement | `elapsed_s` for that round, `load_s` — how much of it was the weights, `0.0` on an amortised round — and `output_tokens` |
-| `report.py`'s `_llm_reviews`, the summary JSON, the rendered block | the same three, so a sizer reads them from the document rather than from the store |
+| each `redaction_llm_review` measurement | `elapsed_s` for that round, `load_s` — how much of it was the weights, `0.0` on an amortised round — `output_tokens`, and the two device-memory readings |
+| `report.py`'s `_llm_reviews`, the summary JSON, the rendered block | the same, so a sizer reads them from the document rather than from the store |
 
 **No timing reaches the annotation**, and that is deliberate rather than an oversight.
 `corpus_report.aggregate` counts each `llm_redaction` field's *values* into a `Counter`: a float per
@@ -180,6 +230,44 @@ round is what establishes that the wrapper reproduces the shipped path rather th
 Then, separately, the shape that matters at corpus scale: **the whole graph over many recordings in
 one process**, the corpus driver's shape, with `llm_check` on and the per-recording step cost read
 back out of each run's own store rather than from a stopwatch outside it.
+
+### The step, arm against arm
+
+12 recordings, one H100 80 GB, `node2803` on `pi_satra`, `max_iterations: 3`, every recording
+settling in one round.
+
+| | arm A — a load per round | arm B — amortised |
+| --- | --- | --- |
+| total for 12 recordings | 244.2 s | **60.4 s** |
+| mean per recording | 20.3 s | 5.0 s |
+| median per recording | 20.3 s | **3.6 s** |
+| range | 18.0 – 22.3 s | 2.0 – 21.0 s (the 21.0 s is the one that loaded) |
+| seconds spent loading | 167.0 s | 14.4 s |
+| **load as a share of the arm** | **68.4%** | 23.8% |
+| output tokens, median | 92 | 92 |
+| verdicts | 12 clean | 12 clean |
+| device held between reviews | 4 MiB | 70,858 MiB |
+
+**4.04× over 12 recordings**, and **5.84×** comparing arm A's median against arm B's median *after*
+the one recording that paid the load — which is the figure a slice of 156 recordings converges on,
+since the load is paid once per process however long the slice is.
+
+Two honest qualifications, both of which make this a conservative reading:
+
+1. **Arm A is cheaper here than the shipped path was when the first run measured it.** That run
+   reported ~62 s per round and ~75 s per checked recording; arm A measures 20.3 s, three times
+   faster, on twelve recordings rather than one. The difference is the page cache: a warm-up load
+   runs immediately before either arm, so every arm-A load reads 21.67 GiB that is already in RAM
+   (13–15 s), where the same load cold takes 38.8 s — measured, as the first arena's warm-up. The
+   first run's single 61.7 s figure was not preceded by a load. So the true saving on a cold host is
+   larger than 4–6×, not smaller; this measurement simply refuses to claim the difference.
+2. **Every transcript settled in one round.** The spec's 1.2-rounds-per-recording assumption is not
+   exercised here, and each extra round is another full load in arm A and none in arm B — so more
+   iteration widens the gap rather than narrowing it.
+
+### The step, end to end, in the corpus driver's shape
+
+<!-- DRIVER -->
 
 <!-- MEASUREMENT -->
 
