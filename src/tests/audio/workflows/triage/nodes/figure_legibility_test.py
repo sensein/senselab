@@ -245,3 +245,70 @@ class TestPageTitleFitsThePage:
         heading = "sub-a_task-loudness — page 1, 0-20s of 6.27s"
         assert wrap_measured(figure, heading, fontsize=PAGE_TITLE_FONTSIZE, drawable_in=drawable) == heading
         plt.close(figure)
+
+
+class TestCoverBodyFitsThePage:
+    """A cover body longer than the page is drawn from the top and clipped, losing its tail."""
+
+    def test_a_body_at_capacity_stays_inside_its_axis(self) -> None:
+        """Measured on the drawn artist against the drawn axis, not on a line count."""
+        from matplotlib.layout_engine import ConstrainedLayoutEngine
+
+        from senselab.audio.workflows.triage.nodes.figure import (
+            _taxonomy_panel,
+            cover_body_capacity,
+            cover_body_rect,
+        )
+
+        style = FigureStyle(figure_inches=(11.0, 8.5))
+        capacity = cover_body_capacity(style, 1)
+        figure = plt.figure(figsize=style.figure_inches, layout=ConstrainedLayoutEngine(rect=cover_body_rect(style, 1)))
+        axis = figure.add_subplot()
+        artist = _taxonomy_panel(axis, [f"line {index:03d}" for index in range(capacity)], style)
+        figure.canvas.draw()
+        assert artist.get_window_extent().y0 >= axis.get_window_extent().y0
+        plt.close(figure)
+
+    def test_a_body_well_past_capacity_would_overflow_undrawn(self) -> None:
+        """The capacity is the page's, not a number that happens to be under it."""
+        from matplotlib.layout_engine import ConstrainedLayoutEngine
+
+        from senselab.audio.workflows.triage.nodes.figure import (
+            _taxonomy_panel,
+            cover_body_capacity,
+            cover_body_rect,
+        )
+
+        style = FigureStyle(figure_inches=(11.0, 8.5))
+        over = cover_body_capacity(style, 1) + 12
+        figure = plt.figure(figsize=style.figure_inches, layout=ConstrainedLayoutEngine(rect=cover_body_rect(style, 1)))
+        axis = figure.add_subplot()
+        artist = _taxonomy_panel(axis, [f"line {index:03d}" for index in range(over)], style)
+        figure.canvas.draw()
+        assert artist.get_window_extent().y0 < axis.get_window_extent().y0
+        plt.close(figure)
+
+    def test_every_paginated_page_is_within_capacity_and_nothing_is_lost(self) -> None:
+        """Pagination must preserve every non-blank line, in order."""
+        from senselab.audio.workflows.triage.nodes.figure import paginate_body
+
+        body = [f"line {index:03d}" if index % 17 else "" for index in range(240)]
+        pages_out = paginate_body(body, 40)
+        assert len(pages_out) > 1
+        assert all(len(page) <= 40 for page in pages_out)
+        kept = [line for page in pages_out for line in page if line.strip()]
+        assert kept == [line for line in body if line.strip()]
+
+    def test_a_body_that_already_fits_stays_one_page(self) -> None:
+        """Paginating a short body would cost a page for nothing."""
+        from senselab.audio.workflows.triage.nodes.figure import paginate_body
+
+        body = ["one", "", "two", "three"]
+        assert paginate_body(body, 40) == [body]
+
+    def test_a_break_prefers_a_blank_line(self) -> None:
+        """A section split mid-block reads as two unrelated fragments."""
+        from senselab.audio.workflows.triage.nodes.figure import paginate_body
+
+        body = ["a1", "a2", "", "b1", "b2", "b3", "b4"]
+        assert paginate_body(body, 5) == [["a1", "a2"], ["b1", "b2", "b3", "b4"]]
