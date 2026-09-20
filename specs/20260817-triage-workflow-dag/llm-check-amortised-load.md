@@ -237,8 +237,10 @@ review:
 - **B — amortised.** The worker is left up.
 
 A warm-up review is run and discarded before either arm, so both see a fully warm page cache and the
-snapshot already staged; arm A's agreement with the first run's independently-measured ~62 s per
-round is what establishes that the wrapper reproduces the shipped path rather than approximating it.
+snapshot already staged. Arm A does *not* reproduce the first run's ~62 s per round and it is worth
+saying why before the numbers rather than after: it is three times faster, because the warm-up put
+21.67 GiB of weights in the page cache first. Arm A is therefore the shipped path with its most
+expensive component made as cheap as it can be, which makes every ratio below a lower bound.
 
 Then, separately, the shape that matters at corpus scale: **the whole graph over many recordings in
 one process**, the corpus driver's shape, with `llm_check` on and the per-recording step cost read
@@ -321,10 +323,6 @@ every annotation.
 (The released arm was still working through its 26 recordings when this was written; the OOM count
 is what matters and it is zero, against 19 in the resident arm on the identical list.)
 
-<!-- DRIVER -->
-
-<!-- MEASUREMENT -->
-
 ## The corpus, re-derived under the gate
 
 `llm-check-first-run.md` estimated ≈23,800 recordings reaching REDACT and ≈15,900 getting a model
@@ -388,8 +386,6 @@ move with transcript length (median 92 tokens across 8- to 887-character transcr
 perfect parallel efficiency across GPUs; no queue wait. **New assumption, and the one most worth
 challenging:** that each of the four GPUs can be given wholly to this pass, since one worker holds
 ~70 GiB of an 80 GB card.
-
-<!-- CORPUS -->
 
 ## What this does not change
 
