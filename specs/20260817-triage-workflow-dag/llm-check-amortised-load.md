@@ -280,6 +280,60 @@ lexical word is **not** in its declared stimulus, or where the family's expected
 response. A recording that produced only the words its task asked for is never scanned, so it never
 reaches REDACT.
 
+The denominator is therefore a **read** rather than an extrapolation from a sample of 20: the
+62,578-recording corpus run of 2026-09-19 writes one row per recording carrying its whole decision,
+and `decision.ran.REDACT` says whether the recording reached the node. Read over the rows that
+existed while this was written:
+
+| | rows | share | scaled to 62,578 |
+| --- | --- | --- | --- |
+| recordings read | 3,779 | — | — |
+| reached REDACT | 1,100 | **29.1%** | ≈18,200 |
+| REDACT passed, so a model verdict | 823 | **21.8%** | **≈13,600** |
+| (pass given reached) | | 74.8% | |
+
+Against `llm-check-first-run.md`'s ≈23,800 reaching and ≈15,900 getting a verdict, the gate removes
+about a quarter of the reaching population and about 14% of the verdicts. It is a smaller correction
+than the gate's own headline numbers suggest, and the reason is visible family by family: the
+families the gate was aimed at are not the ones that dominate. Grouped over the same rows:
+diadochokinesis reaches REDACT on **398 of 469 (84.9%)** — ASR renders repeated syllables as words
+no stimulus contains, so the gate opens almost every time — and free speech on **244 of 327
+(74.6%)** by design, while respiration-and-cough reaches it on **8 of 777 (1.0%)** and glides on
+**13 of 209 (6.2%)**. The gate closes hard on the wordless families and barely at all on the one
+whose transcripts the first run found nothing to reason about.
+
+**The caveat on this read, stated rather than buried.** The run is in flight, and its 400 slices
+stride the manifest (`entries[idx::nsl]`), so the rows that exist early are spread across the corpus
+rather than clustered — but they are the *faster* recordings within each slice, and shorter
+recordings are less likely to produce a word outside their stimulus. The rate has drifted upward as
+rows accumulated (27.8% at 2,108 rows, 28.8% at 2,598, 29.1% at 3,779), so **≈13,600 is more likely
+a floor than a ceiling.** Re-read `decision.ran.REDACT` over the completed run before spending
+anything on the strength of it.
+
+### What the second pass would cost
+
+The re-read as its own pass over only the recordings that carry a finding and clear the detector
+path — ≈13,600 of 62,578 — at 1.0 rounds each, the rate every recording measured here and in the
+first run settled at:
+
+| | per recording | corpus | on 4 H100s |
+| --- | --- | --- | --- |
+| as shipped, as the first run measured it | ~75 s | ~284 GPU-hours | **~3.0 days** |
+| as shipped, as arm A measures it here | 20.3 s | ~77 GPU-hours | **~19 hours** |
+| **amortised (arm B)** | **3.6 s** | **~13.5 GPU-hours** | **~3.4 hours** |
+
+So against the first run's own table the change is the difference between a three-day job and an
+afternoon; against the more conservative arm-A baseline measured here it is nineteen hours against
+three and a half. Both comparisons hold the population, the model, the config and the card fixed;
+only the load policy differs.
+
+Assumptions, all of them the first run's except where marked: one round per checked recording
+(measured, 12 of 12 here and 12 of 12 there); generation cost tracks output tokens, which barely
+move with transcript length (median 92 tokens across 8- to 887-character transcripts here);
+perfect parallel efficiency across GPUs; no queue wait. **New assumption, and the one most worth
+challenging:** that each of the four GPUs can be given wholly to this pass, since one worker holds
+~70 GiB of an 80 GB card.
+
 <!-- CORPUS -->
 
 ## What this does not change
@@ -306,9 +360,39 @@ the refusal record observable on a laptop; a stub of `review_redacted_text` — 
 The timings' own tests are in `redact_test.py`, next to the rest of the step's store contract,
 including one that fails if a timing ever reaches the annotation.
 
-Thirteen mutations were applied and all thirteen were caught; they are listed in the measurement
-section. One of them was not caught on the first attempt and is worth recording as a lesson about
-the tests rather than about the code: the marker check on the worker's replies survived a mutation
-that ignored the marker, because the only unmarked line the fake worker wrote was prose, which the
-JSON parse rejects either way. A well-formed object that is *not* a reply is what makes the marker
-load-bearing, and the test now writes one.
+### Mutations
+
+Sixteen, each applied to the shipped source, run against the named suite, and reverted. **Fifteen
+caught.**
+
+| | mutation | caught by |
+| --- | --- | --- |
+| M1 | the worker is never reused — a fresh load per review, the shipped behaviour | worker suite |
+| M2 | a refused load is retried for every recording | worker suite |
+| M3 | a dead worker is reused rather than replaced | worker suite |
+| M4 | the reply marker is ignored, so a line the loader wrote is read as a reply | worker suite |
+| M5 | a review that never answers is waited on for ever | worker suite |
+| M6 | `shutdown_review_worker` does not clear the recorded refusal | worker suite |
+| M7 | `load_s` is not reported, so load and generation cannot be separated | worker suite |
+| M8 | the worker exiting without answering is not noticed | worker suite |
+| M9 | the `llm_check` activity carries no `started`/`ended` | redact suite |
+| M10 | the stamp is naive, so two hosts cannot be compared | redact suite |
+| M11 | per-round timings never reach the store | redact suite |
+| M12 | the report reader drops the timings the store holds | redact suite |
+| M13 | a timing leaks into the annotation `corpus_report` counts by value | redact suite |
+| M14 | the allocator is never emptied | **not caught — see below** |
+| M15 | the device footprint never reaches the caller | worker suite |
+| M16 | the device footprint never reaches the store | redact suite |
+
+**M14 is not catchable by this suite, by construction, and saying so is more useful than pretending
+otherwise.** `torch.cuda.empty_cache()` lives inside the worker *script* — the string the fake
+worker replaces wholesale — and its effect is a CUDA fact. No laptop test can observe it. What the
+suite does pin is the contract around it (M15, M16: both readings reach the caller and the store).
+The behaviour itself was measured on the GPU instead, and the measurement is why the claim in the
+code comment was weakened: emptying returns 1.31 GiB of 71.66, because the rest is allocated rather
+than cached.
+
+One mutation was not caught on the first attempt and is worth recording as a lesson about the tests
+rather than about the code: M4 survived, because the only unmarked line the fake worker wrote was
+prose, which the JSON parse rejects whether the marker is checked or not. A well-formed object that
+is *not* a reply is what makes the marker load-bearing, and the test now writes one.
