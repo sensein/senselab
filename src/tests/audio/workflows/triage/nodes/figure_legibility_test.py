@@ -150,3 +150,44 @@ class TestTheWordLaneReadsAsSpeech:
     def test_the_staggering_is_preserved(self) -> None:
         """More than one row, so a word's label can use the width its neighbours are not using."""
         assert FigureStyle().asr_rows > 1
+
+
+class TestCoverTextFitsThePage:
+    """A cover line wider than the page is truncated mid-word with no error of any kind."""
+
+    def test_a_full_width_line_stays_inside_the_printed_margins(self) -> None:
+        """Measured against the rendered extent, so page size, point size and column count agree."""
+        from senselab.audio.workflows.triage.nodes.figure import monospace_columns
+        from senselab.audio.workflows.triage.nodes.report import _BLOCK_COLUMNS, _BLOCK_FONTSIZE
+
+        style = FigureStyle()
+        figure = plt.figure(figsize=style.figure_inches)
+        renderer = figure.canvas.get_renderer()
+        text = figure.text(0.0, 0.5, "M" * _BLOCK_COLUMNS, family="monospace", fontsize=_BLOCK_FONTSIZE)
+        drawn_in = text.get_window_extent(renderer=renderer).width / figure.dpi
+        plt.close(figure)
+        drawable_in = style.figure_inches[0] - 2.0 * style.cover_margin_in
+        assert drawn_in <= drawable_in, f"{_BLOCK_COLUMNS} columns draw {drawn_in:.3f}in into {drawable_in:.3f}in"
+        assert _BLOCK_COLUMNS == monospace_columns(style, _BLOCK_FONTSIZE)
+
+    def test_one_more_column_would_not_fit(self) -> None:
+        """The width is the page's, not a round number that happens to be under it."""
+        from senselab.audio.workflows.triage.nodes.report import _BLOCK_COLUMNS, _BLOCK_FONTSIZE
+
+        style = FigureStyle()
+        figure = plt.figure(figsize=style.figure_inches)
+        renderer = figure.canvas.get_renderer()
+        text = figure.text(0.0, 0.5, "M" * (_BLOCK_COLUMNS + 1), family="monospace", fontsize=_BLOCK_FONTSIZE)
+        drawn_in = text.get_window_extent(renderer=renderer).width / figure.dpi
+        plt.close(figure)
+        assert drawn_in > style.figure_inches[0] - 2.0 * style.cover_margin_in
+
+    def test_every_wrapped_cover_line_is_within_the_width(self) -> None:
+        """The wrapper is what enforces it, so a long measurement line must come back folded."""
+        from senselab.audio.workflows.triage.nodes.report import _BLOCK_COLUMNS, _wrapped
+
+        long_line = "  SPEECH: " + "; ".join(f"measure_{index}=0.{index:03d}" for index in range(40))
+        assert len(long_line) > _BLOCK_COLUMNS
+        folded = _wrapped([long_line])
+        assert len(folded) > 1
+        assert all(len(line) <= _BLOCK_COLUMNS for line in folded)
