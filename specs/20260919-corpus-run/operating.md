@@ -28,14 +28,23 @@ check exist because of it.
 
 ## Shape and sizing
 
-1,024 slices of ~61 recordings, 200 concurrent on `mit_preemptable`, 8 CPUs and 32 GB each, CPU only.
-Sized on a 20-recording smoke that ran the full graph: median **254 s** per recording, mean 265 s,
-max 480 s. A slice is therefore ~4.5 h against a 6 h limit, and the corpus is **~23 h** of wall clock.
+**400 slices of ~157 recordings, 200 concurrent, on `mit_preemptable`, 8 CPUs and 32 GB each, CPU
+only, 16 h per slice.** Sized on a 20-recording smoke and a 2,291-recording pilot that both ran the
+full graph: median **254 s** per recording, mean 265 s, max 480 s. A slice is therefore ~11.6 h
+against a 16 h limit, and the corpus is **~23 h** of wall clock.
 
-The limit is deliberately under twice the expected slice: two tasks of an earlier array sat three
-hours on one node without flushing a line, and a stalled slice must release its allocation rather
-than hold it to a longer wall. Array tasks stagger their start over the first two minutes so 200
-tasks do not open the same shared caches at once.
+The slice count is set by the queue, not by preference: `mit_preemptable`'s QOS caps a user at
+**448 submitted jobs**, and every task of an array counts against it. 1,024 slices and 450 slices
+are both refused with `QOSMaxSubmitJobPerUserLimit`; 400 leaves headroom for the report and prep
+jobs that have to run beside it.
+
+Array tasks stagger their start over the first two minutes so 200 tasks do not open the same shared
+caches at once.
+
+**Roughly one slice in fifty stalls.** Four have been seen across three arrays: allocated, running,
+and never flushing a single line of output — 5h12m, 2h38m and 2h14m before being cancelled. The
+cause is not diagnosed. The time limit and the resume path are what contain it: a stalled slice
+dies at its wall and a resubmission picks up its recordings. **Plan on two passes**, not one.
 
 ## Resuming
 
