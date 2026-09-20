@@ -79,7 +79,30 @@ Together these take **42.9% down to 8.9%** — 5,327 of 60,207 recordings, 48,95
 surviving. Three whole false-positive classes lose every member: structured identifiers on
 alphabetic surfaces, item-list place names, and bracketed event markers.
 
-## Why all three annotate rather than suppress
+## The owner's ruling: the scan runs only on words the task did not ask for
+
+Asked whether the scan should run at all on families that ask for no words, the owner ruled wider
+than this document had proposed:
+
+> pii should run only if there are words not in the task — and definitely on any open response tasks
+
+So the gate is not a family list and not a post-hoc filter. It is a word-level test on the
+recording's own transcript, taken before the detector is called:
+
+- The scan runs when at least one lexical word is **not** in the recording's declared prompts. A
+  recording declaring no prompt has every word outside the task, so it is always scanned — which is
+  where disclosure lives.
+- The scan runs unconditionally on a family whose expected pattern is a free response, whatever its
+  transcript holds. Open response is the case that must never depend on a word test a sparse or
+  prompt-echoing transcript could defeat.
+- Otherwise the detector is never called, and a `pii_scan` measurement records `scanned: false` with
+  the reason and the lexical word count, so a reader can tell "nothing was found" from "nothing was
+  looked for".
+
+This removes at the source the two largest false-positive classes the census measured: the 28,719
+recordings whose task asks for no words, and the read tasks whose findings are the script.
+
+## Why what still gets scanned annotates rather than suppresses
 
 The asymmetry is the whole argument, and it applies hardest to C. A corpus-wide surface list
 generalises B across recordings, so a name genuinely disclosed in one participant's free response is
@@ -92,13 +115,12 @@ the unfiltered set, and VERDICT and REPORT read the annotations to decide what t
 is then a number the reader is shown rather than a number the pipeline enforces, and no true
 positive is ever lost to a rule derived from the corpus it is policing.
 
-Rule A is the one exception worth putting to the owner, because it is the only one that saves real
-compute: not scanning 28,719 recordings at all is cheaper than scanning and annotating them. That
-trades the evidence for the saving, and it is the owner's call rather than this document's.
+The gate settles rule A and most of rule B before the detector runs. What the annotation still
+carries is the residual: a recording that *did* say something of its own, whose detector then fired
+on the prompt anyway. That one is scanned, minted and marked — never dropped.
 
 ## Open
 
-- Whether rule A skips the scan or only annotates it.
 - Whether REPORT shows the annotated count, the unannotated count, or both.
 - Whether the LLM re-read should see the stimulus, so it is not re-deciding the same false positives.
 - The reference standard for the surviving 8.9%: nothing in this census was adjudicated.

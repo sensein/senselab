@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 import torch
@@ -97,6 +97,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     path_attributes,
     resolve_stream,
     software_agent,
+    write_measurement,
     write_report,
     write_stream,
 )
@@ -696,6 +697,39 @@ def in_stimulus(surface: str, haystack: str | None) -> bool | None:
         return None
     normalised = " ".join(str(surface).split()).casefold()
     return bool(normalised) and normalised in haystack
+
+
+def invites_disclosure(task_family: str | None) -> bool:
+    """Whether the instruction itself asks the participant to speak freely.
+
+    Args:
+        task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
+
+    Returns:
+        True for a family whose expected pattern is a free response. Such a task is where
+        disclosure lives, so its scan does not depend on a word-level test that a sparse or
+        prompt-echoing transcript could defeat.
+    """
+    expectation = SPEECH_EXPECTATIONS.get(str(task_family))
+    return expectation is not None and expectation.pattern is Pattern.FREE_RESPONSE
+
+
+def words_outside_stimulus(texts: Iterable[str], haystack: str | None) -> list[str]:
+    """The transcript words the task did not ask for.
+
+    Args:
+        texts: The lexical words' texts, bracketed tokens already excluded.
+        haystack: :func:`stimulus_haystack`'s result, or None when the recording declares no prompt.
+
+    Returns:
+        The words that are not in the declared prompts, in order, with repeats kept. Every word when
+        the recording declares no prompt: nothing was asked for, so nothing said was asked for.
+    """
+    words = [" ".join(str(text).split()).casefold() for text in texts]
+    present = [word for word in words if word]
+    if haystack is None:
+        return present
+    return [word for word in present if word not in haystack]
 
 
 def _consensus_id(store: ProvStore) -> str | None:
@@ -1904,8 +1938,33 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     for name in source_names:
         store.used(pii_act, hypotheses[name].id)
     stimulus_text = stimulus_haystack(hint)
-    raw_scans = scan_for_pii([text for _, text, _ in haystacks])
-    scans: list[PiiScan] = raw_scans if isinstance(raw_scans, list) else [raw_scans]
+    # The scan runs only where the participant said something the task did not ask for. A recording
+    # that produced only the words it was handed has nothing to disclose, and scanning it yields the
+    # script back as findings: branch-speech.md §7 and specs/20260919-pii-against-the-stimulus.
+    novel_words = words_outside_stimulus((word_text(word) for word in lexical), stimulus_text)
+    open_response = invites_disclosure(declared_family)
+    scans: list[PiiScan] = []
+    if novel_words or open_response:
+        raw_scans = scan_for_pii([text for _, text, _ in haystacks])
+        scans = raw_scans if isinstance(raw_scans, list) else [raw_scans]
+    else:
+        view.append(
+            write_measurement(
+                store,
+                pii_act,
+                software,
+                name="pii_scan",
+                signal="consensus",
+                attributes={
+                    "scanned": False,
+                    "why": "every lexical word is in the declared stimulus; the task asked for all of them",
+                    "lexical_words_n": len(lexical),
+                    "task_family": declared_family,
+                },
+                derived_from=(consensus.id,),
+            )
+        )
+        notes.append("pii not scanned: the recording produced no word the task did not ask for")
     failures: dict[str, str] = {}
     scanned_by: set[str] = set()
     findings: list[dict[str, Any]] = []

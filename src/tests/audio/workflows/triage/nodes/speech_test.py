@@ -1750,14 +1750,18 @@ class TestPiiOnTheConsensus:
         assert _report_entity(store, "SPEECH").attributes["pii"]["n"] == 1
         assert live_entities(store, "pii")[0].attributes["haystack"] == "consensus"
 
-    def test_a_finding_is_marked_against_the_recording_s_own_stimulus(
+    def test_a_scanned_recording_marks_a_finding_that_is_the_script_s_own_words(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A carrier word the participant was told to say is still minted, and is marked as the script's."""
-        _seed_speech_store(store, tmp_path, words=["buttercup", "buttercup", "buttercup"])
+        """One novel word brings the scan; a finding on the script's words is still minted, and marked.
+
+        The scan gate removes the recordings that produced nothing but their prompt. It cannot remove
+        this: a recording that did say something of its own, whose detector then fired on the prompt.
+        """
+        _seed_speech_store(store, tmp_path, words=["the", "rainbow", "springfield"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
-        _stub_pii(monkeypatch, findings=[("PERSON", "buttercup")])
-        hint = AudioHints(expected_speech=[ExpectedSpeech(text="buttercup")])
+        _stub_pii(monkeypatch, findings=[("PERSON", "rainbow")])
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow")])
         speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
         findings = live_entities(store, "pii")
         assert findings, "the finding must still be minted: annotate, never suppress"
@@ -2670,3 +2674,79 @@ class TestPiiAgainstTheStimulus:
             expected_speech=[ExpectedSpeech(text="first prompt"), ExpectedSpeech(text="second Springfield prompt")]
         )
         assert in_stimulus("springfield", stimulus_haystack(hint)) is True
+
+
+class TestPiiRunsOnlyOnWordsTheTaskDidNotAskFor:
+    """A recording that produced only the words it was handed has nothing to disclose."""
+
+    def test_words_the_prompt_contains_are_not_novel(self) -> None:
+        """A DDK carrier repeated ten times is ten words the task asked for."""
+        from senselab.audio.workflows.triage.nodes.speech import stimulus_haystack, words_outside_stimulus
+
+        haystack = stimulus_haystack(AudioHints(expected_speech=[ExpectedSpeech(text="buttercup")]))
+        assert words_outside_stimulus(["buttercup"] * 10, haystack) == []
+
+    def test_a_word_the_prompt_lacks_is_novel(self) -> None:
+        """One word outside the script is what makes a disclosure possible."""
+        from senselab.audio.workflows.triage.nodes.speech import stimulus_haystack, words_outside_stimulus
+
+        haystack = stimulus_haystack(AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow")]))
+        assert words_outside_stimulus(["the", "rainbow", "springfield"], haystack) == ["springfield"]
+
+    def test_with_no_declared_prompt_every_word_is_novel(self) -> None:
+        """Nothing was asked for, so nothing said was asked for."""
+        from senselab.audio.workflows.triage.nodes.speech import words_outside_stimulus
+
+        assert words_outside_stimulus(["my", "name"], None) == ["my", "name"]
+
+    def test_a_free_response_family_invites_disclosure(self) -> None:
+        """Open response is where disclosure lives; its scan must not hang on a word test."""
+        from senselab.audio.workflows.triage.nodes.speech import invites_disclosure
+
+        assert invites_disclosure("free-speech-v2") is True
+        assert invites_disclosure("diadochokinesis-buttercup") is False
+        assert invites_disclosure(None) is False
+
+    def test_a_carrier_only_recording_is_not_scanned_and_says_so(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """caterpillar-passage reads 98.7% on a corpus scan; none of it can be a disclosure."""
+        _seed_speech_store(store, tmp_path, words=["buttercup", "buttercup", "buttercup"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", "buttercup")])
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="buttercup")])
+        speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        assert scanned == [], "the detector must not be called at all"
+        assert live_entities(store, "pii") == []
+        [record] = [
+            entity
+            for entity in live_entities(store, "measurement")
+            if entity.attributes.get("name") == "pii_scan" and entity.attributes.get("scanned") is False
+        ]
+        assert "asked for all of them" in record.attributes["why"]
+
+    def test_one_word_outside_the_task_is_enough_to_scan(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gate is existence, not proportion: a name in a read passage is still a disclosure."""
+        _seed_speech_store(store, tmp_path, words=["the", "rainbow", "springfield"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        scanned = _stub_pii(monkeypatch, findings=[("LOCATION", "springfield")])
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow")])
+        speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        assert scanned, "one novel word must bring the scan"
+        assert len(live_entities(store, "pii")) == 1
+
+    def test_an_open_response_task_is_scanned_even_when_it_only_echoes_its_prompt(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Open response is scanned on the instruction, not on what the transcript happened to hold."""
+        _seed_speech_store(store, tmp_path, words=["tell", "me", "about", "your", "day"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", "day")])
+        hint = AudioHints(
+            expected_speech=[ExpectedSpeech(text="tell me about your day")],
+            metadata={"task_token": "free-speech-v2"},
+        )
+        speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        assert scanned, "a free-response task is always scanned"
