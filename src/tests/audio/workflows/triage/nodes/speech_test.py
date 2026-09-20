@@ -1750,6 +1750,42 @@ class TestPiiOnTheConsensus:
         assert _report_entity(store, "SPEECH").attributes["pii"]["n"] == 1
         assert live_entities(store, "pii")[0].attributes["haystack"] == "consensus"
 
+    def test_a_finding_is_marked_against_the_recording_s_own_stimulus(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A carrier word the participant was told to say is still minted, and is marked as the script's."""
+        _seed_speech_store(store, tmp_path, words=["buttercup", "buttercup", "buttercup"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "buttercup")])
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="buttercup")])
+        speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        findings = live_entities(store, "pii")
+        assert findings, "the finding must still be minted: annotate, never suppress"
+        assert all(finding.attributes["in_stimulus"] is True for finding in findings)
+
+    def test_a_disclosure_inside_a_read_task_is_not_marked_as_the_script_s(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The mark must not swallow a name the participant added to a passage they were reading."""
+        _seed_speech_store(store, tmp_path, words=["the", "rainbow", "and", "springfield"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("LOCATION", "springfield")])
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow")])
+        speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        [finding] = live_entities(store, "pii")
+        assert finding.attributes["in_stimulus"] is False
+
+    def test_a_recording_declaring_no_stimulus_records_no_reading(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No declaration is an absence; recording it as False would assert the surface is the speaker's."""
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        [finding] = live_entities(store, "pii")
+        assert finding.attributes["in_stimulus"] is None
+
     def test_a_name_only_one_recognizer_heard_is_located_and_marked(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2583,3 +2619,54 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
             if entity.attributes.get("verb") == "label" and entity.attributes.get("label") == "pii"
         ]
         assert marks, "redact.py selects on exactly this verb and label pair"
+
+
+class TestPiiAgainstTheStimulus:
+    """A finding is read against the text the participant was handed, and never suppressed by it."""
+
+    def test_a_surface_the_prompt_contains_is_marked(self) -> None:
+        """84.6% of read-task findings are substrings of the script; the mark is what says so."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="The rainbow is a division of white light.")])
+        haystack = stimulus_haystack(hint)
+        assert in_stimulus("Rainbow", haystack) is True
+        assert in_stimulus("white light", haystack) is True
+
+    def test_a_surface_the_prompt_does_not_contain_is_not_marked(self) -> None:
+        """A disclosure inside a read task is exactly what must survive the mark."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="The rainbow is a division of white light.")])
+        assert in_stimulus("Springfield", stimulus_haystack(hint)) is False
+
+    def test_a_recording_declaring_no_prompt_gets_no_reading_either_way(self) -> None:
+        """An absent declaration is an absence, and must not read as a finding in either direction."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+
+        assert stimulus_haystack(None) is None
+        assert stimulus_haystack(AudioHints()) is None
+        assert in_stimulus("anything", None) is None
+
+    def test_the_test_ignores_case_and_whitespace_runs(self) -> None:
+        """A transcript's spacing is not the prompt's, and neither is its casing."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="The  Caterpillar\nPassage")])
+        assert in_stimulus("caterpillar passage", stimulus_haystack(hint)) is True
+
+    def test_an_empty_surface_is_not_contained(self) -> None:
+        """Every string contains the empty one; a detector that returned nothing found nothing."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="buttercup")])
+        assert in_stimulus("   ", stimulus_haystack(hint)) is False
+
+    def test_every_prompt_of_a_multi_prompt_declaration_is_searched(self) -> None:
+        """A family with several prompts hands the participant all of them."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+
+        hint = AudioHints(
+            expected_speech=[ExpectedSpeech(text="first prompt"), ExpectedSpeech(text="second Springfield prompt")]
+        )
+        assert in_stimulus("springfield", stimulus_haystack(hint)) is True
