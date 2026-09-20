@@ -991,6 +991,54 @@ def wrap_measured(figure: Figure, text: str, *, fontsize: float, drawable_in: fl
     return "\n".join(lines)
 
 
+TEXT_LEADING = 1.2
+"""Matplotlib's default line spacing for a multi-line text artist, as a multiple of the point size."""
+
+
+def cover_body_capacity(style: FigureStyle, title_lines: int) -> int:
+    """How many monospaced lines fit under the cover's title.
+
+    Args:
+        style: The drawing configuration, which carries the page size, the margin and the body's
+            point size.
+        title_lines: How many lines the title wrapped to; the body starts below them.
+
+    Returns:
+        The line count. A body longer than this is drawn from the top and clipped at the axis,
+        losing its tail with no error of any kind.
+    """
+    body_in = cover_body_rect(style, title_lines)[3] * style.figure_inches[1]
+    return max(1, int(body_in / (style.text_fontsize * TEXT_LEADING / 72.0)))
+
+
+def paginate_body(lines: Sequence[str], capacity: int) -> list[list[str]]:
+    """Split a cover body into pages, breaking at a blank line where one is available.
+
+    Args:
+        lines: The body, in print order.
+        capacity: The most lines one page holds.
+
+    Returns:
+        One list per page, never empty. Leading blanks are dropped from every page but the first, so
+        a break at a section boundary does not open the next page with whitespace.
+    """
+    if not lines:
+        return [[]]
+    pages_out: list[list[str]] = []
+    remaining = list(lines)
+    while remaining:
+        stop = min(capacity, len(remaining))
+        if stop < len(remaining):
+            breaks = [index for index in range(1, stop) if not remaining[index].strip()]
+            if breaks:
+                stop = breaks[-1]
+        pages_out.append(remaining[:stop])
+        remaining = remaining[stop:]
+        while remaining and not remaining[0].strip():
+            remaining.pop(0)
+    return pages_out
+
+
 def monospace_columns(style: FigureStyle, fontsize: float) -> int:
     """How many monospaced characters fit between the cover's margins.
 
@@ -2043,22 +2091,22 @@ def summary_pages(
     )
 
     title_lines = textwrap.wrap(f"{stem or store.run_id} — summary", width=_TITLE_COLUMNS, break_long_words=True)
-    cover = plt.figure(
-        figsize=style.figure_inches,
-        layout=ConstrainedLayoutEngine(rect=cover_body_rect(style, len(title_lines))),
-    )
-    cover.suptitle(
-        "\n".join(title_lines),
-        fontsize=style.cover_title_fontsize,
-        y=1.0 - cover_margins(style)[1],
-        va="top",
-    )
-    _taxonomy_panel(
-        cover.add_subplot(),
-        [*cover_lines(store, panel_lines), "", *branch_report_lines(lanes, decision_record=decision_record)],
-        style,
-    )
-    yield "cover", cover
+    body = [*cover_lines(store, panel_lines), "", *branch_report_lines(lanes, decision_record=decision_record)]
+    body_pages = paginate_body(body, cover_body_capacity(style, len(title_lines)))
+    for cover_index, body_page in enumerate(body_pages, start=1):
+        continued = f" ({cover_index} of {len(body_pages)})" if len(body_pages) > 1 else ""
+        cover = plt.figure(
+            figsize=style.figure_inches,
+            layout=ConstrainedLayoutEngine(rect=cover_body_rect(style, len(title_lines))),
+        )
+        cover.suptitle(
+            "\n".join(title_lines) + continued,
+            fontsize=style.cover_title_fontsize,
+            y=1.0 - cover_margins(style)[1],
+            va="top",
+        )
+        _taxonomy_panel(cover.add_subplot(), body_page, style)
+        yield ("cover" if cover_index == 1 else f"cover{cover_index:02d}"), cover
 
     for index, window in enumerate(pages(duration_s, style), start=1):
         figure: Figure
