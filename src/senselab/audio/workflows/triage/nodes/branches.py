@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Literal, NamedTuple, Protocol, Sequence
+from typing import Any, Callable, Literal, Mapping, NamedTuple, Protocol, Sequence
 
 import numpy as np
 
@@ -987,7 +987,6 @@ POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "trough_return_db": float,
     "event_min_s": float,
     "score_min": float,
-    "breath_coverage_min": float,
     "voiced_strength_min": float,
     "voiced_fraction_min": float,
     "f0_spread_window_s": float,
@@ -1132,7 +1131,6 @@ PARAM_KEYS = (
     "trough_return_db",
     "event_min_s",
     "score_min",
-    "breath_coverage_min",
     "voiced_strength_min",
     "voiced_fraction_min",
     "f0_spread_window_s",
@@ -2023,24 +2021,30 @@ def events_in_span(envelope: EnvelopeTrack, span: Entity, params: BranchParams) 
     return events_in_extent(envelope, span.extent, params)
 
 
-def sounds_like(span: Entity, windows: Sequence[Entity], label_set: Sequence[str], p_score_min: float) -> bool:
-    """Whether any classifier window over this span scored one of these labels.
+def sounds_like(
+    span: Entity, windows: Sequence[Entity], label_set: Mapping[str, Sequence[str]], p_score_min: float
+) -> bool:
+    """Whether any classifier window over this span scored this sound, in that classifier's own names.
 
     Reads ``raw_scores``, which PREPROCESS always writes, rather than ``labels``, which is a top-K
-    decision over it that the shipped config leaves unmade for two of the three classifiers.
+    decision over it that the shipped config leaves unmade for two of the three classifiers. Each
+    window is read against the spellings its own classifier uses, taken from its ``classifier``
+    attribute; a window whose classifier the set names nothing for contributes nothing.
 
     Args:
         span: The span.
         windows: The per-span classifier windows, e.g. ``span_hear`` and ``span_yamnet`` together.
-        label_set: The labels that are this sound.
+        label_set: Classifier name to the labels that classifier spells this sound with.
         p_score_min: Score at or above which a label is present.
 
     Returns:
-        True when one window over this span cleared the minimum on one of the labels.
+        True when one window over this span cleared the minimum on one of its classifier's labels.
     """
-    wanted = set(label_set)
     for window in windows:
         if window.attributes.get("span_id") != span.id:
+            continue
+        wanted = label_set.get(str(window.attributes.get("classifier")))
+        if not wanted:
             continue
         scores = window.attributes.get("raw_scores") or {}
         for label in wanted:
