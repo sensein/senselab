@@ -1715,9 +1715,9 @@ def _llm_reviews(store: ProvStore) -> list[dict[str, Any]]:
     Returns:
         One record per review, carrying the iteration, whether the model ran, its reasoning
         verbatim, what it flagged, the commit it loaded, and what it cost — the round's wall clock,
-        how much of that was the model load, and how many tokens it generated. Empty when the step
-        did not run. The reasoning is the point of the step, so it is carried whole rather than
-        summarised.
+        how much of that was the model load, how many tokens it generated, and what it held on the
+        device at its peak and between reviews. Empty when the step did not run. The reasoning is
+        the point of the step, so it is carried whole rather than summarised.
     """
     return [
         {
@@ -1731,6 +1731,8 @@ def _llm_reviews(store: ProvStore) -> list[dict[str, Any]]:
             "elapsed_s": entity.attributes.get("elapsed_s"),
             "load_s": entity.attributes.get("load_s"),
             "output_tokens": entity.attributes.get("output_tokens"),
+            "resident_mib": entity.attributes.get("resident_mib"),
+            "peak_reserved_mib": entity.attributes.get("peak_reserved_mib"),
             "entity_id": entity.id,
         }
         for entity in find_measurements(store, "redaction_llm_review")

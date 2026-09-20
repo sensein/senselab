@@ -1651,7 +1651,7 @@ class TestTheStepRecordsWhatItCost:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """ "How long did the re-read take" must be answerable from the store alone."""
+        """How long the re-read took must be answerable from the store alone."""
         config = _override(tmp_path, LLM_ON)
         _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         _stub_pii(monkeypatch, findings=[])
@@ -1705,6 +1705,22 @@ class TestTheStepRecordsWhatItCost:
         assert [round_["elapsed_s"] for round_ in rounds] == [21.5, 4.6]
         assert [round_["load_s"] for round_ in rounds] == [9.9, 0.0]
         assert [round_["output_tokens"] for round_ in rounds] == [117, 96]
+
+    def test_each_round_records_what_it_held_on_the_device(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Memory, not time, is what decides whether the step can share a card with the graph."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(monkeypatch, [replace(_clean(), peak_reserved_mib=71000, resident_mib=23000)])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        rounds = [dict(entity.attributes) for entity in _reviews(store)]
+        assert [round_["peak_reserved_mib"] for round_ in rounds] == [71000]
+        assert [round_["resident_mib"] for round_ in rounds] == [23000]
 
     def test_the_timings_reach_the_report_document(
         self,

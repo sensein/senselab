@@ -126,15 +126,36 @@ absent at v5.0.0, v5.2.0, v5.3.0 and v5.4.0; present from **v5.5.0** (2026-04-02
 each of which installs cleanly and then fails at `from_pretrained` — which the spec correctly names
 as the worse place to fail.
 
-**Whether a version between 5.5.0 and 5.8.0 can actually read this checkpoint**, by loading its
-config and instantiating the model class on the meta device (no weights, no GPU) under pinned
-versions. The results are in `work/floor_probe.json` beside this document's run directory and
-summarised in the measurement section below.
+**Whether each version can actually read this checkpoint**, by installing it pinned and loading the
+config and the model class on the meta device — no weights, no GPU — plus validating the
+`quantization_config` against `compressed_tensors.quantization.QuantizationConfig`:
 
-The floor ships as **`transformers>=5.8`** — the version the checkpoint itself declares it was saved
-by, which is the lower bound its author asserts — and `compressed-tensors>=0.15`, for the same
-reason: the checkpoint's `quantization_config` declares `version: 0.15.1.a20260521`, and the schema
-it is written in is that library's, not `transformers`'.
+| pinned | `AutoConfig` | model class on meta | `quantization_config` |
+| --- | --- | --- | --- |
+| transformers 5.4.0 | **ValueError: model type `gemma4` … not recognize** | same | ok |
+| transformers 5.5.0 | ok | ok | ok |
+| transformers 5.7.0 | ok | ok | ok |
+| transformers 5.8.0 | ok | ok | ok |
+| transformers 5.17.0 | ok | ok | ok |
+| compressed-tensors 0.12.0 | ok | ok | **ValidationError: 3 validation errors for QuantizationConfig** |
+| compressed-tensors 0.13.0 | ok | ok | ok |
+| compressed-tensors 0.15.0.1 | ok | ok | ok |
+
+(A 0.14.0 cell is missing: that case failed during install rather than at the probe, and 0.13.0
+already brackets the floor, so the cause was not chased.)
+
+So the *measured* minima are transformers 5.5.0 and compressed-tensors 0.13.0, and the old
+`transformers>=4.57` admitted an eight-release band — 4.57.0 through 5.4.x — that installs cleanly
+and then fails at `from_pretrained`, which is the spec's complaint, now with a measurement under it.
+
+The floor nonetheless ships **higher than the measured minimum**: `transformers>=5.8` and
+`compressed-tensors>=0.15`, the versions the checkpoint's own `config.json` declares it was written
+by (`transformers_version: 5.8.0.dev0`, `quantization_config.version: 0.15.1.a20260521`). That is a
+deliberate choice and worth naming as one: 5.5.0–5.7.x pass every check that can be run without
+loading 23 GB of weights, and are excluded on the checkpoint author's assertion rather than on an
+observed failure. The asymmetry is what decides it — a floor set too high costs nothing, because the
+resolver picks the newest satisfying version either way, while a floor set too low costs a
+`from_pretrained` failure on a host nobody is watching.
 
 Raising either floor changes the requirement set `ensure_venv` records in its `.senselab-installed`
 marker, so **the first run after this change rebuilds `pii-redaction-review`** — about three minutes,
