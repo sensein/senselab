@@ -2750,3 +2750,41 @@ class TestPiiRunsOnlyOnWordsTheTaskDidNotAskFor:
         )
         speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
         assert scanned, "a free-response task is always scanned"
+
+
+class TestEveryDiarizedStreamHasAReader:
+    """PREPROCESS diarizes each configured stream; SPEECH reads the first that has a measurement.
+
+    So a second configured stream is a pyannote pass per recording that nothing in the graph ever
+    reads. The corpus run was computing one. This pins the contract rather than the count: adding a
+    stream is fine the day something reads it.
+    """
+
+    def test_speech_reads_the_first_configured_stream_and_stops(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The loop returns on the first readable stream, so any stream after it is never consulted."""
+        from senselab.audio.workflows.triage.nodes import speech as speech_module
+
+        asked: list[str] = []
+        real = speech_module.find_measurement
+
+        def _spy(store_arg: ProvStore, name: str) -> object:
+            if name.endswith("_diarization"):
+                asked.append(name)
+            return real(store_arg, name)
+
+        monkeypatch.setattr(speech_module, "find_measurement", _spy)
+        _seed_speech_store(store, tmp_path, words=["hello"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert asked, "SPEECH never looked for a diarization measurement"
+        assert len(set(asked)) == 1, f"SPEECH consulted more than one stream: {sorted(set(asked))}"
+
+    def test_the_shipped_config_diarizes_only_what_is_read(self) -> None:
+        """Each configured stream costs a pyannote pass per recording; an unread one is pure cost."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+
+        streams = tuple(load_triage_config(None).require("diarization.streams"))
+        assert len(streams) == 1, f"{len(streams)} streams configured; SPEECH reads only the first: {streams}"
+        assert streams == ("enhanced",)

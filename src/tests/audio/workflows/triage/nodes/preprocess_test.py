@@ -2942,7 +2942,13 @@ class TestTheDiarizationBlock:
 
         ``enhanced`` says how many voices survived enhancement; ``residual`` says whether one was
         removed. A store carrying only their sum could answer neither.
+
+        The two streams are configured here rather than taken from the shipped default: this pins
+        the capability, and which streams ship is a separate decision about cost.
         """
+        override = tmp_path / "two_stream_diarization.yaml"
+        override.write_text("diarization:\n  streams: [enhanced, residual]\n")
+        config = load_triage_config(override)
         _seed_admit(store, tmp_path, wav_writer)
 
         calls: list[int] = []
@@ -2975,7 +2981,14 @@ class TestTheDiarizationBlock:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Intersecting a span with the segments must be arithmetic, over one self-describing table."""
+        """Intersecting a span with the segments must be arithmetic, over one self-describing table.
+
+        Two streams are configured here so the concatenation has two to name; which streams ship is
+        a separate decision.
+        """
+        override = tmp_path / "two_stream_sidecar.yaml"
+        override.write_text("diarization:\n  streams: [enhanced, residual]\n")
+        config = load_triage_config(override)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(
             monkeypatch,
