@@ -1426,10 +1426,21 @@ def _flags(
     )
 
 
-def _count_shutdowns(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """Replace the node's worker release with a counter, returning the list it appends to."""
-    released: list[int] = []
-    monkeypatch.setattr(redact_module, "shutdown_review_worker", lambda: released.append(1))
+def _count_shutdowns(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Replace the node's worker release with a recorder of how it was asked for.
+
+    Args:
+        monkeypatch: The patcher.
+
+    Returns:
+        One entry per release, carrying whether it asked to forget a recorded start-up failure.
+    """
+    released: list[bool] = []
+    monkeypatch.setattr(
+        redact_module,
+        "shutdown_review_worker",
+        lambda *, forget_failure=True: released.append(forget_failure),
+    )
     return released
 
 
@@ -1670,7 +1681,10 @@ class TestTheWeightsAreReleasedUnlessTheRunSaysOtherwise:
         _stub_pii(monkeypatch, findings=[])
         _stub_review(monkeypatch, [_clean()])
         redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert released == [1], "the check ended and the weights were not handed back"
+        assert released == [False], (
+            "the check must hand the weights back exactly once, and without asking for the next "
+            f"recording to re-attempt a load that already failed; got {released}"
+        )
 
     def test_a_run_that_asks_for_residency_keeps_them(
         self,
@@ -1702,7 +1716,7 @@ class TestTheWeightsAreReleasedUnlessTheRunSaysOtherwise:
         settings = dict(_llm_settings(_override(tmp_path, LLM_ON)))
         with pytest.raises(RuntimeError):
             redact_module._llm_check("text", settings)
-        assert released == [1]
+        assert released == [False]
 
 
 class TestTheStepRecordsWhatItCost:

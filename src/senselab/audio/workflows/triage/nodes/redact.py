@@ -735,7 +735,7 @@ def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmC
         return _llm_rounds(transcript_text, settings)
     finally:
         if not settings["keep_worker_resident"]:
-            shutdown_review_worker()
+            shutdown_review_worker(forget_failure=False)
 
 
 def _llm_rounds(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmCheck, list[dict[str, Any]]]:

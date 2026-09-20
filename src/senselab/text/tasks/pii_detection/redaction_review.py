@@ -501,16 +501,25 @@ _WORKER_KEY: Optional[tuple[str, str]] = None
 _WORKER_REFUSED: Optional[str] = None
 
 
-def shutdown_review_worker() -> None:
-    """End the process's review worker, releasing its weights, and clear any recorded refusal.
+def shutdown_review_worker(*, forget_failure: bool = True) -> None:
+    """End the process's review worker, releasing its weights.
 
     A later :func:`review_redacted_text` starts a new one. Registered to run at interpreter exit, so
     a caller only needs this to hand the memory back earlier than that, or to retry a load that
     failed.
+
+    Args:
+        forget_failure: Whether to also clear a recorded start-up refusal, so the next review
+            attempts a load again. ``True`` is the deliberate retry. A caller releasing the weights
+            between recordings passes ``False``: the reason a load failed on one recording is a
+            property of the host, not of the transcript, and re-attempting it on every recording is
+            the per-recording stall the refusal record exists to prevent.
     """
     global _WORKER, _WORKER_KEY, _WORKER_REFUSED
     with _WORKER_LOCK:
-        worker, _WORKER, _WORKER_KEY, _WORKER_REFUSED = _WORKER, None, None, None
+        worker, _WORKER, _WORKER_KEY = _WORKER, None, None
+        if forget_failure:
+            _WORKER_REFUSED = None
     if worker is not None:
         worker.close()
 

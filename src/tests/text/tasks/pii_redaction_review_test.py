@@ -242,6 +242,19 @@ class TestAWorkerThatCannotStartCostsOneAttempt:
         assert review_redacted_text("two", model_id="stub/model").available
         assert len(harness.loads) == 2
 
+    def test_releasing_the_weights_between_recordings_does_not_clear_it(self, harness: Harness) -> None:
+        """The caller that hands the memory back after every recording is not asking for a retry.
+
+        This is the interaction, not either half of it: a node that releases the worker when its
+        check ends would, if release also forgot the refusal, re-attempt a 23 GB load once per
+        recording on a host that has no GPU — which is the exact stall the record exists to stop.
+        """
+        harness.directives("fail_load")
+        for _ in range(3):
+            review_redacted_text("a recording", model_id="stub/model")
+            shutdown_review_worker(forget_failure=False)
+        assert len(harness.loads) == 1, f"the refusal was forgotten: {len(harness.loads)} load attempts"
+
 
 class TestAFailedReviewDoesNotPoisonTheProcess:
     """A worker that died mid-generation is gone; the *next* recording must still get a verdict."""
