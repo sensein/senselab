@@ -1,38 +1,22 @@
 """QUALITY — the terminal node, reading the store's own records for internal contradiction.
 
-**When it runs.** After every branch, on every path PREPROCESS completed — whatever routing
-selected, and whether or not routing itself raised. It is the last node before REDACT and VERDICT,
-so every branch has already written whatever it was going to write. ``run._drive_branches`` places
-the call; ``run_test`` pins the position.
+Runs after every branch, on every path PREPROCESS completed, and before REDACT and VERDICT;
+``run._drive_branches`` places the call. It reads stored outputs only — entities and their
+attributes — decoding no audio and opening no sidecar.
 
-**What it may read.** Stored outputs only: entities and their attributes. QUALITY decodes no audio,
-opens no sidecar and re-derives nothing — every amplitude it compares was measured by the node that
-held the signal. The clip-consistency check reads PREPROCESS's ``clip`` spans for their extents and
-the :data:`CLIP_AMPLITUDE_MEASUREMENT` measurement for every amplitude, per-span levels included:
-the spans say what was asserted, the measurement says what the samples were.
+Its one check is clip consistency. A clip span asserts that the signal reached its ceiling over its
+extent; a sample outside every clip span, louder than that ceiling, contradicts the assertion.
+QUALITY reads PREPROCESS's ``clip`` spans for their extents and its
+:data:`CLIP_AMPLITUDE_MEASUREMENT` for the amplitudes, and records each contradiction as an
+``assertion`` derived from the span it contests. It withdraws no span: the store is append-only.
+Clip spans with no clip-amplitude measurement beside them raise, and the runner records the node
+``ERRORED``; a contradiction QUALITY can measure is always a finding and never a raise.
 
-**What it refuses.** A dependency that is absent is an operational fact, not a finding: clip spans
-with no clip-amplitude measurement beside them raise, and the runner records the node ``ERRORED``.
-A contradiction QUALITY *can* measure is always a finding and never a raise.
+``preceded_by`` lists the nodes whose records were live in the store when QUALITY read it, which on
+a fresh run is routing and the branches and on the ``scripts/extend_quality.py`` pass is whatever
+that run actually ran.
 
-**What its verdict names about the run.** ``preceded_by`` lists the nodes whose verdicts were live
-in the store when QUALITY read it. A fresh run reaches QUALITY after routing and the branches; the
-extend pass that gives a finished run its verdict
-(``scripts/extend_quality.py``) reaches it after whatever that run actually ran, which on a run that
-never routed is neither.
-
-Its first check is clip consistency. A clip span asserts that the signal reached its ceiling over
-that extent; a sample outside every clip span, louder than that ceiling, contradicts the assertion.
-QUALITY records each contradiction as an ``assertion`` derived from the span it contests and names
-the count in its verdict. PREPROCESS's spans are never invalidated here: the store is append-only
-and the span is PREPROCESS's reading, not QUALITY's to withdraw. The design is in
-``specs/20260912-quality-clip-consistency/design.md``.
-
-``_clip_spans`` now applies the same comparison at detection and never writes a candidate it
-contradicts, so this check is the audit of that rule and its expected count is zero. It reads
-nothing about whether the rule ran: a store from the completed corpus, or one whose spans came from
-anywhere but ``_clip_spans``, carries spans nothing filtered, and an audit that assumed compliance
-would measure nothing on a fresh store either.
+The design is in ``specs/20260912-quality-clip-consistency/design.md``.
 """
 
 from __future__ import annotations
@@ -65,9 +49,7 @@ CONTEST_VERB = "contest"
 CLIP_AMPLITUDE_MEASUREMENT = "clip_amplitude"
 """PREPROCESS's amplitude reading of the signal its clip spans were detected on.
 
-It carries the whole-file values and, keyed by span id, the per-span ones. A measurement is an
-entity of its own, so it can be appended to a store whose clip spans already exist; a span attribute
-could not be, and the store is append-only.
+It carries the whole-file values and, keyed by span id, the per-span ones.
 """
 
 CLIP_LEVELS = "clip_levels"
@@ -84,7 +66,7 @@ class _Contradiction:
     Attributes:
         span_id: The clip span's entity id.
         extent: The span's extent, in seconds.
-        clip_level: The peak absolute amplitude inside the span — the level it calls the ceiling.
+        clip_level: The peak absolute amplitude inside the span.
         louder_amplitude: The loudest unclipped sample's absolute amplitude.
         louder_time_s: Where that sample sits, in seconds.
         louder_samples_n: How many unclipped samples exceed ``clip_level``.
@@ -98,7 +80,7 @@ class _Contradiction:
     louder_samples_n: int
 
     def as_detail(self) -> dict[str, Any]:
-        """The row this contradiction contributes to the verdict and to its assertion.
+        """The row this contradiction contributes to the report and to its assertion.
 
         Returns:
             The fields, without the span id, which the assertion carries as a derivation edge.
@@ -120,9 +102,7 @@ def preceded_by(store: ProvStore) -> list[str]:
 
     Returns:
         The ``node`` of every live verdict and every live branch report other than QUALITY's own,
-        sorted and deduplicated. Both types are read because the graph writes two: a node that
-        decides writes a ``verdict`` and a node that reports writes a ``branch_report``, and a
-        ``preceded_by`` reading only the first would say no branch had run.
+        sorted and deduplicated.
     """
     return sorted(
         {
@@ -136,9 +116,7 @@ def preceded_by(store: ProvStore) -> list[str]:
 def _stream_id(store: ProvStore, name: str) -> str:
     """The live stream entity's id, by name, without decoding it.
 
-    Reads by the store's shared rule — invalidated entities are never returned, latest write wins —
-    which is ``resolve_stream``'s rule with the load left out: QUALITY names the stream its findings
-    are about and never opens it.
+    Invalidated entities are never returned and the latest write wins.
 
     Args:
         store: The provenance store.
@@ -159,8 +137,8 @@ def _stream_id(store: ProvStore, name: str) -> str:
 def clip_spans(store: ProvStore, signal: str) -> list[Entity]:
     """Every live clip span PREPROCESS proposed over this signal, in time order.
 
-    Public because the extend pass that appends a missing :data:`CLIP_AMPLITUDE_MEASUREMENT` to a
-    finished run must select exactly the spans QUALITY will read it against.
+    Public: the extend pass that appends a missing :data:`CLIP_AMPLITUDE_MEASUREMENT` to a finished
+    run selects the same spans.
 
     Args:
         store: The provenance store.
@@ -214,34 +192,31 @@ def quality(
     """Read PREPROCESS's clip spans against its own amplitude reading, and contest the denied ones.
 
     A clip span's level is the peak absolute amplitude of the samples it covers, which PREPROCESS
-    measured while it held the signal and stored in the clip-amplitude measurement under the span's
-    id. An unclipped sample contradicts that span when its own absolute amplitude exceeds the level
-    by more than ``quality.clip_contradiction_margin`` of the level. What counts as unclipped — the
-    edge guard included — was decided by PREPROCESS, and the guard it used is recorded on the
-    measurement.
+    stored in the clip-amplitude measurement under the span's id. An unclipped sample contradicts
+    that span when its own absolute amplitude exceeds the level by more than
+    ``quality.clip_contradiction_margin`` of the level. What counts as unclipped, the edge guard
+    included, was decided by PREPROCESS and is recorded on the measurement.
 
     Args:
         store: The provenance store, holding ADMIT's recording stream, PREPROCESS's clip spans and
             the clip-amplitude measurement they are read against.
         source: The store-held stream the clip spans were detected on, ``"recording"``.
         config: The triage configuration.
-        hint: Accepted for the shared node shape; not read. No declaration can make a recording
-            internally consistent.
-        run_dir: Accepted for the shared node shape; not read. QUALITY writes no sidecar and opens
-            none.
+        hint: Accepted for the shared node shape; not read.
+        run_dir: Accepted for the shared node shape; not read.
 
     Returns:
-        The verdict, the view over the assertions written, and the verdict entity id.
+        The branch report, the view over the assertions written, and the ``branch_report``
+        entity's id.
 
     Raises:
-        ValueError: If the key read at entry is null — raised before the store is written to.
+        UnknownConfigKey: If ``quality.clip_contradiction_margin`` is not a packaged key. A key
+            that is packaged but null is reported instead, in ``unmeasured``.
         LookupError: If the ``source`` stream is absent, or if clip spans over it carry no
             clip-amplitude measurement to read them against.
     """
     del hint, run_dir
-    # Read without refusing, on the same rule the branches follow: an unmeasured margin means the
-    # audit cannot be taken, which this node reports (UNDETERMINED, and the key named in
-    # `unmeasured`) rather than raising on. A misspelled key still raises, through UnknownConfigKey.
+    # An unmeasured margin is reported, not raised on; a misspelled key still raises.
     margin: float | None
     try:
         margin = float(config.require("quality.clip_contradiction_margin"))
@@ -275,8 +250,7 @@ def quality(
 
     levels = amplitudes.get(CLIP_LEVELS) or {}
     louder_counts = amplitudes.get(UNCLIPPED_LOUDER_N) or {}
-    # An unmeasured margin leaves nothing checkable: the comparison IS the margin, so the checked
-    # set is empty rather than compared against a substituted number.
+    # The comparison IS the margin, so an unmeasured margin leaves the checked set empty.
     measured = (
         [] if margin is None else [(span, float(levels[span.id])) for span in spans if levels.get(span.id) is not None]
     )
@@ -323,11 +297,7 @@ def quality(
             f"unclipped sample of amplitude {loudest.louder_amplitude:.4f} at {loudest.louder_time_s:.3f}s"
         )
 
-    # Conformance, and what it is **about**. QUALITY has no route and no declared task, so there is
-    # no instruction for it to conform to; what it checks is whether the store's own assertions hold
-    # against the store's own measurements, which is why its referent is STORE_ASSERTIONS and not
-    # TASK. Nothing checkable reads UNDETERMINED rather than conforming: a recording with no clip
-    # span has not passed an audit, it has had none taken.
+    # The referent is STORE_ASSERTIONS, not TASK: QUALITY has no route and no declared task.
     conformance: Conformance = UNDETERMINED if not measured else not contradictions
 
     report_id, report = write_report(
@@ -339,8 +309,6 @@ def quality(
         conformance=conformance,
         conformance_of=STORE_ASSERTIONS,
         deviations=(CONTRADICTED_CLIP,) if contradictions else (),
-        # QUALITY reads one config key and refuses nothing over it: an unmeasured margin is
-        # named here and leaves the audit untaken, which is what the UNDETERMINED above says.
         unmeasured=() if margin is not None else ("quality.clip_contradiction_margin",),
         detail={
             "signal": source,

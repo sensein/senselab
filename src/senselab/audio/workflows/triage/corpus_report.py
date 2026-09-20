@@ -1,12 +1,11 @@
 """The corpus fold: what a tree of triage runs decided, counted.
 
 One run writes one decision — :meth:`FileVerdict.record`, carried by the verdict entity and by the
-``run.json`` beside every store. This module reads a corpus of those and counts them, so the
-questions asked of a whole release — how many flagged, on what ground, which deviations, which gates
-nobody could read — are answered without reopening a store.
+``run.json`` beside every store. This module reads a corpus of those and counts them: how many
+flagged, on what ground, which deviations, which gates nobody could read. Every value it reports is
+categorical or a count, never transcript text.
 
-Every value it reports is categorical or a count. No transcript text and no detected string reaches
-it, because none reaches the decision it reads.
+See ``specs/20260817-triage-workflow-dag/corpus-level-node.md``.
 """
 
 from __future__ import annotations
@@ -28,8 +27,7 @@ UNREAD = "UNREAD"
 
 
 DURATION_EDGES = (1.0, 3.0, 10.0, 30.0, 60.0)
-"""Where the duration buckets divide, in seconds. An unusually short recording is a different
-finding from a task that was attempted and failed, so the two are counted apart."""
+"""Where the duration buckets divide, in seconds."""
 
 UNKNOWN_DURATION = "unknown"
 """A recording whose header would not give a duration."""
@@ -72,19 +70,16 @@ class CorpusReport:
         conformance_by_family: Declared family to node to conformance counts.
         conformance_of: Reporting node to what its conformance was about, counted.
         deviations: Node to deviation type to count.
-        unmeasured: Node to config path to count — a path nobody measured on this corpus.
-        critical_absences: Branch to gate to count. Any entry is a run that reached no branch.
+        unmeasured: Node to config path to count.
+        critical_absences: Branch to gate to count; any entry is a run that reached no branch.
         llm_redaction: Field to value to count, over REDACT's re-read.
         reasons: ``node|outcome|kind`` to count, over every contributing verdict.
-        grounds: Node to the ground each of its flag verdicts gave, counted. This is what says why a
-            corpus flags: a branch that found nothing and a task that was not done are different
-            grounds and are not comparable as one count.
+        grounds: Node to the ground each of its flag verdicts gave, counted.
         ran: Node to run state to count.
         families: Declared family to count.
         flagged_families: Declared family to how many of its recordings did not pass.
         durations: Duration bucket to count, read from each record's header duration.
-        triage_by_duration: Duration bucket to triage outcome counts, so an unusually short
-            recording can be told from a task that was attempted and failed.
+        triage_by_duration: Duration bucket to triage outcome counts.
     """
 
     files: int = 0
@@ -115,9 +110,8 @@ class CorpusReport:
 def reason_ground(why: str) -> str:
     """One reason's ground, with the recording's own family taken off the end.
 
-    A node says what it concluded and, where the conclusion is about a task, which task. Counting the
-    whole sentence over a corpus splits one ground across as many families as declared it, so the
-    family is removed and counted separately.
+    The family is counted separately, so a ground is one count over the corpus rather than one per
+    family that declared it.
 
     Args:
         why: The reason, as the node wrote it.
@@ -148,13 +142,11 @@ def decisions(root: Path) -> Iterator[tuple[str, dict[str, Any] | None, dict[str
         root: A directory holding ``*.row.json`` rows, ``run.json`` logs, or both, at any depth.
 
     Yields:
-        The recording's name, its decision or None, and the whole record it came from. One entry per
-        recording: a tree holds a row and a log for the same recording, and counting both would
-        double every total.
+        The recording's name, its decision or None, and the whole record it came from, one entry per
+        recording.
     """
     seen: set[str] = set()
-    # Rows first and logs second: a run tree holds both for the same recording, and the row carries
-    # the driver's own fields -- the duration, the timings, the host -- that the log does not.
+    # Rows first and logs second: a row carries the driver's own fields, which a log does not.
     for path in list(sorted(root.rglob(ROW_GLOB))) + list(sorted(root.rglob(LOG_GLOB))):
         try:
             record = json.loads(path.read_text())

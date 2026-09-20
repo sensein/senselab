@@ -1,10 +1,10 @@
 """REPORT — one summary and one summary JSON per file, on every file and every outcome.
 
-Runs last, after VERDICT, and is the only node that writes no elements: it reads the whole store and
-renders it. A rendering is not evidence, so nothing downstream reads either product to learn a fact
-the store does not already hold. Both products carry element ids, which are a join key back into the
-store, so they sit beside it and never under the release tree. The design is in
-``specs/20260817-triage-workflow-dag/report.md``.
+Runs last, after VERDICT, and is the only node that writes no elements: it reads the whole store
+and renders it. Both products carry element ids, which are a join key back into the store, so they
+sit beside it and never under the release tree.
+
+The design is in ``specs/20260817-triage-workflow-dag/report.md``.
 """
 
 from __future__ import annotations
@@ -129,9 +129,7 @@ _LANES = (
 class ReportRenderError(RuntimeError):
     """The summary could not be drawn, after the JSON was already written.
 
-    The JSON is the product a consumer reads and it is complete by the time the renderer runs, so a
-    drawing failure must not take it down with it. The artifacts written before the failure travel on
-    the exception; the runner records the failure and keeps them.
+    The artifacts written before the failure travel on the exception.
 
     Attributes:
         artifacts: What was written before the renderer raised.
@@ -146,9 +144,7 @@ class ReportRenderError(RuntimeError):
 def _assertions_by_source(store: ProvStore) -> dict[str, list[Entity]]:
     """Every live assertion, indexed by the element it was derived from.
 
-    Built once per report. The two readers below ask "what was asserted over this word / this span",
-    which the store answers only in the forward direction, so without an index each of them walks
-    every assertion for every element it renders — cubic in the size of a transcript.
+    Built once per report; the store answers only in the forward direction.
 
     Args:
         store: The provenance store.
@@ -166,11 +162,8 @@ def _assertions_by_source(store: ProvStore) -> dict[str, list[Entity]]:
 def _scan_state(store: ProvStore) -> tuple[bool, str]:
     """Whether a PII scan covered this transcript, and what to say when it did not.
 
-    The marking is what redacts, so a page that renders unmarked words verbatim is trusting the
-    absence of a marking. That absence has two causes and they are not the same: SPEECH scanned and
-    found nothing, or nobody scanned at all — because routing declined the branch, because SPEECH
-    raised, or because every detector failed. REDACT already refuses to release on this distinction
-    (N15); the summary must respect it too, since it is written beside the store and read by people.
+    An absent marking means either that SPEECH scanned and found nothing or that nobody scanned at
+    all, and the two are kept apart.
 
     Args:
         store: The provenance store.
@@ -197,16 +190,14 @@ def _scan_state(store: ProvStore) -> tuple[bool, str]:
 def _redacted_text(marks: dict[str, list[Entity]], word: Entity, *, scanned: bool = True) -> str:
     """A word's renderable text: its category placeholder when the scan marked it, else the word.
 
-    Governs only the redacted transcript and its token lane. The consensus transcript and its own
-    token lane deliberately render every word's raw text, matched or not, since they exist to let a
-    reviewer audit the ASR evidence itself; the report is not a released artifact.
+    Governs only the redacted transcript and its token lane; the consensus transcript and its own
+    token lane render every word's raw text, matched or not.
 
     Args:
-        marks: :func:`_assertions_by_source`'s index, so the answer costs one dictionary lookup
-            rather than a walk over every assertion in the store.
+        marks: :func:`_assertions_by_source`'s index.
         word: A ``word`` entity.
-        scanned: Whether a complete PII scan stands behind the markings. When it does not, every word
-            is withheld: an unmarked word is only evidence of cleanliness if something looked.
+        scanned: Whether a complete PII scan stands behind the markings. When it does not, every
+            word is withheld.
 
     Returns:
         ``"[<CATEGORY>]"`` when a live ``pii`` label assertion is derived from this word,
@@ -252,10 +243,6 @@ def _is_agreement(word: Entity) -> bool:
 
 def _consensus_transcript(store: ProvStore) -> str:
     """The authoritative, unmodified consensus transcript.
-
-    The report is an audit artifact beside the provenance store, not a released derivative. Keeping
-    this text distinct from the redacted view means a reviewer can assess the ASR evidence without
-    mistaking a PII placeholder for a recognizer output.
 
     Args:
         store: The provenance store holding PREPROCESS consensus words.
@@ -383,9 +370,7 @@ def _role_qualified(span: Entity, label: str, roles: tuple[str, ...]) -> str:
         roles: Every role kind the lane draws.
 
     Returns:
-        The label, prefixed by the span's role kind when the lane draws more than one — a
-        ``segments`` lane's rows are its distinct labels, so without the prefix two roles sharing a
-        caption share a row and overlap there.
+        The label, prefixed by the span's role kind when the lane draws more than one.
     """
     return f"{span_role_kind(span)} · {label}" if len(roles) > 1 else label
 
@@ -395,9 +380,8 @@ def _derived_lane(
 ) -> list[dict[str, Any]]:
     """One span lane, paired with the spans its own spans were derived from when there are any.
 
-    A branch that mints more than one kind of span gets a row per kind, so a ``task_extent`` and the
-    phrase runs inside it are separable bars rather than one bar drawn over another. A branch that
-    mints one kind keeps the single ``proposed`` row it always had.
+    A branch that mints more than one kind of span gets a row per kind; one that mints a single
+    kind keeps a single ``proposed`` row.
 
     Args:
         name: The lane's name, drawn as the panel's y-label.
@@ -405,10 +389,10 @@ def _derived_lane(
         sources: :func:`span_sources`'s index.
 
     Returns:
-        A one-element list holding the panel, or an empty list. With no derivation to show the
-        panel is the ``segments`` lane :func:`_lane` builds and nothing else; with one it is a
-        ``tokens`` lane whose lower rows hold what the lane draws and whose upper row holds the
-        spans those were derived from, each pair joined by the edge that relates them.
+        A one-element list holding the panel, or an empty list. With no derivation to show, the
+        panel is the ``segments`` lane :func:`_lane` builds; with one it is a ``tokens`` lane whose
+        lower rows hold what the lane draws and whose upper row holds the spans those were derived
+        from.
     """
     roles = tuple(dict.fromkeys(span_role_kind(span) for span, _ in entries))
     paired = [(span, label, sources.get(span.id, [])) for span, label in entries]
@@ -511,9 +495,7 @@ def _token_lane(
 def _consensus_word_color(agreement: object) -> str:
     """A light fill ordered by a word's ``agreement`` — the share of sources that produced it.
 
-    Presentation only: ``agreement`` remains a numeric field in the summary JSON and is never
-    thresholded or used to change the transcript. A non-numeric or non-finite value takes the
-    neutral fill.
+    Presentation only. A non-numeric or non-finite value takes the neutral fill.
     """
     if not isinstance(agreement, (int, float)) or not np.isfinite(agreement):
         return "#e5e7eb"
@@ -732,10 +714,8 @@ def _panels(
 ) -> tuple[list[dict[str, Any]], set[str]]:
     """The summary's layers on one shared time axis, drawn from whatever the store holds.
 
-    A layer whose derivative is absent is omitted; nothing raises for want of one, because
-    report.md requires a product on every outcome including a file ADMIT refused. Which layers were
-    omitted, and why, is what the ABSENT block says — an omitted lane must never read as a measured
-    absence.
+    A layer whose derivative is absent is omitted and nothing raises for want of one; the ABSENT
+    block names which layers were omitted and why.
 
     Args:
         store: The provenance store.
@@ -746,8 +726,7 @@ def _panels(
     Returns:
         The panel specifications for ``plot_aligned_panels``, and the names of the declared lanes
         they drew. The two are not the same set: the envelope and the envelope spans share the
-        waveform's row and are named by that row's right-hand scale rather than by a panel ``name``
-        of their own.
+        waveform's row and are named by that row's right-hand scale.
     """
     waveform: dict[str, Any] = {"type": "waveform", "height_ratio": 1.35}
     panels: list[dict[str, Any]] = [waveform]
@@ -833,8 +812,8 @@ def _verdict_entities(store: ProvStore) -> dict[str, Entity]:
         store: The provenance store.
 
     Returns:
-        ``{node: entity}`` over every node that **decided**. A reporting node — a branch, or
-        QUALITY — is not here: it writes a ``branch_report``, read by :func:`report_entities`.
+        ``{node: entity}`` over every node that decided. A reporting node — a branch, or QUALITY —
+        is not here: it writes a ``branch_report``, read by :func:`report_entities`.
     """
     latest: dict[str, Entity] = {}
     for entity in store.entities("verdict"):
@@ -850,8 +829,7 @@ def _concluded_entities(store: ProvStore) -> dict[str, Entity]:
         store: The provenance store.
 
     Returns:
-        ``{node: entity}`` over every node that decided or reported. The two vocabularies are
-        disjoint by node, so nothing here can be shadowed.
+        ``{node: entity}`` over every node that decided or reported.
     """
     return {**_verdict_entities(store), **report_entities(store)}
 
@@ -863,13 +841,9 @@ def _steps(store: ProvStore) -> dict[str, dict[str, Any]]:
         store: The provenance store.
 
     Returns:
-        ``{step: {**record detail, "element_ids": [...]}}`` over every node that wrote a verdict or a
-        branch report.
-        The ids are the verdict entity itself and every **live** entity the node's activities
-        generated, which is what makes any number in the summary traceable to the assertion that
-        produced it. An invalidated entity is left out under the store's shared read rule: it is a
-        join key to something the graph has withdrawn, and citing it would credit a claim to
-        evidence that no longer stands.
+        ``{step: {**record detail, "element_ids": [...]}}`` over every node that wrote a verdict or
+        a branch report. The ids are the verdict entity itself and every live entity the node's
+        activities generated; an invalidated entity is left out.
     """
     by_node = _concluded_entities(store)
     generated: dict[str, list[str]] = {}
@@ -896,9 +870,8 @@ def _branches(store: ProvStore) -> dict[str, dict[str, Any]]:
 
     Returns:
         ``{branch: {will_run, declared, forced_by_declaration, route_state, why, conformance,
-        deviations, notes}}``. There is no ``verdict`` key: a branch writes none, and what stands in
-        its place is the conformance it reported. Empty when ROUTING never ran, which is a graph in
-        which no branch was ever asked.
+        deviations, notes}}``. There is no ``verdict`` key: a branch writes none, and the
+        conformance it reported stands in its place. Empty when ROUTING never ran.
     """
     decisions: dict[str, Entity] = {}
     for entity in store.entities("branch_decision"):
@@ -930,8 +903,7 @@ def _branches(store: ProvStore) -> dict[str, dict[str, Any]]:
 def _senselab_commit() -> tuple[str | None, str | None]:
     """The senselab commit the run was made at, or the reason it could not be resolved.
 
-    A ref is never returned: recording a ref where a commit belongs makes the provenance confidently
-    wrong, which is worse than recording nothing.
+    A ref is never returned.
 
     Returns:
         ``(commit_sha, unresolved_reason)`` with exactly one of the two set.
@@ -998,8 +970,7 @@ def _provenance(store: ProvStore, config: TriageConfig, run_id: str) -> dict[str
 def _admitted_path(store: ProvStore) -> str | None:
     """The path ADMIT was handed, from its own activity parameters.
 
-    A file ADMIT refused has no stream entity, so this is the only place its name survives — and a
-    refusal page that cannot name the file it refused is of no use to whoever has to find it.
+    A file ADMIT refused has no stream entity, so this is the only place its name survives.
 
     Args:
         store: The provenance store.
@@ -1022,7 +993,7 @@ def _file(store: ProvStore) -> dict[str, Any]:
 
     Returns:
         ``{path, duration_s, sample_rate, channels}``. Only ``path`` survives a refusal; the other
-        three are None, because nothing measured them.
+        three are then None.
     """
     found = [entity for entity in live_entities(store, "stream") if entity.attributes.get("name") == _SOURCE_STREAM]
     if not found:
@@ -1039,9 +1010,7 @@ def _file(store: ProvStore) -> dict[str, Any]:
 def _shown(value: Any) -> str:  # noqa: ANN401 — anything a store attribute can hold
     """One value as the page shows it: an em dash where the store holds nothing.
 
-    Only the rendering is rounded. Every figure the page shows is in the JSON at full precision, and
-    the JSON is what a consumer reads; "phonation_s: 11.979999999999999" on a page is a binary
-    float's repr leaking into a document a human is meant to judge the run by.
+    Only the rendering is rounded; the JSON carries every figure at full precision.
 
     Args:
         value: The value.
@@ -1059,10 +1028,8 @@ def _shown(value: Any) -> str:  # noqa: ANN401 — anything a store attribute ca
 def _absences(store: ProvStore) -> dict[str, tuple[str, str]]:
     """Why each PREPROCESS derivative is missing, keyed by the derivative's name.
 
-    PREPROCESS records ``"Class: first line"``. The reading is by class — ``config.require`` raises
-    ``ValueError`` for a key nobody has measured, a block whose input is missing raises
-    ``LookupError``, anything else is a genuine failure — and the message is what names *which* key
-    or *which* input, so it is carried through to the page rather than dropped at the colon.
+    PREPROCESS records ``"Class: first line"``. The reading is by class, and the message, which
+    names which key or which input, is carried through to the page.
 
     Args:
         store: The provenance store.
@@ -1192,8 +1159,7 @@ def _ruleset_reading(store: ProvStore) -> dict[str, Any]:
 def _task_context(run_id: str, verdict: dict[str, Any]) -> dict[str, Any]:
     """The recording/task context the report puts ahead of the evidence lanes.
 
-    ``run_id`` is the only universally available task source. Hints remain separate rather than
-    being recast as a task: they are a declared context for a triage decision, not a measurement.
+    ``run_id`` is the only universally available task source; hints stay separate from it.
 
     Args:
         run_id: The provenance store's run id.
@@ -1217,9 +1183,8 @@ def _timing(entity: Entity) -> dict[str, float] | None:
 def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
     """Compact audit evidence for each decision branch, with no raw transcript text.
 
-    The detail page can show a few examples while JSON carries every item. A ``word`` is represented
-    only by the redacted transcript-token list built below; copying its attributes here could leak
-    the matched text that the report otherwise intentionally withholds.
+    A ``word`` is represented only by the redacted transcript-token list built below, so no
+    matched text is copied here.
     """
     by_branch: dict[str, list[dict[str, Any]]] = {branch: [] for branch in _EVIDENCE_BRANCHES}
     for entity in store.entities():
@@ -1257,9 +1222,7 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
                 "provenance": {"node": activity.node, "step": activity.step},
             }
         )
-    # A branch often evaluates evidence produced upstream (for example AIRWAY labels PREPROCESS
-    # proposals). Include those timed source elements too, retaining their actual producer rather
-    # than incorrectly attributing the measurement to the branch that read it.
+    # Timed source elements a branch read are included under their own producer, not the branch.
     source_spans = {
         "AIRWAY": _envelope_spans(store),
         "SPEECH": _spans_of_family(store, "speech"),
@@ -1312,9 +1275,8 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
 def _lane_records(store: ProvStore) -> list[dict[str, Any]]:
     """The summary's lanes as data: what each drew, and which span each proposal came from.
 
-    The machine-readable counterpart of the lanes the pages draw, so the pairing a page shows as a
-    connector can be checked without reading pixels. One record per declared lane, present whether
-    or not the lane drew anything, because "did not run" is a finding.
+    The machine-readable counterpart of the lanes the pages draw. One record per declared lane,
+    present whether or not the lane drew anything.
 
     Args:
         store: The provenance store.
@@ -1361,9 +1323,7 @@ def _report_document(
 ) -> dict[str, Any]:
     """Build the one structured report object used by the JSON and the human render.
 
-    Rendering reads this object rather than independently reading the store. That makes the JSON a
-    first-class companion, not a text extraction of a PDF, and prevents a later page-only change
-    from silently changing a decision claim.
+    Rendering reads this object rather than reading the store again.
     """
     verdict = _verdict(store)
     branches = _branches(store)
@@ -1433,7 +1393,7 @@ def _report_document(
             "summary": {"path": f"{SUMMARY_STEM}.{summary_format}", "format": summary_format},
             "json": {"path": f"{SUMMARY_STEM}.json", "format": "json", "schema_version": REPORT_SCHEMA_VERSION},
         },
-        # Legacy fields remain so existing consumers can migrate deliberately.
+        # Legacy top-level duplicates of the structured blocks above.
         "file": _file(store),
         "verdict": verdict,
         "branches": branches,
@@ -1455,8 +1415,7 @@ def _report_document(
 def _provenance_line(provenance: dict[str, Any]) -> str:
     """One line naming the run's identity: its config, its commit and how its models resolved.
 
-    The full model list stays in the JSON. What belongs on the page is enough for a reviewer to say
-    "this page came from that configuration at that commit" without opening anything else.
+    The full model list stays in the JSON.
 
     Args:
         provenance: :func:`_provenance`'s mapping.
@@ -1476,9 +1435,8 @@ def _provenance_line(provenance: dict[str, Any]) -> str:
 def _run_label(run_id: str) -> str:
     """The run's short label: the task token it names and the date it was made on.
 
-    The runner mints a run id as ``<file stem>_<utc stamp>``, and a corpus stem is BIDS-shaped often
-    enough to carry a ``task-`` entity. Neither is guaranteed, so each part is taken when it is there
-    and dropped when it is not.
+    The runner mints a run id as ``<file stem>_<utc stamp>``. Neither the ``task-`` entity nor the
+    stamp is guaranteed, so each part is taken when it is there.
 
     Args:
         run_id: The store's run id.
@@ -1520,8 +1478,7 @@ def _timeline_windows(duration_s: float) -> list[tuple[float, float]]:
         duration_s: Duration of the conditioned recording, in seconds.
 
     Returns:
-        Contiguous recording-time windows. A non-positive duration has no window; the caller uses
-        the report-only page for that exceptional case.
+        Contiguous recording-time windows. A non-positive duration has no window.
     """
     if duration_s <= 0.0:
         return []
@@ -1537,12 +1494,9 @@ _PAGED_PANEL_ITEMS = {"segments": "segments", "tokens": "tokens", "score_raster"
 def _paginate_panels(panels: list[dict[str, Any]], windows: list[tuple[float, float]]) -> list[list[dict[str, Any]]]:
     """Bucket every panel's timed items onto report pages in one linear pass.
 
-    ``plot_aligned_panels`` is called once per PDF page over the same full-recording panel list.
-    Without this, every per-item visibility check inside it re-scans the whole recording's items on
-    every page — O(pages x items) instead of O(items). ``windows`` are the fixed, contiguous
-    ``_TIMELINE_PAGE_SECONDS`` pages :func:`_timeline_windows` built, so an item's page index is
-    arithmetic rather than a search; an item straddling a page boundary is placed on both pages, and
-    ``plot_aligned_panels`` still clips it to the one it draws.
+    ``windows`` are the fixed, contiguous ``_TIMELINE_PAGE_SECONDS`` pages
+    :func:`_timeline_windows` built, so an item's page index is arithmetic rather than a search. An
+    item straddling a page boundary is placed on both pages and clipped by the drawing call.
 
     Args:
         panels: The full-recording panel specifications from :func:`_panels`.
@@ -1667,7 +1621,7 @@ def _wrapped(lines: Iterable[str]) -> list[str]:
 
 
 def _ran_line(verdict: dict[str, Any]) -> str:
-    """One line saying what each node did, so a node that raised is not read as one never asked.
+    """One line saying what each node did, a node that raised apart from one never asked.
 
     Args:
         verdict: :func:`_verdict`'s mapping.
@@ -1716,8 +1670,7 @@ def _llm_reviews(store: ProvStore) -> list[dict[str, Any]]:
 
     Returns:
         One record per review, carrying the iteration, whether the model ran, its reasoning
-        verbatim, what it flagged, and the commit it loaded. Empty when the step did not run. The
-        reasoning is the point of the step, so it is carried whole rather than summarised.
+        verbatim, what it flagged, and the commit it loaded. Empty when the step did not run.
     """
     return [
         {
@@ -1759,8 +1712,8 @@ def _llm_check_lines(check: dict[str, Any] | None, reviews: list[dict[str, Any]]
         prefix: Indent.
 
     Returns:
-        One status line, then one block per review. An absent model is stated, never elided: the
-        step having been enabled and not run is a different claim from it having passed.
+        One status line, then one block per review. An absent model is stated rather than
+        elided.
     """
     if check is None:
         return []
@@ -1924,9 +1877,8 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
 def _decision_blocks(document: dict[str, Any]) -> list[str]:
     """Give the PDF a concise, clinician-readable decision page.
 
-    The complete structured report, including every provenance id and branch evidence item, remains
-    in ``summary.json``. The PDF carries the decision, its primary support, and the measured branch
-    outcomes rather than a debug-style dump of that same record.
+    The PDF carries the decision, its primary support and the measured branch outcomes; the
+    complete structured record stays in ``summary.json``.
     """
     decisions, screening, routing = document["decisions"], document["screening"], document["routing"]
     lines = ["DECISION SUMMARY"]
@@ -2028,9 +1980,9 @@ def report(
 ) -> dict[str, Path]:
     """Render one summary and one summary JSON from the store, writing nothing back to it.
 
-    Both products are emitted on every file and every outcome, including a file ADMIT refused, where
-    they say that and nothing else. Both carry element ids, so ``summary_dir`` belongs beside the
-    store and never under the release tree.
+    Both products are emitted on every file and every outcome, including a file ADMIT refused.
+    Both carry element ids, so ``summary_dir`` belongs beside the store, never under the release
+    tree.
 
     Args:
         store: The provenance store, read in full and never written.
@@ -2043,10 +1995,9 @@ def report(
         ``{"summary": <path>, "json": <path>}``.
 
     Raises:
-        ValueError: If ``report.format`` names a form other than ``png`` or ``pdf``. A typo must not
-            fall through to a silent default.
-        ReportRenderError: If the summary could not be drawn. The JSON is written first and is
-            complete by then, so it travels on the exception rather than being lost with the page.
+        ValueError: If ``report.format`` names a form other than ``png`` or ``pdf``.
+        ReportRenderError: If the summary could not be drawn. The JSON is written first, so it
+            travels on the exception.
     """
     fmt = str(config.require("report.format"))
     if fmt not in FORMATS:
@@ -2084,8 +2035,7 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
 ) -> None:
     """Draw the summary in the declared form, over the shared time axis when there is a stream.
 
-    A file ADMIT refused has no conditioned stream, so there is no axis to share; the blocks are the
-    whole product, and they say so — including which lanes are missing and why.
+    A file ADMIT refused has no conditioned stream, so the blocks are the whole product.
 
     Args:
         store: The provenance store.
@@ -2115,8 +2065,7 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
                 pages.savefig(figure)
                 pyplot.close(figure)
 
-            # The decision record leads: it is what a reviewer reads first, and it is the whole
-            # product on a file with no axis to draw. The evidence follows it.
+            # The decision record leads; the evidence follows it.
             for page in _text_pages(_decision_blocks(document)):
                 _save(_text_figure(page, title, figsize=_LETTER_LANDSCAPE_IN))
             if audio is None:
@@ -2160,7 +2109,7 @@ def _text_figure(lines: list[str], title: str, *, figsize: tuple[float, float] |
 
     Returns:
         The figure, not yet saved and not yet closed. An explicit size keeps PDF pages physically
-        fixed; the PNG form still grows to carry a long diagnostic record.
+        fixed; the PNG form grows with its line count.
     """
     from matplotlib import pyplot
 
@@ -2203,8 +2152,7 @@ def _stream(store: ProvStore, run_dir: Path) -> Audio | None:
         run_dir: Where sidecar paths resolve against.
 
     Returns:
-        The audio, or None. A recording ADMIT refused leaves none, and so does a run whose sidecar
-        tree has been moved away from its store.
+        The audio, or None — a recording ADMIT refused, or a run whose sidecar tree has moved.
     """
     for name in (_CONDITIONED_STREAM, _SOURCE_STREAM):
         try:

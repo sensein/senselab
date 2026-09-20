@@ -6,17 +6,13 @@ instruction asked for; :func:`detect_voice` marks sustained phonation on a task 
 and evaluates nothing.
 
 Both write by ``propose`` only. The subject is PREPROCESS's ``amplitude`` spans qualified by
-``phonation_tracks`` and ``continuity_trace`` — the same evidence the route was decided on — and
-VOICE mints its own ``family: "voice"`` spans over what qualifies. It waits for no ``phonation``
-span and edits none. Every span a qualifier discards is reported as a ``carrier_rejected``
-measurement naming the gate, so a reader can tell an absent production from a discarded one.
+``phonation_tracks`` and ``continuity_trace``, over which VOICE mints its own ``family: "voice"``
+spans. It waits for no ``phonation`` span and edits none. Every span a qualifier discards is
+reported as a ``carrier_rejected`` measurement naming the gate. The conformance this branch reports
+is ``True`` or :data:`UNDETERMINED`, never ``False``; VERDICT decides.
 
-Conformance here is ``True`` or :data:`UNDETERMINED` and never ``False``: these instruments can
-establish that a sustained production happened, not that none did. What the grounds for that are
-is in ``specs/20260817-triage-workflow-dag/voice-flag-grounds.md``.
-
-The design is ``specs/20260817-triage-workflow-dag/branch-voice.md``; what porting it decided is
-``specs/20260817-triage-workflow-dag/branch-voice-implementation.md``.
+The design is ``specs/20260817-triage-workflow-dag/branch-voice.md``; the grounds are
+``voice-flag-grounds.md`` and ``branch-voice-implementation.md`` beside it.
 """
 
 from __future__ import annotations
@@ -101,7 +97,7 @@ PHONATION_ROLE = "phonation"
 """The role :func:`detect_voice` mints under: sustained phonation, on nobody's declared task."""
 
 TRACKS_ABSENT = "phonation_tracks is absent; no phonation boundary can be placed"
-"""Why a mode could not look. An absent instrument is :data:`UNDETERMINED`, never a verdict."""
+"""The ``unviable`` reason a mode writes when ``phonation_tracks`` never reached the store."""
 
 _TRACKS_SIDECAR = "derivatives/phonation_tracks.npz"
 """Where PREPROCESS writes the tracks when the measurement carries no ``path`` of its own."""
@@ -234,10 +230,7 @@ class Carrier:
 class Rejection:
     """One amplitude span this branch examined and discarded, and the gate that discarded it.
 
-    A discarded carrier is a reading of the branch's own instrument, not a departure by the
-    speaker, so it is written as a measurement rather than a deviation. Without it the store cannot
-    distinguish a recording holding no sustained phonation from one holding a production a
-    qualifier threw away.
+    Written to the store as a measurement, not a deviation.
 
     Attributes:
         span: The amplitude span that was examined.
@@ -276,7 +269,7 @@ class Rejection:
         """This rejection, as the report's own summary of it.
 
         Returns:
-            The gate, the value and the carrier's length, for a reader who opens no findings.
+            The gate, the value read and the carrier's length.
         """
         start, end = self.span.extent or (0.0, 0.0)
         return {"gate": self.gate, "value_read": self.value, "carrier_s": round(end - start, 3)}
@@ -312,11 +305,10 @@ class Qualification:
 
 
 def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: BranchParams) -> Qualification:
-    """V1's stationarity qualifier, over PREPROCESS's amplitude spans. One body, three callers.
+    """V1's stationarity qualifier, over PREPROCESS's ``measure == "amplitude"`` spans.
 
-    The subject is ``measure == "amplitude"``, not ``family == "phonation"``: VOICE reads the
-    amplitude spans as evidence and mints its own span over what qualifies. Every span it discards
-    is returned beside the ones it keeps, named by the gate that discarded it.
+    Every span it discards is returned beside the ones it keeps, named by the gate that discarded
+    it.
 
     Args:
         evidence: The derivatives and store reads.
@@ -360,9 +352,7 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
         )
         stationarity = float(np.median(trace)) if trace.size else 0.0
         carrier = Carrier(span, track, voiced_fraction, spread, stationarity)
-        # A qualifier whose own boundary is unmeasured is not applied, and neither is one whose own
-        # reading is unmeasurable: either could neither admit nor reject this carrier, and rejecting
-        # on one would be this branch deciding for want of a number. The ask is in `params.missing`.
+        # An unmeasured bound, or an unmeasurable reading, leaves its gate unapplied.
         if fraction_min is not None and voiced_fraction < fraction_min:
             rejected.append(
                 Rejection(span, "voiced_fraction_min", round(voiced_fraction, 4), fraction_min, carrier.qualifiers())
@@ -401,9 +391,7 @@ def align_voice(
         Whether the expected patterns were found, the spans proposed, and the findings.
 
     Raises:
-        KeyError: If ``task_family`` is not a VOICE family, which is the caller's error: the four
-            ``VOICE_EXPECTATIONS_PENDING_DECLARATION`` rows are out of family and take
-            :func:`detect_voice`.
+        KeyError: If ``task_family`` is not a key of :data:`VOICE_EXPECTATIONS`.
         NotImplementedError: If a row carries a pattern no reachable matcher serves.
     """
     expectation = VOICE_EXPECTATIONS[task_family]
@@ -424,7 +412,7 @@ def _count_in(
 ) -> tuple[bool, list[Proposal], list[Finding]]:
     """The lexical count-in the instruction prescribes, as its own span.
 
-    It gets one precisely because it must be excluded from the vowel's measurement window.
+    The span is marked ``excluded_from_measurement`` so the vowel's window does not cover it.
 
     Args:
         expectation: The row, whose ``tokens`` are the prescribed count-in.
@@ -433,9 +421,8 @@ def _count_in(
 
     Returns:
         Whether the count-in was realised, the span it proposes, and one ``omission`` per token
-        nothing realised. The bool is the count-in's own reading and is no part of the task's
-        conformance: a held vowel carries no lexical content by design, so keying the task to a
-        transcript word would decide it on the one thing the instruction asked not to happen.
+        nothing realised. The bool is the count-in's own reading and no part of the task's
+        conformance.
     """
     if expectation.tokens is None:
         return True, [], []
@@ -468,8 +455,7 @@ def _voice_sustained(
         params: The operating points.
 
     Returns:
-        The result. :data:`UNDETERMINED` whenever no carrier qualified, because this branch's
-        instruments can establish a sustained production but not its absence.
+        The result. :data:`UNDETERMINED` whenever no carrier qualified.
     """
     _, components, findings = _count_in(expectation, evidence, params)
     if evidence.tracks is None:
@@ -594,8 +580,8 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
         params: The operating points.
 
     Returns:
-        The result. :data:`UNDETERMINED` when the tracks are absent, so no sweep can be placed, and
-        when every sweep this branch located was discarded by a qualifier.
+        The result. :data:`UNDETERMINED` when the tracks are absent, and when every sweep located
+        was discarded by a qualifier.
     """
     if evidence.tracks is None:
         return Result(UNDETERMINED, [], [unviable("sweep_extent", TRACKS_ABSENT)])
@@ -635,9 +621,6 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
         sweep = (float(track.times_s[first]), float(track.times_s[last]) + track.hop_s)
         held = duration(sweep) / max(duration(span.extent), 1e-9)
         if dominant_min is not None and held < dominant_min:
-            # The sweep was located. It is recorded with what it measured, because "no sweep was
-            # found" would state more than was read: what happened is that a sweep covered less of
-            # its carrier than the operating point asks, and the carrier's extent is PREPROCESS's.
             discarded.append(
                 Rejection(
                     span,
@@ -704,9 +687,7 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
 def detect_voice(store: ProvStore, params: BranchParams, *, run_dir: Path) -> Result:
     """Mark sustained phonation wherever it occurs, and evaluate no task.
 
-    Shares :func:`qualifying_phonation` with the in-family mode — the same qualifier, the same
-    amplitude spans, the same tracks. What differs is that no expectation is consulted and no task
-    is evaluated: ``done`` is :data:`UNDETERMINED`, always.
+    Runs :func:`qualifying_phonation` against a neutral expectation, so no instruction is read.
 
     Args:
         store: The provenance store.
@@ -785,15 +766,15 @@ def voice(
         source: The store-held stream the findings are taken over, ``"plain"``.
         config: The triage configuration.
         hint: What the recording was declared to contain; it selects the mode and carries the task
-            index. A declaration this branch's measurements contradict is named by VERDICT's fold.
+            index.
         run_dir: The run directory sidecar paths are relative to.
 
     Returns:
-        The verdict, the view over the spans, findings and measurements written, and the verdict id.
+        The branch report, the view over the spans, findings and measurements written, and the
+        ``branch_report`` entity's id.
 
     Raises:
-        ValueError: If a ``branch.*`` key a reached body needs is unmeasured. The message names the
-            key, on the recording it was asked about.
+        ValueError: If a ``branch.*`` key a reached body needs is unmeasured.
     """
     params = branch_params(config)
 

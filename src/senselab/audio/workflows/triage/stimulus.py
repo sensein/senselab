@@ -211,8 +211,7 @@ def split_prompts(prompts: Sequence[ExpectedSpeech], *, terminators: str) -> lis
     """Split the declared prompts into structure units and their verbatim tokens.
 
     A prompt is one unit unless it carries a sentence terminator, in which case each sentence is a
-    unit; a caller who declares six sentences as six entries and a caller who declares them as one
-    string therefore get the same six units.
+    unit.
 
     Args:
         prompts: The ``expected_speech`` entries, in declared order.
@@ -248,8 +247,8 @@ def align_stimulus(
     """Align the consensus word stream against the declared utterance.
 
     Args:
-        prompts: The ``expected_speech`` entries, in declared order. May be empty, which is a
-            declared expectation of no particular words: every lexical word is then unexpected.
+        prompts: The ``expected_speech`` entries, in declared order. Empty expects no particular
+            words, so every lexical word is then unexpected.
         words: The lexical consensus words, in stream order.
         terminators: The characters that close a structure unit inside one prompt.
 

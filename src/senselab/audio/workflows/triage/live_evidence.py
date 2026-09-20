@@ -3,19 +3,15 @@
 ``routing_analysis`` reduces a finished ``store.jsonl`` to a
 :class:`~senselab.audio.workflows.triage.routing_analysis.features.RecordingFeatures` and evaluates
 :mod:`~senselab.audio.workflows.triage.routing_analysis.ruleset` over it. ROUTING holds the same
-store in memory, mid-run, with no file yet. This module is the one place the two meet: it hands the
-live store to the store's own writer and the result to the analysis reader, so both paths reduce the
-same bytes with the same code and no feature path has two definitions.
+store in memory, mid-run, with no file yet, so this module serialises the live store and hands the
+result to that same analysis reader.
 
-The evaluation carries the recording's own declaration. A BIDS stem's ``task-`` id is that
-declaration, so :func:`declared_task` reads it off the stem ADMIT recorded and
-:attr:`~senselab.audio.workflows.triage.routing_analysis.ruleset.RouteEvaluation.declared` is
-filled through the ruleset's family sets, exactly as the offline analysis path fills it. A stem
-carrying no ``task-`` entity declares nothing and leaves both :data:`UNDECLARED`.
+The evaluation carries the recording's own declaration: a BIDS stem's ``task-`` id, which
+:func:`declared_task` reads off the stem ADMIT recorded. A stem carrying no ``task-`` entity
+declares nothing and leaves both :data:`UNDECLARED`.
 
-``specs/20260912-ruleset-in-pipeline/design.md`` holds the reasoning: why the serialisation rather
-than a second reader, and what it costs. ``specs/20260817-triage-workflow-dag/routing.md`` holds
-why the declaration is read here rather than resolved a second time downstream.
+See ``specs/20260912-ruleset-in-pipeline/design.md`` and
+``specs/20260817-triage-workflow-dag/routing.md``.
 """
 
 from __future__ import annotations
@@ -62,10 +58,6 @@ EMPTINESS_SOURCE = "stream_peak_max"
 def required_sources(ruleset: Ruleset) -> tuple[str, ...]:
     """Every feature source one ruleset reads, in sorted order.
 
-    The gates are declarative, so what a given configuration consumes is knowable without reading
-    the whole feature surface. A caller that must narrow the reduction reads this rather than
-    enumerating :class:`~senselab.audio.workflows.triage.routing_analysis.features.RecordingFeatures`.
-
     Args:
         ruleset: The loaded ruleset.
 
@@ -85,8 +77,7 @@ def recording_stem(store: ProvStore) -> str:
 
     Returns:
         The stem of the path the latest live ``recording`` stream names, or ``""`` when no such
-        stream is in the store. The ``task-`` id it carries is the recording's own declaration;
-        :func:`declared_task` reads it.
+        stream is in the store.
     """
     found = [
         entity
@@ -106,8 +97,7 @@ def declared_task(stem: str) -> tuple[str, str]:
 
     Returns:
         ``(task_id, family)``, both :data:`UNDECLARED` when the stem carries no ``task-`` entity.
-        The one place the graph reads a declaration off the recording itself, so ROUTING and VERDICT
-        cannot disagree about whether there is one.
+        The one place the graph reads a declaration off the recording itself.
     """
     task_id = task_id_of(stem) if stem else UNKNOWN_TASK
     if task_id == UNKNOWN_TASK:
@@ -125,9 +115,8 @@ def read_live_features(
 ) -> RecordingFeatures:
     """Reduce a live store to the routing evidence, through the analysis reader.
 
-    The serialisation is written under ``run_dir`` and not elsewhere: a measurement naming a sidecar
-    names it relative to the store's own directory, and the reader resolves it against the file it
-    was handed. It is removed whether or not the reduction succeeded.
+    The serialisation is written under ``run_dir``, which the store's sidecar paths are relative to,
+    and is removed whether or not the reduction succeeded.
 
     Args:
         store: The provenance store, as the run holds it.
@@ -168,9 +157,8 @@ def evaluate_live_routes(store: ProvStore, config: TriageConfig, *, run_dir: Pat
     """Route one recording from the store the graph is still writing.
 
     Args:
-        store: The provenance store, holding PREPROCESS's derivatives and TAXONOMY's own summaries.
-            Every gate's evidence is written by one of those two, so this is callable once TAXONOMY
-            has concluded and not before it.
+        store: The provenance store, holding PREPROCESS's derivatives and TAXONOMY's own
+            summaries. Callable once TAXONOMY has concluded and not before it.
         config: The resolved triage configuration, read for ``taxonomy.ruleset`` and for the
             ``windows.<classifier>`` membership rule.
         run_dir: The run directory the store's sidecar paths are relative to.
@@ -201,11 +189,10 @@ def route_attributes(evaluation: RouteEvaluation, ruleset: Ruleset) -> dict[str,
             configures no gate for.
 
     Returns:
-        The attributes. ``ungated`` names the branches whose gate list is empty, so a reader of the
-        stored measurement can tell a branch the ruleset declined from one it never looked at.
-        ``unreadable`` names the branches not one of whose gates could be read, and
-        ``critical_blocks`` the blocks this ruleset needs for every branch to stay judgeable;
-        ``specs/20260817-triage-workflow-dag/critical-failure.md`` holds what each is for.
+        The attributes. ``ungated`` names the branches whose gate list is empty, ``unreadable`` the
+        branches not one of whose gates could be read, and ``critical_blocks`` the blocks this
+        ruleset needs for every branch to stay judgeable — see
+        ``specs/20260817-triage-workflow-dag/critical-failure.md``.
     """
     return {
         "state": evaluation.state.value,

@@ -252,3 +252,26 @@ existing assertion rather than by adding a test: counting a substituted token as
 substitution test did not read `task_extent`'s counts), proposing a span on a syllable train (the
 assertion was on the empty-transcript case, where no hull exists), and giving the enrollment probe
 its overlapped audio back (nothing read what the embedder was handed). All ten are caught.
+
+## Moved from `nodes/speech.py` (2026-09-20)
+
+Three claims that lived only as prose inside `speech.py`, moved here when the module's docstrings
+and comments were cut back to what a caller needs.
+
+**`_locate` returns every occurrence, not the first.** `scan_for_pii` dedupes its findings by
+`(category, text, source)`, so a name the participant says twice arrives as **one** finding. Marking
+only its first match would leave the second occurrence unmarked, and therefore unredacted, because
+`redact.py` selects on the per-word `verb: "label", label: "pii"` assertions and nothing else. The
+occurrences are recorded on the `pii` entity as `occurrence` / `occurrences_n`.
+
+**A finding the transcript does not place covers the whole of it.** When `_locate` matches nothing
+(`pii_unlocated`), the `pii` entity takes the time hull of *every* word rather than of no words: the
+redaction that reads this entity must not be narrower than the text the detector was handed. The
+alternative — dropping an unlocated finding, or giving it a zero-width extent — withdraws redaction
+from text a detector flagged.
+
+**The mode decision runs before the node's no-lexical exit.** `mode_of` / `dispatch` are called at
+step 1, above the early return taken when the consensus carries no lexical word. A
+`SYLLABLE_REPETITION` recording routinely carries none, and its in-family body (`align_ddk`) is
+exactly what evaluates it; returning early would report `UNDETERMINED` for a recording the branch
+can in fact evaluate. The ordering also guarantees neither mode reads a span this pass authored.

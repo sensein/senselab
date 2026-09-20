@@ -4,13 +4,12 @@ Reads the two nodes' elements and their sidecars and writes one image per fixed-
 no model, reads no hint, decides nothing, and writes nothing back to the store, so it can be
 re-invoked over a completed run directory exactly as ``report()`` can.
 
-Its configuration is split in two, and the split is enforced by construction: every pipeline value
-comes from the packaged :class:`TriageConfig` and is only ever read, while every value that governs
-the drawing itself lives in :class:`FigureStyle`. A page whose panel has nothing to draw says which
-element is absent and why, taking the reason from PREPROCESS's own verdict rather than supplying a
-value of its own.
+Every pipeline value comes from the packaged :class:`TriageConfig` and is only read; every value
+that governs the drawing itself lives in :class:`FigureStyle`.
 
-See ``specs/20260904-preprocess-taxonomy-figure/design.md``.
+See ``specs/20260904-preprocess-taxonomy-figure/design.md`` for the per-page panels and
+``specs/20260817-triage-workflow-dag/branch-figure.md`` and ``summary-is-the-figure.md`` for the
+branch lanes and the span axis.
 """
 
 from __future__ import annotations
@@ -56,10 +55,10 @@ _STREAM = "preemphasised"
 _FALLBACK_STREAM = "plain"
 _SOURCE_STREAM = "recording"
 
-#: Characters per line of the cover title, at its 11 pt proportional face on an 11-inch page.
+#: Characters per line of the cover title.
 _TITLE_COLUMNS = 95
 
-#: Imported, never restated: TAXONOMY iterates this same tuple when it writes the summaries below.
+#: The classifiers TAXONOMY summarises, imported rather than restated.
 _SUMMARISED_CLASSIFIERS = SUMMARISED_CLASSIFIERS
 
 #: One title per stream section, keyed by the ``enhanced``/``residual`` prefix PREPROCESS writes.
@@ -68,8 +67,8 @@ _STREAM_TITLES: dict[str, str] = {
     "residual": "RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL",
 }
 
-# E=envelope (primary amplitude), C=continuity, A=asr, S=normalization (supplementary amplitude),
-# G=gap, the complement PREPROCESS writes so the background between proposals is measured too.
+# E=envelope (primary amplitude), C=continuity, A=asr, S=normalization (supplementary
+# amplitude), G=gap (the complement of the proposed set).
 _MEASURE_CODE = {"amplitude": "E", "continuity": "C", "asr": "A", "gap": "G"}
 _SPAN_ROWS = ("E", "C", "A", "S", "G")
 
@@ -91,17 +90,12 @@ class FigureStyle:
 
     Attributes:
         page_seconds: The width of every page, in recording seconds.
-        pad_short_pages: Whether a final page shorter than ``page_seconds`` is padded out to it, so
-            every image spans the same duration and panels are comparable page to page.
+        pad_short_pages: Whether a final page shorter than ``page_seconds`` is padded out to it.
         figure_inches: ``(width, height)`` of one page.
-        cover_margin_in: The cover page's printed margin, in inches, on all four sides. Handed to
-            the same layout engine the evidence pages use, so the cover's axes and its title are
-            placed inside it rather than at hand-tuned figure fractions.
+        cover_margin_in: The cover page's printed margin, in inches, on all four sides.
         cover_title_fontsize: The cover title's point size.
-        cover_title_leading: The vertical space one title line takes, as a multiple of
-            ``cover_title_fontsize``, including the gap between the title and the body below it.
-            The band this reserves is taken off the top of the cover's layout box, so the title
-            sits inside the margin and the body starts under it.
+        cover_title_leading: The space one title line takes, as a multiple of
+            ``cover_title_fontsize``, including the gap to the body below.
         dpi: Raster resolution.
         height_ratios: One entry per panel, top first.
         spectrogram_dynamic_range_db: Colour floor, in dB below the page's own peak bin.
@@ -111,12 +105,9 @@ class FigureStyle:
         asr_legend_line: Vertical step between the lane's source legend entries.
         top_labels: How many of its own highest-scoring labels each span contributes to a
             per-span raster's row set.
-        raster_row_ratio: Height one raster row takes, as a share of the page's height ratios. A
-            raster is at least its declared height and grows past it rather than compressing its
-            rows.
-        raster_rows_scope: Where a raster's row set is unioned. Only ``"file"`` is implemented:
-            every page draws the same rows in the same order, so a label can be scanned down
-            across pages and a page carrying none of a row's label shows that row empty.
+        raster_row_ratio: Height one raster row takes, as a share of the page's height ratios; a
+            raster grows past its declared height rather than compressing rows.
+        raster_rows_scope: Where a raster's row set is unioned. Only ``"file"`` is implemented.
         summary_labels: How many labels the whole-file taxonomy panel lists per classifier.
         speech_free_labels: How many labels the speech-free one-line summary lists per
             stream/classifier.
@@ -124,16 +115,14 @@ class FigureStyle:
         colour_supplement: Normalization-derived spans.
         colour_continuity: The continuity trace and its spans.
         colour_asr: ASR-derived spans and the word lane.
-        colour_gap: Gap spans — the complement of the proposed set, drawn neutral so the
-            background reads as the absence of a proposal rather than as a fifth source.
+        colour_gap: Gap spans — the complement of the proposed set, drawn neutral.
         colour_clip: Clip-event accents.
         colour_padding: The shading that marks a padded tail.
         cmap_spectrogram: Spectrogram colormap.
         cmap_yamnet: YAMNet raster colormap.
         cmap_hear: HeAR raster colormap.
         cmap_squim: SQUIM raster colormap.
-        word_source_colours: One fill per ASR source, cycled in the consensus's source order; each
-            source draws in its own sub-band of a word's row.
+        word_source_colours: One fill per ASR source, cycled in the consensus's source order.
         word_span_alpha: The alpha of a source's own span.
         word_text_colour: The consensus-word text colour and the derived-extent outline.
         title_fontsize: Panel title size.
@@ -142,54 +131,37 @@ class FigureStyle:
         marker_size: Raster cell area.
         text_fontsize: The taxonomy panel's monospaced lines.
         absent_fontsize: The note a panel prints when its element is absent.
-        cell_ramp: The span of a colormap a value is mapped onto. Ink means attention: the end
-            of the ramp that matters runs to near-full colour, and the other end to near-white so
-            it recedes into the page.
-        raster_cell_height: A cell's height in row units, leaving a gap between rows so a dense
-            band of cells does not read as one solid row.
-        raster_min_cell_s: The narrowest a cell is drawn, in seconds. A cell takes its span's width,
-            and a span shorter than this would otherwise render as an invisible hairline.
-        also_write_pngs: Whether each page is additionally written as its own PNG. Off: a recording's
-            pages are one PDF, because 388 recordings emitted 538 loose pages whose only ordering was
-            their filename. A test that must inspect one page's pixels turns it on.
-        colorbar_width_ratio: The colorbar column's width, as a fraction of the panel's. The column
-            exists on every row so that every panel is drawn to the same width and the shared time
-            axis stays aligned; rows with nothing to scale leave their slot blank.
+        cell_ramp: The span of a colormap a value is mapped onto.
+        raster_cell_height: A cell's height in row units, leaving a gap between rows.
+        raster_min_cell_s: The narrowest a cell is drawn, in seconds; otherwise it takes its
+            span's width.
+        also_write_pngs: Whether each page is additionally written as its own PNG.
+        colorbar_width_ratio: The colorbar column's width, as a fraction of the panel's. Every row
+            has the column; rows with nothing to scale leave their slot blank.
         colorbar_tick_fontsize: The colorbar's tick labels.
         colorbar_gap_axes: The gap between a panel's right edge and its colorbar, in axes fractions.
-        squim_ranges: The value range each SQUIM row is normalised over for colour. One shared scale
-            across rows would be meaningless, the three metrics having unrelated units.
+        squim_ranges: The value range each SQUIM row is normalised over for colour, one per row.
         cell_floor_fontsize: The smallest a raster cell's score text is shrunk to before it is
             dropped. The cell itself is never dropped.
-        waveform_headroom: The page's own peak amplitude is scaled by this to set the waveform's
-            y-limits, so a signal well below full scale still fills its panel.
-        waveform_min_amplitude: A floor on those limits, so a near-silent page does not zoom into
-            its own noise.
-        absent_height_ratio: The height an absent panel collapses to, freeing its remaining share
-            for the panels that have something to draw.
-        raster_paint_floor: A raster cell scoring below this is left unpainted, so the eye finds the
-            spans where something registered. A display choice only: it changes no measurement, and the
-            row stays present because the label is still part of the file's union.
+        waveform_headroom: What the page's own peak amplitude is scaled by to set the waveform's
+            y-limits.
+        waveform_min_amplitude: A floor on those limits.
+        absent_height_ratio: The height an absent panel collapses to, its remaining share going to
+            the panels that have something to draw.
+        raster_paint_floor: A raster cell scoring below this is left unpainted; its row stays.
         asr_rows: How many staggered rows the consensus-word lane uses.
         asr_row_height: The bar height within one word-lane row, in row units.
-        span_axis_height_ratio: The span axis's declared height, appended to ``height_ratios`` to
-            make the summary page's full stack. Like a raster it grows past this with its row count
-            rather than compressing its rows.
-        colour_branch_initial: The fill of the shared initial row — the spans every proposal below
-            was derived from.
-        lane_colours: One fill per lane of :data:`SUMMARY_LANES`, cycled. A lane's bars and its
-            connectors take the same one, so a connector crossing an intervening row can be
-            followed by colour to the row it lands in.
+        span_axis_height_ratio: The span axis's declared height, appended to ``height_ratios``;
+            like a raster it grows past this with its row count.
+        colour_branch_initial: The fill of the shared initial row.
+        lane_colours: One fill per lane of :data:`SUMMARY_LANES`, cycled; a lane's bars and its
+            connectors take the same one.
         branch_row_height: A bar's height within its row, in row units.
         branch_link_linewidth: A connector's width.
-        branch_link_alpha: A connector's opacity. Connectors are drawn behind every bar and below
-            full opacity, so a dense derivation never obscures the spans it relates.
+        branch_link_alpha: A connector's opacity.
         branch_block_tint: How far a lane's colour is blended toward white for the band behind its
-            block of sub-rows, ``0`` leaving the lane's own colour and ``1`` leaving white. Every
-            lane is banded in its own hue: the band is what makes one branch's several sub-rows read
-            as one thing and tells a reader which block a connector of that colour lands in.
-        colour_branch_input_band: The band behind the initial row, which marks it as the axis's
-            input zone rather than a fifth branch.
+            block of sub-rows, ``0`` leaving the lane's colour and ``1`` leaving white.
+        colour_branch_input_band: The band behind the initial row.
         colour_span_axis_rule: The rule between two sub-rows of one block.
         colour_span_axis_block_rule: The rule between two blocks, and under the input zone.
         span_axis_rule_linewidth: The width of a rule inside a block.
@@ -288,9 +260,8 @@ class FigureStyle:
 def pages(duration_s: float, style: FigureStyle) -> list[tuple[float, float]]:
     """The page windows covering a recording, every one the same width.
 
-    A recording is cut into ``style.page_seconds`` pages and the final page keeps that full width
-    even when the recording stops inside it, so a span's drawn width means the same thing on every
-    page. The uncovered tail is padding, not silence, and :func:`_mark_padding` says so on the page.
+    The final page keeps its full width even when the recording stops inside it; the uncovered tail
+    is padding, which :func:`_mark_padding` marks on the page.
 
     Args:
         duration_s: The recording's real duration.
@@ -300,8 +271,7 @@ def pages(duration_s: float, style: FigureStyle) -> list[tuple[float, float]]:
         ``[(start, end), ...]``, always at least one page.
 
     Raises:
-        ValueError: If ``page_seconds`` is not positive, since no number of pages would cover the
-            recording.
+        ValueError: If ``page_seconds`` is not positive.
     """
     if style.page_seconds <= 0:
         raise ValueError(f"page_seconds must be positive, got {style.page_seconds}")
@@ -339,8 +309,7 @@ def _mark_padding(axes: Sequence[Axes], duration_s: float, t1: float, style: Fig
             zorder=5,
         )
         axis.axvline(duration_s, color=style.colour_padding, linewidth=1.0, linestyle="--", zorder=6)
-    # Rotated inside the band: a padded tail is often a fraction of a second wide, and a horizontal
-    # label centred on it overflows onto the recording it is meant to be distinguished from.
+    # Rotated inside the band, which is often a fraction of a second wide.
     axes[0].text(
         (duration_s + t1) / 2,
         0.5,
@@ -421,8 +390,8 @@ def _span_code(signal_name: str, measure: str) -> str:
 def _spans(store: ProvStore) -> list[dict[str, Any]]:
     """Every live general span, with what the lane panel needs to draw it.
 
-    ``contains_clip`` is derived here from the live clip extents rather than read from the span's
-    stored attribute, so it names the clip spans that stand at read time.
+    ``contains_clip`` is derived from the live clip extents, not read from the span's stored
+    attribute.
 
     Args:
         store: The provenance store.
@@ -469,8 +438,7 @@ def _span_scores(store: ProvStore, measurement_name: str) -> dict[str, dict[str,
         measurement_name: ``"span_yamnet"`` or ``"span_hear"``.
 
     Returns:
-        ``{span_id: {label: score}}``, read from ``raw_scores`` — the model's own output for the
-        window, written whatever the configuration says. No labelling threshold takes part.
+        ``{span_id: {label: score}}``, read from the span's ``raw_scores``.
     """
     by_span: dict[str, dict[str, float]] = {}
     for measurement in find_measurements(store, measurement_name):
@@ -493,11 +461,10 @@ def _raster_rows(
         per_span_top_k: How many of its own labels each span contributes.
         scope: Where the union is taken. Only ``"file"`` is implemented.
         floor: A span contributes only those of its top ``per_span_top_k`` that reach this score,
-            or ``None`` to contribute all of them. Applied per span, before the union: a span where
-            nothing fires contributes nothing, rather than its four highest near-zero labels.
+            or ``None`` to contribute all of them. Applied per span, before the union.
 
     Returns:
-        The rows, highest file-wide peak first, so a row holds the same position on every page.
+        The rows, highest file-wide peak first.
 
     Raises:
         ValueError: If ``scope`` is not ``"file"``.
@@ -722,8 +689,7 @@ def _summary_sections(store: ProvStore, style: FigureStyle) -> tuple[list[list[s
 def _source_path(store: ProvStore) -> str | None:
     """The recording's own file path, as ADMIT recorded it.
 
-    Read off the entity, never by loading the stream: a figure is often drawn on a different
-    machine from the run, where the recording's own path does not resolve.
+    Read off the entity, never by loading the stream.
 
     Args:
         store: The provenance store.
@@ -741,10 +707,8 @@ def _source_path(store: ProvStore) -> str | None:
 def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     """The whole-file taxonomy readout, one line under another, as the sidecar JSON records it.
 
-    Two aggregations, both file-scoped: each classifier's label-score distribution over every window
-    it produced, and what the routing ruleset made of each branch. A classifier whose derivative is
-    absent prints the reason PREPROCESS recorded, so a null configuration key is named instead of
-    being filled in with a value this figure invented.
+    Two aggregations, both file-scoped: each classifier's label-score distribution over every
+    window it produced, and what the routing ruleset made of each branch.
 
     Args:
         store: The provenance store.
@@ -788,18 +752,16 @@ def _columns(blocks: list[list[str]]) -> list[str]:
 def _stream_header_line(store: ProvStore, prefix: str) -> tuple[str, bool]:
     """One stream's own provenance line, read off the shared ``residual`` measurement.
 
-    ``enhanced`` and ``residual`` are written by the same PREPROCESS block from the same FRCRN
-    pass and share that one measurement, so both stream sections read gain / enhanced % /
-    residual % / speech-present off it and differ only in title.
+    ``enhanced`` and ``residual`` share one FRCRN measurement, so both stream sections read
+    gain / enhanced % / residual % / speech-present off it and differ only in title.
 
     Args:
         store: The provenance store.
         prefix: ``"enhanced"`` or ``"residual"``.
 
     Returns:
-        ``(line, present)``. ``present`` is False when the line states an absence — PREPROCESS's own
-        recorded reason, covering the block never having run, having been gated out, or an upstream
-        failure — in which case no classifier block follows it.
+        ``(line, present)``. ``present`` is False when the line states an absence, taken from
+        PREPROCESS's own recorded reason; no classifier block then follows it.
     """
     title = _STREAM_TITLES[prefix]
     measurement = find_measurement(store, "residual")
@@ -828,9 +790,8 @@ def _stream_classifier_block(store: ProvStore, prefix: str, classifier: str, sty
         style: The drawing configuration, for how many labels to list.
 
     Returns:
-        The block's lines, headed by the classifier's own name so it stands alone in a column: an
-        absent summary states PREPROCESS's own reason, and a summary over zero windows says so
-        rather than printing an empty label list.
+        The block's lines, headed by the classifier's own name. An absent summary states
+        PREPROCESS's own reason; a summary over zero windows says so.
     """
     summary = find_measurement(store, f"{prefix}_{classifier}_summary_all")
     if summary is None:
@@ -861,9 +822,7 @@ def _stream_classifier_block(store: ProvStore, prefix: str, classifier: str, sty
 def _stream_speech_free_line(store: ProvStore, prefix: str, classifier: str, style: FigureStyle) -> str:
     """One classifier's speech-free label summary, read off ``{prefix}_{classifier}_summary_speech_free``.
 
-    The speech-free subset is exactly the windows PREPROCESS recorded with ``speech_overlap ==
-    0.0`` — the target is not speaking in them, so a label appearing here is background, not
-    speech-shaped enhancement artefact.
+    The speech-free subset is the windows PREPROCESS recorded with ``speech_overlap == 0.0``.
 
     Args:
         store: The provenance store.
@@ -872,7 +831,7 @@ def _stream_speech_free_line(store: ProvStore, prefix: str, classifier: str, sty
         style: The drawing configuration, for how many labels to list.
 
     Returns:
-        One line: the classifier's own name, then its top speech-free labels; states the absence
+        One line: the classifier's own name, then its top speech-free labels. States the absence
         reason when the summary never reached the store, or that no window was speech-free.
     """
     summary = find_measurement(store, f"{prefix}_{classifier}_summary_speech_free")
@@ -899,8 +858,8 @@ def _stream_speech_free_line(store: ProvStore, prefix: str, classifier: str, sty
 def _stream_summary_lines(store: ProvStore, prefix: str, style: FigureStyle) -> list[str]:
     """One stream's whole-file classification summary: yamnet, ast and hear, over all windows.
 
-    Laid out with :func:`_columns`, the same machinery :func:`summary_panel_lines` uses for the
-    other classifiers, followed by each classifier's own speech-free top labels as one line apiece.
+    Laid out with :func:`_columns`, followed by each classifier's speech-free top labels as one
+    line apiece.
 
     Args:
         store: The provenance store.
@@ -939,16 +898,15 @@ PAGE_TITLE_FONTSIZE = 10.0
 """The point size a span page's heading is drawn at."""
 
 MONOSPACE_ADVANCE_EM = 0.6075
-"""One monospaced character's advance width, in em, for the face matplotlib resolves ``monospace``
-to. Measured rather than taken from the font's metrics: 0.0675 in per character at 8 pt."""
+"""One monospaced character's advance width, in em, for the face matplotlib resolves
+``monospace`` to."""
 
 
 def wrap_measured(figure: Figure, text: str, *, fontsize: float, drawable_in: float) -> str:
     """Fold text so every line's drawn width fits, measuring rather than counting characters.
 
-    A title is drawn in a proportional face, so a character count cannot say whether it fits. This
-    lays each candidate line out with the figure's own renderer and breaks where it stops fitting,
-    splitting a single over-long word rather than letting it run off the page.
+    Lays each candidate line out with the figure's own renderer and breaks where it stops fitting,
+    splitting a single over-long word.
 
     Args:
         figure: The figure the text will be drawn on, used for its renderer and its dpi.
@@ -1004,8 +962,7 @@ def cover_body_capacity(style: FigureStyle, title_lines: int) -> int:
         title_lines: How many lines the title wrapped to; the body starts below them.
 
     Returns:
-        The line count. A body longer than this is drawn from the top and clipped at the axis,
-        losing its tail with no error of any kind.
+        The line count. A body longer than this is drawn from the top and clipped at the axis.
     """
     body_in = cover_body_rect(style, title_lines)[3] * style.figure_inches[1]
     return max(1, int(body_in / (style.text_fontsize * TEXT_LEADING / 72.0)))
@@ -1019,8 +976,8 @@ def paginate_body(lines: Sequence[str], capacity: int) -> list[list[str]]:
         capacity: The most lines one page holds.
 
     Returns:
-        One list per page, never empty. Leading blanks are dropped from every page but the first, so
-        a break at a section boundary does not open the next page with whitespace.
+        One list per page, never empty. Leading blanks are dropped from every page but the
+        first.
     """
     if not lines:
         return [[]]
@@ -1047,8 +1004,8 @@ def monospace_columns(style: FigureStyle, fontsize: float) -> int:
         fontsize: The point size the text is drawn at.
 
     Returns:
-        The column count. Wrapping to more than this runs the text off the page, where it is
-        truncated mid-word with no error of any kind.
+        The column count. Wrapping wider than this runs the text off the page, truncated
+        mid-word.
     """
     drawable_in = style.figure_inches[0] - 2.0 * style.cover_margin_in
     advance_in = MONOSPACE_ADVANCE_EM * fontsize / 72.0
@@ -1090,8 +1047,7 @@ def unreadable_gate_lines(store: ProvStore) -> list[str]:
 def summary_panel_lines(store: ProvStore, style: FigureStyle, *, decision_record: bool = False) -> list[str]:
     """The same readout laid out across the page: the classifier blocks side by side in columns.
 
-    Every column is padded to :data:`_SUMMARY_COLUMN_WIDTH`, so the longest possible line is a
-    known number of monospaced characters and cannot run past the axis.
+    Every column is padded to :data:`_SUMMARY_COLUMN_WIDTH`.
 
     Args:
         store: The provenance store.
@@ -1185,8 +1141,7 @@ def _absent_panel(axis: Axes, window: tuple[float, float], note: str, style: Fig
     t0, t1 = window
     axis.set_xlim(t0, t1)
     axis.set_yticks([])
-    # Axes fraction, not data coordinates, and above the padding hatch: an absent note placed at the
-    # page's time centre lands inside a padded tail on the final page and is drawn over.
+    # Axes fraction, not data coordinates, and above the padding hatch.
     axis.text(
         0.01,
         0.5,
@@ -1219,8 +1174,7 @@ def _waveform_panel(
 ) -> None:
     """The conditioned waveform, its envelope and floor, and the continuity trace on their own scales.
 
-    The scalar readings go in the title rather than a legend, which at this panel's density covered
-    the traces it was labelling.
+    The scalar readings go in the panel title rather than a legend.
 
     Args:
         axis: The panel.
@@ -1353,8 +1307,7 @@ def _span_lane_panel(
 ) -> None:
     """One compact row per proposing source, hatched where dedup kept the proposal.
 
-    A row that proposed nothing anywhere in the recording says why on the row itself, so an empty
-    row is never mistaken for a source that ran and found nothing.
+    A row that proposed nothing anywhere in the recording says why on the row itself.
 
     Args:
         axis: The panel.
@@ -1443,8 +1396,7 @@ def _ramped(cmap_name: str, style: FigureStyle) -> Colormap:
 def _score_colorbar(axis: Axes, cmap_name: str, style: FigureStyle) -> None:
     """Draw a panel's colour scale in an inset at the panel's right edge.
 
-    Carries ticks and no caption: every scale on the page runs the same way, darker meaning more of
-    whatever its panel measures, so a caption per bar repeated one fact three times.
+    Carries ticks and no caption; darker means more of whatever the panel measures.
 
     Args:
         axis: The inset the scale is drawn in.
@@ -1533,9 +1485,7 @@ def _readable_on(rgba: tuple[float, float, float, float]) -> str:
         rgba: The cell's fill.
 
     Returns:
-        The text colour. Uses Rec. 601 luminance, so the choice follows perceived brightness rather
-        than the colormap's position — which is what a reversed map needs, since its dark end and
-        its light end swap.
+        The text colour, chosen by Rec. 601 luminance rather than by colormap position.
     """
     red, green, blue = rgba[0], rgba[1], rgba[2]
     return "black" if (0.299 * red + 0.587 * green + 0.114 * blue) > 0.55 else "white"
@@ -1551,11 +1501,8 @@ def _squim_panel(
 ) -> None:
     """SQUIM's three metrics per span, each cell drawn at its span's width.
 
-    Ink means attention, so the two kinds of panel ink opposite ends of their scales and still
-    read the same way: a raster darkens where a label fires, and this panel darkens where quality is
-    poor. STOI, PESQ and SI-SDR are all higher-is-better, so low is dark here. Their units are
-    unrelated, so each row is normalised over its own range from ``style.squim_ranges`` and the
-    colorbar reads as a normalised fraction rather than a value.
+    Low scores are drawn dark. Each row is normalised over its own range from
+    ``style.squim_ranges``, so the colorbar reads as a fraction rather than a value.
 
     Args:
         axis: The panel.
@@ -1614,8 +1561,8 @@ def _renderer(axis: Axes) -> RendererBase | None:
         axis: Any panel on the figure.
 
     Returns:
-        The renderer, or None where the backend exposes none — text extents then fall back to
-        matplotlib's own cached renderer, which is accurate enough for a fit decision.
+        The renderer, or None where the backend exposes none, in which case text extents fall
+        back to matplotlib's own cached renderer.
     """
     getter = getattr(axis.figure.canvas, "get_renderer", None)
     renderer = getter() if callable(getter) else None
@@ -1631,8 +1578,7 @@ def _axis_points_per_second(axis: Axes, window: tuple[float, float], renderer: R
         renderer: :func:`_renderer`'s result.
 
     Returns:
-        Points per second, using the axes' own drawn width rather than the figure's, since the
-        margins are not available to a label.
+        Points per second, using the axes' own drawn width rather than the figure's.
     """
     t0, t1 = window
     width_px = axis.get_window_extent(renderer=renderer).width
@@ -1660,8 +1606,7 @@ def _fit_cell_text(
         renderer: :func:`_renderer`'s result.
 
     Returns:
-        Whether the text was drawn. The caller has already drawn the marker, which is never dropped:
-        a missing number means the cell was too small for one, not that nothing was measured.
+        Whether the text was drawn. The marker the caller already drew is never dropped.
     """
     sizes = (style.cell_fontsize, (style.cell_fontsize + style.cell_floor_fontsize) / 2, style.cell_floor_fontsize)
     for size in sizes:
@@ -1683,11 +1628,9 @@ def _asr_lane_panel(
 ) -> None:
     """Each source's own span for every consensus word, one sub-band per source, under the derived extent.
 
-    A word draws on row ``index mod asr_rows``. Within the row, source ``k`` always fills band ``k``
-    at that source's own ``[start, end]``; a rule just under the row marks the consensus
-    onset-offset;
-    the text sits at the derived onset, bold when the word is an agreement. Each source is named
-    above the lane in its own colour.
+    A word draws on row ``index mod asr_rows``, source ``k`` filling band ``k`` at that source's
+    own ``[start, end]``; a rule under the row marks the consensus onset-offset and the text sits
+    at the derived onset, bold on an agreement.
 
     Args:
         axis: The panel.
@@ -1780,9 +1723,8 @@ def _plural(n: int, noun: str) -> str:
 def consensus_alignment_lines(store: ProvStore) -> list[str]:
     """How the consensus transcript was aligned, and how much to trust its timings.
 
-    Reads the ``consensus_transcript`` measurement's own record and the word stream it produced;
-    nothing here is computed beyond formatting. A single-recognizer run writes no consensus, and
-    this states that absence rather than printing a table of zeros.
+    Reads the ``consensus_transcript`` measurement and the word stream it produced; nothing is
+    computed beyond formatting. A single-recognizer run writes no consensus, and the lines say so.
 
     Args:
         store: The provenance store.
@@ -1844,9 +1786,7 @@ def consensus_alignment_lines(store: ProvStore) -> list[str]:
 def cover_lines(store: ProvStore, panel_lines: list[str]) -> list[str]:
     """The cover's lines: the source, the consensus's own alignment record, then the summary.
 
-    The path is wrapped no wider than the summary's own widest line, so it cannot reach further
-    right than the panel already does. The alignment block sits between the two, so a reader learns
-    what the transcript is worth before reading what was found in it.
+    The path is wrapped no wider than the summary's own widest line.
 
     Args:
         store: The provenance store.
@@ -1894,9 +1834,7 @@ def _taxonomy_panel(axis: Axes, lines: list[str], style: FigureStyle) -> Text:
 def _continuity(store: ProvStore, run_dir: Path) -> tuple[np.ndarray | None, float | None, float | None]:
     """PREPROCESS's persisted continuity trace, with the rank cut it recorded.
 
-    Read, never recomputed: a trace derived here could differ from the one the spans in this same
-    store were proposed against, and the page would then annotate spans with a threshold that never
-    produced them.
+    Read, never recomputed.
 
     Args:
         store: The provenance store.
@@ -1922,9 +1860,8 @@ def _continuity(store: ProvStore, run_dir: Path) -> tuple[np.ndarray | None, flo
 def _span_row_absence(absent: dict[str, str], spans: list[dict[str, Any]]) -> dict[str, str]:
     """Why a span-source row is empty over the whole recording.
 
-    A source contributes nothing either because its own upstream derivative is absent or because
-    every candidate it proposed corroborated a span an earlier source already covered. Neither
-    means the source ran and found nothing, so the row says which it was.
+    A source contributes nothing either because its upstream derivative is absent or because every
+    candidate it proposed corroborated an earlier source's span, and the row says which.
 
     Args:
         absent: :func:`_absent_reasons`' result.
@@ -1951,10 +1888,8 @@ def _page_height_ratios(
 ) -> list[float]:
     """The page's panel heights, with absent panels collapsed and their share redistributed.
 
-    The figure's total height is unchanged, so pages stay comparable: what an absent panel gives up
-    goes to the panels that have something to draw, in proportion to what they already had. A
-    raster's own height grows with how many rows it draws, so its tick labels keep their point size
-    however large the row union turns out to be.
+    The figure's total height is unchanged: an absent panel's share goes to the panels that have
+    something to draw, in proportion. A raster's own height grows with its row count.
 
     Args:
         style: The drawing configuration.
@@ -1970,8 +1905,7 @@ def _page_height_ratios(
             ratios[index] = max(ratios[index], rows * style.raster_row_ratio)
     freed = 0.0
     for index in collapsed:
-        # Never grow a panel by collapsing it: a lane whose declared height is already at or under
-        # the absent height keeps its own, so an absent raster cannot out-rank a present one.
+        # A lane whose declared height is already at or under the absent height keeps its own.
         collapsed_to = min(ratios[index], style.absent_height_ratio)
         freed += ratios[index] - collapsed_to
         ratios[index] = collapsed_to
@@ -1994,13 +1928,9 @@ def summary_pages(
 ) -> Iterator[tuple[str, Figure]]:
     """Yield the summary's pages in order: the cover, then one page per ``page_seconds``.
 
-    The single page builder behind both consumers — :func:`preprocess_figure`, which writes them to
-    its own PDF over a completed run directory, and ``report()``, which writes the same pages into
-    ``summary.pdf`` after its decision record. Neither owns the drawing, so the two products cannot
-    drift apart.
+    The single page builder behind :func:`preprocess_figure` and ``report()``.
 
-    Each figure is yielded unsaved and unclosed. **The caller closes it**, so only one page is ever
-    live at once however long the recording; a caller that keeps them all defeats that.
+    Each figure is yielded unsaved and unclosed; the caller closes it.
 
     Args:
         store: The provenance store, read and never written.
@@ -2010,18 +1940,14 @@ def summary_pages(
         stem: The name the page titles carry, defaulting to the run id.
         decision_record: Whether the caller has already written a decision record ahead of these
             pages. When it has, the cover drops the blocks that record owns — the route states,
-            the gate outcomes, each branch's route state and conformance, and the branch measures
-            — and keeps only what describes the figure. A caller with no decision record leaves
-            this False and gets the whole cover.
+            the gate outcomes, each branch's route state and conformance, and the branch measures.
 
     Yields:
         ``(name, figure)`` — ``"cover"``, then ``"page01"``, ``"page02"``, …
 
     Raises:
-        LookupError: If the store holds no stream at all, since there is then no time axis and a
-            blank page would misreport that as a measurement. The pre-emphasised stream is preferred,
-            then the plain one, then ADMIT's own source recording — the same chain ``report()``
-            resolves, so a run whose conditioning failed keeps its evidence pages.
+        LookupError: If the store holds no stream at all. The pre-emphasised stream is preferred,
+            then the plain one, then ADMIT's own source recording.
     """
     import matplotlib.pyplot as plt
 
@@ -2070,8 +1996,7 @@ def summary_pages(
     hear_rows = _raster_rows(hear, style.top_labels, style.raster_rows_scope, floor)
 
     row_absent = _span_row_absence(absent, spans)
-    # Panel indices, in the order they are unpacked below. The span axis is never collapsed: its
-    # rows carry each lane's run state, and a collapsed row cannot say a branch did not run.
+    # Panel indices, in the order they are unpacked below. The span axis is never collapsed.
     collapsed = [
         index
         for index, empty in ((0, wideband is None), (3, not yamnet), (4, not hear), (5, not squim), (6, not words))
@@ -2129,9 +2054,6 @@ def summary_pages(
         ) = axes
 
         # A colorbar is an inset anchored to its own panel's right edge, not a gridspec column.
-        # As a column it sat 0.07 of the figure clear of the panels: the waveform row's twin dBFS
-        # and continuity labels widen the shared column, and constrained_layout aligns every panel
-        # to it, so the gap was reserved decoration space no padding could close.
         def slot_for(panel: Axes) -> Axes:
             """An inset just outside a panel's right edge, for that panel's colorbar.
 
@@ -2211,8 +2133,7 @@ def summary_pages(
         for axis in timed:
             axis.set_xlim(*window)
             axis.tick_params(axis="x", labelsize=style.tick_fontsize)
-        # Only the last timed panel carries the tick labels: repeated on every panel they collide
-        # with the title of the panel below, which is what the scratch tool's pages did.
+        # Only the last timed panel carries the tick labels.
         for axis in timed[:-1]:
             axis.tick_params(axis="x", labelbottom=False)
         padded = _mark_padding(timed, duration_s, window[1], style)
@@ -2244,22 +2165,15 @@ def preprocess_figure(
 ) -> dict[str, Path]:
     """Draw the summary from the store, one image per page, into a directory of its own.
 
-    Reads only what the graph left behind and writes nothing back, so it can be re-invoked over a
-    completed run directory by hand. The pipeline configuration is read and never overridden: a
-    panel whose element is absent says which derivative is missing and prints the reason the
-    producing node recorded.
-
-    The pages are :func:`summary_pages`' — the same ones ``report()`` puts in ``summary.pdf``. This
-    entry point exists so they can be regenerated without re-running the graph or rebuilding the
-    decision record.
+    Reads only what the graph left behind and writes nothing back. The pages are
+    :func:`summary_pages`' — the same ones ``report()`` puts in ``summary.pdf``.
 
     Args:
         store: The provenance store, after the graph has run.
         figure_dir: Where the images are written; created if absent.
         config: The run's configuration, read for the values the panels annotate.
         run_dir: Where PREPROCESS wrote its streams and derivative sidecars.
-        style: How to draw. Defaults to :class:`FigureStyle`, whose every field governs the drawing
-            alone.
+        style: How to draw. Defaults to :class:`FigureStyle`.
         stem: The filename stem, defaulting to the run id.
 
     Returns:
@@ -2290,38 +2204,36 @@ def preprocess_figure(
     return written
 
 
-#: A branch lane's two rows, initial over proposed, spelled as ``report.py``'s paired lane spells them.
+#: A branch lane's two rows, initial over proposed.
 BRANCH_INITIAL_ROW = "initial"
 BRANCH_PROPOSED_ROW = "proposed"
 
-#: What the initial row holds, in words a reader who has not read the graph can act on.
+#: What the initial row holds.
 _INITIAL_ROW_GLOSS = "a span its branch minted from nothing upstream"
 _INITIAL_ROW_TICK = "initial spans\nwhat branches read"
 
-#: The panel's own account of its two zones, so neither row band has to be inferred from its bars.
+#: The panel's own account of its two zones.
 SPAN_AXIS_TITLE = (
     "top band: the spans branches read, as their own producer captioned them"
     "  ·  below: one band per branch, one line per span role\n"
     "a connector is a wasDerivedFrom edge drawn in the branch's colour, never an overlap"
 )
 
-#: A branch wrote a report, so it ran. What it found is a separate question the lane answers.
+#: The branch wrote a report.
 LANE_RAN = "ran"
-#: ROUTING decided against the branch, so no node was called and nothing of its own is in the store.
+#: ROUTING decided against the branch, so no node was called.
 LANE_WITHHELD = "withheld"
-#: ROUTING selected the branch and no report followed, which is neither running nor being withheld.
+#: ROUTING selected the branch and no report followed.
 LANE_NO_REPORT = "asked, no report"
-#: ROUTING never decided, so the store cannot say whether the branch was meant to run.
+#: ROUTING never decided.
 LANE_UNDECIDED = "undecided"
 
-#: REDACT is a graph edge rather than a routed branch — it takes no ``branch_decision`` and writes a
-#: ``verdict``, not a ``branch_report`` — but its plan is a set of timed spans like any other, so it
-#: draws as a fourth lane rather than as prose a reviewer has to align by eye.
+#: REDACT is a graph edge rather than a routed branch: it takes no ``branch_decision`` and
+#: writes a ``verdict``, not a ``branch_report``.
 REDACT_LANE = "REDACT"
 REDACTION_NAME = "redaction"
 
-#: REDACT's own verdict-detail keys the lane reports, the counterpart of ``BRANCH_MEASURES``. Every
-#: one is written by ``redact.py``'s single ``write_verdict`` call.
+#: REDACT's own verdict-detail keys the lane reports, the counterpart of ``BRANCH_MEASURES``.
 REDACT_MEASURES = ("redactions_n", "verified", "survived", "outstanding")
 
 #: The lanes the summary draws, in order.
@@ -2329,7 +2241,7 @@ SUMMARY_LANES = (*BRANCHES, REDACT_LANE)
 
 _UNLABELLED = "unlabelled"
 
-#: The stem suffix this product's files take, so both figures can be written into one directory.
+#: The stem suffix this product's files take.
 _BRANCH_STEM_SUFFIX = "branches"
 
 
@@ -2341,8 +2253,7 @@ class BranchRow:
         key: The span entity's id, which is what a derivation names.
         label: What the bar is captioned with.
         short: The caption a bar too narrow for ``label`` falls back to, before it falls back to
-            none at all. A bar is never dropped, so a narrow one saying ``cough`` carries more than
-            the same bar saying nothing.
+            none at all. A bar is never dropped.
         start: The span's start, in recording seconds.
         end: Its end.
         row: :data:`BRANCH_PROPOSED_ROW` or :data:`BRANCH_INITIAL_ROW`.
@@ -2370,8 +2281,8 @@ class SpanAxisRow:
             name. Consecutive lines sharing a block are one branch's contribution.
         role: The kind of span drawn on this line, empty on the initial row and on a lane that
             proposed nothing.
-        lane_index: The lane's position in :data:`SUMMARY_LANES`, or ``-1`` on the initial row. It
-            is what binds a line to its lane's colour and to its connectors' departure point.
+        lane_index: The lane's position in :data:`SUMMARY_LANES`, or ``-1`` on the initial row,
+            binding the line to its lane's colour and its connectors' departure point.
         tick: The y-tick text.
     """
 
@@ -2396,9 +2307,8 @@ class BranchLane:
         conformance_of: What that conformance is about.
         deviations: The deviation type names it reported.
         unmeasured: The config points it asked for and nobody has measured.
-        measures: The ``BRANCH_MEASURES`` entries its report actually carries, in table order. A key
-            the report does not carry is absent here rather than present as None, which is the
-            distinction ``report.py`` already draws between a value of None and a field never written.
+        measures: The ``BRANCH_MEASURES`` entries its report actually carries, in table order. A
+            key the report does not carry is absent here rather than present as None.
         rows: Every bar, proposals and the initial spans they name, earliest first.
     """
 
@@ -2433,8 +2343,7 @@ def _lane_state(decision: Entity | None, report: Entity | None) -> str:
         report: Its own ``branch_report``, or None.
 
     Returns:
-        The state. A branch that reported ran, whatever it found; one ROUTING withheld was never
-        called; one ROUTING selected that left no report is neither, and saying so is the point.
+        The state.
     """
     if report is not None:
         return LANE_RAN
@@ -2446,10 +2355,8 @@ def _lane_state(decision: Entity | None, report: Entity | None) -> str:
 def branch_lanes(store: ProvStore) -> list[BranchLane]:
     """Every branch's lane, in ``BRANCHES`` order, read from what the branches themselves wrote.
 
-    Every proposed span carries a family, a role and at least one ``wasDerivedFrom``, because
-    ``propose_span`` is the only writer of one and refuses a proposal missing any of the three. The
-    pairing therefore follows the edge and never an extent overlap, exactly as ``report.py``'s
-    ``_derived_lane`` does — :func:`span_sources` is the same index, built once.
+    The pairing follows each proposal's ``wasDerivedFrom`` edge, never an extent overlap, over
+    :func:`span_sources`' index.
 
     Args:
         store: The provenance store, after ROUTING and the branches have run.
@@ -2530,10 +2437,9 @@ def branch_lanes(store: ProvStore) -> list[BranchLane]:
 def _redact_lane(store: ProvStore, sources: dict[str, list[Entity]]) -> BranchLane:
     """REDACT's own lane: the spans it planned, each paired to whatever it named as its reason.
 
-    REDACT writes a ``verdict`` rather than a ``branch_report`` and takes no ``branch_decision``, so
-    its two states are read from the verdict alone: one exists and it ran, or none does and the
-    graph never asked it. Its spans carry ``name`` and ``category`` rather than a family and a role,
-    which is why they are built here rather than by the family loop above.
+    REDACT writes a ``verdict`` rather than a ``branch_report`` and takes no ``branch_decision``,
+    so its two states are read from the verdict alone, and its spans carry ``name`` and
+    ``category`` rather than a family and a role.
 
     Args:
         store: The provenance store.
@@ -2606,8 +2512,7 @@ def _redact_lane(store: ProvStore, sources: dict[str, list[Entity]]) -> BranchLa
 def rows_on_window(rows: Sequence[BranchRow], window: tuple[float, float]) -> tuple[BranchRow, ...]:
     """The bars that reach a page, whether or not they fit inside it.
 
-    A span crossing a page boundary is on both pages and is drawn clipped to each, so its extent is
-    never restated as the page's edge.
+    A span crossing a page boundary reaches both pages and is drawn clipped to each.
 
     Args:
         rows: The bars to filter.
@@ -2636,9 +2541,6 @@ def rows_on_page(lane: BranchLane, window: tuple[float, float]) -> tuple[BranchR
 def lane_note(lane: BranchLane, on_page: int) -> str:
     """What a lane says instead of bars, or ``""`` when it has bars to draw.
 
-    A branch that did not run and a branch that ran and proposed nothing are different facts about
-    the graph, and this is where the figure keeps them apart.
-
     Args:
         lane: The lane.
         on_page: How many of its bars reach this page.
@@ -2649,7 +2551,7 @@ def lane_note(lane: BranchLane, on_page: int) -> str:
     if lane.state == LANE_UNDECIDED:
         return f"ROUTING wrote no decision for {lane.branch}"
     if lane.state == LANE_WITHHELD:
-        # REDACT takes no route: the graph reaches it or does not, and its verdict is the record.
+        # REDACT takes no route; its verdict is the record.
         if lane.route_state is None:
             return f"{lane.branch} did not run — the graph never reached it"
         return f"{lane.branch} did not run — route {lane.route_state}: {lane.why}"
@@ -2665,9 +2567,8 @@ def lane_note(lane: BranchLane, on_page: int) -> str:
 def initial_rows(lanes: Sequence[BranchLane]) -> tuple[BranchRow, ...]:
     """The initial spans every lane draws from, as one deduplicated population.
 
-    Each lane carries its own copy of the parents its proposals name, because a lane is readable on
-    its own. The span axis draws them once: an initial span parenting proposals in two branches is
-    one bar with a connector to each, which is the fact the four-lane layout could not show.
+    The span axis draws them once: an initial span parenting proposals in two branches is one bar
+    with a connector to each.
 
     Args:
         lanes: :func:`branch_lanes`' result.
@@ -2702,8 +2603,7 @@ def initial_row_note(lanes: Sequence[BranchLane], on_page: int) -> str:
         on_page: How many initial bars reach this page.
 
     Returns:
-        The note. The row is never silent: a reader who cannot see what it holds cannot tell an
-        input nobody derived from from an input that is simply on another page.
+        The note. The row is never silent.
     """
     total = len(initial_rows(lanes))
     if not total:
@@ -2716,10 +2616,8 @@ def initial_row_note(lanes: Sequence[BranchLane], on_page: int) -> str:
 def span_axis_rows(lanes: Sequence[BranchLane]) -> tuple[SpanAxisRow, ...]:
     """The axis's rows, top first: the shared initial row, then one block per lane.
 
-    A lane is one block of sub-rows, one per kind of span it proposed, so two spans a branch minted
-    under different roles over overlapping time are two bars a reader can tell apart rather than one
-    bar painted over another. A lane that proposed one kind, or none at all, is the single row it
-    always was.
+    A lane is one block of sub-rows, one per kind of span it proposed. A lane that proposed one
+    kind, or none at all, is a single row.
 
     Args:
         lanes: :func:`branch_lanes`' result.
@@ -2739,10 +2637,8 @@ def span_axis_rows(lanes: Sequence[BranchLane]) -> tuple[SpanAxisRow, ...]:
 def parent_anchor(left: float, right: float, lane_index: int, lane_count: int) -> float:
     """Where on a shared initial bar one lane's connectors leave it.
 
-    Every lane leaving a parent from its centre makes the connectors collinear, and the last drawn
-    paints over the rest: a parent feeding three branches then looks like a parent feeding one. Each
-    lane departs from its own fraction of the parent's width instead, so the fan is visible and a
-    line can be followed to the row it lands in.
+    Each lane departs from its own fraction of the parent's width, so several lanes leaving one
+    parent fan out rather than lying collinear.
 
     Args:
         left: The parent bar's drawn left edge.
@@ -2751,7 +2647,7 @@ def parent_anchor(left: float, right: float, lane_index: int, lane_count: int) -
         lane_count: How many lanes the axis carries.
 
     Returns:
-        The departure point, strictly inside the bar so the connector still reads as leaving it.
+        The departure point, strictly inside the bar.
     """
     return left + (right - left) * (lane_index + 1) / (lane_count + 1)
 
@@ -2789,17 +2685,8 @@ def _span_axis_panel(axis: Axes, lanes: Sequence[BranchLane], window: tuple[floa
     """One axis: the initial spans on the top row, then one block of sub-rows per branch.
 
     A branch's block carries one sub-row per kind of span it proposed, tinted in the branch's own
-    colour, so two spans it minted under different roles over overlapping time are two bars rather
-    than one bar painted over another.
-
-    A connector runs from a proposal to the initial span it names in ``wasDerivedFrom``, never to
-    the one it overlaps, and is drawn only where both ends are on the page — the rule the shared
-    token renderer already applies. Connectors take their lane's own colour and sit behind every
-    bar, so one crossing an intervening row can be followed to the block it lands in.
-
-    A block with no bar on this page carries its lane's note instead, which is what keeps a branch
-    that did not run distinguishable from one that ran and proposed nothing. The initial row says
-    what it holds on the same terms.
+    colour. A connector runs from a proposal to the initial span it names in ``wasDerivedFrom``,
+    never to the one it overlaps, and only where both ends are on the page.
 
     Args:
         axis: The panel.
@@ -2887,13 +2774,12 @@ def _span_axis_panel(axis: Axes, lanes: Sequence[BranchLane], window: tuple[floa
         roles = lane_roles(lane)
         on_page = [row for row in rows_on_page(lane, window) if row.row == BRANCH_PROPOSED_ROW]
         for row in on_page:
-            # The role is on the y-axis now, so the bar spends its width on what the role does not say.
             _bar(row, y_of_row[(lane.branch, row.role)], _lane_colour(index, style), captions=(row.short, row.label))
         note = lane_note(lane, len(on_page))
         if note:
             _note(y_of_row[(lane.branch, roles[0] if roles else "")], note)
 
-    # Connectors last and behind the bars: a dense derivation must never hide a span.
+    # Connectors last and behind the bars.
     for index, lane in enumerate(lanes):
         colour = _lane_colour(index, style)
         for row in rows_on_page(lane, window):
@@ -2922,8 +2808,7 @@ def _measure_text(value: Any) -> str:  # noqa: ANN401 — anything a report attr
         value: What the branch reported.
 
     Returns:
-        The text. A float is rounded, since a branch's own rounding is what it reported and more
-        digits here would suggest a precision the block did not receive.
+        The text, a float rounded to the branch's own reported precision.
     """
     if isinstance(value, bool) or not isinstance(value, float):
         return str(value)
@@ -2933,15 +2818,11 @@ def _measure_text(value: Any) -> str:  # noqa: ANN401 — anything a report attr
 def branch_report_lines(lanes: Sequence[BranchLane], *, decision_record: bool = False) -> list[str]:
     """Each branch's own report, as the cover prints it.
 
-    These are file-scoped facts — a conformance, a deviation, an unmeasured config point, a count
-    over the whole recording — so they belong on the cover rather than repeated inside a page's
-    twenty-second frame, where a whole-file number reads as a measurement of that window.
-
     Args:
         lanes: :func:`branch_lanes`' result.
-        decision_record: Whether a decision record precedes this page. When it does, each branch's
-            route state, conformance and measures are its, and the header keeps only whether the
-            branch ran, without which the block beneath it cannot be read.
+        decision_record: Whether a decision record precedes this page. When it does, the header
+            keeps only whether the branch ran; its route state, conformance and measures are the
+            decision record's.
 
     Returns:
         The lines, in print order.

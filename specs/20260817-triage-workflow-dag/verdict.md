@@ -48,7 +48,7 @@ conformance `UNDETERMINED`, because a refusal is a decision. A misspelled key st
 **Deviations are recorded and are not folded into the flag column until ground truth exists.**
 `specs/20260913-branch-contract-and-hints/design.md` states that `filler` and `stimulus_mismatch` are
 expected on ordinary read speech, so routing them in would flag the corpus — and carries, since
-2026-09-16, which of the eleven declared types that argument actually fits and which are genuine
+2026-09-16, which of the ten declared types that argument actually fits and which are genuine
 departures awaiting a measured rate. The constraint survived
 this change and is now a declared switch — `verdict.deviation_flags`, shipping `false` — rather than
 an implicit rule in the code, so that flipping it is a visible decision with a derivation.
@@ -381,3 +381,42 @@ Ranking recordings, choosing what to do about a flag, overriding a branch on its
 threshold that would turn a `flag` into a `pass`.
 
 Derivations live in [`benchmarks/`](benchmarks/).
+
+
+## Moved from vocabulary.fold_file_verdict (2026-09-20)
+
+Prose cut from the module when rationale was moved out of the code. Recorded here because the
+first item is the only written record of a rule the agreement table above does not state, and the
+second is the only written record of why a direction is missing from it.
+
+**Only one direction of a route mismatch is a flag ground.** `fold_file_verdict` raises the
+mismatch flag where `agreement` is `mismatch` **and** the branch found its kind — the
+declined-and-found-anyway row, which is the ruleset being wrong about the recording. A branch
+routed to a recording that holds none of its kind found nothing because there was nothing: routing
+is lenient by design and the branch is right, so that row is recorded in `agreement` and grounds
+no flag. **This contradicts the `routed | no | mismatch | flag | over-routing` row of the agreement
+table above, which no code path implements.** One of the two is wrong; nothing here resolves which.
+
+**`UNDETERMINED` contributes no flag ground, and that is load-bearing rather than lenient.** Every
+numeric `branch.*` key ships null and `detect_*` evaluates no task, so `UNDETERMINED` is the
+packaged answer and flagging it would flag the corpus. Same argument as
+`verdict.undetermined_flags` in `config-derivations.md`.
+
+**PREPROCESS and ROUTING are folded from `ran`, not from a verdict entity.** Each is a gate every
+later node depends on, and a node that raised wrote no verdict, so a raise there is otherwise
+invisible to this fold; a silent, evidence-free `pass` would be a worse outcome than the flag the
+fold reports from `ran`.
+
+**The two discard grounds are read off different things.** `unmeasurable` is ADMIT's own fail;
+`acoustically_empty` is the ruleset's `empty` state, which is the emptiness bypass having read
+every tracked stream peak under its floor. A recording nothing routed that was *not* empty is
+`unexplained`, and one whose bypass could not be read at all is `unreadable` — both flag rather
+than discard, under their own grounds, because the ruleset failing to account for content and the
+run failing to produce the evidence are not the same report.
+
+**Spans are read back from the store, never copied into `BranchReport`.** A count copied into the
+report would be a second record able to disagree with the store's.
+
+**`withheld_critical` is the fourth state a branch can be in**, beside routed-and-ran,
+ran-and-found-nothing and not-selected; a reader that cannot tell it from not-selected reads a
+withheld run as a decision.

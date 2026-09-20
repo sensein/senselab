@@ -1,8 +1,7 @@
 """ADMIT — is this recording measurable at all.
 
 The only rejections are decode failure, all samples zero, a constant signal, and a file whose bytes
-change while ADMIT reads them. No thresholds, no ``flag`` outcome, no models, no derived audio. The
-measurements behind the threshold-free rule are in
+change while ADMIT reads them. No thresholds, no ``flag`` outcome, no models, no derived audio. See
 ``specs/20260817-triage-workflow-dag/admit.md``.
 """
 
@@ -44,10 +43,8 @@ def admit(
     """Decide whether the recording is measurable at all.
 
     Rejects only decode failure, all-zero samples, a constant signal, and a file whose bytes change
-    between the digest taken before the decode and the one taken after it. Everything else passes, as
-    supplied — no resampling, no channel reduction, no models, no quality judgement. ``config``,
-    ``hint`` and ``run_dir`` belong to the shared node shape and are not read: ADMIT holds no
-    numbers, no hint changes whether a file decodes, and it writes no sidecars.
+    between the digest taken before the decode and the one taken after it. Everything else passes as
+    supplied — no resampling, no channel reduction, no models, no quality judgement.
 
     Args:
         store: The provenance store.
@@ -60,8 +57,7 @@ def admit(
         The verdict and, on ``pass``, the decoded audio.
 
     Raises:
-        TypeError: If ``source`` is not a path or a string — a caller error, not a finding about
-            any recording, so nothing is recorded.
+        TypeError: If ``source`` is not a path or a string. Nothing is recorded.
     """
     source = Path(source)
     activity_id = store.activity(node=NODE, step=None, parameters={"audio_file": str(source)})
