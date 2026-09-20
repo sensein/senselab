@@ -312,3 +312,54 @@ class TestCoverBodyFitsThePage:
 
         body = ["a1", "a2", "", "b1", "b2", "b3", "b4"]
         assert paginate_body(body, 5) == [["a1", "a2"], ["b1", "b2", "b3", "b4"]]
+
+
+class TestTheTextPageRespectsTheMargin:
+    """Measured on what _text_figure actually draws, not on a synthetic line at the same size.
+
+    The column count was derived against the cover's margins and applied to a page whose text began
+    1.63 inches in, because the default subplot placed it there. A full-width line then ran an inch
+    and a half off a Letter page and was truncated mid-word, which is what shipped.
+    """
+
+    @staticmethod
+    def _body(figure: "plt.Figure", needle: str) -> "plt.Text":
+        """The drawn body text, found by a token only it carries."""
+        return next(text for text in figure.texts if needle in text.get_text())
+
+    def test_the_body_starts_at_the_printed_margin(self) -> None:
+        """The same margin as the cover, so the pages of one summary line up."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        figure = report_module._text_figure(["  MARKER"], "a title", figsize=report_module._LETTER_LANDSCAPE_IN)
+        figure.canvas.draw()
+        style = FigureStyle()
+        assert self._body(figure, "MARKER").get_window_extent().x0 / figure.dpi == pytest.approx(
+            style.cover_margin_in, abs=0.02
+        )
+        plt.close(figure)
+
+    def test_a_full_width_line_ends_inside_the_far_margin(self) -> None:
+        """_BLOCK_COLUMNS is only right if a line that long fits the page it is drawn on."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        line = "  " + "M" * (report_module._BLOCK_COLUMNS - 2)
+        figure = report_module._text_figure([line], "a title", figsize=report_module._LETTER_LANDSCAPE_IN)
+        figure.canvas.draw()
+        drawn_end = self._body(figure, "MM").get_window_extent().x1 / figure.dpi
+        style = FigureStyle()
+        assert drawn_end <= style.figure_inches[0] - style.cover_margin_in
+        plt.close(figure)
+
+    def test_a_long_title_is_folded_rather_than_run_off(self) -> None:
+        """The decision record's title carries the task, the date and both axes, and is long."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        title = "task-respiration-and-cough-breath-2 · 2026-09-20 · triage: pass · release: not_assessed " * 2
+        figure = report_module._text_figure(["  body"], title, figsize=report_module._LETTER_LANDSCAPE_IN)
+        figure.canvas.draw()
+        style = FigureStyle()
+        drawn = next(text for text in figure.texts if "triage" in text.get_text())
+        assert "\n" in drawn.get_text()
+        assert drawn.get_window_extent().x1 / figure.dpi <= style.figure_inches[0] - style.cover_margin_in
+        plt.close(figure)

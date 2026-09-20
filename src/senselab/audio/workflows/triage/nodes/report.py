@@ -42,10 +42,12 @@ from senselab.audio.workflows.triage.nodes.common import (
     span_sources,
 )
 from senselab.audio.workflows.triage.nodes.figure import (
+    PAGE_TITLE_FONTSIZE,
     FigureStyle,
     branch_lanes,
     monospace_columns,
     summary_pages,
+    wrap_measured,
 )
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
@@ -2163,13 +2165,33 @@ def _text_figure(lines: list[str], title: str, *, figsize: tuple[float, float] |
     from matplotlib import pyplot
 
     height = max(MIN_FIGURE_HEIGHT_IN, TEXT_PANEL_INCHES_PER_LINE * len(lines))
-    figure = pyplot.figure(figsize=figsize or (14.0, height))
-    axis = figure.add_subplot(111)
-    axis.axis("off")
-    axis.text(
-        0.03, 0.94, "\n".join(lines), va="top", ha="left", family="monospace", fontsize=_BLOCK_FONTSIZE
+    style = FigureStyle(figure_inches=figsize or (14.0, height))
+    figure = pyplot.figure(figsize=style.figure_inches)
+    left = style.cover_margin_in / style.figure_inches[0]
+    top = style.cover_margin_in / style.figure_inches[1]
+    band = _BLOCK_FONTSIZE * 2.4 / (style.figure_inches[1] * 72.0)
+    figure.text(
+        left,
+        1.0 - top,
+        wrap_measured(
+            figure,
+            title,
+            fontsize=PAGE_TITLE_FONTSIZE,
+            drawable_in=style.figure_inches[0] - 2.0 * style.cover_margin_in,
+        ),
+        va="top",
+        ha="left",
+        fontsize=PAGE_TITLE_FONTSIZE,
     )
-    figure.suptitle(title)
+    figure.text(
+        left,
+        1.0 - top - band,
+        "\n".join(lines),
+        va="top",
+        ha="left",
+        family="monospace",
+        fontsize=_BLOCK_FONTSIZE,
+    )
     return figure
 
 
