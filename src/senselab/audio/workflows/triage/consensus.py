@@ -210,9 +210,9 @@ def _midpoint_median(sorted_values: Sequence[float]) -> float:
 def isotonic_median_fit(readings: Sequence[Sequence[float]]) -> tuple[list[float], list[bool]]:
     """The non-decreasing fit of one reading set per position, by pool-adjacent-violators on medians.
 
-    Each position's own value is the median of its readings; an even count takes the midpoint of
-    the two middle readings. Adjacent positions whose values decrease are pooled, and a pooled
-    block's value is the median of every reading in it. The output is non-decreasing for any input.
+    A position's value is the median of its readings, an even count taking the midpoint of the two
+    middle ones; adjacent positions whose values decrease are pooled onto the median of every
+    reading in the block.
 
     Args:
         readings: One non-empty sequence of readings per position, in stream order.
@@ -419,8 +419,7 @@ def word_attributes(word: ConsensusWord) -> dict[str, Any]:
 def word_from_attributes(attributes: Mapping[str, Any], extent: tuple[float, float]) -> ConsensusWord:
     """One stored position, back as the record :func:`align_sources` emitted.
 
-    The inverse of :func:`word_attributes`, so a reader that has only the store can work in the
-    stream's own vocabulary rather than in raw mappings.
+    The inverse of :func:`word_attributes`.
 
     Args:
         attributes: The ``word`` entity's attributes.
@@ -459,11 +458,9 @@ def word_from_attributes(attributes: Mapping[str, Any], extent: tuple[float, flo
 def rebracket(word: ConsensusWord, *, onomatopoeic: set[str], n_sources: int) -> Rebracketed:
     """Read one already-aligned column again under a vocabulary, aligning nothing.
 
-    A member's group key is ``normalise_token`` of its display, and a display differs from its raw
-    token only by brackets and edge punctuation, both of which ``normalise_token`` drops. The key is
-    therefore the same under every vocabulary, and so are the column's membership, its ``outcome``
-    and its ``agreement``; what the vocabulary decides is each member's display, and through it the
-    column's surface, its ``bracketed`` flag and its variants' surfaces.
+    The column's membership, ``outcome`` and ``agreement`` are the same under every vocabulary; what
+    the vocabulary decides is each member's display, and through it the column's surface, its
+    ``bracketed`` flag and its variants' surfaces.
 
     Args:
         word: The stored position, from :func:`word_from_attributes`.
@@ -475,8 +472,7 @@ def rebracket(word: ConsensusWord, *, onomatopoeic: set[str], n_sources: int) ->
         The re-read position and its bracket-override count.
 
     Raises:
-        ValueError: If the re-read column's outcome or agreement differs from the stored one. The
-            column was then not rebuilt from the readings it was built from, and nothing is written.
+        ValueError: If the re-read column's outcome or agreement differs from the stored one.
     """
     members = [
         _Member(
@@ -506,9 +502,9 @@ def render_transcript(words: Sequence[ConsensusWord], *, strong: tuple[str, str]
 
     Args:
         words: The consensus words.
-        strong: The marks wrapped around an agreement word. When both are empty the result is the
-            plain transcript: no mark, and a variant contributes its ``text`` alone rather than
-            every reading joined by ``/``.
+        strong: The marks wrapped around an agreement word. Both empty renders the plain
+            transcript, a variant contributing its ``text`` alone rather than every reading
+            joined by ``/``.
 
     Returns:
         The rendered text, words separated by single spaces.

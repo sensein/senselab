@@ -1,17 +1,16 @@
 """Per-recording routing evidence, stream-parsed out of one triage run's provenance stores.
 
-The store is read one line at a time and never held whole. Only the entity records a routing
-detector could read are decoded; the label summaries are reduced to the peaks in
-:data:`~senselab.audio.workflows.triage.routing_analysis.labels.TRACKED_LABELS` and everything else
-in them is dropped. A span carries every label its classifier put in the span's top K and at or
-above the floor, both read from ``windows.<classifier>`` through
-:class:`~senselab.audio.workflows.triage.label_membership.LabelMembership`, so a span may carry
-several labels and counts toward each. A label outside ``TRACKED_LABELS`` is dropped.
+The store is read one line at a time and never held whole; only the entity records a routing
+detector could read are decoded. Label summaries are reduced to the peaks in
+:data:`~senselab.audio.workflows.triage.routing_analysis.labels.TRACKED_LABELS`. A span carries
+every label its classifier put in the span's top K and at or above the floor, both read from
+``windows.<classifier>`` through
+:class:`~senselab.audio.workflows.triage.label_membership.LabelMembership`, so one span may count
+toward several labels.
 
-The ``praat_features`` scalars are carried as the store keys them. The ``ppg_posteriorgram``
-sidecar the store references and the ``phonation_tracks`` sidecar PREPROCESS writes beside it are
-each opened, reduced to the summaries in :data:`PPG_SUMMARY_KEYS` and
-:data:`PHONATION_SUMMARY_KEYS`, and closed; neither array ever enters a record.
+The ``ppg_posteriorgram`` and ``phonation_tracks`` sidecars are each opened, reduced to
+:data:`PPG_SUMMARY_KEYS` and :data:`PHONATION_SUMMARY_KEYS`, and closed; neither array ever enters
+a record.
 """
 
 from __future__ import annotations
@@ -104,8 +103,8 @@ SILENT_PHONEME = "<silent>"
 """The ppgs inventory's silence label, as its own ``PHONEME_LABELS`` spells it."""
 
 PHONATION_TRACKS_SIDECAR = "derivatives/phonation_tracks.npz"
-"""Where PREPROCESS writes the per-frame F0 track, relative to the run directory the store sits in.
-The measurement names no path of its own, so the reader spells the one PREPROCESS writes."""
+"""Where PREPROCESS writes the per-frame F0 track, relative to the run directory the store sits
+in. The measurement names no path of its own."""
 
 PHONATION_ENTITY_KEYS: tuple[str, ...] = ("hop_s", "f0_min_hz", "f0_max_hz")
 """The ``phonation_tracks`` scalars the measurement itself carries, readable without the sidecar."""
@@ -150,7 +149,7 @@ _SUMMARY_SUFFIX = "_label_summary"
 _SUMMARY_ALL_SUFFIX = "_summary_all"
 
 TRANSCRIPT_CAP = 300
-"""How much of the consensus transcript is kept, so a disagreement can be read, not just counted."""
+"""How much of the consensus transcript is kept."""
 
 _BRACKET_TYPE_DROP = re.compile(r"[^a-z0-9]+")
 
@@ -166,9 +165,8 @@ def bracket_type(text: str) -> str | None:
             vocabulary spelled it.
 
     Returns:
-        The bracket's content, casefolded with every non-alphanumeric character removed, so
-        ``"[Throat Clearing]"`` and ``"[THROATCLEARING]"`` are one type; None when the token is not
-        bracketed or carries nothing between the brackets.
+        The bracket's content, casefolded with every non-alphanumeric character removed; None
+        when the token is not bracketed or carries nothing between the brackets.
     """
     stripped = text.strip()
     if len(stripped) < 2 or not stripped.startswith("[") or not stripped.endswith("]"):
@@ -189,13 +187,11 @@ class RecordingFeatures:
         words: How many live consensus words carry each outcome, plus ``total``, ``bracketed``
             and ``lexical`` (non-bracketed, any outcome).
         bracketed_types: How many live consensus words carry each :func:`bracket_type`, taken off
-            the word entities rather than off the capped transcript. Only types the recording
-            carries are keyed.
+            the word entities. Only types the recording carries are keyed.
         onomatopoeic_types: How many live consensus words are an unbracketed rendering of each
             vocabulary key in ``words.onomatopoeic_tokens``, taken off the word entities. A
             bracketed word contributes to ``bracketed_types`` and never here. Only keys the
-            recording carries appear, so the mapping is empty on a recording carrying none and on
-            a recording extracted against an empty vocabulary.
+            recording carries are present.
         consensus_present: Whether a ``consensus_transcript`` measurement was written at all.
         transcript: The consensus transcript's first :data:`TRANSCRIPT_CAP` characters.
         residual: The ``residual`` measurement's scalar attributes, or empty when it is absent.
@@ -207,22 +203,19 @@ class RecordingFeatures:
             ``corroborated_by`` entry, and the duty fraction against the recording's extent.
         span_label_stats: ``{"<classifier>.<label>.span_count": n}`` and
             ``{"<classifier>.<label>.peak_over_floor_db_<statistic>": value}`` over the live spans
-            carrying that per-span classifier label. A span carries every label in its own top K
-            that also clears the floor, so it contributes to each of them. Only labels in
+            carrying that per-span classifier label. Only labels in
             :data:`~senselab.audio.workflows.triage.routing_analysis.labels.TRACKED_LABELS` that at
-            least one live span carries appear at all. ``span_count`` is over every measure;
-            the ``peak_over_floor_db`` keys are over :data:`PEAK_OVER_FLOOR_MEASURE` spans alone,
-            counted by ``peak_over_floor_db_n``, which is written whether or not one qualified.
+            least one live span carries are present. ``span_count`` is over every measure; the
+            ``peak_over_floor_db`` keys are over :data:`PEAK_OVER_FLOOR_MEASURE` spans alone,
+            counted by ``peak_over_floor_db_n``.
         span_label_set_stats: The same two families of keys over the named unions in
             :data:`~senselab.audio.workflows.triage.routing_analysis.labels.LABEL_SETS`, keyed
-            ``"<classifier>.<set>.…"``. A span counts toward a set when any member of that set is
-            one of the labels it carries, and it counts once however many members qualify.
+            ``"<classifier>.<set>.…"``. A span counts once toward a set when any member of it is
+            one of the labels the span carries.
         span_coverage: ``{"<classifier>.n": spans attempted, "<classifier>.unmeasured": spans it
             could not score}`` per per-span classifier, the denominator under every
             ``span_label_stats`` and ``span_label_set_stats`` key that classifier wrote. A
-            classifier that neither scored nor attempted a live span is not keyed at all, so an
-            absent pair is the classifier never having run and a present ``unmeasured`` of zero is
-            it having read every span. Keyed as :attr:`squim` keys its own ``n`` and ``unmeasured``.
+            classifier that neither scored nor attempted a live span is not keyed at all.
         squim: ``{"<population>.<metric>.<statistic>": value}`` over the per-span SQUIM
             assertions, plus ``<population>.n`` and ``<population>.unmeasured``.
         level: The whole-file ``level`` measurement's scalars.
@@ -230,24 +223,21 @@ class RecordingFeatures:
         silence: ``threshold``, ``n_windows``, ``n_silence`` and ``fraction`` from the YAMNet
             ``Silence`` projection.
         praat: The ``praat_features`` scalars, keyed as the measurement keys them. A scalar the
-            store recorded as null is not keyed at all, so an unmeasured quantity stays distinct
-            from a measured zero, and the whole mapping is empty when the measurement is absent.
+            store recorded as null is not keyed at all, and the mapping is empty when the
+            measurement is absent.
         ppg: The ``ppg_posteriorgram`` sidecar reduced to :data:`PPG_SUMMARY_KEYS`. The keys in
             :data:`PPG_ENTITY_KEYS` come off the measurement; the rest need the sidecar and are
             absent when it cannot be read.
         phonation: The ``phonation_tracks`` sidecar's F0 series reduced to
             :data:`PHONATION_SUMMARY_KEYS`. The keys in :data:`PHONATION_ENTITY_KEYS` come off the
-            measurement; the rest need the sidecar and are absent when it cannot be read. An
-            unvoiced recording carries its frame counts and no trajectory.
+            measurement; the rest need the sidecar and are absent when it cannot be read.
         peaks: ``{peak_key: score}`` for every tracked label on every stream and classifier.
         classifier_streams: Which ``<stream>|<classifier>`` summaries were present at all.
-        kind_state: TAXONOMY's own state per kind, so its current behaviour can be measured too.
+        kind_state: TAXONOMY's own state per kind.
         absent: Every derivative a node recorded as absent, block name to the reason it recorded.
-            PREPROCESS writes one entry per block it could not run; the mapping is what lets an
-            unreadable gate state why rather than only that it was unread.
         verdicts: Each node's own record — a deciding node's outcome, or a reporting node's
-            conformance, spelled ``conformance=<value>`` so the two are never mistaken for each other.
-        n_entities: How many entity records the store held, as a parse sanity check.
+            conformance, spelled ``conformance=<value>``.
+        n_entities: How many entity records the store held.
     """
 
     stem: str
@@ -298,8 +288,8 @@ def read_store(path: Path) -> Iterator[dict[str, Any]]:
         path: The ``run/store.jsonl`` to read.
 
     Yields:
-        Each decoded entity record. Activity, agent, environment and relation records are skipped
-        without being decoded; which entities are retired is :func:`invalidated_ids`.
+        Each decoded entity record. Activity, agent, environment and relation records are
+        skipped without being decoded.
     """
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
@@ -310,9 +300,7 @@ def read_store(path: Path) -> Iterator[dict[str, Any]]:
 def invalidated_ids(path: Path) -> set[str]:
     """Every retired entity's id, from a pass that decodes nothing else.
 
-    A store writes its relations after its entities, so which entities are live is not known until
-    the file has been read to the end. This pass answers that first, at the cost of reading the file
-    twice and the gain of never holding a record longer than the line it came on.
+    A store writes its relations after its entities, so this pass runs before the decoding one.
 
     Args:
         path: The ``run/store.jsonl`` to read.
@@ -372,9 +360,8 @@ def _absorb_span_window(
 ) -> None:
     """Pool one per-span classifier window into the per-label maxima of the span it names.
 
-    The maximum is taken before the membership rule rather than after, so a span whose classifier
-    placed several windows over it is ranked on one score per label. Taking the top K of each
-    window and unioning them instead would rank a label on whichever window it happened to survive.
+    The maximum is taken before the membership rule, so a span carrying several windows is ranked
+    on one score per label.
 
     Args:
         span_scores: ``{classifier: {span_id: {label: max score}}}``, updated in place.
@@ -401,7 +388,7 @@ def _finite_scalars(table: Mapping[str, Any]) -> dict[str, float]:
 
     Returns:
         Every value that is a finite real number, keyed unchanged. A null, a bool, a string and a
-        non-finite number are all left out rather than coerced.
+        non-finite number are left out.
     """
     kept: dict[str, float] = {}
     for key, value in table.items():
@@ -450,9 +437,8 @@ def _repetition(labels: Sequence[int]) -> dict[str, float]:
     Returns:
         ``repetition_peak``, the largest fraction of positions agreeing with the sequence shifted
         by one lag, over every lag up to half the sequence; ``repetition_lag_segments``, the lag it
-        was reached at; ``repetition_mean`` over every lag, which is this sequence's own agreement
-        by chance; and ``repetition_prominence``, the peak over that mean. Empty when the sequence
-        is too short to carry two lags.
+        was reached at; ``repetition_mean`` over every lag; and ``repetition_prominence``, the peak
+        over that mean. Empty when the sequence is too short to carry two lags.
     """
     length = len(labels)
     if length // 2 < 2:
@@ -480,8 +466,8 @@ def _ppg_summary(attributes: Mapping[str, Any], run_dir: Path) -> dict[str, floa
 
     Returns:
         The summary. Only the :data:`PPG_ENTITY_KEYS` are keyed when the sidecar names no path,
-        cannot be opened or holds no readable array; a summary key is absent rather than zero
-        whenever the quantity it names was not computed.
+        cannot be opened or holds no readable array; a key is absent rather than zero whenever the
+        quantity it names was not computed.
     """
     summary = _finite_scalars({key: attributes.get(key) for key in PPG_ENTITY_KEYS})
     relative = attributes.get("path")
@@ -539,8 +525,7 @@ def _rank_correlation(values: np.ndarray) -> float | None:
 
     Returns:
         The coefficient in ``[-1, 1]``: ``+1`` when the sample never falls, ``-1`` when it never
-        rises. None when the sample is shorter than two values or carries one value throughout,
-        where the coefficient is undefined rather than zero.
+        rises. None when the sample is shorter than two values or carries one value throughout.
     """
     if values.size < 2:
         return None
@@ -646,9 +631,8 @@ def _f0_trajectory(times: np.ndarray, f0_hz: np.ndarray, strength: np.ndarray) -
         strength: The periodicity that placed each F0.
 
     Returns:
-        The keys of :data:`PHONATION_SUMMARY_KEYS` the track supports. A quantity the track is too
-        short or too unvoiced to carry is absent rather than zero, so an unvoiced recording reports
-        its frame counts and no trajectory at all.
+        The keys of :data:`PHONATION_SUMMARY_KEYS` the track supports. A quantity the track is
+        too short or too unvoiced to carry is absent rather than zero.
     """
     frames = int(min(times.size, f0_hz.size, strength.size))
     if frames == 0:
@@ -709,9 +693,6 @@ def _absorb_measurement(
     run_dir: Path,
 ) -> None:
     """Fold one live ``measurement`` entity into the record.
-
-    Its caller filters the retired ones out, so a name this folds by assignment rather than by a
-    maximum — ``consensus_taxonomy`` — reaches it once per store.
 
     Args:
         features: The record being built.
@@ -848,8 +829,8 @@ def _finite_peaks(spans: Sequence[dict[str, Any]]) -> list[float]:
         spans: The spans, each carrying ``measure`` and ``peak_db``.
 
     Returns:
-        The sample, in span order, over the :data:`PEAK_OVER_FLOOR_MEASURE` spans carrying a finite
-        level. A span of any other measure is not in the population, whatever it carries.
+        The sample, in span order, over the :data:`PEAK_OVER_FLOOR_MEASURE` spans carrying a
+        finite level.
     """
     return [
         float(span["peak_db"])
@@ -893,10 +874,9 @@ def _span_labels(
 def _distribution(prefix: str, selected: Sequence[dict[str, Any]]) -> dict[str, float]:
     """One group of spans reduced to the keys a span-label detector reads.
 
-    ``span_count`` is over every span in the group, whatever its measure. The
-    ``peak_over_floor_db`` keys are over the :data:`PEAK_OVER_FLOOR_MEASURE` spans in it, and
-    ``peak_over_floor_db_n`` is written whether or not the group holds one, so the decibel family
-    carries its own denominator beside the group's count.
+    ``span_count`` is over every span in the group, whatever its measure; the
+    ``peak_over_floor_db`` keys are over the :data:`PEAK_OVER_FLOOR_MEASURE` spans in it, with
+    ``peak_over_floor_db_n`` written whether or not the group holds one.
 
     Args:
         prefix: ``"<classifier>.<label>"`` or ``"<classifier>.<set>"``.
@@ -923,23 +903,12 @@ def _label_span_statistics(
     """Reduce the live spans to one distribution per label, and one per named label set.
 
     Labels outside
-    :data:`~senselab.audio.workflows.triage.routing_analysis.labels.TRACKED_LABELS` are dropped, so
-    a recording whose spans carry none of them contributes nothing. A set's distribution is over the
-    spans carrying any of its members, counted once each, and is not the union of its members'
-    distributions.
-
-    A classifier that scored at least one span yields a distribution for every set it declares
-    members for, whether or not a span carried that set, so ``<classifier>.<set>.span_count`` is
-    written and reads zero where nothing did. A classifier that scored no span at all yields none
-    of those keys: the absent count is what says nothing measured the set, and a zero count is what
-    says something did and found nothing. How many spans that zero is a statement about is in
-    :func:`_span_coverage`, which is the denominator under every key this writes.
-
-    A group's ``span_count`` counts the spans carrying the label whatever measure they are;
-    ``peak_over_floor_db_n`` counts the :data:`PEAK_OVER_FLOOR_MEASURE` spans among them, which is
-    the sample the ``peak_over_floor_db`` quantiles are taken over. A group whose whole membership
-    is spans of another measure therefore reads a non-zero ``span_count`` beside a zero
-    ``peak_over_floor_db_n`` and no quantile key at all.
+    :data:`~senselab.audio.workflows.triage.routing_analysis.labels.TRACKED_LABELS` are dropped. A
+    set's distribution is over the spans carrying any of its members, counted once each, and is not
+    the union of its members' distributions. A classifier that scored at least one span yields a
+    distribution for every set it declares members for, reading zero where no span carried it; a
+    classifier that scored no span yields none of those keys. :func:`_span_coverage` carries the
+    denominator under every key this writes.
 
     Args:
         spans: The live spans, each carrying ``id`` and ``peak_db``.
@@ -1072,8 +1041,7 @@ def span_label_memberships(config: TriageConfig) -> dict[str, LabelMembership]:
         ``windows.<classifier>`` keys PREPROCESS stamps its own windows with.
 
     Raises:
-        ValueError: When a classifier's floor or top-K is null. Attribution needs both, and a
-            default chosen here would be an unfitted threshold in code.
+        ValueError: When a classifier's floor or top-K is null.
     """
     memberships: dict[str, LabelMembership] = {}
     for classifier in SPAN_CLASSIFIERS.values():
@@ -1113,10 +1081,8 @@ def extract_features(
 ) -> RecordingFeatures:
     """Stream one store and reduce it to the routing evidence.
 
-    Every invalidated entity is dropped, measurements included, matching the store's shared read
-    rule in :func:`senselab.audio.workflows.triage.nodes.common.live_entities`. Which entities those
-    are is decided by the relations, which a store writes after its entities, so the file is read
-    twice: :func:`invalidated_ids` first, then this pass.
+    Every invalidated entity is dropped, measurements included, so the file is read twice:
+    :func:`invalidated_ids` first, then this pass.
 
     Args:
         store_path: The ``run/store.jsonl`` to read. A sidecar a measurement names by relative path
@@ -1128,8 +1094,7 @@ def extract_features(
         memberships: Which labels a span carries, per classifier, from
             :func:`span_label_memberships`.
         onomatopoeic: The vocabulary an unbracketed consensus word is counted against, from
-            :func:`onomatopoeic_vocabulary`. It is the reader's own vocabulary, not the one the run
-            being read was produced under.
+            :func:`onomatopoeic_vocabulary` — the reader's own, not the run's.
 
     Returns:
         The record.

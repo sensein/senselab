@@ -13,7 +13,7 @@ _TASK = re.compile(r"_task-(?P<task>[^_]+)$")
 _TRAILING_INDEX = re.compile(r"(?:-\d+)+$")
 
 UNKNOWN_TASK = "unknown"
-"""The task id of a stem carrying no ``task-`` entity, which is a stem that declares nothing."""
+"""The task id of a stem carrying no ``task-`` entity."""
 
 SYLLABLE_REPETITION: frozenset[str] = frozenset(
     {
@@ -56,7 +56,7 @@ LEXICAL_SPEECH: frozenset[str] = frozenset(
         "word-color-stroop",
     }
 )
-"""Families whose instructions ask the participant to say words. A declaration, not a label."""
+"""Families whose instructions ask the participant to say words."""
 
 SPEECH_ELICITING: frozenset[str] = LEXICAL_SPEECH | SYLLABLE_REPETITION
 """Every family whose instructions ask the participant to produce speech."""

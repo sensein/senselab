@@ -3,18 +3,12 @@
 Two entry points and one mode decision. ``align_speech`` evaluates a declared speech task against
 what its own instruction asked for; ``detect_speech`` finds lexical speech on a recording of another
 branch's kind and evaluates nothing. :func:`~...nodes.branches.dispatch` picks between them from the
-declared task family alone, and both write by ``propose`` only.
+declared task family, and both write by ``propose`` only.
 
-It runs no ASR and never re-transcribes: PREPROCESS wrote the consensus text stream with
-``senselab.audio.workflows.triage.consensus.align_sources`` and this branch reads it. It runs no
-diarizer either: the speakers are PREPROCESS's whole-file ``<stream>_diarization`` derivative, read
-back. Speech spans come from the lexical consensus words' timings, never the envelope. The second
-diarizer runs only when the read count is not 1 and ``speech.second_diarizer`` names a model;
-separation runs only when ``speech.separation_backend`` names a backend. The target speaker is
-identified by a caller-supplied enrollment, not by a per-file hint, and an enrollment is refused
-rather than compared unless its model and its resolved commit are both the probe's. The PII scan
-reads the consensus transcript and each recognizer's own transcript, once, and marks every
-occurrence of what it finds on the consensus words. This branch marks; it removes nothing.
+It runs no ASR and no diarizer: the transcript is PREPROCESS's consensus and the speakers are
+PREPROCESS's whole-file ``<stream>_diarization`` derivative, both read back. Speech spans come from
+the lexical consensus words' timings. The target speaker is identified by a caller-supplied
+enrollment, never by a per-file hint. The PII scan marks; it removes nothing.
 
 Every parameter's derivation is in ``data/config/default.yaml``; the design is in
 ``specs/20260817-triage-workflow-dag/branch-speech.md`` and what porting it decided is in
@@ -131,9 +125,8 @@ REPETITION_ALLOWED_CATEGORIES = ("Letters", "Numbers")
 def diarization_measurement(stream: str) -> str:
     """The measurement name one stream's whole-file diarization is written under.
 
-    The same spelling ``preprocess.diarization_measurement`` writes. It is repeated here rather
-    than imported, because importing PREPROCESS into a branch would put the whole of PREPROCESS's
-    model imports on a branch's import path; ``speech_test`` pins the two against each other.
+    The same spelling ``preprocess.diarization_measurement`` writes, repeated rather than imported;
+    ``speech_test`` pins the two against each other.
 
     Args:
         stream: The stream's name.
@@ -205,10 +198,8 @@ def _read_diarization(store: ProvStore, run_dir: Path, config: TriageConfig) -> 
 def _exclusive_slices(label: str, segments: list[tuple[str, str, tuple[float, float]]]) -> list[tuple[float, float]]:
     """One speaker's segments with every region another speaker also holds removed.
 
-    Under ``diarization.exclusive: false`` two speakers' segments can overlap, so a speaker's
-    concatenated audio would otherwise carry the other's voice wherever they spoke at once. The
-    old in-branch pass took the exclusive partition and could not produce that; this keeps the
-    property without asking for a threshold.
+    Under ``diarization.exclusive: false`` two speakers' segments can overlap; this is arithmetic
+    over the segments and asks for no threshold.
 
     Args:
         label: The speaker whose audio is wanted.
@@ -273,10 +264,8 @@ def _embedding_model(model_id: str, revision: str) -> SpeechBrainModel:
 def _required(params: BranchParams, enrollment: Enrollment | None) -> dict[str, Any]:
     """Resolve the settings this branch reads, refusing none of them.
 
-    The first group are settings of other sections that ship values; a null in one is an override
-    error and ``require`` surfaces it. The enrollment group is nullable in the packaged file, so it
-    is read through :meth:`BranchParams.setting`, which records the ask and returns None rather
-    than stopping the branch — a refusal would be this branch deciding.
+    Settings of other sections that ship values are read with ``require``; the enrollment group is
+    nullable and is read through :meth:`BranchParams.setting`.
 
     Args:
         params: The operating points, which also carry the configuration and the record of misses.
@@ -367,9 +356,8 @@ def _norm_token(token: str) -> str:
 def _locate(finding_text: str, haystack_tokens: list[str]) -> list[tuple[int, int]]:
     """Every place the finding's tokens match the haystack, as contiguous runs (N11).
 
-    Every occurrence, not the first: the scan dedupes by ``(category, text, source)``, so a name
-    said twice arrives as one finding, and locating only its first match leaves the second
-    occurrence unmarked and therefore unredacted.
+    Every occurrence, not the first.
+    See ``specs/20260817-triage-workflow-dag/branch-speech-implementation.md``.
 
     Args:
         finding_text: The detector's matched text.
@@ -596,9 +584,8 @@ def _pii_notes(
         target_speaker: The diarized speaker the enrollment matched, or None.
 
     Returns:
-        The observations, in controlled vocabulary, for the report's ``notes``. REDACT's gate is
-        the ``pii`` entities in the store (``run._speech_found_pii``) and not this list, so nothing
-        here suppresses or triggers a redaction.
+        The observations, in controlled vocabulary, for the report's ``notes``. REDACT gates on the
+        ``pii`` entities in the store, not on this list.
     """
     reasons: list[str] = []
     for detector in missing:
@@ -643,7 +630,7 @@ def _speaker_runs(words: list[Entity], speakers: list[str | None], notes: list[s
 
     Returns:
         The runs, in stream order. A word whose speaker could not be resolved joins the run of
-        words beside it that could not either, so the aggregate says which case it is.
+        words beside it that could not either.
     """
     runs: list[_SpeakerRun] = []
     for word, speaker, note in zip(words, speakers, notes):
@@ -657,7 +644,7 @@ def _speaker_runs(words: list[Entity], speakers: list[str | None], notes: list[s
 # --------------------------------------------------------------------- the two modes
 
 MINT = PROPOSERS[NODE]
-"""SPEECH's own minting function. It proposes into ``family: "speech"`` and can reach no other."""
+"""SPEECH's own minting function, which proposes into ``family: "speech"``."""
 
 STIMULUS_MEASUREMENT = "stimulus_alignment"
 """PREPROCESS's derivative the fully-specified families are evaluated against."""
@@ -674,7 +661,7 @@ def stimulus_haystack(hint: AudioHints | None) -> str | None:
 
     Returns:
         The prompts joined and case-folded with runs of whitespace collapsed, or None when the
-        recording declares no prompt text and no containment can be tested.
+        recording declares no prompt text.
     """
     if hint is None:
         return None
@@ -691,7 +678,7 @@ def in_stimulus(surface: str, haystack: str | None) -> bool | None:
 
     Returns:
         True when the surface occurs in the declared prompts, False when it does not, and None when
-        the recording declares none — an absence that must not read as a finding either way.
+        the recording declares none.
     """
     if haystack is None:
         return None
@@ -702,10 +689,9 @@ def in_stimulus(surface: str, haystack: str | None) -> bool | None:
 def declared_carrier(task_family: str | None) -> str | None:
     """The carrier a syllable task asks for, as text, taken from the family that names it.
 
-    A diadochokinetic family declares its carrier in its own name -- ``diadochokinesis-buttercup``
-    asks for "buttercup" -- while its expectation holds the carrier as an ARPAbet sequence, which no
-    transcript can be matched against. Such a recording declares no ``stimulus_text``, so without
-    this the word-level test sees every carrier repetition as a word the task did not ask for.
+    ``diadochokinesis-buttercup`` asks for "buttercup"; the expectation holds the same carrier as an
+    ARPAbet sequence, which no transcript can be matched against.
+    See ``specs/20260919-pii-against-the-stimulus/design.md``.
 
     Args:
         task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
@@ -727,9 +713,7 @@ def invites_disclosure(task_family: str | None) -> bool:
         task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
 
     Returns:
-        True for a family whose expected pattern is a free response. Such a task is where
-        disclosure lives, so its scan does not depend on a word-level test that a sparse or
-        prompt-echoing transcript could defeat.
+        True for a family whose expected pattern is a free response.
     """
     expectation = SPEECH_EXPECTATIONS.get(str(task_family))
     return expectation is not None and expectation.pattern is Pattern.FREE_RESPONSE
@@ -743,8 +727,8 @@ def words_outside_stimulus(texts: Iterable[str], haystack: str | None) -> list[s
         haystack: :func:`stimulus_haystack`'s result, or None when the recording declares no prompt.
 
     Returns:
-        The words that are not in the declared prompts, in order, with repeats kept. Every word when
-        the recording declares no prompt: nothing was asked for, so nothing said was asked for.
+        The words that are not in the declared prompts, in order, with repeats kept; every word when
+        the recording declares no prompt.
     """
     words = [" ".join(str(text).split()).casefold() for text in texts]
     present = [word for word in words if word]
@@ -773,8 +757,7 @@ def _transcribed(store: ProvStore) -> bool:
         store: The provenance store.
 
     Returns:
-        False when PREPROCESS wrote no consensus, or wrote one no recognizer contributed to — in
-        both of which the extractor is absent and no reading of the response exists to report.
+        False when PREPROCESS wrote no consensus, or wrote one no recognizer contributed to.
     """
     consensus = find_measurement(store, "consensus_transcript")
     return consensus is not None and bool(consensus.attributes.get("sources"))
@@ -926,8 +909,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
 
     Proposes ``task_extent``, one span per realised structure unit the alignment yields — a CAPE-V
     sentence, a Rainbow sentence — and the phrase runs where the family is connected. No span per
-    token: a realised token already has a ``word`` entity carrying its own extent, its agreement and
-    its per-source timings.
+    token: a realised token already has its own ``word`` entity.
 
     Args:
         expectation: The row for this family.
@@ -958,8 +940,6 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
     else:
         read = _stimulus(store, hint, params)
         if read is None:
-            # The derivative is absent and the expectation is per recording, so no extent can be
-            # placed: propose nothing rather than a span whose boundaries are guessed.
             return Result(
                 UNDETERMINED,
                 [],
@@ -1071,11 +1051,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
             )
         )
     for index, token, anchor in omissions:
-        # An omission has no extent of its own — a skip-arc-free aligner assigns every stimulus word
-        # an interval whether or not it was spoken — so it is placed where it should have been. The
-        # `acoustic_score_max` covariate this used to carry named `branch.omission_score_max`, a cut
-        # on an acoustic score no derivative in the graph produces; the key and the covariate were
-        # removed together rather than the key being given a default it could not be reasoned into.
+        # An omission has no extent of its own, so it is placed where it should have been.
         findings.append(deviation("omission", anchor, anchor, *evidence, expected=token, expected_index=index))
 
     if expectation.emit_filler:
@@ -1108,13 +1084,9 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
 ) -> Result:
     """A task prescribing no words: was there a response, and how was it produced?
 
-    Proposes ``task_extent`` over the hull of the consensus's lexical words, plus one span per
-    phrase run where the family is connected. A family carrying no ``stimulus_text`` — every
-    ``picture-description`` and every ``cinderella-story`` in the corpus — expects nothing lexical,
-    so every lexical word is the response rather than a departure from one.
-
-    The response is the words' own hull, not the hull of PREPROCESS's ``asr``-measure spans. See
-    ``specs/20260919-free-response-reads-the-words/design.md``.
+    Proposes ``task_extent`` over the hull of the consensus's lexical words — never the hull of
+    PREPROCESS's ``asr``-measure spans — plus one span per phrase run where the family is connected.
+    See ``specs/20260919-free-response-reads-the-words/design.md``.
 
     Args:
         expectation: The row for this family.
@@ -1152,7 +1124,6 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
             for index, extent in enumerate(groups)
             if extent[1] > extent[0] and evidence
         )
-        # Named for their measurement convention, never `rate`: the name says what was counted.
         findings.append(
             measured(
                 "speech_rate_from_consensus_words_per_s",
@@ -1186,9 +1157,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
         cut = points.point(
             "echo_overlap_max" if expectation.anti_pattern == "verbatim_prompt" else "verbatim_overlap_max"
         )
-        # `verbatim_source` reassigns the conformance term from coverage, so an unreadable stimulus
-        # leaves that term unmeasured. Under `verbatim_prompt` the stimulus underwrites a deviation
-        # and nothing else, so its absence is recorded and the response reading stands.
+        # `verbatim_source` reassigns the conformance term to coverage; `verbatim_prompt` does not.
         term_from_stimulus = expectation.anti_pattern == "verbatim_source"
         if read is None:
             findings.append(unviable(f"anti_pattern_{expectation.anti_pattern}", f"{STIMULUS_MEASUREMENT} is absent"))
@@ -1217,8 +1186,6 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                     )
                 )
             if expectation.anti_pattern == "verbatim_source":
-                # "Recall in your own words": semantic coverage is expected and verbatim
-                # reproduction is the deviation, so coverage is what `done` reads.
                 covered = content_coverage(source, produced)
                 findings.append(
                     measured("source_content_coverage", None, None, round(covered, 3), stimulus_id, *word_ids)
@@ -1238,9 +1205,8 @@ def _speech_item_list(
 ) -> Result:
     """A task asking for a list of items: how many, and was one repeated where none may be?
 
-    Proposes ``task_extent`` only. An item is one ``word`` entity with its own extent, so a per-item
-    span would duplicate ground and carry no measurement of its own; the repetition finding is a
-    deviation over that word's extent.
+    Proposes ``task_extent`` only; the repetition finding is a deviation over the repeated word's
+    own extent.
 
     Args:
         expectation: The row for this family.
@@ -1253,9 +1219,7 @@ def _speech_item_list(
     """
     points = params
     if expectation.repetition_from_category:
-        # Eight of ten categories say "Do not repeat any item"; `Letters` and `Numbers` allow it. A
-        # family-scoped rule inverts the instruction on those, so an unreadable category concludes
-        # nothing rather than guessing which of the two rules applies.
+        # The rule follows the category, which lives only in `instructions`.
         category = (hint.metadata or {}).get("category") if hint is not None else None
         if category is None:
             return Result(
@@ -1328,7 +1292,7 @@ def align_speech(
         Whether the expected patterns were found, the spans proposed, and the deviations.
 
     Raises:
-        KeyError: If the family is not a SPEECH family, which is the caller owing detect_speech.
+        KeyError: If the family is not a SPEECH family.
         NotImplementedError: If the row names a pattern this branch serves no body for.
     """
     expectation = SPEECH_EXPECTATIONS.get(task_family)
@@ -1348,11 +1312,9 @@ def align_speech(
 def detect_speech(store: ProvStore, params: BranchParams) -> Result:
     """Find lexical speech on a recording of another branch's kind, and evaluate no task.
 
-    Needs no alignment at all: nothing lexical is expected of a breath, a cough or a held vowel, so
-    every lexical word is the finding. This is the successor to both a lexical-intrusion detector
-    and a count-in detector — on a ``prolonged-vowel`` recording it proposes a span over
-    ``one two three``, and ``align_voice``, for which that family is in family, is what decides
-    whether the prescribed count-in happened.
+    Needs no alignment: nothing lexical is expected of a breath, a cough or a held vowel, so every
+    lexical word is the finding.
+    See ``specs/20260817-triage-workflow-dag/expected-patterns.md``.
 
     Args:
         store: The provenance store.
@@ -1368,8 +1330,6 @@ def detect_speech(store: ProvStore, params: BranchParams) -> Result:
     gap = points.point("run_gap_max_s")
     components: list[Proposal] = []
     findings: list[Finding] = []
-    # Not `merge` over the word extents: `merge` joins only what touches and ordinary speech has a
-    # gap between every pair of words, so it would propose one span per word.
     runs = [] if gap is None or consensus_id is None else lexical_runs(words, float(gap))
     for index, extent in enumerate(runs):
         if extent[1] <= extent[0] or consensus_id is None:
@@ -1391,8 +1351,7 @@ def detect_speech(store: ProvStore, params: BranchParams) -> Result:
             )
         )
     for span in live_entities(store, "span"):
-        # Only somebody else's claim of speech: contesting this pass's own proposals would have the
-        # branch argue with itself, and a span it has not yet written cannot be read here anyway.
+        # Only somebody else's claim of speech.
         if span.attributes.get("family") != BRANCH_FAMILY[NODE] or span.extent is None:
             continue
         if _author_node(store, span.id) == NODE:
@@ -1446,7 +1405,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     view: list[str] = []
     notes: list[str] = []
 
-    # Step 1 — the consensus transcript is the transcript; this branch reads it and re-fuses nothing.
+    # Step 1 — the consensus transcript, read rather than re-fused.
     consensus = find_measurement(store, "consensus_transcript")
     if consensus is None:
         raise LookupError("no consensus_transcript in the store; PREPROCESS has not run")
@@ -1471,11 +1430,8 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "which was supplied and is not read"
         )
 
-    # The expectation: one mode or the other, chosen from the declared family and nothing else. It
-    # runs before this branch proposes anything, so neither mode reads a span this pass authored,
-    # and it runs *before* the no-lexical exit below rather than after it: a syllable-repetition
-    # recording with no lexical word is one `_speech_no_lexical` reads as conforming, and preempting
-    # both modes would report the opposite.
+    # The expectation: one mode or the other, chosen from the declared family. It runs before this
+    # branch proposes anything, and before the no-lexical exit below.
     mode, declared_family = mode_of(NODE, store, hint)
     expect = store.activity(
         node=NODE, step="expect", parameters={"mode": mode, "task_family": declared_family, "stream": source}
@@ -1499,9 +1455,6 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     view.extend(write_findings(store, expect, software, expectation_findings, signal=source))
 
     if not lexical:
-        # No lexical word is a reading, not a refusal: the mode above already said whether the
-        # instruction's own pattern was found, and this branch reports that beside the spans it
-        # proposed. VERDICT decides what it means for the file.
         notes.append("no consensus word; this branch measured no lexical subject")
         report_id, report = write_report(
             store,
@@ -1541,8 +1494,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         notes.append(f"{len(single_source)} single-recognizer word(s) survive as fabrication candidates")
 
     # Step 2 — speech spans from the lexical words' timings, in memory until corroborated. A run
-    # the consensus places at one instant is dropped rather than proposed: a span of no duration
-    # names no region, and `propose_span` refuses one.
+    # the consensus places at one instant is dropped: `propose_span` refuses a zero-width extent.
     word_extents = [word.extent or (0.0, 0.0) for word in lexical]
     all_grouped = group_extents_into_runs(word_extents)
     grouped = [
@@ -1620,8 +1572,6 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         corroboration.append({"yamnet_coverage": coverage, "yamnet_vote": yamnet_vote, "squim_vote": squim_vote})
 
     # Step 4 — the speakers are PREPROCESS's whole-file derivative, read rather than re-measured.
-    # This branch's own pass ran pyannote over the lexical word hull, so a voice outside it — before
-    # the participant started, after they stopped, or inside a pause — could not be seen at all.
     read = _read_diarization(store, run_dir, config)
     diarize_act = store.activity(
         node=NODE,
@@ -1695,8 +1645,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             )
             store.was_associated_with(second_act, second_agent)
             store.used(second_act, read.measurement_id)
-            # The corroborator reads the signal the derivative was measured on, not this branch's
-            # own stream: two counts over two different signals corroborate nothing.
+            # The corroborator reads the signal the derivative was measured on, not this stream.
             second_stream_id, second_audio = resolve_stream(store, run_dir, read.signal)
             store.used(second_act, second_stream_id)
             [second_segments] = diarize_audios([second_audio], model=second_model)
@@ -1709,8 +1658,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             if second_count != speaker_count:
                 notes.append(f"second diarizer counts {second_count} speakers against {speaker_count}")
 
-    # Step 5 — separation: measurement-gated, and neither backend is selected by default. It runs
-    # over the whole stream, because the diarization that gates it is now a whole-file reading.
+    # Step 5 — separation over the whole stream: measurement-gated, no backend selected by default.
     backend = config.get("speech.separation_backend")
     sound_class = config.get("speech.separation_sound_class")
     separation_state: Any
@@ -1780,10 +1728,9 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             store.was_derived_from(stream_id, plain_id)
             view.append(stream_id)
 
-    # Step 6 — identify: words to speakers by timing, and the target by enrollment. Resolving
-    # across speakers produces an aggregated span — one per contiguous run of words the diarization
-    # gives to the same speaker — proposed in this branch's own family and leaving every word
-    # untouched. There is no per-word assertion: `attribute` was never one of the contract's verbs.
+    # Step 6 — identify: words to speakers by timing, and the target by enrollment. One proposed
+    # span per contiguous run of words the diarization gives to the same speaker; no per-word
+    # assertion.
     identify = store.activity(node=NODE, step="identify", parameters={})
     store.was_associated_with(identify, software)
     word_speakers: list[str | None] = []
@@ -1873,9 +1820,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             labels: list[str] = []
             audios: list[Audio] = []
             for label in sorted({speaker for _, speaker, _ in speaker_segments}):
-                # Only the audio this speaker holds alone: the shared derivative keeps pyannote's
-                # overlapping view, so an overlapped region carries two voices and belongs to the
-                # probe of neither.
+                # Only the audio this speaker holds alone.
                 slices = [
                     plain.waveform[:, int(start * sampling_rate) : int(end * sampling_rate)]
                     for start, end in _exclusive_slices(label, speaker_segments)
@@ -1921,8 +1866,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             else:
                 notes.append("an enrollment was given and no speaker matches it")
 
-    # The span elements, proposed rather than written: a branch mints into its own family, naming
-    # what each extent came from, and never edits a span another node proposed.
+    # The span elements, proposed rather than written.
     run_proposals: list[Proposal] = []
     for position, ((start, end), (_, _, members)) in enumerate(zip(span_extents, grouped)):
         owners = {word_speakers[lexical_index[index]] for index in members}
@@ -1959,9 +1903,8 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     for name in source_names:
         store.used(pii_act, hypotheses[name].id)
     stimulus_text = stimulus_haystack(hint)
-    # The scan runs only where the participant said something the task did not ask for. A recording
-    # that produced only the words it was handed has nothing to disclose, and scanning it yields the
-    # script back as findings: branch-speech.md §7 and specs/20260919-pii-against-the-stimulus.
+    # The scan runs only where the participant said something the task did not ask for.
+    # See specs/20260919-pii-against-the-stimulus/design.md.
     carrier = declared_carrier(declared_family)
     haystack = " ".join(part for part in (stimulus_text, carrier) if part) or None
     novel_words = words_outside_stimulus((word_text(word) for word in lexical), haystack)
@@ -1997,7 +1940,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         scanned_by.update(scan.detectors_used)
         tokens = [_reading(words[position], haystack) for position in positions]
         for finding in scan.spans:
-            # Locate and mark every occurrence of this finding, not just its first (branch-speech.md §7).
+            # Every occurrence of this finding, not just its first.
             located = [(positions[first], positions[last]) for first, last in _locate(str(finding.text or ""), tokens)]
             if not located:
                 notes.append(f"pii_unlocated ({finding.category})")
@@ -2009,8 +1952,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     continue
                 recorded.add((str(finding.category), first, last))
                 covered = list(range(first, last + 1))
-                # A finding nothing in the transcript places covers the whole of it: the redaction
-                # that reads this must not be narrower than the text the detector was given.
+                # A finding nothing in the transcript places covers the whole of it.
                 extent = _timings_hull(words, list(range(len(words)))) if not located else _timings_hull(words, covered)
                 sources = sorted({str(name) for index in covered for name in words[index].attributes["sources"]})
                 speakers = {word_speakers[index] for index in covered}
@@ -2068,7 +2010,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     store.was_attributed_to(scan_id, software)
     view.append(scan_id)
 
-    # Step 8 — quality: SQUIM on plain, disruptions on the original recording; reported, never gating.
+    # Step 8 — quality: SQUIM on plain, disruptions on the original recording.
     quality = store.activity(
         node=NODE,
         step="quality",
@@ -2113,7 +2055,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         store.was_derived_from(disruption_id, span_id)
         view.append(disruption_id)
 
-    # Step 9 — the non-target axis: measured and reported per span, compared against nothing.
+    # Step 9 — the non-target axis, measured and reported per span.
     proximity_act = store.activity(node=NODE, step="proximity", parameters={})
     store.was_associated_with(proximity_act, software)
     store.used(proximity_act, plain_id)
@@ -2150,8 +2092,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             )
         )
 
-    # The report: the spans are in the store, the conformance is the mode's, and the observations
-    # below are named rather than scored. No outcome is written here or anywhere in this branch.
+    # The report: the conformance is the mode's, and the observations below are named, not scored.
     detail: dict[str, Any] = {
         "speaker_count": speaker_count,
         "diarization": diarization_state,

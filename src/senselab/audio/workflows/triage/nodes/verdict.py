@@ -3,13 +3,13 @@
 This is the graph's only decision about the recording. The branches and QUALITY write
 ``branch_report`` entities — task conformance, typed deviations, no outcome — and propose spans; the
 deciding nodes write ``verdict`` entities; this node reads all three, adds the declared task and the
-routing decisions, and hands them to ``vocabulary.fold_file_verdict``. The two axes it keeps apart —
-triage and release — and the tables it implements are in
-``specs/20260817-triage-workflow-dag/verdict.md``.
+routing decisions, and hands them to ``vocabulary.fold_file_verdict``. REDACT's optional LLM re-read
+is read here too, as an annotation: its ``flagged`` reaches the triage axis under
+``verdict.llm_redaction_flags`` and the release axis on no path.
 
-REDACT's optional LLM re-read is read here too, as the annotation it is: its ``flagged`` reaches the
-triage axis under ``verdict.llm_redaction_flags`` and the release axis on no path, which stays
-REDACT's own detector verdict. See ``specs/20260817-triage-workflow-dag/llm-check.md``.
+The two axes this node keeps apart — triage and release — and the tables it implements are in
+``specs/20260817-triage-workflow-dag/verdict.md``; the re-read is in
+``specs/20260817-triage-workflow-dag/llm-check.md``.
 """
 
 from __future__ import annotations
@@ -68,9 +68,8 @@ def _node_verdict_from_entity(entity: Entity) -> NodeVerdict:
         entity: A ``verdict`` entity.
 
     Returns:
-        Its vocabulary verdict. An ``outcome`` outside :class:`Outcome` is not folded as a
-        conclusion: the node is reported as having written something no reader can act on, which
-        flags the file, where raising here would lose the whole file verdict along with it.
+        Its vocabulary verdict. An ``outcome`` outside :class:`Outcome` is returned as a ``flag``
+        naming the unreadable value rather than folded as a conclusion.
     """
     attributes = entity.attributes
     node = str(attributes["node"])
@@ -95,9 +94,7 @@ def _conformance_of_entity(entity: Entity) -> Conformance:
 
     Returns:
         True, False, or :data:`UNDETERMINED`. A value that is neither a bool nor the
-        :data:`UNDETERMINED` token reads as :data:`UNDETERMINED`: a report nobody can interpret
-        answered no conformance question, and reading it as a False would flag on a value the fold
-        does not understand.
+        :data:`UNDETERMINED` token reads as :data:`UNDETERMINED`.
     """
     raw = entity.attributes.get("conformance")
     return raw if isinstance(raw, bool) else UNDETERMINED
@@ -110,9 +107,7 @@ def _branch_report_from_entity(entity: Entity) -> BranchReport:
         entity: A ``branch_report`` entity.
 
     Returns:
-        Its vocabulary report. ``conformance_of`` is read as written; an unknown referent is carried
-        through rather than corrected, and the fold treats anything but ``task`` as not being a
-        claim about a task.
+        Its vocabulary report. ``conformance_of`` is read as written, an unknown referent included.
     """
     attributes = entity.attributes
     return BranchReport(
@@ -129,8 +124,7 @@ def _branch_report_from_entity(entity: Entity) -> BranchReport:
 def _live_latest(store: ProvStore, prov_type: PROV_TYPE, key: Callable[[Entity], str]) -> list[Entity]:
     """Entities of one type under the store's shared rule, one per key.
 
-    The rule is the one ``common.find_measurement`` and ``common.resolve_stream`` apply: an
-    invalidated entity is never read, and of the survivors sharing a key the latest write wins.
+    An invalidated entity is never read, and of the survivors sharing a key the latest write wins.
 
     Args:
         store: The provenance store.
@@ -155,9 +149,8 @@ def _node_verdicts_in_graph_order(store: ProvStore) -> list[tuple[Entity, NodeVe
         store: The provenance store.
 
     Returns:
-        One ``(entity, verdict)`` pair per node, the node's latest live verdict; the file verdict
-        itself is excluded by its ``node`` attribute, which is the only discriminator the entity
-        carries. A withdrawn verdict does not vote and a superseded one is replaced, not added.
+        One ``(entity, verdict)`` pair per node, the node's latest live verdict. The file verdict
+        itself is excluded by its ``node`` attribute.
     """
     pairs = [
         (entity, _node_verdict_from_entity(entity))
@@ -177,8 +170,7 @@ def _branch_reports(store: ProvStore) -> list[tuple[Entity, BranchReport]]:
         store: The provenance store.
 
     Returns:
-        One ``(entity, report)`` pair per node that reported, in order of first appearance. A
-        withdrawn report does not vote and a superseded one is replaced, not added.
+        One ``(entity, report)`` pair per node that reported, in order of first appearance.
     """
     return [
         (entity, _branch_report_from_entity(entity))
@@ -189,11 +181,8 @@ def _branch_reports(store: ProvStore) -> list[tuple[Entity, BranchReport]]:
 def _spans_by_node(store: ProvStore) -> dict[str, int]:
     """How many spans each reporting node proposed into its own family.
 
-    The count is taken from the store rather than from the report, because the spans *are* the
-    record: a count copied into the report would be a second one able to disagree with it. A span is
-    attributed to a node by the activity that generated it and is counted only in that node's own
-    family, so a node reaching into another's — which ``dispatch`` already refuses — could not
-    inflate its own found/not-found reading here either.
+    A span is attributed to a node by the activity that generated it, and counts only in that
+    node's own family.
 
     Args:
         store: The provenance store.
@@ -223,7 +212,7 @@ def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:
 
     Returns:
         The file-level route state and the id it came from, or ``(None, [])`` when ROUTING wrote no
-        evaluation — which is a reading never made, not a recording nothing routed.
+        evaluation.
     """
     measurement = find_measurement(store, RULESET_ROUTING)
     if measurement is None or measurement.attributes.get("state") is None:
@@ -234,16 +223,14 @@ def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:
 def _critical_absences(store: ProvStore) -> dict[str, dict[str, str]]:
     """Which branches the ruleset could form no opinion about at all, and why, as ROUTING recorded it.
 
-    Read off the same ``ruleset_routing`` measurement the route state comes from, so the fold and the
-    node that short-circuited the run cannot disagree about what was missing.
+    Read off the same ``ruleset_routing`` measurement :func:`_route_state` reads.
 
     Args:
         store: The provenance store.
 
     Returns:
         Per branch not one of whose gates could be read, each gate and the absence the node that
-        failed to write its evidence recorded. Empty when ROUTING wrote no evaluation, and empty on
-        every non-critical path.
+        failed to write its evidence recorded. Empty on every non-critical path.
     """
     measurement = find_measurement(store, RULESET_ROUTING)
     if measurement is None:
@@ -262,10 +249,8 @@ def _llm_redaction(store: ProvStore) -> tuple[dict[str, object] | None, list[str
         store: The provenance store.
 
     Returns:
-        The annotation and the id it came from, or ``(None, [])`` when REDACT wrote none — which is
-        a re-read never recorded, not a re-read that found nothing. ``name`` and ``signal`` are the
-        measurement's own bookkeeping and are dropped; everything else is carried through unread, so
-        what the model established reaches this fold exactly as REDACT wrote it.
+        The annotation and the id it came from, or ``(None, [])`` when REDACT wrote none. ``name``
+        and ``signal`` are dropped; every other attribute is carried through unread.
     """
     measurement = find_measurement(store, REDACTION_LLM_ANNOTATION)
     if measurement is None:
@@ -283,8 +268,7 @@ def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list
 
     Returns:
         The decision per branch name, one per branch under the store's shared rule, and the ids of
-        the entities they came from. Empty when ROUTING never ran, which is a graph in which no
-        branch was ever asked.
+        the entities they came from. Empty when ROUTING never ran.
     """
     decisions: dict[str, BranchDecision] = {}
     ids: list[str] = []
@@ -311,22 +295,17 @@ def _hint_claims(
 ) -> dict[str, bool] | None:
     """Which branches the recording's declaration claimed, read off ROUTING's own record of reading it.
 
-    ROUTING resolved the declaration — the stem's own task family through the ruleset's reference
-    family sets, and any hint tag ``routing.hint_branch_map`` maps — and wrote the result onto each
-    branch's decision. Reading it back is what makes the declaration that added a route the same
-    declaration that names a mismatch: a second resolution here could disagree with the first
-    whenever the config or the hint handed to the two nodes differ.
+    The declaration is read back from each branch's decision, never re-resolved here.
 
     Args:
         decisions: ROUTING's decisions, as read from the store.
         hint: What the recording was declared to contain, if anything.
         declared_family: The task family the recording's own stem declares, empty when it declares
-            none. Tested for existence only; what it claims is ROUTING's to say.
+            none. Tested for existence only.
 
     Returns:
         True per claimed branch; a branch the declaration did not name is simply absent. None when a
-        declaration existed and no decision survived to say what ROUTING made of it — the claims
-        are then unknown, which is not the same as no claim.
+        declaration existed and no decision survived to say what ROUTING made of it.
     """
     if (hint is not None or declared_family) and not decisions:
         return None
@@ -336,12 +315,9 @@ def _hint_claims(
 def _derived_ran(
     store: ProvStore, verdicts: Sequence[NodeVerdict], reports: Sequence[BranchReport]
 ) -> dict[str, RunState]:
-    """Whether each graph node ran, as far as the store can say (N26).
+    """Whether each graph node ran, as far as the store can say.
 
-    Operational fact only, and unchanged by the report/decide split: the three states are what the
-    runner records and what this derivation falls back to. A node that *reported* counts as having
-    concluded exactly as one that decided does, which is what keeps a branch under the new contract
-    out of the ``errored`` column.
+    A node that reported counts as having concluded exactly as one that decided does.
 
     Args:
         store: The provenance store, read for which nodes have an activity.
@@ -374,21 +350,15 @@ def verdict(
     Args:
         store: The provenance store, holding every node's ``verdict`` entity, ROUTING's
             ``branch_decision`` entities, its ``ruleset_routing`` measurement, and ADMIT's
-            ``recording`` stream, read only for whether the recording declares a task at all. This
-            node reads nothing else.
+            ``recording`` stream. Nothing else is read.
         source: Accepted for the shared node shape; not read.
         config: The triage configuration, named in the activity by its hash and read for the
-            ``verdict.*`` section — which is where every threshold that turns a reading into a
-            judgement now lives, because a branch reports and this node decides. The hint was
-            already resolved by ROUTING and is read back rather than re-resolved.
+            ``verdict.*`` section, which holds every threshold that turns a reading into a judgement.
         hint: What the recording was declared to contain. Read for branch mismatch only: a hint never
             resolves a finding and never turns a flag into a pass.
         run_dir: Accepted for the shared node shape; VERDICT writes no sidecars.
-        ran: Whether each node ran, from the runner, merged over what the store derives so that a
-            partial mapping overrides per node without erasing the rest. The derivation reads a
-            written verdict as ``completed``, an activity without one as ``errored`` and neither as
-            ``skipped`` (N26); the runner's mapping still wins where it speaks, since it knows why a
-            node it never called was left out.
+        ran: Whether each node ran, from the runner, merged over :func:`_derived_ran` so that a
+            partial mapping overrides per node without erasing the rest.
 
     Returns:
         The file verdict on both axes, the verdict entity it was written to, and a view leading with

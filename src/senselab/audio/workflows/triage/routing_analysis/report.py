@@ -2,16 +2,15 @@
 
 :data:`REFERENCE_STANDARDS` holds the standards; each carries ``is_proxy``, which is False only for
 ``agreed_asr``. Disagreements are enumerated per family by :func:`disagreements` rather than
-reduced to a rate. What the standards are worth is written up in
-``specs/20260910-taxonomy-routing-evidence/measurements.md``.
+reduced to a rate.
 
-Two criteria are reported over the same sweep and neither replaces the other. Youden's J weights a
-missed recording and a spuriously routed one equally; :func:`recall_at_budgets` weights them the way
-a router does, reporting the recall reachable while the false-positive rate over the negatives stays
-inside a stated over-routing budget. A reference standard may name families that its positive set
-excludes by construction although their content is what the branch is for; those are held out of the
-population rather than counted as errors. Both are derived in
-``specs/20260911-recall-first-thresholds/design.md``.
+Two criteria are reported over the same sweep and neither replaces the other: Youden's J, and
+:func:`recall_at_budgets`, the recall reachable while the false-positive rate over the negatives
+stays inside a stated over-routing budget. Families a standard's positive set excludes by
+construction are held out of the population rather than counted as errors.
+
+What the standards are worth is in ``specs/20260910-taxonomy-routing-evidence/measurements.md``;
+the recall-first criterion is derived in ``specs/20260911-praat-ppg-detectors/design.md``.
 """
 
 from __future__ import annotations
@@ -100,9 +99,7 @@ class Confusion:
     def positive_share_of_fired(self) -> float | None:
         """Fraction of firings the reference calls positive, or None when the detector never fired.
 
-        Not named precision. Every reference standard here but ``agreed_asr`` is a proxy, so a
-        firing the reference calls negative is not established to be an error and this share is not
-        an accuracy. ``specs/20260915-gate-family-matrix/design.md`` carries the naming.
+        Not named precision; ``specs/20260915-gate-family-matrix/design.md`` carries the naming.
         """
         fired = self.tp + self.fp
         return self.tp / fired if fired else None
@@ -153,10 +150,9 @@ class ReferenceStandard:
         population: Which recordings are scored at all, or None for the whole corpus. A standard
             that separates two declared families scores only within their union.
         population_description: What the restricted population is, in one phrase.
-        excluded_by_construction: Families whose content is what the branch is for but which the
-            positive set leaves out by construction. They are neither positives nor negatives:
-            counting them as negatives charges the detector for firing correctly. Every function
-            here drops them from the population rather than moving them across it.
+        excluded_by_construction: Families the positive set leaves out by construction although
+            their content is what the branch is for. Every function here drops them from the
+            population rather than counting them as negatives.
         exclusion_description: What the excluded families are, in one phrase.
     """
 
@@ -288,9 +284,7 @@ ROUTING_KINDS: tuple[str, ...] = ("speech", "airway", "voice")
 OVER_ROUTING_BUDGETS: tuple[float, ...] = (0.02, 0.05, 0.10, 0.20)
 """The over-routing budgets :func:`recall_at_budgets` reports at, as false-positive rates.
 
-A viewing parameter, not a decision: nothing downstream reads a budget, and every caller may pass
-its own. Four points spanning an order of magnitude are enough to say whether a detector's recall is
-bought with routing volume or comes for free.
+A viewing parameter: nothing downstream reads a budget, and every caller may pass its own.
 """
 
 LIMIT_BUDGET = "budget"
@@ -311,11 +305,9 @@ class BudgetPoint:
         budget: The false-positive rate over the negatives that the point may not exceed. A point
             whose rate equals the budget exactly is inside it.
         threshold: The operating point: the loosest cut the budget allows, tightened back to the
-            strictest cut reaching the same recall, because loosening past the last positive buys
-            over-routing and nothing else. None when nothing inside the budget fires at all.
-        confusion: The 2x2 there, over the whole population — a recording whose evidence could not
-            be read counts as a non-firing rather than being dropped, because a router that cannot
-            read a recording does not route it.
+            strictest cut reaching the same recall. None when nothing inside the budget fires.
+        confusion: The 2x2 there, over the whole population; a recording whose evidence could not
+            be read counts as a non-firing rather than being dropped.
         limit: :data:`LIMIT_BUDGET`, :data:`LIMIT_AVAILABILITY`, or None when the population holds
             no reference positive and the question does not arise.
     """
@@ -461,14 +453,10 @@ def recall_at_budgets(
 ) -> RecallCurve:
     """The recall each over-routing budget buys, and whether the budget or availability bounds it.
 
-    A point is inside its budget when its false-positive rate over the negatives is at or under it;
-    equality is inside. Among the points inside, the one reported is the loosest, tightened back to
-    the strictest cut reaching the same recall.
-
-    Thresholds are the values the population actually carries rather than a written grid: the
-    question is what the detector can do, and a grid can only answer it worse. Unreadable evidence
-    is a non-firing at every threshold, so a detector whose feature is absent on most recordings
-    reports the low ceiling it has rather than a high recall over the few it can read.
+    A point is inside its budget when its false-positive rate over the negatives is at or under it.
+    Among the points inside, the one reported is the loosest, tightened back to the strictest cut
+    reaching the same recall. Thresholds are the values the population actually carries rather than
+    a written grid, and unreadable evidence is a non-firing at every threshold.
 
     Args:
         observations: One ``(value, is_reference_positive)`` per recording in the population, the
@@ -558,8 +546,7 @@ def detector_recall_at_budgets(
     Args:
         records: The recordings to score over.
         detector: The detector.
-        reference: The standard positives are taken from. Families it excludes by construction are
-            dropped from the population rather than counted as negatives.
+        reference: The standard positives are taken from.
         budgets: The false-positive rates over the negatives that each point may not exceed.
         family: Restrict to one task family, or None for the whole corpus.
 
@@ -604,9 +591,9 @@ def score_detector(
 
     Returns:
         The detector, the reference, how many recordings were scored and how many were excluded
-        because the evidence was absent, one row per threshold, and the recall curve. A row carries
-        the plain table and, where the standard names families it excludes by construction, the
-        same table with those families dropped from the population.
+        because the evidence was absent, one row per threshold, and the recall curve. Each row
+        carries the plain table and, where the standard excludes families by construction, the same
+        table with those families dropped.
     """
     values: list[tuple[float, bool, bool]] = []
     unavailable = 0
@@ -811,8 +798,7 @@ class RoutingRule:
     Attributes:
         kind: The branch it would route to.
         detector: The detector's name.
-        threshold: The operating point. Carried from the brief being answered; **not** a fitted
-            floor, and nothing here proposes one.
+        threshold: The operating point.
     """
 
     kind: str
@@ -821,7 +807,7 @@ class RoutingRule:
 
 
 DETECTOR_BY_NAME: dict[str, Detector] = {detector.name: detector for detector in DETECTORS}
-"""Every detector in the catalogue, by name, so a rule set can name one."""
+"""Every detector in the catalogue, by name."""
 
 BASELINE_RULES: tuple[RoutingRule, ...] = (
     RoutingRule("speech", "speech.words_lexical", 2.0),
@@ -829,7 +815,11 @@ BASELINE_RULES: tuple[RoutingRule, ...] = (
     RoutingRule("airway", "airway.yamnet_peak.plain", 0.3),
     RoutingRule("voice", "voice.yamnet_singing_union.plain", 0.2),
 )
-"""The four rules whose 4.9% fall-through this analysis is asked to move."""
+"""The rule set whose fall-through this analysis is asked to move.
+
+The four thresholds and the fall-through they leave are in
+``specs/20260910-taxonomy-routing-evidence/measurements.md``.
+"""
 
 AUGMENTATION_TOP_FAMILIES = 12
 """How many families the fall-through table lists."""
@@ -906,7 +896,7 @@ def bucket_augmentation(
     Returns:
         One entry per detector not already in ``base``, listing every threshold in its grid with
         the fall-through that adding it there would leave, how many recordings it rescues and how
-        many it fires on in total. No threshold is chosen.
+        many it fires on in total.
     """
     base_names = {rule.detector for rule in base}
     uncovered = [not any(_rule_fires(record, rule) for rule in base) for record in records]
@@ -1222,8 +1212,7 @@ def _column_plans() -> tuple[_ColumnPlan, ...]:
         One plan per field, in declaration order.
 
     Raises:
-        TypeError: If a field carries an annotation the shard schema has no rule for, which is a
-            new field nobody has decided the column shape of.
+        TypeError: If a field carries an annotation the shard schema has no rule for.
     """
     hints = get_type_hints(RecordingFeatures)
     plans: list[_ColumnPlan] = []
@@ -1245,7 +1234,7 @@ def _column_plans() -> tuple[_ColumnPlan, ...]:
 
 
 _COLUMN_PLANS = _column_plans()
-"""The column shape of every field, derived once from the dataclass rather than written down."""
+"""The column shape of every field, derived from the dataclass."""
 
 
 def shard_schema(records: Sequence[RecordingFeatures]) -> pa.Schema:
@@ -1275,8 +1264,8 @@ def _as_row(record: RecordingFeatures) -> dict[str, Any]:
         record: The record.
 
     Returns:
-        Only the columns the record carries a value for. A key its mapping fields omit is left out,
-        so it is written as null rather than as a zero.
+        Only the columns the record carries a value for; a key its mapping fields omit is left
+        out, and so written as null rather than zero.
     """
     row: dict[str, Any] = {}
     for plan in _COLUMN_PLANS:
@@ -1320,8 +1309,7 @@ def shard_files(path: Path) -> list[Path]:
         path: A shard directory, or one shard file.
 
     Returns:
-        Every shard file, in name order, so a directory written in parts reads back in the order
-        the parts were produced.
+        Every shard file, in name order.
     """
     return sorted(path.glob(f"*{SHARD_SUFFIX}")) if path.is_dir() else [path]
 

@@ -40,9 +40,8 @@ class LabelMembership:
 
         Returns:
             ``{label: score}`` in descending score order over the labels that are both in the top
-            :attr:`top_k` and at or above their own floor. Empty is a window nothing cleared, which
-            is a different fact from a window that was never classified. Ties in score are ranked
-            by label so the cut is deterministic.
+            :attr:`top_k` and at or above their own floor. Empty is a window nothing cleared. Ties
+            in score are ranked by label, so the cut is deterministic.
         """
         ranked = sorted(scores.items(), key=lambda item: (-float(item[1]), str(item[0])))[: self.top_k]
         return {
@@ -63,8 +62,7 @@ def load_label_membership(config: TriageConfig, classifier: str) -> LabelMembers
         The rule.
 
     Raises:
-        ValueError: When any of the three keys is null. A caller reading through here records the
-            derivative absent rather than inventing a value for it.
+        ValueError: When any of the three keys is null.
     """
     return LabelMembership(
         top_k=int(config.require(f"windows.{classifier}.{TOP_K_KEY}")),
@@ -78,17 +76,15 @@ def load_label_membership(config: TriageConfig, classifier: str) -> LabelMembers
 def optional_label_membership(config: TriageConfig, classifier: str) -> LabelMembership | None:
     """One classifier's membership rule, or None while its floor is unmeasured.
 
-    Unlike :func:`load_label_membership` a null ``label_thresholds`` is read as no per-label
-    override rather than as an unmeasured value: the overrides refine a floor that is already
-    declared, so their absence is a complete rule and not a missing one.
+    Unlike :func:`load_label_membership`, a null ``label_thresholds`` reads as no per-label
+    override rather than as an unmeasured value.
 
     Args:
         config: The resolved configuration.
         classifier: ``yamnet``, ``ast`` or ``hear``.
 
     Returns:
-        The rule, or None when ``windows.<classifier>.default_threshold`` is null. A caller that
-        gets None writes the raw scores and no membership, rather than inventing a floor.
+        The rule, or None when ``windows.<classifier>.default_threshold`` is null.
     """
     if config.get(f"windows.{classifier}.{FLOOR_KEY}") is None:
         return None

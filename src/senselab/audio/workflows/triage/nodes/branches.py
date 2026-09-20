@@ -1,17 +1,12 @@
-"""The foundation the four triage branches sit on: expectations, proposals, and the two modes.
+"""The foundation the three triage branches sit on: expectations, proposals, and the two modes.
 
 A branch has exactly two entry points. ``align_<branch>`` evaluates a task of the branch's own kind
 against what its instruction asked for; ``detect_<branch>`` finds the branch's own speciality on a
 task of any other kind and evaluates nothing. :func:`dispatch` picks between them from the declared
-task family and enforces what each mode may return.
+task family. Both modes write by ``propose`` only, and every proposed span names the evidence its
+extent was read off.
 
-Both modes write by ``propose`` only: a branch mints spans in its own family and never edits a span
-another node proposed, so ``wasDerivedFrom`` is the whole record of where an extent came from.
-:func:`propose_span` refuses a proposal that carries none, and :func:`write_findings` refuses a
-finding that carries an extent and names none.
-
-The design, its measurements and what each operating point owes are in
-``specs/20260817-triage-workflow-dag/expected-patterns.md``.
+See ``specs/20260817-triage-workflow-dag/expected-patterns.md`` and ``branch-foundation.md``.
 """
 
 from __future__ import annotations
@@ -66,15 +61,14 @@ RESERVED_SPAN_ATTRIBUTES = frozenset({"family", "role"})
 
 
 class Proposal(NamedTuple):
-    """A span a branch mints in its own family. It never edits a span another node proposed.
+    """A span a branch mints in its own family.
 
     Attributes:
-        family: The branch's own family, lowercase; fixed by :func:`proposer`, never by a caller.
+        family: The branch's own family, lowercase; stamped by :func:`proposer`.
         role: What this span is inside the task, e.g. ``"task_extent"`` or ``"count_in"``.
         start: Extent start, in seconds.
         end: Extent end, in seconds.
-        derived_from: The entity ids this extent came from. Required: under propose-only it is the
-            whole record of the relationship to the region the span was derived from.
+        derived_from: The entity ids this extent came from. At least one is required.
         attributes: The span entity's remaining attributes.
     """
 
@@ -95,8 +89,8 @@ class Finding(NamedTuple):
         start: Extent start, or None when the finding is per recording.
         end: Extent end, or None when the finding is per recording.
         evidence: The finding's own payload.
-        derived_from: The entity ids this finding was read off. Required whenever the finding
-            carries an extent; :func:`write_findings` refuses one that does not.
+        derived_from: The entity ids this finding was read off. Required when the finding
+            carries an extent.
     """
 
     kind: str
@@ -124,24 +118,19 @@ DEVIATION_TYPES = {
 }
 """Every deviation type a branch may report, and what each observes.
 
-Closed, and enforced at the write by :func:`write_findings`: VERDICT folds deviations by name, so a
-name nobody declared is a name no reader can fold.
+Closed: :func:`write_findings` refuses any name this table does not declare.
 """
 
 
 class Result(NamedTuple):
     """What every branch entry point returns: the three things a branch reports and nothing else.
 
-    There is no outcome here and there is no outcome downstream of it. ``done`` becomes the report's
-    task conformance, ``components`` become the spans, ``deviations`` become the findings, and
-    ``vocabulary.fold_file_verdict`` is the only place any of it is turned into a decision.
-
     Attributes:
         done: Whether the expected patterns were found — the branch's task conformance.
-            ``detect_*`` always returns :data:`UNDETERMINED`, because no pattern was expected of it,
-            and a body that could not read the operating point its qualifier needed returns it too.
+            ``detect_*`` always returns :data:`UNDETERMINED`, as does a body that could not read
+            the operating point its qualifier needed.
         components: The spans this branch proposes, each in its own family, each naming its
-            evidence. An empty list is a result, not a failure.
+            evidence.
         deviations: Every finding that is not a proposed span.
     """
 
@@ -164,9 +153,8 @@ class Propose(Protocol):
         """Mint one proposal.
 
         Args:
-            role: What this span is inside the task. Positional only, so a ``role`` keyword
-                reaches the reserved-attribute check rather than colliding with this parameter.
-            extent: ``(start, end)``, in seconds. Positional only, for the same reason.
+            role: What this span is inside the task. Positional only.
+            extent: ``(start, end)``, in seconds. Positional only.
             *derived_from: The entity ids the extent came from. At least one is required.
             **attributes: The span's remaining attributes.
 
@@ -177,7 +165,7 @@ class Propose(Protocol):
 
 
 def proposer(family: str) -> Propose:
-    """One minting function per branch. The family is fixed here, never by the caller.
+    """One minting function per branch, with its family bound.
 
     Args:
         family: The branch's own lowercase family.
@@ -229,13 +217,13 @@ def proposer(family: str) -> Propose:
 
 
 PROPOSERS: dict[str, Propose] = {branch: proposer(family) for branch, family in BRANCH_FAMILY.items()}
-"""Branch name to its minting function. A branch takes its own and cannot reach another's."""
+"""Branch name to its minting function."""
 
 airway_span = PROPOSERS["AIRWAY"]
 speech_span = PROPOSERS["SPEECH"]
 voice_span = PROPOSERS["VOICE"]
 quality_span = proposer("quality")
-"""QUALITY is not a routed branch and has only the detect mode, so it is not in :data:`PROPOSERS`."""
+"""QUALITY's minting function; it is not a routed branch, so it is not in :data:`PROPOSERS`."""
 
 
 def deviation(
@@ -249,7 +237,7 @@ def deviation(
     """A finding that the recording departs from what was expected.
 
     Args:
-        name: The deviation type. Positional only, so a ``name`` keyword reaches the payload.
+        name: The deviation type. Positional only.
         start: Extent start, or None when the deviation is per recording. Positional only.
         end: Extent end, or None. Positional only.
         *derived_from: The entity ids the deviation was read off. Required when an extent is given.
@@ -303,10 +291,10 @@ def measured(
     """A branch measurement over its own extent, with the covariates that qualify it.
 
     Args:
-        name: The measurement's name. Positional only, so a ``name`` keyword reaches the covariates.
+        name: The measurement's name. Positional only.
         start: Extent start, or None when the measurement is per recording. Positional only.
         end: Extent end, or None. Positional only.
-        value: The value. Positional only, for the same reason.
+        value: The value. Positional only.
         *derived_from: The entity ids the value was read off. Required when an extent is given.
         **covariates: What the value must be read against.
 
@@ -357,8 +345,7 @@ def propose_span(store: ProvStore, activity_id: str, agent_id: str, proposal: Pr
         The span entity's id.
 
     Raises:
-        ValueError: If the proposal names no evidence, which :func:`proposer` already refuses; the
-            check is repeated here because this is the only function that writes.
+        ValueError: If the proposal names no evidence.
     """
     if not proposal.derived_from:
         raise ValueError(
@@ -397,9 +384,9 @@ def write_findings(
 ) -> list[str]:
     """Write a branch's findings, each in the form its kind calls for.
 
-    A ``deviation`` and a ``contest`` become assertions beside a span rather than edits to one; a
-    ``measure`` becomes its own measurement; every ``count`` folds into one ``counts`` measurement
-    carrying ``found`` beside ``declared`` per entry, which asserts no discrepancy.
+    A ``deviation`` and a ``contest`` become assertions beside a span; a ``measure`` becomes its own
+    measurement; every ``count`` folds into one ``counts`` measurement carrying ``found`` beside
+    ``declared`` per entry.
 
     Args:
         store: The provenance store.
@@ -410,8 +397,8 @@ def write_findings(
 
     Returns:
         The entity ids written, assertions and measurements in the order the findings were given,
-        with the single ``counts`` measurement last when any count was present. The folded
-        ``counts`` measurement derives from the union of its entries' sources, first-seen order.
+        with the single folded ``counts`` measurement last when any count was present. It derives
+        from the union of its entries' sources, in first-seen order.
 
     Raises:
         ValueError: If a finding carries a kind outside :data:`FINDING_KINDS`, or if a finding
@@ -498,10 +485,8 @@ PUHTUHKUH = ("p", "ah", "t", "ah", "k", "ah")
 BUTTERCUP = ("b", "ah", "t", "er", "k", "ah", "p")
 """The nine phoneme sequences the ten ``diadochokinesis-*`` instructions prescribe, in ARPAbet.
 
-One entry per phoneme and no syllable layer, so ``buttercup``'s coda has a position of its own.
-Every entry's derivation is the stimulus text; the decode matches each against the equivalence class
-its phoneme belongs to rather than against the phoneme itself.
-``specs/20260817-triage-workflow-dag/ddk-template-decode.md``.
+One entry per phoneme, with no syllable layer.
+See ``specs/20260817-triage-workflow-dag/ddk-template-decode.md``.
 """
 
 
@@ -517,8 +502,7 @@ class Expectation:
         declared_duration_s: How long the instruction runs, when it is timed rather than counted.
         label_set: Which entry of ``branch.label_sets`` names this task's own sound.
         sequence: The phoneme sequence the train repeats, one ARPAbet phoneme per position in
-            order. Two positions for a single-syllable train, six or seven for a sequential one;
-            its length is one repetition.
+            order; its length is one repetition.
         declared_direction: Which way a pitch sweep is asked to go.
         declared_route: Nose or mouth, where the instruction prescribes one.
         route_from_index: Whether the route is carried by the task's trailing index.
@@ -626,8 +610,8 @@ VOICE_EXPECTATIONS_PENDING_DECLARATION: dict[str, Expectation] = {
 }
 """VOICE's own instrument families, which ``families.py`` places in ``LEXICAL_SPEECH``.
 
-Out of family for VOICE under the reference family set, so ``align_voice`` does not read this table
-and :data:`EXPECTATIONS` does not carry it. Changing that is a ``families.py`` decision.
+Out of family for VOICE under the reference family set, so neither ``align_voice`` nor
+:data:`EXPECTATIONS` reads this table.
 """
 
 SPEECH_EXPECTATIONS: dict[str, Expectation] = {
@@ -701,12 +685,10 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
 }
 """SPEECH's 31 in-family rows: ``LEXICAL_SPEECH`` (21) plus ``SYLLABLE_REPETITION`` (10).
 
-The ten syllable-repetition rows are the instruction each ``diadochokinesis-*`` task actually gives,
-as the token's phoneme sequence: two positions for a train of one syllable, six or seven for a
-sequential one. A one-syllable train and a sequential one are read by the same body with
-``len(sequence)`` as one repetition.
-``specs/20260817-triage-workflow-dag/ddk-template-decode.md``,
-``ddk-dissolved-into-speech.md`` and ``branch-ddk-ppg-instrument.md``.
+Each syllable-repetition row carries its instruction as a phoneme sequence, and one body reads both
+the one-syllable trains and the sequential ones with ``len(sequence)`` as one repetition.
+See ``specs/20260817-triage-workflow-dag/ddk-template-decode.md`` and
+``ddk-dissolved-into-speech.md``.
 """
 
 AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
@@ -778,11 +760,9 @@ EXPECTATIONS: dict[str, dict[str, Expectation]] = {
     "SPEECH": SPEECH_EXPECTATIONS,
     "VOICE": VOICE_EXPECTATIONS,
 }
-"""48 rows over 48 declared families: the whole in-family membership test, as data.
+"""48 rows over 48 declared families, one per family: the in-family membership test, as data.
 
-One row per family, and the ten ``SYLLABLE_REPETITION`` families are SPEECH's like every other
-speaking task: what the instruction asked for is a syllable train, or a cycle of three, or a word
-said ten times.
+The ten ``SYLLABLE_REPETITION`` families are SPEECH's, like every other speaking task.
 """
 
 REFERENCE_FAMILY_SET: dict[str, frozenset[str]] = {
@@ -792,8 +772,8 @@ REFERENCE_FAMILY_SET: dict[str, frozenset[str]] = {
 }
 """Each branch's in-family family set, as ``families.py`` declares it.
 
-The packaged config names the same four sets by key under ``taxonomy.ruleset.reference_family_set``.
-This is the membership test :func:`dispatch` applies, and :data:`EXPECTATIONS` must cover it exactly.
+The packaged config names the same three sets by key under
+``taxonomy.ruleset.reference_family_set``, and :data:`EXPECTATIONS` covers them exactly.
 """
 
 
@@ -803,11 +783,8 @@ This is the membership test :func:`dispatch` applies, and :data:`EXPECTATIONS` m
 def declared_task_family(store: ProvStore, hint: AudioHints | None = None) -> str | None:
     """The declared task family, from whichever carrier the graph has.
 
-    Nothing passes a task family to a branch — routing hands a branch one bit, ``will_run`` — so
-    the mode test is the branch's own and this is the one place it is derived. Two carriers are
-    read, in order: the hint's ``task_token`` metadata, which is the clean route, and then the
-    ``path`` ADMIT writes onto the ``recording`` stream entity, which is the one available today.
-    A third carrier is one more entry in this function and no change in any branch.
+    Two carriers are read, in order: the hint's ``task_token`` metadata, then the ``path`` ADMIT
+    writes onto the ``recording`` stream entity.
 
     Args:
         store: The provenance store.
@@ -816,7 +793,7 @@ def declared_task_family(store: ProvStore, hint: AudioHints | None = None) -> st
     Returns:
         The family, or None when no carrier names one — an absent ``recording`` entity, a path that
         is not a BIDS stem, or a stem whose task id is ``"unknown"``. None takes the out-of-family
-        mode, which is the safe arm: the branch annotates its speciality and concludes nothing.
+        mode.
     """
     for task_id in _declared_task_ids(store, hint):
         family = task_family(task_id)
@@ -894,9 +871,8 @@ def dispatch(
 ) -> Result:
     """The whole of the mode decision, and the contract each mode is held to.
 
-    The declaration picks the mode; it never supplies the answer. ``task_family`` absent from this
-    branch's table — undeclared, unreadable, or another branch's kind — takes the out-of-family
-    mode. There is no third arm and no fallback that guesses a family.
+    A ``task_family`` absent from this branch's table — undeclared, unreadable, or another
+    branch's kind — takes the out-of-family mode.
 
     Args:
         branch: One of :data:`BRANCHES`.
@@ -956,7 +932,7 @@ PARAM_SECTION = "branch"
 """The config section every operating point in :class:`BranchParams` is read from."""
 
 
-def _band(value: Any) -> tuple[float, float]:  # noqa: ANN401 — one config leaf, shape checked here
+def _band(value: Any) -> tuple[float, float]:  # noqa: ANN401 — one config leaf
     """A ``[lo, hi]`` config leaf as a pair of floats.
 
     Args:
@@ -1028,14 +1004,8 @@ UNMEASURED_POINTS = "unmeasured_operating_points"
 class BranchParams:
     """Every operating point a branch body may ask for, read from the config and never refused.
 
-    **A branch does not decide, and a refusal is a decision.** So there is one accessor,
-    :meth:`point`, it returns None for a point nobody has measured, and it records what was asked
-    for so the branch can report it as a fact beside its spans. Nothing here raises for an
-    unmeasured value; :meth:`point` raises only for a key that is not a ``branch.*`` key at all,
-    which is a typo in the calling code and not a measurement the graph is missing.
-
-    Reading is lazy and the misses accumulate per instance, so what a report names is what *this*
-    recording's bodies actually asked for rather than the whole section.
+    There is one accessor, :meth:`point`; it returns None for a point nobody has measured and
+    records the ask in :attr:`missing`. Reading is lazy and the misses accumulate per instance.
 
     Attributes:
         config: The resolved triage configuration.
@@ -1045,7 +1015,7 @@ class BranchParams:
     config: TriageConfig
     missing: list[str] = field(default_factory=list)
 
-    def point(self, key: str) -> Any:  # noqa: ANN401 — each key's own type; several are not floats
+    def point(self, key: str) -> Any:  # noqa: ANN401 — each key's own type
         """One operating point, or None when nobody has measured it.
 
         Args:
@@ -1056,13 +1026,9 @@ class BranchParams:
             overridden value is null. A null is recorded in :attr:`missing` on first read.
 
         Raises:
-            KeyError: If the name is not a ``branch`` key. A typo in a body is a programming error,
-                not a measurement the graph is missing, so it surfaces here rather than reading as
-                one more unmeasured point.
+            KeyError: If the name is not a ``branch`` key.
             UnknownConfigKey: If the name is a :data:`POINT_TYPES` key the packaged file does not
-                spell — a drift between the two, which the second guard catches because
-                :meth:`TriageConfig.require` tells an unspelled key apart from a null one and this
-                method catches only the null.
+                spell.
         """
         if key not in POINT_TYPES:
             raise KeyError(f"{PARAM_SECTION}.{key} is not a branch operating point; check it against PARAM_KEYS")
@@ -1077,9 +1043,7 @@ class BranchParams:
     def setting(self, path: str, coerce: Callable[[Any], Any] = str) -> Any:  # noqa: ANN401 — one config leaf
         """One config value outside the ``branch`` section, read without refusing.
 
-        A body sometimes needs a setting another section owns — the stimulus aligner's sentence
-        terminators, for instance. Reading it with ``require`` would be a refusal by the branch, so
-        it is read here and a null is recorded beside the branch's own unmeasured points.
+        A null is recorded in :attr:`missing` beside the branch's own unmeasured points.
 
         Args:
             path: The full dotted path.
@@ -1089,7 +1053,7 @@ class BranchParams:
             The value, or None when it is null.
 
         Raises:
-            UnknownConfigKey: If no packaged key spells the path, which is a typo in the body.
+            UnknownConfigKey: If no packaged key spells the path.
         """
         try:
             return coerce(self.config.require(path))
@@ -1103,8 +1067,7 @@ class BranchParams:
 
         Returns:
             One :data:`UNMEASURED_POINTS` measurement, or nothing when every key read had a value.
-            The list is in **read order**, not sorted: which point a body reached for first is what
-            says where the evaluation stopped being able to proceed.
+            The list is in read order, not sorted.
         """
         if not self.missing:
             return []
@@ -1116,11 +1079,9 @@ class BranchParams:
 
         Returns:
             ``consensus.vocabulary_key``: casefold, then strip the edge punctuation
-            ``. , ; : ! ? " ' ( )``.
-            Interior punctuation survives, so ``555-1234`` keeps its hyphen and ``[um]`` keeps its
-            brackets. This is **not** the stimulus alignment's ``normalise_token`` (``casefold; keep
-            alphanumerics and apostrophe``), which drops both; an earlier version of this docstring
-            named that normalisation and was wrong about what the property returns.
+            ``. , ; : ! ? " ' ( )``. Interior punctuation survives, so ``555-1234`` keeps its
+            hyphen and ``[um]`` keeps its brackets. It is not the stimulus alignment's
+            ``normalise_token``, which drops both.
         """
         return vocabulary_key
 
@@ -1160,9 +1121,8 @@ PARAM_KEYS = (
 )
 """Every key the ``branch`` config section holds, in the order the section declares them.
 
-``p_normalise`` has no key: it is a function, and a config key naming one would be a plugin hook
-nobody has measured. Every other entry is a key of :data:`POINT_TYPES` and of the packaged section,
-and ``config_test`` pins the three against each other.
+``p_normalise`` has no key: it is a function. Every entry here is a key of :data:`POINT_TYPES` and
+of the packaged section, and ``config_test`` pins the three against each other.
 """
 
 
@@ -1173,8 +1133,7 @@ def branch_params(config: TriageConfig) -> BranchParams:
         config: The resolved triage configuration.
 
     Returns:
-        The record. Nothing is read until :meth:`BranchParams.point` is called, and a fresh record
-        per node call is what makes its ``missing`` list this recording's own.
+        The record. Nothing is read until :meth:`BranchParams.point` is called.
     """
     return BranchParams(config=config)
 
@@ -1224,8 +1183,7 @@ def hull(extents: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
 def merge(extents: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
     """Coalesce touching or overlapping extents.
 
-    Joins only what touches. Ordinary speech has a gap between every pair of words, so this is not
-    the way to group words into runs — :func:`lexical_runs` is.
+    Joins only what touches; to group words separated by ordinary pauses, use :func:`lexical_runs`.
 
     Args:
         extents: The extents, in any order.
@@ -1274,7 +1232,7 @@ def stream_entity(store: ProvStore, name: str = RECORDING_STREAM) -> Entity | No
 
 
 def stream_extent(store: ProvStore, name: str = RECORDING_STREAM) -> tuple[float, float] | None:
-    """One stream's extent, which is the measured duration every "was it done" test needs.
+    """One stream's extent, which is the recording's measured duration.
 
     Args:
         store: The provenance store.
@@ -1379,10 +1337,7 @@ def word_extent(word: Entity) -> tuple[float, float]:
 
 
 def off_task(components: Sequence[Proposal], spans: Sequence[Entity], p_gap_off_task_min_s: float) -> list[Finding]:
-    """Gaps long enough to matter that no proposed span covers.
-
-    Off-task material is the absence of the branch's speciality rather than an instance of it, so it
-    is a deviation and never a proposed span: a branch does not mint over ground it is disclaiming.
+    """Gaps long enough to matter that no proposed span covers, as deviations rather than spans.
 
     Args:
         components: The spans this branch proposed.
@@ -1412,9 +1367,8 @@ def off_task_findings(components: Sequence[Proposal], spans: Sequence[Entity], p
         params: The operating points.
 
     Returns:
-        One ``off_task_extent`` deviation per uncovered gap, and nothing at all when the gap minimum
-        is unmeasured: without it no gap is long enough to matter or short enough not to be, and the
-        ask is recorded in ``params.missing``.
+        One ``off_task_extent`` deviation per uncovered gap, and nothing at all when the gap
+        minimum is unmeasured; the ask is then recorded in ``params.missing``.
     """
     minimum = params.point("gap_off_task_min_s")
     return [] if minimum is None else off_task(components, spans, minimum)
@@ -1422,9 +1376,6 @@ def off_task_findings(components: Sequence[Proposal], spans: Sequence[Entity], p
 
 def declared_duration_count(store: ProvStore, declared: float | None) -> list[Finding]:
     """The recording's measured duration beside what the sidecar declared.
-
-    A sidecar-consistency check, not a task-completion measurement: the finding is that the two
-    disagree, and which of them is wrong is a separate question.
 
     Args:
         store: The provenance store.
@@ -1777,9 +1728,7 @@ def robust_spread(values: np.ndarray) -> float:
 def windowed_spreads(values: np.ndarray, hop_s: float, window_s: float) -> np.ndarray:
     """Every window's local spread, over the windows that carry enough of the series to have one.
 
-    A window holding fewer than two finite values is not a spread of zero, it is no reading: it is
-    dropped rather than voting. The measurement behind that is in
-    ``specs/20260817-triage-workflow-dag/voice-flag-grounds.md``.
+    A window holding fewer than two finite values is dropped rather than read as a spread of zero.
 
     Args:
         values: The values, one per hop.
@@ -1803,18 +1752,13 @@ def windowed_spreads(values: np.ndarray, hop_s: float, window_s: float) -> np.nd
 def typical_windowed_spread(values: np.ndarray, hop_s: float, window_s: float) -> float:
     """The spread of a representative window, which is what a per-window bound is a bound on.
 
-    The median rather than the maximum: a bound derived for one window, applied to the worst of
-    thousands, is certain to find the tracker noise it was written to tolerate, and the number of
-    windows grows with the duration of the very production being qualified.
-
     Args:
         values: The values, one per hop.
         hop_s: The hop, in seconds.
         window_s: The window, in seconds.
 
     Returns:
-        The median of :func:`windowed_spreads`, or NaN when no window is readable — which is an
-        unmeasured qualifier, never a passing or failing one.
+        The median of :func:`windowed_spreads`, or NaN when no window is readable.
     """
     spreads = windowed_spreads(values, hop_s, window_s)
     return float(np.median(spreads)) if spreads.size else float("nan")
@@ -1949,8 +1893,7 @@ def events_in_extent(
 ) -> list[tuple[float, float]]:
     """Every event inside one extent, by peak prominence and a trough-return walk.
 
-    Multiple maxima inside one carrier become separate events, which is the whole point: a span
-    holding three coughs is three events, not one.
+    Multiple maxima inside one carrier become separate events.
 
     Args:
         envelope: The envelope track.
@@ -1959,8 +1902,7 @@ def events_in_extent(
 
     Returns:
         The events, coalesced, earliest first. Empty when one of the walk's own operating points is
-        unmeasured: the walk cannot be taken without it, and a walk taken on a substituted number
-        would report events nobody's setting found. The ask is recorded in ``params.missing``.
+        unmeasured; the ask is then recorded in ``params.missing``.
     """
     window_s = params.point("smoothing_window_s")
     prominence = params.point("peak_prominence_db")
@@ -2026,10 +1968,9 @@ def sounds_like(
 ) -> bool:
     """Whether any classifier window over this span scored this sound, in that classifier's own names.
 
-    Reads ``raw_scores``, which PREPROCESS always writes, rather than ``labels``, which is a top-K
-    decision over it that the shipped config leaves unmade for two of the three classifiers. Each
-    window is read against the spellings its own classifier uses, taken from its ``classifier``
-    attribute; a window whose classifier the set names nothing for contributes nothing.
+    Reads ``raw_scores`` rather than ``labels``, each window against the spellings its own
+    ``classifier`` attribute names; a window whose classifier the set names nothing for contributes
+    nothing.
 
     Args:
         span: The span.
@@ -2064,7 +2005,7 @@ def train_rate_hz(envelope: EnvelopeTrack, extent: tuple[float, float], params: 
     Returns:
         The rate in Hz, or None when the extent is too short, the band selects nothing, the peak
         does not stand over its own band's mean, or one of the two operating points the search
-        needs is unmeasured. The ask is recorded in ``params.missing``.
+        needs is unmeasured.
     """
     band_hz = params.point("modulation_band_hz")
     prominence_min = params.point("rate_prominence_min")
@@ -2159,10 +2100,6 @@ def content_coverage(source_tokens: Sequence[str], produced_tokens: Sequence[str
 
 def lexical_runs(words: Sequence[Entity], max_gap_s: float) -> list[tuple[float, float]]:
     """Consecutive lexical words separated by no more than ``max_gap_s``, as one extent each.
-
-    Not :func:`merge` over the word extents: ``merge`` joins only touching or overlapping intervals,
-    and ordinary speech has a gap between every pair of words, so ``merge`` returns one extent per
-    word. This is the grouping SPEECH already does over the consensus word timings.
 
     Args:
         words: The lexical consensus words, in index order.

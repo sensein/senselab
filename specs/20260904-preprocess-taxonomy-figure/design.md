@@ -213,3 +213,51 @@ recording it exists to be distinguished from.
   staggering this lane does have was left exactly as it was, per instruction.
 - **The `phonation` lane** has no panel at all yet; TAXONOMY's phonation pass raises on eight null
   keys, so there would be nothing to draw.
+
+## Moved from `figure.py` docstrings (2026-09-20)
+
+Rationale that lived inline in `nodes/figure.py` and was cut when the module was trimmed to
+describe rather than argue. Nothing here is a new decision; each item is the record of one that
+was already taken.
+
+### `FigureStyle.also_write_pngs` is off
+
+A recording's pages are one PDF. Per-page PNGs were the earlier default and 388 recordings emitted
+538 loose pages whose only ordering was their filename. A test that must inspect one page's pixels
+turns the flag on.
+
+### The colorbar is an inset, not a gridspec column
+
+As a gridspec column the scale sat 0.07 of the figure clear of the panels: the waveform row's twin
+dBFS and continuity labels widen the shared column, and `constrained_layout` aligns every panel to
+it, so the gap was reserved decoration space no amount of padding could close. Each colorbar is now
+an inset anchored to its own panel's right edge.
+
+### Only the last timed panel carries tick labels
+
+Repeated on every panel, the tick labels collide with the title of the panel below — which is what
+the scratch tool's pages did.
+
+### `_MONOSPACE_EM_WIDTH` and `_TITLE_COLUMNS` are measured, not read off the font
+
+`_MONOSPACE_EM_WIDTH` is one monospaced character's advance in em for the face matplotlib resolves
+`monospace` to, measured on a rendered page rather than taken from the font's metrics: 0.0675 in per
+character at 8 pt. `_TITLE_COLUMNS = 95` is the characters-per-line of the cover title at its 11 pt
+proportional face on an 11-inch page.
+
+### Ink means attention
+
+The two kinds of coloured panel ink opposite ends of their scales and still read the same way. A
+per-span raster darkens where a label fires; the SQUIM panel darkens where quality is *poor*, since
+STOI, PESQ and SI-SDR are all higher-is-better. `cell_ramp` therefore runs the end of a colormap
+that matters to near-full colour and the other end to near-white, so it recedes into the page.
+`raster_paint_floor` leaves a cell below it unpainted for the same reason; it changes no
+measurement and the row stays present, because the label is still part of the file's union.
+
+### Why `parent_anchor` exists
+
+Every lane leaving a shared initial bar from its centre makes the connectors collinear, and the last
+drawn paints over the rest: a parent feeding three branches then looks like a parent feeding one.
+Each lane departs from its own fraction of the parent's width instead. The same defect and its fix
+are recorded for the branch rows in
+`specs/20260817-triage-workflow-dag/summary-is-the-figure.md`.

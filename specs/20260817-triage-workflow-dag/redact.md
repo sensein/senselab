@@ -220,3 +220,27 @@ Derivations live in [`benchmarks/`](benchmarks/).
 | --- | --- |
 | `redaction.fill` | which of `silence`, `noise`, `bleep` is least damaging to downstream measurement is still unmeasured. `silence` now **ships** as an owner-directed declared choice, not as the answer to that question |
 | `redaction.padding_ms` | a positive floor exceeding the worst measured consensus-word edge error. 250 ms now **ships** as a stated convention; the fit — the edge-error distribution at its maximum — is still owed (benchmarks/open.md) |
+
+## Moved from `nodes/redact.py` (2026-09-20)
+
+Two derivations that lived only in the module's docstrings when the prose was cut back to what the
+code is and how to call it.
+
+### The exemption's fifth condition: the covered words must span the whole extent
+
+`_expected_exemptions` refuses any candidate whose identified words do not reach the whole of the
+finding's own extent (within a 1e-9 s float slack). The condition is what makes *"every word its
+extent reaches"* trustworthy: SPEECH builds a located finding's extent as the hull of the words it
+covers, so the covered words' hulls reconstruct it exactly — unless one was missed, and a missed
+word is one the exemption would be accounting for without having looked at it. This sits alongside
+the four conditions listed under *What the declared stimulus accounts for*.
+
+### `verify_failed` / `verify_missing` are separate verdict keys from `scan_failed` / `scan_missing`
+
+`_Verification` keeps *attempted and raised* apart from *never attempted* for the reason the planning
+scan keeps them apart: "it broke" and "nobody ran it" are different findings, and the second is the
+silent one. Both pairs reach the verdict under their own keys — `verify_failed` and `verify_missing`
+beside `scan_failed` and `scan_missing` — because a store whose planning scan was complete and whose
+verification was not is a different state from the reverse, and an operator reading one pair of keys
+for both could not tell which half failed. The *Product* block above lists only the planning pair;
+the node writes all four.

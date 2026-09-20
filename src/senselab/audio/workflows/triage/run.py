@@ -1,9 +1,8 @@
 """The triage runner: one recording driven through the graph over one provenance store.
 
-Holds no thresholds and decides nothing. It builds the run's directory layout, calls each node in
-the graph's order, records whether each one completed, was skipped or raised, and hands that mapping
-to VERDICT — which is the only place ``errored`` can come from, since a node that raised wrote no
-verdict and the store cannot tell it from one never asked to run.
+Builds the run's directory layout, calls each node in the graph's order, records whether each one
+completed, was skipped or raised, and hands that mapping to VERDICT. See
+``specs/20260817-triage-workflow-dag/dag.md``.
 """
 
 from __future__ import annotations
@@ -53,11 +52,7 @@ NO_NODE = "no node implements this branch"
 """The note a branch with no implementation carries, selected or not."""
 
 WITHHELD_CRITICAL = "withheld: a critical measurement was absent and the run went straight to VERDICT"
-"""The note every branch carries when ROUTING short-circuited the run.
-
-A branch is ``SKIPPED`` for three different reasons and the state alone says none of them apart, so
-this is what keeps a withheld run distinguishable from a route the ruleset declined.
-"""
+"""The note every branch carries when ROUTING short-circuited the run."""
 
 STORE_FILE = "store.jsonl"
 LOG_FILE = "run.json"
@@ -80,16 +75,11 @@ class NodeOutcome:
 
     Attributes:
         node: The node's name.
-        state: Whether it completed, was skipped, or raised. Operational fact, recorded here and
-            nowhere else, and untouched by the report/decide split: it says what the runner did, not
-            what the graph concluded.
-        verdict: Its conclusion, or None — which is every reporting node, since a branch and QUALITY
-            write no verdict.
+        state: Whether it completed, was skipped, or raised.
+        verdict: Its conclusion, or None — which is every reporting node.
         report: What it reported, or None — which is every deciding node.
-        error: The exception's type and message when it raised, else None. The runner's own record —
-            never a store fact, because a crash is not a finding about the recording.
-        note: Why the state is what it is, where the state alone does not say — a branch recorded
-            ``SKIPPED`` because no node implements it, rather than because routing declined it.
+        error: The exception's type and message when it raised, else None.
+        note: Why the state is what it is, where the state alone does not say.
     """
 
     node: str
@@ -110,8 +100,7 @@ class TriageRunResult:
         run_dir: The run directory holding the store and every sidecar.
         artifacts_dir: The release directory REDACT was given; disjoint from ``run_dir``.
         store_path: The persisted store.
-        summary_dir: Where REPORT's two products go. Beside the store, never under ``artifacts_dir``:
-            both carry element ids, which are a join key back into the store.
+        summary_dir: Where REPORT's two products go, a sibling of ``run_dir`` and ``artifacts_dir``.
         released: REDACT's released pair, empty unless it cleared one.
         summary: REPORT's two products, empty when REPORT itself raised.
     """
@@ -141,14 +130,12 @@ class RunLayout:
 
     Attributes:
         entity_dir: The directory the run root sits in — ``out_dir`` joined with
-            :func:`entity_subdir` of the stem. Where a caller puts per-recording files that are
-            siblings of the run root.
+            :func:`entity_subdir` of the stem.
         root: The per-run root the three trees below are siblings in.
         run_dir: Where the store and every sidecar go.
         artifacts_dir: Where REDACT may release a pair. Fresh and empty on every run.
         store_path: Where the store is persisted.
-        summary_dir: Where REPORT's two products go, a sibling of the store tree and of the release
-            tree alike.
+        summary_dir: Where REPORT's two products go.
     """
 
     entity_dir: Path
@@ -184,9 +171,8 @@ def entity_subdir(stem: str) -> Path:
 def prepare_run_layout(out_dir: Path, stem: str) -> RunLayout:
     """Create a fresh run root under the stem's entity path, with store tree and release tree apart.
 
-    The release directory is created empty on every run and is never reused: a directory still
-    holding an earlier run's released pair would let a withheld run appear to have published one.
-    Two runs that land in the same second are separated by a numeric suffix rather than merged.
+    Two runs landing in the same second are separated by a numeric suffix. See
+    ``specs/20260817-triage-workflow-dag/dag.md``.
 
     Args:
         out_dir: The tree run roots are created in, under each stem's :func:`entity_subdir`.
@@ -231,9 +217,7 @@ def _attempt(outcomes: dict[str, NodeOutcome], node: str, call: Callable[[], _R]
         call: The node call, already bound to its arguments.
 
     Returns:
-        The node's result, or None when it raised or returned no result. The three states are
-        unchanged by the report/decide split: a node that reported is ``COMPLETED`` exactly as one
-        that decided is, and which of the two it was is carried beside the state rather than in it.
+        The node's result, or None when it raised or returned no result.
     """
     try:
         result = call()
@@ -273,29 +257,11 @@ def _drive_branches(
 ) -> dict[str, Path]:
     """Run PREPROCESS, TAXONOMY and routing, then exactly the branches routing selected.
 
-    A branch routing declined is recorded ``SKIPPED`` and never called, which is what lets VERDICT
-    tell a branch that found nothing from a branch that never looked. A branch in
-    :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES` that no node implements is recorded
-    ``SKIPPED`` carrying :data:`NO_NODE`, selected or not, so naming it in an execution set is a
-    record rather than a crash. A failed ROUTING call likewise
-    leaves every branch ``SKIPPED``: no branch has an authorised decision to act on. A ROUTING call
-    that completed and found a critical failure leaves every branch ``SKIPPED`` carrying
-    :data:`WITHHELD_CRITICAL`, which is the same state for a different reason and is why the note
-    exists. A branch that
-    raises is still recorded ``ERRORED`` and its siblings still run: none of them reads another's
-    output. REDACT is a step of SPEECH and runs only when SPEECH ran and its scan found PII. QUALITY
-    is the terminal node every recording reaches whatever routing selected, so it is called on every
-    path PREPROCESS completed, over the source recording rather than over a branch's view of it. Its
-    call sits after the branch loop and before REDACT because it reads stored outputs and nothing
-    else: every branch has written whatever it was going to write, and a branch that raised has
-    finished too. It decodes no audio, so the position is the only thing that decides what it sees.
-
-    PREPROCESS is the one dependency every later node in this function shares — TAXONOMY reads its
-    stored derivatives, routing reads both, and none of that evidence
-    exists when PREPROCESS itself raised. So a failed PREPROCESS call skips everything else here
-    (TAXONOMY, routing, every branch, REDACT) rather than attempting nodes with nothing to read; the
-    file still reaches VERDICT, which folds "no evidence" from the all-``SKIPPED`` record the same
-    way it already does for an ADMIT failure.
+    A branch routing declined, one no node implements (noted :data:`NO_NODE`) and one withheld by a
+    critical failure (noted :data:`WITHHELD_CRITICAL`) are all recorded ``SKIPPED`` and never
+    called. QUALITY is called after the branch loop on every path PREPROCESS completed, over the
+    source recording; REDACT only when SPEECH ran and its scan found PII. See
+    ``specs/20260817-triage-workflow-dag/dag.md``.
 
     Args:
         store: The provenance store, already holding ADMIT's ``recording`` stream.
@@ -349,18 +315,14 @@ def _attempt_artifacts(
 ) -> dict[str, Path]:
     """Call one node that renders rather than concludes, recording what happened.
 
-    REPORT writes no verdict — a rendering is not evidence — so its outcome carries no conclusion,
-    and its failure changes nothing about the file: the store was already written.
-
     Args:
         outcomes: The per-node record this call is added to.
         node: The node's name.
         call: The node call, already bound to its arguments.
 
     Returns:
-        The artifacts it produced. A failure that carried artifacts on the exception keeps them —
-        REPORT writes its JSON before it draws, and losing a complete product because the picture
-        beside it could not be drawn would be a second failure, not a consequence of the first.
+        The artifacts it produced, including any the exception carried on an ``artifacts``
+        attribute when it raised.
     """
     try:
         artifacts = call()
@@ -407,15 +369,9 @@ def run_triage(
 ) -> TriageRunResult:
     """Triage one recording: the whole graph, one store, one fresh run directory.
 
-    ADMIT is the initial gate. A ``fail`` there means the recording was never measured, so every other
-    node is recorded as ``skipped`` and only VERDICT runs, which is what makes "could not measure"
-    distinguishable from "measured, and found nothing". PREPROCESS is the second gate, of a different
-    kind: it does not fail or flag, but it can raise (see its own docstring), and every node after it
-    reads what it measured, so a raise there likewise leaves TAXONOMY, routing, every branch and
-    REDACT ``skipped`` — see ``_drive_branches``. Every other node's failure is captured rather than
-    propagated and the store is persisted either way. ROUTING is the only remaining dependency gate:
-    when it fails, its dependent branches are recorded ``skipped`` because no execution decision was
-    written; other nodes' independent siblings still run.
+    ADMIT, PREPROCESS and ROUTING are dependency gates: a ``fail`` or a raise in one records every
+    node that reads it as ``skipped``. Every other node's failure is captured rather than propagated
+    and the store is persisted either way.
 
     Args:
         source: The recording to triage.
@@ -426,8 +382,7 @@ def run_triage(
 
     Returns:
         The file verdict, the per-node outcomes and errors, the run's paths, REDACT's released pair
-        and REPORT's two products. REPORT runs after VERDICT on every outcome and writes no elements,
-        so its own failure is recorded beside every other node's and changes no verdict.
+        and REPORT's two products.
     """
     source = Path(source)
     layout = prepare_run_layout(Path(out_dir), source.stem)

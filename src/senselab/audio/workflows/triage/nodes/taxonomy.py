@@ -3,10 +3,9 @@
 It runs no model, reads no hint, localises nothing and decides nothing. It writes two measurements
 per classifier that produced scores: the whole-file label-score distribution, with no threshold
 applied, and the file-level ``consensus_taxonomy`` that resolves every classifier's per-span labels
-onto the AudioSet ontology node each denotes. ROUTING, FIGURE and REPORT read them.
-
-It measures; ``routing`` decides. ``specs/20260912-ruleset-in-pipeline/design.md`` records what this
-node used to fold and why that fold was removed.
+onto the AudioSet ontology node each denotes. ROUTING, FIGURE and REPORT read them; ``routing``
+decides. See ``specs/20260817-triage-workflow-dag/taxonomy.md`` and
+``specs/20260912-ruleset-in-pipeline/design.md``.
 """
 
 from __future__ import annotations
@@ -108,8 +107,8 @@ def _per_span_label_scores(store: ProvStore, measurement_name: str) -> dict[str,
         measurement_name: ``"span_yamnet"`` or ``"span_hear"``.
 
     Returns:
-        ``{span_id: {label: score}}``, read from ``raw_scores`` — the model's own output, written
-        whatever the configuration says. No labelling threshold takes part.
+        ``{span_id: {label: score}}``, read from each span's ``raw_scores`` attribute. No labelling
+        threshold takes part.
     """
     by_span: dict[str, dict[str, float]] = {}
     for measurement in find_measurements(store, measurement_name):
@@ -194,15 +193,9 @@ def _write_consensus_taxonomy(
 ) -> tuple[list[str], tuple[str, ...], int]:
     """Consolidate the per-span labels into one file-level taxonomy, for downstream to read.
 
-    Every classifier's labels are resolved onto the AudioSet ontology node each denotes before they
-    are consolidated, so a row is one node rather than one spelling: HeAR ``Throat Clear`` and
-    YAMNet ``Throat clearing`` are one row reaching ``n_classifiers: 2``, and the row is named by
-    the ontology. A label the profile does not name keeps its own spelling and its own row.
-
-    Resolution is onto the label's mapped node alone, never its subtree, so HeAR ``Cough`` and
-    YAMNet ``Throat clearing`` stay two rows. Two of one classifier's own labels landing on one node
-    — HeAR ``Cough`` and ``Baby Cough`` both denote AudioSet ``Cough`` — contribute one entry to
-    ``peak_by_classifier`` and are both named in ``labels_by_classifier``.
+    Every classifier's labels are resolved onto the AudioSet ontology node each denotes — the mapped
+    node alone, never its subtree — so a row is one node rather than one spelling. See
+    ``specs/20260910-classifier-ontology-mapping/design.md``.
 
     Args:
         store: The provenance store.
@@ -211,8 +204,7 @@ def _write_consensus_taxonomy(
 
     Returns:
         The ids written, the classifiers that contributed, and how many ontology nodes the
-        consolidation kept. The ids and the classifiers are empty when no per-span classifier
-        produced scores, so "no consensus" and "a consensus over nothing" stay distinguishable.
+        consolidation kept. All three are empty when no per-span classifier produced scores.
 
     Raises:
         ValueError: If the configured classifier-ontology profile fails validation.
@@ -292,8 +284,7 @@ def _write_label_summaries(store: ProvStore, run_dir: Path, software: str) -> li
 
     Returns:
         The ids written, for the node's view. A classifier whose scores are absent contributes
-        nothing rather than an empty summary, so a missing summary and an all-zero one stay
-        distinguishable.
+        nothing rather than an empty summary.
     """
     written: list[str] = []
     for classifier in SUMMARISED_CLASSIFIERS:
@@ -333,8 +324,7 @@ def taxonomy(
         store: The provenance store, holding PREPROCESS's derivatives.
         source: The stream every element it writes names, ``"plain"``.
         config: The triage configuration, read for the consolidation floor and the ontology profile.
-        hint: Accepted for the shared node shape and **not read**. A measurement that reads the
-            declaration cannot disagree with it.
+        hint: Accepted for the shared node shape and not read.
         run_dir: Where PREPROCESS wrote each classifier's verbatim
             ``derivatives/<classifier>_scores.json`` — the sidecars this node reads. It writes none
             of its own.

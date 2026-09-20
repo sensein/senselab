@@ -245,7 +245,7 @@ Detail: [`branch-voice.md`](branch-voice.md),
 [`branch-voice-implementation.md`](branch-voice-implementation.md),
 [`voice-flag-grounds.md`](voice-flag-grounds.md).
 
-### QUALITY — the terminal node every recording reaches
+### QUALITY — the node every recording reaches
 
 Not a branch: it has no route, no kind and no subject to find. It is called after the branch loop on
 every path PREPROCESS completed, whatever routing selected and whether or not routing itself raised.
