@@ -8,6 +8,8 @@ only two authors REDACT reads.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -1634,6 +1636,109 @@ class TestTheChainOfThoughtIsCaptured:
         assert "concern [LOCATION]: a town with one clinic" in text
         assert "llm check: flagged" in text
         assert f"revision={'a' * 40}" in text, "a chain of thought nobody can attribute to a commit is not evidence"
+
+
+class TestTheStepRecordsWhatItCost:
+    """A step that can take minutes and leaves no clock behind has to be re-measured to be sized.
+
+    Every timing in ``specs/20260817-triage-workflow-dag/llm-check-first-run.md`` was taken from
+    outside the graph, because the store held none. See ``llm-check-amortised-load.md``.
+    """
+
+    def test_the_activity_carries_its_own_start_and_end(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ "How long did the re-read take" must be answerable from the store alone."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(monkeypatch, [_clean()])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        activity = next(a for a in store.activities("REDACT") if a.step == "llm_check")
+        assert activity.started is not None and activity.ended is not None
+        started = datetime.fromisoformat(activity.started)
+        ended = datetime.fromisoformat(activity.ended)
+        assert started.tzinfo is not None, "a stamp with no zone cannot be compared across hosts"
+        assert ended >= started
+
+    def test_a_disabled_step_is_stamped_too(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        redact_config: TriageConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The activity is written on every path, so an unstamped one would be the odd record out."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        activity = next(a for a in store.activities("REDACT") if a.step == "llm_check")
+        assert activity.started is not None and activity.ended is not None
+
+    def test_each_round_records_its_clock_and_how_much_of_it_was_the_load(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The load is the cost worth separating: it is what amortising removes."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["born", "in", "belmont"], findings=[("PERSON", (0.0, 0.5))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(
+            monkeypatch,
+            [
+                replace(
+                    _flags(ReviewFinding(text="belmont", category="LOCATION", why="one clinic")),
+                    elapsed_s=21.5,
+                    load_s=9.9,
+                    output_tokens=117,
+                ),
+                replace(_clean(), elapsed_s=4.6, load_s=0.0, output_tokens=96),
+            ],
+        )
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        rounds = [dict(entity.attributes) for entity in _reviews(store)]
+        assert [round_["elapsed_s"] for round_ in rounds] == [21.5, 4.6]
+        assert [round_["load_s"] for round_ in rounds] == [9.9, 0.0]
+        assert [round_["output_tokens"] for round_ in rounds] == [117, 96]
+
+    def test_the_timings_reach_the_report_document(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Written to the store and dropped by the reader is written nowhere a sizer looks."""
+        from senselab.audio.workflows.triage.nodes.report import _llm_annotation, _llm_check_lines, _llm_reviews
+
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(monkeypatch, [replace(_clean(), elapsed_s=21.5, load_s=9.9, output_tokens=117)])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        reviews = _llm_reviews(store)
+        assert [review["load_s"] for review in reviews] == [9.9]
+        text = "\n".join(_llm_check_lines(_llm_annotation(store), reviews))
+        assert "elapsed_s=21.5" in text and "load_s=9.9" in text
+
+    def test_no_timing_reaches_the_annotation(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``corpus_report`` counts each annotation field's values; a float per file is 15,900 buckets."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(monkeypatch, [replace(_clean(), elapsed_s=21.5, load_s=9.9)])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        annotation = _annotation(store)
+        assert not [key for key in annotation if key.endswith("_s")], f"timing leaked into {sorted(annotation)}"
 
 
 class TestTheReviewerAnnotatesAndVerdictDecides:
