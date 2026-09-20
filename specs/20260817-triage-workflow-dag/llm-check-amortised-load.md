@@ -43,6 +43,10 @@ only thing that runs at corpus scale — and the within-recording win on the sin
 underneath it. That is what makes the single-recording path impossible to break: it is the same
 call, and a process that makes exactly one review behaves exactly as it did, one load and all.
 
+What that argument missed, and the measurements below found, is that the corpus driver is also the
+one place the worker has to share a GPU with the rest of the graph — and it cannot. So the design
+stands, the win is real, and it is gated on a config key rather than taken by default.
+
 ## What the worker is
 
 One subprocess in the `pii-redaction-review` venv, keyed on `(model_id, resolved commit)`, started
@@ -62,6 +66,15 @@ on that SHA, which makes the pinning *stronger* than it was: the commit a worker
 its lifetime, so a later review is served by the weights that SHA names or by a worker that was
 restarted and re-resolved — never by a pointer that moved under a running one.
 `revision_pinning_guard_test.py`'s allowlist entry says so.
+
+### How long it lives
+
+`redaction.llm_check.keep_worker_resident`, shipped `false`. The rounds of one check always share
+one loaded model — that part needs no permission and cannot hurt anything, because the check is the
+only thing running while it runs. Whether the *next recording* inherits the weights is the key, and
+it ships off because a resident worker on an 80 GB card starves everything else on it; the
+measurement is below, and the derivation is in `config-derivations.md` under `redaction.llm_check.*`.
+`_llm_check` releases the worker in a `finally`, so a check that raises does not strand the memory.
 
 ### The three failure shapes, and why they differ
 
@@ -267,6 +280,29 @@ Two honest qualifications, both of which make this a conservative reading:
 
 ### The step, end to end, in the corpus driver's shape
 
+The arena times the step in isolation. The corpus driver's shape — 26 recordings through the *whole*
+graph in one process, `llm_check` on, on one H100 — is where the amortisation has to survive contact
+with everything else the graph wants the card for. **It did not.**
+
+With `keep_worker_resident: true`:
+
+| | recordings |
+| --- | --- |
+| completed, PREPROCESS through REDACT | **3** |
+| errored in PREPROCESS with `asr_qwen: RuntimeError: CUDA error: out of memory` | **19** |
+
+The three that completed are recordings 1, 2 and 3; the check first ran on recording 3, and **every
+recording after it failed**. Recording 3's own store carries the step exactly as designed —
+`activity_span_s: 21.587`, one round, `load_s: 14.587`, 134 output tokens, the 40-hex revision — and
+then the worker it left behind held 70.4 GiB and PREPROCESS's ASR could not allocate.
+
+That is the measurement behind `redaction.llm_check.keep_worker_resident`, and it is why the key
+ships `false`. It is also worth saying plainly what the default costs: with one round per recording,
+releasing the worker after every check is arm A, 20.3 s per checked recording — the amortisation
+then buys only the multi-round case, and on this corpus no recording had one. **The corpus-scale win
+is real but it is not free: it requires giving the step a GPU of its own**, which is what the owner's
+separate-pass plan already does.
+
 <!-- DRIVER -->
 
 <!-- MEASUREMENT -->
@@ -362,8 +398,8 @@ including one that fails if a timing ever reaches the annotation.
 
 ### Mutations
 
-Sixteen, each applied to the shipped source, run against the named suite, and reverted. **Fifteen
-caught.**
+Twenty, each applied to the shipped source, run against the named suite, and reverted.
+**Nineteen caught.**
 
 | | mutation | caught by |
 | --- | --- | --- |
@@ -383,6 +419,10 @@ caught.**
 | M14 | the allocator is never emptied | **not caught — see below** |
 | M15 | the device footprint never reaches the caller | worker suite |
 | M16 | the device footprint never reaches the store | redact suite |
+| M17 | the worker is held across recordings regardless of the config | redact suite |
+| M18 | the worker is always released, so a dedicated pass cannot amortise either | redact suite |
+| M19 | the release is not on the failure path | redact suite |
+| M20 | the packaged config asks for residency | redact suite |
 
 **M14 is not catchable by this suite, by construction, and saying so is more useful than pretending
 otherwise.** `torch.cuda.empty_cache()` lives inside the worker *script* — the string the fake
