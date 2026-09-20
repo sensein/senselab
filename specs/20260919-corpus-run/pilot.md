@@ -80,3 +80,44 @@ SPEECH: `stimulus_mismatch` 289, `omission` 126, `off_task_extent` 103, `filler`
 
 VOICE's deviation counts being two orders of magnitude below its flag count is itself the finding:
 it is not reporting what a participant did differently, it is failing to find the carrier at all.
+
+## The largest flag ground was routing's leniency, and it is no longer a ground
+
+The grounds table, read over the pilot, separates what the flag count could not:
+
+| ground | records | of all recordings |
+|---|---:|---:|
+| **`mismatch: routing routed VOICE, it found no subject`** | **569** | **25.1%** |
+| **`mismatch: routing routed AIRWAY, it found no subject`** | **261** | **11.5%** |
+| `VOICE reported that what the instruction asked for did not happen` | 187 | 8.2% |
+| `SPEECH reported that what the instruction asked for did not happen` | 182 | 8.0% |
+| `hint mismatch: VOICE was declared and did not find it` | 157 | 6.9% |
+| `REDACT verification found pii` | 158 | 7.0% |
+| `AIRWAY reported that what the instruction asked for did not happen` | 102 | 4.5% |
+| `hint mismatch: SPEECH was declared and did not find it` | 68 | 3.0% |
+| `hint mismatch: AIRWAY was declared and did not find it` | 63 | 2.8% |
+| `TAXONOMY: no per-span classifier produced scores` | 38 | 1.7% |
+| `mismatch: routing declined SPEECH, it found it` | 24 | 1.1% |
+| `routing: no branch routed and the recording was not measurably empty` | 11 | 0.5% |
+
+The top two are one ground reaching 830 records, and it is not a finding about the recording.
+Routing is lenient by design — the owner's rule is that screening is lenient and the branches
+discard — so sending VOICE to a read passage and AIRWAY to a DDK train is routing working as
+intended, and the branch finding nothing of its kind is the branch being right. The owner confirmed
+it directly: *it's possible for voice to find nothing.*
+
+**382 of 2,269 recordings (16.8%) flagged on that ground and nothing else** — led by
+`harvard-sentences-list` (104), `productive-vocabulary` (30), `free-speech-v2` (21), `free-speech`
+(21), `picture-description` (17), `rainbow-passage` (14) and the DDK families. Every one of them
+performed its declared task.
+
+So that direction of the mismatch is no longer a flag ground. The other direction — declined and
+found it anyway — is the ruleset being wrong about the recording, and still flags. Both remain in
+the `agreement` table, which is where a reader checks the ruleset against the detectors, and
+`findings` and `routes` already record the observation on every recording, so nothing auditable is
+lost.
+
+The informative absence is untouched: `hint mismatch: X was declared and did not find it` stays a
+ground on all three branches, which is the case where the recording said it held a kind and does not.
+
+**Corpus flag rate: 41.0% → 24.2%.**

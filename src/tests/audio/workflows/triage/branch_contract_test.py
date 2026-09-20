@@ -237,13 +237,18 @@ class TestTheFoldDecidesFromWhatIsReported:
         assert absent.findings["AIRWAY"] == "absent"
         assert silent.findings["AIRWAY"] == "uncertain"
 
-    def test_the_route_reaches_triage_only_through_a_mismatch(self) -> None:
-        """Routed and found nothing is over-routing; declined and found it is a miss. Both flag."""
+    def test_only_one_direction_of_a_route_mismatch_reaches_triage(self) -> None:
+        """Declined and found it is the ruleset being wrong about the recording, and flags.
+
+        Routed and found nothing is not the mirror of it. Routing is lenient by design, so sending a
+        branch to a recording that holds none of its kind is expected, and the branch finding nothing
+        is the branch being right. Both directions stay in the agreement table; only one is a ground.
+        """
         over = _fold([_report("AIRWAY", conformance=True)], spans={}, routes={"AIRWAY": ROUTED})
         missed = _fold([_report("AIRWAY", conformance=True)], spans={"AIRWAY": 1}, routes={"AIRWAY": DECLINED})
         assert over.agreement["AIRWAY"] == "mismatch"
         assert missed.agreement["AIRWAY"] == "mismatch"
-        assert over.triage is Triage.FLAG
+        assert over.triage is Triage.PASS
         assert missed.triage is Triage.FLAG
 
     def test_the_fold_is_task_aware(self) -> None:

@@ -376,9 +376,15 @@ class TestTheRoutingIsReportedBeside:
         )
         assert folded.agreement["SPEECH"] == "mismatch"
         assert folded.triage is Triage.FLAG
+        assert [reason for reason in folded.reasons if "it found it" in reason.why]
 
-    def test_a_routed_branch_that_found_nothing_is_a_mismatch(self) -> None:
-        """The other direction of the same row: the ruleset over-routed."""
+    def test_a_routed_branch_that_found_nothing_is_a_mismatch_and_does_not_flag(self) -> None:
+        """Routing is lenient by design, so a branch finding none of its kind is it being right.
+
+        The mismatch stays in the agreement table, which is where a reader checks the ruleset against
+        the detectors. It is not a ground: charging the recording for routing's leniency made this
+        the largest single flag ground in the corpus, 830 records over a 2,269-recording pilot.
+        """
         folded = fold_file_verdict(
             [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
             branch_reports=[_report("SPEECH", "speech")],
@@ -389,6 +395,23 @@ class TestTheRoutingIsReportedBeside:
             route_state=ROUTED,
         )
         assert folded.agreement["SPEECH"] == "mismatch"
+        assert folded.findings["SPEECH"] == "absent"
+        assert folded.triage is Triage.PASS
+        assert not [reason for reason in folded.reasons if "found no subject" in reason.why]
+
+    def test_a_declared_branch_that_found_nothing_still_flags(self) -> None:
+        """The informative case survives: the recording said it held this kind and it does not."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech")],
+            spans_by_node={},
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={"SPEECH": True},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.FLAG
+        assert [reason for reason in folded.reasons if "was declared and did not find it" in reason.why]
 
     def test_an_unreadable_route_is_resolved_not_mismatched(self) -> None:
         """A branch whose gates could not be read made no claim to disagree with."""
