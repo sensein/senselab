@@ -665,6 +665,39 @@ BREATH_TOKEN = "[breath]"
 """The one bracketed token that is never a filler: a breath in a passage reading is structure."""
 
 
+def stimulus_haystack(hint: AudioHints | None) -> str | None:
+    """The recording's own declared prompts, normalised for a containment test.
+
+    Args:
+        hint: What the recording was declared to contain.
+
+    Returns:
+        The prompts joined and case-folded with runs of whitespace collapsed, or None when the
+        recording declares no prompt text and no containment can be tested.
+    """
+    if hint is None:
+        return None
+    texts = [str(prompt.text) for prompt in hint.expected_speech if getattr(prompt, "text", None)]
+    return " ".join(" ".join(text.split()) for text in texts).casefold() or None
+
+
+def in_stimulus(surface: str, haystack: str | None) -> bool | None:
+    """Whether a detected surface is text the participant was handed rather than text they chose.
+
+    Args:
+        surface: The detector's own span text.
+        haystack: :func:`stimulus_haystack`'s result.
+
+    Returns:
+        True when the surface occurs in the declared prompts, False when it does not, and None when
+        the recording declares none — an absence that must not read as a finding either way.
+    """
+    if haystack is None:
+        return None
+    normalised = " ".join(str(surface).split()).casefold()
+    return bool(normalised) and normalised in haystack
+
+
 def _consensus_id(store: ProvStore) -> str | None:
     """The live ``consensus_transcript`` measurement's id, which every proposal here derives from.
 
@@ -1870,6 +1903,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     store.used(pii_act, consensus.id)
     for name in source_names:
         store.used(pii_act, hypotheses[name].id)
+    stimulus_text = stimulus_haystack(hint)
     raw_scans = scan_for_pii([text for _, text, _ in haystacks])
     scans: list[PiiScan] = raw_scans if isinstance(raw_scans, list) else [raw_scans]
     failures: dict[str, str] = {}
@@ -1906,6 +1940,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                         "category": finding.category,
                         "source": finding.source,
                         "haystack": haystack,
+                        "in_stimulus": in_stimulus(str(finding.text or ""), stimulus_text),
                         "sources": sources,
                         "occurrence": occurrences.index((first, last)),
                         "occurrences_n": len(occurrences),
