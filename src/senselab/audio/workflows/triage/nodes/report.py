@@ -41,7 +41,12 @@ from senselab.audio.workflows.triage.nodes.common import (
     span_role_kind,
     span_sources,
 )
-from senselab.audio.workflows.triage.nodes.figure import FigureStyle, branch_lanes, summary_pages
+from senselab.audio.workflows.triage.nodes.figure import (
+    FigureStyle,
+    branch_lanes,
+    monospace_columns,
+    summary_pages,
+)
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
     GRAPH_ORDER,
@@ -62,7 +67,8 @@ _UNLABELLED = "unlabelled"
 _UNKNOWN = "—"
 _UNSCANNED = "[unscanned]"
 _SHA_LENGTH = 40
-_BLOCK_COLUMNS = 168
+_BLOCK_FONTSIZE = 8.0
+_BLOCK_COLUMNS = monospace_columns(FigureStyle(), _BLOCK_FONTSIZE)
 _TITLE_COLUMNS = 96
 _SHOWN_DECIMALS = 4
 _TOP_CATEGORIES = 6
@@ -2160,7 +2166,9 @@ def _text_figure(lines: list[str], title: str, *, figsize: tuple[float, float] |
     figure = pyplot.figure(figsize=figsize or (14.0, height))
     axis = figure.add_subplot(111)
     axis.axis("off")
-    axis.text(0.03, 0.94, "\n".join(lines), va="top", ha="left", family="monospace", fontsize=8)
+    axis.text(
+        0.03, 0.94, "\n".join(lines), va="top", ha="left", family="monospace", fontsize=_BLOCK_FONTSIZE
+    )
     figure.suptitle(title)
     return figure
 

@@ -935,6 +935,27 @@ def cover_margins(style: FigureStyle) -> tuple[float, float]:
     return style.cover_margin_in / width_in, style.cover_margin_in / height_in
 
 
+MONOSPACE_ADVANCE_EM = 0.6075
+"""One monospaced character's advance width, in em, for the face matplotlib resolves ``monospace``
+to. Measured rather than taken from the font's metrics: 0.0675 in per character at 8 pt."""
+
+
+def monospace_columns(style: FigureStyle, fontsize: float) -> int:
+    """How many monospaced characters fit between the cover's margins.
+
+    Args:
+        style: The drawing configuration, which carries the page size and the printed margin.
+        fontsize: The point size the text is drawn at.
+
+    Returns:
+        The column count. Wrapping to more than this runs the text off the page, where it is
+        truncated mid-word with no error of any kind.
+    """
+    drawable_in = style.figure_inches[0] - 2.0 * style.cover_margin_in
+    advance_in = MONOSPACE_ADVANCE_EM * fontsize / 72.0
+    return max(1, int(drawable_in / advance_in))
+
+
 def cover_body_rect(style: FigureStyle, title_lines: int) -> tuple[float, float, float, float]:
     """The cover's layout box for everything under the title, in figure fractions.
 
