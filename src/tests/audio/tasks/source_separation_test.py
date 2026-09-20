@@ -1253,6 +1253,7 @@ def test_the_mps_path_casts_the_schedule_before_moving_it() -> None:
     assert "src.float().to(device=timesteps.device)[timesteps]" in script
 
 
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="the allowlist admits MPS only where MPS exists")
 def test_naming_mps_is_not_refused_by_the_host_allowlist(
     mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch
 ) -> None:

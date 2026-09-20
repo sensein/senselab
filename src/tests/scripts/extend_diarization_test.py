@@ -142,6 +142,19 @@ def _summary(log_dir: Path) -> dict[str, Any]:
 
 
 @pytest.fixture
+def both_streams(tmp_path: Path) -> list[str]:
+    """``--config`` naming both halves of the enhancement partition.
+
+    The packaged default diarizes ``enhanced`` alone, because nothing in the graph reads the
+    residual measurement. This pass is what adds it, so the tests for it ask for it: a campaign
+    wanting the residual reading configures it, exactly as the one-stream test configures one.
+    """
+    override = tmp_path / "both_streams.yaml"
+    override.write_text("diarization:\n  streams: [enhanced, residual]\n")
+    return ["--config", str(override)]
+
+
+@pytest.fixture
 def corpus(tmp_path: Path) -> Callable[..., tuple[Path, list[Path]]]:
     """A factory for a manifest over N finished runs."""
 
@@ -160,13 +173,16 @@ class TestTheExtendPass:
     """What one pass adds to a finished run, and what it leaves untouched."""
 
     def test_one_measurement_per_stream_is_merged_into_the_existing_store(
-        self, corpus: Callable[..., tuple[Path, list[Path]]], stub_diarizer: Callable[..., None]
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        stub_diarizer: Callable[..., None],
+        both_streams: list[str],
     ) -> None:
         """Both halves of the enhancement partition land, each naming its own stream and sidecar."""
         manifest, roots = corpus(2)
         before = {root: _store_of(root).fingerprint() for root in roots}
 
-        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", *both_streams]) == 0
 
         for root in roots:
             store = _store_of(root)
@@ -181,11 +197,15 @@ class TestTheExtendPass:
                 assert len(measurement.attributes["checksum_sha256"]) == 64
 
     def test_a_run_whose_residual_was_never_written_still_gets_its_enhanced_reading(
-        self, corpus: Callable[..., tuple[Path, list[Path]]], stub_diarizer: Callable[..., None], tmp_path: Path
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        stub_diarizer: Callable[..., None],
+        both_streams: list[str],
+        tmp_path: Path,
     ) -> None:
         """One stream missing must not cost the other: the two are separate blocks, not one."""
         manifest, roots = corpus(1, streams=("enhanced",))
-        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 1
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", *both_streams]) == 1
 
         store = _store_of(roots[0])
         assert find_measurement(store, ENHANCED_DIARIZATION) is not None
@@ -217,7 +237,11 @@ class TestTheExtendPass:
         assert any(measurement.id in identifier for identifier in entity_ids)
 
     def test_the_slice_log_carries_a_speaker_count_per_stream_never_one_total(
-        self, corpus: Callable[..., tuple[Path, list[Path]]], stub_diarizer: Callable[..., None], tmp_path: Path
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        stub_diarizer: Callable[..., None],
+        both_streams: list[str],
+        tmp_path: Path,
     ) -> None:
         """The two counts answer different questions, so neither the row nor the summary sums them.
 
@@ -226,7 +250,7 @@ class TestTheExtendPass:
         """
         stub_diarizer(_diarizer((0.0, 0.3, "SPEAKER_00"), (0.2, 0.5, "SPEAKER_01")))
         manifest, _ = corpus(2)
-        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"])
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", *both_streams])
 
         rows = _log_rows(tmp_path)
         assert [row["enhanced_n_speakers"] for row in rows] == [2, 2]
@@ -237,7 +261,11 @@ class TestTheExtendPass:
         assert summary["streams"] == ["enhanced", "residual"]
 
     def test_an_empty_residual_is_zero_voices_and_still_an_ok_row(
-        self, corpus: Callable[..., tuple[Path, list[Path]]], stub_diarizer: Callable[..., None], tmp_path: Path
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        stub_diarizer: Callable[..., None],
+        both_streams: list[str],
+        tmp_path: Path,
     ) -> None:
         """A residual holding no voice is the ordinary case: nothing was removed, and that is a value.
 
@@ -252,7 +280,7 @@ class TestTheExtendPass:
 
         stub_diarizer(_by_stream)
         manifest, roots = corpus(1)
-        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", *both_streams]) == 0
 
         store = _store_of(roots[0])
         residual = find_measurement(store, RESIDUAL_DIARIZATION)
@@ -289,12 +317,16 @@ class TestIdempotence:
             assert rewritten == sidecars[root], "the npz was rewritten, which would re-identify the entity"
 
     def test_the_second_run_reports_every_recording_as_skipped_with_its_stored_count(
-        self, corpus: Callable[..., tuple[Path, list[Path]]], stub_diarizer: Callable[..., None], tmp_path: Path
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        stub_diarizer: Callable[..., None],
+        both_streams: list[str],
+        tmp_path: Path,
     ) -> None:
         """A skipped row still says what the store holds, so a re-run's log is a full census."""
         manifest, _ = corpus(2)
-        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"])
-        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"])
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", *both_streams])
+        cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", *both_streams])
 
         rows = _log_rows(tmp_path)
         assert [row["status"] for row in rows] == ["skipped", "skipped"]
@@ -302,7 +334,11 @@ class TestIdempotence:
         assert [row["residual_n_speakers"] for row in rows] == [1, 1]
 
     def test_a_pass_that_adds_a_stream_diarizes_only_the_one_that_is_missing(
-        self, corpus: Callable[..., tuple[Path, list[Path]]], stub_diarizer: Callable[..., None], tmp_path: Path
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        stub_diarizer: Callable[..., None],
+        both_streams: list[str],
+        tmp_path: Path,
     ) -> None:
         """Skipping is per stream, so widening ``diarization.streams`` costs only the new stream."""
         enhanced_only = tmp_path / "enhanced_only.yaml"
@@ -314,7 +350,7 @@ class TestIdempotence:
         first = find_measurement(_store_of(roots[0]), ENHANCED_DIARIZATION)
         assert first is not None and find_measurement(_store_of(roots[0]), RESIDUAL_DIARIZATION) is None
 
-        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", *both_streams]) == 0
         store = _store_of(roots[0])
         assert find_measurement(store, RESIDUAL_DIARIZATION) is not None
         again = find_measurement(store, ENHANCED_DIARIZATION)
@@ -347,7 +383,11 @@ class TestOneBadRecording:
     """A recording the model or the filesystem refuses is an outcome, not the end of the slice."""
 
     def test_a_typed_absence_leaves_the_rest_of_the_slice_intact(
-        self, corpus: Callable[..., tuple[Path, list[Path]]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        corpus: Callable[..., tuple[Path, list[Path]]],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        both_streams: list[str],
     ) -> None:
         """A host with no token records an absence per recording and exits 0; nothing is a failure."""
 
@@ -356,7 +396,7 @@ class TestOneBadRecording:
 
         monkeypatch.setattr(preprocess_module, "PyannoteAudioModel", _gated)
         manifest, roots = corpus(2)
-        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1"]) == 0
+        assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", *both_streams]) == 0
 
         for root in roots:
             assert find_measurement(_store_of(root), ENHANCED_DIARIZATION) is None
