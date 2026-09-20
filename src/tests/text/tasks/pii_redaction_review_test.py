@@ -84,6 +84,7 @@ def main():
             time.sleep(600)
         if directive == "exit":
             sys.exit(3)
+        print(json.dumps({"completion": "LEAKED", "output_tokens": 999}), file=_replies)
         print("chatter on stdout that is not a reply", file=_replies)
         _replies.flush()
         emit(
@@ -262,10 +263,17 @@ class TestTheProtocolIsNotConfusedByTheLoaderSOwnOutput:
     """transformers writes progress to both streams; a reply is what carries the marker."""
 
     def test_unmarked_lines_on_either_stream_are_not_replies(self, harness: Harness) -> None:
-        """The fake worker writes to stderr during load and to stdout before each reply."""
+        """The fake worker writes to stderr during load, and to stdout a line shaped like a reply.
+
+        Prose on stdout would be rejected by the JSON parse whether the marker were checked or not,
+        so it cannot show that the marker does any work. A well-formed object that is not a reply
+        can: without the marker it is read as one, and the review returns the wrong completion.
+        """
         result = review_redacted_text("one", model_id="stub/model")
         assert result.available
+        assert "LEAKED" not in result.reasoning and "LEAKED" not in result.raw
         assert result.reasoning == "nothing identifying remains."
+        assert result.output_tokens == 11, "a line the loader wrote was read as the model's answer"
         assert result.findings == []
 
     def test_a_failure_message_carries_what_the_worker_was_last_doing(self, harness: Harness) -> None:
