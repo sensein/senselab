@@ -2723,7 +2723,7 @@ class TestPiiRunsOnlyOnWordsTheTaskDidNotAskFor:
             for entity in live_entities(store, "measurement")
             if entity.attributes.get("name") == "pii_scan" and entity.attributes.get("scanned") is False
         ]
-        assert "asked for all of them" in record.attributes["why"]
+        assert "were asked for" in record.attributes["why"]
 
     def test_one_word_outside_the_task_is_enough_to_scan(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2788,3 +2788,55 @@ class TestEveryDiarizedStreamHasAReader:
         streams = tuple(load_triage_config(None).require("diarization.streams"))
         assert len(streams) == 1, f"{len(streams)} streams configured; SPEECH reads only the first: {streams}"
         assert streams == ("enhanced",)
+
+
+class TestTheCarrierIsPartOfWhatTheTaskAskedFor:
+    """A syllable task names its carrier in its own family and declares no stimulus text.
+
+    Measured over the corpus run: diadochokinesis reached REDACT on 83.5% of recordings while
+    declaring a stimulus on 0% of them, against 7.5% for harvard-sentences-list, which declares one
+    on 100%. The word test was blind exactly where the sidecar names nothing.
+
+    What it must not do is silence the scan on such a recording wholesale: a disclosure spoken over
+    a DDK take is the case ``test_pii_is_still_scanned_on_a_declared_ddk_recording`` exists for.
+    """
+
+    def test_the_carrier_comes_from_the_family_that_names_it(self) -> None:
+        """The expectation holds ARPAbet, which no transcript matches; the family holds the word."""
+        from senselab.audio.workflows.triage.nodes.speech import declared_carrier
+
+        assert declared_carrier("diadochokinesis-buttercup") == "buttercup"
+        assert declared_carrier("diadochokinesis-pa") == "pa"
+        assert declared_carrier("diadochokinesis-pataka") == "pataka"
+
+    def test_a_family_that_is_not_a_syllable_task_has_no_carrier(self) -> None:
+        """Only a syllable task's name is its carrier; a passage's name is not its text."""
+        from senselab.audio.workflows.triage.nodes.speech import declared_carrier
+
+        assert declared_carrier("harvard-sentences-list") is None
+        assert declared_carrier("free-speech-v2") is None
+        assert declared_carrier(None) is None
+
+    def test_a_carrier_train_is_not_scanned(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Thirty repetitions of the word the task asked for are not thirty disclosures."""
+        _seed_speech_store(store, tmp_path, words=["pa", "pa", "pa"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", "pa")])
+        hint = AudioHints(metadata={"task_token": "diadochokinesis-pa"})
+        speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        assert scanned == [], "a carrier train must not reach the detector"
+        assert live_entities(store, "pii") == []
+
+    def test_a_word_spoken_over_a_carrier_train_still_reaches_the_detector(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The invariant the blanket version broke: the carrier is exempt, the speaker's words are not."""
+        _seed_speech_store(store, tmp_path, words=["pa", "pa", "alice"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        hint = AudioHints(metadata={"task_token": "diadochokinesis-pa"})
+        speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        assert scanned, "one word outside the carrier must bring the scan"
+        assert len(live_entities(store, "pii")) == 1
