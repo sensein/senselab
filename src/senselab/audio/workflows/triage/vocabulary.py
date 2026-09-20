@@ -725,10 +725,13 @@ def fold_file_verdict(
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
         kind = reported.kind if reported is not None else None
-        if agreement[branch] == MISMATCH:
-            found = "found it" if findings[branch] == KindState.PRESENT.value else "found no subject"
+        # Only one direction of a mismatch is a ground. A branch routed to a recording that holds
+        # none of its kind found nothing because there was nothing: routing is lenient by design and
+        # the branch is right. The reverse -- declined and found anyway -- is the ruleset being
+        # wrong about the recording, which is. Both stay in ``agreement`` either way.
+        if agreement[branch] == MISMATCH and findings[branch] == KindState.PRESENT.value:
             reasons.append(
-                NodeVerdict(branch, Outcome.FLAG, kind, f"mismatch: routing {routes[branch]} {branch}, it {found}")
+                NodeVerdict(branch, Outcome.FLAG, kind, f"mismatch: routing {routes[branch]} {branch}, it found it")
             )
         if decision is not None and decision.will_run and reported is None:
             reasons.append(
