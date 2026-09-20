@@ -1867,6 +1867,23 @@ so leaving it off costs nothing that the detector cascade was doing. What its an
   resolve_revision(model_id, ref) first and only the 40-hex commit reaches the worker. See the
   SHA-not-ref rule in CLAUDE.md and the two allowlists in revision_pinning_guard_test.py.
 
+  keep_worker_resident false -- FITTED, on an H100 80 GB, 2026-09-19. The reviewer runs in a
+  long-lived worker so the weights load once rather than once per round; this key is whether that
+  worker survives the recording. The memory arithmetic above is about the checkpoint on disk and at
+  load, and it is not the arithmetic that binds. Measured: the packed weights do stay packed through
+  the load (19.08 GiB allocated, 23.07 GiB reserved, 24.2 GB on the card), but the FIRST forward pass
+  takes the allocator to 71.66 GiB and torch.cuda.empty_cache() returns only 1.31 GiB of it, so
+  70.35 GiB is allocated rather than cached and a warm worker holds it for as long as it lives. On an
+  80 GB card that leaves about 8 GB. Run in the corpus driver's shape -- 22 recordings through the
+  whole graph in one process, llm_check on -- the 3 recordings that preceded the first check
+  completed, and every one of the 19 after it failed with
+  `PREPROCESS: asr_qwen: RuntimeError: CUDA error: out of memory`. So residency is not free and must
+  be asked for: false wherever the step shares a GPU with the graph, true for a pass that has a GPU
+  to itself, which is worth 5.8x (20.3 s to 3.5 s per checked recording, measured over 12). What
+  would change it: loading with run_compressed=True, which would keep the packed weights in place and
+  may make residency cost ~24 GB instead of ~70 GB. Not measured; it changes numerics.
+  See specs/20260817-triage-workflow-dag/llm-check-amortised-load.md.
+
 redaction.fill silence -- owner-directed. redact.md left this DEFERRED, and which of silence, noise
 or bleep is least damaging to the measurements taken downstream of a released artifact is still not
 measured; silence is a declared choice rather than a fitted one. It is the fill with no content of
