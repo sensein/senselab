@@ -25,7 +25,11 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Expectation,
     Pattern,
     branch_params,
+    deviation_names,
     mode_of,
+    semitones,
+    track_slice,
+    windowed_spreads,
 )
 from senselab.audio.workflows.triage.nodes.common import find_branch_report, live_entities
 from senselab.audio.workflows.triage.nodes.voice import (
@@ -150,13 +154,76 @@ def _glide_tracks(
     return times, f0, power
 
 
+def _octave_error_tracks(
+    duration_s: float,
+    extent: tuple[float, float],
+    centre_hz: float,
+    bursts: int,
+    burst_frames: int = 25,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A steady F0 with a few frames the tracker doubled -- the pitch-tracker octave error.
+
+    The production is steady throughout; what is not steady is the tracker. Spread over the whole
+    carrier this is a fraction of a semitone, and in the handful of windows a burst falls in it is
+    twelve.
+
+    Args:
+        duration_s: How long the grid runs.
+        extent: The interval the phonation occupies.
+        centre_hz: The F0 actually held.
+        bursts: How many separate doubling errors to place, spread evenly through the extent.
+        burst_frames: How many consecutive frames each error lasts.
+
+    Returns:
+        ``(times_s, f0_hz, strength)``.
+    """
+    times = np.arange(0.0, duration_s, HOP_S)
+    f0 = np.zeros(times.size)
+    power = np.zeros(times.size)
+    inside = np.flatnonzero((times >= extent[0]) & (times < extent[1]))
+    power[inside] = 0.9
+    f0[inside] = centre_hz
+    for step in range(bursts):
+        first = inside[int(len(inside) * (step + 1) / (bursts + 1))]
+        f0[first : first + burst_frames] = centre_hz * 2.0
+    return times, f0, power
+
+
+def _zigzag_tracks(
+    duration_s: float, extent: tuple[float, float], low_hz: float, high_hz: float, legs: int = 3
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A fully voiced carrier whose pitch reverses, so no one monotone run dominates it.
+
+    Args:
+        duration_s: How long the grid runs.
+        extent: The interval the phonation occupies.
+        low_hz: F0 at the bottom of each leg.
+        high_hz: F0 at the top of each leg.
+        legs: How many monotone legs to divide the extent into.
+
+    Returns:
+        ``(times_s, f0_hz, strength)``.
+    """
+    times = np.arange(0.0, duration_s, HOP_S)
+    f0 = np.zeros(times.size)
+    power = np.zeros(times.size)
+    inside = np.flatnonzero((times >= extent[0]) & (times < extent[1]))
+    power[inside] = 0.9
+    edges = np.linspace(0, inside.size, legs + 1).astype(int)
+    for leg in range(legs):
+        first, last = edges[leg], edges[leg + 1]
+        ends = (low_hz, high_hz) if leg % 2 == 0 else (high_hz, low_hz)
+        f0[inside[first:last]] = np.linspace(ends[0], ends[1], last - first)
+    return times, f0, power
+
+
 def _wobble_tracks(
     duration_s: float, extent: tuple[float, float], centre_hz: float, semitones_peak: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """An F0 oscillating by ``semitones_peak`` within every window, which is real instability.
 
-    A slow sweep is deliberately *not* this: ``max_windowed_spread`` takes the worst local spread so
-    a drift across a long production does not read as unsteady. Only fast variation does.
+    A slow sweep is deliberately *not* this: the spread is taken over a window, so a drift across
+    a long production does not read as unsteady. Only fast variation does.
 
     Args:
         duration_s: How long the grid runs.
@@ -364,7 +431,7 @@ class TestASustainedVowelYieldsTheHeldVowelSpan:
         store, _ = seed(tmp_path, amplitude=((2.0, 2.2),), duration_s=5.0)
         result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
         assert result.components == []
-        assert result.done is False
+        assert result.done == UNDETERMINED
 
 
 class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
@@ -374,38 +441,53 @@ class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
         """Connected speech has a high voiced fraction and a usable contour; it is not steady."""
         store, _ = seed(tmp_path, tracks=_wobble_tracks(20.0, (2.0, 18.0), 120.0, 6.0))
         assert (
-            qualifying_phonation(read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()) == []
+            qualifying_phonation(
+                read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
+            ).carriers
+            == []
         )
 
     def test_a_slow_sweep_is_not_read_as_instability(self, tmp_path: Path) -> None:
-        """The discriminating half: the worst *local* spread is the statistic, by design.
+        """The discriminating half: a *local* spread is the statistic, by design.
 
         A 100-to-400 Hz drift across sixteen seconds is a sustained production, not a wobble.
         """
         store, _ = seed(tmp_path, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 400.0))
         assert (
-            qualifying_phonation(read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()) != []
+            qualifying_phonation(
+                read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
+            ).carriers
+            != []
         )
 
     def test_a_low_continuity_recording_fails_the_stationarity_qualifier(self, tmp_path: Path) -> None:
         """The spectral trace is the qualifier the F0 statistics cannot supply."""
         store, _ = seed(tmp_path, continuity=0.1)
         assert (
-            qualifying_phonation(read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()) == []
+            qualifying_phonation(
+                read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
+            ).carriers
+            == []
         )
 
     def test_a_mostly_unvoiced_carrier_fails_the_voiced_fraction(self, tmp_path: Path) -> None:
         """A carrier the tracker found almost no F0 in is not a phonation carrier."""
         store, _ = seed(tmp_path, amplitude=((2.0, 18.0),), tracks=_tracks(20.0, [(2.0, 4.0)]))
         assert (
-            qualifying_phonation(read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()) == []
+            qualifying_phonation(
+                read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
+            ).carriers
+            == []
         )
 
     def test_an_absent_continuity_trace_fails_the_qualifier_rather_than_passing_it(self, tmp_path: Path) -> None:
         """An absent qualifier must not read as a satisfied one."""
         store, _ = seed(tmp_path, continuity=None)
         assert (
-            qualifying_phonation(read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()) == []
+            qualifying_phonation(
+                read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
+            ).carriers
+            == []
         )
 
 
@@ -516,11 +598,15 @@ class TestAnAbsentInstrumentIsUndetermined:
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
 
-    def test_nothing_qualifying_is_a_non_conformance_because_the_branch_did_look(self, tmp_path: Path) -> None:
-        """The instrument was there and no attempt cleared it; that is an absence of content."""
+    def test_nothing_qualifying_is_undetermined_because_a_qualifier_is_not_a_verdict(self, tmp_path: Path) -> None:
+        """A qualifier says where it is safe to measure, not whether the speaker did the task.
+
+        The instrument was there, it found a carrier, and a qualifier discarded it. That the
+        branch could not place a boundary it trusts is not evidence the instruction was ignored.
+        """
         store, _ = seed(tmp_path, continuity=0.1)
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.report.conformance is False
+        assert result.report.conformance == UNDETERMINED
 
 
 class TestEveryProposalNamesItsEvidence:
@@ -626,11 +712,21 @@ class TestTheCountInIsItsOwnSpan:
         omissions = [finding for finding in result.deviations if finding.name == "omission"]
         assert [finding.evidence["expected"] for finding in omissions] == ["three"]
 
-    def test_no_count_in_at_all_leaves_the_task_not_done(self, tmp_path: Path) -> None:
-        """The instruction asked for one; ``done`` reads off the recording."""
+    def test_no_count_in_at_all_does_not_decide_the_vowel(self, tmp_path: Path) -> None:
+        """A held vowel carries no lexical content by design; the count-in cannot be its verdict.
+
+        The transcript of a sustained vowel has no words in it, so keying ``done`` to an ordered
+        run of ``one``/``two``/``three`` made the task's own definition guarantee a ``False``.
+        """
         store, _ = seed(tmp_path, stem=PROLONGED_STEM, amplitude=((6.0, 18.0),), tracks=_tracks(20.0, [(6.0, 18.0)]))
         result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
-        assert result.done is False
+        assert result.done is True
+        assert [proposal.role for proposal in result.components] == ["task_extent"]
+        assert [finding.evidence["expected"] for finding in result.deviations if finding.name == "omission"] == [
+            "one",
+            "two",
+            "three",
+        ]
 
     def test_a_family_prescribing_no_count_in_is_done_on_the_vowel_alone(self, tmp_path: Path) -> None:
         """MPT declares no tokens, so nothing lexical is owed."""
@@ -673,11 +769,11 @@ class TestTheGlideReadsTheSweepAgainstItsDeclaredDirection:
         found = [finding for finding in result.deviations if finding.name == "glide_extent_semitones"]
         assert found and found[0].evidence["value"] == pytest.approx(12.0, abs=0.5)
 
-    def test_no_monotone_segment_leaves_the_sweep_not_found(self, tmp_path: Path) -> None:
-        """A steady vowel is not a sweep, and the glide arm says so rather than inventing one."""
+    def test_no_monotone_segment_leaves_the_sweep_undetermined(self, tmp_path: Path) -> None:
+        """A steady vowel is not a sweep, and no sweep found is not the task not performed."""
         store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, amplitude=((2.0, 3.0),), tracks=_tracks(20.0, [(2.0, 2.2)]))
         result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert result.done is False
+        assert result.done == UNDETERMINED
         assert result.components == []
 
 
@@ -762,10 +858,14 @@ class TestTheAperiodicCaseNoLongerErrorsTheNode:
         assert not hasattr(voice_module, "derive_f0_range")
 
     def test_an_aperiodic_recording_completes_with_a_report(self, tmp_path: Path) -> None:
-        """Zero voiced frames throughout: no attempt found, and a report rather than a traceback."""
+        """Zero voiced frames throughout: a report rather than a traceback, and no accusation.
+
+        A frankly aperiodic voice is the case the tracker is least able to read, so it is the last
+        recording whose silence should be folded as the speaker not having tried.
+        """
         store, _ = seed(tmp_path, tracks=_tracks(20.0, []))
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.report.conformance is False
+        assert result.report.conformance == UNDETERMINED
         assert result.report_entity_id
 
     def test_an_aperiodic_recording_out_of_family_also_completes(self, tmp_path: Path) -> None:
@@ -926,3 +1026,135 @@ class TestAnUnmeasuredOperatingPointIsRecordedRatherThanRaised:
         store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 300.0))
         result = align_voice("glides-low-to-high", store, None, params(f0_spread_max_semitones=None), run_dir=tmp_path)
         assert result.components[0].attributes["direction"] == "up"
+
+
+class TestTheSpreadQualifierJudgesATypicalWindowNotTheWorstOne:
+    """``f0_spread_max_semitones`` is a per-window bound; the statistic must be a window's spread.
+
+    Read as the maximum over every window, a bound written to tolerate tracker noise was certain to
+    find it: the number of windows grows with the duration of the production being qualified, so a
+    longer held vowel was more likely to be discarded than a short one. Measured across 300
+    recordings in ``specs/20260817-triage-workflow-dag/voice-flag-grounds.md``.
+    """
+
+    def test_a_steady_vowel_with_a_few_octave_errors_still_qualifies(self, tmp_path: Path) -> None:
+        """The production is steady; the tracker is not. One is the speaker, the other is not."""
+        store, _ = seed(tmp_path, tracks=_octave_error_tracks(20.0, (2.0, 18.0), 120.0, bursts=2))
+        qualification = qualifying_phonation(
+            read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
+        )
+        assert [carrier.span.id for carrier in qualification.carriers]
+        assert qualification.carriers[0].f0_spread_semitones < MEASURED["f0_spread_max_semitones"]
+
+    def test_the_same_recording_read_by_the_worst_window_would_be_discarded(self, tmp_path: Path) -> None:
+        """The defect, stated as the contrast: the worst window reads an octave on this signal."""
+        store, _ = seed(tmp_path, tracks=_octave_error_tracks(20.0, (2.0, 18.0), 120.0, bursts=2))
+        evidence = read_evidence(store, tmp_path)
+        assert evidence.tracks is not None
+        track = track_slice(evidence.tracks, (2.0, 18.0), MEASURED["voiced_strength_min"])
+        pitch = semitones(np.where(track.voiced, track.f0_hz, np.nan))
+        spreads = windowed_spreads(pitch, track.hop_s, MEASURED["f0_spread_window_s"])
+        assert spreads.max() > 11.0
+        assert float(np.median(spreads)) < 1.0
+
+    def test_the_verdict_does_not_change_with_the_length_of_the_production(self, tmp_path: Path) -> None:
+        """Duration independence is the property the maximum did not have.
+
+        The same signal and the same error rate, held four seconds and twenty-four: a qualifier
+        must read them alike, or it penalises the task for being performed well.
+        """
+        short, _ = seed(
+            tmp_path / "short",
+            amplitude=((1.0, 5.0),),
+            duration_s=6.0,
+            tracks=_octave_error_tracks(6.0, (1.0, 5.0), 120.0, bursts=1),
+        )
+        long_, _ = seed(
+            tmp_path / "long",
+            amplitude=((1.0, 25.0),),
+            duration_s=26.0,
+            tracks=_octave_error_tracks(26.0, (1.0, 25.0), 120.0, bursts=6),
+        )
+        expectation = Expectation(pattern=Pattern.SUSTAINED)
+        assert len(qualifying_phonation(read_evidence(short, tmp_path / "short"), expectation, params()).carriers) == 1
+        assert len(qualifying_phonation(read_evidence(long_, tmp_path / "long"), expectation, params()).carriers) == 1
+
+    def test_genuine_instability_is_still_discarded(self, tmp_path: Path) -> None:
+        """The gate must keep rejecting what it was for; a fix that accepts everything is no fix."""
+        store, _ = seed(tmp_path, tracks=_wobble_tracks(20.0, (2.0, 18.0), 120.0, 6.0))
+        qualification = qualifying_phonation(
+            read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
+        )
+        assert qualification.carriers == []
+        assert [rejection.gate for rejection in qualification.rejected] == ["f0_spread_max_semitones"]
+
+
+class TestADiscardedCarrierIsReportedRatherThanVanishing:
+    """A branch reports what it found; a carrier it threw away is part of what it found."""
+
+    def test_the_rejection_names_the_gate_and_the_value_it_read(self, tmp_path: Path) -> None:
+        """Without this the store cannot separate an absent production from a discarded one."""
+        store, _ = seed(tmp_path, continuity=0.1)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        rejected = [finding for finding in result.deviations if finding.name == "carrier_rejected"]
+        assert [finding.evidence["value"] for finding in rejected] == ["continuity_min"]
+        assert rejected[0].evidence["value_read"] == pytest.approx(0.1, abs=0.01)
+        assert rejected[0].evidence["bound"] == MEASURED["continuity_min"]
+        assert rejected[0].derived_from
+
+    def test_the_rejection_is_a_measurement_and_not_a_deviation(self, tmp_path: Path) -> None:
+        """It is a reading of this branch's instrument, not a departure by the speaker."""
+        store, _ = seed(tmp_path, continuity=0.1)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        rejected = [finding for finding in result.deviations if finding.name == "carrier_rejected"]
+        assert {finding.kind for finding in rejected} == {"measure"}
+        assert "carrier_rejected" not in deviation_names(result.deviations)
+
+    def test_the_report_carries_the_rejections_for_a_reader_who_opens_no_findings(self, tmp_path: Path) -> None:
+        """The summary a corpus reader sees must not have to be rebuilt from the derivatives."""
+        store, _ = seed(tmp_path, continuity=0.1)
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
+        report = find_branch_report(store, "VOICE")
+        assert report is not None
+        assert report.attributes["carriers_rejected_n"] >= 1
+        assert report.attributes["carriers_rejected"][0]["gate"] == "continuity_min"
+        assert result.report.conformance == UNDETERMINED
+
+    def test_the_glide_records_the_sweep_it_located_and_discarded(self, tmp_path: Path) -> None:
+        """``sweep_found: False`` about a sweep the branch found states more than it measured."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_UP_STEM,
+            amplitude=((2.0, 18.0),),
+            tracks=_zigzag_tracks(20.0, (2.0, 18.0), 100.0, 300.0),
+        )
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        discarded = [
+            finding
+            for finding in result.deviations
+            if finding.name == "carrier_rejected" and finding.evidence["value"] == "dominant_segment_min_fraction"
+        ]
+        assert discarded, "the located sweep must be recorded, not silently dropped"
+        assert discarded[0].evidence["direction"] in ("up", "down")
+        assert discarded[0].evidence["sweep_s"] > 0.0
+        assert result.done == UNDETERMINED
+
+
+class TestConformanceIsNeverFalse:
+    """These instruments establish that a sustained production happened, not that none did."""
+
+    def test_no_reachable_body_returns_a_false_conformance(self) -> None:
+        """A structural guard: a future ``Result(False, ...)`` here is a new accusation.
+
+        The branch has no fitted criterion for the absence of phonation, so every ``False`` it
+        could write today would rest on a qualifier's reading rather than on the speaker's.
+        """
+        source = Path(voice_module.__file__).read_text()
+        assert "Result(False" not in source
+        assert "Result(UNDETERMINED" in source
+
+    def test_an_empty_recording_is_undetermined_rather_than_a_non_conformance(self, tmp_path: Path) -> None:
+        """No amplitude span at all: the branch had no subject, which is not a failed attempt."""
+        store, _ = seed(tmp_path, amplitude=())
+        result = voice(store, "plain", config(), None, run_dir=tmp_path)
+        assert result.report.conformance == UNDETERMINED
