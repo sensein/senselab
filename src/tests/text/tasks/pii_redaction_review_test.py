@@ -92,6 +92,8 @@ def main():
                 "completion": "REASONING: nothing identifying remains.\nFINDINGS: []",
                 "generate_s": 0.01,
                 "output_tokens": 11,
+                "peak_reserved_mib": 71000,
+                "resident_mib": 23000,
             }
         )
 
@@ -197,6 +199,18 @@ class TestTheWeightsAreLoadedOncePerProcess:
         result = review_redacted_text("one", model_id="stub/model")
         assert result.output_tokens == 11
         assert result.revision == SHA
+
+    def test_the_answer_carries_what_it_holds_on_the_card(self, harness: Harness) -> None:
+        """A worker kept alive occupies a GPU; how much decides whether anything else fits beside it."""
+        result = review_redacted_text("one", model_id="stub/model")
+        assert result.peak_reserved_mib == 71000
+        assert result.resident_mib == 23000
+
+    def test_a_worker_that_did_not_answer_claims_no_memory(self, harness: Harness) -> None:
+        """Zero is the honest reading when nothing ran; a stale number would size the next run."""
+        harness.directives("fail_load")
+        result = review_redacted_text("one", model_id="stub/model")
+        assert result.peak_reserved_mib == 0 and result.resident_mib == 0
 
 
 class TestAWorkerThatCannotStartCostsOneAttempt:

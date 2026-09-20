@@ -103,6 +103,10 @@ class ReviewResult:
         load_s: How many of those seconds went on starting the worker and loading the weights.
             ``0.0`` when an already-running worker served the call.
         output_tokens: How many tokens the model generated, or ``None`` when it did not answer.
+        peak_reserved_mib: Device memory the worker's allocator held at the end of the generation,
+            before it was emptied. ``0`` on a CPU worker and on a call that did not answer.
+        resident_mib: Device memory it holds between reviews — the weights and nothing else, which
+            is what a second process on the same card has to live beside.
     """
 
     available: bool
@@ -115,6 +119,8 @@ class ReviewResult:
     elapsed_s: float = 0.0
     load_s: float = 0.0
     output_tokens: Optional[int] = None
+    peak_reserved_mib: int = 0
+    resident_mib: int = 0
 
 
 # A line protocol over the worker's stdin/stdout, one JSON object per line.
@@ -128,8 +134,15 @@ class ReviewResult:
 # Load reply (stdout):        {"ready": True, "revision": str | None, "load_s": float}
 #
 # Review request (stdin):     {"text": str, "prompt": str, "max_new_tokens": int}
-# Review reply (stdout):      {"completion": str, "generate_s": float, "output_tokens": int}
+# Review reply (stdout):      {"completion": str, "generate_s": float, "output_tokens": int,
+#                              "peak_reserved_mib": int, "resident_mib": int}
 # Stop request (stdin):       {"stop": True}
+#
+# The worker empties the CUDA caching allocator after each generation and reports what it held
+# before and holds after. A process that keeps the weights must not also keep every transient
+# buffer one generation touched: the allocator never returns blocks to the driver on its own, and
+# this worker does not share an address space with the graph that needs the rest of the card. See
+# ``specs/20260817-triage-workflow-dag/llm-check-amortised-load.md``.
 #
 # Every reply carries the ``_WORKER_MARKER`` prefix, so a library writing to the real stdout cannot
 # be mistaken for one; ``sys.stdout`` is redirected to stderr before any heavy import for the same
@@ -195,11 +208,22 @@ def main():
                 **inputs, max_new_tokens=int(request["max_new_tokens"]), do_sample=False
             )
         answer = generated[0][inputs["input_ids"].shape[-1]:]
+        completion = tokenizer.decode(answer, skip_special_tokens=True)
+        tokens = int(answer.shape[-1])
+        generate_s = round(time.monotonic() - began, 3)
+        peak, resident = 0, 0
+        if torch.cuda.is_available():
+            peak = int(torch.cuda.memory_reserved() / 2**20)
+            del answer, generated, inputs
+            torch.cuda.empty_cache()
+            resident = int(torch.cuda.memory_reserved() / 2**20)
         emit(
             {
-                "completion": tokenizer.decode(answer, skip_special_tokens=True),
-                "generate_s": round(time.monotonic() - began, 3),
-                "output_tokens": int(answer.shape[-1]),
+                "completion": completion,
+                "generate_s": generate_s,
+                "output_tokens": tokens,
+                "peak_reserved_mib": peak,
+                "resident_mib": resident,
             }
         )
 
@@ -598,6 +622,8 @@ def review_redacted_text(
         elapsed_s=round(time.monotonic() - began, 3),
         load_s=load_s,
         output_tokens=output.get("output_tokens"),
+        peak_reserved_mib=int(output.get("peak_reserved_mib") or 0),
+        resident_mib=int(output.get("resident_mib") or 0),
     )
 
 
@@ -610,7 +636,8 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
     Returns:
         The mapping. ``reasoning`` is the chain of thought verbatim, which is what the step is for.
         ``elapsed_s`` and ``load_s`` are what the round cost and how much of that was the weights,
-        so a store can answer both without a stopwatch outside the graph.
+        and the two ``_mib`` fields are what it held on the device at its peak and between reviews,
+        so a store answers the time and the memory without a stopwatch outside the graph.
     """
     return {
         "available": result.available,
@@ -624,4 +651,6 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         "elapsed_s": result.elapsed_s,
         "load_s": result.load_s,
         "output_tokens": result.output_tokens,
+        "peak_reserved_mib": result.peak_reserved_mib,
+        "resident_mib": result.resident_mib,
     }
