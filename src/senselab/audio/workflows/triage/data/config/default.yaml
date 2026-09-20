@@ -213,10 +213,11 @@ praat_features:
 diarization:
   model: pyannote/speaker-diarization-community-1  # the speaker_diarization task's own default backend
   revision: main                       # resolved to an immutable commit BEFORE the load; the agent records that SHA
-  # One measurement per stream, `<stream>_diarization`, never summed. Enhancement PARTITIONS the
-  # recording rather than destroying what it removes: `enhanced` answers how many voices survive
-  # it, `residual` answers whether one was taken out. Owner-directed 2026-09-15.
-  streams: [enhanced, residual]
+  # One measurement per stream, `<stream>_diarization`, never summed. SPEECH reads the first
+  # configured stream that has one and nothing else in the graph reads any, so a second stream is
+  # computed and never read. Owner-directed 2026-09-15 as [enhanced, residual]; narrowed
+  # 2026-09-20 after the corpus run showed the residual pass had no reader.
+  streams: [enhanced]
   exclusive: false                     # keep pyannote's overlapping view; the exclusive partition makes concurrency unreadable
   min_speakers: null                   # lower bound handed to the clustering; null hands none
   max_speakers: null                   # upper bound, same -- a cap makes a count above it unreportable
