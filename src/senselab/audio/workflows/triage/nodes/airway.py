@@ -3,10 +3,10 @@
 ``align_airway`` evaluates a declared airway task against what its instruction asked for.
 ``detect_airway`` finds breath and cough wherever they occur and evaluates no task. Both read
 PREPROCESS's own derivatives: the energy envelope segments candidate events and the stored
-classifier scores type them, which inverts reading a count off window labels.
+classifier scores type them. Neither mode reads the ``airway.cough`` routing gate.
 
-Neither mode reads the ``airway.cough`` routing gate. The design, the measurements behind that and
-what the restructuring cost are in ``specs/20260817-triage-workflow-dag/branch-airway.md``.
+The design is in ``specs/20260817-triage-workflow-dag/branch-airway.md``, the grounds for what this
+branch does and does not report in ``airway-flag-grounds.md`` beside it.
 """
 
 from __future__ import annotations
@@ -107,8 +107,7 @@ INSTRUMENT_ABSENT = "event_instrument"
 """The measurement name recording that a derivative a mode needs never reached the store."""
 
 COVERAGE_FRACTION = "breath_coverage_fraction"
-"""The measurement naming how much of the extent the instruction asked for carries breath evidence.
-Reported on every ``SOUND_COVERAGE`` row, whatever the fraction, and read by no gate."""
+"""How much of the extent the instruction asked for carries breath evidence. No gate reads it."""
 
 DECLARED_EXTENT = "declared_duration_s"
 """``asked_from`` on a coverage fraction whose denominator is the instruction's own duration."""
@@ -117,9 +116,8 @@ STREAM_EXTENT = "stream_extent"
 """``asked_from`` on one whose denominator is the recording, the row declaring no duration."""
 
 CLASSIFIER_WINDOWS = ("span_hear", "span_yamnet")
-"""The two per-span window measurements :func:`classifier_windows` collects, which are the whole
-input to the label search. PREPROCESS writes one per (span, classifier) pair and neither of them
-when it proposed no span."""
+"""The two per-span window measurements :func:`classifier_windows` collects. PREPROCESS writes one
+per (span, classifier) pair."""
 
 
 HEAR = "hear"
@@ -152,16 +150,14 @@ class LabelSet(NamedTuple):
 def label_sets_by_classifier(params: BranchParams) -> dict[str, LabelSet]:
     """``branch.label_sets`` resolved into each classifier's own vocabulary.
 
-    The configured value names HeAR heads. YAMNet reports AudioSet display names, so the AudioSet
-    side is the union of those heads' corroboration sets from the packaged ontology profile rather
-    than the HeAR spellings, which AudioSet does not carry.
+    The configured value names HeAR heads; the AudioSet side is the union of those heads'
+    corroboration sets from the packaged ontology profile.
 
     Args:
         params: The operating points, whose config names the profile.
 
     Returns:
-        Kind to its two vocabularies. Empty when the operating point is unmeasured, which
-        ``params.missing`` already records.
+        Kind to its two vocabularies, empty when the operating point is unmeasured.
     """
     configured = params.point("label_sets")
     if configured is None:
@@ -230,8 +226,8 @@ def evidence_ids(store: ProvStore, *names: str) -> tuple[str, ...]:
         *names: The measurement names.
 
     Returns:
-        One id per name the store holds, in the order given. A name it does not hold contributes
-        nothing rather than a placeholder, so a derivation never names an entity that is not there.
+        One id per name the store holds, in the order given; a name it does not hold contributes
+        nothing.
     """
     found: list[str] = []
     for name in names:
@@ -294,8 +290,8 @@ def inside_certified_silence(extent: tuple[float, float], windows: list[dict[str
         windows: PREPROCESS's graded windows, or None when it graded none.
 
     Returns:
-        True or False when at least one graded window overlaps, and None when the question has no
-        answer here — an unavailable grading is an absence, never a negative.
+        True or False when at least one graded window overlaps, and None when none does or none was
+        graded.
     """
     if windows is None:
         return None
@@ -310,8 +306,7 @@ def inside_certified_silence(extent: tuple[float, float], windows: list[dict[str
 def overlaps_transcript(store: ProvStore, extent: tuple[float, float]) -> bool:
     """Whether a lexical consensus word overlaps this extent.
 
-    A covariate, not a filter: a cough inside a sentence reading is a cough, and a bracketed
-    word — ``[COUGH]`` — is what this branch looks for rather than a transcript.
+    A covariate recorded on the proposal, not a filter over it.
 
     Args:
         store: The provenance store.
@@ -325,9 +320,6 @@ def overlaps_transcript(store: ProvStore, extent: tuple[float, float]) -> bool:
 
 def hear_score_windows(store: ProvStore, run_dir: Path) -> list[tuple[tuple[float, float], dict[str, float]]] | None:
     """The raw HeAR windows, on the model's own 2 s grid, from the ``hear_scores`` sidecar.
-
-    Not ``hear_windows``: that derivative reads ``windows.hear.label_thresholds``, which the
-    packaged config leaves null, so it is written on no run.
 
     Args:
         store: The provenance store.
@@ -360,8 +352,7 @@ def content_band_hz(store: ProvStore) -> float | None:
         store: The provenance store.
 
     Returns:
-        ``band_profile``'s roll-off, or None when PREPROCESS recorded that block absent. Carried
-        rather than omitted so the route negative is attributable to a measured band.
+        ``band_profile``'s roll-off, or None when PREPROCESS recorded that block absent.
     """
     measurement = find_measurement(store, "band_profile")
     rolloff = None if measurement is None else measurement.attributes.get("rolloff_hz")
@@ -376,8 +367,7 @@ def rounded(value: float | None, digits: int = 2) -> float | None:
         digits: Decimal places.
 
     Returns:
-        The rounded value, or None. A non-finite reading is an absent measurement, and None is how
-        every other absence in this branch is written.
+        The rounded value, or None when it is absent or non-finite.
     """
     if value is None:
         return None
@@ -436,10 +426,8 @@ def airway_events(
 def decided_label_sets(span: Entity, windows: Sequence[Entity], label_sets: Mapping[str, LabelSet]) -> list[str]:
     """Which label sets a stored window over this span decided a label from.
 
-    The decision is ``labels``, which PREPROCESS writes only where a membership rule exists; the
-    measurement is ``raw_scores``, which it always writes. A span carrying the decision and no raw
-    score over the minimum is what :func:`detect_airway` contests. Each window's ``labels`` are in
-    its own classifier's vocabulary and are matched against that classifier's spellings.
+    Reads ``labels``, PREPROCESS's own decision, matching each window against its own classifier's
+    spellings.
 
     Args:
         span: The span.
@@ -515,8 +503,7 @@ def event_measurements(
 ) -> list[Finding]:
     """One acoustic descriptor per event, with the covariates its own extent must be read against.
 
-    The spectral balance is taken only where ``spectrogram_wideband`` reached the store, so
-    ``branch.effort_split_hz`` is read only when the instrument it configures exists.
+    The spectral balance is taken only where ``spectrogram_wideband`` reached the store.
 
     Args:
         events: The events.
@@ -555,10 +542,7 @@ def event_measurements(
 def lexical_intrusions(store: ProvStore) -> list[Finding]:
     """One ``off_task_extent`` deviation per lexical word inside an airway task.
 
-    AIRWAY owns this deviation, and it is the one correct ``off_task_extent``: it keys on
-    positively-identified off-task content that has its own extent, not on the absence of the
-    target. Reached only from the in-family mode, so a cough inside a sentence reading carries no
-    penalty for the words around it.
+    Reached only from the in-family mode.
 
     Args:
         store: The provenance store.
@@ -587,8 +571,8 @@ def lexical_intrusions(store: ProvStore) -> list[Finding]:
 def declared_task_ids(store: ProvStore, hint: AudioHints | None) -> list[str]:
     """Every task id the store and the hint carry, best carrier first, trailing index intact.
 
-    The foundation's ``declared_task_family`` collapses the trailing index, which is what carries
-    the ``fivebreaths`` route, so the id is read again here rather than recovered from the family.
+    The foundation's ``declared_task_family`` collapses the trailing index, so the id is read again
+    here rather than recovered from the family.
 
     Args:
         store: The provenance store.
@@ -666,9 +650,8 @@ def _events_reading(events: Sequence[Event], params: BranchParams) -> Done:
         params: The operating points, read for whether the label cut was measurable.
 
     Returns:
-        True with an event in hand; :data:`UNDETERMINED` where the label search's own cut is
-        unmeasured, because no window could have cleared it and a False would claim the recording
-        carried nothing; False otherwise.
+        True with an event in hand; :data:`UNDETERMINED` where ``branch.score_min`` is unmeasured;
+        False otherwise.
     """
     if events:
         return True
@@ -682,11 +665,10 @@ def instrument_absent(*names: str) -> Result:
         *names: The absent derivatives, in the order the mode reads them.
 
     Returns:
-        ``done = UNDETERMINED``, no components, and one measurement naming every absence. An
-        unavailable measurement is an absence, never a negative.
+        ``done = UNDETERMINED``, no components, and one measurement naming every absence.
 
     Raises:
-        ValueError: If no name is given, which would record an absence of nothing.
+        ValueError: If no name is given.
     """
     if not names:
         raise ValueError("instrument_absent names the derivatives that are absent")
@@ -744,9 +726,7 @@ def _airway_event_series(
 ) -> Result:
     """One span per event, plus ``task_extent`` over their hull.
 
-    One per event is the point: the branch used to increment once per (span, label) pair, so a 4 s
-    span holding three coughs counted 1. The count compared against the instruction's
-    ``expected_event_count`` is the number of these spans.
+    The count read against the instruction's ``expected_event_count`` is the number of these spans.
 
     Args:
         expectation: The row.
@@ -832,17 +812,14 @@ def _airway_event_series(
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
     findings.extend(off_task_findings(components, spans, params))
-    # No event has two causes and they are not the same report: nothing in the recording carried a
-    # label of interest, or the classifier cut the label search needs is unmeasured and no window
-    # could have carried one. Only the first answers the conformance question.
     return Result(_events_reading(events, params), components, findings)
 
 
 def _airway_alternation(expectation: Expectation, store: ProvStore, params: BranchParams, run_dir: Path) -> Result:
     """One span per cough, one per breath, plus ``task_extent``.
 
-    The expected pattern is an alternation, so material between coughs is matched as breath and
-    never scored off task: a cough detector alone is insufficient here.
+    The expected pattern is an alternation, so material between coughs is matched as breath rather
+    than scored off task.
 
     Args:
         expectation: The row.
@@ -926,9 +903,8 @@ def _airway_coverage(
 ) -> Result:
     """One span per merged run of breath-scoring HeAR windows, plus ``task_extent``.
 
-    Reports the covered fraction and answers :data:`UNDETERMINED`: the design states no viable
-    approach for deciding a sustained breathing task from a duty cycle over HeAR's 2 s grid. The
-    measurement behind that is in ``specs/20260817-triage-workflow-dag/airway-flag-grounds.md``.
+    Reports the covered fraction and answers :data:`UNDETERMINED`; no bound is read against it. See
+    ``specs/20260817-triage-workflow-dag/airway-flag-grounds.md``.
 
     Args:
         expectation: The row.
@@ -1028,14 +1004,14 @@ def align_airway(
         hint: What the recording was declared to contain.
         params: The operating points.
         run_dir: The run directory the persisted derivatives are relative to. Keyword-only and
-            defaulted so the positional signature is the foundation's ``AlignMode``; the node binds
-            it, the contract carrying no other way to reach a sidecar.
+            defaulted so the positional signature is the foundation's ``AlignMode``; the node
+            binds it.
 
     Returns:
         Whether the expected patterns were found, the spans proposed, and the findings.
 
     Raises:
-        KeyError: If ``task_family`` is not an AIRWAY family, which the caller owes ``detect``.
+        KeyError: If ``task_family`` is not an AIRWAY family.
         ValueError: If ``run_dir`` is None, or if the row's pattern has no matcher here.
     """
     if run_dir is None:
@@ -1053,11 +1029,8 @@ def align_airway(
 def detect_airway(store: ProvStore, params: BranchParams, *, run_dir: Path | None = None) -> Result:
     """Find breath and cough wherever they occur, and evaluate no task.
 
-    Task-agnostic, on the same machinery the in-family mode uses. It reads no routing gate: the
-    shipped ``airway.cough`` cut was selected under a scoped reference and reads J -0.1398 against
-    ``declared_airway`` over 61,721 recordings, so over an arbitrary recording it is a loudness
-    detector. A breath during passage reading is not a deviation — it is how SPEECH measures breath
-    groups — and no lexical word is off task in someone else's task, so neither is emitted here.
+    Task-agnostic, on the same machinery the in-family mode uses. It reads no routing gate and
+    emits neither a breath deviation nor a lexical one.
 
     Args:
         store: The provenance store.
@@ -1125,13 +1098,8 @@ def airway(
 ) -> BranchResult:
     """Propose this branch's breath and cough spans, write its findings, and report.
 
-    The declaration picks the mode and never supplies the answer: a declared airway family takes
-    :func:`align_airway`; anything else — another branch's kind, an unreadable stem, no declaration
-    at all — takes :func:`detect_airway`.
-
-    There is no FLAG path. ``lexical_contamination`` was the only flag this branch could raise and
-    it is now an ``off_task_extent`` deviation, located and conditioned on the declaration, so the
-    outcome is PASS or FAIL.
+    The declaration picks the mode: a declared airway family takes :func:`align_airway`, anything
+    else takes :func:`detect_airway`. The branch reports; VERDICT decides.
 
     Args:
         store: The provenance store, holding PREPROCESS's spans, derivatives and classifications.
@@ -1141,7 +1109,7 @@ def airway(
         run_dir: The run directory the derivative sidecars are relative to.
 
     Returns:
-        The verdict, the view over what was written, and the verdict entity's id.
+        The branch report, the view over what was written, and the ``branch_report`` entity's id.
     """
     params = branch_params(config)
     software = software_agent(store)
@@ -1189,8 +1157,8 @@ def airway(
 def _detail(result: Result, spans: Sequence[Entity], params: BranchParams) -> dict[str, Any]:
     """The report's design-named observation fields, read off what the mode returned.
 
-    ``labelled_n`` counts the events this branch proposed rather than the spans PREPROCESS merged
-    them out of, which is the repair: a 4 s span holding three coughs used to count one.
+    ``labelled_n`` counts the events this branch proposed, not the spans PREPROCESS merged them out
+    of.
 
     Args:
         result: What the selected mode returned.
@@ -1198,11 +1166,9 @@ def _detail(result: Result, spans: Sequence[Entity], params: BranchParams) -> di
         params: The operating points, read for what was asked for and could not be measured.
 
     Returns:
-        ``labelled_n``, ``by_label``, ``contested_n``, ``merged_n``, ``spans_n``, ``notes``, and
-        the three coverage fields. ``notes`` is what this branch could not measure, in controlled
-        vocabulary; nothing folds it. :data:`COVERAGE_FRACTION`, ``coverage_asked_s`` and
-        ``coverage_asked_from`` carry what the coverage pattern read, whatever it read, and are
-        None on every mode that takes no coverage.
+        ``labelled_n``, ``by_label``, ``contested_n``, ``merged_n``, ``spans_n``, ``notes`` — what
+        this branch could not measure, in controlled vocabulary — and the three coverage fields,
+        which are None on every mode that takes no coverage.
     """
     events = [proposal for proposal in result.components if proposal.role != TASK_EXTENT]
     by_label: dict[str, int] = {}

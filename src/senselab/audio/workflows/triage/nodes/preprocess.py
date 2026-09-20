@@ -1,18 +1,15 @@
 """PREPROCESS — one conditioning pass, every shared derivative written to the store.
 
-Every model that answers a whole-file question runs here: YAMNet, AST, HeAR and the diarizer alike.
-No later node re-runs one. The recognizers, the aligner, SQUIM, level and the window classifiers read the plain
-resampled signal; the envelope, spans, spectrograms, gammatone and the phonation pass read the
-pre-emphasised one; ``disruptions_file`` and ``band_profile`` read the original recording. This node takes no pass/flag/
-fail decision of its own — but it is not guaranteed to complete. Each block still runs in its own
-try/except, and a block whose config value is unmeasured (a null default) or whose own upstream
-prerequisite is missing from the store still records that derivative ``absent`` and moves on, exactly
-as before. Any other exception is different: every remaining block still runs (this pass is meant to
-be robust, not to abort early), but once the loop finishes, ``preprocess`` raises one exception
-summarizing every such failure instead of returning normally — steps here do not get to silently
-swallow a bug. ``run_triage`` treats that raise the same way it treats any other node erroring:
-TAXONOMY, routing and every branch are skipped, and the file goes straight to VERDICT with the
-failure as its reason. Every parameter's derivation is in ``data/config/default.yaml``.
+Every model that answers a whole-file question runs here: YAMNet, AST, HeAR and the diarizer alike;
+no later node re-runs one. The recognizers, the aligner, SQUIM, level and the window classifiers
+read the plain resampled signal; the envelope, spans, spectrograms, gammatone and the phonation pass
+read the pre-emphasised one; ``disruptions_file`` and ``band_profile`` read the original recording.
+The node takes no pass/flag/fail decision of its own. Each block runs in its own try/except: a null
+config value or a missing upstream prerequisite records that derivative ``absent``; any other
+exception is collected and re-raised as one ``RuntimeError`` once every block has had its turn.
+
+Every parameter's derivation is in ``data/config/default.yaml``. The design is in
+``specs/20260817-triage-workflow-dag/preprocess.md`` and ``config-derivations.md``.
 """
 
 from __future__ import annotations
@@ -153,10 +150,10 @@ STIMULUS_MEASUREMENT = "stimulus_alignment"
 DIARIZATION_DERIVATIVE = "diarization"
 """The derivative name. One measurement per stream is written, each ``<stream>_diarization``."""
 DIARIZATION_SAMPLE_RATE = 16000
-"""The rate pyannote's own model card fixes. Not a tunable: the backend refuses any other rate."""
+"""The rate pyannote's model is fixed at; the backend refuses any other."""
 PHONATION_TRACKS_MEASUREMENT = "phonation_tracks"
 WITHDRAW_VERB = "withdraw"
-"""The assertion verb for a candidate the detector proposed in this activity and then took back."""
+"""The assertion verb for a candidate the detector proposed and then took back."""
 WITHDRAWN_CLIPS = "clip_withdrawn"
 """The derivative name the withdrawn clip candidates are listed under in PREPROCESS's verdict."""
 
@@ -277,19 +274,13 @@ def _confident_labels(window: dict[str, Any], membership: LabelMembership) -> di
         membership: The rule read from ``windows.<classifier>``.
 
     Returns:
-        ``{label: score}`` over the members, in descending score order. Empty is a window nothing
-        cleared, which is a different fact from a window that was never classified.
+        ``{label: score}`` over the members, in descending score order; empty when nothing cleared.
     """
     return membership.members(_raw_label_scores(window))
 
 
 def _raw_label_scores(window: dict[str, Any]) -> dict[str, float]:
-    """Return every valid classifier probability in its native ranked order.
-
-    ``scores`` on a stored ``*_window`` measurement remains the thresholded decision subset.
-    ``raw_scores`` is the complete model output for that same window, so presentation and later
-    analysis do not reuse a decision threshold as a data-retention threshold.
-    """
+    """Every classifier probability for one window, unthresholded, in its native ranked order."""
     return {label: score for pair in label_scores(window) for label, score in pair.items()}
 
 
@@ -322,7 +313,7 @@ def _classify_spans_in_batch(
     for item in inputs:
         try:
             results.append((classify([item])[0], None))
-        except Exception as err:  # noqa: BLE001 — now each span's own failure is its own fact
+        except Exception as err:  # noqa: BLE001 — each span's own failure is recorded
             results.append((None, f"{type(err).__name__} (after batch failed: {batch_failure})"))
     return results
 
@@ -338,11 +329,8 @@ def _span_window_attributes(
 ) -> dict[str, Any]:
     """One per-span classifier window's attributes, labelled only when a membership rule exists.
 
-    ``raw_scores`` is written whatever the configuration says, because the model ran and its output
-    is a measurement. ``labels`` and ``scores`` are a decision taken over that measurement, so they
-    appear only when a rule was configured, and ``labelled`` says which case a reader is looking at:
-    absent labels with ``labelled`` False is "no threshold was set", an empty ``labels`` with
-    ``labelled`` True is "nothing cleared the bar".
+    ``raw_scores`` is always written; ``labels`` and ``scores`` appear only when ``membership`` is
+    given, and ``labelled`` says which of the two cases a reader is looking at.
 
     Args:
         name: The measurement name, ``"span_hear"`` or ``"span_yamnet"``.
@@ -454,8 +442,7 @@ class ClipAmplitudes:
 def clip_amplitudes(audio: Audio, extents: Sequence[tuple[float, float]], *, guard_samples: int) -> ClipAmplitudes:
     """Measure each clip span's level and the loudest sample outside every one of them.
 
-    Read from the channel-averaged signal ``detect_clip_events`` reads, at the sampling rate the
-    extents are stated against. See ``specs/20260912-quality-clip-consistency/design.md``.
+    Read from the channel-averaged signal, at the sampling rate the extents are stated against.
 
     Args:
         audio: The signal the extents were detected on.
@@ -540,10 +527,8 @@ def reject_contradicted_clips(
     """Split clip candidates into the ones no unclipped sample is louder than, and the rest.
 
     A candidate is withdrawn when the loudest sample outside every surviving candidate exceeds the
-    candidate's own peak by more than ``margin`` of that peak. Withdrawal only enlarges the
-    unclipped set, so the split is re-read until it stops moving; each round removes at least one
-    candidate, so it terminates within ``len(extents)`` rounds. See
-    ``specs/20260912-quality-clip-consistency/design.md``.
+    candidate's own peak by more than ``margin`` of that peak; the split is re-read until it stops
+    moving. See ``specs/20260912-quality-clip-consistency/design.md``.
 
     Args:
         audio: The signal the candidates were detected on.
@@ -593,11 +578,7 @@ def write_withdrawn_clips(
     margin: float,
     derived_from: tuple[str, ...] = (),
 ) -> list[str]:
-    """Record each withdrawn clip candidate as an assertion, so the proposal is a fact, not a silence.
-
-    An assertion rather than an invalidated span: the candidate never stood, and a span written and
-    invalidated in the same activity would put a ``clip`` entity over that extent into the store for
-    any reader that keys by extent rather than by liveness.
+    """Record each withdrawn clip candidate as an assertion; no span is written for it.
 
     Args:
         store: The provenance store.
@@ -606,8 +587,7 @@ def write_withdrawn_clips(
         withdrawn: The candidates taken back, in time order.
         signal: The stream name the candidates were proposed over.
         margin: The fraction of a candidate's own level the contradiction was read at.
-        derived_from: Entities the withdrawals derive from — the signal, not a span, since none was
-            written.
+        derived_from: Entities the withdrawals derive from — the signal, not a span.
 
     Returns:
         The assertion ids, in the order the withdrawals were given.
@@ -647,8 +627,7 @@ def write_clip_amplitudes(
 ) -> str:
     """Measure the amplitudes of already-written clip spans and store them as one measurement.
 
-    Every level QUALITY reads lives here, keyed by span id, beside the whole-file values. Nothing is
-    stamped on the spans themselves, so this can be appended to a store whose spans already exist.
+    The levels are keyed by span id, beside the whole-file values; nothing is stamped on the spans.
 
     Args:
         store: The provenance store.
@@ -705,9 +684,8 @@ def write_clip_spans(
 ) -> tuple[list[str], str]:
     """Write the clip spans and, beside them, the amplitude reading QUALITY checks them against.
 
-    The two are written together because the waveform is in hand exactly once: QUALITY reads stored
-    outputs and never decodes audio of its own. A span carries what was asserted — its family, its
-    signal and its extent — and no amplitude; :func:`write_clip_amplitudes` holds those.
+    A span carries its family, its signal and its extent and no amplitude;
+    :func:`write_clip_amplitudes` holds those.
 
     Args:
         store: The provenance store.
@@ -766,9 +744,6 @@ def ppg_model_agent(store: ProvStore) -> str:
 def ppg_input(store: ProvStore, run_dir: Path) -> tuple[str, Audio]:
     """The ``enhanced`` stream, conditioned as ppgs reads it: mono at :data:`PPGS_SAMPLE_RATE`.
 
-    The one place the posteriorgram's input is prepared, so a batching caller and the block itself
-    hand the model the same samples.
-
     Args:
         store: The provenance store, read for the live ``enhanced`` stream entity.
         run_dir: The run directory the stream's sidecar path is relative to.
@@ -798,8 +773,7 @@ def write_ppg_posteriorgram(
     """Persist one posteriorgram beside the run and register the measurement that names it.
 
     The array is written frame-major in float16 to ``derivatives/ppg_posteriorgram.npz`` with the
-    phoneme order beside it; the entity carries the path, its SHA-256, its size and its shape, never
-    the array.
+    phoneme order beside it; the entity carries its path, digest, size and shape, never the array.
 
     Args:
         store: The provenance store.
@@ -872,12 +846,7 @@ def ppg_posteriorgram(store: ProvStore, *, run_dir: Path) -> str:
 
 
 class StimulusExpectationUnavailable(ValueError):
-    """No utterance was declared for this recording; record it as an absence.
-
-    A ``ValueError`` so the block runner files it beside every other cascading absence rather than
-    as a node failure: a recording whose family declares no text, or whose hints were never
-    populated, has not found a bug, it has nothing to be measured against.
-    """
+    """No utterance was declared for this recording; record it as an absence."""
 
 
 def stimulus_input(store: ProvStore, hint: AudioHints | None) -> tuple[str, list[ExpectedSpeech], list[LexicalWord]]:
@@ -931,9 +900,7 @@ def write_stimulus_alignment(
     """Persist one stimulus alignment beside the run and register the measurement that names it.
 
     Three parallel-column tables in one ``.npz`` -- the expected tokens, the declared structure and
-    the lexical complement. The entity carries the counts a consumer reads to answer "was this read
-    at all" without opening the file, and the path, digest and size of the table that grows with the
-    stimulus.
+    the lexical complement. The entity carries the counts, and the table's path, digest and size.
 
     Args:
         store: The provenance store.
@@ -1028,12 +995,7 @@ def stimulus_alignment(store: ProvStore, config: TriageConfig, *, run_dir: Path,
 
 
 class SpeakerDiarizationUnavailable(ValueError):
-    """The diarizer could not be obtained or could not run on this host; record it as an absence.
-
-    A ``ValueError`` so the block runner files it beside every other cascading absence rather than
-    as a node failure: a host with no Hugging Face token, no network, or no ``pyannote-audio`` has
-    not found a bug, it has failed to measure.
-    """
+    """The diarizer could not be obtained or could not run on this host; record it as an absence."""
 
 
 def diarization_model(config: TriageConfig) -> PyannoteAudioModel:
@@ -1047,13 +1009,13 @@ def diarization_model(config: TriageConfig) -> PyannoteAudioModel:
 
     Raises:
         SpeakerDiarizationUnavailable: If the repository cannot be reached or is not accessible to
-            this host's token — pyannote's checkpoints are gated.
+            this host's token.
     """
     model_id = str(config.require("diarization.model"))
     revision = str(config.require("diarization.revision"))
     try:
         return PyannoteAudioModel(path_or_uri=model_id, revision=revision)
-    except Exception as err:  # noqa: BLE001 — a spec that will not resolve is an absence, not a bug
+    except Exception as err:  # noqa: BLE001 — an unresolvable spec is an absence
         raise SpeakerDiarizationUnavailable(
             f"the diarizer {model_id}@{revision} could not be resolved: {describe_exception(err)}"
         ) from err
@@ -1062,8 +1024,7 @@ def diarization_model(config: TriageConfig) -> PyannoteAudioModel:
 def diarization_parameters(config: TriageConfig, model: PyannoteAudioModel) -> dict[str, Any]:
     """Every setting the diarization was measured under, as the activity and the entity record it.
 
-    The commit is not among them: the model agent carries it, and a second copy on the entity is
-    the parallel-field shape this repository's pre-alpha convention rules out.
+    The resolved commit is not among them; the model agent carries it.
 
     Args:
         config: The triage configuration.
@@ -1102,10 +1063,6 @@ def diarization_streams(config: TriageConfig) -> tuple[str, ...]:
 def diarization_measurement(stream: str) -> str:
     """The measurement name one stream's diarization is written under.
 
-    One measurement per stream rather than one carrying both, so ``signal`` keeps meaning what it
-    means everywhere else in the store and each entity's ``derived_from`` names exactly the stream
-    it was measured on. Same shape as ``enhanced_yamnet_scores`` and ``residual_yamnet_scores``.
-
     Args:
         stream: The stream's name.
 
@@ -1117,9 +1074,6 @@ def diarization_measurement(stream: str) -> str:
 
 def diarization_input(store: ProvStore, run_dir: Path, stream: str) -> tuple[str, Audio]:
     """One stream, conditioned as pyannote reads it: mono at :data:`DIARIZATION_SAMPLE_RATE`.
-
-    The one place the diarizer's input is prepared, so an extend pass over a finished run hands the
-    model the same samples this pass did.
 
     Args:
         store: The provenance store, read for the live stream entity.
@@ -1160,11 +1114,8 @@ class DiarizedTurns:
 def diarized_segments(lines: Sequence[ScriptLine], duration_s: float) -> DiarizedTurns:
     """The diarizer's script lines as timed, labelled segments bounded by the audio it read.
 
-    A line carrying no speaker, no start or no end names no region of the recording and is dropped:
-    it would otherwise enter the count as a speaker with no extent. A line reaching past
-    ``duration_s`` is bound back to it, and one beginning at or after it is dropped, on the same
-    rule ``_bound_to_duration`` applies to a recognizer's chunks: an instrument cannot report a
-    region of a recording it was not given.
+    A line carrying no speaker, no start or no end is dropped; a line reaching past ``duration_s``
+    is bound back to it, and one beginning at or after it is dropped.
 
     Args:
         lines: One recording's script lines, as ``diarize_audios`` returned them.
@@ -1202,10 +1153,8 @@ def diarized_segments(lines: Sequence[ScriptLine], duration_s: float) -> Diarize
 def speaker_activity(segments: Sequence[tuple[float, float, str]]) -> dict[str, Any]:
     """What the diarizer's segments say about how many voices the recording holds, and for how long.
 
-    ``n_speakers`` is the headline the owner asked for. Zero is a measurement, not an absence: a
-    recording the segmentation finds no speech in has no speaker, which is the ordinary outcome for
-    a breath or cough task. Overlap is only readable when the diarizer's overlapping view was
-    taken; under the exclusive partition ``overlap_s`` is zero by construction.
+    ``overlap_s`` and ``max_concurrent_speakers`` are readable only under the overlapping view;
+    under the exclusive partition both are zero by construction.
 
     Args:
         segments: ``(start, end, speaker)`` per segment.
@@ -1267,17 +1216,9 @@ def write_diarization(
 ) -> str:
     """Persist one stream's diarization beside the run and register the measurement that names it.
 
-    The speaker count and the per-speaker totals are attributes, because they are the facts a
-    consumer reads to answer "one voice or more" and must be legible without opening a file. The
-    segment table is the sidecar, because its length scales with the recording's: the PPG precedent
-    is that what grows with duration is written to ``derivatives/`` in an ``.npz`` the entity names
-    by digest, never inlined. The segments are deliberately not written as ``span`` entities
-    either — ``live_entities(store, "span")`` is the branches' set of candidate task spans, and a
-    per-speaker time partition is not a candidate for anything.
-
-    The sidecar's ``starts``/``ends``/``speakers``/``streams`` are four parallel columns of one
-    table, so concatenating two streams' files gives a complete, self-describing segment list a
-    consumer can intersect with a span by arithmetic alone.
+    The speaker count and the per-speaker totals are attributes; the segment table is a sidecar,
+    whose ``starts``/``ends``/``speakers``/``streams`` are four parallel columns of one table. No
+    ``span`` entity is written. See ``specs/20260915-preprocess-diarization/design.md``.
 
     Args:
         store: The provenance store.
@@ -1345,8 +1286,7 @@ def diarization(
         config: The triage configuration.
         run_dir: The run directory the sidecar is written under.
         stream: Which stream to diarize; one of :func:`diarization_streams`.
-        device: Where the diarizer runs. A host fact rather than a configured one, so it is an
-            argument and not a config key; None lets the backend select.
+        device: Where the diarizer runs; None lets the backend select.
 
     Returns:
         The measurement entity's id.
@@ -1394,10 +1334,8 @@ def _praat_scalar(value: Any) -> Any:  # noqa: ANN401 — Praat's own value, of 
 def praat_features(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
     """Praat/Parselmouth's whole-file feature set over the ``enhanced`` stream.
 
-    Every scalar is an attribute of the measurement: the descriptors, the five keys naming the F0
-    range they were measured under and the frame count the cepstral peak prominence rests on —
-    small enough that a sidecar would only add an indirection. A non-finite scalar is recorded as
-    null, JSON's only representation of a number Praat could not place.
+    Every scalar is an attribute of the measurement, a non-finite one recorded as null. No sidecar
+    is written.
 
     Args:
         store: The provenance store.
@@ -1470,9 +1408,7 @@ def sharp_stream(store: ProvStore, run_dir: Path) -> tuple[str, Audio, str]:
 def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
     """F0 over the pre-emphasised stream and the first four formants over ``plain``, per frame.
 
-    Both streams are read back out of the store rather than taken from a conditioning pass's own
-    arrays, so this pass and an extend pass over a finished run hand the trackers the same samples
-    and write the same entity.
+    Both streams are read back out of the store, not taken from a conditioning pass's own arrays.
 
     Args:
         store: The provenance store, read for the live ``plain`` and pre-emphasised streams.
@@ -1548,14 +1484,8 @@ def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -
 def extend_clip_amplitudes(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str | None:
     """Measure the clip-amplitude measurement a finished run's clip spans have none of.
 
-    The spans are read back rather than re-detected, so nothing else PREPROCESS produced is
-    recomputed and no existing entity is touched. The source audio is the ``recording`` stream's
-    own file, which ADMIT recorded the absolute path and digest of.
-
-    Neither the activity nor the measurement carries a path, a timestamp or any other value that
-    varies between two readings of the same file, so a second call writes records the store already
-    holds and is a set-union no-op. A caller that skips a run already carrying the measurement is
-    saving the decode, not buying the convergence.
+    The spans are read back rather than re-detected, off the ``recording`` stream's own file, whose
+    path and digest ADMIT recorded. A second call over the same run rewrites the same records.
 
     Args:
         store: The finished run's store, read under the run's own id.
@@ -1644,9 +1574,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         names of derivatives that are absent.
 
     Raises:
-        RuntimeError: One or more blocks raised something other than a null-config ``ValueError`` or
-            a missing-prerequisite ``LookupError`` — every block was still attempted, but this
-            propagates instead of a normal return, once every block has had its turn.
+        RuntimeError: If one or more blocks raised something other than a ``ValueError`` or a
+            ``LookupError``. Every block is still attempted first.
     """
     software = software_agent(store)
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
@@ -1736,13 +1665,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _clip_spans() -> None:
         """Clip-event spans over the ORIGINAL recording (ClipDaT), before any normalization runs.
 
-        A merged candidate a louder unclipped sample contradicts is withdrawn rather than written:
-        a real ceiling truncated everything above it, so nothing outside it can be louder, at any
-        scale. Each withdrawal is recorded as an assertion over the extent it was proposed at.
-
-        One ``clip_amplitude`` measurement beside the surviving spans carries the loudest unclipped
-        sample, where it sits, and each span's own peak keyed by its id. QUALITY's consistency check
-        reads those numbers; measuring them here is what lets it read no audio.
+        A merged candidate a louder unclipped sample contradicts is withdrawn and recorded as an
+        assertion instead. One ``clip_amplitude`` measurement beside the surviving spans carries the
+        loudest unclipped sample, where it sits, and each span's own peak keyed by its id.
         """
         if not recording_ids:
             raise LookupError("no recording stream in the store")
@@ -1807,13 +1732,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _envelope() -> None:
         """`energy_envelope` and its floor, over the pre-emphasised signal -- the primary span signal.
 
-        Primary rather than the normalized signal: AGC is an optional, unvalidated step, and
-        measured directly on real recordings it can compress
-        local dynamic range enough that no peak clears any reasonable `k_db` at all (a five-breath
-        recording's rise-over-floor topped out at 9 dB post-normalization against 23 dB pre-). The
-        pre-emphasised envelope needs no optional step to exist, so `_spans` below always has a
-        signal to propose from; `_normalized_envelope`'s spans, where available, only ever add
-        candidates this pass missed, never replace it.
+        `_spans` always has this signal to propose from; `_normalized_envelope`'s spans only ever
+        add candidates it missed.
         """
         parameters = {
             "lowpass_hz": float(config.require("envelope.lowpass_hz")),
@@ -1847,29 +1767,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _normalized_envelope() -> None:
         """The dynamically-normalized signal's own envelope and floor, over the pre-emphasised signal.
 
-        Supplementary, not primary (see `_envelope` above): a quiet event AGC boosted to be
-        detectable is a real candidate `_spans` should not miss, so its spans are added wherever they
-        do not already overlap one the pre-emphasised pass found — never used to replace that pass,
-        because AGC can also destroy contrast the raw signal still carries.
-
-        The macro and micro envelopes inside ``dynamic_range_normalize`` are smoothed with
-        :class:`~senselab.audio.tasks.envelope.api.MedianSmoothing`: a median cannot overshoot past a
-        transient the way a resonant Butterworth does, which is what a word's onset is to this
-        envelope. The final envelope this measurement stores goes one step further and uses
-        :class:`~senselab.audio.tasks.envelope.api.PercentileSmoothing`: a median (its 50th
-        percentile) still averages a real peak down toward the window's centre, and a plain rolling
-        maximum overcorrects the other way — one loud sample pins the whole window to its height and
-        holds it there after the sound has already ended, smearing a peak sideways in time. A high
-        percentile (90th) sits close to the true peak without either failure, verified on real
-        speech in this session's own diagnostics.
-
-        The gain curve's own smoothing (``gain_smoothing``) is median too, not the Butterworth it
-        shipped with: a resonant lowpass cannot settle to a short event's own correct gain within
-        the event, so a ~150 ms burst spent most of its duration at several-hundred-percent excess
-        gain rather than at a brief, edge-localized ringing artifact — raising the cutoff did not
-        fix it, since the residual is the filter's own lag behind the macro-level transition
-        upstream of it, not insufficient bandwidth. A short median settles to the correct plateau
-        immediately, at the cost of a bounded transition rather than a ramped one.
+        Supplementary to `_envelope`: its spans are added wherever they do not already overlap one
+        the pre-emphasised pass found. The macro, micro and gain curves inside
+        ``dynamic_range_normalize`` are median-smoothed; the stored envelope is
+        percentile-smoothed. Their derivations are in
+        ``specs/20260817-triage-workflow-dag/config-derivations.md``.
         """
         parameters: dict[str, Any] = {
             "macro_smoothing_window_s": float(config.require("normalization.macro_smoothing.window_s")),
@@ -1954,13 +1856,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         covers: primary (the pre-emphasised amplitude envelope), supplementary (the normalized
         envelope, where that derivative exists), continuity (``continuity_trace``, where that
         derivative exists) and ASR (the consensus transcript's word timings, grouped where they
-        touch). A later candidate overlapping a kept span is recorded on that
-        span's ``corroborated_by`` attribute rather than dropped; the attribute is absent, not
-        empty, on a span nothing corroborated, and creates no provenance edge because a
-        corroborating candidate never becomes its own entity. ``contains_clip`` is the only flag
-        this pass asserts.
-
-        The measurements behind the source set and its ordering are in
+        touch). A later candidate overlapping a kept span is recorded on that span's
+        ``corroborated_by`` attribute rather than dropped, and becomes no entity of its own.
+        ``contains_clip`` is the only flag this pass asserts. See
         ``specs/20260904-preprocess-taxonomy-figure/design.md`` and
         ``specs/20260817-triage-workflow-dag/benchmarks/preprocess-params.md``.
         """
@@ -2008,11 +1906,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         def _novel(candidates: list[Span], covered: list[Span], *, measure: str, signal: str) -> list[Span]:
             """Candidates over new ground, kept; candidates over already-covered ground, recorded.
 
-            A candidate that overlaps one or more spans in ``covered`` is not discarded: it is
-            attached to every span it overlaps as a ``corroborated_by`` entry (keyed by object
-            identity, since ``covered`` spans are freshly built each call and never value-equal by
-            accident), so a later source agreeing with an earlier one stays visible rather than
-            being silently thrown away. Only a candidate with zero overlap becomes a new span.
+            A candidate overlapping one or more spans in ``covered`` is attached to each of them as
+            a ``corroborated_by`` entry, keyed by object identity. Only a candidate with zero
+            overlap becomes a new span.
             """
             kept: list[Span] = []
             for candidate in candidates:
@@ -2106,9 +2002,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             store.was_attributed_to(span_id, software)
             store.was_derived_from(span_id, source_id)
             span_ids.append(span_id)
-        # Everything the proposers left over is itself a span. The gaps are where the recording's
-        # background lives, and the per-span classifiers run over whatever is in `span_ids`, so
-        # naming them here is what gets the background measured at all rather than never looked at.
+        # Everything the proposers left over is itself a span, written with `measure="gap"`.
         min_gap_s = parameters["min_duration_ms"] / 1000.0
         covered = sorted((span.start, span.end) for span, _, _, _ in combined)
         gaps: list[tuple[float, float]] = []
@@ -2350,10 +2244,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _band_profile() -> None:
         """The content band and long-term average spectrum over the ORIGINAL recording (D3).
 
-        Taken on the un-resampled stream because that is the only place the answer exists: every
-        other spectral derivative is computed after the resample to the working rate and reports
-        that rate's ceiling whatever the file held. The container's declared ``sampling_rate``,
-        which ADMIT records, is not the content's band either.
+        Taken on the un-resampled stream; every other spectral derivative is computed after the
+        resample and reports the working rate's ceiling.
         """
         if not recording_ids:
             raise LookupError("no recording stream in the store")
@@ -2409,7 +2301,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.append(entity_id)
 
     def _squim_for(name: str, span_ids: list[str]) -> None:
-        """One objective-head measure assertion per span in ``span_ids``; refusals recorded, never padded."""
+        """One objective-head measure assertion per span in ``span_ids``; refusals recorded."""
         if not span_ids:
             raise LookupError("spans are absent")
         agent = store.agent(
@@ -2435,7 +2327,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                     "pesq": float(scores["pesq"]),
                     "si_sdr": float(scores["si_sdr"]),
                 }
-            except Exception as err:  # noqa: BLE001 — a span SQUIM refuses is unmeasured, not padded
+            except Exception as err:  # noqa: BLE001 — a span SQUIM refuses is unmeasured
                 attributes = {"verb": "measure", "name": name, "unmeasured": type(err).__name__}
             assertion_id = store.entity(prov_type="assertion", extent=span.extent, attributes=attributes)
             store.was_generated_by(assertion_id, activity)
@@ -2446,15 +2338,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.extend(assertion_ids)
 
     def _squim() -> None:
-        """SQUIM over the spans, on the plain signal -- recording quality, not any span's own gain."""
+        """SQUIM over the spans, on the plain signal."""
         _squim_for("squim", state.get("span_ids") or [])
 
     def _mark_unmeasured(activity: str, agent_id: str, span: Entity, name: str, reason: str) -> str:
-        """Record one span as attempted but unmeasured, so its absence is a fact, not a silence.
-
-        The assertion names the span it stands for, so a reader joins it to the span the same way it
-        joins a scored window, and the classifier's denominator counts both.
-        """
+        """Record one span as attempted but unmeasured, as an assertion naming that span."""
         assertion_id = store.entity(
             prov_type="assertion",
             extent=span.extent,
@@ -2468,14 +2356,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _span_hear() -> None:
         """Per-span HeAR re-evaluation of the spans, raw scores only — no labelling decision.
 
-        Reuses the same per-span windowing AIRWAY uses for its own candidates (a short span is
-        centred in a silent 2 s buffer; a long span is passed through and HeAR's native windows are
-        placed back on the recording's own timeline) for the reason AIRWAY's own docstring already
-        gives: a whole-file HeAR window is the wrong instrument for an isolated candidate. Runs over
-        the plain signal, like ``_squim_for`` -- HeAR already carries its own internal preprocessing,
-        so handing it our own dynamic-range-normalized signal on top is redundant at best and
-        distorting at worst. No longer gated on normalization: this re-evaluation needs no normalized
-        signal to exist at all.
+        A short span is centred in a silent 2 s buffer; a long span is passed through and HeAR's
+        native windows are placed back on the recording's own timeline. Runs over the plain signal.
         """
         span_ids = state.get("span_ids") or []
         if not span_ids:
@@ -2491,7 +2373,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             extent = span.extent or (0.0, 0.0)
             try:
                 prepared.append(span_hear_input(plain, extent))
-            except Exception as err:  # noqa: BLE001 — a span HeAR cannot be given is unmeasured, not padded
+            except Exception as err:  # noqa: BLE001 — a span HeAR cannot be given is unmeasured
                 result_ids.append(_mark_unmeasured(activity, agent, span, "span_hear", type(err).__name__))
                 continue
             prepared_for.append(span_id)
@@ -2534,14 +2416,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 
         A span at least :data:`~senselab.audio.tasks.classification.yamnet.YAMNET_WINDOW_SECONDS`
         long is classified directly, letting YAMNet place its own native windows over it. A shorter
-        span is never classified directly: its score is the overlap-weighted mean of the whole-file
-        ``yamnet_scores`` windows that cover it (:func:`_covering_window_attribution`) -- those
-        windows are real, unpadded audio, already computed earlier in this node. A short span with
-        nothing covering it (only possible when the whole-file pass itself is absent) is recorded
-        unmeasured rather than scored. Runs over the plain signal, like ``_squim_for`` -- YAMNet
-        already carries its own internal preprocessing, so our own dynamic-range-normalized signal
-        on top is redundant at best and distorting at worst. No longer gated on normalization: this
-        re-evaluation needs no normalized signal to exist at all.
+        span is scored by the overlap-weighted mean of the whole-file ``yamnet_scores`` windows that
+        cover it (:func:`_covering_window_attribution`), or recorded unmeasured when none does. Runs
+        over the plain signal.
         """
         span_ids = state.get("span_ids") or []
         if not span_ids:
@@ -2596,7 +2473,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 store.was_derived_from(window_id, span_id)
                 result_ids.append(window_id)
                 continue
-            except Exception as err:  # noqa: BLE001 — a span YAMNet cannot be given is unmeasured, not padded
+            except Exception as err:  # noqa: BLE001 — a span YAMNet cannot be given is unmeasured
                 result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", type(err).__name__))
                 continue
             native_prepared.append(audio)
@@ -2646,7 +2523,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         timing_model: str | None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
-        """One recognizer: its transcript and its own word list, retained as the consensus's evidence.
+        """One recognizer: its transcript and its own word list, the consensus's evidence.
 
         No ``word`` entity is written here; PREPROCESS writes those once, over the consensus.
         """
@@ -2758,10 +2635,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _stimulus_alignment() -> None:
         """The consensus word stream aligned against the declared utterance, to one npz sidecar.
 
-        Reads the words back out of the store rather than out of ``state``, so an extend pass over a
-        finished run aligns the same stream this pass did. A recording that declared no utterance is
-        this derivative's own absence, not a failure: the expectation is an input, and an absent
-        input is not an absent measurement.
+        Reads the words back out of the store, not out of ``state``. A recording that declared no
+        utterance is this derivative's own absence.
         """
         entity_id = stimulus_alignment(store, config, run_dir=run_dir, hint=hint)
         derivatives[STIMULUS_MEASUREMENT] = entity_id
@@ -2770,10 +2645,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _phonation_tracks() -> None:
         """F0 and formant tracks over the whole stream — measured once, localised nowhere.
 
-        Sustained-phonation and glide span *detection* used to happen here; it has moved to
-        TAXONOMY, which reads this measurement back and runs the same proposal functions over it.
-        This block keeps only the part that is a measurement, and it reads its streams back out of
-        the store, so a finished run can gain the tracks without conditioning being replayed.
+        Sustained-phonation and glide span detection is TAXONOMY's, over this measurement. The
+        streams are read back out of the store.
         """
         entity_id = phonation_tracks(store, config, run_dir=run_dir)
         derivatives[PHONATION_TRACKS_MEASUREMENT] = entity_id
@@ -2782,11 +2655,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _spectrogram(name: str, window_key: str) -> None:
         """One STFT power spectrogram, window and hop from the config, n_fft = win_length (decision N7).
 
-        Stores the magnitude (``sqrt`` of this transform's power output) and the hop it was computed
-        at into ``state`` under this block's own name, alongside writing the usual npz/measurement --
-        so a later block (``_spans``'s continuity source, for the wideband case) can reuse the same
-        array rather than recomputing an independent STFT with merely matching parameters. Harmless
-        for the narrowband case, which nothing currently reads back out of ``state``.
+        Beside the npz and the measurement, the magnitude (``sqrt`` of the power output) and the hop
+        go into ``state`` under this block's own name, for a later block to reuse.
         """
         window_ms = float(config.require(window_key))
         hop_ms = float(config.require("spectrogram.hop_ms"))
@@ -2816,8 +2686,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _continuity_trace() -> None:
         """The frame-to-frame spectral similarity over the narrowband spectrogram, to one npz sidecar.
 
-        Written as its own derivative rather than left in ``_spans``' local scope, so a reader draws
-        the trace these spans were proposed from. ``cut_level`` records where the rank cut fell.
+        ``cut_level`` records where the rank cut fell.
         """
         if "spectrogram_narrowband_magnitude" not in state:
             raise LookupError("spectrogram_narrowband is absent")
@@ -2893,11 +2762,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.append(entity_id)
 
     def _ppg_posteriorgram() -> None:
-        """The phonetic posteriorgram over the ``enhanced`` stream, to one npz sidecar.
-
-        Reads the stream back out of the store rather than out of ``state``, so this pass and an
-        extend pass over a finished run hand the model the same samples and write the same entity.
-        """
+        """The phonetic posteriorgram over the ``enhanced`` stream, to one npz sidecar."""
         entity_id = ppg_posteriorgram(store, run_dir=run_dir)
         derivatives[PPG_MEASUREMENT] = entity_id
         view.append(entity_id)
@@ -2911,11 +2776,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _diarization(stream: str) -> None:
         """How many voices one stream holds, and where each of them is, to one npz.
 
-        One block per stream, so a run whose ``residual`` was never written still gets its
-        ``enhanced`` reading and records the other as its own absence. Reads the stream back out of
-        the store rather than out of ``state``, for the same reason the posteriorgram does: this
-        pass and an extend pass over a finished run must hand the model the same samples. The count
-        is recorded, never judged -- no multi-voice gate lives here.
+        One block per stream; the stream is read back out of the store, not out of ``state``. The
+        count is recorded, never judged.
         """
         entity_id = diarization(store, config, run_dir=run_dir, stream=stream)
         derivatives[diarization_measurement(stream)] = entity_id
@@ -2924,9 +2786,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _diarization_blocks() -> list[tuple[str, Callable[[], None]]]:
         """One block per configured stream, or one block that records why there are none.
 
-        Building the list is itself config-reading, and a null ``diarization.streams`` would
-        otherwise abort the whole node before any block ran. It is recorded as this derivative's
-        own absence instead, which is what every other unmeasured config value does.
+        Building the list reads config, so a null ``diarization.streams`` is turned into a block
+        that raises inside the runner and is recorded as this derivative's own absence.
         """
         try:
             streams = diarization_streams(config)
@@ -2944,8 +2805,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         """Speech regions for the residual's ``speech_overlap``, and which source produced them.
 
         The union of the consensus's lexical words' per-source ``timings`` when a consensus
-        transcript exists (even one with no lexical words, which returns no regions but still
-        names that source); the union of this pass's own amplitude-source spans otherwise.
+        transcript exists, even one with no lexical words; the union of this pass's own
+        amplitude-source spans otherwise.
         """
         words = state.get("consensus")
         if words is not None:
@@ -2961,28 +2822,15 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _residual() -> None:
         """Background residual and its paired enhancement: ``plain`` and a lag-aligned FRCRN pass.
 
-        FRCRN_SE_16K runs on ``plain``, is cross-correlation aligned to it (``residual.max_lag_ms`` search via
-        :func:`~senselab.audio.tasks.speech_enhancement.residual.compute_residual`), and the aligned
+        FRCRN_SE_16K runs on ``plain`` and is cross-correlation aligned to it
+        (``residual.max_lag_ms`` search via
+        :func:`~senselab.audio.tasks.speech_enhancement.residual.compute_residual`). The aligned
         enhancement is written as its own stream (``enhanced``) alongside the least-squares
-        gain-fitted ``residual = plain - g*enhanced``. Both are written whenever this block runs, so
-        a downstream consumer -- or a person listening back -- can see what FRCRN actually produced,
-        not only what was left after subtracting it.
-
-        No energy-fraction gate decides whether either stream is written. This block measures; it
-        does not judge whether a residual means "background" -- that question is answered by what
-        ``enhanced`` and ``residual`` were each classified as (``enhanced_yamnet``/``ast``/``hear``
-        and ``residual_yamnet``/``ast``/``hear`` below), not by a threshold on an energy ratio
-        computed before any classifier has run. FRCRN itself being unavailable or raising is still a
-        gate PREPROCESS survives (recorded as a ``ValueError`` the outer loop attributes to this
-        block), because there is nothing to measure at all in that case.
-
-        FRCRN is a speech-enhancement model; ``plain - g*enhanced`` reads as "the noise that was
-        removed" only where there was speech for it to separate from noise. The residual is written
-        regardless of whether speech is present -- this is a recorded precondition on what it
-        *means*, not a gate on whether it is produced -- via ``speech_present``, ``n_consensus_words``
-        and ``speech_coverage_fraction`` (the consensus's lexical words' own per-source timings,
-        unioned, over the stream's duration). When no consensus transcript exists at all, the latter
-        two are ``None`` (unmeasured) rather than 0, and ``speech_present`` is False.
+        gain-fitted ``residual = plain - g*enhanced``; both are written whenever this block runs,
+        under no energy-fraction gate. ``speech_present``, ``n_consensus_words`` and
+        ``speech_coverage_fraction`` record the precondition the subtraction means anything under;
+        the latter two are ``None`` when no consensus transcript exists at all. See
+        ``specs/20260817-triage-workflow-dag/preprocess.md``.
         """
         max_lag_ms = float(config.require("residual.max_lag_ms"))
         bands_hz = [(float(band[0]), float(band[1])) for band in config.require("residual.bands_hz")]
@@ -3152,10 +3000,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     ) -> None:
         """Two label summaries over one stream's classifier windows: every window, speech-free ones.
 
-        The second is exactly the windows whose ``speech_overlap`` is 0.0 -- no new threshold is
-        introduced. Comparing the two is the check for the enhancement model's own speech-shaped
-        artefact: a label whose peak collapses once the speech-overlapping windows are excluded was
-        that artefact, not the background.
+        The second is exactly the windows whose ``speech_overlap`` is 0.0.
         """
         activity = _step(f"{prefix}_{classifier}_summary", {}, reads, agent_id)
         speech_free = [window for window in windows if float(window.get("speech_overlap", 0.0)) == 0.0]
@@ -3282,10 +3127,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         try:
             block()
         except (ValueError, LookupError) as err:
-            # A null/unmeasured config value, or a block's own missing upstream prerequisite —
-            # both are cascading absences, not new failures.
+            # A null config value or a missing upstream prerequisite: a cascading absence.
             absent[name] = describe_exception(err)
-        except Exception as err:  # noqa: BLE001 — classified below; every remaining block still runs
+        except Exception as err:  # noqa: BLE001 — collected below; every remaining block still runs
             absent[name] = describe_exception(err)
             hard_failures.append((name, describe_exception(err)))
 

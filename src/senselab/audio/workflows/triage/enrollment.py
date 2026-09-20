@@ -18,12 +18,9 @@ class Enrollment(BaseModel):
 
     Attributes:
         subject_id: Whose voice this is.
-        vector: The embedding. Non-empty and finite, which is what this model enforces; the
-            estimator is expected to return it unit-norm, and ``refusal_against`` does not depend on
-            that because cosine similarity normalises either way.
-        provenance: Required. Carries the embedding model and its **resolved** commit. An enrollment
-            missing either, or naming a model or a commit the probe does not share, is refused
-            rather than compared. Names every recording that contributed in ``source_files``.
+        vector: The embedding, non-empty and finite.
+        provenance: The embedding model and its **resolved** commit, and every recording that
+            contributed, in ``source_files``. Required.
         task: The vocal task the enrollment was estimated over, when one was declared.
         distribution: Spread over the contributing windows, when the estimator produced one.
     """
@@ -85,7 +82,7 @@ class Enrollment(BaseModel):
             The vector unchanged.
 
         Raises:
-            ValueError: When any component is NaN or infinite, which no similarity is defined over.
+            ValueError: When any component is NaN or infinite.
         """
         if any(component != component or component in (float("inf"), float("-inf")) for component in value):
             raise ValueError("every component of an enrollment vector must be finite")

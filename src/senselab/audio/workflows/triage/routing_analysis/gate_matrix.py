@@ -4,25 +4,18 @@ Every configured gate is re-evaluated on every recording of a finished features 
 three ways. :func:`family_routing` is one cell per (task family, branch): how many recordings of
 the family that branch routed, which gates fired to send them, which gate each routing hinged on
 alone, and how far past its cut the routing was. :func:`gate_matrix` is one cell per (task family,
-gate), the per-gate layer underneath: how many recordings the gate fired on, stayed silent on and
-could not be read on, plus the distribution of the number it read. :func:`qualify_disagreements`
-takes the branches a recording's declared family assigns it that routing did not select, and the
-branches routing selected that the declaration does not assign, and names the deciding gate and its
-reading for each.
+gate): how many recordings the gate fired on, stayed silent on and could not be read on, plus the
+distribution of the number it read. :func:`qualify_disagreements` names the deciding gate and its
+reading for each branch the declared family assigns that routing did not select, and each branch
+routing selected that the declaration does not assign.
 
-**Routing is additive and the reference is multi-label.** A recording routes to every branch one of
-whose gates fires, so several branches on one recording is intended rather than an error, and a
-family declares the *set* of branches that legitimately apply to it — a diadochokinesis family
-declares ``SPEECH``. A branch routed beyond that set is therefore reported as
-:data:`BEYOND_DECLARATION` and never as a false positive of a precision.
+Routing is additive and the reference is multi-label: a recording routes to every branch one of
+whose gates fires, and a branch routed beyond the declared set is reported as
+:data:`BEYOND_DECLARATION` rather than as a false positive. ``unavailable`` is a category of its
+own throughout, never a non-firing.
 
-``unavailable`` is a category of its own throughout. A gate whose evidence was never written did
-not decline to fire, so :attr:`GateCell.fired_rate_evaluable` is None on a cell no recording could
-evaluate and is never 0.0 there.
-
-The declared task family is a reference standard and not ground truth, so every rate here is an
-agreement rate with the declaration. ``specs/20260915-gate-family-matrix/design.md`` carries the
-framing, the reporting band's status and the measurements.
+The framing, the reporting band's status and the measurements are in
+``specs/20260915-gate-family-matrix/design.md``.
 """
 
 from __future__ import annotations
@@ -72,10 +65,7 @@ BEYOND_DECLARATION = "beyond_declaration"
 
 
 class Deciding(Enum):
-    """Which of three findings one disagreement is, read off its deciding gate.
-
-    The three are different questions about different things and are never summed together.
-    """
+    """Which of three findings one disagreement is, read off its deciding gate."""
 
     NEAR_THRESHOLD = "near_threshold"
     FAR = "far"
@@ -83,7 +73,7 @@ class Deciding(Enum):
 
 
 DECIDING_CLASSES: tuple[str, ...] = tuple(member.value for member in Deciding)
-"""Every finding's name, in declaration order, so a group can carry all three whether or not seen."""
+"""Every finding's name, in declaration order."""
 
 
 def _bundled_profile_path() -> Path:
@@ -93,8 +83,7 @@ def _bundled_profile_path() -> Path:
         The last dated profile in the bundled directory.
 
     Raises:
-        FileNotFoundError: If the package ships no profile, which leaves the qualification
-            unavailable rather than silently banded at a value nobody wrote down.
+        FileNotFoundError: If the package ships no profile.
     """
     bundled = sorted(PROFILE_DIR.glob("*.yaml"))
     if not bundled:
@@ -177,9 +166,8 @@ def relative_margin(value: float, gate: Gate) -> float:
 
     Returns:
         Positive when the gate fired and negative when it did not, however the comparison points,
-        and scaled by the threshold so gates in seconds, dB, counts and probabilities are
-        comparable. A gate whose threshold is 0 is scaled by 1 instead, which leaves the margin in
-        the gate's own units rather than dividing by zero.
+        and scaled by the threshold so gates in different units are comparable. A gate whose
+        threshold is 0 is scaled by 1 instead.
     """
     scale = abs(gate.threshold) or 1.0
     signed = value - gate.threshold if gate.op == AT_LEAST else gate.threshold - value
@@ -218,18 +206,13 @@ class GateCell:
     def fired_rate(self) -> float | None:
         """Fraction of every recording of the family the gate fired on, or None when there are none.
 
-        An unreadable recording is in this denominator, so this rate falls when evidence goes
-        missing.
+        Unreadable recordings are in the denominator.
         """
         return self.fired / self.n if self.n else None
 
     @property
     def fired_rate_evaluable(self) -> float | None:
-        """Fraction of the readable recordings the gate fired on, or None when none were readable.
-
-        None means no recording of this family could evaluate this gate, which is not the gate
-        never firing.
-        """
+        """Fraction of the readable recordings the gate fired on, or None when none were readable."""
         return self.fired / self.n_evaluable if self.n_evaluable else None
 
     @property
@@ -252,7 +235,7 @@ class GateCell:
 
         Returns:
             The counts, the three rates and the reading distribution. A rate that is None stays
-            None rather than becoming 0.0.
+            None.
         """
         row: dict[str, Any] = {
             "family": self.family,
@@ -277,9 +260,7 @@ class GateMatrix:
     Attributes:
         families: Every family seen, in name order. The matrix's rows.
         gates: Every gate the ruleset declares, in :func:`gate_order`. The matrix's columns.
-        cells: The cell for each ``(family, gate)``. Every pair of the two axes is keyed, so a
-            family that carried no readable recording for a gate is present and says so rather
-            than being absent.
+        cells: The cell for each ``(family, gate)``. Every pair of the two axes is keyed.
         recordings: How many recordings each family carried.
         n_recordings: How many recordings were reduced.
     """
@@ -317,17 +298,15 @@ class GateMatrix:
 def gate_matrix(records: Sequence[RecordingFeatures], ruleset: Ruleset) -> GateMatrix:
     """Reduce a corpus to one cell per task family and configured gate.
 
-    Every gate is evaluated on every recording, whatever the task asked for, which is what the
-    ruleset itself does. The reading is recomputed rather than read back, because the measurement
-    that records a route keeps each gate's outcome and not the number behind it.
+    Every gate is evaluated on every recording, whatever the task asked for, and each reading is
+    recomputed rather than read back.
 
     Args:
         records: The recordings, from a features shard.
         ruleset: The loaded ruleset.
 
     Returns:
-        The matrix. Its columns are every gate the ruleset declares, flag gates included, so a
-        gate that routes nothing is still measured.
+        The matrix. Its columns are every gate the ruleset declares, flag gates included.
     """
     gates = gate_order(ruleset)
     families = tuple(sorted({record.family for record in records}))
@@ -366,8 +345,7 @@ def gate_matrix(records: Sequence[RecordingFeatures], ruleset: Ruleset) -> GateM
 def unassigned_families(records: Sequence[RecordingFeatures], ruleset: Ruleset) -> dict[str, int]:
     """Which task families no reference family set assigns to any branch, and how many recordings.
 
-    A family here is in no branch's denominator on either side: it cannot be missed and its
-    routings cannot be extra, so it is reported on its own rather than folded into a negative.
+    A family here is in no branch's denominator on either side: it can be neither missed nor extra.
 
     Args:
         records: The recordings.
@@ -387,9 +365,6 @@ def unassigned_families(records: Sequence[RecordingFeatures], ruleset: Ruleset) 
 class Disagreement:
     """One branch on one recording that routing and the declared family do not agree about.
 
-    Neither side adjudicates: a declared family is a statement about what the participant was
-    asked for, not about what the recording holds.
-
     Attributes:
         stem: The recording's BIDS stem.
         family: Its task family.
@@ -403,9 +378,7 @@ class Disagreement:
         margin: The deciding gate's :func:`relative_margin`, negative on a miss and positive on an
             extra, or None when there is no deciding gate.
         finding: Which of the three :class:`Deciding` questions this disagreement raises.
-        n_unavailable_gates: How many of the branch's gates could not be read at all. On an extra
-            this is how much of the branch's evidence was missing while it was routed anyway, and
-            it is reported beside the finding rather than folded into it.
+        n_unavailable_gates: How many of the branch's gates could not be read at all.
         n_gates: How many gates the branch declares.
     """
 
@@ -466,10 +439,8 @@ class _Deciding:
 def _deciding(record: RecordingFeatures, ruleset: Ruleset, branch: str, kind: str, band: float) -> _Deciding:
     """Which gate one disagreement turns on, and which of the three findings it raises.
 
-    For a miss the deciding gate is the one that came closest to firing, so a miss reads as a
-    threshold question only when nothing else about the branch was closer. For an extra it is the
-    firing gate that cleared its cut by least, so an extra reads as a threshold question only when
-    no other gate carried it further.
+    The deciding gate is the one that came closest to firing on a miss, and the firing gate that
+    cleared its cut by least on an extra.
 
     Args:
         record: The recording's extracted evidence.
@@ -514,9 +485,9 @@ def qualify_disagreements(
     Args:
         records: The recordings.
         ruleset: The loaded ruleset.
-        near_threshold_band: The relative margin inside which a deciding gate's reading is reported
-            as a threshold question rather than an evidence question. A declared reporting
-            convention from the disagreement profile, not a fitted cut.
+        near_threshold_band: The relative margin inside which a deciding gate's reading is
+            reported as a threshold question rather than an evidence question, from the
+            disagreement profile.
 
     Returns:
         One entry per (recording, branch) pair the two sides disagree about, misses before extras
@@ -555,13 +526,13 @@ class DisagreementGroup:
         branch: The branch.
         kind: :data:`MISSED` or :data:`EXTRA`.
         n: How many recordings of the family disagree this way.
-        findings: How many raise each :class:`Deciding` question, keyed by its name. All three keys
-            are present whether or not the group carried one, and they sum to ``n``.
+        findings: How many raise each :class:`Deciding` question, keyed by its name. All three
+            keys are always present and sum to ``n``.
         gates: How many turn on each deciding gate, keyed by gate name and in descending count.
         margins: :func:`~senselab.audio.workflows.triage.routing_analysis.features.value_stats`
             over the deciding gates' relative margins, and empty when no gate was readable.
         n_with_unavailable_gate: How many carried at least one unreadable gate for the branch,
-            whatever their finding. On an extra this counts routings made on partial evidence.
+            whatever their finding.
     """
 
     family: str
@@ -647,32 +618,27 @@ def group_disagreements(disagreements: Iterable[Disagreement]) -> list[Disagreem
 class FamilyRouting:
     """Where one task family's recordings routed on one branch, and which gate sent them there.
 
-    One row of the answer to "for each task family, how many are routed where and what the
-    decision criteria are". A branch routes when *any* of its gates fires, so ``fired_gates`` sums
-    to at least ``routed`` and ``sole_gates`` to at most it: a routing several gates agreed on is
-    counted once in ``routed``, once per gate in ``fired_gates``, and in no entry of ``sole_gates``.
+    A branch routes when *any* of its gates fires, so ``fired_gates`` sums to at least ``routed``
+    and ``sole_gates`` to at most it.
 
     Attributes:
         family: The task family.
         branch: The branch.
         n: How many recordings of the family were read.
         declared: Whether the family's reference family sets name this branch. The reference is
-            multi-label, so a family may declare several branches: a diadochokinesis family
-            declares ``SPEECH``.
+            multi-label, so a family may declare several branches.
         routed: How many recordings of the family this branch routed on content.
         fired_gates: Gate to how many of those routings it fired on, in descending count. A routing
             two gates both fired on appears under each.
         sole_gates: Gate to how many routings it was the only firing gate on, in descending count.
-            A gate's entry here is the routing that disappears if the gate is removed.
         not_routed: How many recordings of the family this branch did not route.
-        not_routed_all_unavailable: Of those, how many had *every* gate of the branch unreadable,
-            which is a missing-evidence non-routing and not a silent one.
+        not_routed_all_unavailable: Of those, how many had *every* gate of the branch unreadable.
         not_routed_some_unavailable: Of those, how many had at least one gate unreadable.
         routed_with_unavailable: Of the routings, how many were made while at least one gate of the
-            branch could not be read, so the branch was entered on partial evidence.
+            branch could not be read.
         margins: :func:`~senselab.audio.workflows.triage.routing_analysis.features.value_stats`
             over the relative margin of the least-clearing firing gate on each routing, and empty
-            when the branch routed nothing. How far past its cut the routing actually was.
+            when the branch routed nothing.
     """
 
     family: str
@@ -698,9 +664,8 @@ class FamilyRouting:
         """How this cell stands against the declaration, as one word.
 
         Returns:
-            ``declared`` when the family names the branch, ``beyond_declaration`` when it does not.
-            Neither is a verdict: the declaration says what the participant was asked for, not what
-            the recording holds, and additive routing is intended.
+            ``declared`` when the family names the branch, ``beyond_declaration`` when it does
+            not. Neither is a verdict.
         """
         return DECLARED if self.declared else BEYOND_DECLARATION
 
@@ -758,11 +723,9 @@ class FamilyStates:
         declared: The branches the family's reference family sets name, in branch order.
         states: How many recordings landed in each
             :class:`~senselab.audio.workflows.triage.routing_analysis.ruleset.RouteState`, keyed by
-            its value. Every state is present whether or not the family carried one, and they sum
-            to ``n``.
+            its value. Every state is always present and they sum to ``n``.
         branch_counts: How many recordings routed to each number of branches, keyed by the count as
-            a string. ``"0"`` is every recording no gate fired on, and an entry above ``"1"`` is
-            additive routing, which is intended.
+            a string. ``"0"`` is every recording no gate fired on.
     """
 
     family: str
@@ -799,7 +762,7 @@ def _routing_gates(record: RecordingFeatures, ruleset: Ruleset, branch: str) -> 
 
     Returns:
         The ``(relative margin, gate name)`` of every gate that fired, and how many gates of the
-        branch could not be read at all. An unread gate is in neither the firing list nor a silence.
+        branch could not be read at all.
     """
     fired: list[tuple[float, str]] = []
     unread = 0
@@ -816,9 +779,7 @@ def _routing_gates(record: RecordingFeatures, ruleset: Ruleset, branch: str) -> 
 def family_routing(records: Sequence[RecordingFeatures], ruleset: Ruleset) -> list[FamilyRouting]:
     """How many recordings of each task family routed to each branch, and which gate sent them.
 
-    Every (family, branch) pair is returned, so a branch a family never routed to is present and
-    reads zero rather than being absent. Routing is additive by design: a recording routes to every
-    branch one of whose gates fires, and several branches on one recording is not an error.
+    Every (family, branch) pair is returned, so a branch a family never routed to reads zero.
 
     Args:
         records: The recordings, from a features shard.

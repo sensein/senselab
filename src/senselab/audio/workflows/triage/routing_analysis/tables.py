@@ -18,7 +18,7 @@ COMPRESSION = "zstd"
 """The codec every generated table is written with."""
 
 ROW_GROUP_ROWS = 8192
-"""How many rows share one row group, and so one set of per-column chunk statistics."""
+"""How many rows share one row group."""
 
 METADATA_KEY = b"senselab.routing_analysis"
 """The parquet key-value metadata entry a table's non-tabular header is carried under."""
@@ -30,8 +30,8 @@ def write_table(table: pa.Table, path: Path, header: Mapping[str, Any] | None = 
     Args:
         table: The table.
         path: Where to write it. Overwritten.
-        header: Scalars that describe the whole table rather than any row, JSON-encoded into the
-            file metadata so the table stays one file and one shape.
+        header: Scalars that describe the whole table rather than any row, JSON-encoded into
+            the file's key-value metadata.
     """
     if header is not None:
         schema = table.schema.with_metadata({METADATA_KEY: json.dumps(header, sort_keys=True).encode("utf-8")})
@@ -61,8 +61,7 @@ def write_rows(rows: Sequence[Mapping[str, Any]], path: Path, header: Mapping[st
     """Write a sequence of flat mappings as one table, unioning their keys into the schema.
 
     Args:
-        rows: The rows. A key one row omits is null there, which is how an unmeasured quantity
-            stays distinct from a measured zero.
+        rows: The rows. A key one row omits is null there.
         path: Where to write.
         header: Scalars describing the whole table, as in :func:`write_table`.
 

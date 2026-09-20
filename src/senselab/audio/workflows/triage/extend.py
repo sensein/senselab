@@ -1,22 +1,16 @@
 """Reading, writing and re-exporting a finished triage run, for the drivers that extend one.
 
-A run root holds ``run/store.jsonl`` and ``prov/``. Every extend driver needs the same four
-operations over that layout — derive the root from a path inside it, read the store under the run's
-own id, replace the store atomically, re-export BEP028 — and the layout is the workflow's, not any
-one driver's, so it is stated once here rather than copied per script.
+A run root holds ``run/store.jsonl`` and ``prov/``. This module carries the four operations every
+extend driver needs over that layout — derive the root from a path inside it, read the store under
+the run's own id, replace the store atomically, re-export BEP028 — plus manifest reading and
+slicing for a Slurm array.
 
-Manifest reading and slicing live here for the same reason: a Slurm array shards a JSONL the same
-way whatever it is extending.
+Supersession is here too: a driver recomputing a measurement the store already carries retires the
+old one with an invalidation edge, never a deletion. So is the outcome vocabulary a driver records
+per derivation, and the rule separating a derivation that *cannot apply* from one that *failed* —
+:data:`UNAVAILABLE`, :class:`DerivationOutcome` and :func:`attempt_derivation`.
 
-Supersession lives here too. A driver that recomputes a measurement the store already carries has to
-retire the old one, or the store asserts two readings of the same thing; the store is append-only, so
-retiring is an invalidation edge and never a deletion. The design is in
-``specs/20260912-extend-reprocessed-outputs/design.md``.
-
-So does the outcome vocabulary every driver records per derivation, and the rule that separates a
-derivation which *cannot apply* to a recording from one that *failed*: :data:`UNAVAILABLE`,
-:class:`DerivationOutcome` and :func:`attempt_derivation`. One rule, in one place, rather than a
-per-derivation list of words a driver treats as determinate.
+See ``specs/20260912-extend-reprocessed-outputs/design.md``.
 """
 
 from __future__ import annotations
@@ -119,8 +113,7 @@ REWRITTEN = "rewritten"
 ABSENT = "absent"
 """This derivation has nothing in the store to work from, or cannot apply to this recording.
 
-The bare word is the first case. The second carries the typed absence that said so, as
-``absent: <Class>: <message>``.
+The bare word is the first case; the second reads ``absent: <Class>: <message>``.
 """
 
 UNAVAILABLE: tuple[type[BaseException], ...] = (
@@ -133,8 +126,7 @@ UNAVAILABLE: tuple[type[BaseException], ...] = (
 )
 """Every typed absence a derivation may raise: each says this recording has no such thing to derive.
 
-A derivation raising one of these has answered; :func:`attempt_derivation` records it under
-:data:`ABSENT` and the row's status stays what the other derivations made it.
+:func:`attempt_derivation` records one under :data:`ABSENT` and never as a failure.
 """
 
 
@@ -145,7 +137,7 @@ class DerivationOutcome:
     Attributes:
         detail: What the slice log records under the derivation's own name — one of the outcome
             words above, ``absent: <reason>``, or the failure's class and message.
-        failed: Whether this derivation failed. A derivation that could not apply did not.
+        failed: Whether this derivation failed; one that could not apply did not.
     """
 
     detail: str
@@ -160,9 +152,8 @@ def attempt_derivation(call: Callable[[], str]) -> DerivationOutcome:
             word to record for it.
 
     Returns:
-        The outcome. A typed absence from :data:`UNAVAILABLE` is recorded under :data:`ABSENT` with
-        its reason and is not a failure; any other ``OSError``, ``ValueError`` or ``LookupError`` is
-        recorded with its class and message and is.
+        The outcome. A typed absence from :data:`UNAVAILABLE` is recorded under :data:`ABSENT` and
+        is not a failure; any other ``OSError``, ``ValueError`` or ``LookupError`` is.
     """
     try:
         return DerivationOutcome(call(), failed=False)
@@ -310,11 +301,9 @@ def export_prov(store: ProvStore, run_root: Path) -> list[Path]:
 def supersede(store: ProvStore, entity_id: str, *, node: str, step: str, reason: str, software: str) -> str:
     """Retire one entity in favour of a replacement already written beside it.
 
-    The store is append-only, so a superseded record is never removed: it is marked
-    ``wasInvalidatedBy`` an activity of its own, which is what ``live_entities`` and
-    ``find_measurement`` filter on. The retiring activity is separate from the one that generated
-    the replacement: the replacement's own activity records what its computation ran with, and a
-    reader arriving at the retired record needs the reason instead.
+    The store is append-only, so the record is not removed but marked ``wasInvalidatedBy`` an
+    activity of its own — what ``live_entities`` and ``find_measurement`` filter on — separate from
+    the activity that generated the replacement.
 
     Args:
         store: The provenance store.
@@ -337,26 +326,17 @@ def supersede(store: ProvStore, entity_id: str, *, node: str, step: str, reason:
 def rewrite_consensus_taxonomy(store: ProvStore, config: TriageConfig) -> str | None:
     """Recompute ``consensus_taxonomy`` from the stored per-span scores, retiring the older reading.
 
-    The measurement consolidates ``span_yamnet`` and ``span_hear``'s ``raw_scores``, both of which
-    the store already holds, so no model runs. The current writer merges its classifiers by AudioSet
-    node identity rather than by label string and names each row's own spellings, so a store written
-    by the string-matching writer holds a different consolidation of the same scores.
-
-    Whether a store is already current is decided by recomputing and comparing entity ids, not by
-    probing the attributes for a key the new form happens to carry: an id is a digest over the
-    attributes, so an equal id is the store already holding exactly this reading.
-
-    A store carrying no ``consensus_taxonomy`` at all is left alone rather than given one. There is
-    nothing to make current there, and a consolidation written beside none of TAXONOMY's other
-    outputs would assert that the node ran.
+    Consolidates ``span_yamnet`` and ``span_hear``'s stored ``raw_scores``, so no model runs. A
+    store already current is recognised by the recomputed entity id matching the stored one, and a
+    store carrying no ``consensus_taxonomy`` at all is left alone rather than given one.
 
     Args:
         store: The finished run's store, read under the run's own id.
         config: The triage configuration, read for the consolidation floor and the ontology profile.
 
     Returns:
-        The measurement's id when this call retired an older reading, or None when the store carries
-        no ``consensus_taxonomy`` to make current, or already carries this exact consolidation.
+        The measurement's id when this call retired an older reading, or None when the store
+        carries no ``consensus_taxonomy``, or already carries this exact consolidation.
 
     Raises:
         ValueError: If the configured classifier-ontology profile fails validation.
@@ -385,28 +365,22 @@ def rewrite_consensus_taxonomy(store: ProvStore, config: TriageConfig) -> str | 
 def rebracket_words(store: ProvStore, config: TriageConfig) -> str | None:
     """Re-flag one finished run's consensus words against the vocabulary, retiring the old reading.
 
-    Each stored word carries every recognizer's own reading of its column verbatim, so
     :func:`~senselab.audio.workflows.triage.consensus.rebracket` re-evaluates ``bracketed_form``
-    over those readings and returns the column re-read. Nothing is re-aligned and no timing moves:
-    the alignment key a token groups on is invariant under bracketing.
+    over each stored word's verbatim readings; nothing is re-aligned and no timing moves. A word
+    that reads back unchanged keeps its id and stays live; one whose surface or flag moved is a new
+    entity derived from the old one, and the old one is retired, as is the
+    ``consensus_transcript`` listing them, rewritten with the new ids.
 
-    A word whose attributes read back unchanged keeps its id and stays live. A word whose surface or
-    flag moved is a new entity derived from the old one, and the old one is retired. The
-    ``consensus_transcript`` listing them is retired and rewritten with the new ids, its rendered
-    text and its bracket-override count; every other field of it is the alignment's and is carried
-    through verbatim.
-
-    The spans the ASR proposer contributed are not recomputed. They keep their ``wasDerivedFrom``
-    edge to the retired transcript, which is what says which reading proposed them, and the
-    ``rebracket`` measurement names them and records that they were not.
+    The spans the ASR proposer contributed are not recomputed; the ``rebracket`` measurement names
+    them and records that they were not.
 
     Args:
         store: The finished run's store, read under the run's own id.
         config: The triage configuration, read for ``words.onomatopoeic_tokens``.
 
     Returns:
-        The rewritten transcript's id when this call re-flagged anything, or None when the store
-        carries no ``consensus_transcript``, or no word's reading moved.
+        The rewritten transcript's id, or None when the store carries no ``consensus_transcript``
+        or no word's reading moved.
 
     Raises:
         ValueError: If a word carries no extent, if its attributes are not the set this writer
@@ -504,19 +478,14 @@ def rebracket_words(store: ProvStore, config: TriageConfig) -> str | None:
 def extend_quality(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> BranchResult | None:
     """Run QUALITY over a finished run, whose graph pass never reached it.
 
-    QUALITY reads stored outputs only, so the finished run holds every input it takes: PREPROCESS's
-    clip spans over the ``recording`` stream and the ``clip_amplitude`` measurement beside them.
-    Nothing is retired — the run carries no QUALITY verdict to replace — and the verdict written
-    here names, in its ``preceded_by``, the nodes that had actually concluded when it was reached.
-
-    A store already carrying a live QUALITY verdict is left alone. The recomputation would mint the
-    activity, the assertions and the verdict it already holds, so a second pass is a set-union
-    no-op either way; skipping is what makes it free.
+    QUALITY reads stored outputs only — PREPROCESS's clip spans over the ``recording`` stream and
+    the ``clip_amplitude`` measurement beside them. Nothing is retired, and a store already
+    carrying a live QUALITY verdict is left alone.
 
     Args:
         store: The finished run's store, read under the run's own id.
         config: The triage configuration, read for ``quality.clip_contradiction_margin``.
-        run_dir: The run directory, for the shared node shape. QUALITY opens nothing under it.
+        run_dir: The run directory. QUALITY opens nothing under it.
 
     Returns:
         QUALITY's result, or None when the store already carries a live QUALITY verdict.
@@ -540,8 +509,7 @@ def _retire_quality_findings(store: ProvStore, withdrawn: set[str], *, software:
         software: The agent answerable for the retirement.
 
     Returns:
-        The retired contest assertions' ids. Empty when QUALITY contested none of these spans, in
-        which case the verdict is left alone.
+        The retired contest assertions' ids; empty leaves the verdict alone.
     """
     contests = [
         entity
@@ -575,22 +543,18 @@ def _retire_quality_findings(store: ProvStore, withdrawn: set[str], *, software:
 def withdraw_contradicted_clips(store: ProvStore, config: TriageConfig, *, signal: str = SOURCE_STREAM) -> str | None:
     """Retire a finished run's clip spans an unclipped sample of the same signal is louder than.
 
-    The comparison is the one ``_clip_spans`` applies at detection, read from the stored
-    ``clip_amplitude`` measurement rather than from samples: a span whose own level, keyed by its id
-    under ``clip_levels``, falls below ``unclipped_peak`` by more than
-    ``quality.clip_contradiction_margin`` of that level is withdrawn. A span the measurement carries
-    no level for is left alone. No audio is opened, and no span but a clip span is touched.
+    The comparison is read from the stored ``clip_amplitude`` measurement rather than from samples:
+    a span whose own level, keyed by its id under ``clip_levels``, falls below ``unclipped_peak`` by
+    more than ``quality.clip_contradiction_margin`` of that level is withdrawn. A span the
+    measurement carries no level for is left alone, no audio is opened, and no span but a clip span
+    is touched.
 
     Each withdrawal is an ``assertion`` in
     :func:`~senselab.audio.workflows.triage.nodes.preprocess.write_withdrawn_clips`'s vocabulary,
-    derived from the span it retires, and the span is superseded. The ``clip_amplitude`` measurement
-    is rewritten with ``clip_levels``, ``unclipped_louder_n`` and ``clip_spans_n`` restricted to the
-    survivors and every whole-file value carried through, and the old one is superseded.
-
-    QUALITY's ``contest`` assertions over a withdrawn span are superseded with it, as is the QUALITY
-    verdict counting them. No verdict is written in their place.
-
-    One round is read, not a fixpoint loop. See ``specs/20260912-quality-clip-consistency/design.md``.
+    derived from the span it retires; the span is superseded, the ``clip_amplitude`` measurement is
+    rewritten over the survivors and superseded, and QUALITY's ``contest`` assertions over a
+    withdrawn span are superseded with it, as is the QUALITY verdict counting them. One round, not
+    a fixpoint loop. See ``specs/20260912-quality-clip-consistency/design.md``.
 
     Args:
         store: The finished run's store, read under the run's own id.
@@ -598,9 +562,8 @@ def withdraw_contradicted_clips(store: ProvStore, config: TriageConfig, *, signa
         signal: The stream name the clip spans were detected on.
 
     Returns:
-        The rewritten ``clip_amplitude`` measurement's id, or None when the store carries no live
-        clip span over ``signal``, or none the stored amplitudes contradict. Nothing is written in
-        either of those cases.
+        The rewritten ``clip_amplitude`` measurement's id, or None — writing nothing — when the
+        store carries no live clip span over ``signal``, or none the stored amplitudes contradict.
 
     Raises:
         ValueError: If ``quality.clip_contradiction_margin`` is unmeasured.
