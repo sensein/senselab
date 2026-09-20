@@ -261,7 +261,6 @@ branch:
   trough_return_db: 3.0                # fall from a peak that closes its event, for the onset and offset walk
   event_min_s: 0.05                    # shortest extent the event walk reports
   score_min: 0.2                       # classifier raw score at or above which a label is present in a window
-  breath_coverage_min: 0.5             # fraction of a declared breathing extent that must carry breath evidence
   voiced_strength_min: 0.45            # pitch strength at or above which a frame counts as voiced
   voiced_fraction_min: 0.5             # fraction of voiced frames a phonation carrier must reach
   f0_spread_window_s: 0.5              # window the worst local F0 spread is taken over
@@ -285,6 +284,9 @@ branch:
   burst_window_ms: 20.0                # shortest stop burst and aspiration, which is the decode's minimum phone duration
   effort_split_hz: 1000.0              # split the low and high spectral balance of an effort token is taken at
   gap_off_task_min_s: 1.0              # shortest gap reported as off-task extent
+  # kind -> the HeAR heads that ARE that sound. HeAR spellings only: the AudioSet names YAMNet
+  # reports are derived per kind from the packaged classifier-ontology profile's corroboration set
+  # for each head, so one kind is readable on both classifiers. Data, not schema.
   label_sets:
     cough: [Cough]
     breath: [Breathe]
