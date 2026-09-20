@@ -264,7 +264,7 @@ branch:
   voiced_strength_min: 0.45            # pitch strength at or above which a frame counts as voiced
   voiced_fraction_min: 0.5             # fraction of voiced frames a phonation carrier must reach
   f0_spread_window_s: 0.5              # window the worst local F0 spread is taken over
-  f0_spread_max_semitones: 2.0         # largest local F0 spread a held vowel may show
+  f0_spread_max_semitones: 2.0         # largest spread a held vowel's typical window may show
   continuity_min: 0.5                  # median spectral continuity a stationary production must hold
   production_min_s: 0.5                # shortest carrier span a production may be found in
   monotone_tolerance_semitones: 1.0    # reversal a pitch sweep may contain and still count as monotone

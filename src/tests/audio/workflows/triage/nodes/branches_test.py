@@ -63,7 +63,6 @@ from senselab.audio.workflows.triage.nodes.branches import (
     lexical,
     lexical_runs,
     longest_monotone_run,
-    max_windowed_spread,
     measured,
     merge,
     mode_of,
@@ -86,7 +85,9 @@ from senselab.audio.workflows.triage.nodes.branches import (
     trace_slice,
     track_slice,
     train_rate_hz,
+    typical_windowed_spread,
     voiced_extent,
+    windowed_spreads,
     write_findings,
 )
 from senselab.audio.workflows.triage.routing_analysis.families import (
@@ -922,16 +923,34 @@ class TestArrayHelpers:
         assert semitones(np.array([110.0, 220.0]), ref_hz=110.0).tolist() == pytest.approx([0.0, 12.0])
         assert np.isnan(semitones(np.array([0.0, 0.0]))).all()
 
-    def test_the_windowed_spread_finds_the_worst_window_not_the_whole_series(self) -> None:
-        """A slow drift over a long vowel is not instability; a local jump is."""
+    def test_the_windowed_spread_is_local_rather_than_over_the_whole_series(self) -> None:
+        """A slow drift over a long vowel is not instability; a sustained local jump is."""
         drift = np.linspace(0.0, 10.0, 101)
-        assert max_windowed_spread(drift, hop_s=0.01, window_s=0.10) < 2.0
-        jump = np.concatenate([np.zeros(50), np.full(51, 10.0)])
-        assert max_windowed_spread(jump, hop_s=0.01, window_s=0.10) > 8.0
+        assert typical_windowed_spread(drift, hop_s=0.01, window_s=0.10) < 2.0
+        wobble = np.tile(np.concatenate([np.zeros(5), np.full(5, 10.0)]), 20)
+        assert typical_windowed_spread(wobble, hop_s=0.01, window_s=0.10) > 8.0
+
+    def test_the_typical_window_is_the_statistic_rather_than_the_worst_one(self) -> None:
+        """A bound written for one window, read off the worst of thousands, finds only tails.
+
+        The measurement is in ``specs/20260817-triage-workflow-dag/voice-flag-grounds.md``: the
+        worst window grows with the number of windows, so it penalised the longest productions.
+        """
+        steady = np.zeros(2000)
+        steady[500:540] = 12.0
+        spreads = windowed_spreads(steady, hop_s=0.01, window_s=1.00)
+        assert spreads.max() > 11.0
+        assert typical_windowed_spread(steady, hop_s=0.01, window_s=1.00) == pytest.approx(0.0)
 
     def test_a_series_shorter_than_one_window_falls_back_to_the_whole_spread(self) -> None:
         """Returning zero there would report a two-frame excursion as perfect stability."""
-        assert max_windowed_spread(np.array([0.0, 10.0]), hop_s=0.01, window_s=1.0) == pytest.approx(9.0)
+        assert typical_windowed_spread(np.array([0.0, 10.0]), hop_s=0.01, window_s=1.0) == pytest.approx(9.0)
+
+    def test_a_window_with_nothing_to_read_does_not_vote(self) -> None:
+        """An unreadable window is no reading; counting it as a spread of zero invents stability."""
+        half = np.concatenate([np.full(100, np.nan), np.linspace(0.0, 10.0, 100)])
+        assert windowed_spreads(half, hop_s=0.01, window_s=0.10).size < 190
+        assert np.isnan(typical_windowed_spread(np.full(100, np.nan), hop_s=0.01, window_s=0.10))
 
     def test_the_longest_monotone_run_tolerates_a_reversal_under_the_tolerance(self) -> None:
         """A glide is not strictly monotone; a jitter of a few cents must not cut it in two."""
