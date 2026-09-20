@@ -370,9 +370,11 @@ stride the manifest (`entries[idx::nsl]`), so the rows that exist early are spre
 rather than clustered — but they are the *faster* recordings within each slice, and shorter
 recordings are less likely to produce a word outside their stimulus. The rate rose while the early
 rows accumulated and has since settled: reach 27.8% at 2,108 rows, 28.8% at 2,598, 29.1% at 3,779,
-**29.0% at 5,531**, with the verdict rate flat at 21.8% across the last three. That is a converged
-number rather than a trend, but it is still a 9% sample of a run that has 14 hours left; re-read
-`decision.ran.REDACT` over the completed run before spending anything on the strength of it.
+29.0% at 5,531, **29.1% at 8,068**, with the verdict rate 21.8% across the last three reads and
+22.0% at the last. That is a converged number rather than a trend, but it is still a 13% sample of
+a run with hours left; re-read `decision.ran.REDACT` over the completed run before spending anything
+on the strength of it. The last read scales to **≈13,700 verdicts**, so ≈13,600 is used below and
+the difference is well inside the noise.
 
 ### What the second pass would cost
 
