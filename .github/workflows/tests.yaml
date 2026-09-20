@@ -305,7 +305,7 @@ jobs:
         uv sync --python ${{ matrix.python-version }} --python-preference only-managed --all-extras --group dev
         # torchcodec needs libpython on LD_LIBRARY_PATH.
         # Search uv-managed Python, system lib dirs for libpython.
-        PYTHON_LIB_DIR=$(uv run python -c "import pathlib,sys;v=f'{sys.version_info.major}.{sys.version_info.minor}';exe=pathlib.Path(sys.executable).resolve();candidates=[exe.parent.parent/'lib',pathlib.Path('/usr/lib/x86_64-linux-gnu'),pathlib.Path('/usr/lib64'),pathlib.Path('/usr/local/lib')];print(next((str(d) for d in candidates if list(d.glob(f'libpython{v}*'))),str(exe.parent.parent/'lib')))")
+        PYTHON_LIB_DIR=$(uv run --no-sync python -c "import pathlib,sys;v=f'{sys.version_info.major}.{sys.version_info.minor}';exe=pathlib.Path(sys.executable).resolve();candidates=[exe.parent.parent/'lib',pathlib.Path('/usr/lib/x86_64-linux-gnu'),pathlib.Path('/usr/lib64'),pathlib.Path('/usr/local/lib')];print(next((str(d) for d in candidates if list(d.glob(f'libpython{v}*'))),str(exe.parent.parent/'lib')))")
         echo "PYTHON_LIB_DIR=${PYTHON_LIB_DIR}" >> $GITHUB_ENV
     - name: Verify GPU access
       env:
@@ -313,7 +313,7 @@ jobs:
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         nvidia-smi
-        uv run python -c "
+        uv run --no-sync python -c "
         import torch
         assert torch.cuda.is_available(), 'CUDA not available'
         n = torch.cuda.device_count()
@@ -330,7 +330,7 @@ jobs:
         LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        uv run pytest src/tests \
+        uv run --no-sync pytest src/tests \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
           --cov-report=xml:coverage.xml \
@@ -346,7 +346,7 @@ jobs:
         LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        uv run python -c "
+        uv run --no-sync python -c "
         import json, subprocess, sys
         manifest = json.load(open('tutorials/manifest.json'))
         failed = []
