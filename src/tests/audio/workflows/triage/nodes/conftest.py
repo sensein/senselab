@@ -746,20 +746,20 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
                 store.activity(node="PREPROCESS", step=f"span_{classifier}", parameters={}), agent
             )
             labelled = classifier not in span_unlabelled
-            for span_id, labels in zip(span_ids, per_span_labels, strict=True):
+            for span_id, span_labels in zip(span_ids, per_span_labels, strict=True):
                 extent = store.get_entity(span_id).extent or (0.0, 0.0)
                 attributes: dict[str, Any] = {
                     "name": f"span_{classifier}",
                     "classifier": classifier,
                     "signal": "plain",
                     "span_id": span_id,
-                    "raw_scores": {label: 0.9 for label in labels},
+                    "raw_scores": {label: 0.9 for label in span_labels},
                     "labelled": labelled,
                     "default_threshold": 0.3 if labelled else None,
                 }
                 if labelled:
-                    attributes["labels"] = list(labels)
-                    attributes["scores"] = {label: 0.9 for label in labels}
+                    attributes["labels"] = list(span_labels)
+                    attributes["scores"] = {label: 0.9 for label in span_labels}
                 _write("measurement", extent, attributes)
 
         if continuity_trace is not None:

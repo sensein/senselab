@@ -77,7 +77,12 @@ repos:
     # another word. Raw captured output is excluded rather than corrected: it is a verbatim
     # record, and a truncated word in a printed table is part of what was printed.
     exclude: ^specs/.*/raw/
-    args: [--skip=*.ipynb, --ignore-words-list, 'AER,FPR,PASE,preemptable,caf,als']
+    # The second group are this workflow's own vocabulary and its verbatim records:
+    # UNDET/UNDETERMINED and NotIn are value names; FigureStyle is a class; allk, empt and
+    # empted are fragments of identifiers codespell splits; disjointness, declaring, meaned,
+    # retuned and unparseable are ordinary words it reads as misspellings; probablistic appears
+    # only inside a quoted instruction, where correcting it would misquote the speaker.
+    args: [--skip=*.ipynb, --ignore-words-list, 'AER,FPR,PASE,preemptable,caf,als,UNDET,UNX,NotIn,FigureStyle,allk,empt,empted,disjointness,declaring,meaned,retuned,re-declaring,pre-empt,pre-empted,unparseable,probablistic']
     additional_dependencies:
     - tomli
 - repo: local

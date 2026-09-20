@@ -1,165 +1,165 @@
 {
- "config_hash": "8b659c9d0a0ad97d",
- "budgets": [
-  0.02,
-  0.05,
-  0.1,
-  0.2
- ],
- "totals": {
-  "recordings": 62547,
-  "states": {
-   "routed": 62023,
-   "empty": 187,
-   "unexplained": 337
-  },
-  "routed": {
-   "AIRWAY": 23606,
-   "SPEECH": 41565,
-   "VOICE": 22277,
-   "DDK": 22363
-  },
-  "declared": {
-   "AIRWAY": 13017,
-   "SPEECH": 33235,
-   "VOICE": 8306,
-   "DDK": 7989
-  },
-  "agreed": {
-   "AIRWAY": 12655,
-   "SPEECH": 31693,
-   "VOICE": 7945,
-   "DDK": 7485
-  },
-  "missed": {
-   "AIRWAY": 362,
-   "SPEECH": 1542,
-   "VOICE": 361,
-   "DDK": 504
-  },
-  "extra": {
-   "AIRWAY": 10951,
-   "SPEECH": 9872,
-   "VOICE": 14332,
-   "DDK": 14878
-  },
-  "unavailable": {
-   "AIRWAY": 56505,
-   "SPEECH": 0,
-   "VOICE": 29,
-   "DDK": 2345
-  },
-  "flagged": {
-   "AIRWAY": 0,
-   "SPEECH": 33855,
-   "VOICE": 0,
-   "DDK": 0
-  }
- },
- "branches": {
-  "AIRWAY": {
-   "branch": "AIRWAY",
-   "reference_family_set": "airway",
-   "held_out_family_set": null,
-   "n_held_out": 0,
-   "against_reference": {
-    "tp": 12655,
-    "fp": 10951,
-    "tn": 38579,
-    "fn": 362,
-    "sensitivity": 0.9721902127986479,
-    "specificity": 0.7789016757520695,
-    "false_positive_rate": 0.22109832424793055,
-    "youden": 0.7510918885507174
-   },
-   "excluding_construction": {
-    "tp": 12655,
-    "fp": 10951,
-    "tn": 38579,
-    "fn": 362,
-    "sensitivity": 0.9721902127986479,
-    "specificity": 0.7789016757520695,
-    "false_positive_rate": 0.22109832424793055,
-    "youden": 0.7510918885507174
-   }
-  },
-  "SPEECH": {
-   "branch": "SPEECH",
-   "reference_family_set": "lexical_speech",
-   "held_out_family_set": "syllable_repetition",
-   "n_held_out": 7989,
-   "against_reference": {
-    "tp": 31693,
-    "fp": 9872,
-    "tn": 19440,
-    "fn": 1542,
-    "sensitivity": 0.9536031292312321,
-    "specificity": 0.6632096069868996,
-    "false_positive_rate": 0.33679039301310043,
-    "youden": 0.6168127362181317
-   },
-   "excluding_construction": {
-    "tp": 31693,
-    "fp": 2246,
-    "tn": 19077,
-    "fn": 1542,
-    "sensitivity": 0.9536031292312321,
-    "specificity": 0.8946677296815645,
-    "false_positive_rate": 0.10533227031843549,
-    "youden": 0.8482708589127967
-   }
-  },
-  "VOICE": {
-   "branch": "VOICE",
-   "reference_family_set": "voice",
-   "held_out_family_set": null,
-   "n_held_out": 0,
-   "against_reference": {
-    "tp": 7945,
-    "fp": 14332,
-    "tn": 39909,
-    "fn": 361,
-    "sensitivity": 0.9565374428124247,
-    "specificity": 0.7357718331151711,
-    "false_positive_rate": 0.2642281668848288,
-    "youden": 0.6923092759275957
-   },
-   "excluding_construction": {
-    "tp": 7945,
-    "fp": 14332,
-    "tn": 39909,
-    "fn": 361,
-    "sensitivity": 0.9565374428124247,
-    "specificity": 0.7357718331151711,
-    "false_positive_rate": 0.2642281668848288,
-    "youden": 0.6923092759275957
-   }
-  },
-  "DDK": {
-   "branch": "DDK",
-   "reference_family_set": "syllable_repetition",
-   "held_out_family_set": null,
-   "n_held_out": 0,
-   "against_reference": {
-    "tp": 7485,
-    "fp": 14878,
-    "tn": 39680,
-    "fn": 504,
-    "sensitivity": 0.9369132557266241,
-    "specificity": 0.7272993878074709,
-    "false_positive_rate": 0.27270061219252906,
-    "youden": 0.6642126435340949
-   },
-   "excluding_construction": {
-    "tp": 7485,
-    "fp": 14878,
-    "tn": 39680,
-    "fn": 504,
-    "sensitivity": 0.9369132557266241,
-    "specificity": 0.7272993878074709,
-    "false_positive_rate": 0.27270061219252906,
-    "youden": 0.6642126435340949
-   }
-  }
- }
+    "config_hash": "8b659c9d0a0ad97d",
+    "budgets": [
+        0.02,
+        0.05,
+        0.1,
+        0.2
+    ],
+    "totals": {
+        "recordings": 62547,
+        "states": {
+            "routed": 62023,
+            "empty": 187,
+            "unexplained": 337
+        },
+        "routed": {
+            "AIRWAY": 23606,
+            "SPEECH": 41565,
+            "VOICE": 22277,
+            "DDK": 22363
+        },
+        "declared": {
+            "AIRWAY": 13017,
+            "SPEECH": 33235,
+            "VOICE": 8306,
+            "DDK": 7989
+        },
+        "agreed": {
+            "AIRWAY": 12655,
+            "SPEECH": 31693,
+            "VOICE": 7945,
+            "DDK": 7485
+        },
+        "missed": {
+            "AIRWAY": 362,
+            "SPEECH": 1542,
+            "VOICE": 361,
+            "DDK": 504
+        },
+        "extra": {
+            "AIRWAY": 10951,
+            "SPEECH": 9872,
+            "VOICE": 14332,
+            "DDK": 14878
+        },
+        "unavailable": {
+            "AIRWAY": 56505,
+            "SPEECH": 0,
+            "VOICE": 29,
+            "DDK": 2345
+        },
+        "flagged": {
+            "AIRWAY": 0,
+            "SPEECH": 33855,
+            "VOICE": 0,
+            "DDK": 0
+        }
+    },
+    "branches": {
+        "AIRWAY": {
+            "branch": "AIRWAY",
+            "reference_family_set": "airway",
+            "held_out_family_set": null,
+            "n_held_out": 0,
+            "against_reference": {
+                "tp": 12655,
+                "fp": 10951,
+                "tn": 38579,
+                "fn": 362,
+                "sensitivity": 0.9721902127986479,
+                "specificity": 0.7789016757520695,
+                "false_positive_rate": 0.22109832424793055,
+                "youden": 0.7510918885507174
+            },
+            "excluding_construction": {
+                "tp": 12655,
+                "fp": 10951,
+                "tn": 38579,
+                "fn": 362,
+                "sensitivity": 0.9721902127986479,
+                "specificity": 0.7789016757520695,
+                "false_positive_rate": 0.22109832424793055,
+                "youden": 0.7510918885507174
+            }
+        },
+        "SPEECH": {
+            "branch": "SPEECH",
+            "reference_family_set": "lexical_speech",
+            "held_out_family_set": "syllable_repetition",
+            "n_held_out": 7989,
+            "against_reference": {
+                "tp": 31693,
+                "fp": 9872,
+                "tn": 19440,
+                "fn": 1542,
+                "sensitivity": 0.9536031292312321,
+                "specificity": 0.6632096069868996,
+                "false_positive_rate": 0.33679039301310043,
+                "youden": 0.6168127362181317
+            },
+            "excluding_construction": {
+                "tp": 31693,
+                "fp": 2246,
+                "tn": 19077,
+                "fn": 1542,
+                "sensitivity": 0.9536031292312321,
+                "specificity": 0.8946677296815645,
+                "false_positive_rate": 0.10533227031843549,
+                "youden": 0.8482708589127967
+            }
+        },
+        "VOICE": {
+            "branch": "VOICE",
+            "reference_family_set": "voice",
+            "held_out_family_set": null,
+            "n_held_out": 0,
+            "against_reference": {
+                "tp": 7945,
+                "fp": 14332,
+                "tn": 39909,
+                "fn": 361,
+                "sensitivity": 0.9565374428124247,
+                "specificity": 0.7357718331151711,
+                "false_positive_rate": 0.2642281668848288,
+                "youden": 0.6923092759275957
+            },
+            "excluding_construction": {
+                "tp": 7945,
+                "fp": 14332,
+                "tn": 39909,
+                "fn": 361,
+                "sensitivity": 0.9565374428124247,
+                "specificity": 0.7357718331151711,
+                "false_positive_rate": 0.2642281668848288,
+                "youden": 0.6923092759275957
+            }
+        },
+        "DDK": {
+            "branch": "DDK",
+            "reference_family_set": "syllable_repetition",
+            "held_out_family_set": null,
+            "n_held_out": 0,
+            "against_reference": {
+                "tp": 7485,
+                "fp": 14878,
+                "tn": 39680,
+                "fn": 504,
+                "sensitivity": 0.9369132557266241,
+                "specificity": 0.7272993878074709,
+                "false_positive_rate": 0.27270061219252906,
+                "youden": 0.6642126435340949
+            },
+            "excluding_construction": {
+                "tp": 7485,
+                "fp": 14878,
+                "tn": 39680,
+                "fn": 504,
+                "sensitivity": 0.9369132557266241,
+                "specificity": 0.7272993878074709,
+                "false_positive_rate": 0.27270061219252906,
+                "youden": 0.6642126435340949
+            }
+        }
+    }
 }

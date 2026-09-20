@@ -687,8 +687,10 @@ class TestEveryFamilysTemplateIsItsStimulusText:
     def test_the_three_place_families_differ_only_in_their_first_phoneme(self) -> None:
         """The place contrast is the whole of what /pa/ /ta/ /ka/ ask differently."""
         firsts = {SPEECH_EXPECTATIONS[f"diadochokinesis-{name}"].sequence for name in ("pa", "ta", "ka")}
-        assert {sequence[1] for sequence in firsts} == {"aa"}
-        assert {sequence[0] for sequence in firsts} == {"p", "t", "k"}
+        assert all(sequence is not None for sequence in firsts)
+        sequences = [sequence for sequence in firsts if sequence is not None]
+        assert {sequence[1] for sequence in sequences} == {"aa"}
+        assert {sequence[0] for sequence in sequences} == {"p", "t", "k"}
 
     def test_a_row_survives_a_round_trip_through_its_mapping(self) -> None:
         """A run records which expectation it applied, and a phoneme tuple has to come back."""

@@ -252,10 +252,10 @@ taxonomy:
   voice_min_duration_s: 1.0
   voice_uncertain_duration_s: 0.3
   speech_labels:
-    - Speech
-    - "Child speech, kid speaking"
-    - Conversation
-    - "Narration, monologue"
+  - Speech
+  - Child speech, kid speaking
+  - Conversation
+  - Narration, monologue
 
 routing:
   hint_kind_map:

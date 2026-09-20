@@ -1567,9 +1567,10 @@ class TestRecallAtOverRoutingBudget:
         """Recall is monotone in the budget, because looseness buys both together."""
         curve = recall_at_budgets(_synthetic(50, 100, 0.5), name="d", reference="r")
         recalls = [point.recall for point in curve.points]
-        assert recalls == sorted(recalls)
-        assert recalls[0] is not None and recalls[-1] is not None
-        assert recalls[0] < recalls[-1]
+        assert all(recall is not None for recall in recalls)
+        measured = [recall for recall in recalls if recall is not None]
+        assert measured == sorted(measured)
+        assert measured[0] < measured[-1]
 
     def test_the_over_routing_stays_inside_every_budget(self) -> None:
         """The chosen point is the loosest one whose false-positive rate the budget allows."""
@@ -1580,7 +1581,7 @@ class TestRecallAtOverRoutingBudget:
 
     def test_a_rate_equal_to_the_budget_is_inside_it(self) -> None:
         """The boundary is inclusive: five false positives in a hundred negatives is exactly 5%."""
-        observations: list[tuple[float | None, bool]] = [(1.0, True)] * 5 + [(0.9, True)] * 5
+        observations: list[tuple[float | None, bool]] = list([(1.0, True)] * 5 + [(0.9, True)] * 5)
         observations += [(0.9, False)] * 5 + [(0.1, False)] * 95
         point = recall_at_budgets(observations, name="d", reference="r", budgets=(0.05,)).point(0.05)
         assert point.threshold == pytest.approx(0.9)
@@ -1589,7 +1590,7 @@ class TestRecallAtOverRoutingBudget:
 
     def test_one_false_positive_over_the_budget_takes_the_stricter_cut(self) -> None:
         """Six in a hundred is outside a 5% budget, so the point below it is chosen and half is lost."""
-        observations: list[tuple[float | None, bool]] = [(1.0, True)] * 5 + [(0.9, True)] * 5
+        observations: list[tuple[float | None, bool]] = list([(1.0, True)] * 5 + [(0.9, True)] * 5)
         observations += [(0.9, False)] * 6 + [(0.1, False)] * 94
         point = recall_at_budgets(observations, name="d", reference="r", budgets=(0.05,)).point(0.05)
         assert point.threshold == pytest.approx(1.0)
@@ -1598,7 +1599,7 @@ class TestRecallAtOverRoutingBudget:
 
     def test_a_point_is_tightened_back_to_the_strictest_cut_at_the_same_recall(self) -> None:
         """Loosening past the last positive buys over-routing and nothing else, so it is not taken."""
-        observations: list[tuple[float | None, bool]] = [(1.0, True)] * 10
+        observations: list[tuple[float | None, bool]] = list([(1.0, True)] * 10)
         observations += [(0.9, False)] * 2 + [(0.1, False)] * 98
         point = recall_at_budgets(observations, name="d", reference="r", budgets=(0.02,)).point(0.02)
         assert point.threshold == pytest.approx(1.0)
@@ -1607,7 +1608,7 @@ class TestRecallAtOverRoutingBudget:
 
     def test_a_detector_that_cannot_stay_inside_the_budget_fires_on_nothing(self) -> None:
         """Every firing threshold over-routes, so the point inside the budget is the empty one."""
-        observations: list[tuple[float | None, bool]] = [(1.0, True)] * 5 + [(1.0, False)] * 95
+        observations: list[tuple[float | None, bool]] = list([(1.0, True)] * 5 + [(1.0, False)] * 95)
         point = recall_at_budgets(observations, name="d", reference="r", budgets=(0.02,)).point(0.02)
         assert point.threshold is None
         assert point.recall == pytest.approx(0.0)
@@ -1616,7 +1617,7 @@ class TestRecallAtOverRoutingBudget:
 
     def test_a_detector_whose_feature_is_absent_is_availability_capped_not_threshold_capped(self) -> None:
         """Three positives in ten carry the feature, so the curve is flat at 0.3 from the first budget."""
-        observations: list[tuple[float | None, bool]] = [(5.0, True)] * 3 + [(None, True)] * 7
+        observations: list[tuple[float | None, bool]] = list([(5.0, True)] * 3 + [(None, True)] * 7)
         observations += [(None, False)] * 90 + [(0.0, False)] * 10
         curve = recall_at_budgets(observations, name="d", reference="r")
         assert curve.recall_ceiling == pytest.approx(0.3)
@@ -1628,7 +1629,7 @@ class TestRecallAtOverRoutingBudget:
 
     def test_a_readable_detector_at_the_same_recall_is_budget_capped(self) -> None:
         """The same 0.3 recall, but every positive readable: a wider budget would buy more."""
-        observations: list[tuple[float | None, bool]] = [(5.0, True)] * 3 + [(0.5, True)] * 7
+        observations: list[tuple[float | None, bool]] = list([(5.0, True)] * 3 + [(0.5, True)] * 7)
         observations += [(0.6, False)] * 30 + [(0.0, False)] * 70
         curve = recall_at_budgets(observations, name="d", reference="r", budgets=(0.02, 0.5))
         assert curve.recall_ceiling == pytest.approx(1.0)
@@ -1648,7 +1649,7 @@ class TestRecallAtOverRoutingBudget:
 
     def test_a_below_polarity_detector_loosens_upward(self) -> None:
         """``below`` fires at or under the threshold, so its loosest cut is its highest."""
-        observations: list[tuple[float | None, bool]] = [(0.1, True)] * 10 + [(0.9, False)] * 10
+        observations: list[tuple[float | None, bool]] = list([(0.1, True)] * 10 + [(0.9, False)] * 10)
         point = recall_at_budgets(observations, name="d", reference="r", polarity="below", budgets=(0.0,)).point(0.0)
         assert point.threshold == pytest.approx(0.1)
         assert point.recall == pytest.approx(1.0)

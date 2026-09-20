@@ -203,6 +203,8 @@ class _FittedTokenLabel(Text):
     saved at any width or dpi, and is retaken from ``full_fontsize`` on every draw.
     """
 
+    stale_callback: Any
+
     def __init__(
         self,
         x: float,
@@ -271,7 +273,8 @@ class _FittedTokenLabel(Text):
         Args:
             renderer: The renderer this draw is going through.
         """
-        callback, self.stale_callback = self.stale_callback, None
+        callback: Any = self.stale_callback
+        self.stale_callback = None
         try:
             self.set_visible(True)
             self.set_fontsize(self._full_fontsize)
@@ -1531,7 +1534,7 @@ def plot_aligned_panels(
 
             # Header text is figure-relative rather than axis-relative. Reserve its measured line
             # count before tight_layout so it never clips into the right margin or over the first lane.
-            y = 0.972
+            header_y = 0.972
             label_gap = _line_height_fraction(8.0) + 0.003
             for label_key, value_key, fontsize, width, weight in (
                 ("context_label", "context", 9.0, 168, "normal"),
@@ -1539,12 +1542,12 @@ def plot_aligned_panels(
                 ("evidence_label", "evidence", 10.0, 150, "normal"),
                 ("support_label", "support", 8.5, 168, "normal"),
             ):
-                fig.text(0.015, y, header.get(label_key, ""), va="top", ha="left", fontsize=8, weight="bold")
-                y -= label_gap
+                fig.text(0.015, header_y, header.get(label_key, ""), va="top", ha="left", fontsize=8, weight="bold")
+                header_y -= label_gap
                 lines = _header_lines(header.get(value_key, ""), width)
                 fig.text(
                     0.015,
-                    y,
+                    header_y,
                     "\n".join(lines),
                     va="top",
                     ha="left",
@@ -1552,10 +1555,10 @@ def plot_aligned_panels(
                     weight=weight,
                     linespacing=1.25,
                 )
-                y -= 0.003 + len(lines) * _line_height_fraction(fontsize)
+                header_y -= 0.003 + len(lines) * _line_height_fraction(fontsize)
         elif plain_header:
             fig.text(0.015, 0.972, "\n".join(plain_header), va="top", ha="left", fontsize=8, family="sans-serif")
-        top = max(0.48, y - 0.006) if header else (0.90 if plain_header else (0.96 if title else 1.0))
+        top = max(0.48, header_y - 0.006) if header else (0.90 if plain_header else (0.96 if title else 1.0))
 
         # The y tick labels live in the automatic inner gutter that tight_layout measures. Lane
         # names get a distinct outer gutter, rather than sharing a rotated ylabel with tick text.

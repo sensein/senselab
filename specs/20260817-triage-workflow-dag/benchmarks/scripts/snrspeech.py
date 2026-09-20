@@ -38,7 +38,7 @@ print(f"  {'SNR':>7s} {'floor':>7s} {'spans':>6s} {'span over speech?':>18s} {'I
 for L,m,w_ in zip(LEV,mixes,res):
     xp=np.empty_like(m); xp[0]=m[0]; xp[1:]=m[1:]-0.97*m[:-1]
     E=np.maximum(filtfilt(bb,aa,np.abs(hilbert(xp))),1e-12); Edb=20*np.log10(E/E.max())
-    sc={}; 
+    sc={};
     for win in w_:
         d={k:v for e in win["label_scores"] for k,v in e.items()}
         sc[win["start"]]=d
