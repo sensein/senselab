@@ -196,7 +196,7 @@ join.
 | route | branch found a span | recorded | triage | what it means |
 | --- | --- | --- | --- | --- |
 | routed | yes | `agree` | — | — |
-| routed | no | `mismatch` | `flag` | over-routing |
+| routed | no | `mismatch` | — | routing is lenient by design; the branch found none of its kind and was right |
 | declined | yes | `mismatch` | `flag` | a miss — the branch ran only because a hint forced it |
 | declined | no | `agree` | — | — |
 | unavailable | either | `resolved` | — | a branch nothing could judge made no claim to agree with |
@@ -207,9 +207,19 @@ the branch deciding; it now scores what the branch *found*. Neither side is a ju
 disagreement between them is this fold's to name. The one exception is a branch in
 `detection_is_evaluation` run out of family — see the DDK section above.
 
-**A mismatch flags; it never overrides.** The routing cannot overturn a branch on its own subject,
-and the branch does not rewrite the decision: both stay in the store and both appear in the product,
-so the disagreement is visible rather than resolved by precedence.
+**Only one direction of a mismatch flags, and it never overrides.** Declined-and-found-it is the
+ruleset being wrong about the recording, and flags. Routed-and-found-nothing is not its mirror:
+screening is lenient on purpose, so sending VOICE to a read passage is routing working as intended
+and VOICE finding no phonation is VOICE being right. Charging the recording for that made it the
+largest single flag ground in the corpus — 830 records over a 2,269-recording pilot, 382 recordings
+flagged on it and nothing else. Owner-directed 2026-09-20: *it's possible for voice to find nothing.*
+
+Both directions stay in `agreement`, and `findings` and `routes` record the observation on every
+recording, so nothing auditable is lost — the fold simply stops deciding on it. The informative
+absence is untouched: `hint mismatch` still flags where the recording **declared** a kind the branch
+did not find. The routing cannot overturn a branch on its own subject, and the branch does not
+rewrite the decision: both stay in the store and both appear in the product, so the disagreement is
+visible rather than resolved by precedence.
 
 ## A branch that never ran is not a branch that failed
 
