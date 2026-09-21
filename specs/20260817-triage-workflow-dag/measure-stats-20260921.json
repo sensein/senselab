@@ -1,0 +1,2803 @@
+{
+ "breath_coverage_fraction": {
+  "respiration-and-cough-breath": {
+   "max": 1.0,
+   "min": 0.0,
+   "n": 1641,
+   "numeric_n": 1641,
+   "p25": 0.067,
+   "p5": 0.0,
+   "p50": 0.266,
+   "p75": 0.606,
+   "p95": 0.933
+  },
+  "respiration-and-cough-v2-breath": {
+   "max": 1.0,
+   "min": 0.0,
+   "n": 687,
+   "numeric_n": 687,
+   "p25": 0.2,
+   "p5": 0.0,
+   "p50": 0.4,
+   "p75": 0.7,
+   "p95": 1.0
+  }
+ },
+ "breath_peak_over_floor_db": {
+  "breath-sounds": {
+   "max": 57.21,
+   "min": 7.73,
+   "n": 1292,
+   "numeric_n": 1292,
+   "p25": 22.1,
+   "p5": 15.32,
+   "p50": 28.29,
+   "p75": 34.45,
+   "p95": 43.76
+  },
+  "respiration-and-cough-fivebreaths": {
+   "max": 75.55,
+   "min": -5.7,
+   "n": 18548,
+   "numeric_n": 18548,
+   "p25": 22.36,
+   "p5": 15.16,
+   "p50": 28.34,
+   "p75": 34.96,
+   "p95": 44.97
+  },
+  "respiration-and-cough-threequickbreaths": {
+   "max": 79.64,
+   "min": 1.34,
+   "n": 7909,
+   "numeric_n": 7909,
+   "p25": 26.04,
+   "p5": 17.32,
+   "p50": 33.01,
+   "p75": 40.66,
+   "p95": 51.38
+  },
+  "respiration-and-cough-v2-threebreaths": {
+   "max": 101.3,
+   "min": 1.53,
+   "n": 3000,
+   "numeric_n": 3000,
+   "p25": 24.56,
+   "p5": 15.21,
+   "p50": 31.9,
+   "p75": 39.68,
+   "p95": 51.47
+  },
+  "respiration-and-cough-v2-threebreathsmouth": {
+   "max": 105.5,
+   "min": 2.19,
+   "n": 2694,
+   "numeric_n": 2694,
+   "p25": 23.08,
+   "p5": 15.17,
+   "p50": 29.09,
+   "p75": 35.96,
+   "p95": 45.86
+  },
+  "respiration-and-cough-v2-threebreathsnose": {
+   "max": 70.42,
+   "min": 1.48,
+   "n": 2321,
+   "numeric_n": 2321,
+   "p25": 23.81,
+   "p5": 14.92,
+   "p50": 29.81,
+   "p75": 35.92,
+   "p95": 45.49
+  }
+ },
+ "carrier_rejected": {
+  "animal-fluency": {
+   "n": 7048,
+   "values": {
+    "f0_spread_max_semitones": 266,
+    "production_min_s": 4528,
+    "voiced_fraction_min": 2254
+   }
+  },
+  "breath-sounds": {
+   "n": 627,
+   "values": {
+    "f0_spread_max_semitones": 5,
+    "production_min_s": 291,
+    "voiced_fraction_min": 331
+   }
+  },
+  "cape-v-sentences": {
+   "n": 557,
+   "values": {
+    "f0_spread_max_semitones": 42,
+    "production_min_s": 329,
+    "voiced_fraction_min": 186
+   }
+  },
+  "cape-v-sentences-v2": {
+   "n": 187,
+   "values": {
+    "f0_spread_max_semitones": 28,
+    "production_min_s": 100,
+    "voiced_fraction_min": 59
+   }
+  },
+  "caterpillar-passage": {
+   "n": 38674,
+   "values": {
+    "f0_spread_max_semitones": 3936,
+    "production_min_s": 19121,
+    "voiced_fraction_min": 15617
+   }
+  },
+  "cinderella-story": {
+   "n": 24877,
+   "values": {
+    "f0_spread_max_semitones": 1817,
+    "production_min_s": 13127,
+    "voiced_fraction_min": 9933
+   }
+  },
+  "diadochokinesis-buttercup": {
+   "n": 847,
+   "values": {
+    "f0_spread_max_semitones": 86,
+    "production_min_s": 504,
+    "voiced_fraction_min": 257
+   }
+  },
+  "diadochokinesis-ka": {
+   "n": 1463,
+   "values": {
+    "f0_spread_max_semitones": 109,
+    "production_min_s": 985,
+    "voiced_fraction_min": 369
+   }
+  },
+  "diadochokinesis-pa": {
+   "n": 2294,
+   "values": {
+    "f0_spread_max_semitones": 128,
+    "production_min_s": 1755,
+    "voiced_fraction_min": 411
+   }
+  },
+  "diadochokinesis-pataka": {
+   "n": 1499,
+   "values": {
+    "f0_spread_max_semitones": 61,
+    "production_min_s": 791,
+    "voiced_fraction_min": 647
+   }
+  },
+  "diadochokinesis-ta": {
+   "n": 1419,
+   "values": {
+    "f0_spread_max_semitones": 117,
+    "production_min_s": 934,
+    "voiced_fraction_min": 368
+   }
+  },
+  "diadochokinesis-v2-buttercup": {
+   "n": 244,
+   "values": {
+    "f0_spread_max_semitones": 27,
+    "production_min_s": 165,
+    "voiced_fraction_min": 52
+   }
+  },
+  "diadochokinesis-v2-kuh": {
+   "n": 1396,
+   "values": {
+    "f0_spread_max_semitones": 71,
+    "production_min_s": 1085,
+    "voiced_fraction_min": 240
+   }
+  },
+  "diadochokinesis-v2-puh": {
+   "n": 3035,
+   "values": {
+    "f0_spread_max_semitones": 84,
+    "production_min_s": 2638,
+    "voiced_fraction_min": 313
+   }
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "n": 661,
+   "values": {
+    "f0_spread_max_semitones": 13,
+    "production_min_s": 477,
+    "voiced_fraction_min": 171
+   }
+  },
+  "diadochokinesis-v2-tuh": {
+   "n": 1201,
+   "values": {
+    "f0_spread_max_semitones": 50,
+    "production_min_s": 878,
+    "voiced_fraction_min": 273
+   }
+  },
+  "free-speech": {
+   "n": 41474,
+   "values": {
+    "f0_spread_max_semitones": 4286,
+    "production_min_s": 19436,
+    "voiced_fraction_min": 17752
+   }
+  },
+  "free-speech-v2": {
+   "n": 24640,
+   "values": {
+    "f0_spread_max_semitones": 4017,
+    "production_min_s": 11652,
+    "voiced_fraction_min": 8971
+   }
+  },
+  "glides-high-to-low": {
+   "n": 4971,
+   "values": {
+    "dominant_segment_min_fraction": 686,
+    "production_min_s": 3521,
+    "voiced_fraction_min": 764
+   }
+  },
+  "glides-low-to-high": {
+   "n": 5692,
+   "values": {
+    "dominant_segment_min_fraction": 828,
+    "production_min_s": 4089,
+    "voiced_fraction_min": 775
+   }
+  },
+  "harvard-sentences-list": {
+   "n": 5844,
+   "values": {
+    "f0_spread_max_semitones": 661,
+    "production_min_s": 3339,
+    "voiced_fraction_min": 1844
+   }
+  },
+  "high-to-low": {
+   "n": 161,
+   "values": {
+    "dominant_segment_min_fraction": 20,
+    "production_min_s": 124,
+    "voiced_fraction_min": 17
+   }
+  },
+  "loudness": {
+   "n": 550,
+   "values": {
+    "f0_spread_max_semitones": 42,
+    "production_min_s": 311,
+    "voiced_fraction_min": 197
+   }
+  },
+  "loudness-v2": {
+   "n": 791,
+   "values": {
+    "f0_spread_max_semitones": 48,
+    "production_min_s": 541,
+    "voiced_fraction_min": 202
+   }
+  },
+  "maximum-phonation-time": {
+   "n": 13255,
+   "values": {
+    "f0_spread_max_semitones": 640,
+    "production_min_s": 10487,
+    "voiced_fraction_min": 2128
+   }
+  },
+  "maximum-phonation-time-v2": {
+   "n": 3919,
+   "values": {
+    "f0_spread_max_semitones": 252,
+    "production_min_s": 2985,
+    "voiced_fraction_min": 682
+   }
+  },
+  "open-response-questions": {
+   "n": 2835,
+   "values": {
+    "f0_spread_max_semitones": 248,
+    "production_min_s": 1363,
+    "voiced_fraction_min": 1224
+   }
+  },
+  "picture-description": {
+   "n": 26363,
+   "values": {
+    "f0_spread_max_semitones": 2828,
+    "production_min_s": 12343,
+    "voiced_fraction_min": 11192
+   }
+  },
+  "picture-description-option1": {
+   "n": 8273,
+   "values": {
+    "f0_spread_max_semitones": 1172,
+    "production_min_s": 4166,
+    "voiced_fraction_min": 2935
+   }
+  },
+  "picture-description-option2": {
+   "n": 11468,
+   "values": {
+    "f0_spread_max_semitones": 1749,
+    "production_min_s": 5406,
+    "voiced_fraction_min": 4313
+   }
+  },
+  "productive-vocabulary": {
+   "n": 8833,
+   "values": {
+    "f0_spread_max_semitones": 812,
+    "production_min_s": 5440,
+    "voiced_fraction_min": 2581
+   }
+  },
+  "prolonged-vowel": {
+   "n": 10949,
+   "values": {
+    "f0_spread_max_semitones": 252,
+    "lexical_separator": 2557,
+    "production_min_s": 7363,
+    "voiced_fraction_min": 777
+   }
+  },
+  "rainbow-passage": {
+   "n": 13357,
+   "values": {
+    "f0_spread_max_semitones": 1777,
+    "production_min_s": 6457,
+    "voiced_fraction_min": 5123
+   }
+  },
+  "random-item-generation": {
+   "n": 10853,
+   "values": {
+    "f0_spread_max_semitones": 617,
+    "production_min_s": 7099,
+    "voiced_fraction_min": 3137
+   }
+  },
+  "random-item-generation-v2": {
+   "n": 5712,
+   "values": {
+    "f0_spread_max_semitones": 433,
+    "production_min_s": 3678,
+    "voiced_fraction_min": 1601
+   }
+  },
+  "respiration-and-cough-breath": {
+   "n": 4144,
+   "values": {
+    "f0_spread_max_semitones": 47,
+    "production_min_s": 2661,
+    "voiced_fraction_min": 1436
+   }
+  },
+  "respiration-and-cough-cough": {
+   "n": 1325,
+   "values": {
+    "f0_spread_max_semitones": 1,
+    "production_min_s": 539,
+    "voiced_fraction_min": 785
+   }
+  },
+  "respiration-and-cough-fivebreaths": {
+   "n": 8473,
+   "values": {
+    "f0_spread_max_semitones": 96,
+    "production_min_s": 3362,
+    "voiced_fraction_min": 5015
+   }
+  },
+  "respiration-and-cough-threequickbreaths": {
+   "n": 1827,
+   "values": {
+    "f0_spread_max_semitones": 19,
+    "production_min_s": 817,
+    "voiced_fraction_min": 991
+   }
+  },
+  "respiration-and-cough-v2-breath": {
+   "n": 1647,
+   "values": {
+    "f0_spread_max_semitones": 28,
+    "production_min_s": 896,
+    "voiced_fraction_min": 723
+   }
+  },
+  "respiration-and-cough-v2-hardcough": {
+   "n": 197,
+   "values": {
+    "f0_spread_max_semitones": 2,
+    "production_min_s": 102,
+    "voiced_fraction_min": 93
+   }
+  },
+  "respiration-and-cough-v2-threebreaths": {
+   "n": 1169,
+   "values": {
+    "f0_spread_max_semitones": 20,
+    "production_min_s": 570,
+    "voiced_fraction_min": 579
+   }
+  },
+  "respiration-and-cough-v2-threebreathsmouth": {
+   "n": 1229,
+   "values": {
+    "f0_spread_max_semitones": 21,
+    "production_min_s": 494,
+    "voiced_fraction_min": 714
+   }
+  },
+  "respiration-and-cough-v2-threebreathsnose": {
+   "n": 1136,
+   "values": {
+    "f0_spread_max_semitones": 26,
+    "production_min_s": 495,
+    "voiced_fraction_min": 615
+   }
+  },
+  "story-recall": {
+   "n": 27937,
+   "values": {
+    "f0_spread_max_semitones": 2102,
+    "production_min_s": 14887,
+    "voiced_fraction_min": 10948
+   }
+  },
+  "story-recall-v2": {
+   "n": 35341,
+   "values": {
+    "f0_spread_max_semitones": 4914,
+    "production_min_s": 18035,
+    "voiced_fraction_min": 12392
+   }
+  },
+  "voluntary-cough": {
+   "n": 936,
+   "values": {
+    "production_min_s": 421,
+    "voiced_fraction_min": 515
+   }
+  },
+  "word-color-stroop": {
+   "n": 11882,
+   "values": {
+    "f0_spread_max_semitones": 361,
+    "production_min_s": 8964,
+    "voiced_fraction_min": 2557
+   }
+  }
+ },
+ "category_membership": {
+  "animal-fluency": {
+   "n": 194,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 194
+   }
+  }
+ },
+ "cough_peak_over_floor_db": {
+  "respiration-and-cough-cough": {
+   "max": 84.03,
+   "min": -2.23,
+   "n": 6681,
+   "numeric_n": 6681,
+   "p25": 22.29,
+   "p5": 9.24,
+   "p50": 39.18,
+   "p75": 54.42,
+   "p95": 66.3
+  },
+  "respiration-and-cough-v2-hardcough": {
+   "max": 98.8,
+   "min": 0.99,
+   "n": 1449,
+   "numeric_n": 1449,
+   "p25": 26.15,
+   "p5": 10.24,
+   "p50": 43.78,
+   "p75": 58.44,
+   "p95": 70.43
+  }
+ },
+ "ddk_cv_instrument_reading": {
+  "diadochokinesis-buttercup": {
+   "n": 883,
+   "values": {
+    "[[0.002, 0.017, 0.542, 0.152, 0.89, 0.95": 1,
+    "[[0.456, 0.498, 0.438, 0.527, 0.813, 0.8": 1,
+    "[[0.469, 0.83, 0.781, 0.736, 0.883, 0.94": 1,
+    "[[0.571, 0.56, 0.066, 0.194, 0.485, 0.56": 1,
+    "[[0.579, 0.555, 0.69, 0.451, 0.84, 0.677": 1,
+    "[[0.596, 0.404, 0.516, 0.193, 0.794, 0.8": 1
+   }
+  },
+  "diadochokinesis-ka": {
+   "n": 884,
+   "values": {
+    "[[0.052, 0.628], [0.397, 0.683], [0.221,": 1,
+    "[[0.103, 0.77], [0.322, 0.645], [0.343, ": 1,
+    "[[0.384, 0.637], [0.483, 0.625], [0.068,": 1,
+    "[[0.403, 0.328], [0.751, 0.679], [0.459,": 1,
+    "[[0.422, 0.646], [0.134, 0.579], [0.509,": 1,
+    "[[0.588, 0.445], [0.576, 0.666], [0.688,": 1
+   }
+  },
+  "diadochokinesis-pa": {
+   "n": 888,
+   "values": {
+    "[[0.001, 0.881], [0.89, 0.952], [0.021, ": 1,
+    "[[0.017, 0.799], [0.904, 0.907], [0.54, ": 1,
+    "[[0.03, 0.912], [0.599, 0.653], [0.627, ": 1,
+    "[[0.444, 0.62], [0.504, 0.65], [0.59, 0.": 1,
+    "[[0.533, 0.873], [0.732, 0.64], [0.218, ": 1,
+    "[[0.545, 0.908], [0.569, 0.871], [0.824,": 1
+   }
+  },
+  "diadochokinesis-pataka": {
+   "n": 886,
+   "values": {
+    "[[0.219, 0.939, 0.915, 0.935, 0.819, 0.4": 1,
+    "[[0.595, 0.852, 0.889, 0.587, 0.952, 0.9": 1,
+    "[[0.726, 0.794, 0.866, 0.916, 0.913, 0.8": 1,
+    "[[0.79, 0.989, 0.51, 0.893, 0.77, 0.923]": 1,
+    "[[0.822, 0.782, 0.87, 0.802, 0.65, 0.86]": 1,
+    "[[0.834, 0.61, 0.915, 0.812, 0.704, 0.65": 1
+   }
+  },
+  "diadochokinesis-ta": {
+   "n": 888,
+   "values": {
+    "[[0.291, 0.819], [0.415, 0.797], [0.828,": 1,
+    "[[0.476, 0.635], [0.556, 0.694], [0.489,": 1,
+    "[[0.505, 0.759], [0.479, 0.576], [0.484,": 1,
+    "[[0.519, 0.863], [0.537, 0.819], [0.775,": 1,
+    "[[0.551, 0.836], [0.148, 0.794], [0.116,": 1,
+    "[[0.567, 0.542], [0.534, 0.574], [0.683,": 1
+   }
+  },
+  "diadochokinesis-v2-buttercup": {
+   "n": 687,
+   "values": {
+    "[[0.615, 0.679, 0.827, 0.845, 0.877, 0.9": 1,
+    "[[0.657, 0.275, 0.515, 0.354, 0.658, 0.9": 1,
+    "[[0.687, 0.738, 0.874, 0.831, 0.943, 0.9": 1,
+    "[[0.724, 0.962, 0.98, 0.925, 0.79, 0.867": 1,
+    "[[0.745, 0.863, 0.912, 0.892, 0.893, 0.5": 1,
+    "[[0.77, 0.125, 0.815, 0.012, 0.903, 0.82": 1
+   }
+  },
+  "diadochokinesis-v2-kuh": {
+   "n": 681,
+   "values": {
+    "[[0.004, 0.77], [0.011, 0.832], [0.767, ": 1,
+    "[[0.361, 0.475], [0.768, 0.628], [0.894,": 1,
+    "[[0.532, 0.693], [0.71, 0.653], [0.707, ": 1,
+    "[[0.542, 0.566], [0.747, 0.244], [0.893,": 1,
+    "[[0.561, 0.396], [0.53, 0.577], [0.511, ": 1,
+    "[[0.582, 0.25], [0.732, 0.35], [0.782, 0": 1
+   }
+  },
+  "diadochokinesis-v2-puh": {
+   "n": 681,
+   "values": {
+    "[[0.141, 0.817], [0.075, 0.701], [0.424,": 1,
+    "[[0.497, 0.766], [0.555, 0.879], [0.646,": 1,
+    "[[0.597, 0.561], [0.819, 0.47], [0.848, ": 1,
+    "[[0.616, 0.447], [0.903, 0.428], [0.765,": 1,
+    "[[0.675, 0.805], [0.816, 0.882], [0.732,": 1,
+    "[[0.777, 0.776], [0.636, 0.824], [0.521,": 1
+   }
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "n": 684,
+   "values": {
+    "[[0.001, 0.584, 0.727, 0.234, 0.002, 0.3": 1,
+    "[[0.599, 0.879, 0.926, 0.861, 0.83, 0.90": 1,
+    "[[0.727, 0.75, 0.92, 0.172, 0.633, 0.561": 1,
+    "[[0.791, 0.802, 0.898, 0.246, 0.891, 0.8": 1,
+    "[[0.862, 0.403, 0.891, 0.461, 0.883, 0.6": 1,
+    "[[0.865, 0.533, 0.927, 0.046, 0.802, 0.6": 1
+   }
+  },
+  "diadochokinesis-v2-tuh": {
+   "n": 691,
+   "values": {
+    "[[0.038, 0.686], [0.543, 0.207], [0.652,": 1,
+    "[[0.25, 0.78], [0.222, 0.786], [0.265, 0": 1,
+    "[[0.388, 0.533], [0.685, 0.3], [0.751, 0": 1,
+    "[[0.406, 0.747], [0.817, 0.699], [0.747,": 1,
+    "[[0.455, 0.663], [0.532, 0.687], [0.431,": 1,
+    "[[0.473, 0.705], [0.751, 0.634], [0.61, ": 1
+   }
+  }
+ },
+ "ddk_position_realised_mass": {
+  "diadochokinesis-buttercup": {
+   "n": 890,
+   "values": {
+    "[0.3, 0.497, 0.401, 0.405, 0.533, 0.587,": 1,
+    "[0.491, 0.64, 0.681, 0.389, 0.673, 0.503": 1,
+    "[0.634, 0.875, 0.726, 0.672, 0.798, 0.81": 1,
+    "[0.64, 0.627, 0.687, 0.623, 0.863, 0.928": 1,
+    "[0.654, 0.567, 0.585, 0.128, 0.612, 0.68": 1,
+    "[None, None, None, None, None, None, Non": 7
+   }
+  },
+  "diadochokinesis-ka": {
+   "n": 891,
+   "values": {
+    "[0.404, 0.785]": 1,
+    "[0.429, 0.712]": 1,
+    "[0.537, 0.659]": 1,
+    "[0.574, 0.64]": 2,
+    "[0.819, 0.827]": 2,
+    "[None, None]": 7
+   }
+  },
+  "diadochokinesis-pa": {
+   "n": 895,
+   "values": {
+    "[0.184, 0.752]": 1,
+    "[0.238, 0.74]": 1,
+    "[0.359, 0.808]": 1,
+    "[0.642, 0.803]": 2,
+    "[0.679, 0.746]": 2,
+    "[None, None]": 7
+   }
+  },
+  "diadochokinesis-pataka": {
+   "n": 892,
+   "values": {
+    "[0.321, 0.559, 0.6, 0.779, 0.679, 0.73]": 1,
+    "[0.558, 0.63, 0.478, 0.747, 0.727, 0.788": 1,
+    "[0.696, 0.734, 0.854, 0.872, 0.881, 0.77": 1,
+    "[0.72, 0.711, 0.651, 0.602, 0.694, 0.734": 1,
+    "[0.727, 0.866, 0.768, 0.291, 0.009, 0.08": 1,
+    "[None, None, None, None, None, None]": 6
+   }
+  },
+  "diadochokinesis-ta": {
+   "n": 893,
+   "values": {
+    "[0.733, 0.472]": 2,
+    "[0.752, 0.795]": 2,
+    "[0.757, 0.751]": 2,
+    "[0.833, 0.829]": 2,
+    "[0.872, 0.787]": 2,
+    "[None, None]": 5
+   }
+  },
+  "diadochokinesis-v2-buttercup": {
+   "n": 699,
+   "values": {
+    "[0.071, 0.434, 0.727, 0.335, 0.644, 0.55": 1,
+    "[0.484, 0.459, 0.267, 0.49, 0.441, 0.622": 1,
+    "[0.55, 0.655, 0.05, 0.031, 0.567, 0.717,": 1,
+    "[0.575, 0.559, 0.307, 0.347, 0.573, 0.53": 1,
+    "[0.586, 0.811, 0.845, 0.86, 0.861, 0.811": 1,
+    "[None, None, None, None, None, None, Non": 12
+   }
+  },
+  "diadochokinesis-v2-kuh": {
+   "n": 695,
+   "values": {
+    "[0.474, 0.778]": 1,
+    "[0.496, 0.699]": 1,
+    "[0.681, 0.585]": 2,
+    "[0.767, 0.56]": 2,
+    "[0.807, 0.612]": 2,
+    "[None, None]": 14
+   }
+  },
+  "diadochokinesis-v2-puh": {
+   "n": 696,
+   "values": {
+    "[0.036, 0.654]": 1,
+    "[0.495, 0.789]": 1,
+    "[0.728, 0.685]": 2,
+    "[0.814, 0.655]": 2,
+    "[0.825, 0.577]": 2,
+    "[None, None]": 15
+   }
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "n": 699,
+   "values": {
+    "[0.713, 0.73, 0.853, 0.579, 0.873, 0.807": 1,
+    "[0.789, 0.513, 0.88, 0.543, 0.86, 0.73]": 1,
+    "[0.8, 0.458, 0.856, 0.519, 0.9, 0.786]": 1,
+    "[0.819, 0.409, 0.87, 0.612, 0.901, 0.704": 1,
+    "[0.822, 0.665, 0.785, 0.593, 0.862, 0.70": 1,
+    "[None, None, None, None, None, None]": 15
+   }
+  },
+  "diadochokinesis-v2-tuh": {
+   "n": 702,
+   "values": {
+    "[0.507, 0.634]": 1,
+    "[0.524, 0.576]": 1,
+    "[0.53, 0.537]": 1,
+    "[0.63, 0.621]": 1,
+    "[0.636, 0.717]": 1,
+    "[None, None]": 11
+   }
+  }
+ },
+ "ddk_ppg_period_dispersion": {
+  "diadochokinesis-buttercup": {
+   "max": 1.1933,
+   "min": 0.0166,
+   "n": 877,
+   "numeric_n": 877,
+   "p25": 0.0605,
+   "p5": 0.0309,
+   "p50": 0.1011,
+   "p75": 0.1925,
+   "p95": 0.3995
+  },
+  "diadochokinesis-ka": {
+   "max": 1.9797,
+   "min": 0.0211,
+   "n": 860,
+   "numeric_n": 860,
+   "p25": 0.202,
+   "p5": 0.0669,
+   "p50": 0.3776,
+   "p75": 0.5667,
+   "p95": 0.9405
+  },
+  "diadochokinesis-pa": {
+   "max": 2.166,
+   "min": 0.0272,
+   "n": 870,
+   "numeric_n": 870,
+   "p25": 0.1489,
+   "p5": 0.0655,
+   "p50": 0.3267,
+   "p75": 0.4973,
+   "p95": 0.8887
+  },
+  "diadochokinesis-pataka": {
+   "max": 1.7168,
+   "min": 0.0121,
+   "n": 883,
+   "numeric_n": 883,
+   "p25": 0.056,
+   "p5": 0.0319,
+   "p50": 0.1042,
+   "p75": 0.2219,
+   "p95": 0.4493
+  },
+  "diadochokinesis-ta": {
+   "max": 2.7109,
+   "min": 0.0229,
+   "n": 881,
+   "numeric_n": 881,
+   "p25": 0.13,
+   "p5": 0.0566,
+   "p50": 0.3102,
+   "p75": 0.4396,
+   "p95": 0.7956
+  },
+  "diadochokinesis-v2-buttercup": {
+   "max": 0.6844,
+   "min": 0.0,
+   "n": 669,
+   "numeric_n": 669,
+   "p25": 0.0446,
+   "p5": 0.0232,
+   "p50": 0.0706,
+   "p75": 0.1207,
+   "p95": 0.3708
+  },
+  "diadochokinesis-v2-kuh": {
+   "max": 1.6622,
+   "min": 0.0407,
+   "n": 657,
+   "numeric_n": 657,
+   "p25": 0.2559,
+   "p5": 0.0791,
+   "p50": 0.4075,
+   "p75": 0.5962,
+   "p95": 0.9678
+  },
+  "diadochokinesis-v2-puh": {
+   "max": 1.7235,
+   "min": 0.0406,
+   "n": 670,
+   "numeric_n": 670,
+   "p25": 0.1843,
+   "p5": 0.0795,
+   "p50": 0.3193,
+   "p75": 0.5065,
+   "p95": 0.8789
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "max": 1.0147,
+   "min": 0.011,
+   "n": 661,
+   "numeric_n": 661,
+   "p25": 0.0479,
+   "p5": 0.0279,
+   "p50": 0.0826,
+   "p75": 0.182,
+   "p95": 0.4352
+  },
+  "diadochokinesis-v2-tuh": {
+   "max": 1.6434,
+   "min": 0.0277,
+   "n": 690,
+   "numeric_n": 690,
+   "p25": 0.1391,
+   "p5": 0.0714,
+   "p50": 0.2839,
+   "p75": 0.4451,
+   "p95": 0.7634
+  }
+ },
+ "ddk_repetition_count_from_ppg_decode": {
+  "diadochokinesis-buttercup": {
+   "max": 38.0,
+   "min": 0.0,
+   "n": 890,
+   "numeric_n": 890,
+   "p25": 9.0,
+   "p5": 6.0,
+   "p50": 10.0,
+   "p75": 10.0,
+   "p95": 14.0
+  },
+  "diadochokinesis-ka": {
+   "max": 53.0,
+   "min": 0.0,
+   "n": 891,
+   "numeric_n": 891,
+   "p25": 8.0,
+   "p5": 3.0,
+   "p50": 10.0,
+   "p75": 12.0,
+   "p95": 20.0
+  },
+  "diadochokinesis-pa": {
+   "max": 52.0,
+   "min": 0.0,
+   "n": 895,
+   "numeric_n": 895,
+   "p25": 9.0,
+   "p5": 4.0,
+   "p50": 11.0,
+   "p75": 14.0,
+   "p95": 24.0
+  },
+  "diadochokinesis-pataka": {
+   "max": 27.0,
+   "min": 0.0,
+   "n": 892,
+   "numeric_n": 892,
+   "p25": 9.0,
+   "p5": 6.0,
+   "p50": 10.0,
+   "p75": 11.0,
+   "p95": 15.0
+  },
+  "diadochokinesis-ta": {
+   "max": 50.0,
+   "min": 0.0,
+   "n": 893,
+   "numeric_n": 893,
+   "p25": 9.0,
+   "p5": 6.0,
+   "p50": 11.0,
+   "p75": 14.0,
+   "p95": 24.0
+  },
+  "diadochokinesis-v2-buttercup": {
+   "max": 11.0,
+   "min": 0.0,
+   "n": 699,
+   "numeric_n": 699,
+   "p25": 5.0,
+   "p5": 3.0,
+   "p50": 7.0,
+   "p75": 7.0,
+   "p95": 9.0
+  },
+  "diadochokinesis-v2-kuh": {
+   "max": 25.0,
+   "min": 0.0,
+   "n": 695,
+   "numeric_n": 695,
+   "p25": 9.0,
+   "p5": 2.0,
+   "p50": 12.0,
+   "p75": 14.0,
+   "p95": 17.0
+  },
+  "diadochokinesis-v2-puh": {
+   "max": 25.0,
+   "min": 0.0,
+   "n": 696,
+   "numeric_n": 696,
+   "p25": 11.0,
+   "p5": 5.0,
+   "p50": 14.0,
+   "p75": 16.0,
+   "p95": 19.0
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "max": 16.0,
+   "min": 0.0,
+   "n": 699,
+   "numeric_n": 699,
+   "p25": 6.0,
+   "p5": 2.0,
+   "p50": 7.0,
+   "p75": 8.0,
+   "p95": 9.0
+  },
+  "diadochokinesis-v2-tuh": {
+   "max": 28.0,
+   "min": 0.0,
+   "n": 702,
+   "numeric_n": 702,
+   "p25": 12.0,
+   "p5": 7.0,
+   "p50": 14.0,
+   "p75": 16.0,
+   "p95": 19.0
+  }
+ },
+ "ddk_syllable_rate_from_envelope_modulation_hz": {
+  "diadochokinesis-buttercup": {
+   "max": 6.9155,
+   "min": 1.0026,
+   "n": 443,
+   "numeric_n": 443,
+   "p25": 1.1495,
+   "p5": 1.0356,
+   "p50": 1.3562,
+   "p75": 1.7951,
+   "p95": 4.0396
+  },
+  "diadochokinesis-ka": {
+   "max": 7.1612,
+   "min": 1.0019,
+   "n": 649,
+   "numeric_n": 649,
+   "p25": 1.1116,
+   "p5": 1.0228,
+   "p50": 1.2314,
+   "p75": 1.6424,
+   "p95": 4.9543
+  },
+  "diadochokinesis-pa": {
+   "max": 9.4001,
+   "min": 1.0027,
+   "n": 510,
+   "numeric_n": 510,
+   "p25": 1.1484,
+   "p5": 1.0284,
+   "p50": 1.3522,
+   "p75": 2.6483,
+   "p95": 6.4051
+  },
+  "diadochokinesis-pataka": {
+   "max": 8.6256,
+   "min": 1.0008,
+   "n": 599,
+   "numeric_n": 599,
+   "p25": 1.1063,
+   "p5": 1.0163,
+   "p50": 1.2093,
+   "p75": 1.4565,
+   "p95": 3.1089
+  },
+  "diadochokinesis-ta": {
+   "max": 9.291,
+   "min": 1.001,
+   "n": 675,
+   "numeric_n": 675,
+   "p25": 1.1114,
+   "p5": 1.0242,
+   "p50": 1.2329,
+   "p75": 1.4736,
+   "p95": 4.3742
+  },
+  "diadochokinesis-v2-buttercup": {
+   "max": 6.1788,
+   "min": 1.0006,
+   "n": 262,
+   "numeric_n": 262,
+   "p25": 1.2112,
+   "p5": 1.0366,
+   "p50": 1.4916,
+   "p75": 1.9434,
+   "p95": 4.1352
+  },
+  "diadochokinesis-v2-kuh": {
+   "max": 6.366,
+   "min": 1.001,
+   "n": 400,
+   "numeric_n": 400,
+   "p25": 1.145,
+   "p5": 1.0228,
+   "p50": 1.2967,
+   "p75": 1.8055,
+   "p95": 4.0834
+  },
+  "diadochokinesis-v2-puh": {
+   "max": 6.6532,
+   "min": 1.0011,
+   "n": 303,
+   "numeric_n": 303,
+   "p25": 1.1594,
+   "p5": 1.0361,
+   "p50": 1.3946,
+   "p75": 3.1685,
+   "p95": 4.7018
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "max": 7.3907,
+   "min": 1.0006,
+   "n": 352,
+   "numeric_n": 352,
+   "p25": 1.1656,
+   "p5": 1.0312,
+   "p50": 1.3331,
+   "p75": 1.7093,
+   "p95": 4.8021
+  },
+  "diadochokinesis-v2-tuh": {
+   "max": 7.3902,
+   "min": 1.0018,
+   "n": 460,
+   "numeric_n": 460,
+   "p25": 1.1218,
+   "p5": 1.0308,
+   "p50": 1.2337,
+   "p75": 1.5154,
+   "p95": 4.0855
+  }
+ },
+ "ddk_syllable_rate_from_ppg_decode_hz": {
+  "diadochokinesis-buttercup": {
+   "max": 9.36,
+   "min": 1.105,
+   "n": 879,
+   "numeric_n": 879,
+   "p25": 4.613,
+   "p5": 3.224,
+   "p50": 5.552,
+   "p75": 6.38,
+   "p95": 7.498
+  },
+  "diadochokinesis-ka": {
+   "max": 9.074,
+   "min": 0.256,
+   "n": 869,
+   "numeric_n": 869,
+   "p25": 2.273,
+   "p5": 1.273,
+   "p50": 3.225,
+   "p75": 4.537,
+   "p95": 5.879
+  },
+  "diadochokinesis-pa": {
+   "max": 9.074,
+   "min": 0.277,
+   "n": 880,
+   "numeric_n": 880,
+   "p25": 2.269,
+   "p5": 1.281,
+   "p50": 3.445,
+   "p75": 4.762,
+   "p95": 6.658
+  },
+  "diadochokinesis-pataka": {
+   "max": 11.107,
+   "min": 0.982,
+   "n": 884,
+   "numeric_n": 884,
+   "p25": 4.314,
+   "p5": 2.752,
+   "p50": 5.453,
+   "p75": 6.512,
+   "p95": 8.095
+  },
+  "diadochokinesis-ta": {
+   "max": 9.488,
+   "min": 0.158,
+   "n": 887,
+   "numeric_n": 887,
+   "p25": 2.499,
+   "p5": 1.418,
+   "p50": 3.57,
+   "p75": 4.998,
+   "p95": 6.887
+  },
+  "diadochokinesis-v2-buttercup": {
+   "max": 8.557,
+   "min": 1.61,
+   "n": 683,
+   "numeric_n": 683,
+   "p25": 4.914,
+   "p5": 3.697,
+   "p50": 5.454,
+   "p75": 5.877,
+   "p95": 6.591
+  },
+  "diadochokinesis-v2-kuh": {
+   "max": 7.133,
+   "min": 0.209,
+   "n": 671,
+   "numeric_n": 671,
+   "p25": 3.222,
+   "p5": 1.597,
+   "p50": 3.7,
+   "p75": 4.0,
+   "p95": 4.76
+  },
+  "diadochokinesis-v2-puh": {
+   "max": 7.675,
+   "min": 0.513,
+   "n": 675,
+   "numeric_n": 675,
+   "p25": 3.701,
+   "p5": 2.772,
+   "p50": 4.0,
+   "p75": 4.348,
+   "p95": 5.252
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "max": 10.519,
+   "min": 0.962,
+   "n": 678,
+   "numeric_n": 678,
+   "p25": 4.91,
+   "p5": 3.088,
+   "p50": 5.759,
+   "p75": 6.312,
+   "p95": 7.133
+  },
+  "diadochokinesis-v2-tuh": {
+   "max": 7.68,
+   "min": 0.652,
+   "n": 690,
+   "numeric_n": 690,
+   "p25": 3.697,
+   "p5": 2.811,
+   "p50": 3.992,
+   "p75": 4.167,
+   "p95": 5.4
+  }
+ },
+ "defines_its_cue": {
+  "productive-vocabulary": {
+   "n": 2898,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 2898
+   }
+  }
+ },
+ "effort_absolute": {
+  "respiration-and-cough-v2-hardcough": {
+   "n": 697,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 697
+   }
+  }
+ },
+ "expected_sequence_repeat_fraction": {
+  "cape-v-sentences": {
+   "max": 1.0,
+   "min": 0.0,
+   "n": 2326,
+   "numeric_n": 2326,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 0.0,
+   "p75": 0.0,
+   "p95": 0.143
+  },
+  "cape-v-sentences-v2": {
+   "max": 0.6,
+   "min": 0.0,
+   "n": 1209,
+   "numeric_n": 1209,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 0.0,
+   "p75": 0.0,
+   "p95": 0.143
+  },
+  "caterpillar-passage": {
+   "max": 0.809,
+   "min": 0.017,
+   "n": 587,
+   "numeric_n": 587,
+   "p25": 0.243,
+   "p5": 0.226,
+   "p50": 0.243,
+   "p75": 0.252,
+   "p95": 0.278
+  },
+  "harvard-sentences-list": {
+   "max": 1.0,
+   "min": 0.0,
+   "n": 12638,
+   "numeric_n": 12638,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 0.0,
+   "p75": 0.125,
+   "p95": 0.167
+  },
+  "rainbow-passage": {
+   "max": 0.9,
+   "min": 0.0,
+   "n": 881,
+   "numeric_n": 881,
+   "p25": 0.14,
+   "p5": 0.12,
+   "p50": 0.14,
+   "p75": 0.16,
+   "p95": 0.18
+  },
+  "word-color-stroop": {
+   "max": 1.0,
+   "min": 0.0,
+   "n": 461,
+   "numeric_n": 461,
+   "p25": 0.6,
+   "p5": 0.4,
+   "p50": 0.8,
+   "p75": 0.8,
+   "p95": 1.0
+  }
+ },
+ "glide_extent_semitones": {
+  "glides-high-to-low": {
+   "max": 42.51,
+   "min": 0.0,
+   "n": 685,
+   "numeric_n": 685,
+   "p25": 11.39,
+   "p5": 2.81,
+   "p50": 17.42,
+   "p75": 23.57,
+   "p95": 35.48
+  },
+  "glides-low-to-high": {
+   "max": 41.78,
+   "min": 0.0,
+   "n": 706,
+   "numeric_n": 706,
+   "p25": 9.0,
+   "p5": 0.95,
+   "p50": 15.57,
+   "p75": 20.72,
+   "p95": 28.35
+  },
+  "high-to-low": {
+   "max": 30.2,
+   "min": 7.79,
+   "n": 18,
+   "numeric_n": 18,
+   "p25": 18.12,
+   "p5": 7.79,
+   "p50": 21.86,
+   "p75": 25.54,
+   "p95": 30.2
+  }
+ },
+ "interruptions": {
+  "animal-fluency": {
+   "max": 16.0,
+   "min": 0.0,
+   "n": 349,
+   "numeric_n": 349,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 1.0,
+   "p75": 2.0,
+   "p95": 6.0
+  },
+  "breath-sounds": {
+   "max": 10.0,
+   "min": 0.0,
+   "n": 12,
+   "numeric_n": 12,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 3.0,
+   "p95": 10.0
+  },
+  "cape-v-sentences": {
+   "max": 5.0,
+   "min": 1.0,
+   "n": 6,
+   "numeric_n": 6,
+   "p25": 1.0,
+   "p5": 1.0,
+   "p50": 3.0,
+   "p75": 5.0,
+   "p95": 5.0
+  },
+  "cape-v-sentences-v2": {
+   "max": 4.0,
+   "min": 0.0,
+   "n": 9,
+   "numeric_n": 9,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 1.0,
+   "p75": 2.0,
+   "p95": 4.0
+  },
+  "caterpillar-passage": {
+   "max": 23.0,
+   "min": 0.0,
+   "n": 610,
+   "numeric_n": 610,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 3.0,
+   "p75": 5.0,
+   "p95": 10.0
+  },
+  "cinderella-story": {
+   "max": 27.0,
+   "min": 0.0,
+   "n": 751,
+   "numeric_n": 751,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 5.0,
+   "p95": 11.0
+  },
+  "diadochokinesis-buttercup": {
+   "max": 35.0,
+   "min": 0.0,
+   "n": 25,
+   "numeric_n": 25,
+   "p25": 2.0,
+   "p5": 1.0,
+   "p50": 2.0,
+   "p75": 3.0,
+   "p95": 33.0
+  },
+  "diadochokinesis-ka": {
+   "max": 31.0,
+   "min": 0.0,
+   "n": 65,
+   "numeric_n": 65,
+   "p25": 2.0,
+   "p5": 0.0,
+   "p50": 8.0,
+   "p75": 16.0,
+   "p95": 24.0
+  },
+  "diadochokinesis-pa": {
+   "max": 56.0,
+   "min": 0.0,
+   "n": 100,
+   "numeric_n": 100,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 3.0,
+   "p75": 12.0,
+   "p95": 25.0
+  },
+  "diadochokinesis-pataka": {
+   "max": 45.0,
+   "min": 1.0,
+   "n": 21,
+   "numeric_n": 21,
+   "p25": 3.0,
+   "p5": 1.0,
+   "p50": 6.0,
+   "p75": 24.0,
+   "p95": 38.0
+  },
+  "diadochokinesis-ta": {
+   "max": 60.0,
+   "min": 0.0,
+   "n": 90,
+   "numeric_n": 90,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 5.0,
+   "p75": 13.0,
+   "p95": 25.0
+  },
+  "diadochokinesis-v2-buttercup": {
+   "max": 45.0,
+   "min": 0.0,
+   "n": 9,
+   "numeric_n": 9,
+   "p25": 3.0,
+   "p5": 0.0,
+   "p50": 20.0,
+   "p75": 26.0,
+   "p95": 45.0
+  },
+  "diadochokinesis-v2-kuh": {
+   "max": 30.0,
+   "min": 1.0,
+   "n": 41,
+   "numeric_n": 41,
+   "p25": 2.0,
+   "p5": 1.0,
+   "p50": 6.0,
+   "p75": 13.0,
+   "p95": 22.0
+  },
+  "diadochokinesis-v2-puh": {
+   "max": 28.0,
+   "min": 1.0,
+   "n": 60,
+   "numeric_n": 60,
+   "p25": 3.0,
+   "p5": 2.0,
+   "p50": 6.0,
+   "p75": 16.0,
+   "p95": 22.0
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "max": 46.0,
+   "min": 0.0,
+   "n": 4,
+   "numeric_n": 4,
+   "p25": 2.0,
+   "p5": 0.0,
+   "p50": 30.0,
+   "p75": 46.0,
+   "p95": 46.0
+  },
+  "diadochokinesis-v2-tuh": {
+   "max": 34.0,
+   "min": 1.0,
+   "n": 40,
+   "numeric_n": 40,
+   "p25": 4.0,
+   "p5": 1.0,
+   "p50": 10.0,
+   "p75": 19.0,
+   "p95": 27.0
+  },
+  "free-speech": {
+   "max": 23.0,
+   "min": 0.0,
+   "n": 1881,
+   "numeric_n": 1881,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 3.0,
+   "p75": 5.0,
+   "p95": 12.0
+  },
+  "free-speech-v2": {
+   "max": 63.0,
+   "min": 0.0,
+   "n": 1333,
+   "numeric_n": 1333,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 5.0,
+   "p95": 12.0
+  },
+  "harvard-sentences-list": {
+   "max": 15.0,
+   "min": 0.0,
+   "n": 87,
+   "numeric_n": 87,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 7.0,
+   "p95": 12.0
+  },
+  "loudness": {
+   "max": 5.0,
+   "min": 0.0,
+   "n": 14,
+   "numeric_n": 14,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 0.0,
+   "p75": 1.0,
+   "p95": 5.0
+  },
+  "loudness-v2": {
+   "max": 28.0,
+   "min": 0.0,
+   "n": 37,
+   "numeric_n": 37,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 1.0,
+   "p75": 3.0,
+   "p95": 24.0
+  },
+  "maximum-phonation-time": {
+   "max": 210.0,
+   "min": 0.0,
+   "n": 1846,
+   "numeric_n": 1846,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 4.0,
+   "p75": 14.0,
+   "p95": 61.0
+  },
+  "maximum-phonation-time-v2": {
+   "max": 211.0,
+   "min": 0.0,
+   "n": 553,
+   "numeric_n": 553,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 5.0,
+   "p75": 14.0,
+   "p95": 47.0
+  },
+  "open-response-questions": {
+   "max": 23.0,
+   "min": 0.0,
+   "n": 140,
+   "numeric_n": 140,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 5.0,
+   "p95": 12.0
+  },
+  "picture-description": {
+   "max": 33.0,
+   "min": 0.0,
+   "n": 1129,
+   "numeric_n": 1129,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 4.0,
+   "p95": 10.0
+  },
+  "picture-description-option1": {
+   "max": 24.0,
+   "min": 0.0,
+   "n": 367,
+   "numeric_n": 367,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 5.0,
+   "p95": 11.0
+  },
+  "picture-description-option2": {
+   "max": 32.0,
+   "min": 0.0,
+   "n": 518,
+   "numeric_n": 518,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 4.0,
+   "p95": 10.0
+  },
+  "productive-vocabulary": {
+   "max": 20.0,
+   "min": 0.0,
+   "n": 235,
+   "numeric_n": 235,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 1.0,
+   "p75": 4.0,
+   "p95": 12.0
+  },
+  "prolonged-vowel": {
+   "max": 86.0,
+   "min": 0.0,
+   "n": 785,
+   "numeric_n": 785,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 7.0,
+   "p95": 29.0
+  },
+  "rainbow-passage": {
+   "max": 21.0,
+   "min": 0.0,
+   "n": 411,
+   "numeric_n": 411,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 3.0,
+   "p75": 5.0,
+   "p95": 11.0
+  },
+  "random-item-generation": {
+   "max": 34.0,
+   "min": 0.0,
+   "n": 447,
+   "numeric_n": 447,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 1.0,
+   "p75": 2.0,
+   "p95": 7.0
+  },
+  "random-item-generation-v2": {
+   "max": 15.0,
+   "min": 0.0,
+   "n": 300,
+   "numeric_n": 300,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 1.0,
+   "p75": 2.0,
+   "p95": 7.0
+  },
+  "respiration-and-cough-breath": {
+   "max": 61.0,
+   "min": 0.0,
+   "n": 26,
+   "numeric_n": 26,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 6.0,
+   "p95": 58.0
+  },
+  "respiration-and-cough-fivebreaths": {
+   "max": 28.0,
+   "min": 0.0,
+   "n": 83,
+   "numeric_n": 83,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 4.0,
+   "p75": 11.0,
+   "p95": 24.0
+  },
+  "respiration-and-cough-threequickbreaths": {
+   "max": 13.0,
+   "min": 0.0,
+   "n": 23,
+   "numeric_n": 23,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 5.0,
+   "p95": 8.0
+  },
+  "respiration-and-cough-v2-breath": {
+   "max": 23.0,
+   "min": 0.0,
+   "n": 11,
+   "numeric_n": 11,
+   "p25": 4.0,
+   "p5": 0.0,
+   "p50": 10.0,
+   "p75": 12.0,
+   "p95": 23.0
+  },
+  "respiration-and-cough-v2-hardcough": {
+   "max": 1.0,
+   "min": 1.0,
+   "n": 1,
+   "numeric_n": 1,
+   "p25": 1.0,
+   "p5": 1.0,
+   "p50": 1.0,
+   "p75": 1.0,
+   "p95": 1.0
+  },
+  "respiration-and-cough-v2-threebreaths": {
+   "max": 1.0,
+   "min": 0.0,
+   "n": 2,
+   "numeric_n": 2,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 1.0,
+   "p75": 1.0,
+   "p95": 1.0
+  },
+  "respiration-and-cough-v2-threebreathsmouth": {
+   "max": 27.0,
+   "min": 0.0,
+   "n": 4,
+   "numeric_n": 4,
+   "p25": 10.0,
+   "p5": 0.0,
+   "p50": 18.0,
+   "p75": 27.0,
+   "p95": 27.0
+  },
+  "respiration-and-cough-v2-threebreathsnose": {
+   "max": 13.0,
+   "min": 0.0,
+   "n": 9,
+   "numeric_n": 9,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 1.0,
+   "p75": 2.0,
+   "p95": 13.0
+  },
+  "story-recall": {
+   "max": 30.0,
+   "min": 0.0,
+   "n": 1017,
+   "numeric_n": 1017,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 4.0,
+   "p95": 11.0
+  },
+  "story-recall-v2": {
+   "max": 25.0,
+   "min": 0.0,
+   "n": 1382,
+   "numeric_n": 1382,
+   "p25": 1.0,
+   "p5": 0.0,
+   "p50": 2.0,
+   "p75": 4.0,
+   "p95": 10.0
+  },
+  "word-color-stroop": {
+   "max": 13.0,
+   "min": 0.0,
+   "n": 98,
+   "numeric_n": 98,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 1.0,
+   "p75": 2.0,
+   "p95": 7.0
+  }
+ },
+ "measured_route": {
+  "breath-sounds": {
+   "n": 325,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 325
+   }
+  },
+  "respiration-and-cough-fivebreaths": {
+   "n": 3562,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 3562
+   }
+  },
+  "respiration-and-cough-v2-breath": {
+   "n": 687,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 687
+   }
+  },
+  "respiration-and-cough-v2-threebreathsmouth": {
+   "n": 693,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 693
+   }
+  },
+  "respiration-and-cough-v2-threebreathsnose": {
+   "n": 695,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 695
+   }
+  }
+ },
+ "pause_fraction_of_response": {
+  "open-response-questions": {
+   "max": 0.796,
+   "min": 0.0,
+   "n": 194,
+   "numeric_n": 194,
+   "p25": 0.231,
+   "p5": 0.146,
+   "p50": 0.306,
+   "p75": 0.392,
+   "p95": 0.599
+  },
+  "picture-description": {
+   "max": 0.948,
+   "min": 0.0,
+   "n": 879,
+   "numeric_n": 879,
+   "p25": 0.243,
+   "p5": 0.148,
+   "p50": 0.313,
+   "p75": 0.404,
+   "p95": 0.565
+  },
+  "picture-description-option1": {
+   "max": 0.8,
+   "min": 0.0,
+   "n": 364,
+   "numeric_n": 364,
+   "p25": 0.214,
+   "p5": 0.109,
+   "p50": 0.293,
+   "p75": 0.394,
+   "p95": 0.603
+  },
+  "picture-description-option2": {
+   "max": 0.747,
+   "min": 0.0,
+   "n": 322,
+   "numeric_n": 322,
+   "p25": 0.221,
+   "p5": 0.149,
+   "p50": 0.291,
+   "p75": 0.378,
+   "p95": 0.566
+  }
+ },
+ "phonation_extent": {
+  "breath-sounds": {
+   "n": 3,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 3
+   }
+  },
+  "diadochokinesis-ka": {
+   "n": 3,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 3
+   }
+  },
+  "diadochokinesis-pa": {
+   "n": 1,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 1
+   }
+  },
+  "diadochokinesis-pataka": {
+   "n": 1,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 1
+   }
+  },
+  "diadochokinesis-ta": {
+   "n": 2,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 2
+   }
+  },
+  "diadochokinesis-v2-kuh": {
+   "n": 1,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 1
+   }
+  },
+  "diadochokinesis-v2-puh": {
+   "n": 1,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 1
+   }
+  },
+  "free-speech": {
+   "n": 2,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 2
+   }
+  },
+  "free-speech-v2": {
+   "n": 1,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 1
+   }
+  },
+  "harvard-sentences-list": {
+   "n": 28,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 28
+   }
+  },
+  "maximum-phonation-time": {
+   "n": 9,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 9
+   }
+  },
+  "maximum-phonation-time-v2": {
+   "n": 3,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 3
+   }
+  },
+  "productive-vocabulary": {
+   "n": 7,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 7
+   }
+  },
+  "prolonged-vowel": {
+   "n": 3,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 3
+   }
+  },
+  "rainbow-passage": {
+   "n": 1,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 1
+   }
+  },
+  "respiration-and-cough-breath": {
+   "n": 3,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 3
+   }
+  },
+  "respiration-and-cough-cough": {
+   "n": 9,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 9
+   }
+  },
+  "respiration-and-cough-fivebreaths": {
+   "n": 6,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 6
+   }
+  },
+  "respiration-and-cough-threequickbreaths": {
+   "n": 8,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 8
+   }
+  },
+  "respiration-and-cough-v2-hardcough": {
+   "n": 5,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 5
+   }
+  },
+  "respiration-and-cough-v2-threebreaths": {
+   "n": 4,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 4
+   }
+  },
+  "respiration-and-cough-v2-threebreathsmouth": {
+   "n": 1,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 1
+   }
+  },
+  "respiration-and-cough-v2-threebreathsnose": {
+   "n": 1,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 1
+   }
+  },
+  "story-recall-v2": {
+   "n": 1,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 1
+   }
+  },
+  "voluntary-cough": {
+   "n": 3,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 3
+   }
+  }
+ },
+ "phonation_onset_to_offset_s": {
+  "animal-fluency": {
+   "max": 5.37,
+   "min": 0.26,
+   "n": 349,
+   "numeric_n": 349,
+   "p25": 0.53,
+   "p5": 0.38,
+   "p50": 0.7,
+   "p75": 1.02,
+   "p95": 2.22
+  },
+  "breath-sounds": {
+   "max": 3.96,
+   "min": 0.54,
+   "n": 12,
+   "numeric_n": 12,
+   "p25": 0.58,
+   "p5": 0.54,
+   "p50": 0.8,
+   "p75": 1.25,
+   "p95": 3.96
+  },
+  "cape-v-sentences": {
+   "max": 1.99,
+   "min": 0.61,
+   "n": 6,
+   "numeric_n": 6,
+   "p25": 0.66,
+   "p5": 0.61,
+   "p50": 1.09,
+   "p75": 1.74,
+   "p95": 1.99
+  },
+  "cape-v-sentences-v2": {
+   "max": 2.23,
+   "min": 0.62,
+   "n": 9,
+   "numeric_n": 9,
+   "p25": 0.91,
+   "p5": 0.62,
+   "p50": 1.18,
+   "p75": 1.26,
+   "p95": 2.23
+  },
+  "caterpillar-passage": {
+   "max": 5.57,
+   "min": 0.26,
+   "n": 610,
+   "numeric_n": 610,
+   "p25": 0.61,
+   "p5": 0.37,
+   "p50": 0.88,
+   "p75": 1.31,
+   "p95": 2.57
+  },
+  "cinderella-story": {
+   "max": 4.91,
+   "min": 0.26,
+   "n": 751,
+   "numeric_n": 751,
+   "p25": 0.53,
+   "p5": 0.33,
+   "p50": 0.84,
+   "p75": 1.36,
+   "p95": 2.87
+  },
+  "diadochokinesis-buttercup": {
+   "max": 4.97,
+   "min": 0.37,
+   "n": 25,
+   "numeric_n": 25,
+   "p25": 0.5,
+   "p5": 0.44,
+   "p50": 0.6,
+   "p75": 1.44,
+   "p95": 4.92
+  },
+  "diadochokinesis-ka": {
+   "max": 5.04,
+   "min": 0.33,
+   "n": 65,
+   "numeric_n": 65,
+   "p25": 0.76,
+   "p5": 0.37,
+   "p50": 2.54,
+   "p75": 3.3,
+   "p95": 4.05
+  },
+  "diadochokinesis-pa": {
+   "max": 9.28,
+   "min": 0.29,
+   "n": 100,
+   "numeric_n": 100,
+   "p25": 0.61,
+   "p5": 0.39,
+   "p50": 1.08,
+   "p75": 2.85,
+   "p95": 5.04
+  },
+  "diadochokinesis-pataka": {
+   "max": 5.76,
+   "min": 0.44,
+   "n": 21,
+   "numeric_n": 21,
+   "p25": 0.67,
+   "p5": 0.48,
+   "p50": 0.82,
+   "p75": 4.36,
+   "p95": 5.3
+  },
+  "diadochokinesis-ta": {
+   "max": 8.91,
+   "min": 0.38,
+   "n": 90,
+   "numeric_n": 90,
+   "p25": 0.85,
+   "p5": 0.43,
+   "p50": 2.07,
+   "p75": 3.05,
+   "p95": 4.06
+  },
+  "diadochokinesis-v2-buttercup": {
+   "max": 5.1,
+   "min": 0.6,
+   "n": 9,
+   "numeric_n": 9,
+   "p25": 1.19,
+   "p5": 0.6,
+   "p50": 3.28,
+   "p75": 4.22,
+   "p95": 5.1
+  },
+  "diadochokinesis-v2-kuh": {
+   "max": 4.48,
+   "min": 0.41,
+   "n": 41,
+   "numeric_n": 41,
+   "p25": 0.71,
+   "p5": 0.42,
+   "p50": 1.44,
+   "p75": 3.21,
+   "p95": 4.43
+  },
+  "diadochokinesis-v2-puh": {
+   "max": 4.44,
+   "min": 0.42,
+   "n": 60,
+   "numeric_n": 60,
+   "p25": 0.68,
+   "p5": 0.55,
+   "p50": 1.39,
+   "p75": 3.29,
+   "p95": 4.32
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "max": 4.26,
+   "min": 0.53,
+   "n": 4,
+   "numeric_n": 4,
+   "p25": 0.76,
+   "p5": 0.53,
+   "p50": 4.02,
+   "p75": 4.26,
+   "p95": 4.26
+  },
+  "diadochokinesis-v2-tuh": {
+   "max": 4.45,
+   "min": 0.42,
+   "n": 40,
+   "numeric_n": 40,
+   "p25": 0.94,
+   "p5": 0.49,
+   "p50": 2.96,
+   "p75": 3.94,
+   "p95": 4.44
+  },
+  "free-speech": {
+   "max": 8.85,
+   "min": 0.26,
+   "n": 1881,
+   "numeric_n": 1881,
+   "p25": 0.56,
+   "p5": 0.36,
+   "p50": 0.88,
+   "p75": 1.53,
+   "p95": 3.02
+  },
+  "free-speech-v2": {
+   "max": 19.18,
+   "min": 0.26,
+   "n": 1333,
+   "numeric_n": 1333,
+   "p25": 0.56,
+   "p5": 0.38,
+   "p50": 0.86,
+   "p75": 1.48,
+   "p95": 3.1
+  },
+  "harvard-sentences-list": {
+   "max": 3.95,
+   "min": 0.33,
+   "n": 87,
+   "numeric_n": 87,
+   "p25": 0.54,
+   "p5": 0.38,
+   "p50": 1.14,
+   "p75": 2.64,
+   "p95": 3.43
+  },
+  "loudness": {
+   "max": 3.88,
+   "min": 0.62,
+   "n": 14,
+   "numeric_n": 14,
+   "p25": 0.81,
+   "p5": 0.62,
+   "p50": 1.83,
+   "p75": 3.14,
+   "p95": 3.88
+  },
+  "loudness-v2": {
+   "max": 13.86,
+   "min": 0.34,
+   "n": 37,
+   "numeric_n": 37,
+   "p25": 1.51,
+   "p5": 0.75,
+   "p50": 2.07,
+   "p75": 2.91,
+   "p95": 6.15
+  },
+  "maximum-phonation-time": {
+   "max": 50.07,
+   "min": 0.47,
+   "n": 1846,
+   "numeric_n": 1846,
+   "p25": 6.74,
+   "p5": 1.88,
+   "p50": 10.97,
+   "p75": 15.81,
+   "p95": 24.27
+  },
+  "maximum-phonation-time-v2": {
+   "max": 27.66,
+   "min": 0.45,
+   "n": 553,
+   "numeric_n": 553,
+   "p25": 6.64,
+   "p5": 2.33,
+   "p50": 10.87,
+   "p75": 17.22,
+   "p95": 20.21
+  },
+  "open-response-questions": {
+   "max": 4.12,
+   "min": 0.28,
+   "n": 140,
+   "numeric_n": 140,
+   "p25": 0.51,
+   "p5": 0.38,
+   "p50": 0.82,
+   "p75": 1.28,
+   "p95": 3.13
+  },
+  "picture-description": {
+   "max": 15.04,
+   "min": 0.27,
+   "n": 1129,
+   "numeric_n": 1129,
+   "p25": 0.53,
+   "p5": 0.36,
+   "p50": 0.82,
+   "p75": 1.4,
+   "p95": 2.83
+  },
+  "picture-description-option1": {
+   "max": 5.18,
+   "min": 0.26,
+   "n": 367,
+   "numeric_n": 367,
+   "p25": 0.56,
+   "p5": 0.35,
+   "p50": 0.89,
+   "p75": 1.48,
+   "p95": 3.3
+  },
+  "picture-description-option2": {
+   "max": 5.6,
+   "min": 0.27,
+   "n": 518,
+   "numeric_n": 518,
+   "p25": 0.53,
+   "p5": 0.35,
+   "p50": 0.78,
+   "p75": 1.33,
+   "p95": 2.82
+  },
+  "productive-vocabulary": {
+   "max": 5.64,
+   "min": 0.27,
+   "n": 235,
+   "numeric_n": 235,
+   "p25": 0.62,
+   "p5": 0.38,
+   "p50": 1.01,
+   "p75": 1.85,
+   "p95": 3.68
+  },
+  "prolonged-vowel": {
+   "max": 11.36,
+   "min": 0.29,
+   "n": 785,
+   "numeric_n": 785,
+   "p25": 4.67,
+   "p5": 1.69,
+   "p50": 7.07,
+   "p75": 8.08,
+   "p95": 8.96
+  },
+  "rainbow-passage": {
+   "max": 5.33,
+   "min": 0.26,
+   "n": 411,
+   "numeric_n": 411,
+   "p25": 0.58,
+   "p5": 0.37,
+   "p50": 0.97,
+   "p75": 1.6,
+   "p95": 3.01
+  },
+  "random-item-generation": {
+   "max": 17.87,
+   "min": 0.29,
+   "n": 447,
+   "numeric_n": 447,
+   "p25": 0.54,
+   "p5": 0.36,
+   "p50": 0.73,
+   "p75": 1.06,
+   "p95": 2.59
+  },
+  "random-item-generation-v2": {
+   "max": 4.61,
+   "min": 0.29,
+   "n": 300,
+   "numeric_n": 300,
+   "p25": 0.48,
+   "p5": 0.34,
+   "p50": 0.62,
+   "p75": 0.92,
+   "p95": 2.52
+  },
+  "respiration-and-cough-breath": {
+   "max": 22.47,
+   "min": 0.38,
+   "n": 26,
+   "numeric_n": 26,
+   "p25": 0.59,
+   "p5": 0.39,
+   "p50": 1.88,
+   "p75": 4.77,
+   "p95": 21.95
+  },
+  "respiration-and-cough-fivebreaths": {
+   "max": 11.44,
+   "min": 0.51,
+   "n": 83,
+   "numeric_n": 83,
+   "p25": 0.88,
+   "p5": 0.58,
+   "p50": 1.55,
+   "p75": 2.97,
+   "p95": 5.61
+  },
+  "respiration-and-cough-threequickbreaths": {
+   "max": 4.72,
+   "min": 0.5,
+   "n": 23,
+   "numeric_n": 23,
+   "p25": 0.54,
+   "p5": 0.5,
+   "p50": 0.75,
+   "p75": 1.8,
+   "p95": 3.56
+  },
+  "respiration-and-cough-v2-breath": {
+   "max": 1.45,
+   "min": 0.57,
+   "n": 11,
+   "numeric_n": 11,
+   "p25": 0.75,
+   "p5": 0.57,
+   "p50": 0.91,
+   "p75": 1.22,
+   "p95": 1.45
+  },
+  "respiration-and-cough-v2-hardcough": {
+   "max": 1.98,
+   "min": 1.98,
+   "n": 1,
+   "numeric_n": 1,
+   "p25": 1.98,
+   "p5": 1.98,
+   "p50": 1.98,
+   "p75": 1.98,
+   "p95": 1.98
+  },
+  "respiration-and-cough-v2-threebreaths": {
+   "max": 1.23,
+   "min": 0.49,
+   "n": 2,
+   "numeric_n": 2,
+   "p25": 0.49,
+   "p5": 0.49,
+   "p50": 1.23,
+   "p75": 1.23,
+   "p95": 1.23
+  },
+  "respiration-and-cough-v2-threebreathsmouth": {
+   "max": 2.71,
+   "min": 0.92,
+   "n": 4,
+   "numeric_n": 4,
+   "p25": 1.02,
+   "p5": 0.92,
+   "p50": 1.45,
+   "p75": 2.71,
+   "p95": 2.71
+  },
+  "respiration-and-cough-v2-threebreathsnose": {
+   "max": 5.59,
+   "min": 0.33,
+   "n": 9,
+   "numeric_n": 9,
+   "p25": 0.4,
+   "p5": 0.33,
+   "p50": 0.77,
+   "p75": 0.99,
+   "p95": 5.59
+  },
+  "story-recall": {
+   "max": 6.62,
+   "min": 0.26,
+   "n": 1017,
+   "numeric_n": 1017,
+   "p25": 0.52,
+   "p5": 0.34,
+   "p50": 0.83,
+   "p75": 1.42,
+   "p95": 3.13
+  },
+  "story-recall-v2": {
+   "max": 6.49,
+   "min": 0.26,
+   "n": 1382,
+   "numeric_n": 1382,
+   "p25": 0.53,
+   "p5": 0.36,
+   "p50": 0.78,
+   "p75": 1.31,
+   "p95": 2.82
+  },
+  "word-color-stroop": {
+   "max": 25.87,
+   "min": 0.29,
+   "n": 98,
+   "numeric_n": 98,
+   "p25": 0.47,
+   "p5": 0.31,
+   "p50": 0.75,
+   "p75": 1.07,
+   "p95": 2.82
+  }
+ },
+ "repetition_rule": {
+  "random-item-generation": {
+   "n": 265,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 265
+   }
+  },
+  "random-item-generation-v2": {
+   "n": 206,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 206
+   }
+  }
+ },
+ "route": {
+  "breath-sounds": {
+   "n": 325,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 325
+   }
+  },
+  "respiration-and-cough-fivebreaths": {
+   "n": 3562,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 3562
+   }
+  },
+  "respiration-and-cough-v2-breath": {
+   "n": 687,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 687
+   }
+  },
+  "respiration-and-cough-v2-threebreathsmouth": {
+   "n": 693,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 693
+   }
+  },
+  "respiration-and-cough-v2-threebreathsnose": {
+   "n": 695,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 695
+   }
+  }
+ },
+ "source_content_coverage": {
+  "story-recall": {
+   "max": 0.92,
+   "min": 0.0,
+   "n": 886,
+   "numeric_n": 886,
+   "p25": 0.19,
+   "p5": 0.01,
+   "p50": 0.28,
+   "p75": 0.37,
+   "p95": 0.52
+  },
+  "story-recall-v2": {
+   "max": 0.861,
+   "min": 0.0,
+   "n": 658,
+   "numeric_n": 658,
+   "p25": 0.366,
+   "p5": 0.139,
+   "p50": 0.465,
+   "p75": 0.554,
+   "p95": 0.663
+  }
+ },
+ "source_overlap": {
+  "cinderella-story": {
+   "n": 256,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 256
+   }
+  }
+ },
+ "speech_rate_from_consensus_words_per_s": {
+  "open-response-questions": {
+   "max": 5.447,
+   "min": 0.53,
+   "n": 194,
+   "numeric_n": 194,
+   "p25": 1.706,
+   "p5": 1.1,
+   "p50": 2.203,
+   "p75": 2.539,
+   "p95": 3.139
+  },
+  "picture-description": {
+   "max": 8.333,
+   "min": 0.54,
+   "n": 879,
+   "numeric_n": 879,
+   "p25": 1.85,
+   "p5": 1.303,
+   "p50": 2.2,
+   "p75": 2.562,
+   "p95": 3.054
+  },
+  "picture-description-option1": {
+   "max": 3.873,
+   "min": 0.527,
+   "n": 364,
+   "numeric_n": 364,
+   "p25": 1.865,
+   "p5": 1.079,
+   "p50": 2.255,
+   "p75": 2.581,
+   "p95": 3.224
+  },
+  "picture-description-option2": {
+   "max": 6.337,
+   "min": 0.66,
+   "n": 322,
+   "numeric_n": 322,
+   "p25": 1.851,
+   "p5": 1.224,
+   "p50": 2.305,
+   "p75": 2.667,
+   "p95": 3.149
+  }
+ },
+ "sweep_extent": {
+  "glides-high-to-low": {
+   "n": 3,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 3
+   }
+  },
+  "glides-low-to-high": {
+   "n": 2,
+   "values": {
+    "NOT_SEPARABLE_BY_THIS_DESIGN": 2
+   }
+  }
+ },
+ "train_fraction_of_recording": {
+  "diadochokinesis-buttercup": {
+   "max": 0.992,
+   "min": 0.234,
+   "n": 883,
+   "numeric_n": 883,
+   "p25": 0.72,
+   "p5": 0.591,
+   "p50": 0.785,
+   "p75": 0.843,
+   "p95": 0.91
+  },
+  "diadochokinesis-ka": {
+   "max": 0.996,
+   "min": 0.04,
+   "n": 884,
+   "numeric_n": 884,
+   "p25": 0.604,
+   "p5": 0.412,
+   "p50": 0.711,
+   "p75": 0.793,
+   "p95": 0.901
+  },
+  "diadochokinesis-pa": {
+   "max": 0.993,
+   "min": 0.022,
+   "n": 888,
+   "numeric_n": 888,
+   "p25": 0.615,
+   "p5": 0.43,
+   "p50": 0.721,
+   "p75": 0.807,
+   "p95": 0.896
+  },
+  "diadochokinesis-pataka": {
+   "max": 0.995,
+   "min": 0.249,
+   "n": 886,
+   "numeric_n": 886,
+   "p25": 0.748,
+   "p5": 0.617,
+   "p50": 0.815,
+   "p75": 0.871,
+   "p95": 0.938
+  },
+  "diadochokinesis-ta": {
+   "max": 0.989,
+   "min": 0.087,
+   "n": 888,
+   "numeric_n": 888,
+   "p25": 0.635,
+   "p5": 0.469,
+   "p50": 0.732,
+   "p75": 0.809,
+   "p95": 0.903
+  },
+  "diadochokinesis-v2-buttercup": {
+   "max": 0.963,
+   "min": 0.181,
+   "n": 687,
+   "numeric_n": 687,
+   "p25": 0.657,
+   "p5": 0.493,
+   "p50": 0.737,
+   "p75": 0.805,
+   "p95": 0.878
+  },
+  "diadochokinesis-v2-kuh": {
+   "max": 0.961,
+   "min": 0.037,
+   "n": 681,
+   "numeric_n": 681,
+   "p25": 0.649,
+   "p5": 0.459,
+   "p50": 0.743,
+   "p75": 0.819,
+   "p95": 0.892
+  },
+  "diadochokinesis-v2-puh": {
+   "max": 0.983,
+   "min": 0.037,
+   "n": 681,
+   "numeric_n": 681,
+   "p25": 0.68,
+   "p5": 0.485,
+   "p50": 0.758,
+   "p75": 0.809,
+   "p95": 0.89
+  },
+  "diadochokinesis-v2-puhtuhkuh": {
+   "max": 0.966,
+   "min": 0.118,
+   "n": 684,
+   "numeric_n": 684,
+   "p25": 0.676,
+   "p5": 0.504,
+   "p50": 0.763,
+   "p75": 0.822,
+   "p95": 0.898
+  },
+  "diadochokinesis-v2-tuh": {
+   "max": 0.988,
+   "min": 0.203,
+   "n": 691,
+   "numeric_n": 691,
+   "p25": 0.685,
+   "p5": 0.525,
+   "p50": 0.76,
+   "p75": 0.816,
+   "p95": 0.896
+  }
+ },
+ "verbatim_overlap_fraction": {
+  "free-speech": {
+   "max": 0.909,
+   "min": 0.0,
+   "n": 3059,
+   "numeric_n": 3059,
+   "p25": 0.0,
+   "p5": 0.0,
+   "p50": 0.0,
+   "p75": 0.029,
+   "p95": 0.182
+  },
+  "story-recall": {
+   "max": 0.715,
+   "min": 0.0,
+   "n": 886,
+   "numeric_n": 886,
+   "p25": 0.008,
+   "p5": 0.0,
+   "p50": 0.023,
+   "p75": 0.054,
+   "p95": 0.131
+  },
+  "story-recall-v2": {
+   "max": 0.55,
+   "min": 0.0,
+   "n": 658,
+   "numeric_n": 658,
+   "p25": 0.053,
+   "p5": 0.01,
+   "p50": 0.091,
+   "p75": 0.139,
+   "p95": 0.225
+  }
+ },
+ "voiced_duration_s": {
+  "maximum-phonation-time": {
+   "max": 49.77,
+   "min": 0.44,
+   "n": 1846,
+   "numeric_n": 1846,
+   "p25": 6.13,
+   "p5": 1.74,
+   "p50": 10.38,
+   "p75": 15.38,
+   "p95": 23.4
+  },
+  "maximum-phonation-time-v2": {
+   "max": 27.66,
+   "min": 0.45,
+   "n": 553,
+   "numeric_n": 553,
+   "p25": 6.25,
+   "p5": 2.12,
+   "p50": 10.39,
+   "p75": 16.48,
+   "p95": 20.03
+  },
+  "prolonged-vowel": {
+   "max": 11.36,
+   "min": 0.25,
+   "n": 785,
+   "numeric_n": 785,
+   "p25": 4.4,
+   "p5": 1.56,
+   "p50": 6.76,
+   "p75": 7.94,
+   "p95": 8.76
+  }
+ }
+}
