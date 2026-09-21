@@ -33,6 +33,7 @@ from senselab.audio.workflows.triage.nodes.airway import (
 from senselab.audio.workflows.triage.nodes.branches import (
     NOT_SEPARABLE_BY_THIS_DESIGN,
     UNDETERMINED,
+    Pattern,
     branch_params,
     mode_of,
 )
@@ -42,7 +43,7 @@ from senselab.audio.workflows.triage.nodes.verdict import verdict
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.vocabulary import Outcome, Triage
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.nodes.conftest import word_attributes
+from tests.audio.workflows.triage.nodes.conftest import gated_from_store, word_attributes
 
 PROV_ASSERTION: Literal["assertion"] = "assertion"
 PROV_MEASUREMENT: Literal["measurement"] = "measurement"
@@ -58,10 +59,20 @@ branch:
   peak_prominence_db: 10.0
   trough_return_db: 6.0
   event_min_s: 0.05
-  score_min: 0.5
-  gap_off_task_min_s: 1.0
-  interval_max_s: 0.5
   effort_split_hz: 1000.0
+verdict:
+  gates:
+    by_group:
+      EVENT_SERIES:
+        score_min: 0.5
+        gap_off_task_min_s: 1.0
+        interval_max_s: 0.5
+      EVENT_ALTERNATION:
+        score_min: 0.5
+        gap_off_task_min_s: 1.0
+      SOUND_COVERAGE:
+        score_min: 0.5
+        gap_off_task_min_s: 1.0
 """
 """Fixture operating points. Not a fit: the packaged file ships every one of them null."""
 
@@ -513,7 +524,7 @@ class TestTheModeComesFromTheDeclaration:
             envelope=bump(500, (150,)),
         )
         result = detect_airway(store, branch_params(airway_config), run_dir=tmp_path)
-        assert result.done == UNDETERMINED
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) == UNDETERMINED
         assert result.components
 
 
@@ -701,7 +712,8 @@ class TestAFlatToppedEventTakesItsCarriersExtent:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _events(store) == []
-        assert result.report.conformance is False
+        assert result.report.conformance == UNDETERMINED
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is False
 
 
 class TestTheBreathFamiliesCountCyclesAndTimeThem:
@@ -1179,7 +1191,8 @@ class TestBothClassifiersAreOneEvidenceSet:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert len(_events(store)) == 1
-        assert result.report.conformance is True
+        assert result.report.conformance == UNDETERMINED
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is True
 
     def test_the_rest_of_the_profiles_breath_closure_is_read_too(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1213,7 +1226,8 @@ class TestBothClassifiersAreOneEvidenceSet:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _events(store) == []
-        assert result.report.conformance is False
+        assert result.report.conformance == UNDETERMINED
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is False
 
     def test_a_hear_head_name_on_a_yamnet_window_is_not_read(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1230,7 +1244,8 @@ class TestBothClassifiersAreOneEvidenceSet:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _events(store) == []
-        assert result.report.conformance is False
+        assert result.report.conformance == UNDETERMINED
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is False
 
     def test_the_cough_set_still_reads_yamnets_matching_spelling(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1247,7 +1262,8 @@ class TestBothClassifiersAreOneEvidenceSet:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert len(_events(store)) == 1
-        assert result.report.conformance is True
+        assert result.report.conformance == UNDETERMINED
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is True
 
     def test_a_score_under_the_minimum_from_both_is_not_evidence(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1264,7 +1280,8 @@ class TestBothClassifiersAreOneEvidenceSet:
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _events(store) == []
-        assert result.report.conformance is False
+        assert result.report.conformance == UNDETERMINED
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is False
 
     def test_an_absent_span_hear_pass_is_an_absence_not_a_zero(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1473,7 +1490,8 @@ class TestWhatTheRestructuringKeptFromTheOldBranch:
         """``lexical_contamination`` was the only reachable flag and it is now a deviation."""
         _five_coughs(store, tmp_path, words=[("Marisol", (1.8, 1.9))])
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert result.report.conformance is True
+        assert result.report.conformance == UNDETERMINED
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is True
         assert result.report.deviations == ("off_task_extent",)
         assert _assertions(store, "flag") == []
 
@@ -1658,13 +1676,45 @@ class TestAnAbsentInstrumentIsAnAbsence:
     def test_an_unmeasured_score_min_is_reported_and_proposes_no_event(self, store: ProvStore, tmp_path: Path) -> None:
         """A branch never refuses: the qualifier is skipped, the key is named, no event is proposed."""
         _five_coughs(store, tmp_path)
-        config = _override(tmp_path, "branch:\n  score_min: null\n", name="null-score-min")
+        config = _override(
+            tmp_path,
+            "verdict:\n  gates:\n    by_group:\n      EVENT_SERIES:\n        score_min: null\n",
+            name="null-score-min",
+        )
         result = airway(store, "plain", config, run_dir=tmp_path)
         assert _events(store) == []
-        assert result.report.unmeasured == ("score_min",)
-        # UNDETERMINED, not False: an unmeasured qualifier could neither admit nor reject, so
-        # claiming the instruction was not met would rest on a number nobody chose.
+        assert result.report.unmeasured == ("verdict.gates.by_group.EVENT_SERIES.score_min",)
         assert result.report.conformance == UNDETERMINED
+        # UNDETERMINED, not False: a walk that looked for nothing counted nothing, and a count of
+        # nothing is not a reading of the recording. The branch therefore writes no reading at all,
+        # which is what separates "could not look" from "looked and found none".
+        assert "airway_events_found" not in {
+            str(entity.attributes["name"]) for entity in live_entities(store, "measurement")
+        }
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=config) == UNDETERMINED
+
+    def test_a_walk_that_looked_and_found_nothing_is_a_non_conformance(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The other half of the distinction: a measured cut with no event is a reading of zero."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-cough",
+            spans=[(1.5, 3.0)],
+            scores=[{"Cough": 0.1}],
+            envelope=plateau(500, (200, 260)),
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _events(store) == []
+        assert result.report.unmeasured == ()
+        [found] = [
+            entity
+            for entity in live_entities(store, "measurement")
+            if entity.attributes["name"] == "airway_events_found"
+        ]
+        assert found.attributes["value"] == 0
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is False
 
 
 class TestTheProposeOnlyRules:

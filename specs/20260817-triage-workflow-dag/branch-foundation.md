@@ -108,6 +108,17 @@ the one key that ships a value, and it takes no new decision: it is
 `airway.labels_of_interest` split by which kind each label names. The rest is in
 [`config-derivations.md`](config-derivations.md) § branch.
 
+**Since 2026-09-21 there are two accessors, because there are two kinds of value.** `point` reads an
+instrument setting from `branch:`; `gate` reads one of the task's gates from `verdict.gates`,
+resolved family-first then group then default. The task is bound onto the record by whichever entry
+point ran — `align_*` binds the expectation row's `Pattern` **and** the declared family, `detect_*`
+binds `DETECT_GROUP` and no family, because it declares none. Reading a gate before a task is bound
+raises, because which bound applies is a property of the task and a body may not assume one. A gate
+no layer names returns None and is *not* recorded as an ask: a layer that names no value for a gate
+is not asking for one. A gate the winning layer names null returns None and is recorded under that
+layer's own path, so `verdict.unmeasured_points_flag` reaches it. See
+`specs/20260921-gates-in-verdict/design.md`.
+
 ## D-F5. The propose path, and the two reserved attributes
 
 `propose_span` is the only function that writes a proposal, and it writes a `span` entity carrying

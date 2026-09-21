@@ -22,7 +22,6 @@ import numpy as np
 from senselab.audio.workflows.triage.nodes.branches import (
     UNDETERMINED,
     BranchParams,
-    Done,
     EnvelopeTrack,
     Expectation,
     Finding,
@@ -196,7 +195,7 @@ def ddk_carrier(store: ProvStore, params: BranchParams, envelope: EnvelopeTrack)
         ``(span, rate_hz)``, or ``(None, None)`` when no carrier clears the train minimum with a
         modulation peak that stands over its own band.
     """
-    minimum_s = params.point("train_min_s")
+    minimum_s = params.gate("train_min_s")
     best: Entity | None = None
     best_rate: float | None = None
     for span in amplitude_spans(live_entities(store, "span")):
@@ -874,21 +873,37 @@ def task_extent_span(decode: Decode | None, decode_ids: Sequence[str]) -> Propos
     )
 
 
-def _with_decode(done: Done, decode: Decode | None) -> Done:
-    """Fold the posteriorgram instrument into a conformance the other instrument reached.
+REPETITIONS_FOUND = "ddk_repetitions_found"
+"""The reading ``repetitions_min`` is read against: repetitions either instrument read."""
+
+
+def repetitions_found(carrier_found: bool, readable_carrier: bool, decode: Decode | None) -> list[Finding]:
+    """How many repetitions the branch read, over both instruments, as VERDICT's reading.
 
     Args:
-        done: What the envelope instrument concluded.
-        decode: What the decode read, or None when the posteriorgram is absent or unreadable.
+        carrier_found: Whether the envelope instrument found a modulated carrier.
+        readable_carrier: Whether the envelope instrument could look at all — the envelope reached
+            the store and the carrier's length gate is measured.
+        decode: What the posteriorgram decode read, or None when it is absent.
 
     Returns:
-        The conformance. An absent or unreadable decode changes nothing; otherwise either
-        instrument finding a repetition is True, and a readable decode that completed none where
-        the envelope found no carrier either is False.
+        One :data:`REPETITIONS_FOUND` measurement, and nothing at all when neither instrument could
+        look — which is the only case in which the branch took no reading of the recording.
     """
-    if decode is None or not decode.readable:
-        return done
-    return True if decode.count >= 1 or done is True else False
+    readable_decode = decode is not None and decode.readable
+    if not readable_carrier and not readable_decode:
+        return []
+    decoded = decode.count if readable_decode and decode is not None else 0
+    return [
+        measured(
+            REPETITIONS_FOUND,
+            None,
+            None,
+            max(decoded, 1 if carrier_found else 0),
+            from_envelope_carrier=carrier_found,
+            from_decode=decoded if readable_decode else None,
+        )
+    ]
 
 
 # ------------------------------------------------------------------ the declared-task body
@@ -925,19 +940,17 @@ def align_ddk(
     findings: list[Finding] = []
     carrier_extent: tuple[float, float] | None = None
     carrier_ids: tuple[str, ...] = ()
-    done: Done = UNDETERMINED
+    carrier_found = False
+    readable_carrier = False
 
     if reads.envelope is None:
         findings.append(_absent(ENVELOPE))
     else:
         train, rate_hz = ddk_carrier(store, params, reads.envelope)
-        unmeasured_gate = params.point("train_min_s") is None
-        if train is None or train.extent is None:
-            # An unmeasured length guard is not a reading of the recording, so it answers nothing.
-            done = UNDETERMINED if unmeasured_gate else False
-        else:
+        readable_carrier = params.gate("train_min_s") is not None
+        if train is not None and train.extent is not None:
             carrier_extent, carrier_ids = train.extent, _evidence(train.id, reads.envelope_id)
-            done = True
+            carrier_found = True
             findings.append(
                 measured(
                     RATE,
@@ -975,7 +988,8 @@ def align_ddk(
         if recording_extent is not None and touches_edge(extent, recording_extent):
             findings.append(deviation("truncation", extent[0], extent[1], *span.derived_from, *stream_ids(store)))
 
-    return Result(_with_decode(done, decode), components, [*findings, *ppg_findings, *declared])
+    reading = repetitions_found(carrier_found, readable_carrier, decode)
+    return Result(components, [*findings, *ppg_findings, *declared, *reading])
 
 
 # --------------------------------------------------------------------- what SPEECH reports

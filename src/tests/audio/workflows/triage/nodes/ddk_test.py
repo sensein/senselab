@@ -89,6 +89,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     fold_file_verdict,
 )
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.nodes.conftest import gated_from_store
 
 SR = 16000
 """The working rate PREPROCESS resamples to."""
@@ -189,14 +190,21 @@ def ddk_config(tmp_path: Path) -> TriageConfig:
     override = tmp_path / "ddk.yaml"
     override.write_text(
         "branch:\n"
-        "  train_min_s: 1.5\n"
         "  modulation_band_hz: [2.0, 12.0]\n"
-        "  rate_prominence_min: 2.0\n"
         "  smoothing_window_s: 0.011\n"
         "  peak_prominence_db: 6.0\n"
         "  trough_return_db: 3.0\n"
         "  event_min_s: 0.02\n"
         "  burst_window_ms: 20.0\n"
+        "verdict:\n"
+        "  gates:\n"
+        "    by_group:\n"
+        "      SYLLABLE_TRAIN:\n"
+        "        train_min_s: 1.5\n"
+        "        rate_prominence_min: 2.0\n"
+        "      SYLLABLE_SEQUENCE:\n"
+        "        train_min_s: 1.5\n"
+        "        rate_prominence_min: 2.0\n"
     )
     return load_triage_config(override)
 
@@ -366,6 +374,20 @@ def _run(store: ProvStore, config: TriageConfig, tmp_path: Path, hint: AudioHint
     propose_spans(store, activity, agent, result.components)
     write_findings(store, activity, agent, [*result.deviations, *params.record()], signal="plain")
     return result
+
+
+def _gated(store: ProvStore, config: TriageConfig, family: str) -> Any:  # noqa: ANN401 — a Conformance
+    """What VERDICT's gates make of the readings the syllable body left in the store.
+
+    Args:
+        store: The provenance store the body wrote into.
+        config: The configuration the bounds come from.
+        family: The declared family, whose row names the task group.
+
+    Returns:
+        True, False, or ``UNDETERMINED``.
+    """
+    return gated_from_store(store, SPEECH_EXPECTATIONS[family].pattern, settings=config)
 
 
 def _detail(result: Result) -> dict[str, Any]:
@@ -744,7 +766,7 @@ class TestTheCountsAreHeuristicsAndNothingFoldsThem:
             posteriorgram=_buttercup_raster(2),
         )
         result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
-        assert result.done is True
+        assert _gated(store, ddk_config, "diadochokinesis-buttercup") is True
         assert deviation_names(result.deviations) == ()
 
     def test_no_finding_compares_the_two_counts(
@@ -927,9 +949,9 @@ class TestTheTaskExtentIsTheDecodedRepetitionSpan:
             envelope=np.full(int(6.0 * ENVELOPE_HZ), SILENT_DBFS),
             posteriorgram=_raster([("<silent>", 6.0)]),
         )
-        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
         assert _spans_of(store) == []
-        assert result.done is False
+        assert _gated(store, ddk_config, "diadochokinesis-pataka") is False
 
     def test_the_span_is_minted_into_speechs_own_family_like_every_other_role(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -1050,9 +1072,9 @@ class TestTheEnvelopeChannelIsTheModulationSpectrumAndNothingElse:
             envelope=_flat_envelope(6.0, [(1.0, 5.0)]),
             spans=[(1.0, 5.0)],
         )
-        result = _run(store, ddk_config, tmp_path)
+        _run(store, ddk_config, tmp_path)
         assert _spans_of(store) == []
-        assert result.done is False
+        assert _gated(store, ddk_config, "diadochokinesis-pa") is False
 
     def test_the_train_fraction_is_taken_over_the_extent_that_ships(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -1183,8 +1205,8 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
     ) -> None:
         """No envelope derivative is an absent instrument, not an absent performance."""
         seed_ddk_store(store, stem="sub-a_ses-1_task-diadochokinesis-pa")
-        result = _run(store, ddk_config, tmp_path)
-        assert result.done is UNDETERMINED
+        _run(store, ddk_config, tmp_path)
+        assert _gated(store, ddk_config, "diadochokinesis-pa") == UNDETERMINED
         assert _spans_of(store) == []
 
     def test_an_absent_envelope_notes_rather_than_failing(
@@ -1208,11 +1230,11 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
             envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
             spans=[(1.0, 5.0)],
         )
-        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
         [rate] = _measurements(store, PPG_RATE)
         assert rate.attributes["value"] is None
         assert rate.attributes["unavailable"] == "ppg_posteriorgram"
-        assert result.done is True
+        assert _gated(store, ddk_config, "diadochokinesis-pa") is True
         assert read_ddk(store, tmp_path, "plain").ppg is None, NO_PPG
 
     def test_a_decode_that_completed_nothing_reports_zero_and_not_an_absence(
@@ -1224,14 +1246,14 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
             stem="sub-a_ses-1_task-diadochokinesis-pa",
             posteriorgram=_raster([("<silent>", 6.0)]),
         )
-        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
         [repetitions] = _measurements(store, PPG_REPETITIONS)
         assert repetitions.attributes["value"] == 0
         [mass] = _measurements(store, PPG_MASS)
         assert mass.attributes["value"] == [None, None]
         [rate] = _measurements(store, PPG_RATE)
         assert rate.attributes["reason"] == NO_REPETITIONS
-        assert result.done is False
+        assert _gated(store, ddk_config, "diadochokinesis-pa") is False
 
     def test_an_unmeasured_class_vocabulary_leaves_the_decode_silent_and_names_the_key(
         self, store: ProvStore, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -1253,7 +1275,7 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
     ) -> None:
         """A real narrowing of the unmeasured surface: only the class mappings can reach it."""
         override = tmp_path / "cleared.yaml"
-        override.write_text("branch:\n  train_min_s: null\n")
+        override.write_text("verdict:\n  gates:\n    by_group:\n      SYLLABLE_TRAIN:\n        train_min_s: null\n")
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pa",
@@ -1279,8 +1301,8 @@ class TestConformanceNarrowsAndDoesNotWiden:
             spans=[(1.0, 5.0)],
             posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7),
         )
-        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
-        assert result.done is True
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        assert _gated(store, ddk_config, "diadochokinesis-pa") is True
 
     def test_no_repetition_and_no_carrier_is_the_one_honest_false(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -1292,8 +1314,8 @@ class TestConformanceNarrowsAndDoesNotWiden:
             envelope=np.full(int(6.0 * ENVELOPE_HZ), SILENT_DBFS),
             posteriorgram=_raster([("<silent>", 6.0)]),
         )
-        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
-        assert result.done is False
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        assert _gated(store, ddk_config, "diadochokinesis-pa") is False
 
     def test_a_weak_position_is_never_a_false(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -1304,8 +1326,8 @@ class TestConformanceNarrowsAndDoesNotWiden:
             stem="sub-a_ses-1_task-diadochokinesis-pataka",
             posteriorgram=_cv_raster(["labial"] * 18, [0.2] * 17),
         )
-        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
-        assert result.done is True
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pataka"}))
+        assert _gated(store, ddk_config, "diadochokinesis-pataka") is True
 
     def test_a_weak_path_is_not_an_acceptance_gate(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -1326,27 +1348,28 @@ class TestConformanceNarrowsAndDoesNotWiden:
             spans=[(1.0, 3.5)],
             posteriorgram=noisy,
         )
-        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
+        _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
         [repetitions] = _measurements(store, PPG_REPETITIONS)
         assert repetitions.attributes["value"] == 0
         assert repetitions.attributes["filler_fraction"] == pytest.approx(1.0)
-        assert result.done is True
+        assert _gated(store, ddk_config, "diadochokinesis-pa") is True
 
     def test_an_unmeasured_train_minimum_is_recorded_rather_than_raised(
         self, store: ProvStore, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
         """No carrier has two causes and only one of them is a reading of the recording."""
         override = tmp_path / "cleared.yaml"
-        override.write_text("branch:\n  train_min_s: null\n")
+        override.write_text("verdict:\n  gates:\n    by_group:\n      SYLLABLE_TRAIN:\n        train_min_s: null\n")
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pa",
             envelope=_train_envelope(6.0, (1.0, 5.0), 5.0, 0.1),
             spans=[(1.0, 5.0)],
         )
-        result = _run(store, load_triage_config(override), tmp_path)
-        assert result.done is UNDETERMINED
-        assert "train_min_s" in _unmeasured(store)
+        cleared = load_triage_config(override)
+        _run(store, cleared, tmp_path)
+        assert _gated(store, cleared, "diadochokinesis-pa") == UNDETERMINED
+        assert "verdict.gates.by_group.SYLLABLE_TRAIN.train_min_s" in _unmeasured(store)
 
 
 class TestTheRegularityStatisticsAreParameterFree:
@@ -1498,8 +1521,8 @@ class TestTheDeclaredFamilySelectsTheBody:
             spans=[(1.0, 5.0)],
         )
         assert mode_of("SPEECH", store) == ("align", "diadochokinesis-pa")
-        result = _run(store, ddk_config, tmp_path)
-        assert result.done is True
+        _run(store, ddk_config, tmp_path)
+        assert _gated(store, ddk_config, "diadochokinesis-pa") is True
         assert [branch for branch in BRANCHES if mode_of(branch, store)[0] == "align"] == ["SPEECH"]
 
     def test_another_branchs_family_takes_the_out_of_family_mode(
@@ -1526,8 +1549,8 @@ class TestTheDeclaredFamilySelectsTheBody:
         )
         hint = AudioHints(metadata={"task_token": "diadochokinesis-pataka"})
         assert mode_of("SPEECH", store, hint) == ("align", "diadochokinesis-pataka")
-        result = _run(store, ddk_config, tmp_path, hint)
-        assert result.done is True
+        _run(store, ddk_config, tmp_path, hint)
+        assert _gated(store, ddk_config, "diadochokinesis-pataka") is True
 
 
 class TestThereIsNoSecondBranchForASyllableTask:
@@ -1746,7 +1769,7 @@ class TestTheInstrumentIsTheAuthorityOverTheRecogniserText:
         assert "contest" in kinds
         assert "deviation" not in kinds
         assert CONTRADICTED not in deviation_names(result.deviations)
-        assert result.done is True
+        assert _gated(store, ddk_config, "diadochokinesis-pa") is True
 
     def test_an_instrument_that_completed_no_repetition_claims_nothing(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]

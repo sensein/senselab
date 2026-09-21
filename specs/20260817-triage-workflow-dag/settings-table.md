@@ -2,41 +2,55 @@
 
 Generated from `EXPECTATIONS` and the packaged config by `specs/20260817-triage-workflow-dag/settings-table.py`. Regenerate it rather than editing it.
 
-## The operating points are global
+## The instrument settings are global
 
-Every gate below applies identically to every task. `branch:` carries no per-family override, and VERDICT's only per-family hook, `conformance_flags_by_family`, ships empty. So a 0.5 s `production_min_s` governs a glide, a sustained vowel, a cough and a DDK train alike.
+Every setting below says how a reading is taken and applies identically to every task. `branch:` carries no per-family override and holds no gate.
 
-| operating point | value |
+| instrument setting | value |
 | --- | --- |
 | `burst_window_ms` | `20.0` |
-| `continuity_min` | `0.5` |
-| `coverage_min` | `0.5` |
-| `dominant_segment_min_fraction` | `0.5` |
 | `echo_ngram_n` | `3` |
-| `echo_overlap_max` | `0.5` |
 | `effort_split_hz` | `1000.0` |
 | `event_min_s` | `0.05` |
-| `f0_spread_max_semitones` | `2.0` |
 | `f0_spread_window_s` | `0.5` |
-| `gap_off_task_min_s` | `1.0` |
-| `interval_max_s` | `2.0` |
-| `monotone_tolerance_semitones` | `1.0` |
 | `pause_min_s` | `0.25` |
 | `peak_prominence_db` | `6.0` |
-| `production_min_s` | `0.5` |
-| `rate_prominence_min` | `2.0` |
-| `repeat_overlap_min` | `0.5` |
-| `response_min_s` | `0.5` |
 | `run_gap_max_s` | `0.5` |
-| `score_min` | `0.2` |
 | `smoothing_window_s` | `0.05` |
-| `train_min_s` | `1.0` |
 | `trough_return_db` | `3.0` |
-| `verbatim_overlap_max` | `0.5` |
-| `voiced_fraction_min` | `0.5` |
 | `voiced_strength_min` | `0.45` |
 
-## What differs is the expectation row
+## The gates resolve family, then group, then default, in `verdict.gates`
+
+A gate says what reading is good enough. A layer that names no value for a gate does not apply it, which is why `GLIDE` carries no `f0_spread_max_semitones`. A family overrides its group key by key.
+
+`default` carries nothing — no gate reaches every group. `by_family` carries nothing: no per-family difference has been derived yet.
+
+| gate | `ORDERED_TOKENS` | `FREE_RESPONSE` | `ITEM_LIST` | `SUSTAINED` | `GLIDE` | `EFFORT` | `PER_SENTENCE` | `EVENT_SERIES` | `EVENT_ALTERNATION` | `SOUND_COVERAGE` | `SYLLABLE_TRAIN` | `SYLLABLE_SEQUENCE` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `continuity_min` | — | — | — | `0.5` | — | — | — | — | — | — | — | — |
+| `coverage_min` | — | `0.5` | — | — | — | — | — | — | — | — | — | — |
+| `dominant_segment_min_fraction` | — | — | — | — | `0.5` | — | — | — | — | — | — | — |
+| `echo_overlap_max` | — | `0.5` | — | — | — | — | — | — | — | — | — | — |
+| `events_min` | — | — | — | — | — | — | — | `1` | `1` | — | — | — |
+| `expected_tokens_matched_min` | `1` | — | — | — | — | — | — | — | — | — | — | — |
+| `f0_spread_max_semitones` | — | — | — | `2.0` | — | — | — | — | — | — | — | — |
+| `gap_off_task_min_s` | `1.0` | `1.0` | `1.0` | — | — | — | — | `1.0` | `1.0` | `1.0` | — | — |
+| `interval_max_s` | — | — | — | — | — | — | — | `2.0` | — | — | — | — |
+| `items_min` | — | — | `1` | — | — | — | — | — | — | — | — | — |
+| `monotone_tolerance_semitones` | — | — | — | — | `1.0` | — | — | — | — | — | — | — |
+| `omissions_max` | `0` | — | — | — | — | — | — | — | — | — | — | — |
+| `production_min_s` | — | — | — | `0.5` | `0.5` | — | — | — | — | — | — | — |
+| `rate_prominence_min` | — | — | — | — | — | — | — | — | — | — | `2.0` | `2.0` |
+| `repeat_overlap_min` | `0.5` | — | — | — | — | — | — | — | — | — | — | — |
+| `repetitions_min` | — | — | — | — | — | — | — | — | — | — | `1` | `1` |
+| `response_min_s` | — | `0.5` | — | — | — | — | — | — | — | — | — | — |
+| `score_min` | — | — | — | — | — | — | — | `0.2` | `0.2` | `0.2` | — | — |
+| `train_min_s` | — | — | — | — | — | — | — | — | — | — | `1.0` | `1.0` |
+| `verbatim_overlap_max` | — | `0.5` | — | — | — | — | — | — | — | — | — | — |
+| `voiced_fraction_min` | — | — | — | `0.5` | `0.5` | — | — | — | — | — | — | — |
+
+## What else differs is the expectation row
 
 **39 distinct settings groups over 48 families.**
 

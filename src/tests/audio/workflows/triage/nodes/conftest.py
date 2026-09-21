@@ -15,6 +15,12 @@ from senselab.audio.workflows.triage.config import TriageConfig, load_triage_con
 from senselab.audio.workflows.triage.consensus import ALGORITHM, NORMALISATION, ROUTINE, SOURCE_ORDER, TIME_FIT
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.admit import admit
+from senselab.audio.workflows.triage.nodes.gates import (
+    Pattern,
+    apply_gates,
+    conformance_gate_names,
+    load_gate_bounds,
+)
 from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
@@ -167,6 +173,83 @@ def _stub_models(
 def config() -> TriageConfig:
     """The packaged configuration, unmodified."""
     return load_triage_config()
+
+
+def readings_of(result: Any) -> dict[str, Any]:  # noqa: ANN401 — branches.Result, not imported here
+    """Every reading a branch reported, keyed by measurement name.
+
+    Args:
+        result: What a branch entry point returned.
+
+    Returns:
+        Measurement name to the value it carries, latest write winning, as VERDICT reads them.
+    """
+    return {finding.name: finding.evidence["value"] for finding in result.deviations if finding.kind == "measure"}
+
+
+def store_readings(store: ProvStore) -> dict[str, Any]:
+    """Every live measurement in the store, keyed by name, the way VERDICT reads a gate's input.
+
+    Args:
+        store: The provenance store the nodes wrote into.
+
+    Returns:
+        Measurement name to its value, the latest write winning.
+    """
+    return {
+        str(entity.attributes["name"]): entity.attributes.get("value")
+        for entity in store.entities("measurement")
+        if not store.is_invalidated(entity.id)
+    }
+
+
+def gated_from_store(
+    store: ProvStore,
+    group: Pattern,
+    *,
+    settings: TriageConfig | None = None,
+    anti_pattern: str | None = None,
+) -> Any:  # noqa: ANN401 — a Conformance
+    """What VERDICT's gates make of the readings a node left in the store.
+
+    Args:
+        store: The provenance store the node wrote into.
+        group: The task group whose gates decide.
+        settings: The configuration the bounds come from; None is the packaged one.
+        anti_pattern: The expectation row's anti-pattern, where it declares one.
+
+    Returns:
+        True, False, or ``UNDETERMINED``.
+    """
+    bounds = load_gate_bounds(settings or load_triage_config(), group)
+    names = conformance_gate_names(group, anti_pattern=anti_pattern)
+    return apply_gates(names, bounds, store_readings(store))[0]
+
+
+def gated_conformance(
+    result: Any,  # noqa: ANN401 — branches.Result, not imported here
+    group: Pattern,
+    *,
+    settings: TriageConfig | None = None,
+    anti_pattern: str | None = None,
+) -> Any:  # noqa: ANN401 — a Conformance
+    """What VERDICT's gates make of what a branch reported.
+
+    The branch no longer answers the conformance question, so a test that used to read
+    ``result.done`` applies the group's gates to the readings instead.
+
+    Args:
+        result: What a branch entry point returned.
+        group: The task group whose gates decide.
+        settings: The configuration the bounds come from; None is the packaged one.
+        anti_pattern: The expectation row's anti-pattern, where it declares one.
+
+    Returns:
+        True, False, or ``UNDETERMINED``.
+    """
+    bounds = load_gate_bounds(settings or load_triage_config(), group)
+    names = conformance_gate_names(group, anti_pattern=anti_pattern)
+    return apply_gates(names, bounds, readings_of(result))[0]
 
 
 @pytest.fixture

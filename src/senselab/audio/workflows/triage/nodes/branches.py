@@ -22,6 +22,15 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities
+from senselab.audio.workflows.triage.nodes.gates import (
+    DEFAULT_LAYER,
+    FAMILY_LAYER,
+    GATE_SECTION,
+    GATE_SPECS,
+    GateBounds,
+    Pattern,
+    load_gate_bounds,
+)
 from senselab.audio.workflows.triage.routing_analysis.families import (
     AIRWAY_ELICITING,
     SPEECH_ELICITING,
@@ -49,9 +58,6 @@ BRANCHES = ("AIRWAY", "SPEECH", "VOICE")
 
 BRANCH_FAMILY = {"AIRWAY": "airway", "SPEECH": "speech", "VOICE": "voice"}
 """Branch name to the lowercase span family it, and only it, may propose into."""
-
-Done = bool | Literal["UNDETERMINED"]
-"""Whether the expected patterns were found. Read off the recording, never off the declaration."""
 
 RESERVED_SPAN_ATTRIBUTES = frozenset({"family", "role"})
 """Attribute names a proposal may not carry: the proposer stamps both from its own arguments."""
@@ -123,18 +129,18 @@ Closed: :func:`write_findings` refuses any name this table does not declare.
 
 
 class Result(NamedTuple):
-    """What every branch entry point returns: the three things a branch reports and nothing else.
+    """What every branch entry point returns: the two things a branch reports and nothing else.
+
+    It carries **no conformance**. A branch reports readings and VERDICT decides, so the gate that
+    turns a reading into a judgement about the recording is applied there, against the task group's
+    own bounds. See ``specs/20260921-gates-in-verdict/design.md``.
 
     Attributes:
-        done: Whether the expected patterns were found — the branch's task conformance.
-            ``detect_*`` always returns :data:`UNDETERMINED`, as does a body that could not read
-            the operating point its qualifier needed.
         components: The spans this branch proposes, each in its own family, each naming its
             evidence.
         deviations: Every finding that is not a proposed span.
     """
 
-    done: Done
     components: list[Proposal]
     deviations: list[Finding]
 
@@ -457,23 +463,6 @@ def write_findings(
 # --------------------------------------------------------------------- the expectation, as data
 
 
-class Pattern(Enum):
-    """The kinds of expected pattern an instruction can ask for."""
-
-    ORDERED_TOKENS = "ordered_tokens"
-    FREE_RESPONSE = "free_response"
-    ITEM_LIST = "item_list"
-    SUSTAINED = "sustained"
-    GLIDE = "glide"
-    EFFORT = "effort"
-    PER_SENTENCE = "per_sentence"
-    EVENT_SERIES = "event_series"
-    EVENT_ALTERNATION = "event_alternation"
-    SOUND_COVERAGE = "sound_coverage"
-    SYLLABLE_TRAIN = "syllable_train"
-    SYLLABLE_SEQUENCE = "syllable_sequence"
-
-
 PA = ("p", "aa")
 TA = ("t", "aa")
 KA = ("k", "aa")
@@ -765,6 +754,18 @@ EXPECTATIONS: dict[str, dict[str, Expectation]] = {
 The ten ``SYLLABLE_REPETITION`` families are SPEECH's, like every other speaking task.
 """
 
+DETECT_GROUP: dict[str, Pattern] = {
+    "AIRWAY": Pattern.EVENT_SERIES,
+    "SPEECH": Pattern.FREE_RESPONSE,
+    "VOICE": Pattern.SUSTAINED,
+}
+"""The task group each branch's out-of-family mode is gated under.
+
+``detect_*`` evaluates no task, so none of these groups' conformance gates is ever applied to it.
+What it needs is the group whose reading its instrument takes: AIRWAY walks events, SPEECH reads a
+free response, VOICE qualifies a sustained production.
+"""
+
 REFERENCE_FAMILY_SET: dict[str, frozenset[str]] = {
     "AIRWAY": AIRWAY_ELICITING,
     "SPEECH": SPEECH_ELICITING,
@@ -887,8 +888,7 @@ def dispatch(
 
     Raises:
         KeyError: If ``branch`` is not one of :data:`BRANCHES`.
-        ValueError: If a mode proposed a span outside this branch's own family, or if the
-            out-of-family mode returned anything but :data:`UNDETERMINED`.
+        ValueError: If a mode proposed a span outside this branch's own family.
     """
     table = EXPECTATIONS[branch]
     family = declared_task_family(store, hint)
@@ -898,11 +898,6 @@ def dispatch(
     intruders = sorted({proposal.family for proposal in result.components} - {own})
     if intruders:
         raise ValueError(f"{branch} proposed into {intruders}; a branch mints only into {own!r}")
-    if not in_family and result.done != UNDETERMINED:
-        raise ValueError(
-            f"detect_{own} returned done={result.done!r}; the out-of-family mode evaluates no task, "
-            f"so its only answer is {UNDETERMINED!r}"
-        )
     return result
 
 
@@ -962,30 +957,14 @@ POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "peak_prominence_db": float,
     "trough_return_db": float,
     "event_min_s": float,
-    "score_min": float,
     "voiced_strength_min": float,
-    "voiced_fraction_min": float,
     "f0_spread_window_s": float,
-    "f0_spread_max_semitones": float,
-    "continuity_min": float,
-    "production_min_s": float,
-    "monotone_tolerance_semitones": float,
-    "dominant_segment_min_fraction": float,
-    "response_min_s": float,
     "pause_min_s": float,
     "run_gap_max_s": float,
-    "repeat_overlap_min": float,
     "echo_ngram_n": int,
-    "echo_overlap_max": float,
-    "verbatim_overlap_max": float,
-    "coverage_min": float,
-    "interval_max_s": float,
     "modulation_band_hz": _band,
-    "rate_prominence_min": float,
-    "train_min_s": float,
     "burst_window_ms": float,
     "effort_split_hz": float,
-    "gap_off_task_min_s": float,
     "label_sets": _label_sets,
     "phoneme_place_classes": _label_sets,
     "phoneme_vowel_classes": _label_sets,
@@ -1002,18 +981,67 @@ UNMEASURED_POINTS = "unmeasured_operating_points"
 
 @dataclass
 class BranchParams:
-    """Every operating point a branch body may ask for, read from the config and never refused.
+    """What a branch body may ask for: its instrument settings, and its task group's gates.
 
-    There is one accessor, :meth:`point`; it returns None for a point nobody has measured and
-    records the ask in :attr:`missing`. Reading is lazy and the misses accumulate per instance.
+    Two accessors. :meth:`point` reads an instrument setting from ``branch:``; :meth:`gate` reads
+    one of the task group's gates from ``verdict.gates``. Both return None rather than refusing,
+    and both record the ask in :attr:`missing`. Reading is lazy and the misses accumulate per
+    instance.
 
     Attributes:
         config: The resolved triage configuration.
-        missing: The keys read while null, in first-read order.
+        missing: The paths read while null, in first-read order.
+        gates: The task's resolved gates, or None until :meth:`bind` names a task.
     """
 
     config: TriageConfig
     missing: list[str] = field(default_factory=list)
+    gates: GateBounds | None = None
+
+    def bind(self, group: Pattern, family: str | None = None) -> "BranchParams":
+        """Name the task whose gates :meth:`gate` reads, resolved family-first then group.
+
+        Args:
+            group: The group the task's expectation row declares.
+            family: The declared family, when one is declared. The out-of-family mode declares
+                none and reads only the group and default layers.
+
+        Returns:
+            This instance, so a caller may bind and pass in one expression.
+        """
+        self.gates = load_gate_bounds(self.config, group, family)
+        return self
+
+    def gate(self, name: str) -> Any:  # noqa: ANN401 — each gate's own type
+        """One of this task group's gates, or None when it does not apply.
+
+        Args:
+            name: The gate's name.
+
+        Returns:
+            The bound, None when this group does not configure the gate at all, and None when it
+            configures it null — the second is recorded in :attr:`missing`, the first is not,
+            because a group that names no value for a gate is not asking for one.
+
+        Raises:
+            KeyError: If the name is not a gate, or if no group has been bound.
+        """
+        if name not in GATE_SPECS:
+            raise KeyError(f"{name!r} is not a gate; check it against GATE_KEYS")
+        if self.gates is None:
+            raise KeyError(f"no task group is bound; {name!r} cannot be read before BranchParams.bind")
+        if not self.gates.names(name):
+            return None
+        bound = self.gates.bound(name)
+        if bound is None:
+            layer = self.gates.layer(name)
+            where = self.gates.family if layer == FAMILY_LAYER else self.gates.group.name
+            path = (
+                f"{GATE_SECTION}.{layer}.{where}.{name}" if layer != DEFAULT_LAYER else f"{GATE_SECTION}.{layer}.{name}"
+            )
+            if path not in self.missing:
+                self.missing.append(path)
+        return bound
 
     def point(self, key: str) -> Any:  # noqa: ANN401 — each key's own type
         """One operating point, or None when nobody has measured it.
@@ -1091,30 +1119,14 @@ PARAM_KEYS = (
     "peak_prominence_db",
     "trough_return_db",
     "event_min_s",
-    "score_min",
     "voiced_strength_min",
-    "voiced_fraction_min",
     "f0_spread_window_s",
-    "f0_spread_max_semitones",
-    "continuity_min",
-    "production_min_s",
-    "monotone_tolerance_semitones",
-    "dominant_segment_min_fraction",
-    "response_min_s",
     "pause_min_s",
     "run_gap_max_s",
-    "repeat_overlap_min",
     "echo_ngram_n",
-    "echo_overlap_max",
-    "verbatim_overlap_max",
-    "coverage_min",
-    "interval_max_s",
     "modulation_band_hz",
-    "rate_prominence_min",
-    "train_min_s",
     "burst_window_ms",
     "effort_split_hz",
-    "gap_off_task_min_s",
     "label_sets",
     "phoneme_place_classes",
     "phoneme_vowel_classes",
@@ -1364,13 +1376,13 @@ def off_task_findings(components: Sequence[Proposal], spans: Sequence[Entity], p
     Args:
         components: The spans this branch proposed.
         spans: The span entities.
-        params: The operating points.
+        params: The operating points, bound to the task group whose gate names the gap minimum.
 
     Returns:
-        One ``off_task_extent`` deviation per uncovered gap, and nothing at all when the gap
-        minimum is unmeasured; the ask is then recorded in ``params.missing``.
+        One ``off_task_extent`` deviation per uncovered gap, and nothing at all when the group
+        names no gap minimum or names it unmeasured.
     """
-    minimum = params.point("gap_off_task_min_s")
+    minimum = params.gate("gap_off_task_min_s")
     return [] if minimum is None else off_task(components, spans, minimum)
 
 
@@ -1800,6 +1812,30 @@ def longest_monotone_run(values: np.ndarray, tolerance: float) -> tuple[int, int
     return best
 
 
+def monotone_reversal(values: np.ndarray, first: int, last: int, sign: int) -> float:
+    """The largest step a monotone run takes back on itself.
+
+    Args:
+        values: The values :func:`longest_monotone_run` was given.
+        first: The run's first index.
+        last: The run's last index, inclusive.
+        sign: ``1`` for a rising run, ``-1`` for a falling one.
+
+    Returns:
+        The worst reversal, in the values' own units, and 0.0 for a run that never reverses.
+    """
+    series = np.asarray(values, dtype=float)[first : last + 1]
+    finite = series[np.isfinite(series)]
+    if finite.size < 2:
+        return 0.0
+    extreme = float(finite[0])
+    worst = 0.0
+    for value in finite[1:]:
+        worst = max(worst, sign * (extreme - float(value)))
+        extreme = max(extreme, float(value)) if sign > 0 else min(extreme, float(value))
+    return float(worst)
+
+
 def band_power(block: SpectrogramBlock, extent: tuple[float, float], lo_hz: float, hi_hz: float) -> float:
     """The power one band carries over one extent.
 
@@ -2008,7 +2044,7 @@ def train_rate_hz(envelope: EnvelopeTrack, extent: tuple[float, float], params: 
         needs is unmeasured.
     """
     band_hz = params.point("modulation_band_hz")
-    prominence_min = params.point("rate_prominence_min")
+    prominence_min = params.gate("rate_prominence_min")
     if band_hz is None or prominence_min is None:
         return None
     rate = float(envelope.sampling_rate)
