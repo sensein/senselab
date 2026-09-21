@@ -51,6 +51,48 @@ verdict:
 `GLIDE` naming no `f0_spread_max_semitones` is the point: the gate that made no sense there simply
 is not configured for it, rather than being set to a value that disables it.
 
+### A group is not fine enough on its own
+
+Owner-directed 2026-09-21: *there needs to be more specificity for task somewhere — for example the
+different DDK tasks are different in requirements.* The DDK families show it exactly:
+
+| families | pattern | what the instruction asks |
+| --- | --- | --- |
+| `diadochokinesis-pa`, `-ta`, `-ka` | `SYLLABLE_TRAIN` | a **count**: `expected_event_count=10` |
+| `diadochokinesis-pataka`, `-buttercup` | `SYLLABLE_SEQUENCE` | a **count**: 30, being 10 of a 3-syllable carrier |
+| `diadochokinesis-v2-puh`, `-tuh`, `-kuh` | `SYLLABLE_TRAIN` | a **duration**: `declared_duration_s=5.0`, no count |
+| `diadochokinesis-v2-puhtuhkuh`, `-v2-buttercup` | `SYLLABLE_SEQUENCE` | a **duration**: 5 s |
+
+So `SYLLABLE_TRAIN` holds both a count-based instruction and a timed one, and no single setting of a
+rate or duration gate serves both. The same is true beyond DDK: `maximum-phonation-time` declares
+`expect_inhale` and its v2 does not, while both are `SUSTAINED`.
+
+**Gates therefore resolve most-specific-first: family, then group, then default.**
+
+```yaml
+verdict:
+  gates:
+    default:
+      score_min: 0.2
+    by_group:
+      SYLLABLE_TRAIN:   {train_min_s: 1.0, rate_prominence_min: 2.0}
+      SUSTAINED:        {production_min_s: 0.5, voiced_fraction_min: 0.5, f0_spread_max_semitones: 2.0}
+      GLIDE:            {production_min_s: 0.5, voiced_fraction_min: 0.5, dominant_segment_min_fraction: 0.5}
+      ORDERED_TOKENS:   {ordered_match_min: 0.75}
+    by_family:
+      diadochokinesis-v2-puh: {train_min_s: 4.0}
+```
+
+A family entry overrides its group key by key, not wholesale: a family naming one gate inherits the
+group's others. The default layer carries only what is genuinely universal. **Ship the family layer
+empty** — every value moves at its current setting, and an empty layer is the honest statement that
+no per-family difference has been derived yet. What this buys now is that the distinctions above
+become *expressible*; filling them in is the refitting work this change exists to enable.
+
+The three layers must each be readable back from the verdict: a recording's record says which layer
+supplied each gate it was judged by, so a reader can tell a family-specific bound from an inherited
+one without consulting the config.
+
 ## The mechanism
 
 1. **A branch reports readings, never a verdict.** Each gate's input becomes a `measurement` the
