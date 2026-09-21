@@ -35,7 +35,7 @@ conformance `UNDETERMINED`, because a refusal is a decision. A misspelled key st
 
 | input | what it contributes | flags? |
 | --- | --- | --- |
-| conformance `false` | the one claim a branch makes about the recording against what the instruction asked for | yes, gated on the referent and the declared family |
+| conformance `false` | **this fold's own reading**, from the branch's measurements against the gates for that task — not a claim the branch makes | yes, gated on the referent and the declared family |
 | conformance `true` | nothing | no |
 | conformance `UNDETERMINED` | nothing | no, unless `verdict.undetermined_flags` |
 | the proposed spans | `findings`: `present` with one or more, `absent` where the branch reported and proposed none, `uncertain` where it left no report | only through a route mismatch |
@@ -54,9 +54,48 @@ this change and is now a declared switch — `verdict.deviation_flags`, shipping
 an implicit rule in the code, so that flipping it is a visible decision with a derivation.
 
 **Every threshold that turns a reading into a judgement is in the `verdict:` config section**, not in
-`branch:`. Three keys moved there on the same day for that reason: `min_contrast_db`,
-`tilt_max_db_per_octave` and `level_min_dbfs`, all three whole-recording judgements and all three
-still unset. `config-derivations.md` § verdict carries every value's derivation.
+`branch:`. Three keys moved there on 2026-09-16 for that reason: `min_contrast_db`,
+`tilt_max_db_per_octave` and `level_min_dbfs`. Owner-directed 2026-09-21, the remaining sixteen
+follow, and they arrive keyed by task rather than flat — see below.
+`config-derivations.md` § verdict carries every value's derivation.
+
+## The gates, keyed by task — owner decision, 2026-09-21
+
+*All gates should be in verdict not in branches and it should be task group related. Branches should
+just provide the info necessary for the gates. So instruments sit in preprocess and branches.*
+
+A **gate** says what reading is good enough and lives here. An **instrument setting** says how to
+take a reading and stays with the instrument. Sixteen of `branch:`'s thirty-one keys are gates —
+`production_min_s`, `voiced_fraction_min`, `f0_spread_max_semitones`, `coverage_min`,
+`response_min_s`, `score_min`, `verbatim_overlap_max`, `dominant_segment_min_fraction` among them.
+The other fifteen are definitional: `voiced_strength_min` says what *counts* as a voiced frame,
+`event_min_s` what the walk will *report*, `pause_min_s` what a gap *is*.
+
+**A gate resolves most-specific-first: family, then group, then default**, a family overriding its
+group key by key rather than wholesale. A group naming no value for a gate does not apply it — which
+is how `GLIDE` stops being bound by `f0_spread_max_semitones`, a held-vowel bound that never made
+sense for a task whose purpose is that pitch moves. The verdict records which layer supplied each
+gate, so a family-specific bound is legible as one without opening the config.
+
+`by_family` ships empty. The layer exists because the distinctions are real —
+`maximum-phonation-time` declares `expect_inhale` and its v2 does not, inside one group — and every
+value moves at its current setting, so this is a move and not a refit.
+
+### Two counts, and only one of them may be gated
+
+`expected_event_count` holds two unlike things. The counted-breath, cough and loudness families take
+their number from the instruction: it is in the task's own name (`fivebreaths`,
+`threequickbreaths`) or enumerated in `tokens` (`('hey','hey','hey')`). The diadochokinesis families'
+10 and 30 come from nobody — that task asks for repetition as fast as possible, no number is spoken,
+and individuals vary.
+
+A **required** count may be gated, with a tolerance still to be derived. A **statistically expected**
+count may never be gated; it is a covariate beside the rate it qualifies. Until each row declares
+which kind it carries, **no gate reads the field at all** — which costs the DDK families nothing,
+because a count nobody asked for should never have decided anything.
+
+The full design, with the gate/instrument split in full and the measurements each gate reads, is
+`specs/20260921-gates-in-verdict/design.md`.
 
 ## The fold is task-aware
 
