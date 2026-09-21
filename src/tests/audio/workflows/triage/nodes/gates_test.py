@@ -1,4 +1,4 @@
-"""The gates: one table, keyed by task group, applied in VERDICT. Nothing here loads a model."""
+"""The gates: three layers, resolved family-first, applied in VERDICT. Nothing here loads a model."""
 
 from __future__ import annotations
 
@@ -24,9 +24,13 @@ from senselab.audio.workflows.triage.nodes.gates import (
     AT_LEAST,
     AT_MOST,
     CONFORMANCE_GATES,
+    DEFAULT_LAYER,
+    FAMILY_LAYER,
     GATE_KEYS,
     GATE_SECTION,
     GATE_SPECS,
+    GROUP_LAYER,
+    LAYERS,
     UNDETERMINED,
     GateBounds,
     Pattern,
@@ -76,7 +80,7 @@ STAYED = (
 
 
 def _bounds(group: Pattern, **gates: object) -> GateBounds:
-    """A gate table with exactly the gates named.
+    """A resolved gate table with exactly the gates named, all from the group layer.
 
     Args:
         group: The task group.
@@ -85,7 +89,27 @@ def _bounds(group: Pattern, **gates: object) -> GateBounds:
     Returns:
         The bounds.
     """
-    return GateBounds(group=group, bounds=dict(gates))
+    return GateBounds(
+        group=group,
+        family=None,
+        bounds=dict(gates),
+        layers=dict.fromkeys(gates, GROUP_LAYER),
+    )
+
+
+def _layered(tmp_path: Path, body: str) -> TriageConfig:
+    """The packaged configuration with one partial YAML over it.
+
+    Args:
+        tmp_path: Where the override is written.
+        body: The partial YAML.
+
+    Returns:
+        The resolved configuration.
+    """
+    path = tmp_path / f"override-{abs(hash(body)) % 10**10}.yaml"
+    path.write_text(body)
+    return load_triage_config(path)
 
 
 class TestTheSplitIsTheDesignsTable:
@@ -106,15 +130,20 @@ class TestTheSplitIsTheDesignsTable:
         assert set(MOVED) <= set(GATE_KEYS)
 
     def test_the_gate_table_is_one_vocabulary_in_two_places(self, config: TriageConfig) -> None:
-        """Every name the packaged groups spell is a declared gate, and every gate is used."""
-        spelled = {name for group in Pattern for name in (config.get(f"{GATE_SECTION}.{group.name}") or {})}
+        """Every name the packaged layers spell is a declared gate, and every gate is used."""
+        spelled = {name for name in (config.get(f"{GATE_SECTION}.{DEFAULT_LAYER}") or {})}
+        spelled |= {
+            name for group in Pattern for name in (config.get(f"{GATE_SECTION}.{GROUP_LAYER}.{group.name}") or {})
+        }
         assert spelled <= set(GATE_SPECS)
         assert spelled == set(GATE_SPECS), sorted(set(GATE_SPECS) - spelled)
 
-    def test_each_group_is_a_data_mapping_so_an_override_may_add_a_gate(self) -> None:
-        """Expressing a gate for a group that has none is the point; an override must be able to."""
+    def test_each_layer_is_a_data_mapping_so_an_override_may_add_a_gate(self) -> None:
+        """Expressing a gate for a task that has none is the point; an override must be able to."""
+        assert f"{GATE_SECTION}.{DEFAULT_LAYER}" in DATA_MAP_PATHS
+        assert f"{GATE_SECTION}.{FAMILY_LAYER}" in DATA_MAP_PATHS
         for group in Pattern:
-            assert f"{GATE_SECTION}.{group.name}" in DATA_MAP_PATHS
+            assert f"{GATE_SECTION}.{GROUP_LAYER}.{group.name}" in DATA_MAP_PATHS
 
 
 class TestAGroupThatNamesNoValueDoesNotApplyTheGate:
@@ -122,8 +151,9 @@ class TestAGroupThatNamesNoValueDoesNotApplyTheGate:
 
     def test_glide_is_not_bound_by_a_held_vowels_spread(self, config: TriageConfig) -> None:
         """``GLIDE``'s purpose is that pitch moves, so the spread bound is simply not configured."""
-        assert "f0_spread_max_semitones" in (config.get(f"{GATE_SECTION}.SUSTAINED") or {})
-        assert "f0_spread_max_semitones" not in (config.get(f"{GATE_SECTION}.GLIDE") or {})
+        assert "f0_spread_max_semitones" in (config.get(f"{GATE_SECTION}.{GROUP_LAYER}.SUSTAINED") or {})
+        assert "f0_spread_max_semitones" not in (config.get(f"{GATE_SECTION}.{GROUP_LAYER}.GLIDE") or {})
+        assert "f0_spread_max_semitones" not in (config.get(f"{GATE_SECTION}.{DEFAULT_LAYER}") or {})
 
     def test_an_unconfigured_gate_is_not_applied_at_all(self) -> None:
         """Not configured is not the same as configured and unreadable."""
@@ -242,9 +272,9 @@ class TestTheBoundsAreReadFromOnePlace:
         with pytest.raises(UnknownConfigKey):
             load_gate_bounds(stripped, Pattern.SUSTAINED)
 
-    def test_a_group_naming_something_that_is_not_a_gate_raises(self, config: TriageConfig) -> None:
+    def test_a_layer_naming_something_that_is_not_a_gate_raises(self, config: TriageConfig) -> None:
         """The gate vocabulary is closed; an unknown name is not silently ignored."""
-        gates = {**config.values["verdict"]["gates"], "SUSTAINED": {"not_a_gate": 1.0}}
+        gates = {**config.values["verdict"]["gates"], DEFAULT_LAYER: {"not_a_gate": 1.0}}
         values = {**config.values, "verdict": {**config.values["verdict"], "gates": gates}}
         broken = TriageConfig(name=config.name, version=config.version, config_hash="x", values=values)
         with pytest.raises(ValueError, match="not gates"):
@@ -252,17 +282,154 @@ class TestTheBoundsAreReadFromOnePlace:
 
     def test_an_override_may_add_a_gate_to_a_group(self, tmp_path: Path) -> None:
         """Expressing a gate for a group that has none is what the change is for."""
-        path = tmp_path / "over.yaml"
-        path.write_text("verdict:\n  gates:\n    GLIDE:\n      f0_spread_max_semitones: 12.0\n")
-        bounds = load_gate_bounds(load_triage_config(path), Pattern.GLIDE)
+        settings = _layered(
+            tmp_path, "verdict:\n  gates:\n    by_group:\n      GLIDE:\n        f0_spread_max_semitones: 12.0\n"
+        )
+        bounds = load_gate_bounds(settings, Pattern.GLIDE)
         assert bounds.bound("f0_spread_max_semitones") == 12.0
         assert bounds.bound("production_min_s") == 0.5
 
-    def test_the_bounds_record_names_the_group_and_every_bound(self, config: TriageConfig) -> None:
+    def test_the_bounds_record_names_the_group_the_family_and_every_layer(self, config: TriageConfig) -> None:
         """A decision must be readable backwards without rerunning anything."""
-        record = load_gate_bounds(config, Pattern.SUSTAINED).record()
+        record = load_gate_bounds(config, Pattern.SUSTAINED, "maximum-phonation-time").record()
         assert record["group"] == "sustained"
+        assert record["family"] == "maximum-phonation-time"
         assert record["bounds"]["f0_spread_max_semitones"] == 2.0
+        assert record["layers"]["f0_spread_max_semitones"] == GROUP_LAYER
+
+
+class TestAGateResolvesFamilyThenGroupThenDefault:
+    """A task group alone is too coarse; the layers are how a family says so."""
+
+    def test_the_family_layer_ships_empty(self, config: TriageConfig) -> None:
+        """Every value moved at its current setting; an empty layer says no difference is derived."""
+        assert config.get(f"{GATE_SECTION}.{FAMILY_LAYER}") in (None, {})
+
+    def test_the_default_layer_ships_empty_because_nothing_is_universal(self, config: TriageConfig) -> None:
+        """``gap_off_task_min_s`` reaches six groups of twelve; no gate reaches all of them."""
+        assert config.get(f"{GATE_SECTION}.{DEFAULT_LAYER}") in (None, {})
+        reach = {
+            name: sum(
+                1 for group in Pattern if name in (config.get(f"{GATE_SECTION}.{GROUP_LAYER}.{group.name}") or {})
+            )
+            for name in GATE_KEYS
+        }
+        assert max(reach.values()) < len(Pattern), "a gate every group names would belong in the default"
+
+    def test_a_family_overrides_its_group_key_by_key_and_not_wholesale(self, tmp_path: Path) -> None:
+        """The obvious bug: replacing the group's whole mapping and losing the gates it kept."""
+        settings = _layered(
+            tmp_path,
+            "verdict:\n  gates:\n    by_family:\n      maximum-phonation-time:\n        production_min_s: 4.0\n",
+        )
+        bounds = load_gate_bounds(settings, Pattern.SUSTAINED, "maximum-phonation-time")
+        assert bounds.bound("production_min_s") == 4.0
+        assert bounds.layer("production_min_s") == FAMILY_LAYER
+        # The three the family said nothing about are still the group's, and still applied.
+        assert bounds.bound("voiced_fraction_min") == 0.5
+        assert bounds.bound("f0_spread_max_semitones") == 2.0
+        assert bounds.bound("continuity_min") == 0.5
+        assert {
+            bounds.layer(name) for name in ("voiced_fraction_min", "f0_spread_max_semitones", "continuity_min")
+        } == {GROUP_LAYER}
+
+    def test_one_family_of_a_group_is_overridden_and_its_sibling_is_not(self, tmp_path: Path) -> None:
+        """The case the layers exist for: two families, one group, one of them different."""
+        settings = _layered(
+            tmp_path,
+            "verdict:\n  gates:\n    by_family:\n      maximum-phonation-time:\n        production_min_s: 4.0\n",
+        )
+        overridden = load_gate_bounds(settings, Pattern.SUSTAINED, "maximum-phonation-time")
+        sibling = load_gate_bounds(settings, Pattern.SUSTAINED, "maximum-phonation-time-v2")
+        assert overridden.bound("production_min_s") == 4.0
+        assert sibling.bound("production_min_s") == 0.5
+        assert sibling.layer("production_min_s") == GROUP_LAYER
+
+    def test_a_family_may_add_a_gate_its_group_does_not_name(self, tmp_path: Path) -> None:
+        """A per-family bound need not be a per-group one first."""
+        settings = _layered(
+            tmp_path,
+            "verdict:\n  gates:\n    by_family:\n      glides-low-to-high:\n        f0_spread_max_semitones: 12.0\n",
+        )
+        bounds = load_gate_bounds(settings, Pattern.GLIDE, "glides-low-to-high")
+        assert bounds.bound("f0_spread_max_semitones") == 12.0
+        assert bounds.layer("f0_spread_max_semitones") == FAMILY_LAYER
+        assert not load_gate_bounds(settings, Pattern.GLIDE, "glides-high-to-low").names("f0_spread_max_semitones")
+
+    def test_the_default_layer_is_taken_where_neither_family_nor_group_names_a_gate(self, tmp_path: Path) -> None:
+        """The third layer, exercised: nothing ships in it, so an override is how it is tested."""
+        settings = _layered(tmp_path, "verdict:\n  gates:\n    default:\n      items_min: 7\n")
+        bounds = load_gate_bounds(settings, Pattern.SUSTAINED, "maximum-phonation-time")
+        assert bounds.bound("items_min") == 7
+        assert bounds.layer("items_min") == DEFAULT_LAYER
+
+    def test_a_group_beats_the_default_and_a_family_beats_both(self, tmp_path: Path) -> None:
+        """Most specific first, and the record says which one won."""
+        settings = _layered(
+            tmp_path,
+            "verdict:\n  gates:\n"
+            "    default:\n      production_min_s: 9.0\n"
+            "    by_family:\n      maximum-phonation-time:\n        production_min_s: 4.0\n",
+        )
+        family = load_gate_bounds(settings, Pattern.SUSTAINED, "maximum-phonation-time")
+        group = load_gate_bounds(settings, Pattern.SUSTAINED, "maximum-phonation-time-v2")
+        ungrouped = load_gate_bounds(settings, Pattern.ITEM_LIST, "animal-fluency")
+        assert (family.bound("production_min_s"), family.layer("production_min_s")) == (4.0, FAMILY_LAYER)
+        assert (group.bound("production_min_s"), group.layer("production_min_s")) == (0.5, GROUP_LAYER)
+        assert (ungrouped.bound("production_min_s"), ungrouped.layer("production_min_s")) == (9.0, DEFAULT_LAYER)
+
+    def test_the_out_of_family_mode_reads_no_family_layer(self, tmp_path: Path) -> None:
+        """``detect_*`` declares no family, so a family bound cannot reach it."""
+        settings = _layered(
+            tmp_path,
+            "verdict:\n  gates:\n    by_family:\n      maximum-phonation-time:\n        production_min_s: 4.0\n",
+        )
+        bounds = load_gate_bounds(settings, Pattern.SUSTAINED, None)
+        assert bounds.bound("production_min_s") == 0.5
+        assert bounds.family is None
+
+    def test_a_family_may_clear_a_bound_its_group_measured(self, tmp_path: Path) -> None:
+        """Nulling at the family layer is how one family says the group's bound is not derived for it."""
+        settings = _layered(
+            tmp_path,
+            "verdict:\n  gates:\n    by_family:\n      maximum-phonation-time:\n        production_min_s:\n",
+        )
+        bounds = load_gate_bounds(settings, Pattern.SUSTAINED, "maximum-phonation-time")
+        assert bounds.names("production_min_s")
+        assert bounds.bound("production_min_s") is None
+        assert bounds.layer("production_min_s") == FAMILY_LAYER
+
+    def test_the_layers_are_declared_most_specific_first(self) -> None:
+        """The resolution order is data, not a sequence of ifs a reader has to trace."""
+        assert LAYERS == (FAMILY_LAYER, GROUP_LAYER, DEFAULT_LAYER)
+
+    def test_every_applied_gate_records_the_layer_that_supplied_it(self, config: TriageConfig) -> None:
+        """A reader must tell a family-specific bound from an inherited one without the config."""
+        bounds = load_gate_bounds(config, Pattern.SUSTAINED, "maximum-phonation-time")
+        _, applied = apply_gates(("production_min_s",), bounds, {"carrier_duration_s": 8.0})
+        assert applied[0].record()["layer"] == GROUP_LAYER
+        assert applied[0].record()["keyed_under"] == "SUSTAINED"
+
+
+class TestNoGateReadsACountNobodyGave:
+    """``expected_event_count`` holds two unlike things, so no bound may be put on it."""
+
+    def test_no_gate_reads_the_declared_event_count(self) -> None:
+        """Ten `/pa/` was never spoken to anyone; a participant giving eight did the task."""
+        assert "expected_event_count" not in {spec.reading for spec in GATE_SPECS.values()}
+
+    def test_the_airway_event_gate_reads_what_was_found_and_not_what_was_declared(self) -> None:
+        """``events_min`` asks whether the sound happened at all, not whether the count was met."""
+        assert GATE_SPECS["events_min"].reading == "airway_events_found"
+        bounds = _bounds(Pattern.EVENT_SERIES, events_min=1)
+        assert apply_gates(("events_min",), bounds, {"airway_events_found": 2})[0] is True
+        assert apply_gates(("events_min",), bounds, {"airway_events_found": 9})[0] is True
+
+    def test_the_syllable_gate_reads_repetitions_found_and_not_the_ten_nobody_asked_for(self) -> None:
+        """A DDK train is measured by its rate; the ten in the row is not a target."""
+        assert GATE_SPECS["repetitions_min"].reading == "ddk_repetitions_found"
+        bounds = _bounds(Pattern.SYLLABLE_TRAIN, repetitions_min=1)
+        assert apply_gates(("repetitions_min",), bounds, {"ddk_repetitions_found": 8})[0] is True
 
 
 class TestABranchReadsItsOwnGroupsGates:
@@ -287,10 +454,10 @@ class TestABranchReadsItsOwnGroupsGates:
     def test_a_gate_configured_null_is_recorded_as_unmeasured(self, tmp_path: Path) -> None:
         """A bound nobody has measured is an ask the report carries, under its full path."""
         path = tmp_path / "over.yaml"
-        path.write_text("verdict:\n  gates:\n    SUSTAINED:\n      production_min_s:\n")
+        path.write_text("verdict:\n  gates:\n    by_group:\n      SUSTAINED:\n        production_min_s:\n")
         params = branch_params(load_triage_config(path)).bind(Pattern.SUSTAINED)
         assert params.gate("production_min_s") is None
-        assert params.missing == ["verdict.gates.SUSTAINED.production_min_s"]
+        assert params.missing == ["verdict.gates.by_group.SUSTAINED.production_min_s"]
 
     def test_binding_returns_the_same_instance_so_misses_accumulate(self, config: TriageConfig) -> None:
         """One record of what a branch asked for, whichever group it was bound to."""

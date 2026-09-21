@@ -62,16 +62,17 @@ branch:
   effort_split_hz: 1000.0
 verdict:
   gates:
-    EVENT_SERIES:
-      score_min: 0.5
-      gap_off_task_min_s: 1.0
-      interval_max_s: 0.5
-    EVENT_ALTERNATION:
-      score_min: 0.5
-      gap_off_task_min_s: 1.0
-    SOUND_COVERAGE:
-      score_min: 0.5
-      gap_off_task_min_s: 1.0
+    by_group:
+      EVENT_SERIES:
+        score_min: 0.5
+        gap_off_task_min_s: 1.0
+        interval_max_s: 0.5
+      EVENT_ALTERNATION:
+        score_min: 0.5
+        gap_off_task_min_s: 1.0
+      SOUND_COVERAGE:
+        score_min: 0.5
+        gap_off_task_min_s: 1.0
 """
 """Fixture operating points. Not a fit: the packaged file ships every one of them null."""
 
@@ -1677,15 +1678,43 @@ class TestAnAbsentInstrumentIsAnAbsence:
         _five_coughs(store, tmp_path)
         config = _override(
             tmp_path,
-            "verdict:\n  gates:\n    EVENT_SERIES:\n      score_min: null\n",
+            "verdict:\n  gates:\n    by_group:\n      EVENT_SERIES:\n        score_min: null\n",
             name="null-score-min",
         )
         result = airway(store, "plain", config, run_dir=tmp_path)
         assert _events(store) == []
-        assert result.report.unmeasured == ("verdict.gates.EVENT_SERIES.score_min",)
-        # UNDETERMINED, not False: an unmeasured qualifier could neither admit nor reject, so
-        # claiming the instruction was not met would rest on a number nobody chose.
+        assert result.report.unmeasured == ("verdict.gates.by_group.EVENT_SERIES.score_min",)
         assert result.report.conformance == UNDETERMINED
+        # UNDETERMINED, not False: a walk that looked for nothing counted nothing, and a count of
+        # nothing is not a reading of the recording. The branch therefore writes no reading at all,
+        # which is what separates "could not look" from "looked and found none".
+        assert "airway_events_found" not in {
+            str(entity.attributes["name"]) for entity in live_entities(store, "measurement")
+        }
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=config) == UNDETERMINED
+
+    def test_a_walk_that_looked_and_found_nothing_is_a_non_conformance(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The other half of the distinction: a measured cut with no event is a reading of zero."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-cough",
+            spans=[(1.5, 3.0)],
+            scores=[{"Cough": 0.1}],
+            envelope=plateau(500, (200, 260)),
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _events(store) == []
+        assert result.report.unmeasured == ()
+        [found] = [
+            entity
+            for entity in live_entities(store, "measurement")
+            if entity.attributes["name"] == "airway_events_found"
+        ]
+        assert found.attributes["value"] == 0
+        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is False
 
 
 class TestTheProposeOnlyRules:

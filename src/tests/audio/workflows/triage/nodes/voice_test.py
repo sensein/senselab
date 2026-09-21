@@ -32,6 +32,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     windowed_spreads,
 )
 from senselab.audio.workflows.triage.nodes.common import find_branch_report, live_entities
+from senselab.audio.workflows.triage.nodes.gates import GROUP_LAYER
 from senselab.audio.workflows.triage.nodes.voice import (
     COUNT_IN,
     PHONATION_ROLE,
@@ -119,7 +120,10 @@ def config(**overrides: Any) -> TriageConfig:  # noqa: ANN401
         **packaged.values["verdict"],
         "gates": {
             **packaged.values["verdict"]["gates"],
-            **{group.name: {name: gates[name] for name in names} for group, names in GROUP_GATES.items()},
+            GROUP_LAYER: {
+                **packaged.values["verdict"]["gates"][GROUP_LAYER],
+                **{group.name: {name: gates[name] for name in names} for group, names in GROUP_GATES.items()},
+            },
         },
     }
     return TriageConfig(packaged.name, packaged.version, packaged.config_hash, merged)
@@ -1064,7 +1068,7 @@ class TestAnUnmeasuredOperatingPointIsRecordedRatherThanRaised:
         # UNDETERMINED, not False: an unmeasured qualifier could neither admit nor reject, so
         # claiming the instruction was not met would rest on a number nobody chose.
         assert result.report.conformance == UNDETERMINED
-        assert "verdict.gates.SUSTAINED.production_min_s" in result.report.unmeasured
+        assert "verdict.gates.by_group.SUSTAINED.production_min_s" in result.report.unmeasured
 
     def test_one_null_key_does_not_fail_a_body_that_needs_another(self, tmp_path: Path) -> None:
         """``BranchParams`` reads lazily; the glide arm never reads the sustained arm's keys."""

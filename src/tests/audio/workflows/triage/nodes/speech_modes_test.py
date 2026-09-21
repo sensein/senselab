@@ -29,7 +29,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     mode_of,
     write_findings,
 )
-from senselab.audio.workflows.triage.nodes.gates import GATE_SECTION, GATE_SPECS, Pattern
+from senselab.audio.workflows.triage.nodes.gates import GATE_SECTION, GATE_SPECS, GROUP_LAYER, Pattern
 from senselab.audio.workflows.triage.nodes.speech import (
     align_speech,
     detect_speech,
@@ -61,13 +61,13 @@ def _config(tmp_path: Path, settings: dict[str, Any] | None = None) -> TriageCon
         if key not in GATE_SPECS:
             continue
         for group in Pattern:
-            if key in (packaged.get(f"{GATE_SECTION}.{group.name}") or {}):
+            if key in (packaged.get(f"{GATE_SECTION}.{GROUP_LAYER}.{group.name}") or {}):
                 gates.setdefault(group.name, {})[key] = value
     values: dict[str, Any] = {}
     if branch:
         values["branch"] = branch
     if gates:
-        values["verdict"] = {"gates": gates}
+        values["verdict"] = {"gates": {GROUP_LAYER: gates}}
     path = tmp_path / f"override-{abs(hash(yaml.safe_dump(values))) % 10**10}.yaml"
     path.write_text(yaml.safe_dump(values))
     return load_triage_config(path)

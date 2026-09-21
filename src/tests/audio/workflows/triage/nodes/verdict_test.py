@@ -945,3 +945,261 @@ class TestTheFoldIsWiredNotReimplemented:
         """A node calling into another node's module couples two nodes outside the store."""
         source = inspect.getsource(verdict_module)
         assert "workflows.triage.nodes.routing" not in source
+
+
+class TestTheGatesDecideTheDeclaredTask:
+    """A branch reports and this fold decides, thresholds included."""
+
+    @staticmethod
+    def _gated_store(
+        tmp_path: Path,
+        *,
+        family: str,
+        branch: str,
+        readings: Mapping[str, Any],
+        in_family: bool = True,
+        reported: Conformance = UNDETERMINED,
+    ) -> ProvStore:
+        """A store carrying one recording, one in-family report, and the readings a gate reads.
+
+        Args:
+            tmp_path: Unused; kept so every builder here takes the same first argument.
+            family: The declared task family, written onto the recording's path.
+            branch: The reporting node.
+            readings: Measurement name to value.
+            in_family: What the report says about its own mode.
+            reported: What the branch wrote, which this fold is expected to replace.
+
+        Returns:
+            The store.
+        """
+        del tmp_path
+        store = ProvStore(run_id="gates-test")
+        agent = software_agent(store)
+        store.entity(
+            prov_type="stream",
+            extent=(0.0, 12.0),
+            attributes={"name": "recording", "path": f"sub-a_ses-1_task-{family}.wav"},
+        )
+        activity = store.activity(node=branch, step="seed", parameters={})
+        store.was_associated_with(activity, agent)
+        for name, value in readings.items():
+            entity = store.entity(
+                prov_type="measurement", extent=None, attributes={"name": name, "value": value, "signal": "plain"}
+            )
+            store.was_generated_by(entity, activity)
+            store.was_attributed_to(entity, agent)
+        write_report(
+            store,
+            activity,
+            agent,
+            node=branch,
+            kind=BRANCH_FAMILY[branch],
+            conformance=reported,
+            conformance_of=TASK,
+            deviations=(),
+            in_family=in_family,
+            detail={},
+        )
+        return store
+
+    def test_a_carrier_clearing_every_sustained_gate_conforms(self, config: TriageConfig, tmp_path: Path) -> None:
+        """The branch answered nothing; the four gates the group names answered True."""
+        store = self._gated_store(
+            tmp_path,
+            family="maximum-phonation-time",
+            branch="VOICE",
+            readings={
+                "carrier_duration_s": 8.0,
+                "carrier_voiced_fraction": 0.9,
+                "carrier_f0_spread_semitones": 1.0,
+                "carrier_continuity": 0.8,
+            },
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.conformance["VOICE"] is True
+
+    def test_a_reading_the_group_bounds_and_the_carrier_misses_does_not_conform(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """One gate failing is the whole conformance failing; the others passing does not rescue it."""
+        store = self._gated_store(
+            tmp_path,
+            family="maximum-phonation-time",
+            branch="VOICE",
+            readings={
+                "carrier_duration_s": 8.0,
+                "carrier_voiced_fraction": 0.9,
+                "carrier_f0_spread_semitones": 9.0,
+                "carrier_continuity": 0.8,
+            },
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.conformance["VOICE"] is False
+
+    def test_an_absent_reading_is_undetermined_rather_than_a_non_conformance(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Three defects came from a branch saying a participant failed where nothing had measured."""
+        store = self._gated_store(
+            tmp_path, family="maximum-phonation-time", branch="VOICE", readings={"carrier_duration_s": 8.0}
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
+
+    def test_a_glide_is_not_bound_by_the_held_vowels_spread(self, config: TriageConfig, tmp_path: Path) -> None:
+        """The same spread that fails a sustained vowel leaves a sweep conformant: no gate reads it."""
+        readings = {
+            "carrier_duration_s": 3.0,
+            "carrier_voiced_fraction": 0.9,
+            "carrier_f0_spread_semitones": 9.0,
+            "sweep_dominant_fraction": 0.8,
+            "sweep_monotone_reversal_semitones": 0.4,
+        }
+        sweep = self._gated_store(tmp_path, family="glides-low-to-high", branch="VOICE", readings=readings)
+        vowel = self._gated_store(
+            tmp_path, family="maximum-phonation-time", branch="VOICE", readings={**readings, "carrier_continuity": 0.8}
+        )
+        assert verdict_module.verdict(sweep, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is True
+        assert verdict_module.verdict(vowel, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is False
+
+    def test_an_out_of_family_report_is_never_gated(self, config: TriageConfig, tmp_path: Path) -> None:
+        """``detect_*`` evaluated no task, so the group's gates say nothing about what it reported."""
+        store = self._gated_store(
+            tmp_path,
+            family="maximum-phonation-time",
+            branch="VOICE",
+            readings={
+                "carrier_duration_s": 8.0,
+                "carrier_voiced_fraction": 0.9,
+                "carrier_f0_spread_semitones": 1.0,
+                "carrier_continuity": 0.8,
+            },
+            in_family=False,
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
+        assert result.file_verdict.gates["applied"] == []
+
+    def test_whatever_a_branch_wrote_is_replaced_by_what_the_gates_decided(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A branch cannot smuggle a verdict past the gates by writing one onto its report."""
+        store = self._gated_store(
+            tmp_path,
+            family="maximum-phonation-time",
+            branch="VOICE",
+            readings={
+                "carrier_duration_s": 0.1,
+                "carrier_voiced_fraction": 0.9,
+                "carrier_f0_spread_semitones": 1.0,
+                "carrier_continuity": 0.8,
+            },
+            reported=True,
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.conformance["VOICE"] is False
+
+    def test_every_gate_applied_is_recorded_with_its_reading_bound_and_group(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A decision must be readable backwards without rerunning anything."""
+        store = self._gated_store(
+            tmp_path,
+            family="maximum-phonation-time",
+            branch="VOICE",
+            readings={
+                "carrier_duration_s": 8.0,
+                "carrier_voiced_fraction": 0.9,
+                "carrier_f0_spread_semitones": 1.0,
+                "carrier_continuity": 0.8,
+            },
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        gates = result.file_verdict.gates
+        assert gates["node"] == "VOICE"
+        assert gates["group"] == "sustained"
+        assert gates["bounds"]["f0_spread_max_semitones"] == 2.0
+        applied = {entry["gate"]: entry for entry in gates["applied"]}
+        assert set(applied) == {
+            "production_min_s",
+            "voiced_fraction_min",
+            "f0_spread_max_semitones",
+            "continuity_min",
+        }
+        assert applied["production_min_s"] == {
+            "gate": "production_min_s",
+            "group": "sustained",
+            "reading": "carrier_duration_s",
+            "value": 8.0,
+            "bound": 0.5,
+            "layer": "by_group",
+            "keyed_under": "SUSTAINED",
+            "op": "at_least",
+            "passed": True,
+        }
+        assert gates["family"] == "maximum-phonation-time"
+        assert gates["layers"]["production_min_s"] == "by_group"
+        assert _file_verdict_entity(store).attributes["gates"]["group"] == "sustained"
+
+    def test_a_family_specific_bound_is_distinguishable_from_an_inherited_one(self, tmp_path: Path) -> None:
+        """Once ``by_family`` fills up, the layer is the only way to audit which rows were special."""
+        override = tmp_path / "family.yaml"
+        override.write_text(
+            "verdict:\n  gates:\n    by_family:\n      maximum-phonation-time:\n        production_min_s: 4.0\n"
+        )
+        readings = {
+            "carrier_duration_s": 8.0,
+            "carrier_voiced_fraction": 0.9,
+            "carrier_f0_spread_semitones": 1.0,
+            "carrier_continuity": 0.8,
+        }
+        settings = load_triage_config(override)
+        special = self._gated_store(tmp_path, family="maximum-phonation-time", branch="VOICE", readings=readings)
+        sibling = self._gated_store(tmp_path, family="maximum-phonation-time-v2", branch="VOICE", readings=readings)
+        applied = {
+            stem: {
+                entry["gate"]: entry
+                for entry in verdict_module.verdict(store, None, settings, run_dir=tmp_path).file_verdict.gates[
+                    "applied"
+                ]
+            }
+            for stem, store in (("special", special), ("sibling", sibling))
+        }
+        assert applied["special"]["production_min_s"]["layer"] == "by_family"
+        assert applied["special"]["production_min_s"]["keyed_under"] == "maximum-phonation-time"
+        assert applied["special"]["production_min_s"]["bound"] == 4.0
+        assert applied["sibling"]["production_min_s"]["layer"] == "by_group"
+        assert applied["sibling"]["production_min_s"]["bound"] == 0.5
+        # The family said nothing about the other three, so it inherits them rather than losing them.
+        inherited = ("voiced_fraction_min", "f0_spread_max_semitones", "continuity_min")
+        assert {applied["special"][gate]["layer"] for gate in inherited} == {"by_group"}
+        assert [applied["special"][gate]["bound"] for gate in inherited] == [0.5, 2.0, 0.5]
+
+    def test_a_gate_whose_bound_nobody_measured_joins_the_reports_unmeasured(self, tmp_path: Path) -> None:
+        """An unmeasured gate must reach ``unmeasured_points_flag`` the way a setting does."""
+        override = tmp_path / "nulled.yaml"
+        override.write_text("verdict:\n  gates:\n    by_group:\n      SUSTAINED:\n        production_min_s:\n")
+        store = self._gated_store(
+            tmp_path,
+            family="maximum-phonation-time",
+            branch="VOICE",
+            readings={
+                "carrier_duration_s": 8.0,
+                "carrier_voiced_fraction": 0.9,
+                "carrier_f0_spread_semitones": 1.0,
+                "carrier_continuity": 0.8,
+            },
+        )
+        result = verdict_module.verdict(store, None, load_triage_config(override), run_dir=tmp_path)
+        assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
+        assert result.file_verdict.unmeasured["VOICE"] == ["verdict.gates.by_group.SUSTAINED.production_min_s"]
+
+    def test_a_recording_declaring_no_task_this_graph_knows_is_gated_by_nothing(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """No row, no group, no gates — and no claim about the recording either."""
+        store = self._gated_store(tmp_path, family="not-a-family", branch="VOICE", readings={"carrier_duration_s": 8.0})
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
+        assert result.file_verdict.gates == {}

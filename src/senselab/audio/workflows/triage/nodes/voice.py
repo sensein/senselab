@@ -8,11 +8,14 @@ and evaluates nothing.
 Both write by ``propose`` only. The subject is PREPROCESS's ``amplitude`` spans qualified by
 ``phonation_tracks`` and ``continuity_trace``, over which VOICE mints its own ``family: "voice"``
 spans. It waits for no ``phonation`` span and edits none. Every span a qualifier discards is
-reported as a ``carrier_rejected`` measurement naming the gate. The conformance this branch reports
-is ``True`` or :data:`UNDETERMINED`, never ``False``; VERDICT decides.
+reported as a ``carrier_rejected`` measurement naming the gate. The qualifier's bounds are the task
+group's own, read from ``verdict.gates``; the readings it took off the carrier it selected are
+reported as measurements, and VERDICT applies the same bounds to them to reach a conformance. This
+branch reports no conformance at all.
 
 The design is ``specs/20260817-triage-workflow-dag/branch-voice.md``; the grounds are
-``voice-flag-grounds.md`` and ``branch-voice-implementation.md`` beside it.
+``voice-flag-grounds.md`` and ``branch-voice-implementation.md`` beside it, and the gates are
+``specs/20260921-gates-in-verdict/``.
 """
 
 from __future__ import annotations
@@ -437,7 +440,7 @@ def align_voice(
         NotImplementedError: If a row carries a pattern no reachable matcher serves.
     """
     expectation = VOICE_EXPECTATIONS[task_family]
-    params.bind(expectation.pattern)
+    params.bind(expectation.pattern, task_family)
     evidence = read_evidence(store, run_dir)
     if expectation.pattern is Pattern.SUSTAINED:
         return _voice_sustained(expectation, evidence, hint, params)

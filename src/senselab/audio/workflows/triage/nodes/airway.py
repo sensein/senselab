@@ -1022,7 +1022,7 @@ def align_airway(
     if run_dir is None:
         raise ValueError("align_airway reads persisted derivatives and needs the run directory")
     expectation = AIRWAY_EXPECTATIONS[task_family]
-    params.bind(expectation.pattern)
+    params.bind(expectation.pattern, task_family)
     if expectation.pattern is Pattern.EVENT_SERIES:
         return _airway_event_series(expectation, store, hint, params, run_dir)
     if expectation.pattern is Pattern.EVENT_ALTERNATION:

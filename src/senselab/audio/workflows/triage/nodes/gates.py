@@ -1,9 +1,15 @@
 """The gates, their task groups, and the readings each one is read against.
 
 A **gate** says what reading is good enough; an **instrument setting** says how to take a reading.
-Every gate's bound lives in ``verdict.gates``, keyed by the :class:`Pattern` the task's expectation
-row declares, and a group that names no value for a gate does not apply it. Instrument settings
-stay in ``branch:`` and in PREPROCESS.
+Every gate's bound lives in ``verdict.gates``, and a layer that names no value for a gate does not
+apply it. Instrument settings stay in ``branch:`` and in PREPROCESS.
+
+**A bound resolves most-specific-first: family, then group, then default**, and a family overrides
+its group key by key rather than wholesale, so a family naming one gate inherits the group's
+others. A task group alone is too coarse — ``SYLLABLE_TRAIN`` holds both ``diadochokinesis-pa``,
+which asks for a count of ten, and ``diadochokinesis-v2-puh``, which asks for five seconds and
+names no count. Which layer supplied a bound travels with it, so a verdict says whether a
+recording was judged by a special case or by an inherited one.
 
 VERDICT applies the conformance gates :data:`CONFORMANCE_GATES` names for the group; the remaining
 gates are applied where the finding they produce is located, which is inside the reporting node.
@@ -24,10 +30,22 @@ UNDETERMINED: Literal["UNDETERMINED"] = "UNDETERMINED"
 """What a gate answers when its reading is absent, and what a branch answers about a task."""
 
 _ABSENT = object()
-"""Sentinel separating a group the packaged file does not spell from one it spells empty."""
+"""Sentinel separating a layer the packaged file does not spell from one it spells empty."""
 
 GATE_SECTION = "verdict.gates"
-"""The config section every gate's bound is read from, one sub-mapping per task group."""
+"""The config section every gate's bound is read from, in three layers."""
+
+DEFAULT_LAYER = "default"
+"""The layer every task falls back to. It carries only what is genuinely universal."""
+
+GROUP_LAYER = "by_group"
+"""The layer keyed by :class:`Pattern`."""
+
+FAMILY_LAYER = "by_family"
+"""The layer keyed by declared family, which overrides its group key by key."""
+
+LAYERS = (FAMILY_LAYER, GROUP_LAYER, DEFAULT_LAYER)
+"""The layers, most specific first. A bound is taken from the first one that names its gate."""
 
 
 class Pattern(Enum):
@@ -155,26 +173,31 @@ def conformance_gate_names(pattern: Pattern, *, anti_pattern: str | None = None)
 
 @dataclass(frozen=True)
 class GateBounds:
-    """One task group's gates, as the configuration resolved them.
+    """One task's gates, as the three layers resolved them.
 
     Attributes:
-        group: The group these bounds were read for.
-        bounds: Gate name to its bound. A gate the group does not name is absent; a gate the group
+        group: The task group these bounds were resolved for.
+        family: The declared family they were resolved for, or None for the out-of-family mode,
+            which declares none.
+        bounds: Gate name to its bound. A gate no layer names is absent; a gate the winning layer
             names as null is present with a None value.
+        layers: Gate name to the layer that supplied it — one of :data:`LAYERS`.
     """
 
     group: Pattern
+    family: str | None
     bounds: Mapping[str, Any]
+    layers: Mapping[str, str]
 
     def bound(self, name: str) -> Any:  # noqa: ANN401 — each gate's own type
-        """One gate's bound.
+        """One gate's bound, from the most specific layer that names it.
 
         Args:
             name: The gate's name.
 
         Returns:
-            The bound, or None both when this group does not name the gate and when it names it
-            null. :meth:`names` separates the two.
+            The bound, or None both when no layer names the gate and when the winning layer names
+            it null. :meth:`names` separates the two.
 
         Raises:
             KeyError: If the name is not a gate.
@@ -184,47 +207,121 @@ class GateBounds:
         return self.bounds.get(name)
 
     def names(self, name: str) -> bool:
-        """Whether this group configures the gate at all.
+        """Whether any layer configures the gate at all.
 
         Args:
             name: The gate's name.
 
         Returns:
-            True when the group's mapping spells the gate, whatever its value.
+            True when one of the three layers spells the gate, whatever its value.
         """
         return name in self.bounds
 
-    def record(self) -> dict[str, Any]:
-        """This group's gate table, as the verdict records it.
+    def layer(self, name: str) -> str | None:
+        """Which layer supplied a gate's bound.
+
+        Args:
+            name: The gate's name.
 
         Returns:
-            The group's name and every bound it carries.
+            One of :data:`LAYERS`, or None when no layer names the gate.
         """
-        return {"group": self.group.value, "bounds": {name: self.bounds[name] for name in sorted(self.bounds)}}
+        return self.layers.get(name)
+
+    def keyed_under(self, name: str) -> str:
+        """The key the winning layer configured this gate under.
+
+        Args:
+            name: The gate's name.
+
+        Returns:
+            The group's name for the group layer, the family for the family layer, and the empty
+            string for the default layer, which is keyed by nothing.
+        """
+        layer = self.layers.get(name)
+        if layer == FAMILY_LAYER:
+            return str(self.family)
+        return self.group.name if layer == GROUP_LAYER else ""
+
+    def record(self) -> dict[str, Any]:
+        """The resolved table, as the verdict records it.
+
+        Returns:
+            The group, the family, every bound, and the layer each came from — so a reader can
+            tell a family-specific bound from an inherited one without opening the config.
+        """
+        return {
+            "group": self.group.value,
+            "family": self.family,
+            "bounds": {name: self.bounds[name] for name in sorted(self.bounds)},
+            "layers": {name: self.layers[name] for name in sorted(self.layers)},
+        }
 
 
-def load_gate_bounds(config: TriageConfig, group: Pattern) -> GateBounds:
-    """One task group's gates, from the configuration.
+def _layer_entries(config: TriageConfig, path: str, what: str) -> dict[str, Any]:
+    """One layer's gate mapping, checked against the gate vocabulary.
 
     Args:
         config: The resolved triage configuration.
-        group: The group to read.
+        path: The layer's dotted path.
+        what: What the layer is, for the message.
 
     Returns:
-        The bounds. A gate the group does not spell is absent from them.
+        Gate name to its typed bound. Empty for a layer that names nothing.
 
     Raises:
-        UnknownConfigKey: If the packaged file spells no such group.
-        ValueError: If the group spells a name that is not a gate.
+        UnknownConfigKey: If the packaged file spells no such layer.
+        ValueError: If the layer spells a name that is not a gate.
     """
-    table = config.get(f"{GATE_SECTION}.{group.name}", _ABSENT)
+    table = config.get(path, _ABSENT)
     if table is _ABSENT:
-        raise UnknownConfigKey(f"{GATE_SECTION}.{group.name} is not a configured task group")
+        raise UnknownConfigKey(f"{path} is not a configured {what}")
     entries = dict(table or {})
     unknown = sorted(set(entries) - set(GATE_SPECS))
     if unknown:
-        raise ValueError(f"{GATE_SECTION}.{group.name} names {unknown}, which are not gates; check GATE_KEYS")
-    return GateBounds(group=group, bounds={name: _typed(name, value) for name, value in entries.items()})
+        raise ValueError(f"{path} names {unknown}, which are not gates; check GATE_KEYS")
+    return {name: _typed(name, value) for name, value in entries.items()}
+
+
+def load_gate_bounds(config: TriageConfig, group: Pattern, family: str | None = None) -> GateBounds:
+    """One task's gates, resolved family-first, then group, then default.
+
+    A family entry overrides its group's entry **key by key**: a family naming one gate inherits
+    every other gate its group names.
+
+    Args:
+        config: The resolved triage configuration.
+        group: The task group, from the expectation row's ``Pattern``.
+        family: The declared family, or None for the out-of-family mode, which declares none and
+            therefore reads only the group and default layers.
+
+    Returns:
+        The resolved bounds, each carrying the layer it came from.
+
+    Raises:
+        UnknownConfigKey: If the packaged file spells no such group or layer.
+        ValueError: If a layer spells a name that is not a gate.
+    """
+    resolved: dict[str, Any] = {}
+    layers: dict[str, str] = {}
+    by_family = config.get(f"{GATE_SECTION}.{FAMILY_LAYER}") or {}
+    supplied = {
+        # A family the layer does not name contributes nothing, and so does the out-of-family
+        # mode, whose family is None and is therefore never one of the layer's keys.
+        FAMILY_LAYER: (
+            _layer_entries(config, f"{GATE_SECTION}.{FAMILY_LAYER}.{family}", "declared family")
+            if family in by_family
+            else {}
+        ),
+        GROUP_LAYER: _layer_entries(config, f"{GATE_SECTION}.{GROUP_LAYER}.{group.name}", "task group"),
+        DEFAULT_LAYER: _layer_entries(config, f"{GATE_SECTION}.{DEFAULT_LAYER}", "layer"),
+    }
+    for layer in LAYERS:
+        for name, value in supplied[layer].items():
+            if name not in resolved:
+                resolved[name] = value
+                layers[name] = layer
+    return GateBounds(group=group, family=family, bounds=resolved, layers=layers)
 
 
 def _typed(name: str, value: Any) -> Any:  # noqa: ANN401 — each gate's own type
@@ -250,6 +347,9 @@ class AppliedGate:
         reading: The measurement's name.
         value: What the reporting node read, or None when nothing carried the reading.
         bound: What it was read against, or None when nobody has measured the bound.
+        layer: Which of :data:`LAYERS` supplied the bound.
+        keyed_under: The key that layer configured it under — the group's name, the family, or
+            the empty string for the default layer, which is keyed by nothing.
         op: :data:`AT_LEAST` or :data:`AT_MOST`.
         passed: True, False, or :data:`UNDETERMINED` where either side was absent.
     """
@@ -259,6 +359,8 @@ class AppliedGate:
     reading: str
     value: Any
     bound: Any
+    layer: str
+    keyed_under: str
     op: str
     passed: bool | Literal["UNDETERMINED"]
 
@@ -274,6 +376,8 @@ class AppliedGate:
             "reading": self.reading,
             "value": self.value,
             "bound": self.bound,
+            "layer": self.layer,
+            "keyed_under": self.keyed_under,
             "op": self.op,
             "passed": self.passed,
         }
@@ -327,6 +431,8 @@ def apply_gates(
                 reading=spec.reading,
                 value=value,
                 bound=bound,
+                layer=str(bounds.layer(name)),
+                keyed_under=bounds.keyed_under(name),
                 op=spec.op,
                 passed=passed,
             )

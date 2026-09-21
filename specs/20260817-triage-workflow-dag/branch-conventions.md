@@ -14,6 +14,17 @@ The contract itself is
 > [`verdict.md`](verdict.md) § *A branch reports; this fold decides*, and § *A branch `FAIL` is an
 > absence of detected content* below, which records what became of that outcome.
 
+> **Superseded again, 2026-09-21: a branch no longer concludes a conformance either.** `Result`
+> carries spans and findings and has no field for one; every `branch_report` is written
+> `UNDETERMINED`, and VERDICT applies the declared family's task group's gates to the readings the
+> branch wrote. Sixteen thresholds moved from `branch:` to `verdict.gates` with that change, so a
+> `branch.<gate>` named anywhere below or in the implementation records beside it now reads
+> `verdict.gates.by_group.<GROUP>.<gate>`, resolved under any `by_family` entry and over
+> `default`; `settings-table.md` renders which group carries which.
+> See [`verdict.md`](verdict.md) § *The gates decide the conformance, keyed by family then group*
+> and
+> [`../20260921-gates-in-verdict/`](../20260921-gates-in-verdict/).
+
 ## Span family is lowercase
 
 A branch that proposes a span writes `family: "airway"`, `"speech"`, `"voice"` or `"ddk"`.

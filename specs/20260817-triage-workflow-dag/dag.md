@@ -184,7 +184,7 @@ the router's word for its own subject.
 
 Writes `airway`-family spans (`<label_set>_event`, `<kind>_run`, `breath_event`, `task_extent`),
 counts and measures, `truncation` and `off_task_extent` deviations, and contests a span whose raw
-score never clears `branch.score_min`.
+score never clears `verdict.gates.by_group.<GROUP>.score_min`.
 
 Its `SOUND_COVERAGE` matcher reports `breath_coverage_fraction` over the declared duration and
 answers `UNDETERMINED` unconditionally: nothing in the design decides a sustained breathing task from
