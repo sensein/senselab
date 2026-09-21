@@ -1202,7 +1202,15 @@ contain defaults."* What the reversal does not license is a number chosen to mak
 value below says what it was reasoned from, and where nothing could be reasoned the key was removed
 rather than guessed.
 
-**What the section no longer contains.** Three keys judged the recording rather than configuring a
+**What the section no longer contains.** **Sixteen gates moved to
+[verdict.gates](#the-gates-and-what-each-was-reasoned-from) on 2026-09-21**, resolved family-first
+then by the `Pattern` each expectation row declares then by a shared default: a gate says what
+reading is good enough and belongs with the fold that decides, and a layer that names no value
+for one does not apply it. Their derivations moved
+with them, unchanged. What is left here is the fifteen instrument settings, each of which says how
+a reading is taken.
+
+Before that, three keys judged the recording rather than configuring a
 detector, so they moved to [verdict](#verdict) with the fold that reads them:
 `min_contrast_db` ("the difference two effort levels must differ by to *be* a contrast"),
 `tilt_max_db_per_octave` ("the tilt below which a recording *reads as* occluded") and
@@ -1244,17 +1252,6 @@ branch.event_min_s: 0.05
   50 ms an "event" is not separable from a click, and the envelope at the shipped hop cannot
   resolve one either.
 
-branch.score_min: 0.2
-  The same value the owner already directed for the same question: `windows.yamnet.default_threshold`
-  and `windows.hear.default_threshold` are both 0.2, "score a label needs to join a window's set".
-  `sounds_like` asks that question of the same `raw_scores`, and every classifier in the graph is
-  applied through a sigmoid head (`function_to_apply="sigmoid"`, `preprocess.py:2217,3110`; YAMNet's
-  own output is per-class sigmoid), so the scores are comparably scaled in [0, 1]. Shipping a
-  different number here would be two answers to one question. The 2026-09-04 objection — that one cut
-  across two classifiers whose scales were never compared must be measured — stands as an owed
-  measurement; what changes is that the graph now answers it the same way in both places instead of
-  refusing to answer in one.
-
 branch.breath_coverage_min is **deleted**, not left null.
 
   It shipped as 0.5, derived as "a majority; a breathing task asks for breathing throughout the
@@ -1271,35 +1268,10 @@ branch.voiced_strength_min: 0.45
   Praat's own default for the voicing threshold in `To Pitch`. A published convention of the
   instrument this branch reads, not a value chosen for this corpus.
 
-branch.voiced_fraction_min: 0.5
-  A majority: a sustained phonation carrier is voiced for more of its frames than not.
-
 branch.f0_spread_window_s: 0.5
   Long enough to hold many pitch periods at any adult F0 (40 periods at 80 Hz) and short enough
   that a deliberate glide is not averaged into a steady reading. From the task instruction on both
   sides: a held vowel is asked to be steady, a glide is asked not to be.
-
-branch.f0_spread_max_semitones: 2.0
-  A whole tone: the smallest interval a listener names as a pitch change in speech rather than as
-  vibrato or tracker noise.
-
-branch.continuity_min: 0.5
-  A majority, on the spectral continuity trace.
-
-branch.production_min_s: 0.5
-  From the word "sustained": a production shorter than half a second is not sustained in the
-  instruction's own sense.
-
-branch.monotone_tolerance_semitones: 1.0
-  One semitone, the smallest conventional pitch unit. A reversal smaller than one semitone is
-  within the F0 tracker's own resolution and is not evidence that the sweep turned.
-
-branch.dominant_segment_min_fraction: 0.5
-  A majority: the declared direction holds for more of the sweep than not.
-
-branch.response_min_s: 0.5
-  Half a second holds at most one short word, so it is the shortest extent that can be a response
-  to an instruction asking for one.
 
 branch.pause_min_s: 0.25
   250 ms, the conventional boundary for a perceptible pause in the speech-timing literature, and
@@ -1313,39 +1285,15 @@ branch.breath_group_min_gap_s: 0.5
   A breath takes about half a second, so a gap that could hold one is where a breath group can end.
   Respiratory physiology, not a corpus reading.
 
-branch.repeat_overlap_min: 0.5
-  A majority: an alignment covering more than half the expected sequence twice has covered it twice.
-
 branch.echo_ngram_n: 3
   A trigram. The conventional n of the lexical-overlap measures (BLEU-3/4, ROUGE-3) and the
   smallest n at which word *order* rather than word choice is being compared, which is what
   distinguishes an echo of the prompt from a response using its vocabulary.
 
-branch.echo_overlap_max: 0.5
-  A majority: more than half the prompt's trigrams reproduced is an echo of it.
-
-branch.verbatim_overlap_max: 0.5
-  The same convention on the same measure, for source content rather than prompt.
-
-branch.coverage_min: 0.5
-  A majority of the expected tokens realised.
-
-branch.interval_max_s: 2.0
-  From the instruction's own word. A series a speaker is told to produce *quickly* does not pause
-  for more than about two seconds between events without the instruction having been abandoned.
-
 branch.modulation_band_hz: [1.0, 10.0]
   Brackets the clinically reported DDK rates (4-8 syllables/s for /pataka/, up to ~7/s for a single
   syllable) with margin on both sides, and excludes both the breath-group rate below 1 Hz and
   anything approaching the pitch range above. Task physiology, not a fit.
-
-branch.rate_prominence_min: 2.0
-  A factor of two over the band's own mean: the conventional "a peak, not the noise floor"
-  criterion, on a linear spectrum rather than in dB.
-
-branch.train_min_s: 1.0
-  At the slowest clinically reported DDK rate (~3 syllables/s), a span worth calling a train holds
-  at least three syllables, which is one second.
 
 branch.burst_window_ms: 20.0
   The stop burst and its aspiration occupy the first 10-25 ms after release (Blumstein & Stevens,
@@ -1358,10 +1306,6 @@ branch.effort_split_hz: 1000.0
   Hammarberg index both take it there. A published convention. The *judgement* built on this
   measurement, how far two effort levels must differ, moved to `verdict.min_contrast_db` and is
   still unset, because nothing in the instrument's physics says how far is enough.
-
-branch.gap_off_task_min_s: 1.0
-  Shorter than a second, a gap is a breath or a pause within the task; a full second of nothing is
-  a region that did not serve it.
 
 branch.label_sets
   It maps a kind to the **HeAR heads** that ARE that sound, and the two shipped entries are
@@ -1522,7 +1466,8 @@ as conventional, which is the distinction the owner drew.
 
 What VERDICT does with what the reporting nodes report. **A branch reports and VERDICT decides**
 (owner, 2026-09-16), so every threshold that turns a reading into a judgement about the recording is
-here and none is in `branch:`.
+here and none is in `branch:`. Since 2026-09-21 that is true of the *thresholds* as well as the
+outcomes: `verdict.gates` holds all of them, resolved family, then task group, then default.
 
 ```
 verdict.conformance_flags: true
@@ -1649,15 +1594,139 @@ verdict.level_min_dbfs: null
   rather than defaulted so that the two do not become two answers to one question. Read by no code.
 ```
 
+### The gates, and what each was reasoned from
+
+Moved out of `branch:` on 2026-09-21 at their existing settings — a gate says what reading is
+good enough and belongs with the fold that decides, an instrument setting says how a reading is
+taken and stays with the instrument. See `specs/20260921-gates-in-verdict/design.md` for the
+split and `implementation.md` beside it for what each gate now reads. **Nothing here was
+re-derived**; each entry is the derivation it carried under `branch.`, with the task groups the
+packaged file configures it for named beside it. `settings-table.md` renders the whole table.
+
+**A bound resolves in three layers, most specific first: `by_family`, then `by_group`, then
+`default`, and a family overrides its group key by key.** Every bound below is a `by_group` one.
+`default` and `by_family` both ship **empty**, and each for its own reason. `default` is empty
+because nothing is universal — `gap_off_task_min_s` reaches six of the twelve groups and no other
+gate reaches more than three, so shipping one there would be a default with nine exclusions rather
+than a shared rule. `by_family` is empty because every value moved at its current setting and no
+per-family difference has been derived; what the layer buys today is that a difference like
+`maximum-phonation-time` declaring `expect_inhale` where its v2 does not — one group, two
+instructions — becomes expressible without a code change.
+
+**No gate reads `expected_event_count`**, and none may until each expectation row declares which
+kind of count it carries. The field holds a count the instruction gave (`fivebreaths` asks for
+five, and says so in its own name) beside a count nobody gave (`diadochokinesis-pa`'s ten, on a
+task whose instruction is *repeat as fast as you can*). A bound on the second would judge a
+participant against a number never spoken to them, and individuals vary. `events_min` and
+`repetitions_min` read what the instrument **found**, at a bound of one — did the asked-for sound
+happen at all — never what the row declared. The declared count stays a reported covariate.
+
+```
+verdict.gates.by_group.score_min: 0.2          [EVENT_SERIES, EVENT_ALTERNATION, SOUND_COVERAGE]
+  The same value the owner already directed for the same question: `windows.yamnet.default_threshold`
+  and `windows.hear.default_threshold` are both 0.2, "score a label needs to join a window's set".
+  `sounds_like` asks that question of the same `raw_scores`, and every classifier in the graph is
+  applied through a sigmoid head (`function_to_apply="sigmoid"`, `preprocess.py:2217,3110`; YAMNet's
+  own output is per-class sigmoid), so the scores are comparably scaled in [0, 1]. Shipping a
+  different number here would be two answers to one question. The 2026-09-04 objection — that one cut
+  across two classifiers whose scales were never compared must be measured — stands as an owed
+  measurement; what changes is that the graph now answers it the same way in both places instead of
+  refusing to answer in one.
+
+verdict.gates.by_group.voiced_fraction_min: 0.5          [SUSTAINED, GLIDE]
+  A majority: a sustained phonation carrier is voiced for more of its frames than not.
+
+verdict.gates.by_group.f0_spread_max_semitones: 2.0          [SUSTAINED]
+  A whole tone: the smallest interval a listener names as a pitch change in speech rather than as
+  vibrato or tracker noise.
+
+verdict.gates.by_group.continuity_min: 0.5          [SUSTAINED]
+  A majority, on the spectral continuity trace.
+
+verdict.gates.by_group.production_min_s: 0.5          [SUSTAINED, GLIDE]
+  From the word "sustained": a production shorter than half a second is not sustained in the
+  instruction's own sense.
+
+verdict.gates.by_group.monotone_tolerance_semitones: 1.0          [GLIDE]
+  One semitone, the smallest conventional pitch unit. A reversal smaller than one semitone is
+  within the F0 tracker's own resolution and is not evidence that the sweep turned.
+
+verdict.gates.by_group.dominant_segment_min_fraction: 0.5          [GLIDE]
+  A majority: the declared direction holds for more of the sweep than not.
+
+verdict.gates.by_group.response_min_s: 0.5          [FREE_RESPONSE]
+  Half a second holds at most one short word, so it is the shortest extent that can be a response
+  to an instruction asking for one.
+
+verdict.gates.by_group.repeat_overlap_min: 0.5          [ORDERED_TOKENS]
+  A majority: an alignment covering more than half the expected sequence twice has covered it twice.
+
+verdict.gates.by_group.echo_overlap_max: 0.5          [FREE_RESPONSE]
+  A majority: more than half the prompt's trigrams reproduced is an echo of it.
+
+verdict.gates.by_group.verbatim_overlap_max: 0.5          [FREE_RESPONSE]
+  The same convention on the same measure, for source content rather than prompt.
+
+verdict.gates.by_group.coverage_min: 0.5          [FREE_RESPONSE]
+  A majority of the expected tokens realised.
+
+verdict.gates.by_group.interval_max_s: 2.0          [EVENT_SERIES]
+  From the instruction's own word. A series a speaker is told to produce *quickly* does not pause
+  for more than about two seconds between events without the instruction having been abandoned.
+
+verdict.gates.by_group.rate_prominence_min: 2.0          [SYLLABLE_TRAIN, SYLLABLE_SEQUENCE]
+  A factor of two over the band's own mean: the conventional "a peak, not the noise floor"
+  criterion, on a linear spectrum rather than in dB.
+
+verdict.gates.by_group.train_min_s: 1.0          [SYLLABLE_TRAIN, SYLLABLE_SEQUENCE]
+  At the slowest clinically reported DDK rate (~3 syllables/s), a span worth calling a train holds
+  at least three syllables, which is one second.
+
+verdict.gates.by_group.gap_off_task_min_s: 1.0          [ORDERED_TOKENS, FREE_RESPONSE, ITEM_LIST, EVENT_SERIES, EVENT_ALTERNATION, SOUND_COVERAGE]
+  Shorter than a second, a gap is a breath or a pause within the task; a full second of nothing is
+  a region that did not serve it.
+
+```
+
+### The five gates that were code literals
+
+Each was a hard-coded rule inside a branch body, and each is now a configured gate **at the
+value the code used**. Writing them down is what makes refitting them a config change; none is
+a new decision.
+
+```
+verdict.gates.by_group.expected_tokens_matched_min: 1          [ORDERED_TOKENS]
+  Was `bool(matched)` in `_speech_ordered`. One realised token is the weakest reading of "the
+  prescribed sequence was attempted".
+
+verdict.gates.by_group.omissions_max: 0          [ORDERED_TOKENS]
+  Was `and not omissions` in the same expression: the all-or-nothing rule under which one missed
+  word in a hundred reads exactly like silence, and which fails `caterpillar-passage` 48.6% and
+  `rainbow-passage` 23.8%. It ships at 0 because moving a gate is not refitting it; it is written
+  down here so that refitting it is a config change with a denominator rather than a code change.
+
+verdict.gates.by_group.items_min: 1          [ITEM_LIST]
+  Was `len(items) > 0`. One item is a list attempted.
+
+verdict.gates.by_group.events_min: 1          [EVENT_SERIES, EVENT_ALTERNATION]
+  Was `if events: return True` in `_events_reading`. One event of the instruction's own kind is
+  the weakest reading of "the sound asked for was produced". The count asked for is reported
+  beside it and does not gate: an extractor's shortfall is not evidence about the participant.
+
+verdict.gates.by_group.repetitions_min: 1          [SYLLABLE_TRAIN, SYLLABLE_SEQUENCE]
+  Was `decode.count >= 1 or done is True` in `_with_decode`, over both instruments. The reading
+  folds the two the same way the expression did, so the bound is the same 1.
+```
+
 ### What the fold does with each input
 
 One table, because the contributions are easy to conflate:
 
 | input | where it comes from | what it contributes |
 | --- | --- | --- |
-| conformance `False` | the branch's own expectation match | a flag ground, gated on the referent and the declared family |
+| conformance `False` | this fold's own gates over the branch's readings | a flag ground, gated on the referent and the declared family |
 | conformance `True` | the same | nothing |
-| conformance `UNDETERMINED` | `detect_*`, or an unmeasured point | nothing, unless `undetermined_flags` |
+| conformance `UNDETERMINED` | an out-of-family branch, an absent reading, or an unmeasured bound | nothing, unless `undetermined_flags` |
 | the proposed spans | the store, by generating activity and family | `findings` present/absent/uncertain -- the branch side of the agreement table |
 | the route | ROUTING's `branch_decision` | `agreement`; a mismatch flags, and it is the only way the route reaches triage |
 | deviations | the branch's typed findings | recorded in `deviations`; never a flag ground |

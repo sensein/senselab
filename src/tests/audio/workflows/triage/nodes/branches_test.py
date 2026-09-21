@@ -90,6 +90,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     windowed_spreads,
     write_findings,
 )
+from senselab.audio.workflows.triage.nodes.gates import GATE_SPECS, GROUP_LAYER
 from senselab.audio.workflows.triage.routing_analysis.families import (
     AIRWAY_ELICITING,
     SPEECH_ELICITING,
@@ -184,19 +185,34 @@ def _window(window_id: str, span_id: str, classifier: str, raw_scores: dict[str,
     )
 
 
-def _params(**values: Any) -> BranchParams:  # noqa: ANN401
-    """The packaged operating points, with a fixture's own values overriding some of them.
+def _params(group: Pattern = Pattern.SYLLABLE_TRAIN, **values: Any) -> BranchParams:  # noqa: ANN401
+    """The packaged settings and gates, with a fixture's own values overriding some of them.
 
     Args:
-        **values: ``branch.*`` keys to override, e.g. to set a null a test wants to read as missing.
+        group: The task group whose gates the body under test reads.
+        **values: Instrument settings or gate bounds by name, e.g. a null a test reads as missing.
 
     Returns:
-        The record over a configuration carrying those values.
+        The record over a configuration carrying those values, bound to ``group``.
     """
     config = load_triage_config()
     merged = dict(config.values)
-    merged[PARAM_SECTION] = {**config.values[PARAM_SECTION], **values}
-    return branch_params(TriageConfig(config.name, config.version, config.config_hash, merged))
+    merged[PARAM_SECTION] = {
+        **config.values[PARAM_SECTION],
+        **{key: value for key, value in values.items() if key not in GATE_SPECS},
+    }
+    gates = {key: value for key, value in values.items() if key in GATE_SPECS}
+    merged["verdict"] = {
+        **config.values["verdict"],
+        "gates": {
+            **config.values["verdict"]["gates"],
+            GROUP_LAYER: {
+                **config.values["verdict"]["gates"][GROUP_LAYER],
+                group.name: {**config.values["verdict"]["gates"][GROUP_LAYER][group.name], **gates},
+            },
+        },
+    }
+    return branch_params(TriageConfig(config.name, config.version, config.config_hash, merged)).bind(group)
 
 
 # --------------------------------------------------------------------- the propose path
@@ -280,10 +296,10 @@ class TestAProposerMintsOnlyIntoItsOwnFamily:
         intruder = Proposal("speech", "task_extent", 0.0, 1.0, ("e1",), {})
 
         def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
-            return Result(True, [intruder], [])
+            return Result([intruder], [])
 
         def detect(store: ProvStore, params: BranchParams) -> Result:
-            return Result(UNDETERMINED, [], [])
+            return Result([], [])
 
         with pytest.raises(ValueError, match="mints only into 'voice'"):
             dispatch("VOICE", _store(path="x_task-prolonged-vowel.wav"), _params(), align=align, detect=detect)
@@ -595,15 +611,15 @@ class TestTheModeSelector:
 
         def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
             seen.append(task_family)
-            return Result(True, [], [])
+            return Result([], [measured("carrier_duration_s", None, None, 1.0)])
 
         def detect(store: ProvStore, params: BranchParams) -> Result:
             seen.append("detect")
-            return Result(UNDETERMINED, [], [])
+            return Result([], [])
 
         result = dispatch("VOICE", _store(path="sub-a_task-prolonged-vowel.wav"), _params(), align=align, detect=detect)
         assert seen == ["prolonged-vowel"]
-        assert result.done is True
+        assert [finding.name for finding in result.deviations] == ["carrier_duration_s"]
 
     def test_another_branchs_family_takes_the_out_of_family_mode(self) -> None:
         """A CAPE-V recording is out of family for VOICE under the reference family set."""
@@ -621,38 +637,38 @@ class TestTheModeSelector:
         assert mode_of("VOICE", store)[0] == "detect"
         assert mode_of("AIRWAY", store)[0] == "detect"
 
-    def test_the_out_of_family_mode_may_answer_only_undetermined(self) -> None:
-        """``done = UNDETERMINED`` there is a rule, not a default: no pattern was expected of it."""
+    def test_no_mode_can_answer_a_conformance_at_all(self) -> None:
+        """The rule is structural now: ``Result`` has no field a branch could write a verdict into.
+
+        It used to be a check inside ``dispatch`` that the out-of-family mode returned
+        ``UNDETERMINED``. A check can be forgotten by a new branch; a missing field cannot.
+        """
+        assert Result._fields == ("components", "deviations")
+
+    def test_both_modes_report_findings_and_nothing_else(self) -> None:
+        """Whichever arm runs, what comes back is spans and readings for VERDICT to gate."""
 
         def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
-            return Result(True, [], [])
+            return Result([], [measured("expected_tokens_matched", None, None, 9)])
 
         def detect(store: ProvStore, params: BranchParams) -> Result:
-            return Result(False, [], [])
+            return Result([], [measured("lexical_words", None, None, 2)])
 
-        with pytest.raises(ValueError, match="evaluates no task"):
-            dispatch("SPEECH", _store(path="/tmp/plain.wav"), _params(), align=align, detect=detect)
-
-    def test_the_in_family_mode_may_answer_false(self) -> None:
-        """A declared family that produced none of its patterns returns not-done."""
-
-        def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
-            return Result(False, [], [])
-
-        def detect(store: ProvStore, params: BranchParams) -> Result:
-            return Result(UNDETERMINED, [], [])
-
-        store = _store(path="sub-a_task-prolonged-vowel.wav")
-        assert dispatch("VOICE", store, _params(), align=align, detect=detect).done is False
+        in_family = dispatch(
+            "VOICE", _store(path="sub-a_task-prolonged-vowel.wav"), _params(), align=align, detect=detect
+        )
+        out_of_family = dispatch("SPEECH", _store(path="/tmp/plain.wav"), _params(), align=align, detect=detect)
+        assert [finding.name for finding in in_family.deviations] == ["expected_tokens_matched"]
+        assert [finding.name for finding in out_of_family.deviations] == ["lexical_words"]
 
     def test_an_unknown_branch_is_refused(self) -> None:
         """A misspelled branch must not silently take the detect arm of nothing."""
 
         def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
-            return Result(True, [], [])
+            return Result([], [])
 
         def detect(store: ProvStore, params: BranchParams) -> Result:
-            return Result(UNDETERMINED, [], [])
+            return Result([], [])
 
         with pytest.raises(KeyError):
             dispatch("PROSODY", _store(), _params(), align=align, detect=detect)
@@ -683,7 +699,7 @@ class TestEveryOperatingPointIsAConfigKey:
         mappings = {key for key in PARAM_KEYS if f"{PARAM_SECTION}.{key}" in DATA_MAP_PATHS}
         numeric = [key for key in PARAM_KEYS if key not in mappings]
         assert mappings == {"label_sets", "phoneme_place_classes", "phoneme_vowel_classes"}
-        assert len(numeric) == 28
+        assert len(numeric) == 12
         params = branch_params(config)
         for key in numeric:
             assert config.values[PARAM_SECTION][key] is not None, key
@@ -695,7 +711,7 @@ class TestEveryOperatingPointIsAConfigKey:
         params = _params(event_min_s=None)
         assert params.point("event_min_s") is None
         assert params.missing == ["event_min_s"]
-        assert params.point("score_min") == pytest.approx(0.2)
+        assert params.point("peak_prominence_db") == pytest.approx(6.0)
 
     def test_point_raises_only_for_a_name_outside_point_types(self) -> None:
         """A typo in the calling code is a programming error, not a measurement the graph is missing."""
@@ -704,13 +720,13 @@ class TestEveryOperatingPointIsAConfigKey:
 
     def test_record_names_every_null_key_in_read_order(self) -> None:
         """Which point a body reached for first is what says where the evaluation stopped."""
-        params = _params(peak_prominence_db=None, event_min_s=None, score_min=None)
+        params = _params(peak_prominence_db=None, event_min_s=None, trough_return_db=None)
         params.point("event_min_s")
         params.point("peak_prominence_db")
-        params.point("score_min")
+        params.point("trough_return_db")
         [finding] = params.record()
         assert finding.name == UNMEASURED_POINTS
-        assert finding.evidence["value"] == ["event_min_s", "peak_prominence_db", "score_min"]
+        assert finding.evidence["value"] == ["event_min_s", "peak_prominence_db", "trough_return_db"]
         assert finding.evidence["section"] == PARAM_SECTION
 
     def test_the_label_sets_ship_the_airway_decision_already_taken(self) -> None:

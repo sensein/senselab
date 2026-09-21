@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurements,
     live_entities,
 )
+from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.nodes.preprocess import (
     diarization_measurement as preprocess_diarization_measurement,
 )
@@ -39,6 +40,7 @@ from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.nodes.conftest import gated_from_store
 
 SR = 16000
 ENROLLMENT_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
@@ -161,13 +163,20 @@ def speech_config(tmp_path: Path) -> TriageConfig:
 
 SYLLABLE_POINTS = (
     "branch:\n"
-    "  train_min_s: 1.5\n"
     "  modulation_band_hz: [2.0, 12.0]\n"
-    "  rate_prominence_min: 2.0\n"
     "  smoothing_window_s: 0.011\n"
     "  peak_prominence_db: 6.0\n"
     "  trough_return_db: 3.0\n"
     "  event_min_s: 0.02\n"
+    "verdict:\n"
+    "  gates:\n"
+    "    by_group:\n"
+    "      SYLLABLE_TRAIN:\n"
+    "        train_min_s: 1.5\n"
+    "        rate_prominence_min: 2.0\n"
+    "      SYLLABLE_SEQUENCE:\n"
+    "        train_min_s: 1.5\n"
+    "        rate_prominence_min: 2.0\n"
 )
 """The event walk's own points, at the 1 kHz envelope these fixtures write.
 
@@ -1274,7 +1283,8 @@ class TestAFreeResponseIsReadOffTheWords:
             "the fixture must reproduce the deduplicated store, not merely resemble it"
         )
         result = speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
-        assert result.report.conformance is True
+        assert result.report.conformance == UNDETERMINED
+        assert gated_from_store(store, Pattern.FREE_RESPONSE, settings=speech_config) is True
         assert _report_entity(store, "SPEECH").attributes["words_n"] == 20
 
     def test_the_task_extent_is_the_words_own_hull(
@@ -1336,8 +1346,8 @@ class TestAFreeResponseIsReadOffTheWords:
             attributes={"measure": "asr", "signal": "consensus", "merged_proposals": 1},
         )
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
-        result = speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
-        assert result.report.conformance is True
+        speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        assert gated_from_store(store, Pattern.FREE_RESPONSE, settings=speech_config) is True
         extent = [e for e in live_entities(store, "span") if e.attributes.get("role") == "task_extent"][0].extent
         assert extent is not None and extent[1] - extent[0] > 9.0
 
@@ -1350,7 +1360,11 @@ class TestAFreeResponseIsReadOffTheWords:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", speech_config, self._declared("free-speech"), run_dir=tmp_path)
         assert SPEECH_EXPECTATIONS["free-speech"].anti_pattern == "verbatim_prompt"
-        assert result.report.conformance is True
+        assert result.report.conformance == UNDETERMINED
+        assert (
+            gated_from_store(store, Pattern.FREE_RESPONSE, settings=speech_config, anti_pattern="verbatim_prompt")
+            is True
+        )
         assert "anti_pattern_verbatim_prompt" in {
             entity.attributes.get("name") for entity in live_entities(store, "measurement")
         }
@@ -1365,6 +1379,10 @@ class TestAFreeResponseIsReadOffTheWords:
         result = speech(store, "plain", speech_config, self._declared("story-recall"), run_dir=tmp_path)
         assert SPEECH_EXPECTATIONS["story-recall"].anti_pattern == "verbatim_source"
         assert result.report.conformance == UNDETERMINED
+        assert (
+            gated_from_store(store, Pattern.FREE_RESPONSE, settings=speech_config, anti_pattern="verbatim_source")
+            == UNDETERMINED
+        )
 
     def test_a_recording_with_no_lexical_word_still_reads_as_no_response(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1372,8 +1390,8 @@ class TestAFreeResponseIsReadOffTheWords:
         """The control: the recognizers ran and found nothing, which is a reading, not an absence."""
         _seed_speech_store(store, tmp_path, words=[], duration_s=5.0)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
-        result = speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
-        assert result.report.conformance is False
+        speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        assert gated_from_store(store, Pattern.FREE_RESPONSE, settings=speech_config) is False
 
     def test_no_recognizer_reaching_the_consensus_is_undetermined_not_a_failure(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2346,7 +2364,8 @@ class TestTheNodeRunsOneModeAndProposesWhatItFinds:
         expectation = report.attributes["expectation"]
         assert expectation["mode"] == "align"
         assert expectation["task_family"] == "harvard-sentences-list"
-        assert report.attributes["conformance"] is True
+        assert report.attributes["conformance"] == UNDETERMINED
+        assert gated_from_store(store, Pattern.ORDERED_TOKENS, settings=speech_config) is True
 
     def test_an_undeclared_recording_takes_the_detect_mode(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2518,7 +2537,8 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         assert detail["trains_n"] == 0
         assert detail["modulation_peak_hz"] == pytest.approx(5.0, abs=0.5)
         assert detail["modulation_unit"] == "syllables_per_s"
-        assert result.report.conformance is True
+        assert result.report.conformance == UNDETERMINED
+        assert gated_from_store(store, Pattern.SYLLABLE_TRAIN, settings=syllable_config) is True
         assert result.report.conformance_of == "task"
 
     def test_the_train_is_a_speech_span_carrying_its_production(

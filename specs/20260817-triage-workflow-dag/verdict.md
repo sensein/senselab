@@ -72,14 +72,21 @@ The other fifteen are definitional: `voiced_strength_min` says what *counts* as 
 `event_min_s` what the walk will *report*, `pause_min_s` what a gap *is*.
 
 **A gate resolves most-specific-first: family, then group, then default**, a family overriding its
-group key by key rather than wholesale. A group naming no value for a gate does not apply it — which
-is how `GLIDE` stops being bound by `f0_spread_max_semitones`, a held-vowel bound that never made
-sense for a task whose purpose is that pitch moves. The verdict records which layer supplied each
-gate, so a family-specific bound is legible as one without opening the config.
+group key by key rather than wholesale. A group naming no value for a gate does not apply it. The
+verdict records which layer supplied each gate, so a family-specific bound is legible as one without
+opening the config.
 
-`by_family` ships empty. The layer exists because the distinctions are real —
-`maximum-phonation-time` declares `expect_inhale` and its v2 does not, inside one group — and every
-value moves at its current setting, so this is a move and not a refit.
+The motivating example for that — `GLIDE` being bound by `f0_spread_max_semitones`, a held-vowel
+bound on a task whose purpose is that pitch moves — was **true of the config and false of the code**:
+`_voice_glide` never called the spread qualifier, so no glide was ever judged by it. The config said
+one thing and the code did another, which is its own argument for putting every bound in one
+readable table. The layering stands on a case that is real in both: `maximum-phonation-time`
+declares `expect_inhale` and its v2 does not, inside one group.
+
+`by_family` and `default` both ship empty, so the packaged config exercises one layer of three.
+Every value moved at its current setting: differential replay over the 62,139-recording corpus puts
+conformance at `50455/4916/6768` before and after, **zero moved across all 48 families**. Five gate
+names are new, each a code literal written down at the value the code already used.
 
 ### Two counts, and only one of them may be gated
 
@@ -96,6 +103,58 @@ because a count nobody asked for should never have decided anything.
 
 The full design, with the gate/instrument split in full and the measurements each gate reads, is
 `specs/20260921-gates-in-verdict/design.md`.
+
+## The gates decide the conformance, keyed by family then group — owner decision, 2026-09-21
+
+> "all gates should be in verdict not in branches and it should be task group related. branches
+> should just provide the info necessary for the gates. so instruments sit in preprocess and
+> branches."
+
+Until 2026-09-21 the claim above was true of outcomes and false of thresholds: 31 operating points
+sat in `branch:` as a flat block applied identically to every task, and the branches applied them.
+Sixteen of them are **gates** and are now in `verdict.gates`. Fifteen are **instrument settings** —
+what counts as a voiced frame, what the walk will report, what a gap *is* — and stay with the
+instrument.
+
+**A bound resolves in three layers, most specific first: `by_family`, then `by_group` keyed by the
+`Pattern` each expectation row declares, then `default`.** A task group alone is too coarse:
+`SUSTAINED` holds `maximum-phonation-time`, which declares `expect_inhale`, beside its v2, which
+does not, and `SYLLABLE_TRAIN` holds two generations of diadochokinesis instruction. A family
+overrides its group **key by key** — a family naming one gate inherits every other gate its group
+names — and both the family and the default layer ship empty, because every value moved at its
+current setting and nothing is universal. **Which layer supplied each bound is recorded**, so a
+reader can tell a family-specific bound from an inherited one without opening the config.
+
+**No gate reads `expected_event_count`.** It holds a count the instruction gave and a count nobody
+gave under one name, and until each row says which it carries, a bound on it would judge a
+participant against a number never spoken to them. `events_min` and `repetitions_min` read what the
+instrument found, at a bound of one.
+
+A branch now writes **no conformance at all**: `Result` carries spans and findings and has no field
+for one, and every `branch_report` is written `UNDETERMINED`. This fold reads the gates' inputs off
+the branch's own `measure` findings, applies the declared family's group, and substitutes the answer
+onto that branch's report. Three rules govern it:
+
+- **A layer that names no value for a gate does not apply it.** `GLIDE` naming no
+  `f0_spread_max_semitones` is why a held vowel's pitch bound no longer reaches a sweep.
+- **A gate whose reading is absent yields `UNDETERMINED`, never `False`** — and so does a gate whose
+  bound nobody has measured, and so does a group that applied no gate at all. An absent reading is
+  not a failed one.
+- **Only the branch that owns the declared family, and reported `in_family`, is gated.** Every other
+  report evaluated no task; QUALITY's conformance is about the store's own assertions and no gate
+  reads it.
+
+Each gate applied is recorded on the verdict — the gate, the reading, the value, the bound, the
+layer that supplied it and the key it was keyed under, the comparison and the outcome — under
+`FileVerdict.gates`, alongside the whole resolved table and the layer of every bound in it. A conformance can be read backwards from the verdict alone. A gate whose
+bound is null joins the reporting node's `unmeasured`, so `verdict.unmeasured_points_flag` reaches a
+gate the same way it reaches an instrument setting.
+
+Gates whose finding carries an **extent** — a rejected carrier, a located deviation, a per-event
+count — keep their bound in the same table and are applied where that extent is known, inside the
+reporting node. This fold mints nothing and locates nothing, so it cannot apply them; what it can
+do is hold the one number they and it both read. `specs/20260921-gates-in-verdict/` carries the
+split, the equivalence argument and the corpus replay behind it.
 
 ## The fold is task-aware
 

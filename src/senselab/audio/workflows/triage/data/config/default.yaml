@@ -252,38 +252,24 @@ speech:
 # them. `p_normalise` has no key -- it is a function, not a number, and resolves to
 # `consensus.vocabulary_key`, the normalisation the consensus and the stimulus alignment declare.
 branch:
-  # Detection and instrument settings only. A key that turned a reading into a judgement about the
-  # recording moved to `verdict:` on 2026-09-16. Every value here is a conventional starting point
-  # reasoned from the instrument's physics or from the task instruction, NOT fitted against the
-  # corpus; each one's reasoning is in specs/20260817-triage-workflow-dag/config-derivations.md.
+  # Instrument settings only: each says how a reading is taken, never whether one is good enough.
+  # Every gate — what reading is good enough — is in `verdict.gates`, keyed by family, group or
+  # nothing, resolved in that order. Every
+  # value here is a conventional starting point reasoned from the instrument's physics or from the
+  # task instruction, NOT fitted against the corpus; the reasoning for each is in
+  # specs/20260817-triage-workflow-dag/config-derivations.md.
   smoothing_window_s: 0.05             # boxcar width the energy envelope is smoothed over before the event walk
   peak_prominence_db: 6.0              # rise over the global floor, and over the flanking troughs, that makes a maximum an event
   trough_return_db: 3.0                # fall from a peak that closes its event, for the onset and offset walk
   event_min_s: 0.05                    # shortest extent the event walk reports
-  score_min: 0.2                       # classifier raw score at or above which a label is present in a window
   voiced_strength_min: 0.45            # pitch strength at or above which a frame counts as voiced
-  voiced_fraction_min: 0.5             # fraction of voiced frames a phonation carrier must reach
   f0_spread_window_s: 0.5              # window the worst local F0 spread is taken over
-  f0_spread_max_semitones: 2.0         # largest spread a held vowel's typical window may show
-  continuity_min: 0.5                  # median spectral continuity a stationary production must hold
-  production_min_s: 0.5                # shortest carrier span a production may be found in
-  monotone_tolerance_semitones: 1.0    # reversal a pitch sweep may contain and still count as monotone
-  dominant_segment_min_fraction: 0.5   # fraction of a sweep one direction must hold to be the declared one
-  response_min_s: 0.5                  # shortest extent that counts as a response at all
   pause_min_s: 0.25                    # gap between words that is a pause rather than coarticulation
   run_gap_max_s: 0.5                   # largest gap two lexical words may straddle and stay one run
-  repeat_overlap_min: 0.5              # overlap fraction at which an alignment covers the expected sequence twice
   echo_ngram_n: 3                      # n of the n-gram the prompt-echo overlap is measured over
-  echo_overlap_max: 0.5                # prompt n-gram overlap above which a free response echoes its prompt
-  verbatim_overlap_max: 0.5            # source content overlap above which a recall is verbatim
-  coverage_min: 0.5                    # fraction of expected tokens a read text must realise
-  interval_max_s: 2.0                  # largest inter-event interval a series the instruction calls quick may show
   modulation_band_hz: [1.0, 10.0]      # [lo, hi] band the envelope modulation peak is searched in
-  rate_prominence_min: 2.0             # modulation peak over its own band mean that makes a rate readable
-  train_min_s: 1.0                     # shortest carrier span that can hold a syllable train
   burst_window_ms: 20.0                # shortest stop burst and aspiration, which is the decode's minimum phone duration
   effort_split_hz: 1000.0              # split the low and high spectral balance of an effort token is taken at
-  gap_off_task_min_s: 1.0              # shortest gap reported as off-task extent
   # kind -> the HeAR heads that ARE that sound. HeAR spellings only: the AudioSet names YAMNet
   # reports are derived per kind from the packaged classifier-ontology profile's corroboration set
   # for each head, so one kind is readable on both classifiers. Data, not schema.
@@ -328,6 +314,80 @@ verdict:
   min_contrast_db:                     # spectral-balance difference two effort levels must differ by to be a contrast
   tilt_max_db_per_octave:              # spectral tilt below which a recording reads as occluded
   level_min_dbfs:                      # level below which a recording carries no production at all
+  # Every gate, in three layers. A gate says what reading is good enough; an instrument setting,
+  # which stays in `branch:`, says how the reading is taken. A bound resolves most-specific-first
+  # -- `by_family`, then `by_group`, then `default` -- and a family overrides its group KEY BY KEY,
+  # so a family naming one gate inherits the group's others. A layer that names no value for a gate
+  # does not apply it: `GLIDE` naming no `f0_spread_max_semitones` is why the bound on a held
+  # vowel's pitch does not bind a sweep. Every layer is a data mapping in `DATA_MAP_PATHS`, so an
+  # override may add a gate as well as change one. Every value here moved from `branch:` at its
+  # 2026-09-21 setting; the derivations are in
+  # specs/20260817-triage-workflow-dag/config-derivations.md and what moved is in
+  # specs/20260921-gates-in-verdict/design.md.
+  #
+  # No gate reads `expected_event_count`. It holds two unlike things -- a count the instruction
+  # gave (`fivebreaths`) and a count nobody gave (`diadochokinesis-pa`'s ten) -- and until each row
+  # declares which, a bound on it would judge a participant against a number never spoken to them.
+  # It is reported as a covariate beside the rate it qualifies. See the design's own section.
+  gates:
+    # Genuinely universal only. Nothing is: `gap_off_task_min_s` reaches six of the twelve groups
+    # and no other gate reaches more than three, so shipping any of them here would be a default
+    # with nine exclusions rather than a shared rule.
+    default: {}
+    # Gate bounds per task group, keyed by the `Pattern` each expectation row declares.
+    by_group:
+      SUSTAINED:                         # a held vowel
+        production_min_s: 0.5            # shortest carrier a production may be found in
+        voiced_fraction_min: 0.5         # fraction of voiced frames the carrier must reach
+        f0_spread_max_semitones: 2.0     # largest spread the typical window may show
+        continuity_min: 0.5              # median spectral continuity the production must hold
+      GLIDE:                             # a pitch sweep, whose purpose is that pitch moves
+        production_min_s: 0.5            # shortest carrier a production may be found in
+        voiced_fraction_min: 0.5         # fraction of voiced frames the carrier must reach
+        monotone_tolerance_semitones: 1.0  # reversal the sweep may contain and still count as monotone
+        dominant_segment_min_fraction: 0.5  # fraction of the carrier one direction must hold
+      ORDERED_TOKENS:                    # a prescribed token sequence
+        expected_tokens_matched_min: 1   # prescribed tokens the recording must realise
+        omissions_max: 0                 # prescribed tokens nothing realised that are tolerated
+        repeat_overlap_min: 0.5          # overlap at which an alignment covers the sequence twice
+        gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
+      FREE_RESPONSE:                     # a task prescribing no words
+        response_min_s: 0.5              # shortest extent that counts as a response at all
+        coverage_min: 0.5                # source content a recall must realise; the recall's own term
+        echo_overlap_max: 0.5            # prompt n-gram overlap above which a response echoes its prompt
+        verbatim_overlap_max: 0.5        # source content overlap above which a recall is verbatim
+        gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
+      ITEM_LIST:                         # a list of items
+        items_min: 1                     # items the recording must carry
+        gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
+      EVENT_SERIES:                      # a counted series of airway events
+        score_min: 0.2                   # classifier raw score at or above which a label is present
+        events_min: 1                    # events of the instruction's own kind the walk must find
+        interval_max_s: 2.0              # largest inter-onset interval a series called quick may show
+        gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
+      EVENT_ALTERNATION:                 # coughs alternating with breath
+        score_min: 0.2                   # classifier raw score at or above which a label is present
+        events_min: 1                    # events of the instruction's own kind the walk must find
+        gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
+      SOUND_COVERAGE:                    # a sound held over a declared extent; no conformance term
+        score_min: 0.2                   # classifier raw score at or above which a label is present
+        gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
+      SYLLABLE_TRAIN:                    # one syllable repeated
+        train_min_s: 1.0                 # shortest carrier that can hold a train
+        rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
+        repetitions_min: 1               # repetitions either instrument must read
+      SYLLABLE_SEQUENCE:                 # a syllable sequence repeated
+        train_min_s: 1.0                 # shortest carrier that can hold a train
+        rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
+        repetitions_min: 1               # repetitions either instrument must read
+      PER_SENTENCE: {}                   # no row reaches this group; no gate is configured for it
+      EFFORT: {}                         # no row reaches this group; no gate is configured for it
+    # Per-family overrides, each one applied key by key over its group's entry. **Ships empty**:
+    # every value moved at its current setting, and an empty layer is the honest statement that no
+    # per-family difference has been derived yet. What it buys now is that the differences the
+    # design names -- `maximum-phonation-time` declaring `expect_inhale` where its v2 does not,
+    # inside one group -- are expressible without a code change.
+    by_family: {}
 
 # The label consolidation. TAXONOMY runs no models: it consolidates PREPROCESS's stored scores.
 taxonomy:
