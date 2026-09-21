@@ -16,9 +16,11 @@ detectors, judged complete by ``pii.required_detectors``. A surviving finding is
 incomplete re-scan is a flag, and a finding the verifier still sees is re-planned exactly once, what
 survives that being ``unremediable``; ``audio_check`` is the constant ``"bounded"`` on every path.
 An optional LLM check (``redaction.llm_check``) re-reads the redacted transcript for up to
-``max_iterations`` rounds, storing each round's chain of thought as a ``redaction_llm_review``
-measurement and its summary as a ``redaction_llm_annotation`` written on every path, which VERDICT
-reads under ``verdict.llm_redaction_flags``; it annotates and never decides.
+``max_iterations`` rounds, asked only where a release was in prospect. Each round's chain of thought
+is a ``redaction_llm_review`` measurement carrying its ``elapsed_s``, ``load_s`` and generated
+tokens; its summary is a ``redaction_llm_annotation`` written on every path, which VERDICT reads
+under ``verdict.llm_redaction_flags``. The ``llm_check`` activity carries ``started`` and ``ended``.
+It annotates and never decides.
 
 A pass releases three artifacts under ``artifacts_dir``: the masked audio, the flat redacted
 transcript, and the redacted consensus stream as ``consensus.json``, whose records carry each
@@ -37,6 +39,7 @@ import json
 import math
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -59,7 +62,11 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.stimulus import split_prompts
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.text.tasks.pii_detection.api import scan_for_pii
-from senselab.text.tasks.pii_detection.redaction_review import review_payload, review_redacted_text
+from senselab.text.tasks.pii_detection.redaction_review import (
+    review_payload,
+    review_redacted_text,
+    shutdown_review_worker,
+)
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "REDACT"
@@ -606,6 +613,15 @@ class _LlmCheck:
         }
 
 
+def _stamp() -> str:
+    """Now, as the ISO 8601 UTC string an activity's ``started``/``ended`` carries.
+
+    Returns:
+        The timestamp.
+    """
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _llm_settings(config: TriageConfig) -> dict[str, Any]:
     """Every ``redaction.llm_check`` key, read in one place.
 
@@ -618,7 +634,15 @@ def _llm_settings(config: TriageConfig) -> dict[str, Any]:
     Raises:
         ValueError: If a key is unmeasured. They are read together, before any model is contacted.
     """
-    names = ("enabled", "model_id", "ref", "max_iterations", "max_new_tokens", "timeout_s")
+    names = (
+        "enabled",
+        "model_id",
+        "ref",
+        "max_iterations",
+        "max_new_tokens",
+        "timeout_s",
+        "keep_worker_resident",
+    )
     return {name: config.require(f"{_LLM_SECTION}.{name}") for name in names}
 
 
@@ -646,6 +670,10 @@ def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmC
     One review per call: a round that flags something masks it and reviews again, the masking local
     to the loop, and whether any round flagged is what decides the check.
 
+    Every round of one check shares one loaded model. Whether the *next recording* does is
+    ``redaction.llm_check.keep_worker_resident``: with it unset the weights are released when the
+    check ends, so nothing else on the card has to live beside them.
+
     Args:
         transcript_text: The redacted transcript, as it would be released.
         settings: :func:`_llm_settings`' mapping.
@@ -654,6 +682,23 @@ def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmC
         ``(check, reviews)`` — the summary and one payload per round, in order. The first round
         failing is ``absent``; a later one leaves the flag that already stands and records the
         failure beside it.
+    """
+    try:
+        return _llm_rounds(transcript_text, settings)
+    finally:
+        if not settings["keep_worker_resident"]:
+            shutdown_review_worker(forget_failure=False)
+
+
+def _llm_rounds(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmCheck, list[dict[str, Any]]]:
+    """The bounded review / mask / re-review loop itself, without the worker's lifetime.
+
+    Args:
+        transcript_text: The redacted transcript, as it would be released.
+        settings: :func:`_llm_settings`' mapping.
+
+    Returns:
+        :func:`_llm_check`'s pair.
     """
     reviews: list[dict[str, Any]] = []
     current = transcript_text
@@ -998,6 +1043,7 @@ def redact(
             )
 
     llm_settings = _llm_settings(config)
+    review_started = _stamp()
     if outcome is not Outcome.PASS:
         llm = _LlmCheck("not_run", 0, (), "", None, "the detector path withheld; there was nothing to release")
         reviews: list[dict[str, Any]] = []
@@ -1014,6 +1060,8 @@ def redact(
             "max_iterations": int(llm_settings["max_iterations"]),
             "enabled": bool(llm_settings["enabled"]),
         },
+        started=review_started,
+        ended=_stamp(),
     )
     store.was_associated_with(review_act, software)
     if llm.status not in ("disabled", "not_run"):

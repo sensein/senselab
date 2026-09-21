@@ -1670,7 +1670,9 @@ def _llm_reviews(store: ProvStore) -> list[dict[str, Any]]:
 
     Returns:
         One record per review, carrying the iteration, whether the model ran, its reasoning
-        verbatim, what it flagged, and the commit it loaded. Empty when the step did not run.
+        verbatim, what it flagged, the commit it loaded, and what the round cost -- its wall
+        clock, the share that was the model load, the tokens generated and the device memory held.
+        Empty when the step did not run.
     """
     return [
         {
@@ -1681,6 +1683,11 @@ def _llm_reviews(store: ProvStore) -> list[dict[str, Any]]:
             "failure": entity.attributes.get("failure"),
             "model_id": entity.attributes.get("model_id"),
             "revision": entity.attributes.get("revision"),
+            "elapsed_s": entity.attributes.get("elapsed_s"),
+            "load_s": entity.attributes.get("load_s"),
+            "output_tokens": entity.attributes.get("output_tokens"),
+            "resident_mib": entity.attributes.get("resident_mib"),
+            "peak_reserved_mib": entity.attributes.get("peak_reserved_mib"),
             "entity_id": entity.id,
         }
         for entity in find_measurements(store, "redaction_llm_review")
@@ -1727,7 +1734,10 @@ def _llm_check_lines(check: dict[str, Any] | None, reviews: list[dict[str, Any]]
     if check.get("failure"):
         lines.append(f"{prefix}  did not run: {check['failure']}")
     for review in reviews:
-        lines.append(f"{prefix}  review {_shown(review.get('iteration'))}: available={review.get('available')}")
+        lines.append(
+            f"{prefix}  review {_shown(review.get('iteration'))}: available={review.get('available')} "
+            f"elapsed_s={_shown(review.get('elapsed_s'))} load_s={_shown(review.get('load_s'))}"
+        )
         for finding in review.get("findings") or []:
             lines.append(f"{prefix}    concern [{finding.get('category')}]: {finding.get('why')}")
         for line in str(review.get("reasoning") or "").splitlines():
@@ -2141,6 +2151,7 @@ def _text_figure(lines: list[str], title: str, *, figsize: tuple[float, float] |
         family="monospace",
         fontsize=_BLOCK_FONTSIZE,
     )
+
     return figure
 
 
