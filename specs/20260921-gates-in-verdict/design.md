@@ -93,6 +93,40 @@ The three layers must each be readable back from the verdict: a recording's reco
 supplied each gate it was judged by, so a reader can tell a family-specific bound from an inherited
 one without consulting the config.
 
+### A count the instruction gives, and a count nobody gave
+
+Owner-directed 2026-09-21, restating an earlier ruling: *the instruction does not provide any such
+number*, *there was a previous discussion on expected statistically vs required*, and *individuals
+can vary*. One field, `expected_event_count`, currently holds two unlike things:
+
+| family | count | where the number comes from |
+| --- | --- | --- |
+| `respiration-and-cough-fivebreaths` | 5 | **the instruction** — it is in the task's own name |
+| `respiration-and-cough-threequickbreaths`, `-v2-threebreaths*` | 3 | the instruction |
+| `voluntary-cough`, `breath-sounds` | 3 | the instruction |
+| `loudness` / `-v2` | 3 / 2 | the instruction — its `tokens` enumerate them, `('hey','hey','hey')` |
+| `diadochokinesis-pa`, `-ta`, `-ka` | 10 | **nobody.** The task says repeat, as fast as you can |
+| `diadochokinesis-pataka`, `-buttercup` | 30 | nobody |
+
+The docstring says "how many events the instruction asks for", which is true of the first group and
+false of the second. A participant told to take five breaths and giving four has departed from the
+instruction. A participant producing eight `/pa/` rather than ten has done the task correctly; ten
+was never asked for, and **individuals vary** — rate is the measurement of interest, not compliance
+with a number nobody spoke.
+
+So the row must say which kind it carries, and the gates must treat them differently:
+
+- **A required count may be gated**, with tolerance, because a departure from it is a departure from
+  the instruction. What tolerance is a derivation, not a guess, and is not made here.
+- **A statistically expected count may never be gated.** It is reported as a covariate beside the
+  measurement it qualifies — the rate, the repetition count — and VERDICT applies no bound to it.
+  This is the owner's standing ruling that an expected count is a heuristic and not a target.
+
+Until each row declares its kind, no gate may read `expected_event_count` at all. **That is the
+correct behaviour for this change**: the DDK families lose nothing, because a count nobody asked for
+should never have decided anything, and the counted-breath families keep their reading as a
+measurement until the kind is declared and a tolerance derived.
+
 ## The mechanism
 
 1. **A branch reports readings, never a verdict.** Each gate's input becomes a `measurement` the
