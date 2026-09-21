@@ -22,10 +22,10 @@ from senselab.audio.workflows.triage.classifier_ontology import PROFILE_PATH_KEY
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
+    DETECT_GROUP,
     NOT_SEPARABLE_BY_THIS_DESIGN,
     UNDETERMINED,
     BranchParams,
-    Done,
     EnvelopeTrack,
     Expectation,
     Finding,
@@ -108,6 +108,9 @@ INSTRUMENT_ABSENT = "event_instrument"
 
 COVERAGE_FRACTION = "breath_coverage_fraction"
 """How much of the extent the instruction asked for carries breath evidence. No gate reads it."""
+
+EVENTS_FOUND = "airway_events_found"
+"""The reading ``events_min`` is read against: events of the instruction's own kind the walk found."""
 
 DECLARED_EXTENT = "declared_duration_s"
 """``asked_from`` on a coverage fraction whose denominator is the instruction's own duration."""
@@ -406,7 +409,7 @@ def airway_events(
         The events, earliest first.
     """
     resolved_set = label_sets_by_classifier(params).get(label_set)
-    minimum = params.point("score_min")
+    minimum = params.gate("score_min")
     if resolved_set is None or minimum is None:
         return []
     wanted = resolved_set.by_classifier()
@@ -642,20 +645,20 @@ def route_findings(
 # --------------------------------------------------------------------- the three in-family patterns
 
 
-def _events_reading(events: Sequence[Event], params: BranchParams) -> Done:
-    """Whether the instruction's own pattern was found, or no answer where the cut is unmeasured.
+def events_found(events: Sequence[Event], params: BranchParams) -> list[Finding]:
+    """How many events of the instruction's own kind the walk reported, as VERDICT's reading.
 
     Args:
         events: The events the walk reported.
         params: The operating points, read for whether the label cut was measurable.
 
     Returns:
-        True with an event in hand; :data:`UNDETERMINED` where ``branch.score_min`` is unmeasured;
-        False otherwise.
+        One :data:`EVENTS_FOUND` measurement, and nothing at all where the label cut is
+        unmeasured — the walk then looked for nothing and its count reads no recording.
     """
-    if events:
-        return True
-    return UNDETERMINED if params.point("score_min") is None else False
+    if params.gate("score_min") is None:
+        return []
+    return [measured(EVENTS_FOUND, None, None, len(events), *sorted({event.span_id for event in events}))]
 
 
 def instrument_absent(*names: str) -> Result:
@@ -672,7 +675,7 @@ def instrument_absent(*names: str) -> Result:
     """
     if not names:
         raise ValueError("instrument_absent names the derivatives that are absent")
-    return Result(UNDETERMINED, [], [measured(INSTRUMENT_ABSENT, None, None, None, absent=list(names))])
+    return Result([], [measured(INSTRUMENT_ABSENT, None, None, None, absent=list(names))])
 
 
 def coverage_denominator(expectation: Expectation, store: ProvStore) -> tuple[float, str]:
@@ -767,7 +770,7 @@ def _airway_event_series(
     intervals = [round(later - earlier, 3) for earlier, later in zip(onsets, onsets[1:])]
     if expectation.timed_intervals:
         findings.append(count("inter_onset_interval_s", intervals, None, *carriers))
-        interval_max_s = params.point("interval_max_s")
+        interval_max_s = params.gate("interval_max_s")
         if interval_max_s is not None:
             findings.append(
                 count(
@@ -811,8 +814,9 @@ def _airway_event_series(
     findings.extend(lexical_intrusions(store))
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
+    findings.extend(events_found(events, params))
     findings.extend(off_task_findings(components, spans, params))
-    return Result(_events_reading(events, params), components, findings)
+    return Result(components, findings)
 
 
 def _airway_alternation(expectation: Expectation, store: ProvStore, params: BranchParams, run_dir: Path) -> Result:
@@ -842,7 +846,7 @@ def _airway_alternation(expectation: Expectation, store: ProvStore, params: Bran
 
     coughs = airway_events(kind, store, params, spans=spans, envelope=envelope, windows=windows)
     breath_labels = label_sets_by_classifier(params).get(BREATH, LabelSet((), ())).by_classifier()
-    breath_minimum = params.point("score_min")
+    breath_minimum = params.gate("score_min")
     carriers = (
         []
         if breath_minimum is None
@@ -894,8 +898,9 @@ def _airway_alternation(expectation: Expectation, store: ProvStore, params: Bran
         )
     findings.extend(lexical_intrusions(store))
     findings.extend(unviable_findings(expectation))
+    findings.extend(events_found(coughs, params))
     findings.extend(off_task_findings(components, spans, params))
-    return Result(_events_reading(coughs, params), components, findings)
+    return Result(components, findings)
 
 
 def _airway_coverage(
@@ -922,7 +927,7 @@ def _airway_coverage(
         return instrument_absent("hear_scores")
     kind = expectation.label_set
     labels = label_sets_by_classifier(params).get(kind, LabelSet((), ())).hear
-    minimum = params.point("score_min")
+    minimum = params.gate("score_min")
     covered = (
         []
         if minimum is None
@@ -982,7 +987,7 @@ def _airway_coverage(
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
     findings.extend(off_task_findings(components, candidate_spans(store), params))
-    return Result(UNDETERMINED, components, findings)
+    return Result(components, findings)
 
 
 # --------------------------------------------------------------------- the two modes
@@ -1017,6 +1022,7 @@ def align_airway(
     if run_dir is None:
         raise ValueError("align_airway reads persisted derivatives and needs the run directory")
     expectation = AIRWAY_EXPECTATIONS[task_family]
+    params.bind(expectation.pattern)
     if expectation.pattern is Pattern.EVENT_SERIES:
         return _airway_event_series(expectation, store, hint, params, run_dir)
     if expectation.pattern is Pattern.EVENT_ALTERNATION:
@@ -1046,6 +1052,7 @@ def detect_airway(store: ProvStore, params: BranchParams, *, run_dir: Path | Non
     """
     if run_dir is None:
         raise ValueError("detect_airway reads persisted derivatives and needs the run directory")
+    params.bind(DETECT_GROUP[NODE])
     envelope = read_envelope_track(store, run_dir)
     windows = classifier_windows(store)
     if envelope is None or not windows:
@@ -1082,7 +1089,7 @@ def detect_airway(store: ProvStore, params: BranchParams, *, run_dir: Path | Non
             *sorted({source for component in components for source in component.derived_from}),
         )
     )
-    return Result(UNDETERMINED, components, findings)
+    return Result(components, findings)
 
 
 # --------------------------------------------------------------------- the node
@@ -1143,7 +1150,7 @@ def airway(
         software,
         node=NODE,
         kind=KIND,
-        conformance=result.done,
+        conformance=UNDETERMINED,
         conformance_of=TASK,
         deviations=deviation_names(findings),
         unmeasured=tuple(params.missing),

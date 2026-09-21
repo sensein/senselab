@@ -14,24 +14,34 @@ The two axes this node keeps apart — triage and release — and the tables it 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
-from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
+from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY, EXPECTATIONS, Expectation
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
     software_agent,
     write_verdict,
 )
+from senselab.audio.workflows.triage.nodes.gates import (
+    GATE_SECTION,
+    GATE_SPECS,
+    AppliedGate,
+    GateBounds,
+    apply_gates,
+    conformance_gate_names,
+    load_gate_bounds,
+)
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
     REDACTION_LLM_ANNOTATION,
     RULESET_ROUTING,
+    TASK,
     UNDETERMINED,
     BranchDecision,
     BranchReport,
@@ -312,6 +322,123 @@ def _hint_claims(
     return {decision.branch: True for decision in decisions.values() if decision.declared}
 
 
+def declared_expectation(declared_family: str | None) -> tuple[str, Expectation] | None:
+    """The branch that owns the declared task, and the row it holds for it.
+
+    Args:
+        declared_family: The task family the recording declares, or None.
+
+    Returns:
+        ``(branch, expectation)``, or None when nothing declares a family this graph has a row for.
+    """
+    if declared_family is None:
+        return None
+    for branch, table in EXPECTATIONS.items():
+        if declared_family in table:
+            return branch, table[declared_family]
+    return None
+
+
+def gate_readings(store: ProvStore, names: Sequence[str]) -> dict[str, Any]:
+    """What the reporting node read for each gate, off the measurements it wrote.
+
+    Args:
+        store: The provenance store.
+        names: The gates whose readings to look for.
+
+    Returns:
+        Reading name to its value. A reading nothing live carries, and one written as null, is
+        absent — the two are the same thing to a gate, which is that nobody measured it.
+    """
+    readings: dict[str, Any] = {}
+    for name in names:
+        reading = GATE_SPECS[name].reading
+        if reading is None:
+            continue
+        measurement = find_measurement(store, reading)
+        if measurement is None:
+            continue
+        value = measurement.attributes.get("value")
+        if value is not None:
+            readings[reading] = value
+    return readings
+
+
+@dataclass(frozen=True)
+class GateOutcome:
+    """What VERDICT's gates made of the declared task.
+
+    Attributes:
+        node: The branch whose report the conformance belongs to, or None when nothing was gated.
+        conformance: What the gates decided.
+        bounds: The group's configured gates, or None when no group was resolved.
+        applied: One record per gate applied, in the order the group declares them.
+    """
+
+    node: str | None
+    conformance: Conformance
+    bounds: GateBounds | None
+    applied: tuple[AppliedGate, ...]
+
+    @property
+    def unmeasured(self) -> tuple[str, ...]:
+        """The gates this fold wanted and nobody has measured, by their full config paths.
+
+        Returns:
+            One path per applied gate whose bound is null, in the order they were applied. They
+            join the reporting node's own unmeasured asks, so ``verdict.unmeasured_points_flag``
+            reaches a gate the same way it reaches an instrument setting.
+        """
+        group = "" if self.bounds is None else self.bounds.group.name
+        return tuple(f"{GATE_SECTION}.{group}.{gate.name}" for gate in self.applied if gate.bound is None)
+
+    def record(self) -> dict[str, Any]:
+        """This application, as the verdict records it.
+
+        Returns:
+            The node, the group and its bounds, and every gate applied. Empty when no group was
+            resolved, which is every recording that declares no task this graph holds a row for.
+        """
+        if self.bounds is None:
+            return {}
+        return {
+            "node": self.node,
+            **self.bounds.record(),
+            "applied": [gate.record() for gate in self.applied],
+        }
+
+
+def gate_conformance(
+    store: ProvStore, config: TriageConfig, reports: Sequence[BranchReport], declared_family: str | None
+) -> GateOutcome:
+    """Decide the declared task's conformance from the readings the branch reported.
+
+    The gates are the declared family's own task group's, and only the branch that owns that
+    family and evaluated it in family is gated: every other report evaluated no task.
+
+    Args:
+        store: The provenance store, read for the gates' readings.
+        config: The resolved triage configuration, read for ``verdict.gates``.
+        reports: Every reporting node's report.
+        declared_family: The task family the recording declares, or None.
+
+    Returns:
+        The outcome. Its conformance is :data:`UNDETERMINED` whenever no group was resolved, the
+        owning branch left no in-family report, or any applied gate could not be answered.
+    """
+    owner = declared_expectation(declared_family)
+    if owner is None:
+        return GateOutcome(None, UNDETERMINED, None, ())
+    branch, expectation = owner
+    bounds = load_gate_bounds(config, expectation.pattern)
+    reported = next((report for report in reports if report.node == branch and report.in_family), None)
+    if reported is None:
+        return GateOutcome(branch, UNDETERMINED, bounds, ())
+    names = conformance_gate_names(expectation.pattern, anti_pattern=expectation.anti_pattern)
+    conformance, applied = apply_gates(names, bounds, gate_readings(store, names))
+    return GateOutcome(branch, conformance, bounds, tuple(applied))
+
+
 def _derived_ran(
     store: ProvStore, verdicts: Sequence[NodeVerdict], reports: Sequence[BranchReport]
 ) -> dict[str, RunState]:
@@ -367,12 +494,23 @@ def verdict(
     pairs = _node_verdicts_in_graph_order(store)
     node_verdicts = [node_verdict for _, node_verdict in pairs]
     report_pairs = _branch_reports(store)
-    reports = [report for _, report in report_pairs]
+    declared_family = declared_task(recording_stem(store))[1]
+    reported = [report for _, report in report_pairs]
+    outcome = gate_conformance(store, config, reported, declared_family or None)
+    reports = [
+        replace(
+            report,
+            conformance=outcome.conformance,
+            unmeasured=tuple(dict.fromkeys((*report.unmeasured, *outcome.unmeasured))),
+        )
+        if report.node == outcome.node and report.in_family and report.conformance_of == TASK
+        else report
+        for report in reported
+    ]
     route_state, route_ids = _route_state(store)
     decisions, decision_ids = _branch_decisions(store)
     annotation, annotation_ids = _llm_redaction(store)
     resolved_ran = {**_derived_ran(store, node_verdicts, reports), **(ran or {})}
-    declared_family = declared_task(recording_stem(store))[1]
     file_verdict = fold_file_verdict(
         node_verdicts,
         branch_reports=reports,
@@ -384,6 +522,7 @@ def verdict(
         declared_family=declared_family or None,
         llm_redaction=annotation,
         critical_absences=_critical_absences(store),
+        gates=outcome.record(),
         policy=FoldPolicy.from_config(config),
     )
 

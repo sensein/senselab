@@ -362,6 +362,9 @@ class FileVerdict:
             model id, resolved commit, failure. Empty when REDACT wrote none.
         critical_absences: Per branch not one of whose gates could be read, each gate and the
             recorded absence. Non-empty means no branch was run.
+        gates: The task group's gates and every one this fold applied — the gate, its reading, the
+            bound and the group — so the conformance can be read backwards. Empty where the
+            recording declares no task this graph holds a row for.
     """
 
     triage: Triage
@@ -383,6 +386,7 @@ class FileVerdict:
     bad_map_values: dict[str, str] = field(default_factory=dict)
     llm_redaction: dict[str, Any] = field(default_factory=dict)
     critical_absences: dict[str, dict[str, str]] = field(default_factory=dict)
+    gates: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
         """Every decision point of this fold, as JSON-ready values.
@@ -411,6 +415,7 @@ class FileVerdict:
             "bad_map_values": dict(self.bad_map_values),
             "llm_redaction": dict(self.llm_redaction),
             "critical_absences": {branch: dict(gates) for branch, gates in self.critical_absences.items()},
+            "gates": dict(self.gates),
             "ran": {node: state.value for node, state in self.ran.items()},
             "reasons": [
                 {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why} for r in self.reasons
@@ -519,6 +524,7 @@ def fold_file_verdict(
     declared_family: str | None = None,
     llm_redaction: Mapping[str, Any] | None = None,
     critical_absences: Mapping[str, Mapping[str, str]] | None = None,
+    gates: Mapping[str, Any] | None = None,
     policy: FoldPolicy | None = None,
 ) -> FileVerdict:
     """Decide the file, from the deciding nodes' verdicts and the reporting nodes' reports.
@@ -547,6 +553,8 @@ def fold_file_verdict(
             the **triage** axis under ``policy.llm_redaction_flags`` and the release axis never.
         critical_absences: Per branch not one of whose gates could be read, each gate and the
             recorded absence behind it, as ``routing`` wrote them. Non-empty flags, never discards.
+        gates: The task group's gates and the ones this fold's caller applied to the declared
+            task's readings, carried onto the verdict so the conformance can be read backwards.
         policy: What to do with what was reported, from the ``verdict.*`` config section. None is
             the packaged policy.
 
@@ -699,4 +707,5 @@ def fold_file_verdict(
         bad_map_values=bad_map_values,
         llm_redaction=annotation,
         critical_absences=absences,
+        gates=dict(gates or {}),
     )
