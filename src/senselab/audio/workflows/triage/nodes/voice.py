@@ -26,6 +26,7 @@ import numpy as np
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import (
+    DETECT_GROUP,
     UNDETERMINED,
     VOICE_EXPECTATIONS,
     BranchParams,
@@ -49,6 +50,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     longest_monotone_run,
     measured,
     mode_of,
+    monotone_reversal,
     ordered_run,
     overlaps,
     propose_spans,
@@ -304,6 +306,46 @@ class Qualification:
         return [rejection.record() for rejection in self.rejected]
 
 
+CARRIER_DURATION = "carrier_duration_s"
+"""The reading ``production_min_s`` is read against: how long the qualifying carrier ran."""
+
+CARRIER_VOICED_FRACTION = "carrier_voiced_fraction"
+"""The reading ``voiced_fraction_min`` is read against."""
+
+CARRIER_SPREAD = "carrier_f0_spread_semitones"
+"""The reading ``f0_spread_max_semitones`` is read against."""
+
+CARRIER_CONTINUITY = "carrier_continuity"
+"""The reading ``continuity_min`` is read against."""
+
+SWEEP_DOMINANT_FRACTION = "sweep_dominant_fraction"
+"""The reading ``dominant_segment_min_fraction`` is read against."""
+
+SWEEP_REVERSAL = "sweep_monotone_reversal_semitones"
+"""The reading ``monotone_tolerance_semitones`` is read against."""
+
+
+def carrier_readings(carrier: Carrier, *derived_from: str) -> list[Finding]:
+    """What the qualifier read off the carrier this mode selected, one measurement per gate input.
+
+    Args:
+        carrier: The carrier the mode measured over.
+        *derived_from: The entity ids the readings were taken off.
+
+    Returns:
+        One measurement per reading VERDICT's ``SUSTAINED`` and ``GLIDE`` gates read. A spread that
+        the window could not resolve is written as None rather than omitted.
+    """
+    start, end = carrier.span.extent or (0.0, 0.0)
+    spread = carrier.f0_spread_semitones
+    return [
+        measured(CARRIER_DURATION, start, end, round(end - start, 3), *derived_from),
+        measured(CARRIER_VOICED_FRACTION, start, end, round(carrier.voiced_fraction, 4), *derived_from),
+        measured(CARRIER_SPREAD, start, end, round(spread, 3) if np.isfinite(spread) else None, *derived_from),
+        measured(CARRIER_CONTINUITY, start, end, round(carrier.stationarity, 4), *derived_from),
+    ]
+
+
 def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: BranchParams) -> Qualification:
     """V1's stationarity qualifier, over PREPROCESS's ``measure == "amplitude"`` spans.
 
@@ -320,14 +362,14 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
     """
     if evidence.tracks is None:
         return Qualification([], [])
-    minimum_s = params.point("production_min_s")
+    minimum_s = params.gate("production_min_s")
     strength_min = params.point("voiced_strength_min")
     if minimum_s is None or strength_min is None:
         return Qualification([], [])
-    fraction_min = params.point("voiced_fraction_min")
+    fraction_min = params.gate("voiced_fraction_min")
     spread_window_s = params.point("f0_spread_window_s")
-    spread_max = params.point("f0_spread_max_semitones")
-    continuity_min = params.point("continuity_min")
+    spread_max = params.gate("f0_spread_max_semitones")
+    continuity_min = params.gate("continuity_min")
     words = lexical(evidence.words)
     out: list[Carrier] = []
     rejected: list[Rejection] = []
@@ -395,6 +437,7 @@ def align_voice(
         NotImplementedError: If a row carries a pattern no reachable matcher serves.
     """
     expectation = VOICE_EXPECTATIONS[task_family]
+    params.bind(expectation.pattern)
     evidence = read_evidence(store, run_dir)
     if expectation.pattern is Pattern.SUSTAINED:
         return _voice_sustained(expectation, evidence, hint, params)
@@ -460,7 +503,7 @@ def _voice_sustained(
     _, components, findings = _count_in(expectation, evidence, params)
     if evidence.tracks is None:
         findings.append(unviable("phonation_extent", TRACKS_ABSENT))
-        return Result(UNDETERMINED, components, findings)
+        return Result(components, findings)
 
     qualification = qualifying_phonation(evidence, expectation, params)
     findings.extend(qualification.findings())
@@ -469,7 +512,7 @@ def _voice_sustained(
         count("attempt_count", len(carriers), expectation.expected_event_count, *(each.span.id for each in carriers))
     )
     if not carriers:
-        return Result(UNDETERMINED, components, findings)
+        return Result(components, findings)
 
     carrier = carriers[0]
     assert carrier.span.extent is not None  # noqa: S101 — qualifying_phonation admits no other case
@@ -486,6 +529,7 @@ def _voice_sustained(
         )
     )
     read_off = (carrier.span.id, *evidence.derivations(evidence.tracks_id))
+    findings.extend(carrier_readings(carrier, *read_off))
     findings.append(
         measured(
             "phonation_onset_to_offset_s",
@@ -533,7 +577,7 @@ def _voice_sustained(
                 *evidence.derivations(evidence.file_id),
             )
         )
-    return Result(True, components, findings)
+    return Result(components, findings)
 
 
 def _interruptions(carrier: Carrier, *derived_from: str) -> list[Finding]:
@@ -584,17 +628,17 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
         was discarded by a qualifier.
     """
     if evidence.tracks is None:
-        return Result(UNDETERMINED, [], [unviable("sweep_extent", TRACKS_ABSENT)])
+        return Result([], [unviable("sweep_extent", TRACKS_ABSENT)])
 
-    minimum_s = params.point("production_min_s")
+    minimum_s = params.gate("production_min_s")
     strength_min = params.point("voiced_strength_min")
-    tolerance = params.point("monotone_tolerance_semitones")
+    tolerance = params.gate("monotone_tolerance_semitones")
     if minimum_s is None or strength_min is None or tolerance is None:
-        return Result(UNDETERMINED, [], params.record())
-    fraction_min = params.point("voiced_fraction_min")
-    dominant_min = params.point("dominant_segment_min_fraction")
+        return Result([], params.record())
+    fraction_min = params.gate("voiced_fraction_min")
+    dominant_min = params.gate("dominant_segment_min_fraction")
 
-    best: tuple[Entity, TrackSlice, int, float, tuple[float, float]] | None = None
+    best: tuple[Entity, TrackSlice, int, float, tuple[float, float], float, float, float] | None = None
     discarded: list[Finding] = []
     for span in amplitude_spans(evidence.spans):
         if span.extent is None or duration(span.extent) < minimum_s:
@@ -636,12 +680,21 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
             )
             continue
         if best is None or duration(sweep) > duration(best[4]):
-            best = (span, track, sign, abs(float(pitch[last] - pitch[first])), sweep)
+            best = (
+                span,
+                track,
+                sign,
+                abs(float(pitch[last] - pitch[first])),
+                sweep,
+                voiced_fraction,
+                held,
+                monotone_reversal(pitch, first, last, sign),
+            )
 
     if best is None:
-        return Result(UNDETERMINED, [], [*discarded, count("sweep_found", False, True)])
+        return Result([], [*discarded, count("sweep_found", False, True)])
 
-    span, track, sign, extent_semitones, sweep = best
+    span, track, sign, extent_semitones, sweep, voiced_fraction, held, reversal = best
     direction = "up" if sign > 0 else "down"
     components = [
         voice_span(
@@ -655,8 +708,13 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
         )
     ]
     read_off = (span.id, *evidence.derivations(evidence.tracks_id))
+    carrier_extent = span.extent or sweep
     findings: list[Finding] = [
         *discarded,
+        measured(CARRIER_DURATION, carrier_extent[0], carrier_extent[1], round(duration(carrier_extent), 3), *read_off),
+        measured(CARRIER_VOICED_FRACTION, carrier_extent[0], carrier_extent[1], round(voiced_fraction, 4), *read_off),
+        measured(SWEEP_DOMINANT_FRACTION, sweep[0], sweep[1], round(held, 4), *read_off),
+        measured(SWEEP_REVERSAL, sweep[0], sweep[1], round(reversal, 3), *read_off),
         measured(
             "glide_extent_semitones",
             sweep[0],
@@ -681,7 +739,7 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
         )
     if evidence.file_extent is not None and touches_edge(sweep, evidence.file_extent):
         findings.append(deviation("truncation", sweep[0], sweep[1], span.id, reading="right_censored"))
-    return Result(True, components, findings)
+    return Result(components, findings)
 
 
 def detect_voice(store: ProvStore, params: BranchParams, *, run_dir: Path) -> Result:
@@ -695,12 +753,13 @@ def detect_voice(store: ProvStore, params: BranchParams, *, run_dir: Path) -> Re
         run_dir: The run directory sidecar paths are relative to.
 
     Returns:
-        A result whose ``done`` is :data:`UNDETERMINED`, one span per sustained region, and the
-        findings.
+        One span per sustained region, and the findings. It evaluates no task, so VERDICT applies
+        no conformance gate to what it reports.
     """
+    params.bind(DETECT_GROUP[NODE])
     evidence = read_evidence(store, run_dir)
     if evidence.tracks is None:
-        return Result(UNDETERMINED, [], [unviable("phonation_extent", TRACKS_ABSENT)])
+        return Result([], [unviable("phonation_extent", TRACKS_ABSENT)])
 
     neutral = Expectation(pattern=Pattern.SUSTAINED)
     qualification = qualifying_phonation(evidence, neutral, params)
@@ -747,7 +806,7 @@ def detect_voice(store: ProvStore, params: BranchParams, *, run_dir: Path) -> Re
                 )
             )
     findings.append(count("phonation_spans", len(components), None, *(carrier.span.id for carrier in carriers)))
-    return Result(UNDETERMINED, components, findings)
+    return Result(components, findings)
 
 
 def voice(
@@ -837,7 +896,7 @@ def voice(
         software,
         node=NODE,
         kind=KIND,
-        conformance=result.done,
+        conformance=UNDETERMINED,
         conformance_of=TASK,
         deviations=deviation_names(findings),
         unmeasured=tuple(params.missing),

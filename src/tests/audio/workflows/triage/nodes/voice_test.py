@@ -43,6 +43,7 @@ from senselab.audio.workflows.triage.nodes.voice import (
     voice,
 )
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.nodes.conftest import gated_conformance, readings_of
 
 HOP_S = 0.01
 """PREPROCESS's own phonation-track hop, which the fixtures build their frame grid on."""
@@ -59,44 +60,83 @@ LOUDNESS_STEM = "sub-abc_ses-1_task-loudness"
 CAPEV_STEM = "sub-abc_ses-1_task-cape-v-sentences"
 HARVARD_STEM = "sub-abc_ses-1_task-harvard-sentences-list"
 
-MEASURED = {
+SETTINGS = {"voiced_strength_min": 0.5, "f0_spread_window_s": 1.0}
+"""Instrument settings supplied by the fixture, overriding the packaged ones for the test signals."""
+
+GATES = {
     "production_min_s": 0.5,
-    "voiced_strength_min": 0.5,
     "voiced_fraction_min": 0.6,
-    "f0_spread_window_s": 1.0,
     "f0_spread_max_semitones": 4.0,
     "continuity_min": 0.8,
     "monotone_tolerance_semitones": 1.0,
     "dominant_segment_min_fraction": 0.5,
 }
-"""Operating points supplied by the fixture, overriding the packaged ones for the test signals."""
+"""Gate bounds supplied by the fixture. Each group takes the ones its own body reads."""
+
+GROUP_GATES = {
+    Pattern.SUSTAINED: ("production_min_s", "voiced_fraction_min", "f0_spread_max_semitones", "continuity_min"),
+    Pattern.GLIDE: (
+        "production_min_s",
+        "voiced_fraction_min",
+        "monotone_tolerance_semitones",
+        "dominant_segment_min_fraction",
+    ),
+}
+"""Which of :data:`GATES` each group names, mirroring the packaged table's shape."""
+
+MEASURED = {**SETTINGS, **GATES}
+"""Both halves together, for the assertions that read a fixture value back."""
 
 
-def params(**overrides: Any) -> Any:  # noqa: ANN401
-    """The operating points, over a configuration carrying fixture values.
+def params(group: Pattern = Pattern.SUSTAINED, **overrides: Any) -> Any:  # noqa: ANN401
+    """The operating points, over a configuration carrying fixture values, bound to one group.
 
     Args:
-        **overrides: ``branch.*`` keys, spelled without the ``p_`` prefix.
+        group: The task group whose gates the body will read. Rebound by ``align_voice``.
+        **overrides: ``branch.*`` or gate keys to set or clear.
 
     Returns:
         The record.
     """
-    return branch_params(config(**overrides))
+    return branch_params(config(**overrides)).bind(group)
 
 
 def config(**overrides: Any) -> TriageConfig:  # noqa: ANN401
-    """A configuration whose ``branch`` section carries the fixture's measured values.
+    """A configuration carrying the fixture's instrument settings and its per-group gates.
 
     Args:
-        **overrides: ``branch.*`` keys to set or clear.
+        **overrides: ``branch.*`` or gate keys to set or clear; each lands in its own section.
 
     Returns:
         The configuration.
     """
     packaged = load_triage_config()
     merged = dict(packaged.values)
-    merged[PARAM_SECTION] = {**packaged.values[PARAM_SECTION], **MEASURED, **overrides}
+    settings = {**SETTINGS, **{k: v for k, v in overrides.items() if k not in GATES}}
+    gates = {**GATES, **{k: v for k, v in overrides.items() if k in GATES}}
+    merged[PARAM_SECTION] = {**packaged.values[PARAM_SECTION], **settings}
+    merged["verdict"] = {
+        **packaged.values["verdict"],
+        "gates": {
+            **packaged.values["verdict"]["gates"],
+            **{group.name: {name: gates[name] for name in names} for group, names in GROUP_GATES.items()},
+        },
+    }
     return TriageConfig(packaged.name, packaged.version, packaged.config_hash, merged)
+
+
+def _node_readings(store: ProvStore) -> dict[str, Any]:
+    """Every measurement the node wrote, keyed by name, as VERDICT reads them.
+
+    Args:
+        store: The provenance store the node wrote into.
+
+    Returns:
+        Measurement name to its value.
+    """
+    return {
+        str(entity.attributes["name"]): entity.attributes.get("value") for entity in live_entities(store, "measurement")
+    }
 
 
 def _tracks(
@@ -431,7 +471,8 @@ class TestASustainedVowelYieldsTheHeldVowelSpan:
         store, _ = seed(tmp_path, amplitude=((2.0, 2.2),), duration_s=5.0)
         result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
         assert result.components == []
-        assert result.done == UNDETERMINED
+        assert readings_of(result).get("carrier_duration_s") is None
+        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) == UNDETERMINED
 
 
 class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
@@ -507,10 +548,10 @@ class TestTheModeIsSelectedByTheDeclaredFamily:
         assert result.report.node == "VOICE"
 
     def test_the_detect_arm_evaluates_no_task(self, tmp_path: Path) -> None:
-        """``done`` is UNDETERMINED always, and ``dispatch`` refuses anything else."""
+        """It takes no reading a conformance gate reads, so VERDICT can answer nothing about it."""
         store, _ = seed(tmp_path, stem=COUGH_STEM)
         result = detect_voice(store, params(), run_dir=tmp_path)
-        assert result.done == UNDETERMINED
+        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) == UNDETERMINED
 
     def test_the_detect_arm_still_proposes_the_phonation_it_finds(self, tmp_path: Path) -> None:
         """Sustained phonation occurs inside sentence reading and free speech; it is marked there."""
@@ -573,14 +614,14 @@ class TestAnAbsentInstrumentIsUndetermined:
         """``UNDETERMINED`` is what a mode returns when its only instrument is absent."""
         store, _ = seed(tmp_path, write_tracks=False)
         result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert result.done == UNDETERMINED
+        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) == UNDETERMINED
         assert result.components == []
 
     def test_absent_tracks_make_the_glide_arm_undetermined(self, tmp_path: Path) -> None:
         """The same rule on the other in-family matcher."""
         store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, write_tracks=False)
         result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert result.done == UNDETERMINED
+        assert gated_conformance(result, Pattern.GLIDE, settings=config()) == UNDETERMINED
 
     def test_the_absence_is_recorded_as_unviable_rather_than_omitted(self, tmp_path: Path) -> None:
         """A measurement that could not be taken is written, not silently dropped."""
@@ -720,7 +761,7 @@ class TestTheCountInIsItsOwnSpan:
         """
         store, _ = seed(tmp_path, stem=PROLONGED_STEM, amplitude=((6.0, 18.0),), tracks=_tracks(20.0, [(6.0, 18.0)]))
         result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
-        assert result.done is True
+        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is True
         assert [proposal.role for proposal in result.components] == ["task_extent"]
         assert [finding.evidence["expected"] for finding in result.deviations if finding.name == "omission"] == [
             "one",
@@ -732,7 +773,7 @@ class TestTheCountInIsItsOwnSpan:
         """MPT declares no tokens, so nothing lexical is owed."""
         store, _ = seed(tmp_path)
         result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert result.done is True
+        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is True
 
 
 class TestTheGlideReadsTheSweepAgainstItsDeclaredDirection:
@@ -773,7 +814,7 @@ class TestTheGlideReadsTheSweepAgainstItsDeclaredDirection:
         """A steady vowel is not a sweep, and no sweep found is not the task not performed."""
         store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, amplitude=((2.0, 3.0),), tracks=_tracks(20.0, [(2.0, 2.2)]))
         result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert result.done == UNDETERMINED
+        assert gated_conformance(result, Pattern.GLIDE, settings=config()) == UNDETERMINED
         assert result.components == []
 
 
@@ -960,17 +1001,21 @@ class TestTheNodeWritesWhatItFound:
         assert report.attributes["conformance"] == UNDETERMINED
 
     def test_a_found_attempt_reads_as_the_kind_being_present(self, tmp_path: Path) -> None:
-        """VERDICT reads a false conformance as the kind absent, so anything else means it was found."""
+        """The branch answers nothing; it reports the readings the SUSTAINED gates then clear."""
         store, _ = seed(tmp_path)
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.report.conformance is True
+        assert result.report.conformance == UNDETERMINED
         assert result.report.kind == "voice"
+        readings = _node_readings(store)
+        assert readings["carrier_duration_s"] >= GATES["production_min_s"]
+        assert readings["carrier_voiced_fraction"] >= GATES["voiced_fraction_min"]
 
     def test_a_deviation_is_recorded_rather_than_read_as_a_non_conformance(self, tmp_path: Path) -> None:
         """A truncated attempt is still an attempt; ``conformance is False`` is reserved for none."""
         store, _ = seed(tmp_path, amplitude=((0.0, 20.0),), tracks=_tracks(20.0, [(0.0, 20.0)]))
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.report.conformance is True
+        assert result.report.conformance == UNDETERMINED
+        assert _node_readings(store)["carrier_duration_s"] >= GATES["production_min_s"]
         assert "truncation" in result.report.deviations
 
 
@@ -1019,7 +1064,7 @@ class TestAnUnmeasuredOperatingPointIsRecordedRatherThanRaised:
         # UNDETERMINED, not False: an unmeasured qualifier could neither admit nor reject, so
         # claiming the instruction was not met would rest on a number nobody chose.
         assert result.report.conformance == UNDETERMINED
-        assert "production_min_s" in result.report.unmeasured
+        assert "verdict.gates.SUSTAINED.production_min_s" in result.report.unmeasured
 
     def test_one_null_key_does_not_fail_a_body_that_needs_another(self, tmp_path: Path) -> None:
         """``BranchParams`` reads lazily; the glide arm never reads the sustained arm's keys."""
@@ -1137,7 +1182,7 @@ class TestADiscardedCarrierIsReportedRatherThanVanishing:
         assert discarded, "the located sweep must be recorded, not silently dropped"
         assert discarded[0].evidence["direction"] in ("up", "down")
         assert discarded[0].evidence["sweep_s"] > 0.0
-        assert result.done == UNDETERMINED
+        assert gated_conformance(result, Pattern.GLIDE, settings=config()) == UNDETERMINED
 
 
 class TestConformanceIsNeverFalse:
@@ -1151,7 +1196,7 @@ class TestConformanceIsNeverFalse:
         """
         source = Path(voice_module.__file__).read_text()
         assert "Result(False" not in source
-        assert "Result(UNDETERMINED" in source
+        assert "conformance=UNDETERMINED" in source
 
     def test_an_empty_recording_is_undetermined_rather_than_a_non_conformance(self, tmp_path: Path) -> None:
         """No amplitude span at all: the branch had no subject, which is not a failed attempt."""

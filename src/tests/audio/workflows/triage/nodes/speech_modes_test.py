@@ -29,30 +29,65 @@ from senselab.audio.workflows.triage.nodes.branches import (
     mode_of,
     write_findings,
 )
+from senselab.audio.workflows.triage.nodes.gates import GATE_SECTION, GATE_SPECS, Pattern
 from senselab.audio.workflows.triage.nodes.speech import (
     align_speech,
     detect_speech,
 )
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.nodes.conftest import gated_conformance
 
 HARVARD = "The birch canoe slid on the smooth planks."
 """One Harvard sentence, as ``stimulus_text`` spells it."""
 
 
-def _config(tmp_path: Path, branch: dict[str, Any] | None = None) -> TriageConfig:
-    """The packaged config, with the named ``branch`` operating points measured.
+def _config(tmp_path: Path, settings: dict[str, Any] | None = None) -> TriageConfig:
+    """The packaged config, with the named settings supplied to whichever section holds them.
 
     Args:
         tmp_path: Where the override file is written.
-        branch: The ``branch.*`` keys to supply, or None for the packaged config as shipped.
+        settings: Instrument settings and gate bounds, by their own names, or None for the
+            packaged config as shipped. A gate is written into every group the packaged file
+            configures it for.
 
     Returns:
         The resolved configuration.
     """
-    values = {"branch": dict(branch)} if branch else {}
+    supplied = dict(settings or {})
+    packaged = load_triage_config()
+    branch = {key: value for key, value in supplied.items() if key not in GATE_SPECS}
+    gates: dict[str, dict[str, Any]] = {}
+    for key, value in supplied.items():
+        if key not in GATE_SPECS:
+            continue
+        for group in Pattern:
+            if key in (packaged.get(f"{GATE_SECTION}.{group.name}") or {}):
+                gates.setdefault(group.name, {})[key] = value
+    values: dict[str, Any] = {}
+    if branch:
+        values["branch"] = branch
+    if gates:
+        values["verdict"] = {"gates": gates}
     path = tmp_path / f"override-{abs(hash(yaml.safe_dump(values))) % 10**10}.yaml"
     path.write_text(yaml.safe_dump(values))
     return load_triage_config(path)
+
+
+def _gated(result: Result, family: str, settings: TriageConfig, *, group: Pattern | None = None) -> Any:  # noqa: ANN401
+    """What VERDICT's gates make of what a SPEECH mode reported.
+
+    Args:
+        result: What the mode returned.
+        family: The declared family, whose row names the group and the anti-pattern.
+        settings: The configuration the bounds come from.
+        group: An explicit group, for the out-of-family mode, which declares no family.
+
+    Returns:
+        True, False, or ``UNDETERMINED``.
+    """
+    row = SPEECH_EXPECTATIONS.get(family)
+    pattern = group or (row.pattern if row is not None else Pattern.FREE_RESPONSE)
+    return gated_conformance(result, pattern, settings=settings, anti_pattern=None if row is None else row.anti_pattern)
 
 
 def _store(*, family: str | None = None, duration_s: float = 20.0) -> ProvStore:
@@ -235,7 +270,7 @@ class TestTheDeclarationPicksTheMode:
             align=align_speech,
             detect=detect_speech,
         )
-        assert result.done is True
+        assert _gated(result, "harvard-sentences-list", _config(tmp_path)) is True
         assert "task_extent" in _roles(result)
 
     def test_dispatch_runs_detect_on_another_branchs_kind(self, tmp_path: Path) -> None:
@@ -250,7 +285,7 @@ class TestTheDeclarationPicksTheMode:
             align=align_speech,
             detect=detect_speech,
         )
-        assert result.done == UNDETERMINED
+        assert _gated(result, "", _config(tmp_path), group=Pattern.FREE_RESPONSE) == UNDETERMINED
         assert _roles(result) == ["lexical_run_0"]
 
     def test_align_refuses_a_family_that_is_not_its_own(self, tmp_path: Path) -> None:
@@ -281,7 +316,7 @@ class TestAFullySpecifiedFamilyAlignsAgainstTheDerivative:
         """Nine tokens declared, nine realised: the task was done and nothing departed."""
         store, hint = self._read(HARVARD.split())
         result = align_speech("harvard-sentences-list", store, hint, branch_params(_config(tmp_path)))
-        assert result.done is True
+        assert _gated(result, "harvard-sentences-list", _config(tmp_path)) is True
         assert _of_kind(result, "deviation", "stimulus_mismatch") == []
         assert _of_kind(result, "deviation", "omission") == []
         [task_extent] = [proposal for proposal in result.components if proposal.role == "task_extent"]
@@ -308,7 +343,8 @@ class TestAFullySpecifiedFamilyAlignsAgainstTheDerivative:
         [omission] = _of_kind(result, "deviation", "omission")
         assert omission.evidence["expected"] == "smooth"
         assert omission.start == omission.end == 6.5, "the end of `the`, the last token realised before it"
-        assert result.done is False, "a token nothing realised is the task not being done"
+        conformance = _gated(result, "harvard-sentences-list", _config(tmp_path))
+        assert conformance is False, "a token nothing realised is the task not being done"
         assert omission.derived_from, "an anchored omission carries an extent, so it names its evidence"
         activity = store.activity(node="SPEECH", step=None, parameters={})
         agent = store.agent(agent_type="software", version="test")
@@ -340,7 +376,7 @@ class TestAFullySpecifiedFamilyAlignsAgainstTheDerivative:
         store = _store(family="harvard-sentences-list")
         _transcript(store, [(word, 1.0 + index, 1.5 + index) for index, word in enumerate(HARVARD.split())])
         result = align_speech("harvard-sentences-list", store, _hint(HARVARD), branch_params(_config(tmp_path)))
-        assert result.done == UNDETERMINED
+        assert _gated(result, "harvard-sentences-list", _config(tmp_path)) == UNDETERMINED
         assert result.components == []
         [unviable] = _of_kind(result, "measure", "expected_token_sequence")
         assert "stimulus_alignment is absent" in unviable.evidence["why"]
@@ -365,7 +401,7 @@ class TestAFullySpecifiedFamilyAlignsAgainstTheDerivative:
         store = _store(family="loudness")
         _transcript(store, [("hey", 1.0, 1.3), ("hey", 3.0, 3.3), ("hey", 5.0, 5.3)])
         result = align_speech("loudness", store, None, branch_params(_config(tmp_path)))
-        assert result.done is True
+        assert _gated(result, "loudness", _config(tmp_path)) is True
         [counted] = _of_kind(result, "count", "expected_event_count")
         assert counted.evidence == {"found": 3, "declared": 3}
 
@@ -396,7 +432,7 @@ class TestADesignedEmptyFamilyScoresNothingAsADeparture:
         [task_extent] = [proposal for proposal in result.components if proposal.role == "task_extent"]
         assert task_extent.attributes["words_n"] == 9
         assert (task_extent.start, task_extent.end) == (1.0, 9.6)
-        assert result.done is True
+        assert _gated(result, "picture-description", _config(tmp_path, {"response_min_s": 1.0})) is True
 
     def test_no_departure_from_an_expectation_that_does_not_exist(self, tmp_path: Path) -> None:
         """An absent expectation is a typed outcome; it is not nine mismatches."""
@@ -414,11 +450,15 @@ class TestADesignedEmptyFamilyScoresNothingAsADeparture:
         assert rate.evidence == {"value": 1.047, "support_words": 9}
 
     def test_an_unmeasured_operating_point_is_named_rather_than_defaulted(self, tmp_path: Path) -> None:
-        """Every `branch` key now ships a value; nulling one is still named rather than defaulted."""
-        params = branch_params(_config(tmp_path, {"response_min_s": None, "run_gap_max_s": None}))
-        result = align_speech("picture-description", self._described(), None, params)
-        assert result.done == UNDETERMINED
-        assert "response_min_s" in _unmeasured(result)
+        """Nulling a setting is named rather than defaulted; nulling a gate answers nothing.
+
+        The branch names only what it reads, so an unmeasured ``run_gap_max_s`` is its ask and an
+        unmeasured ``response_min_s`` is VERDICT's — ``VerdictResult.gates`` carries that one.
+        """
+        settings = _config(tmp_path, {"response_min_s": None, "run_gap_max_s": None})
+        result = align_speech("picture-description", self._described(), None, branch_params(settings))
+        assert _gated(result, "picture-description", settings) == UNDETERMINED
+        assert _unmeasured(result) == ["run_gap_max_s"]
         assert "run_gap_max_s" in _unmeasured(result)
 
     def test_the_family_whose_source_is_a_physical_book_says_so(self, tmp_path: Path) -> None:
@@ -480,11 +520,11 @@ class TestFreeSpeechsTwoVersionsExpectOppositeThings:
     def test_story_recall_reads_coverage_rather_than_echo(self, tmp_path: Path) -> None:
         """Recall in your own words: coverage is expected and verbatim reproduction is not."""
         store, hint = self._spoken("story-recall", self.PROMPT)
-        params = branch_params(_config(tmp_path, {"echo_ngram_n": 2, "verbatim_overlap_max": 0.5, "coverage_min": 0.5}))
-        result = align_speech("story-recall", store, hint, params)
+        settings = _config(tmp_path, {"echo_ngram_n": 2, "verbatim_overlap_max": 0.5, "coverage_min": 0.5})
+        result = align_speech("story-recall", store, hint, branch_params(settings))
         [covered] = _of_kind(result, "measure", "source_content_coverage")
         assert covered.evidence["value"] == 1.0
-        assert result.done is True
+        assert _gated(result, "story-recall", settings) is True
 
 
 class TestStroopIsMatchedAgainstItsAnswersNotItsDisplay:
@@ -518,7 +558,7 @@ class TestStroopIsMatchedAgainstItsAnswersNotItsDisplay:
         store, hint = self._said(self.ANSWERS)
         result = align_speech("word-color-stroop", store, hint, branch_params(_config(tmp_path)))
         assert _of_kind(result, "deviation", "stimulus_mismatch") == []
-        assert result.done is True
+        assert _gated(result, "word-color-stroop", _config(tmp_path)) is True
 
     def test_the_display_declared_would_score_it_backwards(self, tmp_path: Path) -> None:
         """Matching the words on the card against the answers spoken inverts the task."""
@@ -526,7 +566,7 @@ class TestStroopIsMatchedAgainstItsAnswersNotItsDisplay:
         result = align_speech("word-color-stroop", store, hint, branch_params(_config(tmp_path)))
         departures = _of_kind(result, "deviation", "stimulus_mismatch") + _of_kind(result, "deviation", "omission")
         assert len(departures) == 2, "an answer nothing displayed, and a display nothing answered"
-        assert result.done is False
+        assert _gated(result, "word-color-stroop", _config(tmp_path)) is False
 
     def test_hesitation_is_the_dependent_variable_and_never_a_filler(self, tmp_path: Path) -> None:
         """`emit_filler` is False on this row: a filled pause here is the measurement, not a fault."""
@@ -581,7 +621,7 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
         """Two of ten categories allow repetition, so a family-scoped rule would invert those."""
         store = self._listed("random-item-generation", ["a", "a"])
         result = align_speech("random-item-generation", store, None, branch_params(_config(tmp_path)))
-        assert result.done == UNDETERMINED
+        assert _gated(result, "random-item-generation", _config(tmp_path)) == UNDETERMINED
         assert _of_kind(result, "measure", "repetition_rule")
         assert result.components == []
 
@@ -616,7 +656,7 @@ class TestASyllableFamilyIsEvaluatedAsTheTrainItsInstructionAsksFor:
             if finding.kind == "measure" and finding.evidence.get("unavailable")
         ]
         assert ("ddk_syllable_rate_from_envelope_modulation_hz", "energy_envelope") in absent
-        assert result.done == UNDETERMINED
+        assert _gated(result, "diadochokinesis-pa", _config(tmp_path)) == UNDETERMINED
 
     def test_the_row_carries_the_instructions_own_expectation(self) -> None:
         """A syllable family's row says what it asks for; ``no lexical content`` is not a task."""
@@ -649,7 +689,7 @@ class TestASyllableFamilyIsEvaluatedAsTheTrainItsInstructionAsksFor:
         ]
         assert ("ddk_syllable_rate_from_envelope_modulation_hz", "energy_envelope") in absent
         assert result.components == []
-        assert result.done == UNDETERMINED
+        assert _gated(result, "diadochokinesis-buttercup", _config(tmp_path)) == UNDETERMINED
 
 
 class TestDetectSpeechNeedsNoAlignmentAndGroupsByGap:
@@ -688,7 +728,7 @@ class TestDetectSpeechNeedsNoAlignmentAndGroupsByGap:
     def test_it_evaluates_no_task(self, tmp_path: Path) -> None:
         """No pattern was expected of it, so its only answer is UNDETERMINED and each span says so."""
         result = detect_speech(self._store_with_words(), branch_params(_config(tmp_path, {"run_gap_max_s": 0.3})))
-        assert result.done == UNDETERMINED
+        assert _gated(result, "", _config(tmp_path), group=Pattern.FREE_RESPONSE) == UNDETERMINED
         assert all(proposal.attributes["evaluates_no_task"] for proposal in result.components)
 
     def test_it_reads_no_stimulus_alignment_at_all(self, tmp_path: Path) -> None:

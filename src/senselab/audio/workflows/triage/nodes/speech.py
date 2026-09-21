@@ -37,13 +37,12 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
-    PARAM_KEYS,
+    DETECT_GROUP,
     PARAM_SECTION,
     PROPOSERS,
     SPEECH_EXPECTATIONS,
     UNDETERMINED,
     BranchParams,
-    Done,
     Expectation,
     Finding,
     Pattern,
@@ -652,6 +651,18 @@ STIMULUS_MEASUREMENT = "stimulus_alignment"
 BREATH_TOKEN = "[breath]"
 """The one bracketed token that is never a filler: a breath in a passage reading is structure."""
 
+EXPECTED_TOKENS_MATCHED = "expected_tokens_matched"
+"""The reading ``expected_tokens_matched_min`` is read against: prescribed tokens the recording realised."""
+
+EXPECTED_TOKENS_OMITTED = "expected_tokens_omitted"
+"""The reading ``omissions_max`` is read against: prescribed tokens nothing realised."""
+
+RESPONSE_DURATION = "response_duration_s"
+"""The reading ``response_min_s`` is read against: how long the consensus's lexical words span."""
+
+ITEMS_PRODUCED = "items_produced"
+"""The reading ``items_min`` is read against: how many items the list carried."""
+
 
 def stimulus_haystack(hint: AudioHints | None) -> str | None:
     """The recording's own declared prompts, normalised for a containment test.
@@ -891,12 +902,12 @@ def _off_task(components: Sequence[Proposal], store: ProvStore, points: BranchPa
     Args:
         components: The spans this evaluation proposed.
         store: The provenance store.
-        points: The operating points.
+        points: The operating points, bound to the task group whose gate names the gap minimum.
 
     Returns:
-        The findings, or nothing while ``branch.gap_off_task_min_s`` is unmeasured.
+        The findings, or nothing when the group names no gap minimum or names it unmeasured.
     """
-    cut = points.point("gap_off_task_min_s")
+    cut = points.gate("gap_off_task_min_s")
     if cut is None:
         return []
     return off_task(components, live_entities(store, "span"), float(cut))
@@ -924,7 +935,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
     consensus_id = _consensus_id(store)
     words = lexical_words(store)
     if consensus_id is None:
-        return Result(UNDETERMINED, [], [unviable("expected_token_sequence", "no consensus_transcript in the store")])
+        return Result([], [unviable("expected_token_sequence", "no consensus_transcript in the store")])
 
     substitutions: list[tuple[str, Entity]] = []
     omissions: list[tuple[int, str, float | None]] = []
@@ -941,7 +952,6 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
         read = _stimulus(store, hint, params)
         if read is None:
             return Result(
-                UNDETERMINED,
                 [],
                 [
                     unviable(
@@ -1008,7 +1018,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
                 findings.append(
                     measured("expected_sequence_repeat_fraction", None, None, round(repeat_fraction, 3), *evidence)
                 )
-                cut = points.point("repeat_overlap_min")
+                cut = points.gate("repeat_overlap_min")
                 if cut is not None and repeat_fraction >= float(cut):
                     findings.append(
                         deviation(
@@ -1072,11 +1082,13 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
                 *(word.id for _, word in matched),
             )
         )
+    findings.append(measured(EXPECTED_TOKENS_MATCHED, None, None, len(matched), *evidence))
+    findings.append(measured(EXPECTED_TOKENS_OMITTED, None, None, len(omissions), *evidence))
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
     findings.extend(_off_task(components, store, points))
     findings.extend(points.record())
-    return Result(bool(matched) and not omissions, components, findings)
+    return Result(components, findings)
 
 
 def _speech_free_response(  # noqa: C901 — the response, the connected measures and the anti-pattern
@@ -1107,15 +1119,10 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
     findings: list[Finding] = []
     if response is not None and response[1] > response[0] and evidence:
         components.append(MINT("task_extent", response, *evidence, *word_ids, words_n=len(words)))
-    minimum = points.point("response_min_s")
-    done: Done
     if not _transcribed(store):
         findings.append(unviable("response", "no recognizer's hypothesis reached the consensus transcript"))
-        done = UNDETERMINED
-    elif minimum is None:
-        done = UNDETERMINED
     else:
-        done = response is not None and duration(response) >= float(minimum)
+        findings.append(measured(RESPONSE_DURATION, None, None, round(duration(response), 3), *evidence, *word_ids))
 
     if expectation.connected and response is not None and duration(response) > 0.0:
         groups = _phrase_runs(store, points)
@@ -1154,17 +1161,12 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
     if expectation.anti_pattern is not None:
         read = _stimulus(store, hint, params)
         ngram_n = points.point("echo_ngram_n")
-        cut = points.point(
+        cut = points.gate(
             "echo_overlap_max" if expectation.anti_pattern == "verbatim_prompt" else "verbatim_overlap_max"
         )
-        # `verbatim_source` reassigns the conformance term to coverage; `verbatim_prompt` does not.
-        term_from_stimulus = expectation.anti_pattern == "verbatim_source"
         if read is None:
             findings.append(unviable(f"anti_pattern_{expectation.anti_pattern}", f"{STIMULUS_MEASUREMENT} is absent"))
-            done = UNDETERMINED if term_from_stimulus else done
-        elif ngram_n is None:
-            done = UNDETERMINED if term_from_stimulus else done
-        else:
+        elif ngram_n is not None:
             stimulus_id, alignment = read
             source = [token.key for token in alignment.expected]
             produced = [params.p_normalise(word_text(word)) for word in words]
@@ -1190,14 +1192,12 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
                 findings.append(
                     measured("source_content_coverage", None, None, round(covered, 3), stimulus_id, *word_ids)
                 )
-                coverage_min = points.point("coverage_min")
-                done = UNDETERMINED if coverage_min is None else covered >= float(coverage_min)
 
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
     findings.extend(_off_task(components, store, points))
     findings.extend(points.record())
-    return Result(done, components, findings)
+    return Result(components, findings)
 
 
 def _speech_item_list(
@@ -1223,7 +1223,6 @@ def _speech_item_list(
         category = (hint.metadata or {}).get("category") if hint is not None else None
         if category is None:
             return Result(
-                UNDETERMINED,
                 [],
                 [
                     unviable(
@@ -1264,11 +1263,12 @@ def _speech_item_list(
         )
     findings.append(count("items", len(items), None, *(word.id for word in items)))
     findings.append(count("repetition_allowed", repetition_allowed, None))
+    findings.append(measured(ITEMS_PRODUCED, None, None, len(items), *(word.id for word in items)))
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
     findings.extend(_off_task(components, store, points))
     findings.extend(points.record())
-    return Result(len(items) > 0, components, findings)
+    return Result(components, findings)
 
 
 def align_speech(
@@ -1298,6 +1298,7 @@ def align_speech(
     expectation = SPEECH_EXPECTATIONS.get(task_family)
     if expectation is None:
         raise KeyError(f"{task_family} is not a SPEECH family; the caller owes detect_speech")
+    params.bind(expectation.pattern)
     if task_family in SYLLABLE_REPETITION:
         return align_ddk(expectation, store, params, reads=reads)
     if expectation.pattern is Pattern.ORDERED_TOKENS:
@@ -1324,6 +1325,7 @@ def detect_speech(store: ProvStore, params: BranchParams) -> Result:
         A result whose ``done`` is ``UNDETERMINED``, one span per run of lexical words, and the
         findings.
     """
+    params.bind(DETECT_GROUP[NODE])
     points = params
     words = lexical_words(store)
     consensus_id = _consensus_id(store)
@@ -1360,7 +1362,7 @@ def detect_speech(store: ProvStore, params: BranchParams) -> Result:
             findings.append(contest(span.id, span.extent, "speech", "no_consensus_word_inside"))
     findings.append(count("lexical_words", len(words), None, *(word.id for word in words)))
     findings.extend(points.record())
-    return Result(UNDETERMINED, components, findings)
+    return Result(components, findings)
 
 
 # --------------------------------------------------------------------- the node
@@ -1462,7 +1464,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             software,
             node=NODE,
             kind="speech",
-            conformance=result.done,
+            conformance=UNDETERMINED,
             conformance_of=TASK,
             deviations=deviation_names(expectation_findings),
             unmeasured=tuple(params.missing),
@@ -2127,7 +2129,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         software,
         node=NODE,
         kind="speech",
-        conformance=result.done,
+        conformance=UNDETERMINED,
         conformance_of=TASK,
         deviations=deviation_names(expectation_findings),
         unmeasured=tuple(params.missing),
