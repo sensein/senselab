@@ -5,9 +5,8 @@ the measurements; the code carries neither.
 
 ## What moved
 
-`branch:` held 31 keys. 16 of them are gates and are now in `verdict.gates`, keyed by the
-`Pattern` each expectation row declares. 15 are instrument settings and stayed. The split is the
-design's table, applied unchanged.
+`branch:` held 31 keys. 16 of them are gates and are now in `verdict.gates`. 15 are instrument
+settings and stayed. The split is the design's table, applied unchanged.
 
 | moved to `verdict.gates` | stayed in `branch:` |
 | --- | --- |
@@ -54,19 +53,67 @@ selection and decision.
 `CONFORMANCE_GATES` is where each group's conformance rule is. A gate with `reading=None` is one of
 the located kind and is never applied by VERDICT.
 
-## Task groups, and the out-of-family mode
+All three uses read the same resolved table, so a `by_family` bound reaches the branch's own
+carrier selection as well as VERDICT's decision. One number, one resolution, three uses.
 
-`Pattern` is the key, as the design directs. Two of the twelve groups — `PER_SENTENCE` and
-`EFFORT` — are configured empty: they appear only in `VOICE_EXPECTATIONS_PENDING_DECLARATION`,
-which `EXPECTATIONS` does not carry, so no reachable row declares them.
+## Three layers: family, then group, then default
 
-`detect_*` declares no task and therefore no `Pattern`. It still needs the instrument-selecting
-gates: `detect_voice` qualifies carriers, `detect_airway` walks events. `DETECT_GROUP` binds each
-branch's out-of-family mode to the group whose reading its instrument takes — AIRWAY to
-`EVENT_SERIES`, SPEECH to `FREE_RESPONSE`, VOICE to `SUSTAINED`. **No conformance gate is ever
-applied to an out-of-family report**: VERDICT gates only the branch that owns the declared family
-and reported `in_family`. The alternative, a thirteenth `DETECT` group, would duplicate four
-values with nothing to key them to.
+A bound resolves most-specific-first, and a family overrides its group **key by key**:
+`load_gate_bounds(config, group, family)` walks `LAYERS` in order and the first layer that *names*
+a gate supplies it, so a family naming one gate inherits every other gate its group names. The
+layer that supplied each bound travels with it, on `GateBounds.layers` and on every `AppliedGate`.
+
+Both non-group layers ship empty, each for its own reason.
+
+- **`by_family: {}`** because every value moved at its current setting and no per-family difference
+  has been derived. What the layer buys today is that a difference is *expressible*:
+  `maximum-phonation-time` declares `expect_inhale` where its v2 does not, inside one `SUSTAINED`
+  group, and saying so is now a config line rather than a code change.
+- **`default: {}`** because nothing is universal. `gap_off_task_min_s` reaches six of the twelve
+  groups and no other gate reaches more than three, so putting one there would be a default with
+  nine exclusions rather than a shared rule. A test pins that no gate reaches every group, so the
+  day one does, the default stops being empty on purpose rather than by neglect.
+
+`Pattern` keys the group layer. Two of its twelve groups — `PER_SENTENCE` and `EFFORT` — are
+configured empty: they appear only in `VOICE_EXPECTATIONS_PENDING_DECLARATION`, which
+`EXPECTATIONS` does not carry, so no reachable row declares them.
+
+`detect_*` declares no task and therefore neither a `Pattern` nor a family. It still needs the
+instrument-selecting gates: `detect_voice` qualifies carriers, `detect_airway` walks events.
+`DETECT_GROUP` binds each branch's out-of-family mode to the group whose reading its instrument
+takes — AIRWAY to `EVENT_SERIES`, SPEECH to `FREE_RESPONSE`, VOICE to `SUSTAINED` — and it reads no
+family layer, because it has no family. **No conformance gate is ever applied to an out-of-family
+report**: VERDICT gates only the branch that owns the declared family and reported `in_family`. The
+alternative, a thirteenth `DETECT` group, would duplicate four values with nothing to key them to.
+
+## No gate reads `expected_event_count`
+
+Owner-directed, and it required no change here: none of the thirteen readings a gate reads is that
+field, and a test now says so structurally rather than by inspection.
+
+The field holds two unlike things. `respiration-and-cough-fivebreaths` asks for five breaths and
+says so in its own name; a participant who gives four departed from the instruction.
+`diadochokinesis-pa` carries a ten nobody ever spoke — the instruction is *repeat as fast as you
+can* — and a participant who produces eight did the task. Individuals vary, and rate is the
+measurement of interest there.
+
+So the two gates that could plausibly have read it read something else instead, and both at a bound
+of **one**, which asks whether the asked-for sound happened at all rather than whether a count was
+met:
+
+| gate | reads | not |
+| --- | --- | --- |
+| `events_min` | `airway_events_found` — how many events of the kind the instruction named the walk found | the declared count |
+| `repetitions_min` | `ddk_repetitions_found` — repetitions either instrument read | the ten, or the thirty |
+
+The declared count is still **reported**, in both shapes it already had: as a `count` finding
+carrying `found` beside `declared`, and — on the DDK families, the ones where nobody gave the
+number — as a `declared_event_count` covariate on the repetition measurement itself.
+`decode_evidence`'s docstring already said what that arrangement is for: *"the decoded repetition
+count and the declared count are written beside each other and nothing folds them: no conformance
+term, no score and no gate reads the pair."* That sentence predates this change and is now true of
+the gate table as well. A bound waits for each row to declare which kind of count it carries and
+for a tolerance to be derived; neither is this change's work.
 
 ## `Result` no longer carries a conformance
 
@@ -141,6 +188,109 @@ is in [`corpus-replay.md`](corpus-replay.md).
 
 ## What a verdict now records
 
-`FileVerdict.gates` carries the node, the group, the group's whole bound table, and one row per
-gate applied — name, reading, value, bound, comparison, outcome. A conformance can be read
-backwards from the verdict alone, without the store and without a re-run.
+`FileVerdict.gates` carries the node, the group, the declared family, the whole resolved bound
+table with the layer of every entry, and one row per gate applied — name, reading, value, bound,
+**the layer that supplied it and the key it was keyed under**, comparison, outcome. A conformance
+can be read backwards from the verdict alone, without the store and without a re-run, and a
+family-specific bound is distinguishable from an inherited one without opening the config. That
+last part matters more than it looks: once `by_family` starts filling up, it is the only way to
+audit which recordings were judged by a special case.
+
+
+## Four keys I would put on the other side of the table
+
+The design's table was followed exactly and nothing was silently reclassified. Four of its
+left-hand entries fail the design's **own** test for a gate — *"changing one changes the verdict,
+not the reading"* — and are recorded here rather than moved.
+
+**`gap_off_task_min_s` is the clearest.** The design's paragraph justifying the right-hand column
+says `event_min_s` stays because it is "what the walk will *report*". `gap_off_task_min_s`'s own
+config comment is "shortest gap **reported** as off-task extent": the same sentence. Changing it
+changes how many `off_task_extent` deviations exist, and a deviation is never a flag ground
+(`verdict.deviation_flags: false`), so it cannot change a verdict at all. It is an instrument
+setting by the design's criterion and by its consequences.
+
+**`score_min` is the parallel of `voiced_strength_min`, which the design keeps.**
+`voiced_strength_min` says what counts as a voiced frame; `score_min` says what counts as a label
+being present in a classifier window. Both define what the instrument *sees*; neither says whether
+what was seen is good enough. The gate that decides an airway task is `events_min`, over the count
+the walk produced — and that one genuinely is a gate. Moving `score_min` is why the branch has to
+read `verdict.gates` in order to detect at all.
+
+**`monotone_tolerance_semitones` and `rate_prominence_min` are search parameters.**
+`longest_monotone_run(pitch, tolerance)` uses the first to *find* the run, so changing it changes
+the sweep's extent, its direction and its dominant fraction — the readings. `rate_prominence_min`
+decides whether a modulation peak is *readable as a rate*; below it there is no rate, not a bad
+one. Both are applied where the search happens, and both were given a reading so that VERDICT can
+at least record them: `sweep_monotone_reversal_semitones` was added for the first, and the second
+has no scalar reading and is marked `reading=None`.
+
+None of this changes what shipped. It is the argument to have if the table is revisited.
+
+## Mutation results
+
+`mutations.py` beside this file rewrites one line of the implementation at a time into a plausible
+wrong version of itself and runs the tests that should notice. **17 of 17 caught.** Two of them
+were added after a run that they would have passed: M10 survived the first pass, and an earlier M16 turned out to be an
+**equivalent mutant** — it removed a redundant `family is None` disjunct from a test that `None`
+already fails, so the two expressions agree on every input. The redundancy is gone and M16 now
+mutates something that can actually be wrong: whether a family-specific bound records its own
+family or its group's name.
+
+| # | mutation | caught by |
+| --- | --- | --- |
+| M1 | an absent reading reads as `False` rather than as no answer | 5 tests in `gates_test`, `verdict_test` |
+| M2 | a gate the group does not name is applied anyway | 2 tests, `GLIDE`'s spread among them |
+| M3 | a group that applied no gate reads as a pass | 1 test |
+| M4 | `f0_spread_max_semitones` compares `at_least` instead of `at_most` | 6 tests across three files |
+| M5 | `GLIDE` is configured with the held vowel's spread after all | 2 tests |
+| M6 | VERDICT gates an out-of-family report too | 1 test |
+| M7 | VERDICT leaves whatever the branch wrote on the report | 4 tests |
+| M8 | the sustained carrier's readings are never written | 4 tests |
+| M9 | DDK writes a repetition reading even when neither instrument could look | 2 tests |
+| M10 | AIRWAY counts events as a reading even where the label cut is unmeasured | **survived** the first run; now 1 test |
+| M11 | a recall is gated on how long it ran rather than on coverage | 2 tests |
+| M12 | a branch writes its own conformance onto its report again | 13 tests |
+| M13 | a family replaces its group's whole mapping instead of overriding key by key | 1 test |
+| M14 | the layers resolve least-specific-first, so a group beats its family | 5 tests |
+| M15 | a gate is put on the count nobody gave | 10 tests across two files |
+| M16 | a family-specific bound records its group, so it reads as an inherited one | 1 test |
+| M17 | every applied gate records the default layer, whichever one supplied it | 4 tests |
+
+M10 is the one worth recording. Nothing asserted that AIRWAY writes **no** `airway_events_found`
+reading when `score_min` is unmeasured, so the "could not look" and "looked and found none" cases
+were indistinguishable to the suite — exactly the defect this change exists to prevent, surviving
+inside the change that prevents it. `airway_test` now pins both halves: no reading with the cut
+unmeasured and `UNDETERMINED`, a reading of `0` with the cut measured and `False`.
+
+## Found and not fixed
+
+- **`SOUND_COVERAGE` has no conformance term at all**, before or after: 2,455 `-breath` recordings
+  answer `UNDETERMINED` on every run. `breath_coverage_fraction` is reported and no gate reads it,
+  because `branch.breath_coverage_min` was deleted rather than defaulted (`config-derivations.md`
+  § branch). It is now a one-line config question instead of a code change, which is the whole
+  point of the table; fitting it is separate work.
+- **`interval_max_s` decides a `count` nothing folds.** `intervals_over_p_interval_max_s` reaches
+  the report and no verdict.
+- **`FREE_RESPONSE` with `verbatim_source` is gated on coverage alone**, reproducing the old code's
+  reassignment. An `AND` with `response_min_s` is the more principled rule and would change
+  `story-recall` and `story-recall-v2`; that is a refit and out of scope here.
+- **The design's motivating example is true of the configuration and not of the code.**
+  `f0_spread_max_semitones` never reached a glide: `_voice_glide` does not call
+  `qualifying_phonation`, so the sweep families were never bound by the held vowel's spread. One
+  flat value governing two unlike tasks was real; its application to a glide was not. The fix is
+  the same either way — the value is now per group and `GLIDE` names none — but the corpus was
+  never going to move on it, and it did not.
+- **`config-derivations.md` carries a `branch.breath_group_min_gap_s` entry** for a key the
+  packaged section does not have. Pre-existing drift, untouched.
+- **`PER_SENTENCE` and `EFFORT` are unreachable groups.** They appear only in
+  `VOICE_EXPECTATIONS_PENDING_DECLARATION`, which `EXPECTATIONS` does not carry. They ship
+  configured empty so that a row declaring one does not raise.
+- **The base branch already answers AIRWAY differently from the corpus run** on 2,787 recordings,
+  from commits landed between them. [`corpus-replay.md`](corpus-replay.md) breaks that down; it is
+  present identically on both sides of the A/B and moves nothing here.
+- **`by_family` and `default` both ship empty, so the packaged config exercises one layer of
+  three.** The resolution order, the key-by-key override and the layer provenance are covered by
+  tests and by four mutations, over overrides rather than over shipped values. The first real
+  `by_family` entry is the first time the layering runs on a corpus, and it should be replayed
+  when it lands.

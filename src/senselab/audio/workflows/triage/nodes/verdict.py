@@ -1,14 +1,21 @@
 """The VERDICT node: the store's contents read into the vocabulary's fold, and the result recorded.
 
 This is the graph's only decision about the recording. The branches and QUALITY write
-``branch_report`` entities — task conformance, typed deviations, no outcome — and propose spans; the
-deciding nodes write ``verdict`` entities; this node reads all three, adds the declared task and the
-routing decisions, and hands them to ``vocabulary.fold_file_verdict``. REDACT's optional LLM re-read
-is read here too, as an annotation: its ``flagged`` reaches the triage axis under
+``branch_report`` entities — typed deviations, no outcome and no conformance — and propose spans;
+the deciding nodes write ``verdict`` entities; this node reads all three, adds the declared task and
+the routing decisions, and hands them to ``vocabulary.fold_file_verdict``. REDACT's optional LLM
+re-read is read here too, as an annotation: its ``flagged`` reaches the triage axis under
 ``verdict.llm_redaction_flags`` and the release axis on no path.
 
+**The declared task's conformance is decided here.** :func:`gate_conformance` reads the declared
+family's task group's gates from ``verdict.gates``, reads their inputs off the branch's own
+``measure`` findings, and substitutes the answer onto the report of the branch that owns the family
+and reported ``in_family``. An absent reading and an unmeasured bound both answer
+:data:`UNDETERMINED`; every gate applied is recorded on the verdict.
+
 The two axes this node keeps apart — triage and release — and the tables it implements are in
-``specs/20260817-triage-workflow-dag/verdict.md``; the re-read is in
+``specs/20260817-triage-workflow-dag/verdict.md``; the gates are in
+``specs/20260921-gates-in-verdict/`` and the re-read in
 ``specs/20260817-triage-workflow-dag/llm-check.md``.
 """
 
@@ -29,6 +36,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_verdict,
 )
 from senselab.audio.workflows.triage.nodes.gates import (
+    DEFAULT_LAYER,
     GATE_SECTION,
     GATE_SPECS,
     AppliedGate,
@@ -364,6 +372,20 @@ def gate_readings(store: ProvStore, names: Sequence[str]) -> dict[str, Any]:
     return readings
 
 
+def _gate_path(gate: AppliedGate) -> str:
+    """Where a gate's bound was configured, as a dotted config path.
+
+    Args:
+        gate: One applied gate.
+
+    Returns:
+        The path, naming the layer that supplied the bound and the key it was keyed under.
+    """
+    if gate.layer == DEFAULT_LAYER:
+        return f"{GATE_SECTION}.{gate.layer}.{gate.name}"
+    return f"{GATE_SECTION}.{gate.layer}.{gate.keyed_under}.{gate.name}"
+
+
 @dataclass(frozen=True)
 class GateOutcome:
     """What VERDICT's gates made of the declared task.
@@ -385,12 +407,12 @@ class GateOutcome:
         """The gates this fold wanted and nobody has measured, by their full config paths.
 
         Returns:
-            One path per applied gate whose bound is null, in the order they were applied. They
-            join the reporting node's own unmeasured asks, so ``verdict.unmeasured_points_flag``
-            reaches a gate the same way it reaches an instrument setting.
+            One path per applied gate whose bound is null, named by the layer that supplied it, in
+            the order they were applied. They join the reporting node's own unmeasured asks, so
+            ``verdict.unmeasured_points_flag`` reaches a gate the same way it reaches an
+            instrument setting.
         """
-        group = "" if self.bounds is None else self.bounds.group.name
-        return tuple(f"{GATE_SECTION}.{group}.{gate.name}" for gate in self.applied if gate.bound is None)
+        return tuple(_gate_path(gate) for gate in self.applied if gate.bound is None)
 
     def record(self) -> dict[str, Any]:
         """This application, as the verdict records it.
@@ -430,7 +452,7 @@ def gate_conformance(
     if owner is None:
         return GateOutcome(None, UNDETERMINED, None, ())
     branch, expectation = owner
-    bounds = load_gate_bounds(config, expectation.pattern)
+    bounds = load_gate_bounds(config, expectation.pattern, declared_family)
     reported = next((report for report in reports if report.node == branch and report.in_family), None)
     if reported is None:
         return GateOutcome(branch, UNDETERMINED, bounds, ())

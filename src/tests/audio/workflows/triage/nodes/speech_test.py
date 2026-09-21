@@ -170,12 +170,13 @@ SYLLABLE_POINTS = (
     "  event_min_s: 0.02\n"
     "verdict:\n"
     "  gates:\n"
-    "    SYLLABLE_TRAIN:\n"
-    "      train_min_s: 1.5\n"
-    "      rate_prominence_min: 2.0\n"
-    "    SYLLABLE_SEQUENCE:\n"
-    "      train_min_s: 1.5\n"
-    "      rate_prominence_min: 2.0\n"
+    "    by_group:\n"
+    "      SYLLABLE_TRAIN:\n"
+    "        train_min_s: 1.5\n"
+    "        rate_prominence_min: 2.0\n"
+    "      SYLLABLE_SEQUENCE:\n"
+    "        train_min_s: 1.5\n"
+    "        rate_prominence_min: 2.0\n"
 )
 """The event walk's own points, at the 1 kHz envelope these fixtures write.
 

@@ -1298,7 +1298,7 @@ def align_speech(
     expectation = SPEECH_EXPECTATIONS.get(task_family)
     if expectation is None:
         raise KeyError(f"{task_family} is not a SPEECH family; the caller owes detect_speech")
-    params.bind(expectation.pattern)
+    params.bind(expectation.pattern, task_family)
     if task_family in SYLLABLE_REPETITION:
         return align_ddk(expectation, store, params, reads=reads)
     if expectation.pattern is Pattern.ORDERED_TOKENS:

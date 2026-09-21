@@ -198,12 +198,13 @@ def ddk_config(tmp_path: Path) -> TriageConfig:
         "  burst_window_ms: 20.0\n"
         "verdict:\n"
         "  gates:\n"
-        "    SYLLABLE_TRAIN:\n"
-        "      train_min_s: 1.5\n"
-        "      rate_prominence_min: 2.0\n"
-        "    SYLLABLE_SEQUENCE:\n"
-        "      train_min_s: 1.5\n"
-        "      rate_prominence_min: 2.0\n"
+        "    by_group:\n"
+        "      SYLLABLE_TRAIN:\n"
+        "        train_min_s: 1.5\n"
+        "        rate_prominence_min: 2.0\n"
+        "      SYLLABLE_SEQUENCE:\n"
+        "        train_min_s: 1.5\n"
+        "        rate_prominence_min: 2.0\n"
     )
     return load_triage_config(override)
 
@@ -1274,7 +1275,7 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
     ) -> None:
         """A real narrowing of the unmeasured surface: only the class mappings can reach it."""
         override = tmp_path / "cleared.yaml"
-        override.write_text("verdict:\n  gates:\n    SYLLABLE_TRAIN:\n      train_min_s: null\n")
+        override.write_text("verdict:\n  gates:\n    by_group:\n      SYLLABLE_TRAIN:\n        train_min_s: null\n")
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pa",
@@ -1358,7 +1359,7 @@ class TestConformanceNarrowsAndDoesNotWiden:
     ) -> None:
         """No carrier has two causes and only one of them is a reading of the recording."""
         override = tmp_path / "cleared.yaml"
-        override.write_text("verdict:\n  gates:\n    SYLLABLE_TRAIN:\n      train_min_s: null\n")
+        override.write_text("verdict:\n  gates:\n    by_group:\n      SYLLABLE_TRAIN:\n        train_min_s: null\n")
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pa",
@@ -1368,7 +1369,7 @@ class TestConformanceNarrowsAndDoesNotWiden:
         cleared = load_triage_config(override)
         _run(store, cleared, tmp_path)
         assert _gated(store, cleared, "diadochokinesis-pa") == UNDETERMINED
-        assert "verdict.gates.SYLLABLE_TRAIN.train_min_s" in _unmeasured(store)
+        assert "verdict.gates.by_group.SYLLABLE_TRAIN.train_min_s" in _unmeasured(store)
 
 
 class TestTheRegularityStatisticsAreParameterFree:

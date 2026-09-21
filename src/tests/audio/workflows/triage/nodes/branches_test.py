@@ -90,7 +90,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     windowed_spreads,
     write_findings,
 )
-from senselab.audio.workflows.triage.nodes.gates import GATE_SPECS
+from senselab.audio.workflows.triage.nodes.gates import GATE_SPECS, GROUP_LAYER
 from senselab.audio.workflows.triage.routing_analysis.families import (
     AIRWAY_ELICITING,
     SPEECH_ELICITING,
@@ -206,7 +206,10 @@ def _params(group: Pattern = Pattern.SYLLABLE_TRAIN, **values: Any) -> BranchPar
         **config.values["verdict"],
         "gates": {
             **config.values["verdict"]["gates"],
-            group.name: {**config.values["verdict"]["gates"][group.name], **gates},
+            GROUP_LAYER: {
+                **config.values["verdict"]["gates"][GROUP_LAYER],
+                group.name: {**config.values["verdict"]["gates"][GROUP_LAYER][group.name], **gates},
+            },
         },
     }
     return branch_params(TriageConfig(config.name, config.version, config.config_hash, merged)).bind(group)

@@ -33,7 +33,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     branch_params,
 )
 from senselab.audio.workflows.triage.nodes.common import RESERVED_REPORT_KEYS, write_report
-from senselab.audio.workflows.triage.nodes.gates import GateBounds, Pattern, apply_gates
+from senselab.audio.workflows.triage.nodes.gates import GROUP_LAYER, GateBounds, Pattern, apply_gates
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
     DECLINED,
@@ -547,10 +547,10 @@ class TestABranchNeverRefuses:
     def test_an_unmeasured_gate_is_recorded_under_its_own_group(self, tmp_path: Path) -> None:
         """A gate's bound lives in ``verdict.gates``, so its ask is named by its full path there."""
         override = tmp_path / "nulled-gate.yaml"
-        override.write_text("verdict:\n  gates:\n    SYLLABLE_TRAIN:\n      train_min_s: null\n")
+        override.write_text("verdict:\n  gates:\n    by_group:\n      SYLLABLE_TRAIN:\n        train_min_s: null\n")
         params = branch_params(load_triage_config(override)).bind(Pattern.SYLLABLE_TRAIN)
         assert params.gate("train_min_s") is None
-        assert params.missing == ["verdict.gates.SYLLABLE_TRAIN.train_min_s"]
+        assert params.missing == ["verdict.gates.by_group.SYLLABLE_TRAIN.train_min_s"]
 
     def test_a_misspelled_point_still_raises_from_inside_a_branch(self) -> None:
         """The distinction the whole split exists for: this must not read as one more null."""
@@ -578,22 +578,26 @@ class TestABranchNeverRefuses:
         could not look writes none, and ``apply_gates`` answers ``UNDETERMINED`` to an absent
         reading and to an unmeasured bound alike.
         """
-        bounds = GateBounds(group=Pattern.EVENT_SERIES, bounds={"events_min": 1})
+        bounds = GateBounds(
+            group=Pattern.EVENT_SERIES, family=None, bounds={"events_min": 1}, layers={"events_min": GROUP_LAYER}
+        )
         assert apply_gates(("events_min",), bounds, {})[0] == UNDETERMINED
         assert apply_gates(("events_min",), bounds, {"airway_events_found": 0})[0] is False
-        unmeasured = GateBounds(group=Pattern.EVENT_SERIES, bounds={"events_min": None})
+        unmeasured = GateBounds(
+            group=Pattern.EVENT_SERIES, family=None, bounds={"events_min": None}, layers={"events_min": GROUP_LAYER}
+        )
         assert apply_gates(("events_min",), unmeasured, {"airway_events_found": 0})[0] == UNDETERMINED
 
     def test_an_unmeasured_point_flags_through_the_fold_rather_than_through_a_raise(self) -> None:
         """Where the refusal went: the branch names the key, and this fold decides about it."""
         folded = _fold(
-            [_report("AIRWAY", conformance=UNDETERMINED, unmeasured=["verdict.gates.EVENT_SERIES.score_min"])],
+            [_report("AIRWAY", conformance=UNDETERMINED, unmeasured=["verdict.gates.by_group.EVENT_SERIES.score_min"])],
             spans={},
         )
-        assert folded.unmeasured["AIRWAY"] == ["verdict.gates.EVENT_SERIES.score_min"]
+        assert folded.unmeasured["AIRWAY"] == ["verdict.gates.by_group.EVENT_SERIES.score_min"]
         assert folded.triage is Triage.FLAG
         quiet = _fold(
-            [_report("AIRWAY", conformance=UNDETERMINED, unmeasured=["verdict.gates.EVENT_SERIES.score_min"])],
+            [_report("AIRWAY", conformance=UNDETERMINED, unmeasured=["verdict.gates.by_group.EVENT_SERIES.score_min"])],
             spans={},
             policy=FoldPolicy(unmeasured_points_flag=False),
         )

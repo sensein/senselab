@@ -23,6 +23,8 @@ from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfi
 from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities
 from senselab.audio.workflows.triage.nodes.gates import (
+    DEFAULT_LAYER,
+    FAMILY_LAYER,
     GATE_SECTION,
     GATE_SPECS,
     GateBounds,
@@ -989,23 +991,25 @@ class BranchParams:
     Attributes:
         config: The resolved triage configuration.
         missing: The paths read while null, in first-read order.
-        gates: The task group's gates, or None until :meth:`bind` names a group.
+        gates: The task's resolved gates, or None until :meth:`bind` names a task.
     """
 
     config: TriageConfig
     missing: list[str] = field(default_factory=list)
     gates: GateBounds | None = None
 
-    def bind(self, group: Pattern) -> "BranchParams":
-        """Name the task group whose gates :meth:`gate` reads.
+    def bind(self, group: Pattern, family: str | None = None) -> "BranchParams":
+        """Name the task whose gates :meth:`gate` reads, resolved family-first then group.
 
         Args:
             group: The group the task's expectation row declares.
+            family: The declared family, when one is declared. The out-of-family mode declares
+                none and reads only the group and default layers.
 
         Returns:
             This instance, so a caller may bind and pass in one expression.
         """
-        self.gates = load_gate_bounds(self.config, group)
+        self.gates = load_gate_bounds(self.config, group, family)
         return self
 
     def gate(self, name: str) -> Any:  # noqa: ANN401 — each gate's own type
@@ -1030,7 +1034,11 @@ class BranchParams:
             return None
         bound = self.gates.bound(name)
         if bound is None:
-            path = f"{GATE_SECTION}.{self.gates.group.name}.{name}"
+            layer = self.gates.layer(name)
+            where = self.gates.family if layer == FAMILY_LAYER else self.gates.group.name
+            path = (
+                f"{GATE_SECTION}.{layer}.{where}.{name}" if layer != DEFAULT_LAYER else f"{GATE_SECTION}.{layer}.{name}"
+            )
             if path not in self.missing:
                 self.missing.append(path)
         return bound

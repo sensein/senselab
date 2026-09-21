@@ -76,3 +76,15 @@ is not configured for it, rather than being set to a value that disables it.
 Re-deriving any threshold. Every value moves at its current setting; this changes *where* a gate
 lives and *which tasks* it applies to, not what it is set to. Refitting is separate work, and the
 table this produces is what makes it possible.
+
+## What was built
+
+- [`implementation.md`](implementation.md) — what moved, where each gate is applied, the
+  equivalence argument per reading, the four keys I would classify differently, the mutation
+  results and the open items.
+- [`corpus-replay.md`](corpus-replay.md) — conformance per family before and after, over 61,797
+  recordings of the 2026-09-19 corpus run, replayed once per gate shape. **Nothing moved.**
+- [`corpus-replay.py`](corpus-replay.py), [`corpus-replay-report.py`](corpus-replay-report.py) —
+  the branch-only replay and its join, read-only over a finished run tree.
+- [`mutations.py`](mutations.py) — one plausible wrong version of each behavioural line, and the
+  tests that catch it.
