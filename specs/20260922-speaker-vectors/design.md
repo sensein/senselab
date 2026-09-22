@@ -194,7 +194,9 @@ cross-recording, cross-session speaker identity rather than within-recording con
 | **extent-equal (two-stage)** | 0.781 | **0.553** | 0.281 | 0.594 | **0.9847** | **0.0588** | 3.54 | **0.818** |
 | extent-equal, corpus-centred | 0.672 | 0.319 | 0.009 | 0.301 | 0.9870 | 0.0476 | 3.84 | 0.804 |
 
-**Extent-equal wins, and by a margin worth the code.** It halves the equal error rate (5.9%
+**Extent-equal wins, and by a margin worth the code.** (On the design tree every recording
+minted exactly one extent, so *extent*-equal and *recording*-equal were the same estimator there.
+D-9 is why the shipped rule is the recording one.) It halves the equal error rate (5.9%
 against 12.0%) and lifts rank-1 identification from 0.722 to 0.818 against 1,512 impostors. The
 mechanism is visible in the within p05: 0.553 against 0.343. One-stage pooling weights an extent
 by its window count, and the corpus spans 1.0 s to 330 s, so a single long free-speech extent can
@@ -279,6 +281,51 @@ measurement raises and does not answer.
 shift — subject-level variation is large, and these six happen to be speech-heavy. It is flagged
 because "did the replay move task extent" is the question the whole *when it is final* condition
 rests on, and it is the first thing to check against the replayed census rather than assume.
+
+## D-9. The replay mints two task extents on 3,309 recordings, and the pooling unit moves
+
+Census of the replayed tree, `/orcd/scratch/bcs/002/satra/triage_replay_20260922/out`, job
+`23474063`, taken while the tree was still being written — 62,356 recordings readable, 5 without
+a store.
+
+| | design tree | replayed tree |
+| --- | ---: | ---: |
+| recordings with ≥1 task extent | 54,923 (87.8%) | 55,063 (88.3%) |
+| …with exactly one | 54,923 | 51,754 |
+| …**with two** | **0** | **3,309** |
+| total extents | 54,923 | 58,372 |
+| speech extents | 39,235 | 39,104 |
+| **airway extents** | **11,066** | **14,662** |
+| voice extents | 4,622 | 4,606 |
+
+**The replay moved AIRWAY and nothing else.** Speech and voice counts are unchanged to within
+0.4%; airway gains 3,596 extents, and 3,309 recordings now carry two.
+
+**All 3,309 two-extent recordings are `('airway', 'airway')`, and the two spans are nested
+(2,405) or overlapping (904) — never disjoint.** They share an endpoint and differ at the other:
+`[2.24, 25.74]` beside `[2.24, 26.69]`; `[1.08, 29.87]` beside `[3.13, 29.87]`. They are not two
+portions of the recording. They are two AIRWAY matchers placing nearly the same span — the
+`respiration-and-cough-*` and `breath-sounds` families, where `_airway_event_series`,
+`_airway_alternation` and `_airway_coverage` can all fire.
+
+**Why this changes the estimator.** Under extent-equal pooling such a recording casts two votes
+for one recording's audio, and near-duplicate audio at that. The unit of independence is the
+**recording**, not the span: two overlapping spans of one file are not two observations of the
+speaker. Pooling is therefore three-stage — windows → extent centroid → recording centroid →
+speaker vector — and the shipped `method` is `recording_equal_spherical_mean`.
+
+This **costs nothing against the D-7 measurement**, because on the design tree every recording
+minted exactly one extent, so what was measured there as extent-equal *is* recording-equal. The
+change keeps the validated semantics on the tree where the two diverge.
+
+Rejected: collapsing the pair to its hull, and keeping the longest. Both throw away a span the
+branch deliberately minted, and neither generalises to a future case where two extents are
+genuinely disjoint — which recording-equal pooling already handles correctly.
+
+**Caveat on these counts.** The replayed tree was mid-write, and an un-replayed run root still
+carries its design-tree store, so the true rate among *replayed* recordings is higher than
+3,309/62,356. The direction and the mechanism are what matter here; re-run this census once the
+array finishes before quoting a rate.
 
 ## What was not measured
 
