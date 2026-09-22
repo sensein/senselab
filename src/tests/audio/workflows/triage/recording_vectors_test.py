@@ -239,7 +239,7 @@ def test_time_round_trips_within_half_a_millisecond(seconds: float) -> None:
     """A time survives the uint16 round trip to well under what the graph measures."""
     duration = 30.0
     code = rv.quantise_time(seconds, duration)
-    assert 0 <= code <= rv.TIME_SCALE
+    assert 0 <= code <= 65535
     assert abs(rv.dequantise_time(code, duration) - min(seconds, duration)) < 0.0005
 
 
@@ -256,7 +256,9 @@ def test_out_of_range_values_clamp_rather_than_wrap() -> None:
     assert rv.quantise_value(-500.0, *rv.ENVELOPE_DBFS_RANGE) == 0
     assert rv.quantise_value(500.0, *rv.ENVELOPE_DBFS_RANGE) == 255
     assert rv.quantise_time(-1.0, 4.0) == 0
-    assert rv.quantise_time(99.0, 4.0) == rv.TIME_SCALE
+    assert rv.quantise_time(99.0, 4.0) == 65535
+    assert rv.quantise_time(4.0, 4.0) == 65535
+    assert rv.encode_records([(0, rv.quantise_time(4.0, 4.0), 0)], rv.SPANS_LAYOUT)[1:3] == b"\xff\xff"
 
 
 def test_non_finite_values_do_not_escape_the_quantisers() -> None:
@@ -316,7 +318,7 @@ def test_a_trace_is_always_exactly_the_declared_number_of_points() -> None:
     for length in (3, 256, 100311):
         blob = rv.encode_trace(np.linspace(-80.0, -10.0, length), *rv.ENVELOPE_DBFS_RANGE, how="max")
         assert blob is not None
-        assert len(blob) == rv.TRACE_POINTS
+        assert len(blob) == 256
 
 
 def test_a_decimated_ramp_decodes_back_to_a_ramp() -> None:
@@ -340,7 +342,7 @@ def test_the_waveform_carries_a_min_and_a_max_per_bucket_scaled_by_its_own_peak(
     tone = 0.25 * np.sin(2 * np.pi * 220 * np.arange(16000) / 16000)
     blob, peak = rv.encode_waveform(tone)
     assert blob is not None and peak == pytest.approx(0.25, abs=1e-3)
-    assert len(blob) == rv.TRACE_POINTS * 2
+    assert len(blob) == 512
     lows = [rv.dequantise_value(blob[i], -peak, peak) for i in range(0, len(blob), 2)]
     highs = [rv.dequantise_value(blob[i], -peak, peak) for i in range(1, len(blob), 2)]
     assert all(low <= high for low, high in zip(lows, highs))
@@ -436,9 +438,9 @@ def test_branch_lanes_carry_the_lane_the_role_kind_and_the_rectangle(one_row: di
 
 def test_the_waveform_and_the_traces_are_the_declared_widths(one_row: dict[str, Any]) -> None:
     """256 envelope bytes, 256 continuity bytes, 512 waveform bytes, one floor scalar."""
-    assert len(one_row["env_dbfs"]) == rv.TRACE_POINTS
-    assert len(one_row["continuity"]) == rv.TRACE_POINTS
-    assert len(one_row["wave_minmax"]) == rv.TRACE_POINTS * 2
+    assert len(one_row["env_dbfs"]) == 256
+    assert len(one_row["continuity"]) == 256
+    assert len(one_row["wave_minmax"]) == 512
     assert one_row["floor_dbfs"] == pytest.approx(-73.25)
 
 
@@ -647,3 +649,83 @@ def test_the_flag_outcomes_are_the_ones_the_report_counts() -> None:
     source = (Path(figure_module.__file__).parent / "report.py").read_text()
     assert 'reason.get("outcome") in {"flag", "fail", "discard"}' in source
     assert rv.FLAG_OUTCOMES == {"flag", "fail", "discard"}
+
+
+def test_the_envelope_keeps_a_narrow_peak_a_mean_would_flatten() -> None:
+    """The envelope decimates by max, so a short loud event survives to the drawn trace."""
+    trace = np.full(100000, -90.0)
+    trace[50000:50050] = -5.0
+    blob = rv.encode_trace(trace, *rv.ENVELOPE_DBFS_RANGE, how="max")
+    assert blob is not None
+    assert max(rv.dequantise_value(b, *rv.ENVELOPE_DBFS_RANGE) for b in blob) == pytest.approx(-5.0, abs=0.5)
+
+
+def test_the_continuity_trace_averages_so_one_sample_cannot_dominate() -> None:
+    """Continuity decimates by mean, so a single-sample excursion does not become a bucket."""
+    trace = np.full(100000, 0.1)
+    trace[50000] = 1.0
+    blob = rv.encode_trace(trace, *rv.CONTINUITY_RANGE, how="mean")
+    assert blob is not None
+    assert max(rv.dequantise_value(b, *rv.CONTINUITY_RANGE) for b in blob) == pytest.approx(0.1, abs=0.02)
+
+
+def test_words_are_ordered_by_their_consensus_index_not_by_store_order(tmp_path: Path) -> None:
+    """``index`` is the only legal ordering, and the parallel text column follows it."""
+    run_root = build_recording(tmp_path)
+    store = run_root / "run" / "store.jsonl"
+    text = store.read_text().replace(
+        _entity("word-0", "word", [0.5, 0.9], index=0, text="Hello", outcome="agreement") + "\n", ""
+    )
+    store.write_text(text + _entity("word-0", "word", [0.5, 0.9], index=0, text="Hello", outcome="agreement") + "\n")
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert row["asr_word_text"] == ["Hello", "Jane"]
+    assert rv.decode_records(row["asr_words"], rv.ASR_WORDS_LAYOUT)[0][0] == rv.quantise_time(0.5, 4.0)
+
+
+def test_a_span_index_points_at_the_span_it_names_even_past_an_unrowed_span(tmp_path: Path) -> None:
+    """A redaction span carries no row code; the indices in the label and SQUIM blocks skip it."""
+    run_root = build_recording(tmp_path)
+    store = run_root / "run" / "store.jsonl"
+    lines = store.read_text().splitlines()
+    marker = _entity("span-0", "span", [0.5, 1.5], measure="amplitude", signal="preemphasised")
+    at = lines.index(marker)
+    lines.insert(at, _entity("span-x", "span", [0.1, 0.2], name="redaction", category="PERSON"))
+    store.write_text("\n".join(lines) + "\n")
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert row["spans_unrowed_n"] == 2
+    assert len(rv.decode_records(row["spans"], rv.SPANS_LAYOUT)) == 2
+    span_index = rv.decode_records(row["span_labels"], rv.SPAN_LABELS_LAYOUT)[0][0]
+    row_code, t0, _ = rv.decode_records(row["spans"], rv.SPANS_LAYOUT)[span_index]
+    assert rv.SPAN_ROWS[row_code] == "E"
+    assert rv.dequantise_time(t0, 4.0) == pytest.approx(0.5, abs=1e-3)
+
+
+def test_the_extracted_envelope_keeps_a_short_loud_event(tmp_path: Path) -> None:
+    """Through ``extract``, not only through ``encode_trace``: the envelope column is max-decimated."""
+    run_root = build_recording(tmp_path)
+    samples = 64000
+    trace = np.full(samples, -90.0)
+    trace[32000:32050] = -5.0
+    _write_npz(
+        run_root / "run" / "derivatives" / "energy_envelope.npz",
+        envelope_dbfs=trace,
+        floor_dbfs=np.full(samples, -73.25),
+    )
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    peak = max(rv.dequantise_value(b, *rv.ENVELOPE_DBFS_RANGE) for b in row["env_dbfs"])
+    assert peak == pytest.approx(-5.0, abs=0.5)
+
+
+def test_the_extracted_continuity_does_not_let_one_sample_become_a_bucket(tmp_path: Path) -> None:
+    """Through ``extract``: the continuity column is mean-decimated, so a spike is averaged away."""
+    run_root = build_recording(tmp_path)
+    trace = np.full(64000, 0.1)
+    trace[32000] = 1.0
+    _write_npz(run_root / "run" / "derivatives" / "continuity_trace.npz", continuity=trace)
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    peak = max(rv.dequantise_value(b, *rv.CONTINUITY_RANGE) for b in row["continuity"])
+    assert peak == pytest.approx(0.1, abs=0.02)
