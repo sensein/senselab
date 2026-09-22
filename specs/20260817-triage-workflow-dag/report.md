@@ -189,6 +189,10 @@ embedded rather than referenced**:
 - **Every claim names the store elements behind it.** Each entry under `steps` carries the
   `element_ids` it summarises, so any number in the JSON is traceable to the assertion that produced
   it. This is what makes the JSON a view of the store rather than a second copy of it.
+- **`evidence.branches` carries every branch's typed findings**, not one branch's — each as
+  `<branch> <verb>: <type>` beside its extent. See
+  [`branch-evidence-assertions.md`](branch-evidence-assertions.md) for what the previous
+  AIRWAY-only filter hid, counted on the corpus.
 
 ## Placement
 
