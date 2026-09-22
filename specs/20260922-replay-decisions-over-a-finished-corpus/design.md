@@ -108,6 +108,13 @@ store.
 recording in the corpus run, so the replay passes `None`. A corpus run that used enrollment could
 not be replayed without carrying it in the manifest.
 
+The table above is read off the code. It was then run: all twelve probe recordings — three duration
+strata across four routed-branch profiles — were re-entered at TAXONOMY against their finished
+stores on `pi_satra`, and every node either completed or was skipped by routing. Zero node errors,
+and both REPORT products rendered on all twelve. The replayed graph cost 0.8 s to 35.6 s per
+recording, 162.8 s in total, against 2,288 s for the same twelve through the full graph — 14.1
+times cheaper on these recordings, against the 10.4 the corpus-wide node table predicts.
+
 **Sidecar paths.** `resolve_stream` (`nodes/common.py:566-570`) honours an absolute stored path and
 falls back to `run_dir / path` for a relative one; `taxonomy.py:76`, `airway.py:342` do
 `run_dir / str(path)`, which pathlib resolves to the absolute path when the stored one is absolute.
