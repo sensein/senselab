@@ -9,6 +9,7 @@ import pyarrow as pa
 import pytest
 import soundfile
 
+from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage import speaker_vectors as sv
 
 PROFILE = Path(sv.__file__).parent / "data" / "speaker_vector_profile" / "2026-09-22.yaml"
@@ -442,3 +443,36 @@ def test_one_writer_of_a_duplicated_interval_surviving_keeps_the_extent(tmp_path
     store.write_text(store.read_text() + _relation("wasInvalidatedBy", "span-0", "activity-x") + "\n")
     (extent,) = sv.read_task_extents(run_root)
     assert (extent.start_s, extent.end_s) == (1.0, 9.0)
+
+
+def test_a_long_extent_does_not_outvote_a_short_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pooling is extent-equal: eight windows of one extent weigh what two of another do."""
+    import senselab.audio.tasks.speaker_embeddings.windowing as windowing
+    from senselab.audio.tasks.speaker_embeddings.windowing import WindowEmbedding
+
+    build_recording(tmp_path, stem="sub-w_ses-s0_task-long", duration_s=20.0, extents=((1.0, 19.0, "speech"),))
+    build_recording(tmp_path, stem="sub-w_ses-s1_task-short", duration_s=8.0, extents=((1.0, 6.0, "speech"),))
+    grouped, _ = sv.gather(tmp_path)
+    extents = sorted(grouped["sub-w"], key=lambda e: e.duration_s)
+
+    # Two orthogonal directions, one per extent, with eight windows against two.
+    east, north = np.zeros(sv.EMBEDDING_DIM), np.zeros(sv.EMBEDDING_DIM)
+    east[0], north[1] = 1.0, 1.0
+    plan = {extents[0].extent_id: (north, 2), extents[1].extent_id: (east, 8)}
+    by_duration = {round(e.duration_s, 3): plan[e.extent_id] for e in extents}
+
+    def _windows(*, audio: Audio, **_kwargs: object) -> dict[str, list[WindowEmbedding]]:
+        seconds = round(audio.waveform.shape[-1] / audio.sampling_rate, 3)
+        direction, count = by_duration[seconds]
+        return {sv.MODEL_ID: [WindowEmbedding(float(i), float(i) + 2.0, direction) for i in range(count)]}
+
+    monkeypatch.setattr(windowing, "extract_per_window_embeddings", _windows)
+    row = sv.embed_subject("sub-w", extents, tmp_path)
+
+    vector = np.asarray(row["vector"])
+    # Equal weighting puts the centroid exactly between the two directions; window weighting
+    # would pull it to 0.97/0.24 in favour of the eight-window extent.
+    assert vector[0] == pytest.approx(0.7071, abs=1e-3)
+    assert vector[1] == pytest.approx(0.7071, abs=1e-3)
+    assert row["method"] == "extent_equal_spherical_mean"
+    assert row["n_windows_used"] == 10

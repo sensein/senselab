@@ -64,9 +64,8 @@ windows. Three separately measured grids exist in this repo for three different 
 for `audio_analysis` detection, 1.0/0.5 as `windowing.py`'s fallback, 2.0/1.0 for enrollment);
 this is the enrollment job and it takes the enrollment grid.
 
-Pooling is by spherical mean over **all** of a subject's windows, which weights an extent by its
-length. That is a real property with a real alternative — weighting every extent equally — and
-D-7 measures both rather than asserting one.
+Pooling over the window grid is by spherical mean. How the *extents* are then combined was left
+open here and settled by measurement in D-7: **extent-equal**, not window-weighted.
 
 ## D-5. Batching must be duration-matched, and here it is by construction
 
@@ -179,9 +178,72 @@ than counting it, so that case is distinguishable from a decode error. Lowering 
 admit those subjects was rejected: it would replace a measured grid (D-4) with an unmeasured one
 to rescue a handful of speakers whose vector would rest on a single window anyway.
 
-## D-7. Within- versus between-speaker separation
+## D-7. Within- versus between-speaker separation, and the pooling it settles
 
-*(Job `23471343`, 24 shards. Filled in below when the array lands.)*
+**The protocol.** 1,513 subjects — essentially the whole corpus — each contributing up to 12 task
+extents, each extent embedded separately on the production window grid (jobs `23471343`, 24
+shards, and `23471698`, 16 shards). A subject's extents are split at random into two disjoint
+halves; each half is pooled into a vector. A **within**-speaker score is one subject's half-A
+against its own half-B. A **between**-speaker score is half-A against another subject's half-B —
+2,287,656 pairs. No recording contributes to both sides of a within pair, so this measures
+cross-recording, cross-session speaker identity rather than within-recording consistency.
+
+| pooling | within mean | within p05 | between mean | between p95 | AUC | EER | d′ | rank-1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| window-weighted (one-stage) | 0.747 | 0.343 | 0.260 | 0.632 | 0.9500 | 0.1196 | 2.64 | 0.722 |
+| **extent-equal (two-stage)** | 0.781 | **0.553** | 0.281 | 0.594 | **0.9847** | **0.0588** | 3.54 | **0.818** |
+| extent-equal, corpus-centred | 0.672 | 0.319 | 0.009 | 0.301 | 0.9870 | 0.0476 | 3.84 | 0.804 |
+
+**Extent-equal wins, and by a margin worth the code.** It halves the equal error rate (5.9%
+against 12.0%) and lifts rank-1 identification from 0.722 to 0.818 against 1,512 impostors. The
+mechanism is visible in the within p05: 0.553 against 0.343. One-stage pooling weights an extent
+by its window count, and the corpus spans 1.0 s to 330 s, so a single long free-speech extent can
+outvote a subject's entire remaining supply — and if that one extent is atypical, the speaker's
+vector is that extent. The production pooling was changed to two-stage on this measurement.
+
+**Centring was measured and not adopted.** The corpus mean vector has norm **0.3697**, against
+a `1/sqrt(n)` null of about 0.001 at this sample size: every extent in the corpus points
+substantially in one shared direction, which is channel and protocol rather than identity.
+Subtracting it does what you would expect — the between-speaker mean falls from 0.281 to 0.009,
+essentially to the orthogonality null — and buys a further AUC 0.9870 and EER 4.8%. It is **not**
+applied, for two reasons: it *lowers* rank-1 (0.804 against 0.818), which is the operation a
+reader of this file most plausibly wants; and it is a corpus-level statistic, so baking it in
+would make one row uninterpretable without the other 1,512. The raw vector is stored, the corpus
+mean is recoverable from the parquet in one pass, and a reader who wants verification rather than
+identification should centre and gets the numbers above.
+
+**Honest limits of this result.** The two distributions still **overlap at the 5/95 tails even at
+the best pooling**: within p05 0.553 against between p95 0.594. An EER of 5.9% means about one in
+seventeen decisions is wrong at the equal-error operating point. This is a usable speaker
+embedding, not a strong one, and no threshold is shipped with it.
+
+**181 of 2,287,656 between-speaker pairs score above 0.9** under extent-equal pooling (2 under
+centring). Two `sub-` ids that are one person re-enrolled would look exactly like this, and so
+would a genuine failure. Not investigated; named because a reader deduplicating on this vector
+will meet it.
+
+### How it scales with supply
+
+Per-extent count, on the thinner half (centred pooling, where the buckets are populated):
+
+| extents in the thinner half | n | within mean | within p05 | rank-1 |
+| ---: | ---: | ---: | ---: | ---: |
+| 3 | 5 | 0.358 | 0.145 | 0.200 |
+| 4 | 77 | 0.607 | 0.251 | 0.727 |
+| 5 | 609 | 0.660 | 0.271 | 0.793 |
+| 6 | 819 | 0.690 | 0.359 | **0.825** |
+
+Monotone in the **number** of extents, which is the number this module should be read on.
+
+Seconds, by contrast, is **not** monotone: the [10,20) s bucket reaches rank-1 0.942 while
+[40,80) s reaches 0.759. Total duration is confounded with task mix — the longest suppliers are
+free-speech-heavy, the 10–20 s ones spread over many short prompted tasks — so seconds is a worse
+predictor of a good speaker vector than extent count is, and `n_extents` is the column to weight
+by. Both are on every row.
+
+At the small-sample end the fast replicate (123 subjects, at most 3 extents per half) gives
+AUC 0.899 and rank-1 0.667 under extent-equal pooling — the same ordering between poolings, at
+materially worse absolute numbers. Three extents is not enough; six is workable.
 
 ## What was not measured
 
@@ -192,7 +254,8 @@ to rescue a handful of speakers whose vector would rest on a single window anywa
   labels fell inside the participant's own narration. The per-extent agreement columns are what a
   reader uses to notice this; nothing here reaches a verdict about it.
 - **Why `random-item-generation` mints an extent on none of its 472 recordings.** A coverage fact
-  this module inherits; see `coverage.md`.
+  this module inherits; see `coverage.md`. It is 6.2% of all missing extents — the rest is
+  per-recording, not structural.
 - **Whether the replay moves any of this.** Every number above is from the *design* corpus. Task
   extent is one of the things the replay may move, which is why the production run targets the
   replayed tree. The replayed smoke set (16 recordings, 16 distinct subjects) confirms the shape

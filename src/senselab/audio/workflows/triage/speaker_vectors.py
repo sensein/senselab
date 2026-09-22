@@ -50,7 +50,8 @@ BRANCH_FAMILIES = ("airway", "speech", "voice")
 MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
 WINDOW_S = 2.0
 HOP_S = 1.0
-AGGREGATOR = "spherical_mean"
+WINDOW_AGGREGATOR = "spherical_mean"
+AGGREGATOR = "extent_equal_spherical_mean"
 EMBEDDING_DIM = 192
 
 _TIMESTAMP = re.compile(r"_\d{8}-\d{6}(?:-\d+)?$")
@@ -95,6 +96,19 @@ def load_min_extent_s(path: Optional[Path] = None) -> float:
     if not isinstance(value, (int, float)) or not value > 0:
         raise ValueError(f"{target}: min_extent_s must be a positive number, got {value!r}")
     return float(value)
+
+
+def _unit(v: np.ndarray) -> np.ndarray:
+    """Return the L2-normalised vector, or the vector unchanged when its norm is zero.
+
+    Args:
+        v: Any real vector.
+
+    Returns:
+        A unit vector, or ``v`` when it has no direction to normalise.
+    """
+    norm = float(np.linalg.norm(v))
+    return v / norm if norm > 0 else v
 
 
 # ------------------------------------------------------------------------------------ store view
@@ -574,8 +588,15 @@ def embed_subject(
     """Pool one subject's task extents into a single speaker vector.
 
     Each extent is cut from its recording's ``plain`` stream, windowed at :data:`WINDOW_S` on
-    :data:`HOP_S`, and every window embedded; windows from all of the subject's extents are
-    pooled by spherical mean. Extents are embedded separately, never concatenated.
+    :data:`HOP_S`, and every window embedded. Extents are embedded separately, never
+    concatenated. Pooling is two-stage and **extent-equal**: the spherical mean of an extent's
+    own windows, then the spherical mean of those per-extent centroids, so a 300 s extent and a
+    3 s one weigh the same. Measured against the one-stage window-weighted mean in
+    ``specs/20260922-speaker-vectors/design.md`` (D-7).
+
+    One embedding pass serves both outputs: the same window vectors produce the centroid and,
+    via :func:`describe_embedding_distribution`, every diagnostic column. Those diagnostics
+    describe the **window** cloud, not the per-extent centroids.
 
     Batching is duration-homogeneous by construction: within one extent every window is exactly
     :data:`WINDOW_S` long, and a shorter extent yields a single window in a batch of one. Why
@@ -599,16 +620,28 @@ def embed_subject(
     import torch  # noqa: PLC0415
 
     from senselab.audio.data_structures import Audio  # noqa: PLC0415
-    from senselab.audio.tasks.speaker_embeddings.api import (  # noqa: PLC0415
-        estimate_speaker_embedding_from_audios,
+    from senselab.audio.data_structures.audio_hints import (  # noqa: PLC0415
+        SpeakerEmbeddingProvenance,
+        TargetSpeakerEmbedding,
     )
-    from senselab.utils.data_structures import SpeechBrainModel  # noqa: PLC0415
+    from senselab.audio.tasks.speaker_embeddings.windowing import (  # noqa: PLC0415
+        extract_per_window_embeddings,
+    )
     from senselab.utils.model_revision import resolve_revision  # noqa: PLC0415
+    from senselab.utils.tasks.embedding_distribution import (  # noqa: PLC0415
+        describe_embedding_distribution,
+    )
 
     if not extents:
         raise ValueError(f"{subject}: no extents to embed")
 
-    audios = []
+    commit_sha = resolve_revision(MODEL_ID, "main")
+
+    window_vectors: list[np.ndarray] = []
+    window_extent_ids: list[str] = []
+    window_starts: list[float] = []
+    extent_centroids: list[np.ndarray] = []
+    extraction_failures: dict[str, str] = {}
     kept: list[Extent] = []
     for extent in extents:
         info = sf.info(str(extent.audio_path))
@@ -618,21 +651,62 @@ def embed_subject(
             continue
         samples, rate = sf.read(str(extent.audio_path), start=first, stop=last, dtype="float32", always_2d=True)
         waveform = torch.from_numpy(np.ascontiguousarray(samples[:, 0])).unsqueeze(0)
-        audios.append(Audio(waveform=waveform, sampling_rate=rate))
         kept.append(extent)
-    if not audios:
-        raise ValueError(f"{subject}: every extent decoded to zero samples")
 
-    model: SpeechBrainModel = SpeechBrainModel(path_or_uri=MODEL_ID, revision=resolve_revision(MODEL_ID, "main"))
-    embedding = estimate_speaker_embedding_from_audios(
-        audios=audios,
-        model=model,
-        device=device,
+        failures: dict[str, str] = {}
+        per_model = extract_per_window_embeddings(
+            audio=Audio(waveform=waveform, sampling_rate=rate),
+            models=[MODEL_ID],
+            device=device,
+            window_s=WINDOW_S,
+            hop_s=HOP_S,
+            revision=commit_sha,
+            failures=failures,
+        )
+        if MODEL_ID in failures:
+            extraction_failures[extent.extent_id] = failures[MODEL_ID]
+            continue
+        rows = [np.asarray(w.vector, dtype=np.float64) for w in per_model.get(MODEL_ID, [])]
+        live = [v for v in rows if np.linalg.norm(v) > 0]
+        if not live:
+            extraction_failures[extent.extent_id] = "every window of this extent had zero norm"
+            continue
+        for w, vector in zip(per_model[MODEL_ID], rows, strict=False):
+            window_vectors.append(vector)
+            window_extent_ids.append(extent.extent_id)
+            window_starts.append(float(w.start_s))
+        extent_centroids.append(_unit(np.vstack([_unit(v) for v in live]).mean(axis=0)))
+
+    if not kept:
+        raise ValueError(f"{subject}: every extent decoded to zero samples")
+    if not extent_centroids:
+        detail = "; ".join(f"{eid}: {why}" for eid, why in extraction_failures.items())
+        raise ValueError(f"{subject}: no extent produced a vector ({detail})")
+
+    centroid = _unit(np.vstack(extent_centroids).mean(axis=0))
+    _, distribution = describe_embedding_distribution(
+        np.vstack(window_vectors),
+        window_extent_ids,
+        aggregator=WINDOW_AGGREGATOR,
         window_s=WINDOW_S,
         hop_s=HOP_S,
-        aggregator=AGGREGATOR,
-        created_at=created_at,
-        file_ids=[e.extent_id for e in kept],
+        window_starts_s=window_starts,
+    )
+    embedding = TargetSpeakerEmbedding(
+        vector=[float(v) for v in centroid],
+        provenance=SpeakerEmbeddingProvenance(
+            model_id=MODEL_ID,
+            model_commit_sha=commit_sha,
+            method=AGGREGATOR,
+            source_files=[e.extent_id for e in kept],
+            window_s=WINDOW_S,
+            hop_s=HOP_S,
+            n_windows_used=int(distribution.counts.n_scored),
+            n_windows_dropped=len(window_vectors) - int(distribution.counts.n_scored),
+            created_at=created_at,
+            extraction_failures=extraction_failures,
+        ),
+        distribution=distribution,
     )
     return row_for(subject, kept, embedding, root)
 
@@ -685,6 +759,7 @@ __all__ = [
     "HOP_S",
     "MODEL_ID",
     "SCHEMA_VERSION",
+    "WINDOW_AGGREGATOR",
     "WINDOW_S",
     "Extent",
     "ScanReport",

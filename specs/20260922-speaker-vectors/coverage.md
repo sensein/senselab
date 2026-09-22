@@ -92,7 +92,53 @@ is the population the refusal floor in `design.md` is about.
 The supply is not the constraint: a median subject brings 35 extents and nearly seven minutes.
 Four subjects bring nothing, and a tail of ~40 brings fewer than ten.
 
-### Where the 12.2% goes
+### The 12.2% that mints nothing: structural or per-recording?
+
+Almost entirely per-recording, but at a rate the task family sets.
+
+Of the 796 distinct task labels: **2 never mint an extent** (472 recordings), 184 always do
+(3,596 recordings), and 610 sometimes do (58,480 recordings). So of the 7,625 recordings with no
+extent:
+
+| | recordings | share of missing |
+| --- | ---: | ---: |
+| in a task label that mints one on **no** recording | 472 | **6.2%** |
+| in a task label that mints one on **some** recordings | 7,153 | **93.8%** |
+
+The 472 are both `random-item-generation` variants, and they are structural: the branch never
+places an extent on that task, on any recording, so no amount of better audio would change it.
+
+The other 93.8% is a per-recording outcome — the branch looked at that recording and did not find
+its task — but **the probability is set by the family**. The five VOICE families
+(`glides-high-to-low`, `glides-low-to-high`, `prolonged-vowel`, `maximum-phonation-time`,
+`maximum-phonation-time-v2`) contribute **3,660 of the 7,625 missing, 48.0%, from 8,264
+recordings — 13.2% of the corpus**. Read the other way: a diadochokinesis or cape-v recording
+mints an extent ~99% of the time and a glide recording 44.5% of the time. So the honest summary
+is *a per-recording failure whose rate is a property of the task*, not a property of either alone.
+
+Collapsed family coverage, worst first (n ≥ 200):
+
+| task family | with extent / total | | missing |
+| --- | ---: | ---: | ---: |
+| `random-item-generation` | 0 / 265 | 0.0% | 265 |
+| `random-item-generation-v2` | 0 / 207 | 0.0% | 207 |
+| `glides-high-to-low` | 692 / 1,554 | 44.5% | 862 |
+| `glides-low-to-high` | 711 / 1,596 | 44.5% | 885 |
+| `prolonged-vowel` | 786 / 1,604 | 49.0% | 818 |
+| `maximum-phonation-time-v2` | 557 / 813 | 68.5% | 256 |
+| `maximum-phonation-time` | 1,858 / 2,697 | 68.9% | 839 |
+| `respiration-and-cough-breath` | 1,332 / 1,788 | 74.5% | 456 |
+| `respiration-and-cough-fivebreaths` | 2,921 / 3,576 | 81.7% | 655 |
+| `harvard-sentences-list` | 12,684 / 13,705 | 92.6% | 1,021 |
+| `free-speech` | 2,996 / 3,074 | 97.5% | 78 |
+| `diadochokinesis-*` (10 families) | ~99% each | | ~100 total |
+| `cape-v-sentences-v2` | 1,218 / 1,224 | 99.5% | 6 |
+| `picture-description` | 886 / 889 | 99.7% | 3 |
+
+`harvard-sentences-list` is the largest single contributor in absolute terms (1,021 missing)
+purely because it is the largest family; its *rate* is unremarkable at 92.6%.
+
+### Where the 12.2% goes, by task label
 
 Coverage is not uniform across tasks. Lowest, among tasks with ≥100 recordings:
 
