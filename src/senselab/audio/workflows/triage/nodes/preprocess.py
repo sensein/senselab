@@ -29,7 +29,11 @@ from senselab.audio.data_structures.audio_hints import ExpectedSpeech
 from senselab.audio.tasks.band_profile import band_profile
 from senselab.audio.tasks.classification.api import classify_audios
 from senselab.audio.tasks.classification.label_scores import label_scores
-from senselab.audio.tasks.classification.yamnet import SpanTooShortForYAMNet, span_yamnet_input
+from senselab.audio.tasks.classification.yamnet import (
+    SpanTooShortForYAMNet,
+    shutdown_yamnet_worker,
+    span_yamnet_input,
+)
 from senselab.audio.tasks.clearvoice import clearvoice_provenance
 from senselab.audio.tasks.clipping.api import detect_clip_events
 from senselab.audio.tasks.disruptions.api import detect_disruptions
@@ -3123,15 +3127,19 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         *_diarization_blocks(),
     ]
     hard_failures: list[tuple[str, str]] = []
-    for name, block in blocks:
-        try:
-            block()
-        except (ValueError, LookupError) as err:
-            # A null config value or a missing upstream prerequisite: a cascading absence.
-            absent[name] = describe_exception(err)
-        except Exception as err:  # noqa: BLE001 — collected below; every remaining block still runs
-            absent[name] = describe_exception(err)
-            hard_failures.append((name, describe_exception(err)))
+    try:
+        for name, block in blocks:
+            try:
+                block()
+            except (ValueError, LookupError) as err:
+                # A null config value or a missing upstream prerequisite: a cascading absence.
+                absent[name] = describe_exception(err)
+            except Exception as err:  # noqa: BLE001 — collected below; every remaining block still runs
+                absent[name] = describe_exception(err)
+                hard_failures.append((name, describe_exception(err)))
+    finally:
+        if not bool(config.require("yamnet.keep_worker_resident")):
+            shutdown_yamnet_worker()
 
     if hard_failures:
         summary = "; ".join(f"{name}: {message}" for name, message in hard_failures)

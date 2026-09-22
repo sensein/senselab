@@ -19,6 +19,7 @@ checkpoint — the property under test is that quiet content survives serializat
 from __future__ import annotations
 
 import math
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -228,15 +229,24 @@ def _one_second() -> Audio:
     return Audio(waveform=torch.zeros(1, SR, dtype=torch.float32), sampling_rate=SR)
 
 
+def _live_process(mod: object) -> subprocess.Popen:
+    """The running worker's child process, asserting there is one."""
+    worker = mod._WORKER  # type: ignore[attr-defined]  # noqa: SLF001 — the worker is under test
+    assert worker is not None
+    process = worker._process  # noqa: SLF001
+    assert process is not None
+    return process
+
+
 @pytest.mark.usefixtures("stub_worker")
 def test_the_worker_is_reused_across_calls() -> None:
     """A second classification must reach the same process, not a fresh one."""
     from senselab.audio.tasks.classification import yamnet as mod
 
     first = mod.YAMNetClassifier.classify_with_yamnet([_one_second()], top_k=1)
-    pid = mod._WORKER._process.pid  # noqa: SLF001 — the process identity is the property under test
+    pid = _live_process(mod).pid  # the process identity is the property under test
     second = mod.YAMNetClassifier.classify_with_yamnet([_one_second()], top_k=1)
-    assert mod._WORKER._process.pid == pid  # noqa: SLF001
+    assert _live_process(mod).pid == pid
     # The stub counts the requests it has served, so a reused process answers 1 then 2.
     assert first[0][0]["label_scores"] == [{"Speech": 1.0}]
     assert second[0][0]["label_scores"] == [{"Speech": 2.0}]
@@ -248,7 +258,7 @@ def test_shutdown_ends_the_worker_and_the_next_call_starts_another() -> None:
     from senselab.audio.tasks.classification import yamnet as mod
 
     mod.YAMNetClassifier.classify_with_yamnet([_one_second()], top_k=1)
-    process = mod._WORKER._process  # noqa: SLF001 — asserting the child actually ended
+    process = _live_process(mod)
     mod.shutdown_yamnet_worker()
     assert mod._WORKER is None
     assert process.poll() is not None

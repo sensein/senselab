@@ -91,6 +91,7 @@ yamnet:
   silence_threshold: 0.5               # Silence score at or above this marks a window silent
   coverage_threshold: 0.5              # fraction of the file that must read silent to call it empty
   top_k: 521                           # full label space; a SIZE, not a threshold
+  keep_worker_resident: true           # hold the loaded model across recordings, not just within one
 
 # Per-classifier window grids, and the membership rule that folds raw scores into per-window label
 # sets: a label is carried when it is in the window's top label_top_k AND at or above its floor.

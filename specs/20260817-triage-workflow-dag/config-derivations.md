@@ -442,6 +442,22 @@ YAMNet top_k 521 -- the full label space, which is a size, not a threshold. clas
 defaults windowed top_k to 5 and Silence is not always in the top 5 (capability-map 4.2), so a
 truncated read silently reports zero for a label the model actually emitted.
 
+YAMNet keep_worker_resident true -- FITTED, on an idle exclusive node2312, 2026-09-22. YAMNet runs
+in an isolated TensorFlow venv, and the worker holding the model now outlives the call; this key is
+whether it also outlives the recording. One invocation costs 4.81 s fixed and 0.0005 s per second of
+audio (n=30 over 1-240 s, r2 on the duration term 0.010), so at the corpus median recording of 7.3 s
+it is 99.9% start-up: 2.0 s interpreter and TensorFlow import, 1.85 s TF-Hub load, ~0.95 s spawn and
+parent-side overhead, against 0.18 s of inference. PREPROCESS pays it four times per recording --
+yamnet_scores, enhanced_yamnet, residual_yamnet and the one batched span_yamnet call -- measured at
+19.1-21.1 s per recording over the step probe. What residency costs is memory held rather than
+memory peaked: the worker is 710 MiB loaded and idle and 971 MiB after the corpus's longest
+recording (130 s), measured from /proc VmRSS, against the 32 GB a corpus task is given. The process
+already existed at that size during each of the four calls; residency only makes it continuous, so
+the peak is unchanged and the steady state rises by at most 3% of the task's memory. false is for a
+host where that 1 GiB is contended -- a shared node, or a driver running several recordings in
+parallel in one address space -- and costs 14.4 s per recording to have it back.
+See specs/20260922-yamnet-process-startup-cost/.
+
 ## windows
 
 Per-classifier window grids and the thresholds folding scores into label sets.
