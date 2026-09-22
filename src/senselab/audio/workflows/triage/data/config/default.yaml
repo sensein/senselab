@@ -355,16 +355,19 @@ verdict:
       ORDERED_TOKENS:                    # a prescribed token sequence
         expected_tokens_matched_min: 1   # prescribed tokens the recording must realise
         omissions_max: 0                 # prescribed tokens nothing realised that are tolerated
+        dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
         repeat_overlap_min: 0.5          # overlap at which an alignment covers the sequence twice
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       FREE_RESPONSE:                     # a task prescribing no words
         response_min_s: 0.5              # shortest extent that counts as a response at all
         coverage_min: 0.5                # source content a recall must realise; the recall's own term
+        dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
         echo_overlap_max: 0.5            # prompt n-gram overlap above which a response echoes its prompt
         verbatim_overlap_max: 0.5        # source content overlap above which a recall is verbatim
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       ITEM_LIST:                         # a list of items
         items_min: 1                     # items the recording must carry
+        dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       EVENT_SERIES:                      # a counted series of airway events
         score_min: 0.2                   # classifier raw score at or above which a label is present
@@ -382,10 +385,12 @@ verdict:
         train_min_s: 1.0                 # shortest carrier that can hold a train
         rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
         repetitions_min: 1               # repetitions either instrument must read
+        dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
       SYLLABLE_SEQUENCE:                 # a syllable sequence repeated
         train_min_s: 1.0                 # shortest carrier that can hold a train
         rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
         repetitions_min: 1               # repetitions either instrument must read
+        dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
       PER_SENTENCE: {}                   # no row reaches this group; no gate is configured for it
       EFFORT: {}                         # no row reaches this group; no gate is configured for it
     # Per-family overrides, each one applied key by key over its group's entry. **Ships empty**:

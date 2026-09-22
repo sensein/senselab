@@ -670,12 +670,19 @@ def _stub_embedder(
     return calls
 
 
-def _stub_separator(monkeypatch: pytest.MonkeyPatch, *, sources: int = 0) -> list[dict[str, Any]]:
+def _stub_separator(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    sources: int = 0,
+    active: Optional[list[list[tuple[float, float]]]] = None,
+) -> list[dict[str, Any]]:
     """Fake source separation and return the log of what it was asked for.
 
     Args:
         monkeypatch: The patcher.
         sources: How many streams the fake returns.
+        active: Per source, the extents it carries signal over; elsewhere it is silent. None
+            returns a copy of the mixture in every slot, which localises nothing.
 
     Returns:
         The mutable call log.
@@ -700,7 +707,13 @@ def _stub_separator(monkeypatch: pytest.MonkeyPatch, *, sources: int = 0) -> lis
         )
         out: list[Audio] = []
         for index in range(sources):
-            separated = Audio(waveform=audios[0].waveform.clone(), sampling_rate=audios[0].sampling_rate)
+            waveform = audios[0].waveform.clone()
+            if active is not None:
+                rate = audios[0].sampling_rate
+                waveform = torch.zeros_like(waveform)
+                for start, end in active[index] if index < len(active) else []:
+                    waveform[:, int(start * rate) : int(end * rate)] = 0.5
+            separated = Audio(waveform=waveform, sampling_rate=audios[0].sampling_rate)
             separated.metadata["clearvoice"] = {
                 "model": "alibabasglab/MossFormer2_SS_16K",
                 "commit": "b" * 40,
@@ -1935,6 +1948,181 @@ class TestSeparationIsMeasurementGated:
         assert separator == []
         notes = _report_entity(store, "SPEECH").attributes["notes"]
         assert any("cannot serve 3" in note for note in notes)
+
+
+class TestTheMultiSpeakerInstrument:
+    """Separation fires where the speakers were counted, and localises them. It decides nothing.
+
+    The design is in ``specs/20260922-the-multi-speaker-instrument/design.md``.
+    """
+
+    CONFIG = "speech:\n  separation_backend: MossFormer2_SS_16K\n"
+
+    def _stream_id(self, store: ProvStore, name: str) -> str:
+        """One live stream entity's id, by name.
+
+        Args:
+            store: The store.
+            name: The stream's name.
+
+        Returns:
+            The entity id.
+        """
+        found = [e for e in live_entities(store, "stream") if e.attributes.get("name") == name]
+        assert found, f"no {name} stream was seeded"
+        return found[-1].id
+
+    def _separated(self, store: ProvStore) -> list[Entity]:
+        """The separated stream entities, by source index.
+
+        Args:
+            store: The store.
+
+        Returns:
+            The entities, ordered by source index.
+        """
+        return sorted(
+            (e for e in live_entities(store, "stream") if str(e.attributes.get("name", "")).startswith("separated")),
+            key=lambda e: int(e.attributes["source_index"]),
+        )
+
+    def test_separation_reads_the_stream_the_speakers_were_counted_on(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The count comes off `enhanced`; separating `plain` would decompose a different signal."""
+        config = _override(tmp_path, self.CONFIG)
+        _seed_speech_store(store, tmp_path, words=["hello", "world"], diarized=2)
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        _stub_separator(monkeypatch, sources=2)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        enhanced_id = self._stream_id(store, "enhanced")
+        plain_id = self._stream_id(store, "plain")
+        separated = self._separated(store)
+        assert separated, "the instrument wrote no separated stream"
+        for entity in separated:
+            assert enhanced_id in store.derived_from(entity.id)
+            assert plain_id not in store.derived_from(entity.id)
+            assert entity.attributes["signal"] == "enhanced"
+        activity_id = store.generated_by(separated[0].id)
+        assert activity_id is not None
+        assert enhanced_id in store.uses_of(activity_id)
+
+    def _two_voices(self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """One task extent, two diarized speakers inside it, and a separation that splits them.
+
+        The participant holds 1.0-1.8 and 2.6-3.6; someone else holds 1.8-2.6.
+
+        Args:
+            store: The store to seed.
+            tmp_path: The run directory.
+            monkeypatch: The patcher.
+        """
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two", "three"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0), (3.0, 3.6)],
+            duration_s=5.0,
+            diarization=False,
+        )
+        _seed_diarization(
+            store,
+            tmp_path,
+            [(1.0, 1.8, "SPEAKER_00"), (1.8, 2.6, "SPEAKER_01"), (2.6, 3.6, "SPEAKER_00")],
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        _stub_separator(monkeypatch, sources=2, active=[[(1.0, 1.8), (2.6, 3.6)], [(1.8, 2.6)]])
+
+    def _readings(self, store: ProvStore, name: str) -> list[Entity]:
+        """Every live measurement carrying one name.
+
+        Args:
+            store: The store.
+            name: The reading's name.
+
+        Returns:
+            The entities.
+        """
+        return [e for e in live_entities(store, "measurement") if e.attributes.get("name") == name]
+
+    def test_the_separated_sources_are_localised_inside_the_task_extent(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This is what the separated streams are for: where each voice is, inside the task."""
+        config = _override(tmp_path, self.CONFIG)
+        self._two_voices(store, tmp_path, monkeypatch)
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        per_source = {
+            int(e.attributes["source_index"]): e for e in self._readings(store, speech_module.EXTENT_SOURCE_ACTIVE_S)
+        }
+        assert sorted(per_source) == [0, 1], "one reading per separated source"
+        assert per_source[0].attributes["value"] == pytest.approx(1.8, abs=0.06)
+        assert per_source[1].attributes["value"] == pytest.approx(0.8, abs=0.06)
+        assert per_source[0].attributes["speaker"] == "SPEAKER_00"
+        assert per_source[1].attributes["speaker"] == "SPEAKER_01"
+        assert per_source[1].attributes["active_spans"], "the source's own extents ride with its seconds"
+
+    def test_the_seconds_another_source_holds_inside_the_task_are_a_reading_of_their_own(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The instrument's headline number, and it is a number, not a judgement."""
+        config = _override(tmp_path, self.CONFIG)
+        self._two_voices(store, tmp_path, monkeypatch)
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        [reading] = self._readings(store, speech_module.EXTENT_SECONDARY_SOURCE_S)
+        assert reading.attributes["value"] == pytest.approx(0.8, abs=0.06)
+        assert "outcome" not in reading.attributes
+        assert "conformance" not in reading.attributes
+
+    def test_the_refined_extent_is_a_new_span_and_the_task_extent_survives(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Refining is additive: the span the expectation minted is not retired under it."""
+        config = _override(tmp_path, self.CONFIG)
+        self._two_voices(store, tmp_path, monkeypatch)
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        solo = [e for e in live_entities(store, "span") if e.attributes.get("role") == speech_module.SOLO_EXTENT_ROLE]
+        assert len(solo) == 1, "one refined extent per task extent"
+        assert solo[0].extent is not None
+        assert solo[0].extent[0] == pytest.approx(2.6, abs=0.06)
+        assert solo[0].extent[1] == pytest.approx(3.6, abs=0.06)
+        task = [e for e in live_entities(store, "span") if e.attributes.get("role") == speech_module.TASK_EXTENT_ROLE]
+        assert task, "the task extent is still live; the refinement does not supersede it"
+
+    def test_the_instrument_writes_no_decision(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A branch reports and VERDICT decides; the instrument writes measurements only."""
+        config = _override(tmp_path, self.CONFIG)
+        self._two_voices(store, tmp_path, monkeypatch)
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        localise = [a for a in store.activities() if a.step == speech_module.LOCALISE_STEP]
+        assert localise, "the localisation ran"
+        authored = {
+            entity.prov_type
+            for entity in live_entities(store, "measurement") + live_entities(store, "span")
+            if store.generated_by(entity.id) in {a.id for a in localise}
+        }
+        assert authored <= {"measurement", "span"}, "no assertion, no verdict, no conformance"
+
+    def test_an_extent_past_the_shortest_separated_source_reads_empty_rather_than_raising(self) -> None:
+        """The separator may return a source shorter than the mixture, so the extent can miss it."""
+        short = [
+            Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000),
+            Audio(waveform=torch.zeros(1, 8000), sampling_rate=16000),
+        ]
+        reading = speech_module._localise_sources((3.0, 4.0), short, [("seg-0", "SPEAKER_00", (3.0, 4.0))], 0.05)
+        assert [record["active_s"] for record in reading["sources"]] == [0.0, 0.0]
+        assert reading["secondary_s"] == 0.0
+        assert reading["solo"] is None
+
+    def _hint(self) -> AudioHints:
+        """A declaration naming one lexical task.
+
+        Returns:
+            The hints.
+        """
+        return AudioHints(metadata={"task_token": "picture-description"})
 
 
 class TestPiiOnTheConsensus:
