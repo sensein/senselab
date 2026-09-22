@@ -53,20 +53,26 @@ not absent runs" is the rule that made the old fold inert, and adopting the rule
 declines. What the distinction buys is the fold's agreement axis, which reads `resolved` rather than
 `agree`/`mismatch` for a branch nothing could judge ([`verdict.md`](verdict.md)).
 
-**DDK is routable.** The ruleset routes four branches and `BRANCHES` has always named four, so DDK
-gets a decision like any other. No node implements it: the runner looks the branch up rather than
-indexing it and records `SKIPPED` with `no node implements this branch`. A recording whose DDK gates
-fire therefore reaches the fold with `will_run` true and no verdict, and the file **flags**. That is
-the graph saying it has no instrument for what is in the recording, and it is the standing argument
-for building the branch. See [`dag.md`](dag.md), "DDK".
+**DDK is SPEECH's, and is not a branch.** `BRANCHES` names three — `vocabulary.py:33` and
+`branches.py:58` — and the ruleset routes those three: `reference_family_set`,
+`excluded_by_construction`, `branch_gates` and `branch_flags` each carry an AIRWAY, a SPEECH and a
+VOICE entry and nothing else (`default.yaml:410-432`). The diadochokinesis families are inside
+SPEECH's reference set, which the config says in as many words and which is why that set is wide:
+their syllable trains carry no lexical word and would never clear `speech.lexical`, and SPEECH is
+where the PII scan runs. The instrument itself is `nodes/ddk.py`, imported by `nodes/speech.py`.
+
+An earlier stage did route a fourth branch that no node implemented, and this section described the
+`SKIPPED` / `no node implements this branch` path that followed. That path is now unreachable in
+both directions: nothing routes a fourth branch, and the runner's map covers all three of
+`BRANCHES` (`run.py:288-296`), so the `NO_NODE` arm cannot be taken at all.
 
 **Flag gates annotate; they never route.** A fired flag gate is recorded on its branch's decision in
 `flag_gates` and changes no `will_run`.
 
 ### Measured: recall 13/13, and precision is what produced every flag
 
-On 13 b2ai v3.1 recordings across three subjects, every declared branch was reached — AIRWAY 4/4,
-VOICE 3/3, SPEECH 4/4, DDK 2/2 — and every whole-file state read `routed`, so neither `empty` nor
+On 13 b2ai v3.1 recordings across three subjects, measured when DDK was still routed as a fourth
+branch, every declared branch was reached — AIRWAY 4/4, VOICE 3/3, SPEECH 4/4, DDK 2/2 — and every whole-file state read `routed`, so neither `empty` nor
 `unexplained` was exercised. Against that, VOICE routed 3 speech tasks, AIRWAY 4 non-airway tasks and
 DDK 3 pure-speech tasks; the files came out **5 `pass`, 8 `flag`, no `discard`**. Each flag traces to
 one of three things, and none of them is a missed route: a branch running on material it has no
@@ -105,7 +111,8 @@ already holds exactly one, `reference_family_set`, and it is derived in
 [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md). Populating `hint_branch_map` instead
 would mean inventing one. The corpus's own tag vocabulary is measurable and does not name branches:
 `speech_type` takes `non-lexical`, `read`, `elicited` and `recall` — `non-lexical` alone spans
-VOICE, DDK and AIRWAY, so no entry for it is derivable — and `recording_profile_name` takes
+sustained phonation, syllable trains and airway events, which is two branches and not one, so no
+entry for it is derivable — and `recording_profile_name` takes
 `Speech`, `Breathe`, `Cough`, which is a coarser second copy of the family knowledge and would be a
 second thing to keep in step. `AudioHints` carries no task field at all, so a caller could not name
 the task even if asked to. `hint_branch_map` therefore **stays null**, as the optional second
@@ -148,6 +155,12 @@ Reduced from the finished features shard at
 | VOICE | 22,277 | 8,306 | **361** |
 | DDK | 22,363 | 7,989 | **504** |
 | total | 109,811 | 70,536 | **3,132** |
+
+**This table counts a four-branch world and is kept as the measurement it was.** DDK was still a
+routed branch when it was taken; it is now SPEECH's instrument and its families sit inside SPEECH's
+reference set, so a re-run today would fold the DDK row into SPEECH rather than reproduce it. The
+conclusion the table was taken to support — that declaration adds routes and removes none — does
+not depend on the partition and stands.
 
 2,955 recordings (4.7%) gain at least one route; 3,132 / 109,811 is **+2.85%** on the execution set.
 Every one of the 48 families declares at least one branch, so no recording is left declaring
@@ -234,7 +247,7 @@ written before any branch runs:
 
 ```
 branch_decision: {
-  branch:                "AIRWAY" | "SPEECH" | "VOICE" | "DDK",
+  branch:                "AIRWAY" | "SPEECH" | "VOICE",
   will_run:              bool,
   route_state:           "routed" | "declined" | "unavailable" | "ungated",  # content only, never rewritten
   unavailable_gates:     [ ... ],   # this branch's gates that could not read their feature
@@ -281,6 +294,6 @@ Derivations live in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md) a
 | --- | --- |
 | `routing.hint_branch_map` | **No longer owed a derivation, and deliberately still null.** The declared route now comes from the task family through `reference_family_set`, which needs no new vocabulary; the corpus's tag vocabulary does not name branches (`non-lexical` spans three) and `recording_profile_name` would be a second copy of the family knowledge. It stays as the optional caller-supplied second source. What is owed is only the corpus a *caller* would draw tags from, if one ever supplies tags a family cannot express |
 | the triage effect of the 524 newly-routed empty recordings | 337 `unexplained` and 187 `empty` recordings now run their declared branch while the whole-recording state is unchanged. For the 187, `verdict.md` tests any node flag before the `acoustically_empty` discard, so a declared branch disagreeing with its `declined` route flags the file instead of discarding it. How many change triage needs the branches to run and is **not** derivable from the features shard; owed a graph run |
-| the ruleset's operating points | scored 0.97 / 0.95 / 0.96 / 0.94 sensitivity across AIRWAY / SPEECH / VOICE / DDK over 62,547 recordings, 333 of them (0.5%) reaching no branch. Which gates are provisional is in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md). **Recall is not the axis under strain on real material**: 13/13 declared branches were reached in the 2026-09-15 run and every flag traced to over-routing, to a branch with no subject, or to a wrong label |
+| the ruleset's operating points | scored 0.97 / 0.95 / 0.96 / 0.94 sensitivity across AIRWAY / SPEECH / VOICE / DDK over 62,547 recordings, DDK then being a fourth routed branch and now SPEECH's instrument, 333 of them (0.5%) reaching no branch. Which gates are provisional is in [`family-taxonomy-ruleset.md`](family-taxonomy-ruleset.md). **Recall is not the axis under strain on real material**: 13/13 declared branches were reached in the 2026-09-15 run and every flag traced to over-routing, to a branch with no subject, or to a wrong label |
 | the gate values behind an evaluation | the `ruleset_routing` measurement records each gate's outcome and not the number behind it, so a run cannot be audited against its own cuts without re-reducing the store. **Decided 2026-09-15: the evaluation carries them**, because a fired rule may now write a span's label and such a label must cite the rule, the evidence and the value. **Owed a code change**, no longer a decision. The span identity is owed with it: `live_spans` rows carry `"id"` (`routing_analysis/features.py:1084`) and `span_longest_s[measure] = max(durations)` (`:1134`) keeps only the scalar, so no fired gate can name the span it read |
 | the `unexplained` population | 0.5% of the corpus at the scored operating points, and nobody has looked at what is in those recordings. They now flag rather than passing silently, which is what makes the question askable |
