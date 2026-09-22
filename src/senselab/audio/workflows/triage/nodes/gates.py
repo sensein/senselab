@@ -95,10 +95,9 @@ TYPICAL_COUNT = "typical_count"
 """The count finding a row's ``TypicalCount`` writes. Never gateable."""
 
 UNGATEABLE_READINGS = frozenset({TYPICAL_COUNT})
-"""Readings no gate may ever be bound to, whatever a later config or edit says.
+"""Readings no gate may be bound to. :func:`_gate_specs` refuses a table naming one, at import.
 
-:func:`_gate_specs` refuses a table naming one, at import, so the rule is not a convention a future
-gate has to remember. See ``specs/20260921-required-and-typical-counts/design.md``.
+See ``specs/20260921-required-and-typical-counts/design.md``.
 """
 
 

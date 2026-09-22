@@ -510,9 +510,7 @@ class CountUnit(Enum):
 
 @dataclass(frozen=True)
 class RequiredCount:
-    """A count the instruction spoke, in the unit it spoke it in.
-
-    A departure from it is a departure from the instruction, so a bound may be derived against it.
+    """A count the instruction spoke, in the unit it spoke it in. A bound may be derived against it.
 
     Attributes:
         value: The number the instruction gave.
@@ -556,8 +554,8 @@ class RequiredCount:
 class TypicalCount:
     """A central tendency measured over the corpus, in the unit it was measured in.
 
-    Nobody asked the participant for it, so nothing may be judged against it: it is reported beside
-    the reading it qualifies and :data:`~...nodes.gates.UNGATEABLE_READINGS` names its finding.
+    Nothing may be judged against it: it is reported beside the reading it qualifies, and
+    :data:`~...nodes.gates.UNGATEABLE_READINGS` names the finding it writes.
 
     Attributes:
         median: The measured median.
