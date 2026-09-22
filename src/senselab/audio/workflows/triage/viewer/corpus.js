@@ -1,8 +1,8 @@
 // The corpus view: one polyline per recording over up to ten axes.
 //
-// The drawing rule that matters: a line is BROKEN wherever its value on an axis is null.
-// Absence is never a position on the value scale. It is a stub toward a separated rail and a
-// count on that rail, so the eye reads "not measured here" and never "measured low".
+// The drawing rule: a line is BROKEN wherever its value on an axis is null. Absence is never a
+// position on the value scale; it is a dashed stub toward a separated rail, and a count on that
+// rail. See specs/20260922-compact-recording-vectors/views.md.
 
 'use strict';
 
@@ -55,9 +55,19 @@ var CorpusView = (function () {
     this.resummarise();
   };
 
+  /** Scale for one axis: 'linear' or 'log'. Refused silently when the domain reaches zero. */
+  CorpusView.prototype.setScale = function (name, scale) {
+    this.scales = this.scales || {};
+    this.scales[name] = scale;
+    this.resummarise();
+  };
+
   CorpusView.prototype.resummarise = function () {
     var self = this;
-    this.summaries = this.axes.map(function (n) { return SchemaAxes.summarise(n, self.rows); });
+    this.scales = this.scales || {};
+    this.summaries = this.axes.map(function (n) {
+      return SchemaAxes.summarise(n, self.rows, { scale: self.scales[n] });
+    });
     Object.keys(this.brushes).forEach(function (k) {
       if (self.axes.indexOf(k) < 0) delete self.brushes[k];
     });
@@ -106,7 +116,37 @@ var CorpusView = (function () {
     var railY = h - PAD.bottom;
     var bandBottom = railY - RAIL_GAP - RAIL_HEIGHT;
     this.geom = { w: w, h: h, xs: xs, bandTop: bandTop, bandBottom: bandBottom, railY: railY };
+    this.cacheYs();
     return this.geom;
+  };
+
+  /**
+   * One Float64Array of y per axis, rebuilt on every layout or axis change.
+   * NaN is the absent marker, because a typed array cannot hold null. Every reader of these
+   * arrays must test for it; `vertices` is the one that converts it back to null.
+   */
+  CorpusView.prototype.cacheYs = function () {
+    var g = this.geom;
+    var span = g.bandBottom - g.bandTop;
+    this.ys = [];
+    for (var a = 0; a < this.summaries.length; a++) {
+      var s = this.summaries[a];
+      var out = new Float64Array(this.rows.length);
+      for (var i = 0; i < this.rows.length; i++) {
+        var p = SchemaAxes.position(s, SchemaAxes.readValue(s.col, this.rows[i]));
+        out[i] = p == null ? NaN : g.bandBottom - p * span;
+      }
+      this.ys.push(out);
+    }
+    this.ysFor = this.summaries;
+  };
+
+  /** The cached y, or NaN. Falls back to a direct read when the cache is not built yet. */
+  CorpusView.prototype.yAt = function (a, index) {
+    if (this.ys && this.ysFor === this.summaries && this.ys[a]) return this.ys[a][index];
+    var s = this.summaries[a];
+    var y = this.yOf(s, SchemaAxes.readValue(s.col, this.rows[index]));
+    return y == null ? NaN : y;
   };
 
   /** The y a value occupies, or null when the value is absent. */
@@ -202,26 +242,35 @@ var CorpusView = (function () {
 
   /**
    * One recording's vertices, one per axis, in axis order.
-   * `y` is null exactly where the value is absent — the rail y is NOT substituted here,
-   * because a vertex on the value band and a vertex on the rail are different things.
+   * `y` is null exactly where the value is absent; the rail y is never substituted here.
    */
   CorpusView.prototype.vertices = function (row) {
     var g = this.geom;
+    var i = row.__i;
+    var cached = typeof i === 'number' && this.rows[i] === row &&
+      this.ys && this.ysFor === this.summaries;
     var out = [];
     for (var a = 0; a < this.summaries.length; a++) {
       var s = this.summaries[a];
-      var v = SchemaAxes.readValue(s.col, row);
-      var y = this.yOf(s, v);
+      var y;
+      var v;
+      if (cached) {
+        y = this.ys[a][i];
+        if (Number.isNaN(y)) y = null;
+        v = undefined;
+      } else {
+        v = SchemaAxes.readValue(s.col, row);
+        y = this.yOf(s, v);
+      }
       out.push({ axis: a, x: g.xs[a], y: y, value: v, absent: y == null });
     }
     return out;
   };
 
   /**
-   * The segments actually drawn for one recording, and the stubs.
-   * The rule, in one place so a test can hold it: a segment is drawn only between two
-   * consecutive axes that BOTH carry a value. An absent value breaks the line; it never
-   * contributes a position on the value scale.
+   * The segments drawn for one recording, and its stubs to the absent rail.
+   * A segment runs only between two consecutive axes that BOTH carry a value; an absent value
+   * yields a stub instead, and never a segment.
    */
   CorpusView.prototype.segmentsFor = function (verts) {
     var g = this.geom;
@@ -326,7 +375,7 @@ var CorpusView = (function () {
         for (var t = 0; t <= 4; t++) {
           var frac = t / 4;
           var y = g.bandBottom - frac * (g.bandBottom - g.bandTop);
-          var val = s.min + frac * (s.max - s.min);
+          var val = SchemaAxes.valueOf(s, frac);
           ctx.fillText(formatNumber(val), x - 6, y);
           ctx.strokeStyle = '#3a4150';
           ctx.beginPath(); ctx.moveTo(x - 4, y); ctx.lineTo(x, y); ctx.stroke();
@@ -355,11 +404,14 @@ var CorpusView = (function () {
   /** Present/absent counts on one axis over the currently drawn set. */
   CorpusView.prototype.countPresent = function (a) {
     var s = this.summaries[a];
+    var cached = this.ys && this.ysFor === this.summaries && this.ys[a];
     var present = 0, absent = 0;
     for (var i = 0; i < this.rows.length; i++) {
       if (this.selected[i] !== 1) continue;
-      var v = SchemaAxes.readValue(s.col, this.rows[i]);
-      if (v == null) absent++; else present++;
+      var missing = cached
+        ? Number.isNaN(this.ys[a][i])
+        : SchemaAxes.readValue(s.col, this.rows[i]) == null;
+      if (missing) absent++; else present++;
     }
     return { present: present, absent: absent };
   };
@@ -423,14 +475,14 @@ var CorpusView = (function () {
     var a1 = Math.min(a0 + 1, g.xs.length - 1);
     var x0 = g.xs[a0], x1 = g.xs[a1];
     var t = x1 === x0 ? 0 : (x - x0) / (x1 - x0);
-    var s0 = this.summaries[a0], s1 = this.summaries[a1];
     var best = -1, bestD = 9;
+    var sel = this.selected;
     for (var i = 0; i < this.rows.length; i++) {
-      if (this.selected[i] !== 1) continue;
-      var row = this.rows[i];
-      var y0 = this.yOf(s0, SchemaAxes.readValue(s0.col, row));
-      var y1 = this.yOf(s1, SchemaAxes.readValue(s1.col, row));
-      if (y0 == null || y1 == null) continue;
+      if (sel[i] !== 1) continue;
+      var y0 = this.yAt(a0, i);
+      var y1 = this.yAt(a1, i);
+      // NaN is the absent marker in the cache, and NaN comparisons are false, so an
+      // absent endpoint can never win: the segment is not drawn, so it is not pickable.
       var d = Math.abs(y0 + (y1 - y0) * t - y);
       if (d < bestD) { bestD = d; best = i; }
     }
@@ -445,15 +497,11 @@ var CorpusView = (function () {
     return -1;
   };
 
-  /** The value a y within the band stands for on axis a. */
+  /** The value a y within the band stands for on axis a, under that axis's own scale. */
   CorpusView.prototype.valueAt = function (a, y) {
     var g = this.geom;
-    var s = this.summaries[a];
     var p = (g.bandBottom - y) / (g.bandBottom - g.bandTop);
-    p = Math.max(0, Math.min(1, p));
-    if (s.kind === 'numeric') return s.min + p * (s.max - s.min);
-    var i = Math.round((1 - p) * Math.max(0, s.categories.length - 1));
-    return s.categories[i];
+    return SchemaAxes.valueOf(this.summaries[a], Math.max(0, Math.min(1, p)));
   };
 
   function formatNumber(v) {

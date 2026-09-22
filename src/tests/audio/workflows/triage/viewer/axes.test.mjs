@@ -286,3 +286,90 @@ test('removing an axis drops its brush rather than filtering invisibly', () => {
   assert.deepEqual(Object.keys(v.brushes), [])
   assert.equal(v.selectedCount, 2)
 })
+
+// -------------------------------------------------------------- the value scale
+
+test('a log axis places the median where a linear one would crush it', () => {
+  const data = rows(...[1, 2, 3, 5, 7, 10, 300].map((duration_s) => ({ duration_s })))
+  const lin = A.summarise('duration_s', data)
+  const log = A.summarise('duration_s', data, { scale: 'log' })
+  assert.equal(lin.scale, 'linear')
+  assert.equal(log.scale, 'log')
+  assert.ok(A.position(lin, 5) < 0.02, 'linear crushes the median')
+  assert.ok(A.position(log, 5) > 0.25, 'log does not')
+  assert.ok(Math.abs(A.position(log, 1)) < 1e-12)
+  assert.ok(Math.abs(A.position(log, 300) - 1) < 1e-12)
+})
+
+test('log is refused when the domain reaches zero, rather than producing -Infinity', () => {
+  const data = rows({ pii_findings_n: 0 }, { pii_findings_n: 9 })
+  const s = A.summarise('pii_findings_n', data, { scale: 'log' })
+  assert.equal(s.logCapable, false)
+  assert.equal(s.scale, 'linear')
+  assert.equal(A.position(s, 0), 0)
+})
+
+test('the tick labels invert the scale, so they stay real values', () => {
+  const data = rows(...[1, 10, 100].map((duration_s) => ({ duration_s })))
+  for (const scale of ['linear', 'log']) {
+    const s = A.summarise('duration_s', data, { scale })
+    for (const frac of [0, 0.25, 0.5, 0.75, 1]) {
+      const v = A.valueOf(s, frac)
+      assert.ok(Math.abs(A.position(s, v) - frac) < 1e-9, `${scale} at ${frac}`)
+    }
+  }
+  assert.ok(Math.abs(A.valueOf(A.summarise('duration_s', data, { scale: 'log' }), 0.5) - 10) < 1e-9)
+})
+
+test('a log axis says so in its caption', () => {
+  const data = rows({ duration_s: 1 }, { duration_s: 100 })
+  assert.match(A.caption(A.summarise('duration_s', data, { scale: 'log' })), /log10 scale/)
+  assert.ok(!A.caption(A.summarise('duration_s', data)).includes('log10'))
+})
+
+test('a null stays absent under a log scale too', () => {
+  const data = rows({ duration_s: 1 }, { duration_s: null }, { duration_s: 100 })
+  const s = A.summarise('duration_s', data, { scale: 'log' })
+  assert.equal(s.absent, 1)
+  assert.equal(A.position(s, null), null)
+})
+
+// -------------------------------------------------------------- the geometry cache
+
+test('the cached y agrees with the direct computation, absent included', () => {
+  const data = rows(
+    { duration_s: 1, pii_findings_n: 0 },
+    { duration_s: 9, pii_findings_n: null },
+    { duration_s: null, pii_findings_n: 3 },
+  )
+  const v = view(['duration_s', 'pii_findings_n'], data)
+  for (let i = 0; i < data.length; i++) {
+    for (let a = 0; a < 2; a++) {
+      const direct = v.yOf(v.summaries[a], A.readValue(v.summaries[a].col, data[i]))
+      const cached = v.yAt(a, i)
+      if (direct == null) assert.ok(Number.isNaN(cached), `row ${i} axis ${a} must cache NaN`)
+      else assert.ok(Math.abs(cached - direct) < 1e-9, `row ${i} axis ${a}`)
+    }
+  }
+})
+
+test('pick never returns a recording whose segment was not drawn', () => {
+  const data = rows(
+    { duration_s: 1, pii_findings_n: null },
+    { duration_s: 1, pii_findings_n: 5 },
+  )
+  const v = view(['duration_s', 'pii_findings_n'], data)
+  const mid = (v.geom.xs[0] + v.geom.xs[1]) / 2
+  for (let y = v.geom.bandTop; y <= v.geom.bandBottom; y += 3) {
+    assert.notEqual(v.pick(mid, y), 0, 'the broken line must not be pickable between those axes')
+  }
+})
+
+test('changing the scale moves the cached geometry with it', () => {
+  const data = rows(...[1, 5, 300].map((duration_s) => ({ duration_s })))
+  const v = view(['duration_s'], data)
+  const linear = v.yAt(0, 1)
+  v.setScale('duration_s', 'log')
+  v.layout()
+  assert.ok(Math.abs(v.yAt(0, 1) - linear) > 10, 'the median must move up under log')
+})
