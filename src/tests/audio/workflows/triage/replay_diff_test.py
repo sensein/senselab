@@ -24,11 +24,14 @@ from senselab.audio.workflows.triage.extend import (
 )
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.replay_diff import (
+    ADMIT_DID_NOT_ADMIT,
     AMBIGUOUS,
     NO_STORE,
+    NOT_REPLAYABLE,
     NOT_REPLAYED,
     NOTHING_RETIRED,
     OK,
+    PREPROCESS_DID_NOT_COMPLETE,
     aggregate,
     diff_run,
     diff_store,
@@ -165,18 +168,34 @@ def _write_pass(
     )
 
 
-def _replayed(tmp_path: Path, before: dict[str, Any], after: dict[str, Any]) -> ProvStore:
+def _admit(store: ProvStore) -> None:
+    """Write ADMIT's source stream, which it writes only when it admits the recording.
+
+    Args:
+        store: The store to write into.
+    """
+    activity = store.activity(node="ADMIT", step=None, parameters={})
+    stream = store.entity(
+        prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording", "sampling_rate": 16000}
+    )
+    store.was_generated_by(stream, activity)
+
+
+def _replayed(tmp_path: Path, before: dict[str, Any], after: dict[str, Any], *, admitted: bool = True) -> ProvStore:
     """A store carrying two passes and the replay's edges between them.
 
     Args:
         tmp_path: A directory to round-trip the store through.
         before: Keyword arguments for the first pass's :func:`_write_pass`.
         after: Keyword arguments for the second's.
+        admitted: Whether ADMIT admitted the recording and left its source stream behind.
 
     Returns:
         The replayed store.
     """
     first = ProvStore(run_id="run-a")
+    if admitted:
+        _admit(first)
     _write_pass(first, **before)
     path = tmp_path / "store.jsonl"
     first.write_jsonl(path)
@@ -384,6 +403,7 @@ class TestUnreplayed:
     def test_a_run_that_decided_nothing_before_is_not_identical(self, tmp_path: Path) -> None:
         """A corpus run that left no decision for the replay to retire reads against ``UNREAD``."""
         first = ProvStore(run_id="run-a")
+        _admit(first)
         path = tmp_path / "store.jsonl"
         first.write_jsonl(path)
         store = ProvStore.read_jsonl(path, run_id="run-a+replay-cafe")
@@ -408,6 +428,67 @@ class TestUnreplayed:
         row = diff_store(store)
         assert row["status"] == AMBIGUOUS
         assert row["config_hash"] == ["cafe", "f00d"]
+
+
+class TestNotReplayable:
+    """A run whose replayed nodes had nothing to read moved nothing, whatever its store says."""
+
+    def test_a_run_admit_rejected_is_excluded(self, tmp_path: Path) -> None:
+        """Without ADMIT's source stream the replay calls what the original run skipped."""
+        store = _replayed(
+            tmp_path,
+            {"fold": _fold(ran={"PREPROCESS": RunState.SKIPPED, "QUALITY": RunState.SKIPPED})},
+            {"fold": _fold(ran={"PREPROCESS": RunState.SKIPPED, "QUALITY": RunState.ERRORED})},
+            admitted=False,
+        )
+        row = diff_store(store)
+        assert row["status"] == NOT_REPLAYABLE
+        assert row["blocker"] == ADMIT_DID_NOT_ADMIT
+
+    def test_a_run_preprocess_did_not_finish_is_excluded(self, tmp_path: Path) -> None:
+        """ADMIT admitted it and PREPROCESS left no conditioned output, which is the same artefact."""
+        store = _replayed(
+            tmp_path,
+            {"fold": _fold(ran={"PREPROCESS": RunState.ERRORED})},
+            {"fold": _fold(ran={"PREPROCESS": RunState.ERRORED})},
+        )
+        row = diff_store(store)
+        assert row["status"] == NOT_REPLAYABLE
+        assert row["blocker"] == PREPROCESS_DID_NOT_COMPLETE
+
+    def test_an_admitted_and_preprocessed_run_is_compared(self, tmp_path: Path) -> None:
+        """The gate only excludes; a run that carries both is compared as before."""
+        store = _replayed(
+            tmp_path,
+            {"fold": _fold(ran={"PREPROCESS": RunState.COMPLETED})},
+            {"fold": _fold(ran={"PREPROCESS": RunState.COMPLETED})},
+        )
+        assert diff_store(store)["status"] == OK
+
+    def test_they_are_counted_apart_and_named(self, tmp_path: Path) -> None:
+        """The excluded runs reach neither the transition matrix nor the identical count."""
+        for name in "ab":
+            (tmp_path / name).mkdir()
+        blocked = _replayed(
+            tmp_path / "a",
+            {"fold": _fold(Triage.DISCARD, ran={"PREPROCESS": RunState.SKIPPED})},
+            {"fold": _fold(Triage.FLAG, ran={"PREPROCESS": RunState.SKIPPED})},
+            admitted=False,
+        )
+        fine = _replayed(
+            tmp_path / "b",
+            {"fold": _fold(ran={"PREPROCESS": RunState.COMPLETED})},
+            {"fold": _fold(ran={"PREPROCESS": RunState.COMPLETED})},
+        )
+        report = aggregate([{**diff_store(blocked), "stem": "sub-blocked"}, {**diff_store(fine), "stem": "sub-fine"}])
+        assert report.compared == 1
+        assert report.triage == {"pass->pass": 1}
+        assert report.not_replayable["count"] == 1
+        assert report.not_replayable["stems"] == ["sub-blocked"]
+        rendered = render_markdown(report, tmp_path)
+        assert "1 not replayable and excluded" in rendered
+        assert "`sub-blocked`" in rendered
+        assert "discard" not in rendered
 
 
 class TestAggregate:

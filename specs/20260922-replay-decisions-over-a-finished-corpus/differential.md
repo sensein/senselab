@@ -39,6 +39,36 @@ Two limits, both recorded rather than worked around:
   took and derives the mirrored root the way `mirror_run_root` did: `out_root / entity_subdir(stem)
   / <finished run dir name>`.
 
+## The runs the replay could not re-decide
+
+`run_triage` treats ADMIT as a dependency gate: when ADMIT fails, or admits nothing decodable, it
+writes every node from PREPROCESS to REDACT `SKIPPED` and never calls `_drive_branches`
+(`run.py:432-451`). ADMIT writes its `recording` stream **only** on pass (`admit.py:93-105`).
+
+`replay_decisions` re-enters at TAXONOMY and calls `drive_decisions` unconditionally, so for such a
+recording the nodes the original run skipped are *called*. QUALITY reads the `recording` stream and
+raises `LookupError: no stream named 'recording' in the store`, which is the error the replay's row
+logs carry — 10 in the first 23,378 rows.
+
+That produces `QUALITY: skipped → errored` and can move the replayed VERDICT's fold, but none of it
+is a decision: it is where the replay re-enters. The differential gives those runs the status
+`not_replayable` with the blocker that caused it, keeps them out of `compared` and therefore out of
+every transition matrix, ground count and identical count, and names them in their own section of
+the report with how many there were.
+
+Two blockers, both read off the store rather than off the row log:
+
+- `ADMIT_DID_NOT_ADMIT` — no live `stream` entity named `recording`. This is the same condition
+  QUALITY's error reports, so it catches exactly the affected runs.
+- `PREPROCESS_DID_NOT_COMPLETE` — the retired decision's own `ran` records PREPROCESS as anything
+  but `completed`. A PREPROCESS that errored leaves the same kind of hole one step later. An
+  absent `PREPROCESS` key is not treated as a blocker: a missing key says nothing.
+
+**The driver is not changed for this.** Reproducing ADMIT's gate inside `replay_decisions` — skip
+every replayed node when the store carries no `recording` stream — would be the right fix for a
+future pass, and would cost these runs nothing since their decision cannot move. It is not worth
+restarting a 37%-complete array for.
+
 ## What a move is
 
 The comparison is of content, not ids — the replay's run id makes an unchanged decision take a new
@@ -95,6 +125,34 @@ uv run python scripts/triage_replay_diff.py report ROWS_DIR [--out DIR]
 manifest by default; nothing is written under the corpus tree or the replay tree.
 
 Row statuses: `ok`, `not_replayed` (no marker yet), `no_store` (the replay has not written this run),
-`unreadable`, `nothing_retired` (the corpus run left no live decision to retire), `ambiguous`,
-`error`. A task exits nonzero only on `error`, so running it against a partly-finished replay is a
-normal thing to do.
+`unreadable`, `nothing_retired` (the corpus run left no live decision to retire), `not_replayable`
+(the section above), `ambiguous`, `error`. A task exits nonzero only on `error`, so running it
+against a partly-finished replay is a normal thing to do.
+
+## What it was tested against
+
+`67b7dd1d`, on `mit_quicktest`, while replay array `23468946` was still running.
+
+| tree | rows | compared | identical | statuses |
+| --- | --- | --- | --- | --- |
+| `smoke_out`, all 16 | 16 | 16 | 16 | 16 `ok` |
+| `out`, slices 0, 37, 101, 199 of 400 | 611 | 554 | 519 | 554 `ok`, 57 `no_store` |
+
+No `error`, no `unreadable`. 30 tests over synthetic stores built by the replay's own sequence, plus
+these 627 real ones.
+
+What the 35 movements are, on the four real slices: eleven `AIRWAY` conformances `False →
+UNDETERMINED` and five `True → UNDETERMINED`, eleven `truncation` deviations gained — 0 assertions
+before, 11 after — six `AIRWAY` findings `absent → present` with the matching `mismatch → agree` and
+`no_claim → found_unclaimed`, and eleven losses of the `AIRWAY` non-conformance ground. No triage or
+release outcome moved on these slices.
+
+One recording read on the leaking direction of the PII axis:
+`sub-6afb0324-…_task-diadochokinesis-ka`, scanned before and not scanned now. Cross-checked against
+its store by hand — the retired `pii_scan` names `gliner`, `presidio` and `rules` as having run, and
+the replayed one carries `scanned: false` with the carrier reason. Its decision did not otherwise
+move and it found nothing either way, which is what makes it exactly the case a count of moved
+decisions would miss.
+
+Cost: 157 rows in 30 s on one core, so 62,548 rows is 3.3 core-hours. The array is 64 slices of
+~977 at ~3.5 min each.
