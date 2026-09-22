@@ -325,10 +325,11 @@ verdict:
   # specs/20260817-triage-workflow-dag/config-derivations.md and what moved is in
   # specs/20260921-gates-in-verdict/design.md.
   #
-  # No gate reads `expected_event_count`. It holds two unlike things -- a count the instruction
-  # gave (`fivebreaths`) and a count nobody gave (`diadochokinesis-pa`'s ten) -- and until each row
-  # declares which, a bound on it would judge a participant against a number never spoken to them.
-  # It is reported as a covariate beside the rate it qualifies. See the design's own section.
+  # Each expectation row declares which kind of count it carries. A `required_count` is a number
+  # the instruction spoke (`fivebreaths`) and may be gated once a tolerance is derived; a
+  # `typical_count` is a median measured over the corpus (`diadochokinesis-pa`) and may never be,
+  # which `gates.UNGATEABLE_READINGS` enforces at import. No gate reads either today. See
+  # specs/20260921-required-and-typical-counts/design.md.
   gates:
     # Genuinely universal only. Nothing is: `gap_off_task_min_s` reaches six of the twelve groups
     # and no other gate reaches more than three, so shipping any of them here would be a default

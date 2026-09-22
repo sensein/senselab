@@ -17,19 +17,28 @@ import yaml
 from senselab.audio.data_structures import AudioHints, ExpectedSpeech
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.branches import (
+    DDK_MEDIANS,
     SPEECH_EXPECTATIONS,
     UNDETERMINED,
     UNMEASURED_POINTS,
+    CountUnit,
     Finding,
     Proposal,
     Result,
+    TypicalCount,
     branch_params,
     dispatch,
     merge,
     mode_of,
     write_findings,
 )
-from senselab.audio.workflows.triage.nodes.gates import GATE_SECTION, GATE_SPECS, GROUP_LAYER, Pattern
+from senselab.audio.workflows.triage.nodes.gates import (
+    GATE_SECTION,
+    GATE_SPECS,
+    GROUP_LAYER,
+    REQUIRED_COUNT,
+    Pattern,
+)
 from senselab.audio.workflows.triage.nodes.speech import (
     align_speech,
     detect_speech,
@@ -402,8 +411,8 @@ class TestAFullySpecifiedFamilyAlignsAgainstTheDerivative:
         _transcript(store, [("hey", 1.0, 1.3), ("hey", 3.0, 3.3), ("hey", 5.0, 5.3)])
         result = align_speech("loudness", store, None, branch_params(_config(tmp_path)))
         assert _gated(result, "loudness", _config(tmp_path)) is True
-        [counted] = _of_kind(result, "count", "expected_event_count")
-        assert counted.evidence == {"found": 3, "declared": 3}
+        [counted] = _of_kind(result, "count", REQUIRED_COUNT)
+        assert counted.evidence == {"found": 3, "required": 3, "unit": "tokens"}
 
 
 class TestADesignedEmptyFamilyScoresNothingAsADeparture:
@@ -661,7 +670,10 @@ class TestASyllableFamilyIsEvaluatedAsTheTrainItsInstructionAsksFor:
     def test_the_row_carries_the_instructions_own_expectation(self) -> None:
         """A syllable family's row says what it asks for; ``no lexical content`` is not a task."""
         assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("p", "aa")
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].expected_event_count == 10
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].required_count is None
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].typical_count == TypicalCount(
+            11, CountUnit.REPETITIONS, DDK_MEDIANS
+        )
         assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence == ("p", "aa", "t", "aa", "k", "aa")
         assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].sequence == ("b", "ah", "t", "er", "k", "ah", "p")
 

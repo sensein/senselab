@@ -22,6 +22,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     BRANCH_FAMILY,
     BRANCHES,
+    DDK_MEDIANS,
     DEVIATION_TYPES,
     EXPECTATIONS,
     PARAM_KEYS,
@@ -37,18 +38,23 @@ from senselab.audio.workflows.triage.nodes.branches import (
     VOICE_EXPECTATIONS_PENDING_DECLARATION,
     BranchParams,
     ContinuityTrack,
+    CountUnit,
     EnvelopeTrack,
     Expectation,
     Finding,
     Pattern,
     PhonationTracks,
     Proposal,
+    RequiredCount,
     Result,
     SpectrogramBlock,
+    TypicalCount,
     branch_params,
     content_coverage,
     contest,
     count,
+    count_against_instruction,
+    count_beside_typical,
     declared_duration_count,
     declared_task_family,
     deviation,
@@ -90,7 +96,13 @@ from senselab.audio.workflows.triage.nodes.branches import (
     windowed_spreads,
     write_findings,
 )
-from senselab.audio.workflows.triage.nodes.gates import GATE_SPECS, GROUP_LAYER
+from senselab.audio.workflows.triage.nodes.gates import (
+    GATE_SPECS,
+    GROUP_LAYER,
+    REQUIRED_COUNT,
+    TYPICAL_COUNT,
+    UNGATEABLE_READINGS,
+)
 from senselab.audio.workflows.triage.routing_analysis.families import (
     AIRWAY_ELICITING,
     SPEECH_ELICITING,
@@ -524,7 +536,7 @@ class TestTheExpectationTableIsData:
         free = difference(SPEECH_EXPECTATIONS["free-speech"], SPEECH_EXPECTATIONS["free-speech-v2"])
         assert "anti_pattern" in free
         ddk = difference(SPEECH_EXPECTATIONS["diadochokinesis-pa"], SPEECH_EXPECTATIONS["diadochokinesis-v2-puh"])
-        assert ddk == {"expected_event_count", "declared_duration_s", "sequence"}
+        assert ddk == {"typical_count", "declared_duration_s", "sequence"}
         assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("p", "aa")
         assert SPEECH_EXPECTATIONS["diadochokinesis-v2-puh"].sequence == ("p", "ah")
 
@@ -557,6 +569,126 @@ class TestTheExpectationTableIsData:
         for expectation in rows:
             for name, why in expectation.unviable:
                 assert name and why
+
+
+# --------------------------------------------------------------------- the two kinds of count
+
+
+REQUIRED_ROWS = {
+    ("AIRWAY", "respiration-and-cough-cough"): (5, CountUnit.EVENTS),
+    ("AIRWAY", "voluntary-cough"): (3, CountUnit.EVENTS),
+    ("AIRWAY", "respiration-and-cough-fivebreaths"): (5, CountUnit.EVENTS),
+    ("AIRWAY", "respiration-and-cough-v2-threebreathsnose"): (3, CountUnit.EVENTS),
+    ("AIRWAY", "respiration-and-cough-v2-threebreathsmouth"): (3, CountUnit.EVENTS),
+    ("AIRWAY", "respiration-and-cough-threequickbreaths"): (3, CountUnit.EVENTS),
+    ("AIRWAY", "respiration-and-cough-v2-threebreaths"): (3, CountUnit.EVENTS),
+    ("AIRWAY", "breath-sounds"): (3, CountUnit.EVENTS),
+    ("SPEECH", "loudness"): (3, CountUnit.TOKENS),
+    ("SPEECH", "loudness-v2"): (2, CountUnit.TOKENS),
+}
+"""Every in-family row whose instruction speaks a number, and what that number counts."""
+
+TYPICAL_ROWS = {
+    "diadochokinesis-pa": 11,
+    "diadochokinesis-ta": 11,
+    "diadochokinesis-ka": 10,
+    "diadochokinesis-pataka": 10,
+    "diadochokinesis-buttercup": 10,
+}
+"""Every in-family row carrying a measured median, in repetitions. The p50 column of the scan."""
+
+
+class TestARowSaysWhoGaveItsCountAndWhatItCounts:
+    """One field held a number the instruction gave and a number nobody gave. Two fields now do."""
+
+    def test_the_rows_carrying_a_required_count_are_the_ones_the_instruction_counts(self) -> None:
+        """Five breaths is in the task's own name; ten `/pa/` was never spoken to anyone."""
+        found = {
+            (branch, family): (row.required_count.value, row.required_count.unit)
+            for branch, table in EXPECTATIONS.items()
+            for family, row in table.items()
+            if row.required_count is not None
+        }
+        assert found == REQUIRED_ROWS
+
+    def test_the_rows_carrying_a_typical_count_carry_the_measured_median(self) -> None:
+        """The scan's p50, in repetitions, with the scan cited on every one of them."""
+        found = {
+            family: row.typical_count
+            for table in EXPECTATIONS.values()
+            for family, row in table.items()
+            if row.typical_count is not None
+        }
+        assert set(found) == set(TYPICAL_ROWS)
+        for family, median in TYPICAL_ROWS.items():
+            assert found[family] == TypicalCount(median, CountUnit.REPETITIONS, DDK_MEDIANS), family
+
+    def test_no_row_carries_both_kinds(self) -> None:
+        """A number the instruction spoke and a number measured over people who heard it differ."""
+        both = [
+            family
+            for table in EXPECTATIONS.values()
+            for family, row in table.items()
+            if row.required_count is not None and row.typical_count is not None
+        ]
+        assert both == []
+
+    def test_the_multi_syllable_families_declare_repetitions_and_not_syllables(self) -> None:
+        """The retired field said 30 here and 10 for `/pa/`: the same quantity in two units."""
+        for family in ("diadochokinesis-pataka", "diadochokinesis-buttercup"):
+            row = SPEECH_EXPECTATIONS[family]
+            assert row.sequence is not None and len(row.sequence) > 2
+            assert row.typical_count is not None
+            assert row.typical_count.unit is CountUnit.REPETITIONS
+            assert row.typical_count.median == SPEECH_EXPECTATIONS["diadochokinesis-ka"].typical_count.median  # type: ignore[union-attr]
+
+    def test_the_voice_effort_rows_carry_the_count_their_tokens_enumerate(self) -> None:
+        """Out of family for VOICE today, and the declaration travels with the row regardless."""
+        pending = VOICE_EXPECTATIONS_PENDING_DECLARATION
+        assert pending["loudness"].required_count == RequiredCount(3, CountUnit.EVENTS)
+        assert pending["loudness-v2"].required_count == RequiredCount(2, CountUnit.EVENTS)
+
+    def test_a_required_count_is_a_number_an_instruction_could_have_spoken(self) -> None:
+        """Zero breaths is not an instruction, so the declaration refuses to be constructed."""
+        with pytest.raises(ValueError, match="a number an instruction spoke"):
+            RequiredCount(0, CountUnit.EVENTS)
+
+    def test_a_typical_count_cites_the_measurement_it_came_from(self) -> None:
+        """An underived number is what this change exists to remove; it cannot be declared."""
+        with pytest.raises(ValueError, match="cites the measurement"):
+            TypicalCount(10, CountUnit.REPETITIONS, "")
+        assert TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS).derivation.endswith(".md")
+
+    def test_both_declarations_round_trip_through_their_mapping(self) -> None:
+        """A run records which expectation it applied, so a declaration has to come back whole."""
+        required = RequiredCount(5, CountUnit.EVENTS)
+        typical = TypicalCount(11, CountUnit.REPETITIONS, DDK_MEDIANS)
+        assert RequiredCount.from_mapping(required.as_mapping()) == required
+        assert TypicalCount.from_mapping(typical.as_mapping()) == typical
+        assert required.as_mapping() == {"value": 5, "unit": "events"}
+        assert typical.as_mapping() == {"median": 11, "unit": "repetitions", "derivation": DDK_MEDIANS}
+
+    def test_the_two_findings_are_named_apart_and_carry_their_unit(self) -> None:
+        """The kind is in the finding's name, and the unit beside the number, not in a docstring."""
+        against = count_against_instruction(RequiredCount(5, CountUnit.EVENTS), 4, "e1")
+        beside = count_beside_typical(TypicalCount(11, CountUnit.REPETITIONS, DDK_MEDIANS), 8, "e2")
+        assert (against.kind, against.name) == ("count", REQUIRED_COUNT)
+        assert against.evidence == {"found": 4, "required": 5, "unit": "events"}
+        assert (beside.kind, beside.name) == ("count", TYPICAL_COUNT)
+        assert beside.evidence == {"found": 8, "typical": 11, "unit": "repetitions", "derivation": DDK_MEDIANS}
+
+    def test_the_typical_finding_carries_no_key_a_comparator_would_reach_for(self) -> None:
+        """Nothing may be judged against it, so it names no ``declared`` and no ``required``."""
+        beside = count_beside_typical(TypicalCount(11, CountUnit.REPETITIONS, DDK_MEDIANS), 8, "e2")
+        assert not {"declared", "required", "expected"} & set(beside.evidence)
+        assert TYPICAL_COUNT in UNGATEABLE_READINGS
+        assert REQUIRED_COUNT not in UNGATEABLE_READINGS
+
+    def test_no_row_carries_the_field_the_two_replaced(self) -> None:
+        """Pre-alpha: renamed and replaced outright, with no alias and no shim."""
+        names = {field_.name for field_ in fields(Expectation)}
+        assert "expected_event_count" not in names
+        assert {"required_count", "typical_count"} <= names
 
 
 # --------------------------------------------------------------------- the task family

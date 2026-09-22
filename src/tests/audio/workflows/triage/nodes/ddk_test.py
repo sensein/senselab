@@ -27,6 +27,7 @@ from senselab.audio.workflows.triage.config import (
 from senselab.audio.workflows.triage.nodes import ddk
 from senselab.audio.workflows.triage.nodes.branches import (
     BUTTERCUP,
+    DDK_MEDIANS,
     DEVIATION_TYPES,
     PA,
     PARAM_KEYS,
@@ -35,7 +36,9 @@ from senselab.audio.workflows.triage.nodes.branches import (
     UNDETERMINED,
     UNMEASURED_POINTS,
     BranchParams,
+    CountUnit,
     Result,
+    TypicalCount,
     branch_params,
     deviation_names,
     dispatch,
@@ -81,6 +84,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     trend,
     visits,
 )
+from senselab.audio.workflows.triage.nodes.gates import TYPICAL_COUNT
 from senselab.audio.workflows.triage.nodes.speech import align_speech, detect_speech
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
@@ -677,10 +681,11 @@ class TestButtercupHasSevenPositionsIncludingItsCoda:
         assert set(places["alveolar"]) == {"t", "d", "r"}
         assert "r" not in BUTTERCUP
 
-    def test_it_counts_the_same_thirty_syllables_pataka_does(self) -> None:
-        """Ten repetitions of three syllables, so the row is structurally the sequential one's."""
-        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].expected_event_count == 30
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].expected_event_count == 30
+    def test_it_declares_the_same_typical_repetition_count_pataka_does(self) -> None:
+        """Both medians are ten repetitions of a multi-syllable carrier, in repetitions."""
+        buttercup = SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].typical_count
+        pataka = SPEECH_EXPECTATIONS["diadochokinesis-pataka"].typical_count
+        assert buttercup == pataka == TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS)
         assert SPEECH_EXPECTATIONS["diadochokinesis-v2-buttercup"].declared_duration_s == 5.0
 
 
@@ -721,12 +726,12 @@ class TestEveryFamilysTemplateIsItsStimulusText:
 
 
 class TestTheCountsAreHeuristicsAndNothingFoldsThem:
-    """The owner's governing constraint: expected count is not a target, it is a heuristic."""
+    """The owner's governing constraint: a typical count is not a target, it is a heuristic."""
 
-    def test_the_declared_count_and_the_decoded_one_are_written_beside_each_other(
+    def test_the_typical_count_and_the_decoded_one_are_written_beside_each_other(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """Found beside declared, in the same unit: both are syllables."""
+        """Found beside the measured median, in the unit the declaration names."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pa",
@@ -734,14 +739,18 @@ class TestTheCountsAreHeuristicsAndNothingFoldsThem:
         )
         _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
         [counts] = _measurements(store, "counts")
-        entry = counts.attributes["entries"]["expected_event_count"]
-        assert entry["declared"] == 10
-        assert entry["found"] == 8
+        entry = counts.attributes["entries"][TYPICAL_COUNT]
+        assert entry == {"found": 8, "typical": 11, "unit": "repetitions", "derivation": DDK_MEDIANS}
+        assert "required" not in entry
 
-    def test_the_found_count_is_in_syllables_because_the_declaration_is(
+    def test_the_found_count_is_in_repetitions_because_the_declaration_is(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """Six repetitions of a three-syllable token is eighteen syllables against a declared 30."""
+        """Six repetitions of a three-syllable carrier is six, against a measured median of ten.
+
+        The retired field declared 30 here and 10 for `/pa/` — the same quantity in two units. Both
+        rows now declare repetitions, so the two numbers are comparable.
+        """
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-buttercup",
@@ -749,12 +758,11 @@ class TestTheCountsAreHeuristicsAndNothingFoldsThem:
         )
         _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
         [counts] = _measurements(store, "counts")
-        entry = counts.attributes["entries"]["expected_event_count"]
-        assert entry["declared"] == 30
-        assert entry["found"] == 18
+        entry = counts.attributes["entries"][TYPICAL_COUNT]
+        assert entry == {"found": 6, "typical": 10, "unit": "repetitions", "derivation": DDK_MEDIANS}
         [repetitions] = _measurements(store, PPG_REPETITIONS)
         assert repetitions.attributes["value"] == 6
-        assert repetitions.attributes["declared_repetitions"] == 10
+        assert repetitions.attributes["typical_repetitions"] == 10
 
     def test_a_count_short_of_its_declaration_is_not_a_deviation_and_not_a_non_conformance(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
@@ -782,19 +790,22 @@ class TestTheCountsAreHeuristicsAndNothingFoldsThem:
         scores = [
             finding
             for finding in result.deviations
-            if finding.kind == "measure" and {"declared_event_count", "declared_repetitions"} & set(finding.evidence)
+            if finding.kind == "measure" and "typical_repetitions" in finding.evidence
         ]
         assert [finding.name for finding in scores] == [PPG_REPETITIONS]
         assert set(scores[0].evidence) & {"conformance", "agreement", "shortfall", "ratio"} == set()
 
-    def test_the_field_keeps_its_name(self) -> None:
-        """The owner kept ``expected_event_count``: for 3 heys or 5 breaths the number is meaningful.
+    def test_the_row_says_which_kind_of_count_it_carries(self) -> None:
+        """A syllable-repetition row has no required count: the instruction speaks no number."""
+        row = SPEECH_EXPECTATIONS["diadochokinesis-pataka"]
+        assert row.required_count is None
+        assert row.typical_count == TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS)
+        assert not hasattr(row, "expected_event_count")
 
-        Which kind of count a task declares is a per-task property that does not exist yet and is
-        sequenced separately; until it does, a DDK reader has no field saying the number is a guide.
-        """
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].expected_event_count == 30
-        assert not hasattr(SPEECH_EXPECTATIONS["diadochokinesis-pataka"], "declared_event_count")
+    def test_a_typical_count_cannot_be_declared_without_citing_its_measurement(self) -> None:
+        """A measured number whose measurement is unrecorded is the defect this shape forbids."""
+        with pytest.raises(ValueError, match="cites the measurement"):
+            TypicalCount(10, CountUnit.REPETITIONS, "  ")
 
 
 class TestTheTaskExtentIsTheDecodedRepetitionSpan:

@@ -28,10 +28,12 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Pattern,
     Proposal,
     Result,
+    TypicalCount,
     acquisition_covariates,
     amplitude_spans,
     branch_params,
     count,
+    count_beside_typical,
     declared_duration_count,
     derivative_arrays,
     deviation,
@@ -375,7 +377,7 @@ class Decode:
 
     @property
     def syllables(self) -> int:
-        """How many syllables the completed repetitions hold, the unit a declared count is in."""
+        """How many syllables the completed repetitions hold."""
         return self.count * self.vowel_positions
 
     @property
@@ -751,11 +753,11 @@ def decode_evidence(
     reads: DdkReads,
     params: BranchParams,
     decode: Decode | None,
-    declared_event_count: int | None = None,
+    typical: TypicalCount | None = None,
 ) -> list[Finding]:
     """Everything the posteriorgram instrument has to say about one recording.
 
-    The decoded repetition count and the declared count are written beside each other and nothing
+    The decoded repetition count and the corpus median are written beside each other and nothing
     folds them: no conformance term, no score and no gate reads the pair.
 
     Args:
@@ -763,7 +765,8 @@ def decode_evidence(
         reads: The derivatives, for the posteriorgram's entity id.
         params: The operating points, for the burst window the chain length is derived from.
         decode: What the decode read, or None when the posteriorgram is absent.
-        declared_event_count: The instruction's own syllable count, or None when it declares none.
+        typical: The corpus median for this family, or None where none is measured. Nobody asked
+            the participant for it, so nothing folds it.
 
     Returns:
         The findings; an absent posteriorgram yields one measurement with no value, and a decode
@@ -779,11 +782,6 @@ def decode_evidence(
     floor = None if reads.ppg is None else reads.ppg.emission_floor
     chain = None if reads.ppg is None or window_ms is None else min_phone_frames(reads.ppg.seconds_per_frame, window_ms)
     start, end = (None, None) if extent is None else extent
-    per_repetition = (
-        None
-        if not decode.vowel_positions or declared_event_count is None
-        else (declared_event_count // decode.vowel_positions)
-    )
     findings: list[Finding] = [
         measured(
             PPG_REPETITIONS,
@@ -791,8 +789,7 @@ def decode_evidence(
             end,
             decode.count,
             *evidence,
-            declared_event_count=declared_event_count,
-            declared_repetitions=per_repetition,
+            typical_repetitions=None if typical is None else typical.median,
             repetition_start_s=decode.starts_s,
             filler_fraction=decode.filler_fraction,
             score_per_frame=decode.score_per_frame,
@@ -812,8 +809,9 @@ def decode_evidence(
             repetitions=decode.count,
             emission_floor=floor,
         ),
-        count("expected_event_count", decode.syllables, declared_event_count, *evidence),
     ]
+    if typical is not None:
+        findings.append(count_beside_typical(typical, decode.count, *evidence))
     if extent is None:
         findings.append(measured(PPG_RATE, None, None, None, *evidence, unit=SYLLABLES_PER_S, reason=NO_REPETITIONS))
         return findings
@@ -933,7 +931,7 @@ def align_ddk(
         Whether the expected patterns were found, the one task extent, and the findings.
     """
     decode = decode_template(reads.ppg, params, expectation.sequence)
-    ppg_findings = decode_evidence(store, reads, params, decode, expectation.expected_event_count)
+    ppg_findings = decode_evidence(store, reads, params, decode, expectation.typical_count)
     declared = declared_duration_count(store, expectation.declared_duration_s)
     ppg_ids = _evidence(reads.ppg_id)
     sequence = expectation.pattern is Pattern.SYLLABLE_SEQUENCE
@@ -1048,7 +1046,7 @@ def syllable_detail(result: Result) -> dict[str, Any]:
         "ppg_syllable_rate_hz": _value(result.deviations, PPG_RATE),
         "ppg_cycle_rate_hz": _covariate(result.deviations, PPG_RATE, "cycle_rate_hz"),
         "ppg_repetitions": _value(result.deviations, PPG_REPETITIONS),
-        "ppg_declared_event_count": _covariate(result.deviations, PPG_REPETITIONS, "declared_event_count"),
+        "ppg_typical_repetitions": _covariate(result.deviations, PPG_REPETITIONS, "typical_repetitions"),
         "ppg_period_s": _covariate(result.deviations, PPG_RATE, "period_s"),
         "ppg_period_cv": _value(result.deviations, PPG_DISPERSION),
         "ppg_period_trend_s_per_step": _covariate(result.deviations, PPG_DISPERSION, "trend_s_per_step"),
