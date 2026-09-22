@@ -60,7 +60,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "REPORT"
 SUMMARY_STEM = "summary"
 FORMATS = ("png", "pdf")
-REPORT_SCHEMA_VERSION = "triage-summary/v7"
+REPORT_SCHEMA_VERSION = "triage-summary/v8"
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
@@ -536,13 +536,10 @@ def _window_label_scores(window: Entity, *, raw: bool = False) -> dict[str, floa
 
     Args:
         window: A PREPROCESS classifier-window measurement.
-        raw: Return every model score retained for display. Falls back to the thresholded decision
-            subset for historical stores that predate ``raw_scores``.
+        raw: Return every model score retained for display, rather than the thresholded decision
+            subset.
     """
-    raw_scores = window.attributes.get("raw_scores" if raw else "scores")
-    if raw_scores is None and raw:
-        raw_scores = window.attributes.get("scores")
-    raw_scores = raw_scores or {}
+    raw_scores = window.attributes.get("raw_scores" if raw else "scores") or {}
     if not isinstance(raw_scores, dict):
         return {}
     labels = raw_scores if raw else {label: raw_scores[label] for label in window.attributes.get("labels") or []}
@@ -1398,10 +1395,8 @@ def _report_document(
             "summary": {"path": f"{SUMMARY_STEM}.{summary_format}", "format": summary_format},
             "json": {"path": f"{SUMMARY_STEM}.json", "format": "json", "schema_version": REPORT_SCHEMA_VERSION},
         },
-        # Legacy top-level duplicates of the structured blocks above.
-        "file": _file(store),
+        # Top-level fields no structured block above carries.
         "verdict": verdict,
-        "branches": branches,
         "steps": steps,
         "llm_check": _llm_reviews(store),
         "llm_annotation": _llm_annotation(store),
@@ -1764,7 +1759,7 @@ def _redact_line(redact: dict[str, Any] | None, *, prefix: str = "  ") -> str:
 def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C901 — evidence hierarchy is explicit
     """Render the detail page from the report object also written as JSON."""
     steps, verdict, provenance = document["steps"], document["verdict"], document["provenance"]
-    described, decisions, screening = document["file"], document["decisions"], document["screening"]
+    described, decisions, screening = document["recording"], document["decisions"], document["screening"]
     lines: list[str] = ["DECISION SUMMARY"]
     lines.append(
         f"  triage: {_shown(decisions['file_triage'])}   release: {_shown(decisions['release'])}   "
