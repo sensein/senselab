@@ -307,14 +307,16 @@ record button and cough HARD as if something were stuck in your throat."*
 ### Three things are broken today
 
 **The hint is parsed from the filename while the sidecar goes unread.**
-`runs/b2ai-v2/make_hints.py` extracts the BIDS `task-` token from the stem and emits `may_contain`
-plus `metadata.{task_token, speech_type, task_id, registry}`. Every recording carries the protocol's
+`specs/20260817-triage-workflow-dag/runs/b2ai-v2/make_hints.py` extracts the BIDS `task-` token from
+the stem (`task_token` at `:323`) and emits `may_contain`
+plus `metadata.{task_token, speech_type, task_id, registry}` (`:381-384`). Every recording carries
+the protocol's
 own `task_name` and `speech_type` beside it. `stimulus_text` — which `AudioHints.expected_speech`
 exists to hold — is never carried at all.
 
-**The only populated map raises on load.** `runs/b2ai-v2/override.yaml:261` is keyed
+**The only populated map raises on load.** That campaign's `override.yaml:261` is keyed
 `routing.hint_kind_map`. Stage 2 renamed the packaged key to `hint_branch_map`
-(`default.yaml:127`), and `_merge` refuses any key the packaged config lacks (`config.py:147-148`).
+(`default.yaml:150`), and `_merge` refuses any key the packaged config lacks (`config.py:162`).
 
 **Its values would all be rejected even after renaming.** `_map_tags` casefolds the map's *keys*
 against the declared tags (`routing.py:115`) but tests the *value* against `BRANCHES` unchanged
@@ -330,19 +332,24 @@ take an `Outcome.FLAG` against ROUTING (`vocabulary.py:610-612`, the ground at `
 **value-case fix**; `routing.md:76-78` documents testing the value unchanged as deliberate, and
 that test is not the defect.
 
-**A fourth, found by measurement rather than by reading: the null map makes the file verdict assert
-the opposite of the declaration.** Because every tag is unmapped, no decision carries `hint_tags`, so
-`_hint_claims` returns `{}` rather than `None` (`nodes/verdict.py:182-184`) and `FileVerdict.hints`
-reads `found_unclaimed` / `no_claim` for every branch — including `AIRWAY: found_unclaimed` on runs
-whose `may_contain` declared `[cough, airway]`. It renders: `summary.json`'s
-`recording.declared_hints` (`report.py:1097`) and the PDF header (`report.py:1426-1427`, `:1467`).
-The `UNREAD_DECLARATION` flag built for this case fires only when no decision survived
-(`vocabulary.py:385-386`). Recorded, with the vocabulary decision it is blocked on, at
+**A fourth was found by measurement rather than by reading, and it has since been closed.** With
+every tag unmapped, no decision carried a claim, so `_hint_claims` returned `{}` rather than `None`
+and `FileVerdict.hints` read `found_unclaimed` / `no_claim` for every branch — including
+`AIRWAY: found_unclaimed` on runs whose `may_contain` declared `[cough, airway]`. It rendered:
+`summary.json`'s `recording.declared_hints` (`report.py:1173`) and the PDF header (`report.py:1543`).
+
+**What closed it is that a declaration no longer has to come through the hint map.** A branch
+decision's `declared` is `branch in by_family or bool(hint_tags)` (`routing.py:257`, written at
+`:272`), and `by_family` is the ruleset's reading of the recording's own BIDS stem
+(`routing.py:229`). `_hint_claims` reads exactly that field (`verdict.py:330`), so a cough
+recording's `AIRWAY` claim survives an inert map. What remains true is the shape of the remaining
+hole: `_hint_claims` returns `None` — and the fold raises `UNREAD_DECLARATION` (`vocabulary.py:160-163`,
+fired at `:613-614`) — only when a declaration existed and **no decision survived at all**
+(`verdict.py:328-329`). Recorded, with the vocabulary decision it was blocked on, at
 [`../20260817-triage-workflow-dag/verdict.md`](../20260817-triage-workflow-dag/verdict.md) and
-measured in
+measured as of 2026-09-15 in
 [`../20260817-triage-workflow-dag/benchmarks/hints-and-routing-2026-09-15.md`](../20260817-triage-workflow-dag/benchmarks/hints-and-routing-2026-09-15.md)
-§ B. **Owed a code change.** The first three items above are what a hint-blind run costs; this one is
-what it *says*, and it is worse, because a silent inertness misleads nobody.
+§ B, which predates the fix. The first three items above stand and are what a hint-blind run costs.
 
 ### What SCREEN resolves
 
@@ -385,21 +392,21 @@ contract written in this spec** — keys `task_name`, `acoustic_task_name`, `spe
 a data structure outside the triage module, which would need its own consumers and tests. Promoting
 them to typed fields is **unresolved** and deferred.
 
-**The contract and the live readers name different keys — owed a code change, and the contract is the
-side to change.** Checked against the tree 2026-09-15: `nodes/voice.py` reads
-`hint.metadata["population"]` (`voice.py:66`) and `hint.metadata["task"]` (`voice.py:146`), and
-**neither key is in the seven above**, so a hint written to this contract reaches neither consumer. Of
-the three `metadata` keys anything in `src/senselab` reads, only ROUTING's `speech_type`
-(`routing.py:42`, read at `:80`) is covered. The contract is the side to move: `task_name` and
-`acoustic_task_name` are the sidecar's own names and separate the per-recording grain from the
-per-family one, which is the distinction a single `task` cannot carry, and `population` is not a field
-the sidecars hold at all — so deciding what `voice.py:146` should read is deciding which grain a
-declared duration range is keyed at, which is this spec's question rather than the branch's. V7's and
-V2's reading of the same mismatch from the branch's side is in
+**The mismatch this section recorded has resolved itself, in the direction it predicted.** Checked
+against the tree 2026-09-15, `nodes/voice.py` read `hint.metadata["population"]` and
+`hint.metadata["task"]`, neither of them in the seven keys above, so a hint written to this contract
+would have reached neither consumer. VOICE's rewrite removed both reads. **Exactly one
+`hint.metadata` key is read anywhere in `src/senselab` today** — ROUTING's `speech_type`
+(`routing.py:45`, read at `:93`) — and it is in the seven. `voice.f0_range_by_population` and
+`voice.task_duration_ranges` are still null (`default.yaml:230`, `:232`) and nothing reads them.
+
+So the contract is now the only claimant on those keys, and the reason it should stay the contract is
+unchanged: `task_name` and `acoustic_task_name` are the sidecar's own names and separate the
+per-recording grain from the per-family one, which is the distinction a single `task` cannot carry,
+and `population` is not a field the sidecars hold at all. V7's and V2's reading of the mismatch from
+the branch's side is in
 [`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
-*Unresolved*. Both paths are inert today — `voice.f0_range_by_population` and
-`voice.task_duration_ranges` are both null (`default.yaml:183`, `:185`) — so this costs nothing until
-either is populated, which is the moment it becomes silent.
+*Unresolved*; the branch it described no longer exists in that form.
 
 **When the two grains disagree** — both carry `speech_type` and `stimulus_text` — the recording-grain
 file wins, and the disagreement is recorded on the declaration as a field rather than resolved
@@ -453,17 +460,18 @@ from a classifier's own label, which is precisely the distinction the store exis
 
 **Two prerequisites, both owed a code change, because the evaluation carries neither today.**
 
-- **The value is not recorded at all.** `evaluate_gate` computes `value = gate_value(features, gate)`
-  (`routing_analysis/ruleset.py:405`) and returns only a three-member enum (`:406-409`);
-  `RouteEvaluation.gate_outcomes` is `Mapping[str, GateOutcome]` (`:210`, filled at `:467`) and
-  `route_attributes` serialises exactly that and no number (`live_evidence.py:172-190`, the key at
-  `:185`). So a rule-written label could not today cite the number that produced it. Registered
+- **The value is not recorded at all.** `evaluate_gate` returns `gate_outcome_of(gate_value(features,
+  gate), gate)` (`routing_analysis/ruleset.py:426-436`), and `gate_outcome_of` (`:385-398`) reduces
+  the number it was handed to a three-member enum;
+  `RouteEvaluation.gate_outcomes` is `Mapping[str, GateOutcome]` (`:199`, filled at `:536`) and
+  `route_attributes` serialises exactly that and no number (`live_evidence.py:183-208`, the key at
+  `:202`). So a rule-written label could not today cite the number that produced it. Registered
   against the ruleset at [`../20260817-triage-workflow-dag/routing.md`](../20260817-triage-workflow-dag/routing.md)
   § *Open derivations*.
 - **The span identity is discarded one step before the gate sees it.** `live_spans` rows carry
-  `"id"` (`routing_analysis/features.py:1084`) and the reduction
-  `span_longest_s[measure] = max(durations)` (`:1134`) keeps only the scalar. A `Gate` is "one
-  threshold rule over one number" (`ruleset.py:92-106`) with no span in it, so **"the span whose
+  `"id"` (`routing_analysis/features.py:1128`) and the reduction
+  `span_longest_s[measure] = max(durations)` (`:1188`) keeps only the scalar. A `Gate` is "one
+  threshold rule over one number" (`ruleset.py:85`) with no span in it, so **"the span whose
   evidence fired it" is not addressable from a fired gate.** Which span a reduction attributes to is
   a contract question rather than a threshold: `max` has a unique argument only until two spans tie.
 
