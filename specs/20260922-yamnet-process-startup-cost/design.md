@@ -26,7 +26,7 @@ Scripts in this directory, each run through the sbatch beside it:
 | `probe_yamnet_cost.py` | fixed vs marginal cost of one invocation | 23464721 |
 | `probe_preprocess_steps.py` | corrected step table; every YAMNet invocation | 23464900 |
 | `probe_worker_rss.py` | what a resident worker holds | srun, `mit_quicktest` |
-| `probe_equivalence.py` | old path against new, same recordings | 23465448 |
+| `probe_equivalence.py` | old path against new, same recordings | 23465390 |
 
 ## The split: 4.81 s fixed, 0.0005 s per second of audio
 
@@ -202,7 +202,31 @@ tolerance, not a numeric one**: the two paths run the same TensorFlow graph over
 samples in the same interpreter build, differing only in whether the process exits afterwards, so
 any difference at all would be a defect rather than a rounding artefact.
 
-Results are in `equiv-<jobid>.jsonl`; the summary line carries `mismatches`.
+**9 recordings, 2.8 s to 73.5 s, 0 mismatches.** Every window of every recording is identical,
+including the `Silence` score the emptiness gate reads and the full 521-label vector. Job 23465390,
+node2112, `loadavg_start` 0.00, exclusive. `equiv-23465390.jsonl`:
+
+| recording s | windows | identical | old path s | new path s | worker RSS MiB |
+| --- | --- | --- | --- | --- | --- |
+| 2.79 | 5 | yes | 6.76 | 4.55 (cold) | 750 |
+| 3.72 | 7 | yes | 4.60 | 0.18 | 762 |
+| 4.54 | 9 | yes | 5.12 | 0.06 | 781 |
+| 5.58 | 11 | yes | 4.87 | 0.06 | 797 |
+| 7.29 | 15 | yes | 4.68 | 0.07 | 815 |
+| 10.18 | 21 | yes | 5.02 | 0.07 | 852 |
+| 18.32 | 38 | yes | 4.83 | 0.08 | 912 |
+| 30.02 | 62 | yes | 5.04 | 0.10 | 995 |
+| 73.54 | 153 | yes | 5.30 | 0.21 | 1181 |
+| **total** | | **0 mismatches** | **47.21** | **5.38** | |
+
+The last two columns are the whole result: 8.8x over the nine, and a call that is not the first
+costs 0.06–0.21 s against 4.6–6.8 s. The same job also ran the four-invocations-per-recording shape
+from cold: **18.86 s old, 4.50 s new**.
+
+`worker_rss_mib` here is the same worker growing across nine recordings of increasing length, and
+it tops out at 1,181 MiB — higher than the 971 MiB of the single-recording RSS probe, because this
+process classified all nine without a restart. That is the figure a long-lived driver should be
+sized against: **~1.2 GiB**, still 3.7% of a task's 32 GB.
 
 ## What was not measured
 
