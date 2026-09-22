@@ -142,6 +142,20 @@ fold's ordinary behaviour: the flag joins every other ground and the triage axis
 An `UNDETERMINED` answer — no reading, or a null bound — is never a flag, which is the fold's
 standing rule for every gate.
 
+### Which task extent, when a branch mints more than one
+
+`gate_readings`, which the conformance gates use, reads one measurement per name —
+`find_measurement` returns the **last** live one. A branch that mints two task extents writes the
+reading twice, and under that rule a second voice inside the *first* extent would be answered by
+the second extent's reading and would not flag. That is a hole in the gate as specified, so the
+flag gates read through `flag_gate_readings` instead: every live measurement of the name, reduced
+by the gate's own sense — the minimum for an `at_least` gate, the maximum for an `at_most` one.
+The question a flag gate asks is whether the recording carries the circumstance *anywhere*, so the
+answer is the reading hardest on it.
+
+This is deliberately scoped to the flag gates. The conformance gates ask a different question of
+possibly-many extents, and answering it is not this change's business.
+
 ### Scope, enforced by the keying
 
 The five groups the gate is keyed under — `ORDERED_TOKENS`, `FREE_RESPONSE`, `ITEM_LIST`,
@@ -221,4 +235,5 @@ rediscovered.
 | the gate reads the within-extent share, not the whole-file count | `…::test_the_gate_reads_the_within_extent_share_and_not_the_whole_file_count` |
 | an absent reading is UNDETERMINED and never a flag | `…::test_an_absent_reading_is_undetermined_and_never_a_flag` |
 | the gate is not a term in the task's conformance | `…::test_the_speaker_gate_is_not_a_term_in_the_tasks_conformance` |
+| the worst of several task extents answers the gate, not the last written | `…::test_the_worst_task_extent_answers_the_gate_not_the_last_one_written` |
 | a VOICE task carries no speaker gate at all | `…::test_a_voice_task_carries_no_speaker_gate_at_all` |
