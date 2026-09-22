@@ -483,7 +483,7 @@ class TestTheRedactInterlockIsUntouched:
 
         from senselab.audio.workflows.triage import run as run_module
 
-        gate = inspect.getsource(run_module._drive_branches)
+        gate = inspect.getsource(run_module.drive_decisions)
         assert '"SPEECH" in selected and _speech_found_pii(store)' in gate
         assert 'store.entities("pii")' in inspect.getsource(run_module._speech_found_pii)
 
