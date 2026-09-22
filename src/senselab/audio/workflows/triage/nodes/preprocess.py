@@ -67,6 +67,7 @@ from senselab.audio.tasks.health_acoustics.hear import (
     HEAR_REVISION,
     HEAR_WINDOW_SECONDS,
     hear_window_extent,
+    shutdown_hear_worker,
     span_hear_input,
 )
 from senselab.audio.tasks.phonation.api import derive_f0_range, f0_track, formant_track
@@ -3140,6 +3141,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     finally:
         if not bool(config.require("yamnet.keep_worker_resident")):
             shutdown_yamnet_worker()
+        if not bool(config.require("hear.keep_worker_resident")):
+            shutdown_hear_worker()
 
     if hard_failures:
         summary = "; ".join(f"{name}: {message}" for name, message in hard_failures)
