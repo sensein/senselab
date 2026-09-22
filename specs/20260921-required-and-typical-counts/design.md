@@ -68,6 +68,10 @@ required_count: RequiredCount | None = None
 typical_count: TypicalCount | None = None
 ```
 
+The number is `value` on one and `median` on the other, deliberately. Generic code that reaches
+for `.value` gets the number an instruction spoke and nothing else, and a reader of a `TypicalCount`
+is told what kind of number it is by the attribute they had to name to get it.
+
 ### Why two fields rather than one discriminated field
 
 A single `count: RequiredCount | TypicalCount | None` also forces every reader to narrow, and was
@@ -221,5 +225,10 @@ AST sweep over `gates.py` was added for it.
   measured for what they produce. `-v2-tuh`'s p50 of 14 is in the scan and is not declared here:
   the timed families are bounded by their own 5 s timer, and what a median over a fixed window
   means has not been reasoned.
+- **`Expectation.as_mapping` is still unused by any run.** Its docstring says *"so a run can record
+  which expectation it applied"*, and nothing does — SPEECH's `expectation` detail records the mode,
+  the family and two counts, not the row. The declarations therefore reach a store only through the
+  findings and covariates above. Pre-existing; this change gave both new types their own
+  `as_mapping`/`from_mapping` so that the round trip stays whole when a run does record it.
 - **`measure-distributions.md`'s own `n` differs slightly from the replay's.** The scan read 62,273
   recordings and the replay 62,1xx; both denominators are stated where they are used.
