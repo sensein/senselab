@@ -63,7 +63,7 @@ recordings, and include each step's model load where the step is the first to ne
 > the activity being registered carries the name of the step that is starting, not the one that has
 > just run. `enhanced_yamnet` is registered immediately after the `residual` block, and the 100.20 s
 > is that block's FRCRN enhancement, cross-correlation alignment and two stream writes. Re-measured
-> with `[t_i, t_{i+1}]` attributed to step *i*, on an exclusive node, `enhanced_yamnet` is 4.87 s.
+> with `[t_i, t_{i+1}]` attributed to step *i*, on an exclusive node, `enhanced_yamnet` is 4.98 s.
 > The same artefact is visible in the table without needing a second probe:
 > `enhanced_hear_summary` and `residual_hear_summary` are pure Python pooling over a window list and
 > cannot cost ~6 s — those are the HeAR inferences that preceded them. The conclusion drawn from
