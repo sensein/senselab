@@ -201,8 +201,9 @@ by its window count, and the corpus spans 1.0 s to 330 s, so a single long free-
 outvote a subject's entire remaining supply — and if that one extent is atypical, the speaker's
 vector is that extent. The production pooling was changed to two-stage on this measurement.
 
-**Centring was measured and not adopted.** The corpus mean vector has norm **0.3697**, against
-a `1/sqrt(n)` null of about 0.001 at this sample size: every extent in the corpus points
+**Centring was measured and not adopted.** The corpus mean vector has norm **0.3697**. The mean
+of *n* independent unit directions has expected norm `1/sqrt(n)`, about **0.0074** for the
+~18,000 extent vectors here — so 0.37 is fifty times the null: every extent in the corpus points
 substantially in one shared direction, which is channel and protocol rather than identity.
 Subtracting it does what you would expect — the between-speaker mean falls from 0.281 to 0.009,
 essentially to the orthogonality null — and buys a further AUC 0.9870 and EER 4.8%. It is **not**
