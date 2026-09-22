@@ -174,7 +174,7 @@ def read_task_extents(run_root: Path) -> list[Extent]:
         return []
 
     invalidated: set[str] = set()
-    candidates: dict[tuple[float, float], dict[str, Any]] = {}
+    candidates: dict[tuple[float, float], list[tuple[str, dict[str, Any]]]] = {}
     with store.open() as handle:
         for line in handle:
             if TASK_EXTENT_ROLE not in line and "wasInvalidatedBy" not in line:
@@ -195,13 +195,17 @@ def read_task_extents(run_root: Path) -> list[Extent]:
             if not span or len(span) != 2:
                 continue
             key = (round(float(span[0]), 6), round(float(span[1]), 6))
-            candidates[key] = {"id": str(record.get("id")), "attributes": attributes}
+            candidates.setdefault(key, []).append((str(record.get("id")), attributes))
 
+    # Every writer of one interval is kept until the whole store has been read, because a
+    # wasInvalidatedBy relation may follow the entity it invalidates, and two entities may carry
+    # the same interval. An interval survives when any of its writers does.
     out: list[Extent] = []
-    for (start_s, end_s), found in sorted(candidates.items()):
-        if found["id"] in invalidated:
+    for (start_s, end_s), writers in sorted(candidates.items()):
+        live = [(eid, attrs) for eid, attrs in writers if eid not in invalidated]
+        if not live:
             continue
-        attributes = found["attributes"]
+        attributes = live[0][1]
         out.append(
             Extent(
                 subject=subject,
