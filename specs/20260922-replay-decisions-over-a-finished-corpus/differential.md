@@ -157,15 +157,43 @@ exactly those 23 stems, the differential returns 23 `not_replayable`, all with
 `ADMIT_DID_NOT_ADMIT`, and compares none of them. The detector reads the store, not the row log, so
 the agreement is between two independent readings of the same fact.
 
-**One recording on the leaking direction of the PII axis**, found at `2fa5179d` and cross-checked
-against its store by hand: `sub-6afb0324-…_task-diadochokinesis-ka`. Its retired `pii_scan` names
-`gliner`, `presidio` and `rules` as having run; its replayed one carries `scanned: false` with the
-carrier reason. Its decision did not otherwise move and it found nothing either way, which is
-exactly the case a count of moved decisions would miss.
+**1,899 rows at `ee7bcfca`** — thirteen slices spread across the manifest (3, 41, 77, 120, 158,
+193, 227, 266, 301, 333, 355, 371 of 400) plus the 23 targeted above. 1,875 compared, **1,721
+identical (91.8%)**, 154 moved, 24 `not_replayable` — the 23 plus one found organically, which is
+the detector meeting the case without being pointed at it. No `error`, no `unreadable`, no
+`no_store`.
+
+What moved, on that sample:
+
+| axis | movement | files |
+| --- | --- | ---: |
+| triage | `flag → pass` | 44 |
+| release | `releasable → not_assessed`, `withheld → not_assessed` | 1 each |
+| `AIRWAY` conformance | `False → UNDETERMINED` / `True → UNDETERMINED` / `False → True` | 48 / 27 / 8 |
+| `AIRWAY` finding | `absent → present` | 31 |
+| `AIRWAY` agreement | `mismatch → agree` | 31 |
+| `REDACT` run state | `completed → skipped` | 2 |
+| grounds lost | `AIRWAY` non-conformance / `AIRWAY` hint mismatch / `REDACT` verification found pii | 56 / 8 / 1 |
+| deviations | `truncation` gained on 34, `off_task_extent` lost on 8 | 34 / 8 |
+| deviation assertions | `truncation` 0 → 34, `off_task_extent` 30 → 11 | — |
+
+No discard ground, file route state or declared family moved on any of the 1,875.
+
+**Two recordings on the leaking direction**, both diadochokinesis: scanned before, not scanned now,
+and REDACT ran on both before and runs on neither now. They are the same two rows in both counts,
+which is the widened haystack doing exactly what it was changed to do — and the reason that count
+is named rather than folded into a total.
+
+**One of those read by hand against its own store**, at `2fa5179d`:
+`sub-6afb0324-…_task-diadochokinesis-ka`. Its retired `pii_scan` names `gliner`, `presidio` and
+`rules` as having run; its replayed one carries `scanned: false` with the carrier reason. Its
+decision did not otherwise move and it found nothing either way, which is exactly the case a count
+of moved decisions would miss.
 
 **Cost.** 157 rows in 30 s on one core on a quiet allocation, 35 s a slice under the replay array's
 own load — so 62,548 rows is 3.3 to 4 core-hours. The array is 64 slices of ~977 at under 10 min
 each against a 1 h limit. Both figures were taken on a shared node and are upper bounds.
 
-**Not verified.** That every real store reads `ok` once the replay finishes: the array was at 93%
-when this was written, so the tail of the manifest has only been exercised as `no_store`.
+**Not verified.** That every real store reads `ok` once the replay finishes: the array was at 96%
+when this was written. The 1,899-row sample is 3% of the corpus and is not a corpus figure — the
+full pass is what settles the counts.
