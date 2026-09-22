@@ -36,15 +36,48 @@ Total 10,358,336 recording-seconds, 2,877 task-hours, over a 51.72 h array windo
 
 **Twelve recordings re-run at the branch tip**, spread over three duration strata and four
 routed-branch profiles, timed with the corpus driver's own instrumentation. No node was skipped and
-no node was cheaper for having run before; the re-run cost between 1.00 and 1.24 times the original,
-a spread dominated by node heterogeneity rather than by reuse.
+no node was cheaper for having run before. 2,285.4 s originally, 2,607.4 s re-run — 1.14 overall,
+per recording between 0.90 and 1.61, a spread dominated by node heterogeneity rather than by reuse:
+the twelve originally ran on ten different `mit_preemptable` nodes and the re-run on one `pi_satra`
+node whose load average was 19 at the start and 21 at the end, shared with the corpus array's last
+slice and with the second probe below. PREPROCESS was 93.9% of the re-run, against 90.4%
+corpus-wide.
 
 **The same recording twice inside one process** — the node-independent control, since it removes
-the machine from the comparison. The second pass costs 0.97 of the first. That 3% is the one-off
-model load amortised over a second recording; there is no other reuse to find.
+the machine from the comparison. Three recordings, second pass 0.97, 0.97 and 1.01 of the first.
+The 3% is the one-off model load amortised over a second recording; there is no other reuse.
 
 So a resubmission pays PREPROCESS again, and PREPROCESS is 90.4% of the corpus. A replay that reads
 it out of the store pays the other 9.6% — 275 task-hours against 2,877, a factor of 10.4.
+
+## Where PREPROCESS's time goes
+
+`ProvStore.activity` accepts `started`/`ended` and every caller leaves them `None`, so a finished
+store carries no step timing and the corpus run cannot be decomposed. The probe patched
+`ProvStore.activity` to stamp the interval since the previous registration, which attributes that
+interval to the step that just finished; the figures are the branch tip's, over the same twelve
+recordings, and include each step's model load where the step is the first to need it.
+
+| step | mean s | total s | share of the re-run |
+| --- | --- | --- | --- |
+| PREPROCESS `enhanced_yamnet` | 100.20 | 1,202.4 | 46.6% |
+| PREPROCESS `asr_qwen` | 22.44 | 269.3 | 10.4% |
+| PREPROCESS `consensus` | 17.86 | 214.3 | 8.3% |
+| PREPROCESS `enhanced_diarization` | 9.17 | 110.0 | 4.3% |
+| PREPROCESS `ppg_posteriorgram` | 7.63 | 91.6 | 3.6% |
+| SPEECH `quality` | 12.35 | 74.1 | 2.9% |
+| PREPROCESS `enhanced_hear_summary` | 5.97 | 71.6 | 2.8% |
+| PREPROCESS `span_yamnet` | 5.96 | 71.5 | 2.8% |
+| PREPROCESS `level` | 5.70 | 68.4 | 2.7% |
+| PREPROCESS `residual_hear_summary` | 5.67 | 68.0 | 2.6% |
+| REDACT `plan` | 14.86 | 44.6 | 1.7% |
+
+Two things the table settles. **`residual_diarization` does not appear**, so the narrowing is in
+force on the tip; the corpus run ran the same pyannote work twice, and `enhanced_diarization`'s
+110.0 s over twelve recordings bounds what that second pass cost — roughly 4% of a PREPROCESS,
+measured on the tip's own step rather than on the run that paid for both. **One step is 46.6% of
+everything**: YAMNet over the enhanced stream, at 100 s mean against a 21 s median recording. The
+`residual_*` classifier summaries do still run; only diarization was narrowed.
 
 ## What changed since the corpus run
 
@@ -248,6 +281,13 @@ ideal — the two existing partial replays over this corpus
   the previous registration; it is the branch tip's step cost, not the corpus run's.
 - **How much the narrowed diarization saves.** It removes one of two pyannote passes, but the corpus
   run's per-step cost is unrecoverable for the reason above, so the saving is bounded by the tip's
-  own `enhanced_diarization` step rather than measured on the run that paid for both.
+  own `enhanced_diarization` step — 9.17 s a recording, roughly 4% of a PREPROCESS — rather than
+  measured on the run that paid for both. The replay makes the question moot: it re-runs no part of
+  PREPROCESS, so it neither pays the residual pass nor saves anything by not paying it.
+- **Whether the timing figures would hold on an idle machine.** They would not, exactly. The probe
+  node carried a load average of 19 rising to 21 on 128 cores, shared with the corpus array's last
+  slice; the corpus run's own figures come from 128 concurrent tasks across 163 nodes. Both sides
+  are loaded, which is why the comparison is stated as a ratio and why the node-independent
+  same-process control is what the no-caching claim rests on.
 - **How many recordings the widened PII haystack keeps out of REDACT.** It can only be counted by
   running the replay; REDACT's 17,970 recordings and 326,405 s are an upper bound for the tip.
