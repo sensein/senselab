@@ -243,3 +243,9 @@ dist/
 
 # matplotlib's font cache — machine-local, and it was committed by accident once
 .matplotlib/
+
+# Sensitive: the compact recording vectors carry transcript text and marked PII extents.
+# Mode 600, never committed. See specs/20260922-compact-recording-vectors/schema.md.
+recording_vectors*.parquet
+recording_vectors*.report.json
+recording_vectors*.summary.json
