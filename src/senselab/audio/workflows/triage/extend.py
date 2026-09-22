@@ -10,7 +10,13 @@ old one with an invalidation edge, never a deletion. So is the outcome vocabular
 per derivation, and the rule separating a derivation that *cannot apply* from one that *failed* —
 :data:`UNAVAILABLE`, :class:`DerivationOutcome` and :func:`attempt_derivation`.
 
-See ``specs/20260912-extend-reprocessed-outputs/design.md``.
+:func:`replay_decisions` re-decides rather than adds: it retires every live decision the nodes from
+TAXONOMY on made, then runs them again over the PREPROCESS output the store already holds. It reads
+under :func:`replay_run_id` so that what it writes cannot collide with what it retires, and writes
+a marker :func:`find_replay_marker` reads to make a second pass a no-op.
+
+See ``specs/20260912-extend-reprocessed-outputs/design.md`` and
+``specs/20260922-replay-decisions-over-a-finished-corpus/design.md``.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
 from senselab.audio.tasks.classification.yamnet import SpanTooShortForYAMNet
 from senselab.audio.tasks.features_extraction.ppg import PpgsPosteriorgramUnavailable
@@ -34,8 +41,10 @@ from senselab.audio.workflows.triage.consensus import (
     word_attributes,
     word_from_attributes,
 )
+from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
+    capture_environments,
     describe_exception,
     find_branch_report,
     find_measurement,
@@ -58,11 +67,21 @@ from senselab.audio.workflows.triage.nodes.quality import (
     clip_spans,
     quality,
 )
+from senselab.audio.workflows.triage.nodes.report import report
 from senselab.audio.workflows.triage.nodes.taxonomy import NODE as TAXONOMY_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import _write_consensus_taxonomy
-from senselab.audio.workflows.triage.vocabulary import QUALITY
+from senselab.audio.workflows.triage.nodes.verdict import verdict
+from senselab.audio.workflows.triage.run import (
+    REPORT_NODE,
+    NodeOutcome,
+    _attempt,
+    _attempt_artifacts,
+    drive_decisions,
+)
+from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
 from senselab.utils.prov_store import ProvStore
+from senselab.utils.subprocess_venv import record_venv_use
 
 RUN_SUBDIR = "run"
 STORE_FILE = "store.jsonl"
@@ -84,6 +103,20 @@ ASR_MEASURE = "asr"
 
 SOURCE_STREAM = "recording"
 """The stream QUALITY's clip spans were detected on, and the one it names its findings about."""
+
+REPLAY_NODE = "REPLAY"
+"""The node name a replay's own activities carry: the retirements and the marker."""
+
+REPLAY_MARKER_STEP = "decisions_replayed"
+"""The step of the marker activity a replay writes last, carrying its config hash and commit."""
+
+DECISION_SUPERSEDED = "decision_superseded"
+"""The step of the activity retiring one decision a replay is about to make again."""
+
+REPLAYED_NODES: tuple[str, ...] = GRAPH_ORDER[GRAPH_ORDER.index(TAXONOMY_NODE) :]
+"""The nodes a replay re-runs: the graph from TAXONOMY on, PREPROCESS and ADMIT read off disk."""
+
+_DECISION_REASON = "the decision was replayed over this run's stored PREPROCESS output"
 
 _CLIP_SPAN_REASON = f"{CONTRADICTED_CLIP}: an unclipped sample is louder than this span's own level"
 _CLIP_AMPLITUDE_REASON = "its per-span levels name clip spans withdrawn as contradicted"
@@ -249,14 +282,16 @@ def run_root_of(stream_path: Path) -> Path:
     return parents[2]
 
 
-def read_store(run_root: Path) -> ProvStore:
-    """Read one run's store under the run's own id, so re-derived entity ids match the run's.
+def read_store(run_root: Path, *, run_id: str | None = None) -> ProvStore:
+    """Read one run's store, by default under the run's own id so re-derived ids match the run's.
 
     Args:
         run_root: The run root.
+        run_id: The id to read under. Defaults to the run root's own name. A replay passes
+            :func:`replay_run_id` so that what it writes takes ids of its own.
 
     Returns:
-        The store, with ``run_id`` set to the run root's own name.
+        The store.
 
     Raises:
         FileNotFoundError: If the run holds no store.
@@ -264,7 +299,7 @@ def read_store(run_root: Path) -> ProvStore:
     store_path = run_root / RUN_SUBDIR / STORE_FILE
     if not store_path.is_file():
         raise FileNotFoundError(f"no store at {store_path}")
-    return ProvStore.read_jsonl(store_path, run_id=run_root.name)
+    return ProvStore.read_jsonl(store_path, run_id=run_id if run_id is not None else run_root.name)
 
 
 def write_store(store: ProvStore, run_root: Path) -> Path:
@@ -473,6 +508,172 @@ def rebracket_words(store: ProvStore, config: TriageConfig) -> str | None:
         derived_from=(written,),
     )
     return written
+
+
+def replay_run_id(run_root: Path, config_hash: str) -> str:
+    """The run id a replay of this run under this configuration writes its own records under.
+
+    Args:
+        run_root: The finished run root.
+        config_hash: The replaying configuration's hash.
+
+    Returns:
+        The run id, distinct from the run root's own name and from any other configuration's.
+    """
+    return f"{run_root.name}+replay-{config_hash}"
+
+
+def find_replay_marker(store: ProvStore, config_hash: str) -> str | None:
+    """The marker a replay under this configuration already wrote into this store, if any.
+
+    Args:
+        store: The run's store.
+        config_hash: The replaying configuration's hash.
+
+    Returns:
+        The marker activity's id, or None when this store has not been replayed under it.
+    """
+    for activity in store.activities(REPLAY_NODE):
+        if activity.step == REPLAY_MARKER_STEP and activity.parameters.get("config_hash") == config_hash:
+            return activity.id
+    return None
+
+
+def live_decisions(store: ProvStore) -> list[str]:
+    """Every live entity one of the replayed nodes generated.
+
+    Args:
+        store: The run's store.
+
+    Returns:
+        The entity ids, in the store's own order.
+    """
+    found: list[str] = []
+    for entity in store.entities():
+        if store.is_invalidated(entity.id):
+            continue
+        activity_id = store.generated_by(entity.id)
+        if activity_id is None:
+            continue
+        try:
+            node = store.get_activity(activity_id).node
+        except KeyError:
+            continue
+        if node in REPLAYED_NODES:
+            found.append(entity.id)
+    return found
+
+
+def retire_decisions(store: ProvStore, entity_ids: Sequence[str], *, software: str) -> list[str]:
+    """Retire each decision a replay is about to supersede.
+
+    Args:
+        store: The run's store.
+        entity_ids: The entities to retire, as :func:`live_decisions` found them.
+        software: The software agent's id.
+
+    Returns:
+        The invalidating activities' ids.
+    """
+    return [
+        supersede(
+            store,
+            entity_id,
+            node=REPLAY_NODE,
+            step=DECISION_SUPERSEDED,
+            reason=_DECISION_REASON,
+            software=software,
+        )
+        for entity_id in entity_ids
+    ]
+
+
+@dataclass(frozen=True)
+class ReplayOutcome:
+    """What one replay did to one finished run.
+
+    Attributes:
+        retired: How many live decisions the replay superseded.
+        states: The run state of each replayed node, keyed by node name.
+        errors: The nodes that raised and what they raised, keyed by node name.
+        released: REDACT's released pair, empty unless it cleared one.
+        summary: REPORT's products, empty when REPORT itself raised.
+        marker: The marker activity's id.
+    """
+
+    retired: int
+    states: dict[str, str]
+    errors: dict[str, str]
+    released: dict[str, Path]
+    summary: dict[str, Path]
+    marker: str
+
+
+def replay_decisions(
+    store: ProvStore,
+    config: TriageConfig,
+    hint: AudioHints | None,
+    *,
+    run_dir: Path,
+    artifacts_dir: Path,
+    summary_dir: Path,
+    enrollment: Enrollment | None = None,
+    commit: str | None = None,
+) -> ReplayOutcome:
+    """Re-decide a finished run from TAXONOMY, over the PREPROCESS output its store already holds.
+
+    Retires every live decision a replayed node made, then runs TAXONOMY through REDACT, VERDICT and
+    REPORT against the store and the sidecars under ``run_dir``. The store must have been read under
+    :func:`replay_run_id`, so what the replay writes takes ids distinct from what it retires. The
+    caller persists the result with :func:`write_store` and :func:`export_prov`.
+
+    See ``specs/20260922-replay-decisions-over-a-finished-corpus/design.md``.
+
+    Args:
+        store: The finished run's store, read under :func:`replay_run_id`.
+        config: The replaying configuration.
+        hint: What the recording was declared to contain, rebuilt by the caller.
+        run_dir: The run directory sidecar paths resolve against. Must hold ``derivatives/`` and a
+            writable ``streams/``.
+        artifacts_dir: The release directory handed to REDACT.
+        summary_dir: Where REPORT's products go.
+        enrollment: The target speaker's enrollment, when the caller has one.
+        commit: The code revision the replay ran under, recorded on the marker.
+
+    Returns:
+        What the replay did, including the marker it wrote last.
+    """
+    software = software_agent(store)
+    retired = retire_decisions(store, live_decisions(store), software=software)
+    outcomes: dict[str, NodeOutcome] = {}
+    with record_venv_use() as used_venvs:
+        released = drive_decisions(
+            store,
+            config,
+            hint,
+            run_dir=run_dir,
+            artifacts_dir=artifacts_dir,
+            outcomes=outcomes,
+            enrollment=enrollment,
+        )
+        ran = {node: outcome.state for node, outcome in outcomes.items()}
+        _attempt(outcomes, "VERDICT", lambda: verdict(store, None, config, hint, run_dir=run_dir, ran=ran))
+    capture_environments(store, used_venvs)
+    summary = _attempt_artifacts(outcomes, REPORT_NODE, lambda: report(store, summary_dir, config, run_dir=run_dir))
+    marker = store.activity(
+        node=REPLAY_NODE,
+        step=REPLAY_MARKER_STEP,
+        parameters={"config_hash": config.config_hash, "commit": commit, "retired": len(retired)},
+    )
+    store.was_associated_with(marker, software)
+    return ReplayOutcome(
+        retired=len(retired),
+        states={node: outcome.state.value for node, outcome in outcomes.items()},
+        errors={node: outcome.error for node, outcome in outcomes.items() if outcome.error is not None},
+        released=dict(released),
+        summary=dict(summary),
+        marker=marker,
+    )
 
 
 def extend_quality(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> BranchResult | None:
