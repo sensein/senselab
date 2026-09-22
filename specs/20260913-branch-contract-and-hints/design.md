@@ -33,52 +33,66 @@ VERDICT      Admit/reject, flag for human review, durable description.
 
 ### The nodes this does not place
 
-`GRAPH_ORDER` has ten entries (`vocabulary.py:14-25`) and **contains neither REPORT nor FIGURE** —
-`REPORT_NODE` is defined at `run.py:44` and concatenated onto the outcome list at `:453`; FIGURE's
-name exists only at `figure.py:44`. Of the non-branch nodes it does contain: ADMIT runs before
-PREPROCESS; **QUALITY is not terminal** — REDACT runs after it (`run.py:311-317`); and **REDACT is
-its own `GRAPH_ORDER` entry gated on SPEECH's result**, not a step of SPEECH. REPORT and FIGURE
-re-read a finished store. All keep their current positions.
+`GRAPH_ORDER` has ten entries (`vocabulary.py:16-27`) and **contains neither REPORT nor FIGURE** —
+`REPORT_NODE` is defined at `run.py:49` and concatenated onto the outcome list at `:432`; FIGURE's
+name exists only at `figure.py:52`. Of the non-branch nodes it does contain: ADMIT runs before
+PREPROCESS; **QUALITY is not terminal** — REDACT runs after it (`run.py:301-309`); and **REDACT is
+its own `GRAPH_ORDER` entry gated on SPEECH's result** (`run.py:302`), not a step of SPEECH. REPORT
+and FIGURE re-read a finished store. All keep their current positions.
 
 **QUALITY is the sharp case, and it decides the scope of the verbs.** QUALITY writes `contest`
-assertions over PREPROCESS's clip spans (`quality.py`, the clip-consistency check) — one of the
-contract's own verbs, performed by a node that is not a branch. So **the verbs are store-wide, not branch-only**:
+assertions over PREPROCESS's clip spans (`quality.py:273-290`, via `CONTEST_VERB` at `:46`) — one of
+the contract's own verbs, performed by a node that is not a branch. So **the verbs are store-wide,
+not branch-only**:
 any node may label, contest, refine, trim or propose, and the contract below says how, regardless of
 who performs it. What is branch-specific is the *family* the findings are written under and the
-question the node concludes on.
+question the node reports on.
+
+**Since 2026-09-21 a branch no longer concludes at all**, which moves the second half of that
+sentence. A branch returns a `BranchReport` carrying no outcome and no conformance
+(`vocabulary.py:201-228`), and VERDICT applies the declared task group's gates to the branch's own
+`measure` findings to reach one (`verdict.py:10-14`, `gate_conformance` at `:433`). Everything
+below that places a threshold, a gate or an `Outcome` inside a branch is describing the graph
+before that change; where the difference matters the passage says so.
 
 ### The merge reverses a decision made the same day
 
-`specs/20260912-ruleset-in-pipeline/design.md:367-370` — landed hours before this spec — kept
+`specs/20260912-ruleset-in-pipeline/design.md:379-391` — landed hours before this spec — kept
 TAXONOMY and ROUTING as two nodes, on the argument that TAXONOMY emits measurements and ROUTING
-emits decisions, and that the L1-measures/L2-decides boundary is worth a node boundary.
+emits decisions, and that the L1-measures/L2-decides boundary is worth a node boundary. That
+document still records the merge as unimplemented and the two nodes as standing (`:390-391`), which
+the tree confirms: `GRAPH_ORDER` carries both names and no `SCREEN`.
 
 The owner reversed it: **the middle stage's product is the routing decision.** The consolidation
 exists to serve it. A node whose output nothing acts on is a seam, not a layer.
 
 That premise was checked against the tree and holds more strongly than earlier drafts of this spec
 claimed. **`consensus_taxonomy` has exactly one production consumer: routing's own reduction**
-(`features.py:755`). The only other reader is `extend.py:330 rewrite_consensus_taxonomy`, which
-recomputes it rather than consuming it. `figure.py:603-617` reads `<classifier>_label_summary` — a
-*different* TAXONOMY measurement — and never the consensus. `report.py:425,484-487` reads
+(`features.py:756`). The only other reader is `extend.py:326 rewrite_consensus_taxonomy`, which
+recomputes it rather than consuming it. `figure.py:619` reads `<classifier>_label_summary` — a
+*different* TAXONOMY measurement — and never the consensus. `report.py:510,528` reads
 PREPROCESS's `<classifier>_windows` and neither the consensus nor the summaries.
 
 **One argument previously made here is withdrawn as unsound.** That `evaluate_live_routes` serialises
-the whole store (`live_evidence.py:124-141`, called from `:162-168`) proves too much — VERDICT and
+the whole store (`live_evidence.py:135-153`, called from `:173-179`) proves too much — VERDICT and
 REPORT read the whole store too, and nobody proposes merging them — and it rests on stage 1
-scaffolding already scheduled for replacement by `reduce_records` over `required_sources(ruleset)`.
-The merge stands on one product, one stage, and the single verified consumer.
+scaffolding already scheduled for replacement by `reduce_records` over `required_sources(ruleset)`
+(`live_evidence.py:58`). The merge stands on one product, one stage, and the single verified
+consumer.
 
 ### What the merge costs, and what must be budgeted
 
 **Two node names retire, and node name is a join key.** `GRAPH_ORDER` contains `"TAXONOMY"` and
-`"routing"` (`vocabulary.py:14-25`); verdict entities, `run.json`, the figure and the report all join
+`"routing"` (`vocabulary.py:16-27`); verdict entities, `run.json`, the figure and the report all join
 on it, and every finished store carries activities with `node: "TAXONOMY"`.
 
-**`"routing"` is load-bearing beyond `GRAPH_ORDER`.** `vocabulary.py:113` defines
-`_ROUTING = "routing"`, read by the flag grounds at `:373` and `:384`, and `verdict.py:36,202` joins
-on it. Dropping it from the vocabulary stops the "routing failed" FLAG firing on pre-merge stores,
-silently — the same failure shape as the demoted consolidation flag above.
+**`"routing"` is load-bearing beyond `GRAPH_ORDER`.** `vocabulary.py:148` defines
+`_ROUTING = "routing"`, and it is the node the fold attributes five of its flag grounds to —
+"routing failed" (`:601-609`), the bad map values (`:610-612`), `unexplained` (`:615-616`),
+`unreadable` (`:617-618`) and the critical absence (`:619-625`). `verdict.py:163-181` orders the
+node verdicts it reads by `GRAPH_ORDER` and puts a name outside it last. Dropping `"routing"` from
+the vocabulary stops the "routing failed" FLAG firing on pre-merge stores, silently — the same
+failure shape as the demoted consolidation flag above.
 
 Stage 2's own audit states the governing rule — **the writer's vocabulary may shrink, the reader's
 may not** — and this is the same shape as the `kind` prov-type fix of 2026-09-13. So: SCREEN is the
@@ -88,16 +102,17 @@ readable set, as `prov_store_test.py::test_every_readable_entity_type_round_trip
 
 **An ordering constraint demotes back to intra-node.** Stage 2 promoted the
 `voice.glide` / `voice.chant` → `yamnet_label_summary` dependency from step ordering inside TAXONOMY
-to an edge in `GRAPH_ORDER` (`taxonomy.md:60-63`, ruleset `design.md:372-375`). Merging demotes it
+to an edge in `GRAPH_ORDER` (`taxonomy.md:85`, ruleset `design.md:395`); the two gates are still
+configured (`default.yaml:429`). Merging demotes it
 again. **The intra-node ordering test must return with the merge** — without it VOICE silently stops
 routing, which has already happened once.
 
 **Two verdicts become one, and it must fold both conclusions.** TAXONOMY and ROUTING each write one;
 `store.md` requires a node's verdict be attributed to its last step. An earlier revision demoted the
 consolidation's conclusion to a `detail` field — **that deletes a live FLAG ground.**
-`taxonomy.py:360` writes `Outcome.FLAG`, with the string at `:361`: "no per-span classifier produced scores; there was
-nothing to consolidate"; `vocabulary.py:423` folds on `outcome` and reads no `detail`; and
-`routing.py:263` writes `PASS` unconditionally. Demoting it would silently stop that flag firing.
+`taxonomy.py:350` writes `Outcome.FLAG`, with the string at `:351`: "no per-span classifier produced scores; there was
+nothing to consolidate"; `vocabulary.py:682` folds on `outcome` and reads no `detail`; and
+`routing.py:317` writes `PASS` unconditionally. Demoting it would silently stop that flag firing.
 
 **SCREEN's verdict flags if either conclusion flags**, and is attributed to the routing step as the
 stage's last.
@@ -106,9 +121,11 @@ stage's last.
 classifier produced scores" *more* common, so rule (a) grows the population this flag fires on. Both
 pieces must name the interaction.
 
-**Four documents assert the split and must be updated**, not only the one cited above:
+**Several documents assert the split and must be updated**, not only the one cited above:
 `taxonomy.md:27-29` ("a node that both measures content and decides what runs on it cannot be checked
-against itself"), `taxonomy.md:109-110`, `routing.md:16`, `dag.md:751-753`.
+against itself"), `routing.md:16` ("It measures nothing and classifies nothing"), and `dag.md:53`,
+`:73-75`, `:89`, `:102`, `:154`, `:164`, which name TAXONOMY and `routing` as separate nodes in the
+runner's order, the diagram and the skip rules.
 
 ---
 
