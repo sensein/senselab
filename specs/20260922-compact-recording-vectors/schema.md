@@ -315,3 +315,34 @@ with `considered`, `written`, `incomplete`, `unreadable`, `superseded` and `anom
 being measurement names the store carried that this schema has no column for. The merge writes
 `recording_vectors.parquet` (mode 600) and `recording_vectors.summary.json`, which carries the
 per-column null counts.
+
+## Row groups: why 1024
+
+The first build wrote one row group for all 62,488 rows, which is pyarrow's default
+(`row_group_size` 1,048,576). Parquet's unit of skippable IO is the column chunk, and a column
+chunk is per row group, so a single row group means a reader wanting one recording's eight blob
+columns must read those columns *entire*. Measured on that file: **79.9 MB to open one recording.**
+The viewer hid this behind decode caching, but it is 87% of the file for one row.
+
+Rewriting the same table at several row-group sizes, with `write_page_index=True` throughout, and
+costing the two reads the viewer actually performs — the ten axis columns over all rows at first
+paint, and the eight blob columns for one row on selection:
+
+| rows/group | groups | file MB | first paint MB | one selection MB |
+| ---: | ---: | ---: | ---: | ---: |
+| 512 | 123 | 100.8 | 1.47 | 0.65 |
+| **1024** | **62** | **97.3** | **1.33** | **1.29** |
+| 2048 | 31 | 95.9 | 1.23 | 2.60 |
+| 4096 | 16 | 94.1 | 0.96 | 5.23 |
+| 8192 | 8 | 93.1 | 0.72 | 10.49 |
+| 1048576 (default) | 1 | 91.3 | 0.46 | 79.91 |
+
+The two costs cross at 1024, which is what the writer uses. It is the right side of the trade for
+this page regardless of the crossing: first paint happens once and 1.33 MB is a third of the 4.06 MB
+that painted in 498 ms, while a selection is the interaction the reader repeats and falls **62×**.
+The file grows 6.6%, on a private local artefact.
+
+`write_page_index` is separate and additive: it writes the offset and column indexes, so a reader
+can seek within a chunk instead of decompressing from its start. It costs nothing measurable in
+file size and is what makes a narrow read narrow at page granularity rather than row-group
+granularity.

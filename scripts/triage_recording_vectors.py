@@ -28,6 +28,7 @@ SHARD_GLOB = "recording_vectors.*.parquet"
 MERGED_NAME = "recording_vectors.parquet"
 PRIVATE_FILE_MODE = 0o600
 COMPRESSION = "zstd"
+ROW_GROUP_SIZE = 1024
 
 
 def write_private(table: pa.Table, path: Path) -> int:
@@ -40,7 +41,7 @@ def write_private(table: pa.Table, path: Path) -> int:
     Returns:
         The file's size in bytes.
     """
-    pq.write_table(table, path, compression=COMPRESSION)
+    pq.write_table(table, path, compression=COMPRESSION, row_group_size=ROW_GROUP_SIZE, write_page_index=True)
     os.chmod(path, PRIVATE_FILE_MODE)
     return path.stat().st_size
 
