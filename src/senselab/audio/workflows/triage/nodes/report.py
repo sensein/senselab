@@ -81,6 +81,8 @@ _INITIAL_FILL = "#dbeafe"
 _PROPOSED_FILL = "#fde9c8"
 _PAIRED_LANE_HEIGHT_RATIO = 0.9
 _EVIDENCE_BRANCHES = (*BRANCHES, "REDACT")
+_EVIDENCE_ASSERTION_VERBS = frozenset({"deviate", "contest"})
+"""The assertion verbs :func:`_branch_evidence` renders: the typed findings ``write_findings`` writes."""
 _WORDS_LANE_LABEL = "consensus ASR"
 _TITLE_SEPARATOR = " · "
 _TASK_PREFIX = "task-"
@@ -1184,7 +1186,9 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
     """Compact audit evidence for each decision branch, with no raw transcript text.
 
     A ``word`` is represented only by the redacted transcript-token list built below, so no
-    matched text is copied here.
+    matched text is copied here. An ``assertion`` is carried when its verb is one of
+    :data:`_EVIDENCE_ASSERTION_VERBS`, rendered as ``<branch> <verb>: <type>`` beside its extent;
+    the per-word ``pii`` labels are the redacted transcript's business and are not carried.
     """
     by_branch: dict[str, list[dict[str, Any]]] = {branch: [] for branch in _EVIDENCE_BRANCHES}
     for entity in store.entities():
@@ -1199,14 +1203,15 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
             continue
         if entity.prov_type not in {"span", "measurement", "assertion"}:
             continue
-        if entity.prov_type == "assertion" and branch != "AIRWAY":
+        verb = str(entity.attributes.get("verb") or "")
+        if entity.prov_type == "assertion" and verb not in _EVIDENCE_ASSERTION_VERBS:
             continue
         description = str(entity.attributes.get("name") or entity.attributes.get("family") or entity.prov_type)
-        if branch == "AIRWAY" and entity.prov_type == "span":
-            description = f"airway span: {_airway_span_label(entity)}"
-        elif branch == "AIRWAY" and entity.prov_type == "assertion":
+        if entity.prov_type == "assertion":
             claim = entity.attributes.get("deviation_type") or entity.attributes.get("claim")
-            description = f"airway {entity.attributes.get('verb')}: {claim}"
+            description = f"{branch.lower()} {verb}: {claim}"
+        elif branch == "AIRWAY" and entity.prov_type == "span":
+            description = f"airway span: {_airway_span_label(entity)}"
         elif branch == "VOICE" and entity.prov_type == "span":
             description = f"voice span: {_voice_span_label(entity)}"
         elif branch == "REDACT" and entity.prov_type == "span":
