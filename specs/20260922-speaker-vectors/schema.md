@@ -1,6 +1,6 @@
 # `speaker_vectors.parquet` — the schema a reader decodes against
 
-One row per speaker. `schema_version` 1, carried twice: as an `int32` column on every row and as
+One row per speaker. `schema_version` 2, carried twice: as an `int32` column on every row and as
 arrow metadata `senselab.speaker_vectors.schema_version`. No column changes without this file
 changing with it.
 
@@ -43,7 +43,7 @@ assumptions about how they are laid out.
 | `unresolved_reason` | `string` | Why the sha is null. Non-null exactly when the sha is null. |
 | `method` | `string` | The pooling rule, `recording_equal_spherical_mean`: windows → extent centroid → recording centroid → speaker vector. Measured against the one-stage window-weighted alternative in `design.md` D-7; the recording rather than the extent is the unit for the reason in D-9. |
 | `window_s`, `hop_s` | `float64` | The window grid, 2.0 and 1.0. |
-| `schema_version` | `int32` | 1. |
+| `schema_version` | `int32` | 2. |
 | `corpus_root` | `string` | The tree the extents were read from — which matters, because the replay moves task extent. |
 
 ### Counts a reader needs to weight a row
@@ -127,8 +127,13 @@ that wrote no row exits 1.
 The report is not decoration. It carries `subjects_without_extent` and `subjects_all_refused`
 separately — nothing to embed and everything below the floor are different facts about a speaker
 — plus `recordings_seen`, `recordings_with_extent`, `recordings_unreadable`, `extents_admitted`,
-`extents_refused_short`, `extents_missing_audio` and `subjects_failed`. A thin result must never
-be mistaken for a clean one.
+`extents_refused_short`, `extents_refused_family`, `extents_missing_audio` and `subjects_failed`.
+A thin result must never be mistaken for a clean one.
+
+`extents_refused_family` is a mapping from the refused family to its count, and on this corpus it
+is the largest refusal by far: only `speech` extents are embedded (`design.md` D-10), so every
+`airway` and `voice` extent a recording minted appears here. A shard whose `extents_admitted` is
+far below its `recordings_with_extent` is reporting family composition, not a fault.
 
 ## Running it
 
