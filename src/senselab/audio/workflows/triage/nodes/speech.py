@@ -1997,8 +1997,10 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     # Step 5b — the separated streams read back: which source holds which frame of the task
     # extent, which diarized label each source is, and the run one source holds alone. Every
     # number is arithmetic over the sources' own energy; nothing here reaches a conclusion.
-    localisation: Any = "not_separated" if not separated_ids else "no_task_extent"
     frame_s = params.point("smoothing_window_s")
+    localisation: Any = (
+        "not_separated" if not separated_ids else "no_frame_width" if frame_s is None else "no_task_extent"
+    )
     if separated_ids and task_extents and frame_s is not None:
         localise_act = store.activity(
             node=NODE,
