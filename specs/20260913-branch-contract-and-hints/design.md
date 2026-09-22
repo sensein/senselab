@@ -905,11 +905,17 @@ flag is a question this contract reopens rather than answers.
 
 **Background-typed gap spans are not contestable, and the reason is the verb's object, not the
 evidence.** A gap span carries real branch-readable evidence — gaps are appended to `span_ids`
-(`preprocess.py:1596`) and the per-span classifiers run over them, which is why 143 of 384 consensus
+(`preprocess.py:2031`) and the per-span classifiers run over them, which is why 143 of 384 consensus
 rows traced to gaps in the 2026-09-07 measurement — a figure that predates its own fix, per
 Corrections below, and is cited here only for the mechanism it demonstrates. So "no evidence within the extent" is not automatically true of a gap. What is
 true is that `contest` carries *that a span does not carry what was proposed*, and **a gap proposes
 nothing**, so a contest over one has no object.
+
+AIRWAY's shipped criterion respects that without being told to: `decided_label_sets`
+(`airway.py:430-454`) is what a contest needs, and a gap carrying no decided label set never
+reaches `contest` (`:1088-1089`). A gap **is** read, though — as an `off_task_extent` deviation
+when no proposed span covers it (`branches.py:1535-1554`), which is the "measured and visible" half
+of the typing this section asks for, already written.
 
 **DDK is not a branch: it was dissolved into SPEECH, and a DDK recording now routes SPEECH.** This
 spec was written while DDK was a fourth branch with no node; that is no longer the shape.
@@ -1045,38 +1051,45 @@ finding.
 
 ### Whole-file diarization as a shared derivative
 
-Today SPEECH runs pyannote itself, over `(min word start, max word end)` — the lexical word hull
-(`speech.py:642-646`). It cannot see a speaker outside that hull, which is where an interrupting
-voice or a background talker lives.
+When this was written, SPEECH ran pyannote itself over `(min word start, max word end)` — the
+lexical word hull. It could not see a speaker outside that hull, which is where an interrupting
+voice or a background talker lives. **Both halves of this section have since landed**; what each
+one settled is marked below.
 
 Move it to PREPROCESS, whole-file, in the same shape as the PPG extension:
 
 - **Every branch gets it.** A cough from a second person in a respiration recording is an airway
   finding AIRWAY has no way to notice today.
 - **`speaker_count` becomes available for every task.**
-- **SPEECH's diarize step becomes a read — owner decision, 2026-09-15**: *"speech should not have
-  to rerun pyannote to do this, just take the output and use it."* SPEECH does not run pyannote; it
-  reads the shared derivative. `speech.second_diarizer` (`data/config/default.yaml:189`, null, so
-  `second_record` stays `"not_consulted"` at `speech.py:684-685`) becomes a question about that
-  derivative rather than about SPEECH's own pass. This is a behaviour change to a shipped branch, not
-  a pure addition, and it is **owed a code change**: removing SPEECH's diarizer run and replacing it
-  with a read.
+- **SPEECH's diarize step becomes a read — owner decision, 2026-09-15; landed.** *"speech should not
+  have to rerun pyannote to do this, just take the output and use it."* SPEECH runs no diarizer of
+  its own: its docstring says so (`speech.py:8-10`) and `_read_diarization` (`speech.py:164-192`)
+  takes the first configured stream that has a `<stream>_diarization` measurement.
+  `speech.second_diarizer` (`data/config/default.yaml:236`) is still null, so the corroborator at
+  `speech.py:1649` never runs and `second_record` stays `"not_consulted"` (`speech.py:1631`,
+  `:1482`); it is now a question about the shared derivative rather than about a pass of SPEECH's
+  own.
 
-**The migration gains coverage rather than trading it, which is why the decision costs nothing to
-take.** SPEECH's own run is scoped to `(min word start, max word end)` — the lexical word hull,
-computed at `speech.py:642-645` under the step comment at `:641` that says as much — so a speaker who
-talks before the participant starts, after they stop, or inside a pause falls outside the interval
-and cannot be found at all. A whole-file derivative has no hull. The branch's own account of the
+**The migration gained coverage rather than trading it, which is why the decision cost nothing to
+take.** SPEECH's own run was scoped to `(min word start, max word end)` — the lexical word hull — so
+a speaker who
+talks before the participant starts, after they stop, or inside a pause fell outside the interval
+and could not be found at all. A whole-file derivative has no hull. The branch's own account of the
 defect is at [`../20260817-triage-workflow-dag/branch-speech.md`](../20260817-triage-workflow-dag/branch-speech.md)
 § *S5 — Speaker count*.
 
-**It lands together with the `attribute` → `refine`/`propose` migration** of § *`refine` covers
-metadata as well as extent*: both touch SPEECH's speaker handling and the same assertions — step 6's
-word→speaker attribution (`speech.py:774-798`) consumes the `speaker_segments` the shared derivative
-would now supply.
+**It landed together with the `attribute` migration** of § *`refine` covers
+metadata as well as extent*: both touched SPEECH's speaker handling, and the word→speaker
+attribution that consumed the segments is now stamped on the proposed span rather than written as
+a per-word assertion.
 
-**The streams are `enhanced` and `residual`, decided by the owner on 2026-09-15. No pilot is owed,
-and the question that would have needed one does not arise.**
+**The streams were `enhanced` and `residual`, decided by the owner on 2026-09-15; the packaged
+config narrowed to `[enhanced]` on 2026-09-20.** No pilot was owed, and the question that would
+have needed one did not arise. What narrowed it is a reader, not a reconsideration: `diarization.streams`
+is `[enhanced]` (`default.yaml:220`) because *"SPEECH reads the first configured stream that has one
+and nothing else in the graph reads any, so a second stream is computed and never read"*
+(`default.yaml:216-219`). The argument below for why both halves are wanted is unchanged and
+unimplemented; what it now needs is a consumer for the residual count, not a decision.
 
 The objection that held this open was that the derivative exists to catch a quiet background talker
 and enhancement suppresses exactly that. The owner's resolution: **enhancement does not destroy that
@@ -1085,11 +1098,11 @@ single speaker and the suppressed voice is in `residual` — where it can be ana
 is lost, so there is nothing to trade off and nothing to pilot.
 
 This costs no new plumbing, because `residual` is already first-class: `residual = plain - g*enhanced`,
-lag-aligned and gain-fitted (`../../src/senselab/audio/workflows/triage/nodes/preprocess.py:2323`),
-written with its own stream entity whenever that block runs (`:2393-2402`), already classified as
-`residual_yamnet_scores` / `residual_ast_scores` / `residual_hear_scores`, and already read by the
-ruleset — `airway.breath` is `[residual, energy_fraction]` (`data/config/default.yaml:270`) and
-`residual|yamnet` sits in `peak_streams` at `:246`.
+lag-aligned and gain-fitted (`../../src/senselab/audio/workflows/triage/nodes/preprocess.py:2822-2829`),
+written with its own stream entity whenever that block runs (`:2884-2897`), already classified
+beside `enhanced`, and already read by the
+ruleset — `airway.breath` is `[residual, energy_fraction]` (`data/config/default.yaml:459`) and
+`residual|yamnet` sits in `peak_streams` at `:435`.
 
 The two halves answer different questions and both are wanted:
 
@@ -1120,12 +1133,17 @@ speaker detection is that it runs on raw for that reason. The owner's resolution
 
 Enhancement **partitions** the recording rather than destroying what it removes, and the residual is
 already first-class here — computed, lag-aligned, gain-fitted, written as its own stream, already
-classified beside `enhanced`, already read by the ruleset. So `diarization.streams` is
+classified beside `enhanced`, already read by the ruleset. So `diarization.streams` was set to
 `[enhanced, residual]`: the enhanced half says how many voices survived enhancement, the residual
 half says whether one was removed, **the two counts are never summed**, and a disagreement between
 them is itself the finding. **No pilot is owed.** The derivation is in
 [`../20260817-triage-workflow-dag/config-derivations.md`](../20260817-triage-workflow-dag/config-derivations.md)'s
 `diarization` section.
+
+**Narrowed to `[enhanced]` on 2026-09-20**, after the corpus run showed the residual pass had no
+reader (`default.yaml:216-220`). The reasoning above is not withdrawn — it says what a residual
+count would be *for* — but the finding it describes is not being taken today, because nothing
+compares the two counts. Restoring the second stream is a reader's job, not a config change.
 
 The claim that pyannote is reliable at the single/multi-speaker distinction is **uncited** and is
 still not relied on here; `benchmarks/diarization.md` and `benchmarks/glides-diarization.md` are in
@@ -1136,16 +1154,15 @@ this tree and the corpus pass should be read against them.
 **Landed 2026-09-15.** PREPROCESS's `diarization` block writes one measurement per stream, and
 `scripts/extend_diarization.py` adds them to the stores that already exist.
 
-**What this section still asks for and the change deliberately does not do.** The owner has since
-directed that *"speech should not have to rerun pyannote to do this, just take the output and use
-it"* — so SPEECH's own pass over the word hull (`speech.py:642-646`) is going away and this
-derivative becomes the only diarization in the graph. That read-swap is **not** in this change,
-because it is a behaviour change to a shipped branch: exactly what SPEECH reads today, what the
-migration gains, and the three consequences it must handle are enumerated in
+**The read-swap this section then owed has also landed.** SPEECH's own pass over the word hull is
+gone; `_read_diarization` (`speech.py:164-192`) takes the first configured stream that carries a
+`<stream>_diarization` measurement, and this derivative is the only diarization in the graph. What
+SPEECH must read, and the consequences the migration had to handle, are enumerated in
 [`../20260915-preprocess-diarization/design.md`](../20260915-preprocess-diarization/design.md)'s
-"What SPEECH must read". `speech.second_diarizer` is untouched and becomes a question about the
-shared derivative. The multi-voice *judgement* is likewise absent by design — PREPROCESS measures,
-branches refine their task spans, QUALITY judges against those refined spans after every branch.
+"What SPEECH must read". `speech.second_diarizer` is untouched and is now a question about the
+shared derivative. The multi-voice *judgement* is still absent by design — PREPROCESS measures
+only, takes no multi-voice decision and gates nothing, and the recording-level judgement is
+QUALITY's, taken after the branches have run (`default.yaml:208-212`).
 
 ### An extend driver runs a stage's work late
 
@@ -1167,26 +1184,40 @@ Three jobs:
 | job | source |
 | --- | --- |
 | **admit / reject** | ADMIT's failure (`unmeasurable`); the ruleset's `empty` state (`acoustically_empty`); branch findings that the content is unusable |
-| **flag for human review** | route-vs-finding mismatch; `unexplained` route state; the existing grounds at `vocabulary.py:364-405` |
+| **flag for human review** | route-vs-finding mismatch; `unexplained` route state; the existing grounds at `vocabulary.py:592-663` |
 | **describe for the record** | branch findings, `consensus_taxonomy`, the declaration |
 
-**The existing precedence is ADMIT-fail → *any* FLAG → `empty` → pass** (`vocabulary.py:419-429`), so
-`acoustically_empty` discards only when nothing flagged; `verdict.md:135-140` records the additional
+**The existing precedence is ADMIT-fail → *any* FLAG → `empty` → pass** (`vocabulary.py:676-688`), so
+`acoustically_empty` discards only when nothing flagged; `verdict.md:250` records the additional
 condition that no hint claims otherwise. The table above is not a replacement for that ordering.
 
-**The description job requires VERDICT to read more of the store than it does.** Its docstring says it
-holds every node's `verdict` entity, ROUTING's `branch_decision`s and its `ruleset_routing`, and that
-"this node reads nothing else" (`verdict.py:218-220`). Reading branch findings and the consensus
-taxonomy is a deliberate widening of that contract. **The smallest defensible choice: VERDICT does
-not widen.** The description is assembled by REPORT, and VERDICT's `detail` carries the identifiers a
-reader follows.
+**A fourth job arrived after this table was written, and it is the largest.** VERDICT decides the
+declared task's conformance: `gate_conformance` (`verdict.py:433`) resolves the declared family's
+task group from `verdict.gates`, reads each gate's input off the **branch's own `measure` findings**,
+and substitutes the answer onto the report of the branch that owns the family and reported
+`in_family` (`verdict.py:10-14`). Bounds resolve most-specific-first — `by_family`, then `by_group`,
+then `default`, a family overriding its group **key by key** (`default.yaml:317-326`) — and a layer
+naming no value for a gate does not apply it. Every gate applied is recorded on the verdict, in
+`FileVerdict.gates` (`vocabulary.py:366-367`, `:389`), so the conformance can be read backwards.
+This is why a branch carries no outcome: the threshold that turns a reading into a judgement about
+the recording is here and nowhere else (`default.yaml:297-299`).
+
+**The description job requires VERDICT to read more of the store than it did.** Its docstring said
+it held every node's `verdict` entity, ROUTING's `branch_decision`s and its `ruleset_routing`, and
+that "this node reads nothing else". That contract is already widened, though by the gates rather
+than by the description: VERDICT now also reads the branch reports (`verdict.py:184-196`), the spans
+each branch proposed (`:199`), the declared expectation (`:333`) and each gate's reading off the
+branch's `measure` findings (`gate_readings`, `:350`). **The smallest defensible choice stands: the
+*description* is assembled by REPORT**, and VERDICT's `detail` carries the identifiers a reader
+follows.
 
 **REPORT does not read the whole store either, and an earlier revision claimed it did.** It reads
 spans and measurements across branches — including SPEECH's and VOICE's spans, which have their own
-arms at `report.py:1130-1139` — but `report.py:1127` drops every assertion whose branch is not AIRWAY,
-and `figure.py:577-578` reads assertions only where `name == "squim"`. Under the annotating contract
-that means **the four annotating verbs' output reaches no reader** outside AIRWAY. Widening REPORT's
-assertion read is a prerequisite for the description job, and is listed as its own piece below. Whether the durable description should
+arms at `report.py:1205-1215` — but `report.py:1202` drops every assertion whose branch is not
+AIRWAY, and `figure.py:583` reads assertions only where `name == "squim"`. That means **every
+`deviate` and `contest` assertion SPEECH and VOICE write reaches no reader**. Widening REPORT's
+assertion read is a prerequisite for the description job, and is listed as its own piece below.
+Whether the durable description should
 instead be its own entity written by VERDICT is **unresolved**.
 
 **A deviation does not drive a reject**, and for now does not drive a flag either. Whether a
