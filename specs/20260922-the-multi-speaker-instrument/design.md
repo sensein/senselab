@@ -171,7 +171,10 @@ take.
 `specs/20260817-triage-workflow-dag/config-derivations.md` § verdict.gates.**
 
 What the corpus scan can say, over the 62,392 recordings of the replayed run at
-`/orcd/scratch/bcs/002/satra/triage_replay_20260922/out/`:
+`/orcd/scratch/bcs/002/satra/triage_replay_20260922/out/` (the scan is
+`/orcd/scratch/bcs/002/satra/msinstr_20260922/scripts/scan_trigger.py`, array job 23477727, which
+reads each recording's `summary.json` and its `enhanced_diarization` sidecar and recomputes the
+share against the task extent — no inference, nothing written to the replayed tree):
 
 | | |
 | --- | --- |
@@ -215,17 +218,45 @@ whose task extent holds more than one diarized speaker. Everything below is the 
 bill, and the instrument is off by default (`speech.separation_backend` ships null).
 
 22.22 hours of audio over 2,305 recordings — mean 34.7 s, median 24.7 s — every time the corpus is
-processed with `speech.separation_backend` set. Per-recording CPU cost is measured by
-`msinstr-sep` (job 23478224 on `mit_preemptable`), timing MossFormer2_SS_16K on a sample of the
-corpus's own enhanced streams; multiply its median wall-seconds-per-audio-second by 22.22 h for the
-corpus figure.
+processed with `speech.separation_backend` set.
+
+`msinstr-sep` (job 23478224 on `mit_preemptable`, 4 cores, CPU-only) timed MossFormer2_SS_16K
+through `separate_audios` on the corpus's own enhanced streams, one call per recording, which is
+how the branch calls it. Over six recordings spanning 4.4 s to 27.6 s the cost is linear in audio
+length with a large constant, and the fit is tight — every residual under 2 s:
+
+```
+wall_seconds = 19.6 + 5.36 x audio_seconds
+```
+
+| audio | measured | fit |
+| --- | --- | --- |
+| 4.4 s | 43.4 s | 43.4 |
+| 4.5 s | 42.6 s | 43.5 |
+| 4.6 s | 46.7 s | 44.3 |
+| 7.5 s | 58.8 s | 60.1 |
+| 8.1 s | 62.5 s | 63.0 |
+| 27.6 s | 168.0 s | 167.8 |
+
+A seventh, first, recording took 405 s because it paid for creating the `clearvoice` subprocess
+venv; that is once per host, not once per recording, and is excluded from the fit.
+
+Applied to the 2,305 recordings the trigger fires on: **12.6 CPU-hours of fixed per-call cost plus
+119.1 of marginal, about 132 CPU-hours** for one pass over the corpus. Around 5.4x realtime on
+four cores.
+
+The ~20 s constant is subprocess start, torch import and checkpoint load, paid once per call
+because the graph runs one recording at a time and `separate_audios` is handed a list of one.
+`separate_audios` takes a list, so the constant is amortisable in principle — but not by anything
+inside the branch as the graph is structured, so it is a real 12.6 hours and not an avoidable one
+without a change nobody has asked for.
 
 **A cheaper trigger is available and is not taken here.** Narrowing the trigger from "whole-file
-speakers > 1" to "within-extent speakers > 1" would drop 260 of the 2,305 firings, an 11.3%
-saving, and would skip exactly the recordings where the second speaker never touches the task —
-which are also the recordings the gate will pass. The owner specified the whole-file trigger
-explicitly, so it stands; the number is recorded here so the trade is visible rather than
-rediscovered.
+speakers > 1" to "within-extent speakers > 1" would drop 260 of the 2,305 firings — an 11.3%
+saving, about 15 CPU-hours — and would skip exactly the recordings where the second speaker never
+touches the task, which are also the recordings the gate will pass. The owner specified the
+whole-file trigger explicitly, so it stands; the number is recorded here so the trade is visible
+rather than rediscovered.
 
 ## Tests
 
