@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>recording vectors — corpus and recording</title>
+<!--@BUILD@-->
+<style>
+/*@INLINE:styles.css@*/
+</style>
+</head>
+<body>
+
+<div id="landing">
+  <h1>recording vectors</h1>
+  <p>Two views over <code>recording_vectors.parquet</code>, schema_version 1: a parallel-coordinate
+  view of the corpus where each line is one recording, and a recording view drawn from that
+  recording's compact vectors.</p>
+  <div class="caution">
+    <b>This page renders transcript text and detected PII in place.</b> It reads a file you hand it
+    from your own disk; nothing is uploaded, fetched or stored. Open it from <code>file://</code>,
+    for your own viewing, and do not host it.
+  </div>
+  <label class="pick">choose recording_vectors.parquet…<input id="picker" type="file" accept=".parquet"></label>
+  <p style="font-size:11px">…or drop the file anywhere on this page.</p>
+  <p style="font-size:11px">
+    <label><input id="cache-toggle" type="checkbox" checked> keep decoded binary blocks in memory
+    after the first recording is opened (about 250&nbsp;MB for 62,000 rows; makes every later
+    selection instant)</label>
+  </p>
+  <p id="status" class="status"></p>
+</div>
+
+<div id="main" hidden>
+
+  <div class="topbar">
+    <h1>recording vectors</h1>
+    <span id="file-info"></span>
+    <span class="grow"></span>
+    <span id="status-2" class="status"></span>
+  </div>
+
+  <div class="controls">
+    <label>colour by <select id="colour-by"></select></label>
+    <label>line opacity
+      <input id="opacity" type="range" min="0" max="120" value="0" step="1">
+      <span id="opacity-label">auto</span>
+    </label>
+    <label><input id="stubs" type="checkbox" checked> draw absent stubs</label>
+    <button id="clear-brushes">clear brushes</button>
+    <button id="reset-axes">reset axes</button>
+    <span id="legend"></span>
+  </div>
+
+  <div id="axis-rail"></div>
+
+  <div id="pc-wrap">
+    <canvas id="pc"></canvas>
+    <canvas id="pc-overlay"></canvas>
+  </div>
+
+  <div class="underbar">
+    <span id="selcount"></span>
+    <span id="hoverinfo"></span>
+    <span class="grow"></span>
+    <span id="warm" hidden></span>
+  </div>
+
+  <p class="explain" style="padding:0 16px">
+    <b>Null is absent, not zero.</b> A line is broken wherever its value on an axis is null; the
+    dashed stubs run to the <b>absent rail</b> below the break, which carries a count and never a
+    position. <b>A categorical axis is ordered categories</b>, not a number line.
+    <b>An <code>m_&lt;name&gt;</code> axis is a mean</b> of <code>m_&lt;name&gt;_n</code> readings,
+    and its caption says how many rows fold more than one. Vectors and matrices are listed in the
+    axis picker but disabled, with the reason on the option.
+  </p>
+
+  <div class="columns">
+    <div id="list"></div>
+    <div id="rec-panel" hidden>
+      <div id="rec-head">
+        <h2 style="margin:0">recording</h2>
+        <span id="rec-title"></span>
+        <span id="rec-timing"></span>
+      </div>
+      <div id="rec-loading" hidden></div>
+      <div id="rec-nostream" hidden></div>
+      <canvas id="rec-canvas"></canvas>
+      <div class="rec-grid">
+        <div>
+          <h2>decision record</h2>
+          <dl id="rec-decision" class="record"></dl>
+        </div>
+        <div>
+          <h2>transcript, with PII marked in place</h2>
+          <div id="rec-transcript-note" class="note"></div>
+          <div id="rec-transcript"></div>
+          <h2 style="margin-top:16px">measurements</h2>
+          <table class="measures">
+            <thead><tr><th>name</th><th>value</th><th>_n</th><th>what the column is</th></tr></thead>
+            <tbody id="rec-measures"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/*@INLINE:vendor/hyparquet-1.31.1-fzstd-0.1.1.bundle.js@*/
+</script>
+<script>
+/*@INLINE:decode.js@*/
+</script>
+<script>
+/*@INLINE:axes.js@*/
+</script>
+<script>
+/*@INLINE:corpus.js@*/
+</script>
+<script>
+/*@INLINE:recording.js@*/
+</script>
+<script>
+/*@INLINE:app.js@*/
+</script>
+</body>
+</html>

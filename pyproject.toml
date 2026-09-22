@@ -247,6 +247,8 @@ line-ending = "auto"
 skip = [
   "uv.lock",
   "docs_style/pdoc-theme/syntax-highlighting.css",
+  "src/senselab/audio/workflows/triage/viewer/vendor/*.js",
+  "src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html",
   "*.cha",
   "*.ipynb"
 ]

@@ -82,7 +82,10 @@ repos:
     # empted are fragments of identifiers codespell splits; disjointness, declaring, meaned,
     # retuned and unparseable are ordinary words it reads as misspellings; probablistic appears
     # only inside a quoted instruction, where correcting it would misquote the speaker.
-    args: [--skip=*.ipynb, --ignore-words-list, 'AER,FPR,PASE,preemptable,caf,als,UNDET,UNX,NotIn,FigureStyle,allk,empt,empted,disjointness,declaring,meaned,retuned,re-declaring,pre-empt,pre-empted,unparseable,probablistic']
+    # The vendored parquet reader and the page that inlines it are minified JavaScript, whose
+    # short identifiers codespell reads as misspelt words. Skipped whole, as the pdoc theme's
+    # generated CSS already is; the parts they are built from are checked normally.
+    args: [--skip=*.ipynb, --skip=src/senselab/audio/workflows/triage/viewer/vendor/*.js, --skip=src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html, --ignore-words-list, 'AER,FPR,PASE,preemptable,caf,als,UNDET,UNX,NotIn,FigureStyle,allk,empt,empted,disjointness,declaring,meaned,retuned,re-declaring,pre-empt,pre-empted,unparseable,probablistic']
     additional_dependencies:
     - tomli
 - repo: local
