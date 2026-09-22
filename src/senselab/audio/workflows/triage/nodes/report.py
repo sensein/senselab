@@ -60,7 +60,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "REPORT"
 SUMMARY_STEM = "summary"
 FORMATS = ("png", "pdf")
-REPORT_SCHEMA_VERSION = "triage-summary/v7"
+REPORT_SCHEMA_VERSION = "triage-summary/v8"
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
@@ -81,6 +81,8 @@ _INITIAL_FILL = "#dbeafe"
 _PROPOSED_FILL = "#fde9c8"
 _PAIRED_LANE_HEIGHT_RATIO = 0.9
 _EVIDENCE_BRANCHES = (*BRANCHES, "REDACT")
+_EVIDENCE_ASSERTION_VERBS = frozenset({"deviate", "contest"})
+"""The assertion verbs :func:`_branch_evidence` renders: the typed findings ``write_findings`` writes."""
 _WORDS_LANE_LABEL = "consensus ASR"
 _TITLE_SEPARATOR = " · "
 _TASK_PREFIX = "task-"
@@ -534,13 +536,10 @@ def _window_label_scores(window: Entity, *, raw: bool = False) -> dict[str, floa
 
     Args:
         window: A PREPROCESS classifier-window measurement.
-        raw: Return every model score retained for display. Falls back to the thresholded decision
-            subset for historical stores that predate ``raw_scores``.
+        raw: Return every model score retained for display, rather than the thresholded decision
+            subset.
     """
-    raw_scores = window.attributes.get("raw_scores" if raw else "scores")
-    if raw_scores is None and raw:
-        raw_scores = window.attributes.get("scores")
-    raw_scores = raw_scores or {}
+    raw_scores = window.attributes.get("raw_scores" if raw else "scores") or {}
     if not isinstance(raw_scores, dict):
         return {}
     labels = raw_scores if raw else {label: raw_scores[label] for label in window.attributes.get("labels") or []}
@@ -1184,7 +1183,9 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
     """Compact audit evidence for each decision branch, with no raw transcript text.
 
     A ``word`` is represented only by the redacted transcript-token list built below, so no
-    matched text is copied here.
+    matched text is copied here. An ``assertion`` is carried when its verb is one of
+    :data:`_EVIDENCE_ASSERTION_VERBS`, rendered as ``<branch> <verb>: <type>`` beside its extent;
+    the per-word ``pii`` labels are the redacted transcript's business and are not carried.
     """
     by_branch: dict[str, list[dict[str, Any]]] = {branch: [] for branch in _EVIDENCE_BRANCHES}
     for entity in store.entities():
@@ -1199,14 +1200,15 @@ def _branch_evidence(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
             continue
         if entity.prov_type not in {"span", "measurement", "assertion"}:
             continue
-        if entity.prov_type == "assertion" and branch != "AIRWAY":
+        verb = str(entity.attributes.get("verb") or "")
+        if entity.prov_type == "assertion" and verb not in _EVIDENCE_ASSERTION_VERBS:
             continue
         description = str(entity.attributes.get("name") or entity.attributes.get("family") or entity.prov_type)
-        if branch == "AIRWAY" and entity.prov_type == "span":
-            description = f"airway span: {_airway_span_label(entity)}"
-        elif branch == "AIRWAY" and entity.prov_type == "assertion":
+        if entity.prov_type == "assertion":
             claim = entity.attributes.get("deviation_type") or entity.attributes.get("claim")
-            description = f"airway {entity.attributes.get('verb')}: {claim}"
+            description = f"{branch.lower()} {verb}: {claim}"
+        elif branch == "AIRWAY" and entity.prov_type == "span":
+            description = f"airway span: {_airway_span_label(entity)}"
         elif branch == "VOICE" and entity.prov_type == "span":
             description = f"voice span: {_voice_span_label(entity)}"
         elif branch == "REDACT" and entity.prov_type == "span":
@@ -1393,10 +1395,8 @@ def _report_document(
             "summary": {"path": f"{SUMMARY_STEM}.{summary_format}", "format": summary_format},
             "json": {"path": f"{SUMMARY_STEM}.json", "format": "json", "schema_version": REPORT_SCHEMA_VERSION},
         },
-        # Legacy top-level duplicates of the structured blocks above.
-        "file": _file(store),
+        # Top-level fields no structured block above carries.
         "verdict": verdict,
-        "branches": branches,
         "steps": steps,
         "llm_check": _llm_reviews(store),
         "llm_annotation": _llm_annotation(store),
@@ -1759,7 +1759,7 @@ def _redact_line(redact: dict[str, Any] | None, *, prefix: str = "  ") -> str:
 def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C901 — evidence hierarchy is explicit
     """Render the detail page from the report object also written as JSON."""
     steps, verdict, provenance = document["steps"], document["verdict"], document["provenance"]
-    described, decisions, screening = document["file"], document["decisions"], document["screening"]
+    described, decisions, screening = document["recording"], document["decisions"], document["screening"]
     lines: list[str] = ["DECISION SUMMARY"]
     lines.append(
         f"  triage: {_shown(decisions['file_triage'])}   release: {_shown(decisions['release'])}   "
