@@ -32,10 +32,12 @@ from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY, EXPECT
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
+    find_measurements,
     software_agent,
     write_verdict,
 )
 from senselab.audio.workflows.triage.nodes.gates import (
+    AT_LEAST,
     DEFAULT_LAYER,
     FLAG_GATES,
     GATE_SECTION,
@@ -374,6 +376,37 @@ def gate_readings(store: ProvStore, names: Sequence[str]) -> dict[str, Any]:
     return readings
 
 
+def flag_gate_readings(store: ProvStore, names: Sequence[str]) -> dict[str, Any]:
+    """The worst reading each flag gate can be answered with, over every extent that carries one.
+
+    A branch mints one task extent per component, so a reading can be written more than once. A
+    flag gate asks whether the recording carries the circumstance anywhere, so the answer is the
+    reading that is hardest on it: the smallest for an ``at_least`` gate, the largest for an
+    ``at_most`` one.
+
+    Args:
+        store: The provenance store.
+        names: The gates whose readings to look for.
+
+    Returns:
+        Reading name to its worst value. A reading nothing live carries, and one written only as
+        null, is absent.
+    """
+    readings: dict[str, Any] = {}
+    for name in names:
+        spec = GATE_SPECS[name]
+        if spec.reading is None:
+            continue
+        values = [
+            float(measurement.attributes["value"])
+            for measurement in find_measurements(store, spec.reading)
+            if measurement.attributes.get("value") is not None
+        ]
+        if values:
+            readings[spec.reading] = min(values) if spec.op == AT_LEAST else max(values)
+    return readings
+
+
 def _gate_path(gate: AppliedGate) -> str:
     """Where a gate's bound was configured, as a dotted config path.
 
@@ -462,7 +495,7 @@ def gate_conformance(
     bounds = load_gate_bounds(config, expectation.pattern, declared_family)
     # The flag gates ask about the recording's circumstances, not about the instruction, so they
     # are applied whether or not the owning branch evaluated the task in family.
-    flagging = apply_flag_gates(bounds, gate_readings(store, tuple(FLAG_GATES)))
+    flagging = apply_flag_gates(bounds, flag_gate_readings(store, tuple(FLAG_GATES)))
     reported = next((report for report in reports if report.node == branch and report.in_family), None)
     if reported is None:
         return GateOutcome(branch, UNDETERMINED, bounds, (), tuple(flagging))

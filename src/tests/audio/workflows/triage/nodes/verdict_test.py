@@ -1309,6 +1309,27 @@ class TestAnotherSpeakerInsideTheTaskExtentIsAFlag:
         assert result.file_verdict.conformance["SPEECH"] is True
         assert "dominant_speaker_share_min" not in {entry["gate"] for entry in result.file_verdict.gates["applied"]}
 
+    def test_the_worst_task_extent_answers_the_gate_not_the_last_one_written(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A branch minting two task extents must not hide a second voice in the earlier one."""
+        store = self._store({"response_duration_s": 8.0})
+        agent = software_agent(store)
+        activity = store.activity(node="SPEECH", step="extents", parameters={})
+        store.was_associated_with(activity, agent)
+        for share in (0.4, 1.0):
+            entity = store.entity(
+                prov_type="measurement",
+                extent=None,
+                attributes={"name": self.READING, "value": share, "signal": "enhanced"},
+            )
+            store.was_generated_by(entity, activity)
+            store.was_attributed_to(entity, agent)
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        applied = {entry["gate"]: entry for entry in result.file_verdict.gates["flagging"]}
+        assert applied["dominant_speaker_share_min"]["value"] == 0.4
+        assert any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))
+
     def test_a_voice_task_carries_no_speaker_gate_at_all(self, config: TriageConfig, tmp_path: Path) -> None:
         """Source separation separates voices; a held vowel's group names no such gate."""
         store = self._store({self.READING: 0.1}, family="maximum-phonation-time")
