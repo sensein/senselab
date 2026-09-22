@@ -454,7 +454,8 @@ def diff_generations(before: Generation, after: Generation) -> dict[str, Any]:
     assertions = _counter_change(before.deviation_assertions, after.deviation_assertions)
     if assertions:
         body["deviation_assertions"] = assertions
-    body["identical"] = not (changed or grounds or reports or assertions or _pii_moved(body["pii"]))
+    decided_alike = (before.decision is None) == (after.decision is None)
+    body["identical"] = decided_alike and not (changed or grounds or reports or assertions or _pii_moved(body["pii"]))
     return body
 
 

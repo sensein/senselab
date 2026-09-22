@@ -24,7 +24,10 @@ from senselab.audio.workflows.triage.extend import (
 )
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.replay_diff import (
+    AMBIGUOUS,
+    NO_STORE,
     NOT_REPLAYED,
+    NOTHING_RETIRED,
     OK,
     aggregate,
     diff_run,
@@ -376,7 +379,35 @@ class TestUnreplayed:
 
     def test_a_missing_store_is_a_status(self, tmp_path: Path) -> None:
         """A run root the replay has not written yet reads as ``no_store``."""
-        assert diff_run(tmp_path, stem="sub-a")["status"] == "no_store"
+        assert diff_run(tmp_path, stem="sub-a")["status"] == NO_STORE
+
+    def test_a_run_that_decided_nothing_before_is_not_identical(self, tmp_path: Path) -> None:
+        """A corpus run that left no decision for the replay to retire reads against ``UNREAD``."""
+        first = ProvStore(run_id="run-a")
+        path = tmp_path / "store.jsonl"
+        first.write_jsonl(path)
+        store = ProvStore.read_jsonl(path, run_id="run-a+replay-cafe")
+        agent = software_agent(store)
+        _write_pass(store, _fold())
+        marker = store.activity(
+            node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={"config_hash": "cafe", "commit": None}
+        )
+        store.was_associated_with(marker, agent)
+        row = diff_store(store)
+        assert row["status"] == NOTHING_RETIRED
+        assert row["transitions"]["triage"] == "UNREAD->pass"
+        assert row["identical"] is False
+
+    def test_two_replays_are_ambiguous(self, tmp_path: Path) -> None:
+        """Retirements carry no pass of their own, so a twice-replayed store says so."""
+        store = _replayed(tmp_path, {"fold": _fold()}, {"fold": _fold()})
+        second = store.activity(
+            node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={"config_hash": "f00d", "commit": None}
+        )
+        store.was_associated_with(second, software_agent(store))
+        row = diff_store(store)
+        assert row["status"] == AMBIGUOUS
+        assert row["config_hash"] == ["cafe", "f00d"]
 
 
 class TestAggregate:
