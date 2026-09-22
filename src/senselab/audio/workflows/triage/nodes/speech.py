@@ -1762,18 +1762,30 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             if second_count != speaker_count:
                 notes.append(f"second diarizer counts {second_count} speakers against {speaker_count}")
 
-    # Step 5 — separation over the whole stream: measurement-gated, no backend selected by default.
+    # Step 5 — separation over the stream the speakers were counted on, which is the one
+    # `diarization.streams` names and `read.signal` records, not this branch's own `plain`.
     backend = config.get("speech.separation_backend")
     sound_class = config.get("speech.separation_sound_class")
     separation_state: Any
     separated: list[Audio] = []
-    stream_span = (0.0, plain.waveform.shape[-1] / sampling_rate)
+    separation_signal = None if read is None else read.signal
+    mixture_id: str | None = None
+    mixture: Audio | None = None
+    if read is not None and backend is not None and speaker_count is not None and speaker_count >= SEPARABLE_SOURCES:
+        try:
+            mixture_id, mixture = resolve_stream(store, run_dir, read.signal)
+        except LookupError:
+            mixture_id, mixture = None, None
+    stream_span = (0.0, 0.0) if mixture is None else (0.0, mixture.waveform.shape[-1] / mixture.sampling_rate)
     if speaker_count is None:
         separation_state = "no_speaker_count"
     elif speaker_count < SEPARABLE_SOURCES:
         separation_state = "not_needed"
     elif backend is None:
         separation_state = "not_selected"
+    elif mixture is None or mixture_id is None:
+        separation_state = f"signal_stream_absent:{separation_signal}"
+        notes.append(f"the speakers were counted on {separation_signal!r} and no such stream is in the store")
     elif speaker_count > SEPARABLE_SOURCES:
         separation_state = f"count_{speaker_count}_exceeds_backend"
         notes.append(f"separation cannot serve {speaker_count} speakers; the checkpoints separate exactly 2")
@@ -1790,7 +1802,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "source_classes": [str(sound_class)],
         }
         separated = separate_audios(
-            [plain],
+            [mixture],
             model=None,
             n_sources=SEPARABLE_SOURCES,
             mode="speech_sound",
@@ -1798,15 +1810,18 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         )[0]
     else:
         separator = _clearvoice_model(f"{CLEARVOICE_ORG}/{backend}")
-        separation_state = {"backend": str(backend), "n_sources": SEPARABLE_SOURCES}
-        separated = separate_audios([plain], model=separator, n_sources=SEPARABLE_SOURCES)[0]
+        separation_state = {"backend": str(backend), "n_sources": SEPARABLE_SOURCES, "signal": separation_signal}
+        separated = separate_audios([mixture], model=separator, n_sources=SEPARABLE_SOURCES)[0]
 
-    if separated:
+    separated_ids: list[str] = []
+    if separated and mixture_id is not None:
         separate_act = store.activity(
-            node=NODE, step="separate", parameters={"backend": str(backend), "extent": list(stream_span)}
+            node=NODE,
+            step="separate",
+            parameters={"backend": str(backend), "signal": separation_signal, "extent": list(stream_span)},
         )
         store.was_associated_with(separate_act, software)
-        store.used(separate_act, plain_id)
+        store.used(separate_act, mixture_id)
         for position, stream_audio in enumerate(separated):
             meta = dict(stream_audio.metadata.get("clearvoice") or {})
             index = int(meta.get("source_index", position))
@@ -1821,6 +1836,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     "channels": 1,
                     "source_index": index,
                     "backend": str(backend),
+                    "signal": separation_signal,
                     "input_norm_scalar": meta.get("input_norm_scalar"),
                     "separation_model": meta.get("model"),
                     "separation_commit": meta.get("commit"),
@@ -1829,8 +1845,9 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             )
             store.was_generated_by(stream_id, separate_act)
             store.was_attributed_to(stream_id, software)
-            store.was_derived_from(stream_id, plain_id)
+            store.was_derived_from(stream_id, mixture_id)
             view.append(stream_id)
+            separated_ids.append(stream_id)
 
     # Step 6 — identify: words to speakers by timing, and the target by enrollment. One proposed
     # span per contiguous run of words the diarization gives to the same speaker; no per-word

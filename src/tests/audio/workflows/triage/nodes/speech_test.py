@@ -1937,6 +1937,64 @@ class TestSeparationIsMeasurementGated:
         assert any("cannot serve 3" in note for note in notes)
 
 
+class TestTheMultiSpeakerInstrument:
+    """Separation fires where the speakers were counted, and localises them. It decides nothing.
+
+    The design is in ``specs/20260922-the-multi-speaker-instrument/design.md``.
+    """
+
+    CONFIG = "speech:\n  separation_backend: MossFormer2_SS_16K\n"
+
+    def _stream_id(self, store: ProvStore, name: str) -> str:
+        """One live stream entity's id, by name.
+
+        Args:
+            store: The store.
+            name: The stream's name.
+
+        Returns:
+            The entity id.
+        """
+        found = [e for e in live_entities(store, "stream") if e.attributes.get("name") == name]
+        assert found, f"no {name} stream was seeded"
+        return found[-1].id
+
+    def _separated(self, store: ProvStore) -> list[Entity]:
+        """The separated stream entities, by source index.
+
+        Args:
+            store: The store.
+
+        Returns:
+            The entities, ordered by source index.
+        """
+        return sorted(
+            (e for e in live_entities(store, "stream") if str(e.attributes.get("name", "")).startswith("separated")),
+            key=lambda e: int(e.attributes["source_index"]),
+        )
+
+    def test_separation_reads_the_stream_the_speakers_were_counted_on(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The count comes off `enhanced`; separating `plain` would decompose a different signal."""
+        config = _override(tmp_path, self.CONFIG)
+        _seed_speech_store(store, tmp_path, words=["hello", "world"], diarized=2)
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        _stub_separator(monkeypatch, sources=2)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        enhanced_id = self._stream_id(store, "enhanced")
+        plain_id = self._stream_id(store, "plain")
+        separated = self._separated(store)
+        assert separated, "the instrument wrote no separated stream"
+        for entity in separated:
+            assert enhanced_id in store.derived_from(entity.id)
+            assert plain_id not in store.derived_from(entity.id)
+            assert entity.attributes["signal"] == "enhanced"
+        activity_id = store.generated_by(separated[0].id)
+        assert activity_id is not None
+        assert enhanced_id in store.uses_of(activity_id)
+
+
 class TestPiiOnTheConsensus:
     """One scan, one text, and the decision is speaker-scoped while the redaction is not."""
 
