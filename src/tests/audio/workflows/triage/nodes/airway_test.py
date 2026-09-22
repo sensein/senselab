@@ -543,10 +543,10 @@ class TestACountedCoughFamilyProposesOneSpanPerEvent:
     def test_the_count_is_compared_against_the_instructions_own(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """The declared 5 comes from the ``Expectation`` table, never from a literal here."""
+        """The required 5 comes from the ``Expectation`` table, never from a literal here."""
         _five_coughs(store, tmp_path)
         airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert _counts(store)["expected_event_count"] == {"found": 5, "declared": 5}
+        assert _counts(store)["required_count"] == {"found": 5, "required": 5, "unit": "events"}
 
     def test_a_short_count_is_reported_beside_the_declaration_and_asserts_no_discrepancy(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -561,7 +561,7 @@ class TestACountedCoughFamilyProposesOneSpanPerEvent:
             envelope=bump(500, (150, 350)),
         )
         airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert _counts(store)["expected_event_count"] == {"found": 2, "declared": 5}
+        assert _counts(store)["required_count"] == {"found": 2, "required": 5, "unit": "events"}
         assert [a.attributes["deviation_type"] for a in _assertions(store, "deviate")] == []
 
     def test_the_verdict_counts_events_not_carriers(
@@ -596,7 +596,8 @@ class TestACountedCoughFamilyProposesOneSpanPerEvent:
         events = _events(store)
         assert task.extent == (events[0].extent[0], events[-1].extent[1])  # type: ignore[index]
         assert task.attributes["events_n"] == 5
-        assert task.attributes["declared_event_count"] == 5
+        assert task.attributes["required_count"] == 5
+        assert task.attributes["required_count_unit"] == "events"
 
     def test_each_event_carries_its_own_acoustic_descriptor_with_covariates(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -622,7 +623,7 @@ class TestACountedCoughFamilyProposesOneSpanPerEvent:
     def test_the_hardcough_family_declares_no_count_and_says_so(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """``v2-hardcough`` states no number, and absolute effort has no viable approach."""
+        """``v2-hardcough`` states no number, so no count is written against one."""
         _seed(
             store,
             tmp_path,
@@ -632,7 +633,10 @@ class TestACountedCoughFamilyProposesOneSpanPerEvent:
             envelope=bump(500, (250,)),
         )
         airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert _counts(store)["expected_event_count"] == {"found": 1, "declared": None}
+        assert "required_count" not in _counts(store)
+        assert find_measurements(store, "airway_events_found")[0].attributes["value"] == 1
+        [task] = _proposed(store, TASK_EXTENT)
+        assert (task.attributes["required_count"], task.attributes["required_count_unit"]) == (None, None)
         [effort] = [m for m in find_measurements(store, "effort_absolute")]
         assert effort.attributes["value"] == NOT_SEPARABLE_BY_THIS_DESIGN
 
@@ -733,7 +737,7 @@ class TestTheBreathFamiliesCountCyclesAndTimeThem:
         )
         airway(store, "plain", airway_config, run_dir=tmp_path)
         counts = _counts(store)
-        assert counts["expected_event_count"] == {"found": 3, "declared": 3}
+        assert counts["required_count"] == {"found": 3, "required": 3, "unit": "events"}
         assert counts["inter_onset_interval_s"]["found"] == pytest.approx([2.0, 2.0], abs=0.1)
         assert counts["intervals_over_p_interval_max_s"] == {"found": 2, "declared": 0}
 

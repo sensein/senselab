@@ -52,6 +52,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     content_coverage,
     contest,
     count,
+    count_against_instruction,
     declared_duration_count,
     derivative_arrays,
     deviation,
@@ -1073,14 +1074,9 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
     if expectation.connected:
         components.extend(_phrase_run_components(store, points, evidence))
 
-    if expectation.expected_event_count is not None:
+    if expectation.required_count is not None:
         findings.append(
-            count(
-                "expected_event_count",
-                len(matched),
-                expectation.expected_event_count,
-                *(word.id for _, word in matched),
-            )
+            count_against_instruction(expectation.required_count, len(matched), *(word.id for _, word in matched))
         )
     findings.append(measured(EXPECTED_TOKENS_MATCHED, None, None, len(matched), *evidence))
     findings.append(measured(EXPECTED_TOKENS_OMITTED, None, None, len(omissions), *evidence))

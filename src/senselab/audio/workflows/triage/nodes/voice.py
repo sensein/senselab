@@ -511,9 +511,7 @@ def _voice_sustained(
     qualification = qualifying_phonation(evidence, expectation, params)
     findings.extend(qualification.findings())
     carriers = sorted(qualification.carriers, key=lambda carrier: duration(carrier.span.extent), reverse=True)
-    findings.append(
-        count("attempt_count", len(carriers), expectation.expected_event_count, *(each.span.id for each in carriers))
-    )
+    findings.append(count("attempt_count", len(carriers), None, *(each.span.id for each in carriers)))
     if not carriers:
         return Result(components, findings)
 
