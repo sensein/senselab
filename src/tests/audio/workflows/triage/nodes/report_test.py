@@ -296,6 +296,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
                     "signal": "plain",
                     "labels": [label, *extra],
                     "scores": {name: 0.9 for name in (label, *extra)},
+                    "raw_scores": {name: 0.9 for name in (label, *extra)},
                 },
             )
             start += grid
@@ -591,7 +592,7 @@ class TestBothProductsAlways:
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         payload = json.loads(artifacts["json"].read_text())
         assert payload["verdict"]["triage"] == "discard"
-        assert payload["branches"] == {}
+        assert payload["routing"] == {}
         assert artifacts["summary"].exists()
 
     def test_a_store_holding_nothing_at_all_still_emits_both(self, store: ProvStore, tmp_path: Path) -> None:
@@ -652,7 +653,7 @@ class TestTheStructuredJsonCompanion:
         artifacts = report(store, tmp_path / "summary", pdf_config)
         payload = json.loads(artifacts["json"].read_text())
         assert artifacts["summary"].exists() and artifacts["json"].exists()
-        assert payload["schema_version"] == "triage-summary/v7"
+        assert payload["schema_version"] == "triage-summary/v8"
         assert payload["decisions"]["file_triage"] == payload["verdict"]["triage"]
         assert payload["decisions"]["release"] == payload["verdict"]["release"]
         assert payload["artifacts"]["summary"]["path"] == artifacts["summary"].name
@@ -1487,8 +1488,8 @@ class TestTheRefusalPage:
         _seed_report_store(store, tmp_path, admit_failed=True)
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         payload = json.loads(artifacts["json"].read_text())
-        assert payload["file"]["path"] is not None and payload["file"]["path"].endswith("refused.wav")
-        assert payload["file"]["duration_s"] is None
+        assert payload["recording"]["path"] is not None and payload["recording"]["path"].endswith("refused.wav")
+        assert payload["recording"]["duration_s"] is None
 
     def test_the_page_itself_carries_the_name_the_dash_and_the_reason(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

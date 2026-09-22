@@ -323,7 +323,7 @@ store. Detail: [`verdict.md`](verdict.md), `config-derivations.md` § verdict.
 ### REPORT — render only
 
 Writes two products into `summary/` and no store elements: `summary.json` (schema
-`triage-summary/v7`) and `summary.{png,pdf}`. JSON first, so a drawing failure still leaves a
+`triage-summary/v8`) and `summary.{png,pdf}`. JSON first, so a drawing failure still leaves a
 complete product. It writes no verdict — a rendering is not evidence — and its own failure changes no
 decision, because the store was already persisted. Detail: [`report.md`](report.md),
 [`summary-is-the-figure.md`](summary-is-the-figure.md), [`branch-figure.md`](branch-figure.md).
