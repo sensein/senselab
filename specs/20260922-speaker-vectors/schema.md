@@ -129,3 +129,27 @@ separately — nothing to embed and everything below the floor are different fac
 — plus `recordings_seen`, `recordings_with_extent`, `recordings_unreadable`, `extents_admitted`,
 `extents_refused_short`, `extents_missing_audio` and `subjects_failed`. A thin result must never
 be mistaken for a clean one.
+
+## Running it
+
+```bash
+# one shard
+uv run python scripts/triage_speaker_vectors.py CORPUS_ROOT --out DIR --slice N --slices 64
+# then, once every shard has written
+uv run python scripts/triage_speaker_vectors.py --merge DIR
+```
+
+`CORPUS_ROOT` is a tree of finished run directories. **For the production artefact it is the
+replayed tree**, `/orcd/scratch/bcs/002/satra/triage_replay_20260922/out`, because task extent is
+one of the things the replay moves; every measurement in `design.md` was taken on the design
+tree, which is the same shape and is what validated the reading path.
+
+The staged submission is `/orcd/scratch/bcs/002/satra/speaker_vectors_20260922/production.sbatch`
+(64 shards on `pi_satra`, output to `.../replay_vectors/`, checkout pinned by a commit check that
+exits 74 on a mismatch).
+
+**Submit it only after the replay array has finished every slice.** Sharding is by subject, so a
+subject whose recordings straddle a finished and an unfinished replay slice would be pooled from
+a partial supply — and the row would carry no sign of it, because `n_extents` would simply be
+smaller. There is no marker in the tree that distinguishes "this speaker had four extents" from
+"this speaker has four extents so far".
