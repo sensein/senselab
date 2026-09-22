@@ -70,6 +70,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     off_task,
     ordered_run,
     overlaps,
+    propose_span,
     propose_spans,
     stream_extent,
     touches_edge,
@@ -346,6 +347,133 @@ def _speakers_within(
         "extent_s": round(extent[1] - extent[0], 6),
         "share": (dominant / attributed) if attributed > 0.0 else None,
         "sources": sources,
+    }
+
+
+def _frame_rms(audio: Audio, frame_s: float) -> tuple[torch.Tensor, float]:
+    """One stream's energy over consecutive non-overlapping frames.
+
+    Args:
+        audio: The stream.
+        frame_s: The frame width, in seconds.
+
+    Returns:
+        The per-frame RMS and the realised frame width, which the sampling rate rounds.
+    """
+    rate = int(audio.sampling_rate)
+    width = max(1, int(round(frame_s * rate)))
+    samples = audio.waveform[0]
+    count = int(samples.shape[-1]) // width
+    if count == 0:
+        return torch.zeros(0), width / rate
+    return samples[: count * width].reshape(count, width).pow(2).mean(dim=1).sqrt(), width / rate
+
+
+def _inside(point: float, extents: Sequence[tuple[float, float]]) -> bool:
+    """Whether an instant falls in any of a set of extents.
+
+    Args:
+        point: The instant.
+        extents: The extents.
+
+    Returns:
+        True when one of them holds it.
+    """
+    return any(start <= point < end for start, end in extents)
+
+
+def _runs(owners: list[int | None], frame_s: float, offset: int) -> dict[int, list[tuple[float, float]]]:
+    """Contiguous runs of frames held by the same source, per source.
+
+    Args:
+        owners: One owner per frame, or None for a frame nothing holds.
+        frame_s: The frame width.
+        offset: The frame index the first entry stands for.
+
+    Returns:
+        Source index to its extents, earliest first.
+    """
+    spans: dict[int, list[tuple[float, float]]] = {}
+    start = 0
+    for position in range(len(owners) + 1):
+        if position < len(owners) and owners[position] == owners[start]:
+            continue
+        owner = owners[start]
+        if owner is not None:
+            spans.setdefault(owner, []).append(((offset + start) * frame_s, (offset + position) * frame_s))
+        start = position
+    return spans
+
+
+def _localise_sources(
+    extent: tuple[float, float],
+    separated: Sequence[Audio],
+    segments: list[tuple[str, str, tuple[float, float]]],
+    frame_s: float,
+) -> dict[str, Any]:
+    """Where each separated source is, inside one task extent.
+
+    Arithmetic over the sources' own energy: a frame belongs to whichever source is loudest on it,
+    and only frames the diarizer attributed to somebody are considered, so the denominator is the
+    same voice the whole-extent share is taken over.
+
+    Args:
+        extent: The task extent.
+        separated: The separated streams, in source order.
+        segments: ``(entity id, speaker label, extent)`` per diarized segment.
+        frame_s: The frame width the energy is taken over.
+
+    Returns:
+        ``sources``, one record per source carrying its ``active_s``, ``active_spans`` and the
+        diarized ``speaker`` it best matches; ``dominant_index``; ``secondary_s``; and ``solo``,
+        the dominant source's longest run, or None when it holds none.
+    """
+    energies = [_frame_rms(audio, frame_s) for audio in separated]
+    width = energies[0][1] if energies else frame_s
+    count = min((int(energy.shape[0]) for energy, _ in energies), default=0)
+    attributed = merge([span for _, _, span in segments])
+    first = int(extent[0] // width)
+    last = min(count, int(-(-extent[1] // width)))
+    owners: list[int | None] = []
+    for index in range(first, max(first, last)):
+        middle = (index + 0.5) * width
+        if not (extent[0] <= middle < extent[1]) or not _inside(middle, attributed):
+            owners.append(None)
+            continue
+        levels = [float(energy[index]) for energy, _ in energies]
+        owners.append(None if max(levels) <= 0.0 else int(max(range(len(levels)), key=lambda p: levels[p])))
+    spans = _runs(owners, width, first)
+
+    exclusive = {label: _exclusive_slices(label, segments) for label in sorted({label for _, label, _ in segments})}
+    sources: list[dict[str, Any]] = []
+    for position, (energy, _) in enumerate(energies):
+        held = spans.get(position, [])
+        by_label = {
+            label: sum(
+                float(energy[index])
+                for index in range(count)
+                if _inside((index + 0.5) * width, slices) and _inside((index + 0.5) * width, [extent])
+            )
+            for label, slices in exclusive.items()
+        }
+        loudest = max(by_label, key=lambda label: by_label[label]) if by_label else None
+        sources.append(
+            {
+                "source_index": position,
+                "active_s": round(sum(end - start for start, end in held), 6),
+                "active_spans": [[round(start, 6), round(end, 6)] for start, end in held],
+                "speaker": None if loudest is None or by_label[loudest] <= 0.0 else loudest,
+            }
+        )
+    if not sources:
+        return {"sources": [], "dominant_index": None, "secondary_s": 0.0, "solo": None}
+    dominant = max(sources, key=lambda record: record["active_s"])["source_index"]
+    held = spans.get(dominant, [])
+    return {
+        "sources": sources,
+        "dominant_index": dominant,
+        "secondary_s": round(sum(record["active_s"] for record in sources if record["source_index"] != dominant), 6),
+        "solo": max(held, key=lambda span: span[1] - span[0]) if held else None,
     }
 
 
@@ -714,6 +842,22 @@ Whole-file ``speaker_count`` cannot answer this: an interjection in the middle o
 inside the extent, and a prompt before it falls outside. See
 ``specs/20260922-speakers-within-the-task-extent/design.md``.
 """
+
+SOLO_EXTENT_ROLE = "solo_extent"
+"""The role of the span the multi-speaker instrument refines out of a task extent.
+
+The longest run inside the task extent over which one separated source holds every attributed
+frame. It is minted beside the task extent, never over it.
+"""
+
+LOCALISE_STEP = "localise_speakers"
+"""The step that reads the separated streams back and says where each source is."""
+
+EXTENT_SOURCE_ACTIVE_S = "extent_source_active_s"
+"""Per separated source, the seconds inside the task extent on which it holds the frame."""
+
+EXTENT_SECONDARY_SOURCE_S = "extent_secondary_source_s"
+"""The seconds inside the task extent that a source other than the largest one holds."""
 
 EXTENT_DOMINANT_SHARE = "extent_dominant_speaker_share"
 """The reading ``dominant_speaker_share_min`` is read against.
@@ -1547,6 +1691,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                 "pii": {"categories": [], "n": 0, "scanned_by": [], "failed": [], "missing": []},
                 "second_diarizer": "not_consulted",
                 "separation": "no_speaker_count",
+                "source_localisation": "not_separated",
                 "notes": notes,
             },
         )
@@ -1848,6 +1993,68 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             store.was_derived_from(stream_id, mixture_id)
             view.append(stream_id)
             separated_ids.append(stream_id)
+
+    # Step 5b — the separated streams read back: which source holds which frame of the task
+    # extent, which diarized label each source is, and the run one source holds alone. Every
+    # number is arithmetic over the sources' own energy; nothing here reaches a conclusion.
+    localisation: Any = "not_separated" if not separated_ids else "no_task_extent"
+    frame_s = params.point("smoothing_window_s")
+    if separated_ids and task_extents and frame_s is not None:
+        localise_act = store.activity(
+            node=NODE,
+            step=LOCALISE_STEP,
+            parameters={"signal": separation_signal, "frame_s": float(frame_s), "n_sources": len(separated_ids)},
+        )
+        store.was_associated_with(localise_act, software)
+        for separated_id in separated_ids:
+            store.used(localise_act, separated_id)
+        localised: list[dict[str, Any]] = []
+        for span_id, extent in task_extents:
+            store.used(localise_act, span_id)
+            reading = _localise_sources(extent, separated, speaker_segments, float(frame_s))
+            evidence = (span_id, *separated_ids)
+            source_findings = [
+                measured(
+                    EXTENT_SOURCE_ACTIVE_S,
+                    extent[0],
+                    extent[1],
+                    record["active_s"],
+                    *evidence,
+                    **record,
+                    dominant=record["source_index"] == reading["dominant_index"],
+                )
+                for record in reading["sources"]
+            ]
+            source_findings.append(
+                measured(
+                    EXTENT_SECONDARY_SOURCE_S,
+                    extent[0],
+                    extent[1],
+                    reading["secondary_s"],
+                    *evidence,
+                    dominant_index=reading["dominant_index"],
+                    speakers=[record["speaker"] for record in reading["sources"]],
+                    extent_s=round(extent[1] - extent[0], 6),
+                )
+            )
+            view.extend(write_findings(store, localise_act, software, source_findings, signal=str(separation_signal)))
+            if reading["solo"] is not None:
+                view.append(
+                    propose_span(
+                        store,
+                        localise_act,
+                        software,
+                        MINT(
+                            SOLO_EXTENT_ROLE,
+                            (float(reading["solo"][0]), float(reading["solo"][1])),
+                            *evidence,
+                            source_index=reading["dominant_index"],
+                            refines=span_id,
+                        ),
+                    )
+                )
+            localised.append(reading)
+        localisation = localised[0] if len(localised) == 1 else localised
 
     # Step 6 — identify: words to speakers by timing, and the target by enrollment. One proposed
     # span per contiguous run of words the diarization gives to the same speaker; no per-word
@@ -2237,6 +2444,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         },
         "second_diarizer": second_record,
         "separation": separation_state,
+        "source_localisation": localisation,
         "notes": notes,
     }
     if target_speaker is not None:
