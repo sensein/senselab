@@ -111,6 +111,8 @@ from senselab.utils.data_structures import HFModel, SpeechBrainModel
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "SPEECH"
+TASK_EXTENT_ROLE = "task_extent"
+"""The role that says where the declared task was performed. Exactly one may survive a recording."""
 ORIGINAL = "recording"  # the stream disruptions are measured on: as captured, unnormalised, unresampled
 DIARIZATION_DERIVATIVE = "diarization"
 """The stem of PREPROCESS's per-stream diarization measurement, ``<stream>_diarization``."""
@@ -304,6 +306,47 @@ def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
         True when they intersect.
     """
     return a[0] < b[1] and a[1] > b[0]
+
+
+def _speakers_within(
+    extent: tuple[float, float], segments: list[tuple[str, str, tuple[float, float]]]
+) -> dict[str, Any]:
+    """How the diarizer's speakers divide one task extent between them.
+
+    A reading, not a judgement: it names who holds seconds inside the extent and how many, and
+    reaches no conclusion about whether that is the task being performed correctly.
+
+    Args:
+        extent: The task extent.
+        segments: ``(entity_id, speaker label, extent)`` per diarized segment, on the same clock.
+
+    Returns:
+        The covariates, plus ``share`` -- the largest contributor's seconds over every attributed
+        second inside the extent, or ``None`` when no segment intersects it -- and ``sources``,
+        the ids the reading was taken off.
+    """
+    held: dict[str, float] = {}
+    sources: list[str] = []
+    for segment_id, label, (start, end) in segments:
+        overlap = min(extent[1], end) - max(extent[0], start)
+        if overlap <= 0.0:
+            continue
+        held[label] = held.get(label, 0.0) + overlap
+        sources.append(segment_id)
+    labels = sorted(held)
+    seconds = [held[label] for label in labels]
+    attributed = sum(seconds)
+    dominant = max(seconds) if seconds else 0.0
+    return {
+        "speaker_labels": labels,
+        "speaker_seconds": [round(value, 6) for value in seconds],
+        "attributed_s": round(attributed, 6),
+        "dominant_s": round(dominant, 6),
+        "secondary_s": round(attributed - dominant, 6),
+        "extent_s": round(extent[1] - extent[0], 6),
+        "share": (dominant / attributed) if attributed > 0.0 else None,
+        "sources": sources,
+    }
 
 
 def _author_node(store: ProvStore, entity_id: str) -> str | None:
@@ -664,6 +707,22 @@ RESPONSE_DURATION = "response_duration_s"
 ITEMS_PRODUCED = "items_produced"
 """The reading ``items_min`` is read against: how many items the list carried."""
 
+EXTENT_SPEAKER_COUNT = "extent_speaker_count"
+"""How many diarized speakers hold a segment intersecting the task extent.
+
+Whole-file ``speaker_count`` cannot answer this: an interjection in the middle of the task falls
+inside the extent, and a prompt before it falls outside. See
+``specs/20260922-speakers-within-the-task-extent/design.md``.
+"""
+
+EXTENT_DOMINANT_SHARE = "extent_dominant_speaker_share"
+"""The reading ``dominant_speaker_share_min`` is read against.
+
+The largest contributor's seconds inside the task extent over every attributed second inside it.
+``None`` when no diarized segment intersects the extent, and absent when PREPROCESS wrote no
+diarization derivative -- both of which a gate must turn into ``UNDETERMINED``, never ``False``.
+"""
+
 
 def stimulus_haystack(hint: AudioHints | None) -> str | None:
     """The recording's own declared prompts, normalised for a containment test.
@@ -1002,7 +1061,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
         if read_extent[1] > read_extent[0]:
             components.append(
                 MINT(
-                    "task_extent",
+                    TASK_EXTENT_ROLE,
                     read_extent,
                     *evidence,
                     *(word.id for _, word in matched),
@@ -1114,7 +1173,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
     components: list[Proposal] = []
     findings: list[Finding] = []
     if response is not None and response[1] > response[0] and evidence:
-        components.append(MINT("task_extent", response, *evidence, *word_ids, words_n=len(words)))
+        components.append(MINT(TASK_EXTENT_ROLE, response, *evidence, *word_ids, words_n=len(words)))
     if not _transcribed(store):
         findings.append(unviable("response", "no recognizer's hypothesis reached the consensus transcript"))
     else:
@@ -1249,7 +1308,7 @@ def _speech_item_list(
     if extent is not None and extent[1] > extent[0] and consensus_id is not None:
         components.append(
             MINT(
-                "task_extent",
+                TASK_EXTENT_ROLE,
                 extent,
                 consensus_id,
                 *(word.id for word in items),
@@ -1449,7 +1508,13 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             notes.append(NO_ENVELOPE)
         if reads.ppg is None:
             notes.append(NO_PPG)
-    view.extend(propose_spans(store, expect, software, result.components))
+    proposed_ids = propose_spans(store, expect, software, result.components)
+    view.extend(proposed_ids)
+    task_extents = [
+        (span_id, (proposal.start, proposal.end))
+        for span_id, proposal in zip(proposed_ids, result.components)
+        if proposal.role == TASK_EXTENT_ROLE
+    ]
     view.extend(write_findings(store, expect, software, expectation_findings, signal=source))
 
     if not lexical:
@@ -1468,6 +1533,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             detail={
                 "speaker_count": None,
                 "diarization": "no_words",
+                "extent_speakers": "no_task_extent",
                 "expectation": {
                     "mode": mode,
                     "task_family": declared_family,
@@ -1626,6 +1692,46 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             )
         if read.n_speakers != speaker_count:
             notes.append(f"the derivative records {read.n_speakers} speaker(s) and its segments carry {speaker_count}")
+
+    # Step 4b — who holds the task extent. `speaker_count` above is whole-file, so a prompt before
+    # the task raises it and an interjection inside the task does not distinguish itself from one.
+    # This reads the same segments against the extent the branch minted, and reaches no verdict.
+    extent_speakers: Any = "no_task_extent" if not task_extents else "derivative_absent"
+    if task_extents and read is not None:
+        within_act = store.activity(node=NODE, step="extent_speakers", parameters={"signal": read.signal})
+        store.was_associated_with(within_act, software)
+        store.used(within_act, read.measurement_id)
+        within_findings: list[Finding] = []
+        readings = []
+        for span_id, extent in task_extents:
+            reading = _speakers_within(extent, speaker_segments)
+            readings.append(reading)
+            covariates = {key: value for key, value in reading.items() if key not in ("share", "sources")}
+            evidence = (span_id, read.measurement_id, *reading["sources"])
+            within_findings.append(
+                measured(
+                    EXTENT_SPEAKER_COUNT,
+                    extent[0],
+                    extent[1],
+                    len(reading["speaker_labels"]),
+                    *evidence,
+                    **covariates,
+                    diarizer=read.model,
+                )
+            )
+            within_findings.append(
+                measured(
+                    EXTENT_DOMINANT_SHARE,
+                    extent[0],
+                    extent[1],
+                    reading["share"],
+                    *evidence,
+                    **covariates,
+                    diarizer=read.model,
+                )
+            )
+        view.extend(write_findings(store, within_act, software, within_findings, signal=read.signal))
+        extent_speakers = readings[0] if len(readings) == 1 else readings
 
     second = config.get("speech.second_diarizer")
     second_record: Any = "not_consulted"
@@ -2094,6 +2200,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     detail: dict[str, Any] = {
         "speaker_count": speaker_count,
         "diarization": diarization_state,
+        "extent_speakers": extent_speakers,
         "expectation": {
             "mode": mode,
             "task_family": declared_family,
