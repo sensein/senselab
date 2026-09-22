@@ -433,3 +433,12 @@ def test_a_subject_whose_estimate_raises_is_recorded_with_its_reason(
     assert report.subjects_written == 0
     assert "sub-boom" in report.subjects_failed
     assert "2 non-zero vectors" in report.subjects_failed["sub-boom"]
+
+
+def test_one_writer_of_a_duplicated_interval_surviving_keeps_the_extent(tmp_path: Path) -> None:
+    """The store writes the span twice; invalidating one copy must not drop the interval."""
+    run_root = build_recording(tmp_path, extents=((1.0, 9.0, "speech"),), duplicate_extent=True)
+    store = run_root / "run" / "store.jsonl"
+    store.write_text(store.read_text() + _relation("wasInvalidatedBy", "span-0", "activity-x") + "\n")
+    (extent,) = sv.read_task_extents(run_root)
+    assert (extent.start_s, extent.end_s) == (1.0, 9.0)
