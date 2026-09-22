@@ -131,3 +131,18 @@ store order; collapse a repeated measurement's count to one; read invalidated en
 `verdict` before `task`; drop the words from the ASR lane; drop the PII category.
 
 18/18 killed.
+
+## The suite
+
+60 new tests in `src/tests/audio/workflows/triage/recording_vectors_test.py`.
+`src/tests/audio/workflows/triage` goes from 2,215 to **2,275 passing**; the whole of `src/tests`
+is **5,950 passed, 69 skipped, 0 failed** (14 m 41 s, serial). `ruff format`, `ruff check` and
+`mypy` (cache purged) are clean. `soundfile` moves from a transitive dependency of `librosa` to a
+declared one, because the scan decodes conditioned streams with it directly; `uv lock --check`
+passes unchanged, since the lock already pinned it.
+
+Four of the tests are drift guards rather than behaviour tests: `SPAN_ROWS` and the measure→row
+map are asserted equal to `figure.py`'s own, the SQUIM ranges equal to `FigureStyle.squim_ranges`,
+the lane list equal to `BRANCHES + ("REDACT",)`, and the flag-outcome set equal to the literal
+`report.py` filters on. A byte enum that silently stops matching what the figure draws is the
+failure mode those exist for.
