@@ -1031,10 +1031,17 @@ no extent, and the section's own definition excludes them.
 They are written as a **per-branch `counts` measurement**, each entry carrying `found` and
 `declared`, the latter copied from the declaration. Not "beside the declaration", which an earlier
 draft said and which **cannot be built**: the declaration is SCREEN's, written at stage 2, while
-`expected_event_count`'s `found` half can only come from a branch at stage 3. (`speaker_count` would
+a declared count's `found` half can only come from a branch at stage 3. (`speaker_count` would
 fit there, since its `found` half comes from PREPROCESS's diarization at stage 1 — but splitting the
 two placements is worse than one rule.) A measurement rather than verdict `detail` because these are
 facts, not conclusions.
+
+**This is built as written.** `write_findings` folds every `count` finding into one `counts`
+measurement per branch, `{name: {found, declared, ...}}`, derived from the union of its entries'
+sources (`branches.py:470-473`, `:488-496`). The `declared` half is spelled by the count's own kind:
+`count` carries `declared` (`:275-287`), `count_against_instruction` carries `required` and the
+unit the instruction spoke it in (`:290-302`), and `count_beside_typical` carries `typical` with the
+spec path its median was measured in (`:305-322`). None of the three asserts a discrepancy.
 
 Earlier drafts called them `extra_speaker` and `missing_expected_event` and put them in the deviation
 table; both the names and the placement encoded a comparison the branch is not entitled to make.
@@ -1059,7 +1066,9 @@ finding.
 ### Read speech has the sharpest case
 
 `stimulus_text` is a reference transcript. Lexical words align against it — and the aligner exists:
-`consensus.py::align_sources` over `harmonize._align_pair`, specified in `transcript-alignment.md`.
+`consensus.py::align_sources` (`:276`) over `harmonize.align_pair`
+(`audio_analysis/harmonize.py:446`), specified in `transcript-alignment.md`; SPEECH reads it
+through `stimulus.align_stimulus` (`speech.py:107`).
 **Bracketed tokens are their own channel** — disfluency and non-speech, not transcript errors — so
 `[uh]` and `[breath]` never read as misread words.
 
@@ -1317,10 +1326,14 @@ blocking — at
 settled as required; the entity shape, and which span a reduced feature attributes its firing to, are
 not.
 
-**The writer/reader vocabulary rule deserves stating once.** This design retires three
+**The writer/reader vocabulary rule deserves stating once, and the case for stating it has
+strengthened.** This design retires three
 writer-vocabulary values with live readers: the `kind` entity type (done 2026-09-13), the node names
-`TAXONOMY` and `routing` (the merge), and the `phonation` span family (VOICE). Three instances of one
-rule, currently written as three special cases. **Recommendation: state it once in `store.md` as a
+`TAXONOMY` and `routing` (the merge, unbuilt), and the `phonation` span family (VOICE). The third
+has since happened, and the rule was not applied: VOICE writes `voice` and REPORT reads only
+`voice`, so a `phonation` span in a store written before the change reaches no reader. That is the
+failure this rule exists to prevent, arrived at by not having the rule written down anywhere a
+reader of `report.py` would find it. **Recommendation, unchanged: state it once in `store.md` as a
 general contract** — a writer may stop emitting a value, a reader may never stop accepting one — with
 the three instances as its examples. Not edited here; `store.md` is out of this spec's scope.
 
@@ -1344,10 +1357,15 @@ a *required* count may be gated at, once a tolerance is derived, is still open.
 
 **Whether a deviation is disqualifying**, per task.
 
-**`expected_event_count` and `speaker_count` owe ground truth** — recorded as observations, no
-discrepancy asserted.
+**The declared counts and `speaker_count` owe ground truth** — recorded as observations, no
+discrepancy asserted. `expected_event_count` is two fields now, `required_count` and
+`typical_count` (`branches.py:511-601`), and the second may never be gated at all; the first owes a
+tolerance before it can be.
 
-**Promoting the declaration's fields from `metadata` to typed `AudioHints` fields.**
+**Promoting the declaration's remaining fields from `metadata` to typed `AudioHints` fields.**
+`AudioHints` carries `targeted_speaker_count` and `expected_speech` as typed fields already
+(`audio_hints.py:149-154`); the seven acquisition and task-identity keys this spec's contract names
+have no typed home.
 
 **Whether background spans split around branch-proposed events**, or are merely superseded for that
 extent.
