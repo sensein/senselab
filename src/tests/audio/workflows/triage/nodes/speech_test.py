@@ -1415,6 +1415,198 @@ class TestAFreeResponseIsReadOffTheWords:
         assert unviable_reads, "the absence is written as a reading nobody could take"
 
 
+class TestTheSpeakersInsideTheTaskExtent:
+    """`speaker_count` is whole-file, so an interjection inside the extent was never measured.
+
+    The design is in ``specs/20260922-speakers-within-the-task-extent/design.md``. Every
+    assertion here is about a reading; nothing in this class asserts an outcome, because the
+    branch reports and VERDICT decides.
+    """
+
+    def _declared(self, family: str) -> AudioHints:
+        """A declaration naming one task family and nothing else.
+
+        Args:
+            family: The declared task family.
+
+        Returns:
+            The hints.
+        """
+        return AudioHints(metadata={"task_token": family})
+
+    def _readings(self, store: ProvStore) -> dict[str, Entity]:
+        """The two within-extent readings, by name.
+
+        Args:
+            store: The finished store.
+
+        Returns:
+            ``{reading name: measurement entity}`` for the readings this class is about.
+        """
+        found: dict[str, Entity] = {}
+        for name in (speech_module.EXTENT_SPEAKER_COUNT, speech_module.EXTENT_DOMINANT_SHARE):
+            entity = find_measurement(store, name)
+            if entity is not None:
+                found[name] = entity
+        return found
+
+    def test_one_speaker_across_the_extent_reads_a_share_of_one(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ordinary recording: one voice holds every attributed second of the task."""
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two", "three"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0), (3.0, 3.6)],
+            duration_s=5.0,
+            diarization=False,
+        )
+        _seed_diarization(store, tmp_path, [(1.0, 3.6, "SPEAKER_00")])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        readings = self._readings(store)
+        assert readings[speech_module.EXTENT_SPEAKER_COUNT].attributes["value"] == 1
+        assert readings[speech_module.EXTENT_DOMINANT_SHARE].attributes["value"] == pytest.approx(1.0)
+
+    def test_an_interjection_inside_the_extent_lowers_the_dominant_share(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gap this closes: a second voice in the middle of the task, invisible to the hull."""
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two", "three"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0), (3.0, 3.6)],
+            duration_s=5.0,
+            diarization=False,
+        )
+        # The participant holds 1.0-1.8 and 2.8-3.6; someone else holds 1.8-2.8, inside the hull.
+        _seed_diarization(
+            store,
+            tmp_path,
+            [(1.0, 1.8, "SPEAKER_00"), (1.8, 2.8, "SPEAKER_01"), (2.8, 3.6, "SPEAKER_00")],
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        readings = self._readings(store)
+        assert readings[speech_module.EXTENT_SPEAKER_COUNT].attributes["value"] == 2
+        # 1.6 s of 2.6 s attributed.
+        assert readings[speech_module.EXTENT_DOMINANT_SHARE].attributes["value"] == pytest.approx(1.6 / 2.6)
+
+    def test_a_second_speaker_wholly_outside_the_extent_does_not_move_the_reading(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This is the reading `speaker_count` cannot give: whole-file 2, within-extent 1."""
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two"],
+            word_extents=[(2.0, 2.4), (2.6, 3.0)],
+            duration_s=5.0,
+            diarization=False,
+        )
+        # An examiner prompt before the task, and the participant inside it.
+        _seed_diarization(store, tmp_path, [(0.2, 1.0, "SPEAKER_01"), (2.0, 3.0, "SPEAKER_00")])
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        assert _report_entity(store, "SPEECH").attributes["speaker_count"] == 2, "the whole file holds two"
+        readings = self._readings(store)
+        assert readings[speech_module.EXTENT_SPEAKER_COUNT].attributes["value"] == 1
+        assert readings[speech_module.EXTENT_DOMINANT_SHARE].attributes["value"] == pytest.approx(1.0)
+
+    def test_the_reading_names_the_seconds_each_speaker_holds(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A share alone cannot be checked; the covariates it was computed from ride with it."""
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two", "three"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0), (3.0, 3.6)],
+            duration_s=5.0,
+            diarization=False,
+        )
+        _seed_diarization(
+            store,
+            tmp_path,
+            [(1.0, 1.8, "SPEAKER_00"), (1.8, 2.8, "SPEAKER_01"), (2.8, 3.6, "SPEAKER_00")],
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        attributes = self._readings(store)[speech_module.EXTENT_DOMINANT_SHARE].attributes
+        assert attributes["speaker_labels"] == ["SPEAKER_00", "SPEAKER_01"]
+        assert attributes["speaker_seconds"] == pytest.approx([1.6, 1.0])
+        assert attributes["attributed_s"] == pytest.approx(2.6)
+        assert attributes["secondary_s"] == pytest.approx(1.0)
+        assert attributes["extent_s"] == pytest.approx(2.6)
+
+    def test_the_reading_is_absent_rather_than_guessed_when_no_derivative_was_written(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An absent reading must stay absent: a gate turns that into UNDETERMINED, never False."""
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0)],
+            duration_s=5.0,
+            diarization=False,
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        for name in (speech_module.EXTENT_SPEAKER_COUNT, speech_module.EXTENT_DOMINANT_SHARE):
+            entity = find_measurement(store, name)
+            assert entity is None or entity.attributes["value"] is None
+
+    def test_the_reading_does_not_depend_on_enrollment(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`nontarget_speech_s` is None across the corpus for want of a target; this is not."""
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two", "three"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0), (3.0, 3.6)],
+            duration_s=5.0,
+            diarization=False,
+        )
+        _seed_diarization(
+            store,
+            tmp_path,
+            [(1.0, 1.8, "SPEAKER_00"), (1.8, 2.8, "SPEAKER_01"), (2.8, 3.6, "SPEAKER_00")],
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path, enrollment=None)
+        report = _report_entity(store, "SPEECH")
+        assert report.attributes["nontarget_speech_s"] is None, "no enrollment, so the target axis is silent"
+        assert self._readings(store)[speech_module.EXTENT_DOMINANT_SHARE].attributes["value"] is not None
+
+    def test_the_reading_is_a_measurement_and_asserts_no_outcome(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A branch reports; VERDICT decides. Nothing here may carry a verdict or a threshold."""
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two", "three"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0), (3.0, 3.6)],
+            duration_s=5.0,
+            diarization=False,
+        )
+        _seed_diarization(
+            store,
+            tmp_path,
+            [(1.0, 1.8, "SPEAKER_00"), (1.8, 2.8, "SPEAKER_01"), (2.8, 3.6, "SPEAKER_00")],
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        result = speech(store, "plain", speech_config, self._declared("picture-description"), run_dir=tmp_path)
+        for entity in self._readings(store).values():
+            assert entity.prov_type == "measurement"
+            assert not {"conformance", "outcome", "bound", "threshold", "passed"} & set(entity.attributes)
+        assert result.report.conformance == UNDETERMINED
+
+
 class TestTheDiarizersReachPastTheDecode:
     """The corpus blocker: pyannote times its turns on a padded window's grid, not on the file's.
 
