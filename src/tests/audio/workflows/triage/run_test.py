@@ -592,7 +592,7 @@ class TestConditionalExecution:
 
     def test_the_branch_table_names_exactly_the_branches_the_vocabulary_declares(self) -> None:
         """A branch in the table the vocabulary does not name runs where nothing routed it."""
-        source = inspect.getsource(run_module._drive_branches)
+        source = inspect.getsource(run_module.drive_decisions)
         table = source.split("branches: dict[str, Callable[[], BranchResult]] = {", 1)[1].split("}", 1)[0]
         named = set(re.findall(r'"([A-Z]+)": lambda:', table))
         assert named == set(BRANCHES) == {"AIRWAY", "SPEECH", "VOICE"}
