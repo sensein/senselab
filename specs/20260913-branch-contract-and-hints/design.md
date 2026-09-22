@@ -297,17 +297,18 @@ exists to hold — is never carried at all.
 (`default.yaml:127`), and `_merge` refuses any key the packaged config lacks (`config.py:147-148`).
 
 **Its values would all be rejected even after renaming.** `_map_tags` casefolds the map's *keys*
-against the declared tags (`routing.py:102`) but tests the *value* against `BRANCHES` unchanged
-(`:107-108`). The override's values are lowercase kinds — `cough: airway` — and `BRANCHES` is
-`("AIRWAY", "SPEECH", "VOICE", "DDK")`.
+against the declared tags (`routing.py:115`) but tests the *value* against `BRANCHES` unchanged
+(`:121`). The override's values are lowercase kinds — `cough: airway`
+(`specs/20260817-triage-workflow-dag/runs/b2ai-v2/override.yaml:262`) — and `BRANCHES` is
+`("AIRWAY", "SPEECH", "VOICE")` (`vocabulary.py:33`).
 
 The mechanism matters for the fix. `bad_map_values` is keyed **by declared tag on the recording**,
-not by map entry (`routing.py:106-113`, recorded at `:234`), so a map entry no file declares never
+not by map entry (`routing.py:119-126`, recorded at `:278`), so a map entry no file declares never
 surfaces. The conclusion still holds — checked against every rule in `make_hints.py:136-182`, every
 corpus recording declares at least one tag the override maps — so **every file in the run** would
-take an `Outcome.FLAG` against ROUTING (`vocabulary.py:382-384`). This is a **value-case fix**;
-`routing.md:76-78` documents testing the value unchanged as deliberate, and that test is not the
-defect.
+take an `Outcome.FLAG` against ROUTING (`vocabulary.py:610-612`, the ground at `:150`). This is a
+**value-case fix**; `routing.md:76-78` documents testing the value unchanged as deliberate, and
+that test is not the defect.
 
 **A fourth, found by measurement rather than by reading: the null map makes the file verdict assert
 the opposite of the declaration.** Because every tag is unmapped, no decision carries `hint_tags`, so
@@ -892,9 +893,23 @@ Corrections below, and is cited here only for the mechanism it demonstrates. So 
 true is that `contest` carries *that a span does not carry what was proposed*, and **a gap proposes
 nothing**, so a contest over one has no object.
 
-**DDK has no node.** `nodes/ddk.py` does not exist. Since stage 2 the ruleset routes DDK, so a
-recording with DDK content receives a `branch_decision` with `will_run` true and is recorded
-`SKIPPED` with `NO_NODE` (`run.py:303-305`), which flags the file.
+**DDK is not a branch: it was dissolved into SPEECH, and a DDK recording now routes SPEECH.** This
+spec was written while DDK was a fourth branch with no node; that is no longer the shape.
+`BRANCHES` is `("AIRWAY", "SPEECH", "VOICE")` in both `vocabulary.py:33` and `branches.py:58`, and
+the ten `diadochokinesis-*` families are `SYLLABLE_REPETITION` (`families.py:18-31`), which
+`families.py:61` unions into `SPEECH_ELICITING`. So SPEECH holds 31 in-family rows —
+`LEXICAL_SPEECH`'s 21 plus those ten (`branches.py:759-856`) — and a recording declaring a DDK task
+is in-family for SPEECH, which takes its align mode.
+
+`nodes/ddk.py` does exist, and it is an instrument rather than a branch: its own docstring says so
+(`ddk.py:1-11`), and `speech.py:98-105` imports `align_ddk`, `read_ddk`, `syllable_detail` and the
+two absence constants from it. `align_speech` serves the ten families through `align_ddk`; every
+measurement it writes is a SPEECH measurement.
+
+**Nothing is `SKIPPED` with `NO_NODE` any more.** `NO_NODE` (`run.py:51`) is still written at
+`run.py:296`, but only for a branch the runner has no callable for, and the callable map at
+`run.py:288-292` covers all three of `BRANCHES` — so the arm is unreachable on the shipped graph.
+The claim that DDK routing flags the file no longer holds: there is no DDK route to flag.
 
 ---
 
@@ -913,12 +928,13 @@ an observation with an extent.
 column would flag the corpus — the exact failure stage 1 refused when it declined to let a
 default-uncertain kind line flag every recording.
 
-**That argument was derived over three types and now governs eleven, and it does not fit all of
+**That argument was derived over three types and now governs ten, and it does not fit all of
 them equally.** `filler`, `stimulus_mismatch`, `repeated_item` and `lexical_content` are ordinary on
-spontaneous or read speech and would flag the corpus. `truncation`, `omission`,
-`sweep_direction_mismatch` and `syllable_sequence_mismatch` are **not** ordinary — each says the
+spontaneous or read speech and would flag the corpus. `truncation`, `omission` and
+`sweep_direction_mismatch` are **not** ordinary — each says the
 production departed from what the instruction asked for, and each is a candidate flag ground once
-ground truth exists to set a rate against. `verdict.deviation_flags` stays `false` for all eleven,
+ground truth exists to set a rate against. `verdict.deviation_flags` stays `false`
+(`default.yaml:303`) for all ten,
 because no ground truth exists for any of them and a rule fitted to none is worse than a rule that
 flags none.
 
@@ -926,31 +942,44 @@ A per-type folding policy is the natural extension and is **deliberately not bui
 would read `false` today, which is a mechanism carrying no decision, and this graph does not ship an
 unmeasured decision. Build it with the first measured rate, not before.
 
-A deviation is an observation **with an extent**. Eleven qualify, declared in
-`nodes/branches.py`'s `DEVIATION_TYPES` and enforced at the write by `write_findings`:
+A deviation is an observation **with an extent**. Ten qualify, declared in
+`nodes/branches.py`'s `DEVIATION_TYPES` (`branches.py:115-126`) and enforced at the write by
+`write_findings` (`branches.py:453-458`). The branch column is the node whose activity generates
+the assertion, read off the emitting call sites:
 
 | type | what it says | branch |
 | --- | --- | --- |
-| `stimulus_mismatch` | a lexical word that is not the word the stimulus expected | SPEECH |
-| `filler` | a disfluency or non-speech token where the task expected lexical content | SPEECH |
-| `off_task_extent` | a region of the recording that does not serve the declared task | AIRWAY, SPEECH, shared |
-| `lexical_content` | a lexical word where the task expected none | VOICE |
-| `omission` | an expected token the recording does not realise | SPEECH, VOICE |
-| `repeat_attempt` | a further carrier where the task expected one production | VOICE |
-| `repeat_reading` | an alignment covering the expected sequence more than once | SPEECH |
-| `repeated_item` | an item repeated where the task expected each once | SPEECH |
-| `sweep_direction_mismatch` | a pitch sweep running against its declared direction | VOICE |
-| `syllable_sequence_mismatch` | a syllable whose place is not the one its cycle position expects | DDK |
-| `truncation` | a production the recording does not contain the end of | AIRWAY, DDK, SPEECH, VOICE |
+| `filler` | a disfluency or non-speech token where the task expected lexical content | SPEECH (`speech.py:1072`) |
+| `lexical_content` | a lexical word where the task expected none | VOICE (`voice.py:567`) |
+| `off_task_extent` | a region of the recording that does not serve the declared task | AIRWAY (`airway.py:563`, `:812`, and `off_task_findings` at `:821`, `:908`, `:995`) |
+| `omission` | an expected token the recording does not realise | SPEECH (`speech.py:1066`), VOICE (`voice.py:476`) |
+| `repeat_attempt` | a further carrier where the task expected one production | VOICE (`voice.py:560`) |
+| `repeat_reading` | an alignment covering the expected sequence more than once | SPEECH (`speech.py:1025`) |
+| `repeated_item` | an item repeated where the task expected each once | SPEECH (`speech.py:1244`) |
+| `stimulus_mismatch` | a lexical word that is not the word the stimulus expected | SPEECH (`speech.py:1040`, `:1054`, `:1177`) |
+| `sweep_direction_mismatch` | a pitch sweep running against its declared direction | VOICE (`voice.py:731`) |
+| `truncation` | a production the recording does not contain the end of | AIRWAY (`airway.py:809`), SPEECH (`speech.py:1016`, and `ddk.py:987` under SPEECH), VOICE (`voice.py:556`, `:742`) |
 
-**This table said "three" until 2026-09-16, while the branches emitted eleven.** Nothing validated
+No row names DDK, because DDK is not a branch: `ddk.py` runs inside SPEECH's activity, so the
+deviation it writes is SPEECH's. `off_task_extent`'s helper `off_task` lives in `branches.py:1535`
+and is shared by construction, but AIRWAY is the only caller, so the row names AIRWAY alone rather
+than "shared".
+
+**`syllable_sequence_mismatch` is no longer declared.** It was the eleventh row until its only
+writer went: a threshold on per-position posterior mass had no derivation, so the decode reports
+mass per position instead of asserting a mismatch. `ddk_test.py:1155-1157` asserts the absence
+deliberately, and `specs/20260817-triage-workflow-dag/ddk-template-decode.md:638` records why. It
+was also this section's fourth example of a "not ordinary" deviation, and the sentence above now
+carries three.
+
+**This table said "three" until 2026-09-16, while the branches emitted more.** Nothing validated
 the name at the write, so the vocabulary and the code drifted apart silently — and the three it
 named were a subset, not a mistake, which is why nothing ever failed. `write_findings` now refuses
-an undeclared name and `branches_test.py`'s AST sweep refuses a declared name nobody emits, so the
-two cannot part again in either direction.
+an undeclared name (`branches.py:453-458`) and `branches_test.py`'s AST sweep refuses a declared
+name nobody emits (`branches_test.py:1436-1444`), so the two cannot part again in either direction.
 
 The three named above are the three the folding argument below was actually derived over. The other
-eight inherited a justification written without them in view — see the note under that rule.
+seven inherited a justification written without them in view — see the note under that rule.
 
 **`speaker_count` and `expected_event_count` are not deviations** — they are file-level counts with
 no extent, and the section's own definition excludes them.
@@ -972,7 +1001,7 @@ A declaration used as a **condition for what to look for** is the contract's who
 declaration used as a **reference to score against** is what the ground-truth rule forbids, because
 the declaration is not verified.
 
-The three deviations are on the right side of it: each reports something observed in the audio,
+All ten declared types are on the right side of it: each reports something observed in the audio,
 located, with the declaration only saying where to look.
 
 **The two counts are what forced the line to be drawn.** As `missing_expected_event` and
