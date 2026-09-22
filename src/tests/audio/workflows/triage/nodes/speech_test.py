@@ -2105,6 +2105,17 @@ class TestTheMultiSpeakerInstrument:
         }
         assert authored <= {"measurement", "span"}, "no assertion, no verdict, no conformance"
 
+    def test_an_extent_past_the_shortest_separated_source_reads_empty_rather_than_raising(self) -> None:
+        """The separator may return a source shorter than the mixture, so the extent can miss it."""
+        short = [
+            Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000),
+            Audio(waveform=torch.zeros(1, 8000), sampling_rate=16000),
+        ]
+        reading = speech_module._localise_sources((3.0, 4.0), short, [("seg-0", "SPEAKER_00", (3.0, 4.0))], 0.05)
+        assert [record["active_s"] for record in reading["sources"]] == [0.0, 0.0]
+        assert reading["secondary_s"] == 0.0
+        assert reading["solo"] is None
+
     def _hint(self) -> AudioHints:
         """A declaration naming one lexical task.
 

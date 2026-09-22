@@ -208,6 +208,12 @@ placeholder chosen for its distance from a known artefact mode, not a fitted ope
 
 ## The bill
 
+**The gate costs nothing.** It reads `extent_dominant_speaker_share`, which SPEECH already writes
+from a derivative PREPROCESS already measured, so turning the gate on adds no inference to any
+recording. Over the corpus it would flag 613 recordings — 1.57% of SPEECH, and 30% of the 2,045
+whose task extent holds more than one diarized speaker. Everything below is the *instrument's*
+bill, and the instrument is off by default (`speech.separation_backend` ships null).
+
 22.22 hours of audio over 2,305 recordings — mean 34.7 s, median 24.7 s — every time the corpus is
 processed with `speech.separation_backend` set. Per-recording CPU cost is measured by
 `msinstr-sep` (job 23478224 on `mit_preemptable`), timing MossFormer2_SS_16K on a sample of the

@@ -394,6 +394,8 @@ def _runs(owners: list[int | None], frame_s: float, offset: int) -> dict[int, li
         Source index to its extents, earliest first.
     """
     spans: dict[int, list[tuple[float, float]]] = {}
+    if not owners:
+        return spans
     start = 0
     for position in range(len(owners) + 1):
         if position < len(owners) and owners[position] == owners[start]:
