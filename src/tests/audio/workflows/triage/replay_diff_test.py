@@ -424,6 +424,17 @@ class TestAggregate:
         assert "scanned before, not scanned now: 1" in rendered
         assert "`sub-c`" in rendered
 
+    def test_typed_findings_report_their_totals(self, tmp_path: Path) -> None:
+        """The assertions table names what each pass wrote, not only how many recordings moved."""
+        store = _replayed(
+            tmp_path,
+            {"fold": _fold(), "deviation_assertions": ("truncation",)},
+            {"fold": _fold(), "deviation_assertions": ("truncation", "truncation")},
+        )
+        report = aggregate([{**diff_store(store), "stem": "sub-a"}])
+        assert report.deviation_assertions["SPEECH"]["truncation"] == {"before": 1, "after": 2, "gained": 1}
+        assert "| `SPEECH` | `truncation` | 1 | 2 | 1 | 0 |" in render_markdown(report, tmp_path)
+
     def test_products_round_trip(self, tmp_path: Path) -> None:
         """Both products are written, and the JSON reads back as what was counted."""
         for name in "abc":
