@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from senselab.audio.workflows.triage.config import (
     UnknownConfigKey,
     load_triage_config,
 )
+from senselab.audio.workflows.triage.nodes import gates as gates_module
 from senselab.audio.workflows.triage.nodes.branches import (
     DETECT_GROUP,
     EXPECTATIONS,
@@ -433,6 +435,18 @@ class TestNoGateReadsACountNobodyGave:
         """A number the instruction spoke may be gated once a tolerance is derived."""
         assert REQUIRED_COUNT not in UNGATEABLE_READINGS
         assert _gate_specs({"required_min": GateSpec(REQUIRED_COUNT, AT_LEAST, int)})
+
+    def test_the_shipped_table_is_built_through_the_refusal(self) -> None:
+        """A table assigned around the factory would make the refusal unreachable."""
+        tree = ast.parse(Path(gates_module.__file__).read_text())
+        assigned = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "GATE_SPECS"
+        ]
+        [statement] = assigned
+        assert isinstance(statement.value, ast.Call)
+        assert isinstance(statement.value.func, ast.Name) and statement.value.func.id == "_gate_specs"
 
     def test_no_gate_reads_either_count_today(self) -> None:
         """Deriving a tolerance for the required kind is separate work this change enables."""

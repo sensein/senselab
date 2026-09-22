@@ -210,7 +210,8 @@ this fires on an ordinary sampled sinusoid, which is what a DDK train is. And it
 — AIRWAY's cough and breath counts come through the same walk.
 
 The consequence for this branch is direct: the syllable count is the measurand, and
-`expected_event_count`, `syllable_onset_s`, `inter_onset_interval_s`, `interval_dispersion` and the
+the count beside the row's declaration, `syllable_onset_s`, `inter_onset_interval_s`,
+`interval_dispersion` and the
 `onset_rate_hz` that labels D1's unit all read off it. A halved onset series doubles the intervals
 it does find, which **inflates dispersion at high rates — the fastest, healthiest speakers** — the
 same direction as the bias `branch-ddk.md` D3 already records for Praat's 0.1 s minimum sounding

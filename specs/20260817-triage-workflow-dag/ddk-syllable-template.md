@@ -64,8 +64,11 @@ clinically meaningful reading.
 ## `buttercup` stops being a lexical special case
 
 With a three-position template, both `buttercup` rows are `SYLLABLE_SEQUENCE` and structurally
-identical to `pataka`: `expected_event_count: 30` for the counted v1 row (10 cycles × 3 syllables)
-and `declared_duration_s: 5.0` for the timed v2 row, exactly as `-pataka` and `-v2-puhtuhkuh` carry.
+identical to `pataka`: a `typical_count` of 10 repetitions for the v1 row and
+`declared_duration_s: 5.0` for the timed v2 row, exactly as `-pataka` and `-v2-puhtuhkuh` carry.
+(The v1 rows carried `expected_event_count: 30` — 10 cycles × 3 syllables — until the count split
+of 2026-09-21 put the unit on the declaration; see
+`specs/20260921-required-and-typical-counts/design.md`.)
 
 Deleted with it: `_repeated_word` and its `align_ddk` fork, `DdkReads.transcript_id` and the
 `TRANSCRIPT` constant that fed it, the `production="lexical_repetition"` marker,

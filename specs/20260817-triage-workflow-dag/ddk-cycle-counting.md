@@ -74,16 +74,23 @@ and the other to the whole unit series. Both are reported. Neither is special-ca
 
 ## Units: cycles against syllables
 
-`expected_event_count` is 30 for `-pataka` and `-buttercup` — syllables, since `-buttercup` moved
-from 10 words to 30 syllables. The repeat count counts cycles. The declaration is **not** changed
-again; instead the cycle measurement carries both sides:
+> **Superseded 2026-09-21** by `specs/20260921-required-and-typical-counts/design.md`. What follows
+> describes the single `expected_event_count` field, which held 30 for `-pataka` and `-buttercup`
+> (syllables) beside 10 for `-pa` (repetitions) with nothing recording which. Both rows now carry a
+> `typical_count` of **10 repetitions**, measured, with the unit on the declaration — so a
+> declaration no longer has to be divided by a template length to be read, and the cycle
+> measurement carries `typical_repetitions` alone.
+
+`expected_event_count` was 30 for `-pataka` and `-buttercup` — syllables, since `-buttercup` moved
+from 10 words to 30 syllables. The repeat count counts cycles. The declaration was **not** changed
+at the time; instead the cycle measurement carried both sides:
 
 - `syllables_n` — CV units detected
 - `declared_syllables` — the row's `expected_event_count`
 - `declared_cycles` — that count divided by the template length
 
 so a reader comparing 6 found cycles against 10 declared, or 20 found syllables against 30 declared,
-has both without inferring either.
+had both without inferring either.
 
 ## The nucleus fraction: kept, phase-aligned, renamed
 

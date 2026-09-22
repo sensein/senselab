@@ -5,6 +5,15 @@ whether a task was done and what the start end spans are for a task."*
 
 **There is not.** This document is that list.
 
+> **One field has since been replaced.** Every `expected_event_count` below — in the tables, in the
+> dataclass and in the code listings — is the field as it stood on 2026-09-15. It was split on
+> 2026-09-21 into `required_count` (a number an instruction spoke, with its unit) and
+> `typical_count` (a median measured over the corpus, with its derivation), because it held both
+> and said which in a docstring rather than in its structure. See
+> `specs/20260921-required-and-typical-counts/design.md` for the shape and for what each family
+> declares now; the numbers below are otherwise unchanged, except that `-pataka` and `-buttercup`'s
+> 30 syllables are 10 repetitions, which is the same quantity in the unit the measure uses.
+
 It is a **method inventory**, not a threshold fit. No number in it is fitted. Where a method needs a
 boundary it says what would fit it and marks it owed, per the project rule that a threshold lives in
 `data/` with a written derivation and never as a code literal.
@@ -1061,7 +1070,8 @@ class Expectation:
     pattern: Pattern
     tokens: tuple[str, ...] | None = None
     token_source: str | None = None
-    expected_event_count: int | None = None
+    required_count: RequiredCount | None = None      # 2026-09-21: was `expected_event_count: int`
+    typical_count: TypicalCount | None = None        # 2026-09-21: the other half of that field
     declared_duration_s: float | None = None
     label_set: str | None = None
     sequence: tuple[str, ...] | None = None
@@ -1085,7 +1095,7 @@ class Expectation:
 **Twenty-two fields, and every one of them was a difference between two functions before.** The
 v1/v2 pairs are the clearest case: `maximum-phonation-time` against `-v2` is `expect_inhale`;
 `free-speech` against `-v2` is `anti_pattern`; every `diadochokinesis` v1 against its v2 is
-`expected_event_count` against `declared_duration_s`. Written as data, the pair cannot drift apart;
+`typical_count` against `declared_duration_s`. Written as data, the pair cannot drift apart;
 written as two functions, it repeatedly did.
 
 ### What spans each in-family task proposes
@@ -1111,7 +1121,7 @@ measurement of their own, so each does.
 | SPEECH | the eight non-`buttercup` `SYLLABLE_REPETITION` families | **0** | **Nothing, and that is the finding.** The expectation is that no lexical content occurs; a branch that proposed a speech span here would assert the opposite of what it measured |
 | SPEECH | `diadochokinesis-buttercup`, `-v2-buttercup` | **1** — `task_extent` | the hull of the realised `buttercup` tokens |
 | SPEECH | `loudness`, `loudness-v2` | **1** — `task_extent` | the hull of the realised `hey` tokens |
-| AIRWAY | the counted families (`-cough`, `-v2-hardcough`, `fivebreaths`, both `threebreaths*`, `threequickbreaths`, `v2-threebreaths`, `breath-sounds`) | **n + 1** — **one per event**, plus `task_extent` over their hull | each event from `events_in_span`'s peak-prominence and trough-return walk over `energy_envelope`, derived from the carrier amplitude span it was found in. **One per event is the point**: `by_label` increments once per (span, label) pair (`airway.py:280`), so a 4 s span holding three coughs counts 1 today, and the count compared against the instruction's `expected_event_count` is the number of these spans |
+| AIRWAY | the counted families (`-cough`, `-v2-hardcough`, `fivebreaths`, both `threebreaths*`, `threequickbreaths`, `v2-threebreaths`, `breath-sounds`) | **n + 1** — **one per event**, plus `task_extent` over their hull | each event from `events_in_span`'s peak-prominence and trough-return walk over `energy_envelope`, derived from the carrier amplitude span it was found in. **One per event is the point**: `by_label` increments once per (span, label) pair (`airway.py:280`), so a 4 s span holding three coughs counts 1 today, and the count compared against the instruction's `required_count` is the number of these spans |
 | AIRWAY | `voluntary-cough` | **n + m + 1** — one per cough, one per breath, plus `task_extent` | coughs from `events_in_span`, breaths from the `Breathe`-scoring carrier spans. Both are expected, because the pattern is an alternation and material between coughs must be matched rather than scored off-task |
 | AIRWAY | `-breath`, `-v2-breath` | **n + 1** — one per merged run of `Breathe` windows, plus `task_extent` | HeAR's raw 2.0 s windows, merged. Uncounted and durational, so the runs are the structure |
 | DDK | every train and sequence family | **1** — `task_extent`, the train | the hull of the syllable onsets inside the carrier span, falling back to the carrier's extent. **An individual syllable is NOT a span**: rate, inter-onset interval variability and sequence collapse are statistics over the onset series, and one span per syllable would add ~30 per recording over 7,989 recordings carrying no measurement of their own. The onsets travel as a `counts` entry; a syllable that is not the one the sequence expected travels as a `syllable_sequence_mismatch` deviation with its own extent, which needs no span |
