@@ -75,8 +75,7 @@ so 16 recordings in one invocation cost 5.23 s, or 0.33 s each.
 ## Four invocations per recording
 
 `probe_preprocess_steps.py` wraps `subprocess.run` and records every call with the PREPROCESS step
-that was registered when it was made. Over nine recordings spanning 2.8 s to 73.5 s, every recording
-makes exactly four YAMNet invocations:
+that was registered when it was made. Job 23464900, exclusive node, `loadavg_start` 0.00.
 
 | call site | block | batch |
 | --- | --- | --- |
@@ -85,13 +84,32 @@ makes exactly four YAMNet invocations:
 | `_stream_yamnet("residual")` | `residual_yamnet` | the residual stream, 1 audio |
 | `_span_yamnet` | `span_yamnet` | every native-length span, **already batched into one call** |
 
-The brief's worry that `_span_yamnet` spawns a process per span was checked and is not the case:
-`_classify_spans_in_batch` (`nodes/preprocess.py:287`) hands every prepared span to one
-`classify_audios` call, and only falls back to one call per span when the batch as a whole fails.
-That is the one level of reuse that already existed.
+Measured, per recording:
 
-Four invocations at 4.6–6.8 s is **19.1–21.1 s of YAMNet per recording**, of which ~0.7 s is
-inference.
+| recording s | invocations | YAMNet s | share of the whole graph | per call |
+| --- | --- | --- | --- | --- |
+| 2.79 | 4 | 21.1 | 10.8% | 6.76 / 4.97 / 4.50 / 4.85 |
+| 3.72 | 4 | 19.1 | 23.1% | 4.93 / 4.76 / 4.57 / 4.81 |
+| 4.54 | 3 | 14.4 | 12.5% | 4.80 / 5.18 / 4.40 / — |
+| 5.58 | 4 | 19.4 | 16.2% | 5.10 / 4.90 / 4.50 / 4.93 |
+| 7.29 | 3 | 14.3 | 12.5% | 4.84 / 5.00 / 4.48 / — |
+| 10.18 | 4 | 19.4 | 16.6% | 5.08 / 4.89 / 5.09 / 4.35 (3 spans) |
+| 18.32 | 4 | 19.0 | 18.4% | 4.88 / 5.01 / 4.54 / 4.58 (10 spans) |
+
+Median 4 invocations, 19.1 s, **15.0% of the whole graph** over these recordings — of which about
+0.7 s is inference.
+
+Two things the table settles that a code reading would not have.
+
+**Three, not four, when no span reaches YAMNet's native frame.** At 4.54 s and 7.29 s every span was
+shorter than 0.96 s, so all of them took the covering-window attribution path, `native_prepared` was
+empty, and `_classify_spans_in_batch` returned without calling. The count is 3 or 4, not a constant.
+
+**`_span_yamnet` does not spawn a process per span.** The brief's worry was checked and is not the
+case: `_classify_spans_in_batch` (`nodes/preprocess.py:287`) hands every prepared span to one
+`classify_audios` call and only falls back to one call per span when the batch as a whole fails. The
+probe sees batches of 1, 3 and 10 spans each costing one ~4.5 s invocation. That is the one level of
+reuse that already existed, and it is why `span_yamnet` is not the outlier the brief expected.
 
 ## The 46.6% was an off-by-one, and this is what the steps actually cost
 
@@ -109,18 +127,32 @@ a window list and cannot cost seconds — they are the HeAR inferences that prec
 `probe_preprocess_steps.py` attributes `[t_i, t_{i+1}]` to step *i*, which is correct given
 registration-before-work. Over nine recordings:
 
-| step | mean s |
-| --- | --- |
-| PREPROCESS `asr_qwen` | see run output |
-| PREPROCESS `asr_crisperwhisper` | see run output |
-| PREPROCESS `enhanced_yamnet` | **4.87** |
-| PREPROCESS `yamnet` | 5.86 |
-| PREPROCESS `span_yamnet` | 4.86 |
-| PREPROCESS `residual_yamnet` | 4.55 |
+| step | n | mean s | share |
+| --- | --- | --- | --- |
+| PREPROCESS `asr_qwen` | 7 | 18.68 | 15.4% |
+| PREPROCESS `asr_crisperwhisper` | 7 | 18.14 | 15.0% |
+| SPEECH `pii` | 5 | 17.19 | 10.1% |
+| QUALITY `clip_consistency` | 7 | 7.82 | 6.5% |
+| PREPROCESS `residual` | 7 | 7.28 | 6.0% |
+| PREPROCESS `hear` | 7 | 6.84 | 5.7% |
+| PREPROCESS `enhanced_hear` | 7 | 6.50 | 5.4% |
+| PREPROCESS `span_hear` | 7 | 6.44 | 5.3% |
+| PREPROCESS `residual_hear` | 7 | 6.41 | 5.3% |
+| PREPROCESS `gammatone` | 7 | 6.32 | 5.2% |
+| PREPROCESS `yamnet` | 7 | 5.22 | 4.3% |
+| PREPROCESS **`enhanced_yamnet`** | 7 | **4.98** | 4.1% |
+| PREPROCESS `residual_yamnet` | 7 | 4.60 | 3.8% |
+| PREPROCESS `span_yamnet` | 7 | 3.43 | 2.8% |
 
-`enhanced_yamnet` is 4.87 s, not 100.20 s. The replay document's claim that one step is 46.6% of
+`enhanced_yamnet` is 4.98 s, not 100.20 s. The replay document's claim that one step is 46.6% of
 PREPROCESS does not survive a correctly-attributed probe, and
-`specs/20260922-replay-decisions-over-a-finished-corpus/design.md` is corrected alongside this.
+`specs/20260922-replay-decisions-over-a-finished-corpus/design.md` is corrected alongside this. The
+steps that are actually large are the two ASR passes, SPEECH's PII scan, and the FRCRN `residual`
+that the 100 s was really measuring. No single step is anywhere near half of a recording; the
+largest is 15%.
+
+(`span_yamnet`'s 3.43 s mean is below its 4.5 s per-invocation cost because two of the seven
+recordings had no span long enough to reach the model, so the step ran without calling it.)
 
 What survives is the smaller, real finding the wrong number pointed at: YAMNet is ~20 s per
 recording and almost none of it is classification.
@@ -235,24 +267,32 @@ sized against: **~1.2 GiB**, still 3.7% of a task's 32 GB.
   run's nodes the 4.81 s is a floor, likely by a large factor, and the saving is correspondingly a
   floor too. No loaded-node measurement was taken.
 - **The corpus-wide saving in absolute hours.** Stated below as a ratio only, for the same reason.
-- **HeAR, which has the same disease and is bigger.** The corrected step table shows `hear` 7.56 s,
-  `enhanced_hear` 6.53 s, `residual_hear` 6.28 s and `span_hear` 6.40 s — four subprocess-venv
-  invocations of a second TensorFlow model, ~27 s per recording against YAMNet's ~20 s. It was not
-  touched here and the same fix applies to it.
+- **HeAR, which has the same disease and is bigger.** The corrected step table shows `hear` 6.84 s,
+  `enhanced_hear` 6.50 s, `span_hear` 6.44 s and `residual_hear` 6.41 s — four subprocess-venv
+  invocations of a second TensorFlow model, ~26 s per recording against YAMNet's ~19 s, 21.7% of the
+  graph against YAMNet's 15.0%. Its own fixed/marginal split was not measured and the resident-worker
+  change was not applied to it; it is the obvious next target and a larger one.
+- **`gammatone` at 6.32 s and `clip_consistency` at 7.82 s**, both of which the probe shows making
+  subprocess calls of ~5–11 s. Not investigated.
 
 ## Projected saving
 
-Per recording, PREPROCESS gives back 14.4 s of the four-call cost within a recording, and
-19.1 s across recordings in a driver task that processes more than one. Against the corpus run's own
-PREPROCESS mean of 149.93 s, and holding the ratio rather than the seconds:
+Measured directly rather than projected: YAMNet was **15.0% of the whole graph** over the probe's
+recordings, at a median 19.1 s and 4 invocations. The equivalence job measured the four-invocation
+shape end to end at **18.86 s before and 4.50 s after** from cold, and 0.06–0.21 s per call once the
+worker is up.
 
-| | per recording | share of PREPROCESS | share of the corpus |
-| --- | --- | --- | --- |
-| YAMNet today | 19.1–21.1 s | 12.7–14.1% | 11.5–12.7% |
-| resident within a recording | 4.8 s | 3.2% | 2.9% |
-| resident across recordings | ~0.1 s | ~0.1% | ~0.1% |
+| | per recording | share of the graph, measured |
+| --- | --- | --- |
+| YAMNet today | 14.3–21.1 s, median 19.1 | 15.0% |
+| resident within a recording | 4.5 s | ~3.7% |
+| resident across recordings in a task | 0.1–0.3 s | ~0.2% |
 
-So roughly **12% of the whole corpus's wall clock**, on an idle node, and more on a loaded one.
+Applied to the corpus run's own totals as a ratio — PREPROCESS 90.4% of 10,358,336 recording-seconds
+— YAMNet is on the order of **12–14% of the whole corpus's wall clock** and nearly all of it goes.
+Stated as a ratio deliberately: these seconds are idle-node seconds and the corpus ran at load
+averages in the hundreds, where process start-up costs more than 4.81 s and the saving is
+correspondingly larger, not smaller.
 
 ## Is `residual_yamnet` still running, and does anything read it?
 
