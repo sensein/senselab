@@ -249,3 +249,9 @@ dist/
 recording_vectors*.parquet
 recording_vectors*.report.json
 recording_vectors*.summary.json
+
+# Sensitive: the per-speaker vectors are a voice biometric derived from human-subject audio.
+# Mode 600, never committed. See specs/20260922-speaker-vectors/schema.md.
+speaker_vectors*.parquet
+speaker_vectors*.report.json
+speaker_vectors*.summary.json
