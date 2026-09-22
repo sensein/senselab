@@ -2,16 +2,25 @@
 
 ## What this is
 
-Four stages, one contract for all four branches, and a declaration read from the BIDS sidecars
+Four stages, one contract for every branch, and a declaration read from the BIDS sidecars
 rather than guessed from a filename.
 
-Three things forced this design at once. The branches do not share a job description: SPEECH
-proposes its own spans, VOICE reads spans nothing writes, AIRWAY reads the general set including
+Three things forced this design at once. The branches did not share a job description: SPEECH
+proposed its own spans, VOICE read spans nothing wrote, AIRWAY read the general set including
 the gaps. Hints are extractable and inert — the packaged map is `null` and the only real one raises
 on load. And the spans everything reads are permissive by construction, which is correct for a
 recall-first router and wrong for anything that has to say what happened.
 
 This spec settles what a branch is *for*. It does not build one.
+
+**Read as of 2026-09-22.** The graph moved under this document between its writing and that date,
+and this pass re-read every claim in it against the tree. Four changes carry through the whole
+text and are worth knowing before the first section: **DDK is not a branch** — it is SPEECH's
+syllable-train instrument, and `BRANCHES` is three; **a branch writes by `propose` only** and
+carries no outcome, reporting findings that `write_findings` turns into `deviate` and `contest`
+assertions; **every gate lives in VERDICT**, resolved family → group → default, key by key; and
+**VOICE was rebuilt** onto the amplitude spans this document said it should read. Where a passage
+describes the older shape, it now says which half of it still holds.
 
 ---
 
@@ -26,10 +35,14 @@ SCREEN       TAXONOMY ⊕ ROUTING, merged. Consolidates the classifier evidence,
 
 BRANCHES     Receive every upstream output, their route, and the declaration. Annotate
              PREPROCESS's spans (label, contest, refine, trim) and propose the ones it
-             missed as `family: "<branch>"` spans. Emit typed deviations. Conclude.
+             missed as `family: "<branch>"` spans. Emit typed deviations. Report.
 
-VERDICT      Admit/reject, flag for human review, durable description.
+VERDICT      Admit/reject, decide the declared task's conformance against the task group's
+             gates, flag for human review, durable description.
 ```
+
+Of the branch line, `propose`, `contest` and the typed deviations are built; `label`, `refine` and
+`trim` are not. The branch reports and does not conclude: VERDICT decides.
 
 ### The nodes this does not place
 
@@ -487,10 +500,13 @@ fitted rule.
 
 ### Two standing rules
 
-**A declaration may add and inform. It may never suppress.** Routing is the union:
-`will_run = by_ruleset or forced_by_declaration`. The declaration is the recording's own task,
-read off its BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`, with a hint tag
-as an optional second source; see [`../20260817-triage-workflow-dag/routing.md`](../20260817-triage-workflow-dag/routing.md).
+**A declaration may add and inform. It may never suppress.** This is the rule the code implements:
+`will_run = not critical and (by_ruleset or by_declaration or by_default)` (`routing.py:260`), a
+union in which a declaration only adds. The declaration is the recording's own task,
+read off its BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`
+(`branches.py:953-962`), with a hint tag
+as an optional second source that "adds routes and removes none" (`default.yaml:143-148`); see
+[`../20260817-triage-workflow-dag/routing.md`](../20260817-triage-workflow-dag/routing.md).
 A branch the content routed cannot be un-routed by a declaration that disagrees with it.
 
 **Content the task did not ask for is content, not error.** A breathing recording that carries speech
@@ -504,8 +520,12 @@ routes SPEECH on the ruleset's evidence and has that speech recorded.
 > recognises, **contests** what was proposed but is not there, **refines** a boundary the proposer got
 > wrong, and **trims** a span to the extent that serves the task — all four as assertions about spans
 > that keep their own identity. It **proposes** what the proposer missed but the declaration says to
-> expect, and that alone mints a `family: "<branch>"` span. It emits typed deviations and concludes on
-> its own question.
+> expect, and that alone mints a `family: "<branch>"` span. It emits typed deviations and reports
+> what it read.
+
+The last clause read *"concludes on its own question"* when this was written. It does not: a branch
+returns a `BranchReport` carrying no outcome and no conformance, and VERDICT decides
+(`vocabulary.py:201-228`).
 
 The owner's example is the specification: *a breathing task routing through AIRWAY will try to
 estimate inhalation and exhalation even though the initial spans may not have generated all of them;
