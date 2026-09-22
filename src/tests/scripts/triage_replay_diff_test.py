@@ -70,6 +70,10 @@ def _corpus_run(root: Path, stem: str) -> Path:
     (run_root / "run" / "streams").mkdir(parents=True)
     (run_root / "run" / "streams" / "enhanced.flac").write_bytes(b"")
     store = ProvStore(run_id=run_root.name)
+    admitting = store.activity(node="ADMIT", step=None, parameters={})
+    store.was_generated_by(
+        store.entity(prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording"}), admitting
+    )
     _decide(store, Triage.FLAG)
     store.write_jsonl(run_root / "run" / "store.jsonl")
     return run_root

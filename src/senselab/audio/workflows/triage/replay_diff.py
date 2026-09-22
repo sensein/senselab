@@ -37,6 +37,13 @@ VERDICT_NODE = "VERDICT"
 
 SPEECH_NODE = "SPEECH"
 REDACT_NODE = "REDACT"
+PREPROCESS_NODE = "PREPROCESS"
+
+RECORDING_STREAM = "recording"
+"""The stream ADMIT writes only when it admits the recording, and QUALITY reads."""
+
+COMPLETED = "completed"
+"""The run state a node that ran to the end carries."""
 
 PII_SCAN = "pii_scan"
 """The measurement SPEECH writes for its PII scan, whether or not the scan ran."""
@@ -70,8 +77,23 @@ NOTHING_RETIRED = "nothing_retired"
 AMBIGUOUS = "ambiguous"
 """A store replayed more than once, whose retirements cannot be attributed to one pass."""
 
-STATUSES = (OK, NOT_REPLAYED, NO_STORE, UNREADABLE, NOTHING_RETIRED, AMBIGUOUS)
+NOT_REPLAYABLE = "not_replayable"
+"""A run the replay could not re-decide, because the output it re-enters over was never written.
+
+The replay starts at TAXONOMY and does not re-run ADMIT or PREPROCESS, and neither node is a gate
+it can observe. So a run those two did not carry has its replayed nodes *called* where the original
+run skipped them, and they error. The moves that follow are the re-entry point's, not decisions,
+and are excluded from the comparison rather than counted.
+"""
+
+STATUSES = (OK, NOT_REPLAYED, NO_STORE, UNREADABLE, NOTHING_RETIRED, AMBIGUOUS, NOT_REPLAYABLE)
 """Every status a row may carry."""
+
+ADMIT_DID_NOT_ADMIT = "ADMIT did not admit the recording; the store holds no source stream"
+"""Why a run is not replayable when ADMIT rejected it."""
+
+PREPROCESS_DID_NOT_COMPLETE = "PREPROCESS did not complete; there is no conditioned output to read"
+"""Why a run is not replayable when PREPROCESS errored or was skipped."""
 
 UNREAD = "UNREAD"
 """The stand-in for a generation that left no file-level decision."""
@@ -475,6 +497,27 @@ def _pii_moved(axis: Mapping[str, Any]) -> bool:
     ) or bool(axis.get("categories"))
 
 
+def replay_blocker(store: ProvStore, before: Generation) -> str | None:
+    """Why this run's replayed nodes had nothing to read, or None when they did.
+
+    Args:
+        store: The run's store.
+        before: The retired pass, read for what the original run recorded as having run.
+
+    Returns:
+        :data:`ADMIT_DID_NOT_ADMIT`, :data:`PREPROCESS_DID_NOT_COMPLETE`, or None.
+    """
+    names = {
+        str(entity.attributes.get("name")) for entity in store.entities("stream") if not store.is_invalidated(entity.id)
+    }
+    if RECORDING_STREAM not in names:
+        return ADMIT_DID_NOT_ADMIT
+    ran = before.mapping("ran")
+    if PREPROCESS_NODE in ran and str(ran[PREPROCESS_NODE]) != COMPLETED:
+        return PREPROCESS_DID_NOT_COMPLETE
+    return None
+
+
 def diff_store(store: ProvStore) -> dict[str, Any]:
     """The differential over one replayed store.
 
@@ -483,9 +526,10 @@ def diff_store(store: ProvStore) -> dict[str, Any]:
 
     Returns:
         ``{status, ...}`` — :data:`OK` with the row body when the store carries a replay and both
-        generations, :data:`NOT_REPLAYED` when it carries no marker, :data:`NOTHING_RETIRED` when
-        the replay found no decision to retire, and :data:`AMBIGUOUS` when more than one
-        configuration has replayed it.
+        generations, :data:`NOT_REPLAYED` when it carries no marker, :data:`NOT_REPLAYABLE` with
+        the blocker when the replayed nodes had nothing to read, :data:`NOTHING_RETIRED` when the
+        replay found no decision to retire, and :data:`AMBIGUOUS` when more than one configuration
+        has replayed it.
     """
     markers = replay_markers(store)
     if not markers:
@@ -496,6 +540,9 @@ def diff_store(store: ProvStore) -> dict[str, Any]:
     body = diff_generations(before, after)
     body["config_hash"] = hashes[0] if len(hashes) == 1 else hashes
     body["commit"] = markers[-1].get("commit")
+    blocker = replay_blocker(store, before)
+    if blocker is not None:
+        return {"status": NOT_REPLAYABLE, "blocker": blocker, **body}
     if len(hashes) > 1:
         return {"status": AMBIGUOUS, **body}
     if not before_entities:
@@ -533,6 +580,9 @@ class ReplayDiff:
         statuses: Row status to count.
         compared: How many rows carried both generations and were compared.
         identical: How many compared decisions did not move at all.
+        not_replayable: The runs the replayed nodes had nothing to read, by blocker, with their
+            stems. Excluded from every count below, because what moved on them is the re-entry
+            point's doing and not a decision.
         new_keys: A decision field the replay added to how many recordings.
         dropped_keys: A decision field the replay dropped from how many recordings.
         triage: Triage transition to count, over every compared recording.
@@ -567,6 +617,7 @@ class ReplayDiff:
     statuses: dict[str, int] = field(default_factory=dict)
     compared: int = 0
     identical: int = 0
+    not_replayable: dict[str, Any] = field(default_factory=dict)
     new_keys: dict[str, int] = field(default_factory=dict)
     dropped_keys: dict[str, int] = field(default_factory=dict)
     triage: dict[str, int] = field(default_factory=dict)
@@ -757,14 +808,18 @@ def aggregate(rows: Iterable[Mapping[str, Any]]) -> ReplayDiff:
     """
     tally = _Tally()
     total = compared = identical = 0
+    blockers: dict[str, list[str]] = {}
     for row in rows:
         total += 1
         status = str(row.get("status"))
         tally.statuses[status] += 1
+        stem = str(row.get("stem") or row.get("run_root") or "")
+        if status == NOT_REPLAYABLE:
+            blockers.setdefault(str(row.get("blocker")), []).append(stem)
+            continue
         if status not in (OK, NOTHING_RETIRED, AMBIGUOUS):
             continue
         compared += 1
-        stem = str(row.get("stem") or row.get("run_root") or "")
         if row.get("identical"):
             identical += 1
         tally.new_keys.update(str(key) for key in row.get("new_keys") or [])
@@ -777,6 +832,11 @@ def aggregate(rows: Iterable[Mapping[str, Any]]) -> ReplayDiff:
         statuses=dict(tally.statuses.most_common()),
         compared=compared,
         identical=identical,
+        not_replayable={
+            "count": sum(len(stems) for stems in blockers.values()),
+            "by_blocker": {blocker: len(stems) for blocker, stems in sorted(blockers.items())},
+            "stems": sorted(stem for stems in blockers.values() for stem in stems),
+        },
         new_keys=dict(tally.new_keys.most_common()),
         dropped_keys=dict(tally.dropped_keys.most_common()),
         triage=dict(tally.scalars["triage"].most_common()),
@@ -946,6 +1006,38 @@ def _nested_totals(title: str, table: Mapping[str, Mapping[str, Mapping[str, int
     return [*lines, ""]
 
 
+def _not_replayable_lines(block: Mapping[str, Any], rows: int) -> list[str]:
+    """Render the runs excluded from the comparison, and why each was.
+
+    Args:
+        block: What :func:`aggregate` counted under ``not_replayable``.
+        rows: How many rows were read, the denominator the share is taken against.
+
+    Returns:
+        The section's lines, empty when every run was replayable.
+    """
+    count = int(block.get("count", 0))
+    if not count:
+        return []
+    lines = [
+        "### Not replayable, and excluded from every count below",
+        "",
+        f"**{count} runs** ({_share(count, rows)}) had nothing for the replayed nodes to read, so "
+        "the nodes the original run skipped were called and errored. What moved on them is the "
+        "re-entry point's doing and is not a decision; none of it is counted anywhere else in this "
+        "report.",
+        "",
+        "| blocker | runs |",
+        "|---|---:|",
+    ]
+    for blocker, number in (block.get("by_blocker") or {}).items():
+        lines.append(f"| {blocker} | {number} |")
+    stems = [str(stem) for stem in block.get("stems") or []]
+    shown = ", ".join(f"`{stem}`" for stem in stems[:STEM_CAP])
+    more = f" and {len(stems) - STEM_CAP} more" if len(stems) > STEM_CAP else ""
+    return [*lines, "", f"They are {shown}{more}.", ""]
+
+
 def _stem_lines(block: Mapping[str, Any], total: int) -> list[str]:
     """Render one named set of recordings, capped.
 
@@ -976,10 +1068,13 @@ def render_markdown(report: ReplayDiff, source: Path | str) -> str:
     """
     total = report.compared
     moved = report.moved_stems
+    excluded = int(report.not_replayable.get("count", 0))
     lines = [
         f"# What the replay changed — {source}",
         "",
-        f"**{report.rows} rows read, {total} compared.** "
+        f"**{report.rows} rows read, {total} compared"
+        + (f", {excluded} not replayable and excluded" if excluded else "")
+        + ".** "
         f"**{report.identical} decisions did not move at all** ({_share(report.identical, total)}); "
         f"{total - report.identical} moved on at least one axis.",
         "",
@@ -992,6 +1087,7 @@ def render_markdown(report: ReplayDiff, source: Path | str) -> str:
         "",
     ]
     lines += _table("Row status", report.statuses, report.rows)
+    lines += _not_replayable_lines(report.not_replayable, report.rows)
     lines += _table("Decision fields the replay added", report.new_keys, total)
     lines += _table("Decision fields the replay dropped", report.dropped_keys, total)
     lines += ["## Did the file-level decision move", ""]

@@ -199,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{report.rows} rows read, {report.compared} compared, {report.identical} identical")
         for status, count in report.statuses.items():
             print(f"  {status:<16} {count}")
+        for blocker, count in (report.not_replayable.get("by_blocker") or {}).items():
+            print(f"  not replayable: {blocker} — {count}")
         print(f"JSON:     {json_path}")
         print(f"Markdown: {markdown_path}")
         return 0 if report.rows else 1
