@@ -255,13 +255,10 @@ def _drive_branches(
     outcomes: dict[str, NodeOutcome],
     enrollment: Enrollment | None,
 ) -> dict[str, Path]:
-    """Run PREPROCESS, TAXONOMY and routing, then exactly the branches routing selected.
+    """Run PREPROCESS, then hand the rest of the graph to :func:`drive_decisions`.
 
-    A branch routing declined, one no node implements (noted :data:`NO_NODE`) and one withheld by a
-    critical failure (noted :data:`WITHHELD_CRITICAL`) are all recorded ``SKIPPED`` and never
-    called. QUALITY is called after the branch loop on every path PREPROCESS completed, over the
-    source recording; REDACT only when SPEECH ran and its scan found PII. See
-    ``specs/20260817-triage-workflow-dag/dag.md``.
+    A PREPROCESS that fails records every node between it and VERDICT ``SKIPPED`` and calls
+    nothing further. See ``specs/20260817-triage-workflow-dag/dag.md``.
 
     Args:
         store: The provenance store, already holding ADMIT's ``recording`` stream.
@@ -281,6 +278,48 @@ def _drive_branches(
         for node in GRAPH_ORDER[GRAPH_ORDER.index("PREPROCESS") + 1 : GRAPH_ORDER.index("VERDICT")]:
             outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
         return {}
+    return drive_decisions(
+        store,
+        config,
+        hint,
+        run_dir=run_dir,
+        artifacts_dir=artifacts_dir,
+        outcomes=outcomes,
+        enrollment=enrollment,
+    )
+
+
+def drive_decisions(
+    store: ProvStore,
+    config: TriageConfig,
+    hint: AudioHints | None,
+    *,
+    run_dir: Path,
+    artifacts_dir: Path,
+    outcomes: dict[str, NodeOutcome],
+    enrollment: Enrollment | None,
+) -> dict[str, Path]:
+    """Run TAXONOMY, routing, the branches routing selects, QUALITY and REDACT over a preprocessed store.
+
+    Every input is the store and the sidecars under ``run_dir``, so the caller may be a graph pass
+    that has just run PREPROCESS or a driver replaying over a finished run. A branch routing
+    declined, one no node implements (noted :data:`NO_NODE`) and one withheld by a critical failure
+    (noted :data:`WITHHELD_CRITICAL`) are all recorded ``SKIPPED`` and never called. QUALITY is
+    called after the branch loop over the source recording; REDACT only when SPEECH ran and its scan
+    found PII. See ``specs/20260817-triage-workflow-dag/dag.md``.
+
+    Args:
+        store: The provenance store, holding ADMIT's ``recording`` stream and PREPROCESS's output.
+        config: The triage configuration.
+        hint: What the recording was declared to contain.
+        run_dir: The run directory sidecar paths are relative to.
+        artifacts_dir: The release directory handed to REDACT.
+        outcomes: The per-node record each call is added to.
+        enrollment: The target speaker's enrollment, when the caller supplied one.
+
+    Returns:
+        REDACT's released pair, empty unless it cleared one.
+    """
     _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
     routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
     selected = set(routed.runs) if routed is not None else set()
