@@ -31,7 +31,7 @@ assumptions about how they are laid out.
 | `vector` | `list<double>` | The pooled embedding, unit norm. Length `dim`. **Raw, not corpus-centred.** Centring the corpus improves verification and costs identification; `design.md` D-7 has both numbers, and the corpus mean is recoverable from this column in one pass. |
 | `dim` | `int32` | 192 for ECAPA. |
 | `n_extents` | `int32` | Task extents that contributed a window. |
-| `n_recordings` | `int32` | Distinct stems behind those extents. At most one extent per recording, so this equals `n_extents` unless a recording minted more than one — which no recording in the measured corpus did. |
+| `n_recordings` | `int32` | Distinct stems behind those extents, and **the divisor the vector is actually pooled over**. Smaller than `n_extents` whenever a recording minted more than one extent — which the replayed tree does on 3,309 AIRWAY recordings (`design.md` D-9) and the design tree never did. |
 | `extent_seconds` | `float64` | Total seconds of task extent that went in. |
 
 ### Provenance
@@ -41,7 +41,7 @@ assumptions about how they are laid out.
 | `model_id` | `string` | `speechbrain/spkrec-ecapa-voxceleb`. |
 | `model_commit_sha` | `string` | The **resolved 40-hex commit** the vector was produced with. Never a ref. Null only when resolution failed. |
 | `unresolved_reason` | `string` | Why the sha is null. Non-null exactly when the sha is null. |
-| `method` | `string` | The pooling rule, `extent_equal_spherical_mean`: the spherical mean of each extent's own windows, then the spherical mean of those per-extent centroids. Measured against the one-stage window-weighted alternative in `design.md` D-7. |
+| `method` | `string` | The pooling rule, `recording_equal_spherical_mean`: windows → extent centroid → recording centroid → speaker vector. Measured against the one-stage window-weighted alternative in `design.md` D-7; the recording rather than the extent is the unit for the reason in D-9. |
 | `window_s`, `hop_s` | `float64` | The window grid, 2.0 and 1.0. |
 | `schema_version` | `int32` | 1. |
 | `corpus_root` | `string` | The tree the extents were read from — which matters, because the replay moves task extent. |

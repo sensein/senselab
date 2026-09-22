@@ -51,7 +51,7 @@ MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
 WINDOW_S = 2.0
 HOP_S = 1.0
 WINDOW_AGGREGATOR = "spherical_mean"
-AGGREGATOR = "extent_equal_spherical_mean"
+AGGREGATOR = "recording_equal_spherical_mean"
 EMBEDDING_DIM = 192
 
 _TIMESTAMP = re.compile(r"_\d{8}-\d{6}(?:-\d+)?$")
@@ -589,10 +589,11 @@ def embed_subject(
 
     Each extent is cut from its recording's ``plain`` stream, windowed at :data:`WINDOW_S` on
     :data:`HOP_S`, and every window embedded. Extents are embedded separately, never
-    concatenated. Pooling is two-stage and **extent-equal**: the spherical mean of an extent's
-    own windows, then the spherical mean of those per-extent centroids, so a 300 s extent and a
-    3 s one weigh the same. Measured against the one-stage window-weighted mean in
-    ``specs/20260922-speaker-vectors/design.md`` (D-7).
+    concatenated. Pooling is three-stage and **recording-equal**: the spherical mean of an
+    extent's own windows, then of the extents belonging to one recording, then of the
+    per-recording centroids. A 300 s extent and a 3 s one weigh the same, and a recording that
+    mints two overlapping extents still casts one vote. Measured against the one-stage
+    window-weighted mean in ``specs/20260922-speaker-vectors/design.md`` (D-7, D-9).
 
     One embedding pass serves both outputs: the same window vectors produce the centroid and,
     via :func:`describe_embedding_distribution`, every diagnostic column. Those diagnostics
@@ -640,7 +641,7 @@ def embed_subject(
     window_vectors: list[np.ndarray] = []
     window_extent_ids: list[str] = []
     window_starts: list[float] = []
-    extent_centroids: list[np.ndarray] = []
+    extent_centroids: list[tuple[str, np.ndarray]] = []
     extraction_failures: dict[str, str] = {}
     kept: list[Extent] = []
     for extent in extents:
@@ -675,7 +676,7 @@ def embed_subject(
             window_vectors.append(vector)
             window_extent_ids.append(extent.extent_id)
             window_starts.append(float(w.start_s))
-        extent_centroids.append(_unit(np.vstack([_unit(v) for v in live]).mean(axis=0)))
+        extent_centroids.append((extent.stem, _unit(np.vstack([_unit(v) for v in live]).mean(axis=0))))
 
     if not kept:
         raise ValueError(f"{subject}: every extent decoded to zero samples")
@@ -683,7 +684,14 @@ def embed_subject(
         detail = "; ".join(f"{eid}: {why}" for eid, why in extraction_failures.items())
         raise ValueError(f"{subject}: no extent produced a vector ({detail})")
 
-    centroid = _unit(np.vstack(extent_centroids).mean(axis=0))
+    # One vote per recording, not per extent. On the replayed tree AIRWAY mints two nested or
+    # overlapping extents on 3,309 recordings; weighting per extent would give that recording's
+    # audio two votes. See design.md D-9.
+    per_recording: dict[str, list[np.ndarray]] = {}
+    for stem, vector in extent_centroids:
+        per_recording.setdefault(stem, []).append(vector)
+    recording_centroids = [_unit(np.vstack(v).mean(axis=0)) for _, v in sorted(per_recording.items())]
+    centroid = _unit(np.vstack(recording_centroids).mean(axis=0))
     _, distribution = describe_embedding_distribution(
         np.vstack(window_vectors),
         window_extent_ids,
