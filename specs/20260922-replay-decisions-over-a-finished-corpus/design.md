@@ -58,6 +58,18 @@ store carries no step timing and the corpus run cannot be decomposed. The probe 
 interval to the step that just finished; the figures are the branch tip's, over the same twelve
 recordings, and include each step's model load where the step is the first to need it.
 
+> **The table below is off by one step and its headline is wrong.** Every PREPROCESS block calls
+> `_step(...)`, which registers the activity, *before* doing its work, so an interval stamped onto
+> the activity being registered carries the name of the step that is starting, not the one that has
+> just run. `enhanced_yamnet` is registered immediately after the `residual` block, and the 100.20 s
+> is that block's FRCRN enhancement, cross-correlation alignment and two stream writes. Re-measured
+> with `[t_i, t_{i+1}]` attributed to step *i*, on an exclusive node, `enhanced_yamnet` is 4.98 s.
+> The same artefact is visible in the table without needing a second probe:
+> `enhanced_hear_summary` and `residual_hear_summary` are pure Python pooling over a window list and
+> cannot cost ~6 s — those are the HeAR inferences that preceded them. The conclusion drawn from
+> `residual_diarization`'s absence is unaffected; the shares are not.
+> See `specs/20260922-yamnet-process-startup-cost/design.md`.
+
 | step | mean s | total s | share of the re-run |
 | --- | --- | --- | --- |
 | PREPROCESS `enhanced_yamnet` | 100.20 | 1,202.4 | 46.6% |
@@ -72,12 +84,16 @@ recordings, and include each step's model load where the step is the first to ne
 | PREPROCESS `residual_hear_summary` | 5.67 | 68.0 | 2.6% |
 | REDACT `plan` | 14.86 | 44.6 | 1.7% |
 
-Two things the table settles. **`residual_diarization` does not appear**, so the narrowing is in
-force on the tip; the corpus run ran the same pyannote work twice, and `enhanced_diarization`'s
-110.0 s over twelve recordings bounds what that second pass cost — roughly 4% of a PREPROCESS,
-measured on the tip's own step rather than on the run that paid for both. **One step is 46.6% of
-everything**: YAMNet over the enhanced stream, at 100 s mean against a 21 s median recording. The
-`residual_*` classifier summaries do still run; only diarization was narrowed.
+One thing the table settles, and it does not depend on the attribution: **`residual_diarization`
+does not appear**, so the narrowing is in force on the tip; the corpus run ran the same pyannote
+work twice, and `enhanced_diarization`'s 110.0 s over twelve recordings bounds what that second pass
+cost — roughly 4% of a PREPROCESS, measured on the tip's own step rather than on the run that paid
+for both. The `residual_*` classifier summaries do still run; only diarization was narrowed.
+
+The retracted reading was that one step is 46.6% of everything. What a correctly-attributed probe
+finds instead is that YAMNet costs ~20 s of a recording spread over four subprocess invocations,
+almost all of it TensorFlow start-up rather than inference, and that the four largest single steps
+are the two ASR passes, `consensus` and the FRCRN `residual`.
 
 ## What changed since the corpus run
 
