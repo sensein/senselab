@@ -237,8 +237,13 @@ var SchemaAxes = (function () {
    * Summarise one column over the rows an axis will draw.
    * Returns {col, kind, present, absent, min, max, categories, counts, folded, foldedMax}.
    * `absent` is the count of nulls and is never folded into the value scale.
+   * `options` may carry `order` ('frequency' | 'alphabetical') and `scale`
+   * ('linear' | 'log'); log is refused rather than silently ignored when the domain
+   * reaches zero or below.
    */
-  function summarise(name, rows, order) {
+  function summarise(name, rows, options) {
+    var opts = typeof options === 'string' ? { order: options } : (options || {});
+    var order = opts.order;
     var col = BY_NAME[name];
     if (!col) throw new Error('no column ' + name + ' in the catalogue');
     if (!col.assignable) throw new Error(name + ' is not assignable to an axis: ' + col.reason);
@@ -280,6 +285,12 @@ var SchemaAxes = (function () {
       if (present === 0) { summary.min = 0; summary.max = 1; summary.empty = true; }
       else if (min === max) { summary.min = min - 0.5; summary.max = max + 0.5; summary.flat = true; }
       else { summary.min = min; summary.max = max; }
+      summary.logCapable = summary.min > 0;
+      summary.scale = opts.scale === 'log' && summary.logCapable ? 'log' : 'linear';
+      if (summary.scale === 'log') {
+        summary.logMin = Math.log10(summary.min);
+        summary.logMax = Math.log10(summary.max);
+      }
     } else {
       summary.counts = counts;
       summary.categories = order === 'alphabetical'
@@ -300,6 +311,9 @@ var SchemaAxes = (function () {
     if (summary.kind === 'numeric') {
       if (typeof value !== 'number' || !Number.isFinite(value)) return null;
       if (summary.max === summary.min) return 0.5;
+      if (summary.scale === 'log') {
+        return (Math.log10(value) - summary.logMin) / (summary.logMax - summary.logMin);
+      }
       return (value - summary.min) / (summary.max - summary.min);
     }
     var i = summary.index[value];
@@ -308,11 +322,24 @@ var SchemaAxes = (function () {
     return 1 - i / (summary.categories.length - 1);
   }
 
+  /** The value a fraction of the value band stands for: the inverse of `position`. */
+  function valueOf(summary, fraction) {
+    if (summary.kind !== 'numeric') {
+      var i = Math.round((1 - fraction) * Math.max(0, summary.categories.length - 1));
+      return summary.categories[i];
+    }
+    if (summary.scale === 'log') {
+      return Math.pow(10, summary.logMin + fraction * (summary.logMax - summary.logMin));
+    }
+    return summary.min + fraction * (summary.max - summary.min);
+  }
+
   /** One line of prose under the axis title saying what the axis is showing. */
   function caption(summary) {
     var bits = [];
     if (summary.kind === 'numeric') {
-      bits.push(summary.col.unit ? summary.col.unit : 'numeric');
+      bits.push((summary.col.unit ? summary.col.unit : 'numeric') +
+        (summary.scale === 'log' ? ' · log10 scale' : ''));
     } else {
       bits.push(summary.categories.length + ' ordered categories');
     }
@@ -346,6 +373,7 @@ var SchemaAxes = (function () {
     readValue: readValue,
     summarise: summarise,
     position: position,
+    valueOf: valueOf,
     caption: caption,
   };
 })();

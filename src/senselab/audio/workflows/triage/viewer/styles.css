@@ -168,3 +168,7 @@ table.measures tr.absent-row { background: #14120e; }
 
 .explain { font-size: 11px; color: var(--ink-3); margin: 10px 0 0; max-width: 90ch; }
 .explain b { color: var(--ink-2); font-weight: 600; }
+
+.chip.scale { cursor: pointer; }
+.chip.scale.on { color: var(--good); border-color: var(--good); }
+.chip.scale:disabled { opacity: .4; cursor: default; }

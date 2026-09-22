@@ -1,8 +1,11 @@
-// Wiring: pick the parquet off disk, read what the corpus view needs, draw it, and fetch a
-// recording's binary blocks only when its line is selected.
+// Wiring: pick the parquet off disk, read what the corpus view needs, draw it, and read a
+// recording's binary blocks when its line is selected.
 //
 // Nothing here is fetched over the network. The page is opened from file:// and the parquet is
-// handed to it by the reader, which is why it can carry transcripts and PII marks at all.
+// handed to it by the reader.
+//
+// specs/20260922-compact-recording-vectors/views.md carries what each read costs and why the
+// block cache is shaped the way it is.
 
 'use strict';
 
@@ -80,8 +83,7 @@
         ' — refusing to draw rather than mis-decode.', 'bad');
       return;
     }
-    // A column that was not read reads as undefined, which readValue would report as absent —
-    // an axis that is silently empty rather than one that says it could not be drawn.
+    // An unread column would read as absent on every row rather than as an error.
     var unread = columns.filter(function (c) { return !rows.length || !(c in rows[0]); });
     if (unread.length) {
       status('the parquet has no column ' + unread.join(', ') + ' — refusing to draw an axis that ' +
@@ -98,11 +100,7 @@
     buildCorpus();
   }
 
-  /**
-   * Every binary block for every row, read once and kept. A narrow read costs the same
-   * decompression as a full one (the file is a single row group with no page index), so the
-   * choice is one 1.5 s warm or that cost on every click.
-   */
+  /** Every binary block for every row, read one column at a time and kept. */
   async function warmCache(onProgress) {
     if (state.cache) return state.cache;
     if (state.warm) return state.warm;
@@ -252,6 +250,20 @@
         var clear = el('button', 'chip-x', '✕');
         clear.onclick = function () { state.view.setBrush(s.name, null); renderAxisCaptions(); };
         brush.appendChild(clear);
+      }
+      if (s.kind === 'numeric') {
+        var log = s.scale === 'log';
+        var scaleBtn = el('button', 'chip scale' + (log ? ' on' : ''), log ? 'log10' : 'linear');
+        scaleBtn.title = s.logCapable
+          ? 'switch the value scale; the tick labels stay real values'
+          : 'log needs a domain above zero, and this one reaches ' + CorpusView.formatNumber(s.min);
+        scaleBtn.disabled = !s.logCapable;
+        scaleBtn.onclick = function () {
+          state.view.setScale(s.name, log ? 'linear' : 'log');
+          state.view.draw();
+          renderAxisCaptions();
+        };
+        brush.appendChild(scaleBtn);
       }
       var abs = el('button', 'chip abs' + (b && b.absent ? ' on' : ''),
         'absent ' + live.absent.toLocaleString());

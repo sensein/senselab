@@ -2,7 +2,7 @@
 
 The page is `src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html`, assembled
 from the parts beside it by `build.py` and rebuilt by
-`uv run python scripts/triage_vectors_viewer.py`. It is **one self-contained file**: 161 KB, no
+`uv run python scripts/triage_vectors_viewer.py`. It is **one self-contained file**: 164 KB, no
 network reference of any kind, a vendored `hyparquet` 1.31.1 + `fzstd` 0.1.1 bundle (61 KB, esbuild
 IIFE) and about 100 KB of our own JavaScript and CSS.
 
@@ -44,6 +44,16 @@ What is measured is everything that decides *what* is drawn.
 | first selection, after the warm | **43 ms** |
 | warming every block column | ~1.5 s, ~250 MB |
 | decoding every block of all 62,488 rows | 1.4 s, 0 failures |
+| one hover hit-test over 62,488 lines | **1.6 ms** (59 ms before the geometry cache) |
+| brushing an axis and redrawing | ~1.3 s in jsdom, of which the paint is a stub |
+
+Hover was the one interaction that did not survive the corpus size. `pick()` interpolates every
+drawn line at the pointer's x, and doing that through `readValue` — a string-keyed property read
+plus a scale computation, per row per axis — cost **59 ms per `mousemove`**. The fix is one
+`Float64Array` of y per axis, rebuilt on layout or axis change, with `NaN` for absent: 1.6 ms, and
+the same array is what the paint loop walks. `NaN` compares false against everything, so an absent
+endpoint can never win a nearest-line contest — which is the behaviour we want anyway, since that
+segment was not drawn.
 
 **A narrow read costs the same as a full one**, and that is the whole reason the page caches. The
 file is a single row group of 62,488 rows with **no page index** (`parquet-cpp-arrow` 23.0.1 did
@@ -88,6 +98,22 @@ Rejected for a default slot, with reasons:
 - **`route_airway` / `route_speech` / `route_voice`** — 99.9% non-null, and they are exactly the
   *explanation* of the conformance nulls (`declined` ⟺ no branch report). Genuinely useful, but
   paired with the conformance axes they would spend six of ten slots on three facts.
+
+### `duration_s` needed a second scale
+
+`duration_s` is the strongest numeric axis and also the worst-behaved one: p5 2.7 s, p50 7.3 s,
+p95 57.1 s, **max 333 s**. On a linear axis that puts the median at 1.4% of the band and 95% of
+every line in the bottom sixth, which is not a readable axis however honest it is. Every numeric
+axis therefore carries a **`linear` / `log10` chip**, the caption says which is active, and the
+tick labels are inverted through the same scale so they stay real seconds. Under log10 the median
+sits at 21% and p95 at 68%.
+
+The chip is **disabled, with the reason in its tooltip, when the domain reaches zero or below** —
+`pii_findings_n`, `flags_n` and `floor_dbfs` among them. Silently falling back to linear would be
+the wrong failure: the axis would say `log10` and draw something else.
+
+Linear stays the default. A log axis is a real distortion of distance and should be a thing the
+reader turned on.
 
 **Under these defaults 59,649 of 62,488 lines break at least once and only 2,839 are complete.**
 That is not a flaw in the view; it is the shape of this corpus — AIRWAY declined on 61.4% of
@@ -249,12 +275,14 @@ A fifth, cosmetic: the Python test the schema cites,
 ## Testing
 
 The decoders and the axis model are pure JavaScript with no DOM, and are tested by `node --test`:
-**50 tests** in `src/tests/audio/workflows/triage/viewer/{decode,axes}.test.mjs`. They cover the
+**58 tests** in `src/tests/audio/workflows/triage/viewer/{decode,axes}.test.mjs`. They cover the
 worked example byte-for-byte (including a big-endian read producing a *different* answer, which a
 round trip cannot see), full scale being 65535 and not 65536, the fixed widths as literals, every
 declared range, null-vs-empty for every block, the `255` sentinel not collapsing to the first term,
 an undocumented enum code throwing, parallel-length mismatch throwing, cross-block index overrun
-throwing, nulls surviving inside a vector, and the drawing rule — that an absent value breaks the
+throwing, nulls surviving inside a vector, log being refused rather than silently ignored on a
+domain that reaches zero, the cached geometry agreeing with the direct computation, and the
+drawing rule — that an absent value breaks the
 line and that an absent vertex carries `y: null`.
 
 Every fixture is synthetic. No byte in any committed file came from a recording, and

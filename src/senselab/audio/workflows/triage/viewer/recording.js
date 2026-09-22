@@ -292,8 +292,7 @@ var RecordingView = (function () {
 
   RecordingView.prototype.paint_asr = function (ctx, lane, X) {
     var self = this;
-    // Bars are acoustic extents. Word text lives in the transcript panel; it is not fitted
-    // to a bar, because a word's text length has nothing to do with its duration.
+    // Bars are acoustic extents. Word text lives in the transcript panel, not fitted to a bar.
     this.blocks.asrWords.forEach(function (word) {
       var xa = X(word.t0), xb = X(word.t1);
       ctx.fillStyle = word.outcome == null ? UNKNOWN_COLOUR : OUTCOME_COLOURS[word.outcome];
