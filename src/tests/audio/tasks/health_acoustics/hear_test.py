@@ -9,11 +9,10 @@ properties of the *parent*, and the two that need the real model say so and skip
 from __future__ import annotations
 
 import json
+import queue
 import re
-import subprocess
-import types
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import numpy as np
 import pytest
@@ -47,22 +46,84 @@ def _ramp_audio(n_samples: int, sampling_rate: int = SR) -> Audio:
     return Audio(waveform=waveform.unsqueeze(0), sampling_rate=sampling_rate)
 
 
-def _stub_worker(monkeypatch: pytest.MonkeyPatch, captured: Dict[str, Any], out_dim: int) -> None:
-    """Replace venv provisioning, model staging and the worker subprocess with a recorder."""
-    monkeypatch.setattr(hear, "ensure_venv", lambda *a, **k: Path("/tmp/fake-hear-venv"))
-    monkeypatch.setattr(hear, "venv_python", lambda venv_dir: "python3")
-    monkeypatch.setattr(
-        hear,
-        "stage_hear_snapshot",
-        lambda: (hear.HEAR_REVISION, Path("/tmp/fake-hf-cache/snapshots") / hear.HEAR_REVISION),
-    )
+class _StubPipe:
+    """The parent's ``for line in process.stdout`` pump, fed by the stub instead of a process."""
 
-    def fake_run(
-        cmd: List[str], *, input: str, capture_output: bool, text: bool, timeout: float, env: Dict[str, str]
-    ) -> types.SimpleNamespace:
-        payload = json.loads(input)
-        captured["payload"] = payload
+    def __init__(self) -> None:
+        """Start empty and open."""
+        self._lines: "queue.Queue[Optional[str]]" = queue.Queue()
+
+    def push(self, line: str) -> None:
+        """Make one line available to the pump."""
+        self._lines.put(line)
+
+    def close(self) -> None:
+        """End the stream, so the pump sees EOF."""
+        self._lines.put(None)
+
+    def __iter__(self) -> "_StubPipe":
+        """The pump iterates the pipe."""
+        return self
+
+    def __next__(self) -> str:
+        """Block until the next line, or stop at EOF."""
+        line = self._lines.get()
+        if line is None:
+            raise StopIteration
+        return line
+
+
+class _StubStdin:
+    """The parent's request side; each written line is handled inline."""
+
+    def __init__(self, handle: Any) -> None:  # noqa: ANN401 — a bound method of the stub process
+        """Record the handler and start open."""
+        self._handle = handle
+        self.closed = False
+
+    def write(self, text: str) -> int:
+        """Handle one complete request line."""
+        self._handle(text)
+        return len(text)
+
+    def flush(self) -> None:
+        """Requests are handled on write; nothing is buffered."""
+
+    def close(self) -> None:
+        """Close the request side."""
+        self.closed = True
+
+
+class _StubProcess:
+    """A protocol-speaking stand-in for the worker process, recording what the parent sent."""
+
+    pid = -1
+
+    def __init__(self, captured: Dict[str, Any], out_dim: int, env: Dict[str, str]) -> None:
+        """Announce readiness immediately, as a loaded worker does."""
+        self._captured = captured
+        self._out_dim = out_dim
+        self._returncode: Optional[int] = None
         captured["env"] = env
+        self.stdout = _StubPipe()
+        self.stderr = _StubPipe()
+        self.stdin = _StubStdin(self._handle)
+        self._emit({"ready": True, "load_s": 0.0})
+
+    def _emit(self, payload: Dict[str, Any]) -> None:
+        """Write one marked reply line."""
+        self.stdout.push(hear._WORKER_MARKER + json.dumps(payload) + "\n")
+
+    def _handle(self, line: str) -> None:
+        """Serve one request: record it, fabricate arrays of the right shape, reply."""
+        payload = json.loads(line)
+        if payload.get("stop"):
+            self._returncode = 0
+            self.stdout.close()
+            self.stderr.close()
+            return
+        captured = self._captured
+        captured["payload"] = payload
         captured["windows"] = []
         results = []
         for job in payload["jobs"]:
@@ -72,12 +133,50 @@ def _stub_worker(monkeypatch: pytest.MonkeyPatch, captured: Dict[str, Any], out_
             captured["n_samples"] = data.shape[0]
             for start in job["starts"]:
                 captured["windows"].append(data[start : start + payload["window_samples"]].copy())
-            array = np.arange(len(job["starts"]) * out_dim, dtype=np.float32).reshape(len(job["starts"]), out_dim)
+            array = np.arange(len(job["starts"]) * self._out_dim, dtype=np.float32).reshape(
+                len(job["starts"]), self._out_dim
+            )
             np.save(job["out"], array)
             results.append({"out": job["out"], "shape": list(array.shape)})
-        return types.SimpleNamespace(returncode=0, stdout=json.dumps({"results": results, "batch": 1}), stderr="")
+        self._emit({"results": results, "batch": 1})
 
-    monkeypatch.setattr(hear.subprocess, "run", fake_run)
+    def poll(self) -> Optional[int]:
+        """Whether the stub has stopped."""
+        return self._returncode
+
+    def wait(self, timeout: Optional[float] = None) -> int:
+        """The stub stops the moment it is told to."""
+        return self._returncode if self._returncode is not None else 0
+
+    def kill(self) -> None:
+        """End the stub the impolite way."""
+        self._returncode = -9
+        self.stdout.close()
+        self.stderr.close()
+
+
+@pytest.fixture(autouse=True)
+def _no_resident_worker() -> Iterator[None]:
+    """The worker outlives a call by design, so it must not outlive a test."""
+    hear.shutdown_hear_worker()
+    yield
+    hear.shutdown_hear_worker()
+
+
+def _stub_worker(monkeypatch: pytest.MonkeyPatch, captured: Dict[str, Any], out_dim: int) -> None:
+    """Replace venv provisioning, model staging and the worker process with a recorder."""
+    monkeypatch.setattr(hear, "ensure_venv", lambda *a, **k: Path("/tmp/fake-hear-venv"))
+    monkeypatch.setattr(hear, "venv_python", lambda venv_dir: "python3")
+    monkeypatch.setattr(
+        hear,
+        "stage_hear_snapshot",
+        lambda: (hear.HEAR_REVISION, Path("/tmp/fake-hf-cache/snapshots") / hear.HEAR_REVISION),
+    )
+
+    def fake_popen(cmd: List[str], **kwargs: Any) -> _StubProcess:  # noqa: ANN401 — Popen's own kwargs
+        return _StubProcess(captured, out_dim, kwargs["env"])
+
+    monkeypatch.setattr(hear.subprocess, "Popen", fake_popen)
 
 
 # ── The pin ───────────────────────────────────────────────────────────
@@ -533,7 +632,7 @@ def test_the_real_detector_rejects_a_non_two_second_window(tmp_path: Path) -> No
     the failure genuinely comes from the graph; the assertion matches on TensorFlow's own wording
     rather than accepting any exception.
     """
-    from senselab.utils.subprocess_venv import parse_subprocess_result, venv_python
+    from senselab.utils.data_structures import DeviceType
 
     prepared = hear.prepare_audio_for_hear(_ramp_audio(3 * SR))
     _, snapshot = hear.stage_hear_snapshot()
@@ -547,15 +646,13 @@ def test_the_real_detector_rejects_a_non_two_second_window(tmp_path: Path) -> No
     )
     payload["window_samples"] = SR  # 1 s: half of what the graph accepts
 
-    completed = subprocess.run(
-        [venv_python(_cache_dir_path() / "hear"), "-c", hear._HEAR_WORKER],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=900,
-    )
-    with pytest.raises(RuntimeError, match="Graph execution error"):
-        parse_subprocess_result(completed, "HeAR")
+    worker = hear._HearWorker(DeviceType.CPU)
+    try:
+        worker.start(900)
+        with pytest.raises(RuntimeError, match="Graph execution error"):
+            worker.run(payload, 900)
+    finally:
+        worker.close()
 
 
 def test_span_to_hear_buffer_is_exactly_two_seconds() -> None:
@@ -622,3 +719,162 @@ class TestHearWindowExtent:
         """A native window relative to the candidate is placed on the recording's own timeline."""
         extent = hear.hear_window_extent((10.0, 14.0), {"start": 1.0, "end": 3.0})
         assert extent == (11.0, 13.0)
+
+
+# ── The resident worker ───────────────────────────────────────────────
+
+_PROTOCOL_STUB = r"""
+import json
+import os
+import sys
+
+import numpy as np
+
+MARKER = "@@SENSELAB_HEAR@@"
+_replies = sys.stdout
+sys.stdout = sys.stderr
+
+
+def emit(payload):
+    _replies.write(MARKER + json.dumps(payload) + "\n")
+    _replies.flush()
+
+
+emit({"ready": True, "load_s": 0.0})
+calls = 0
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    if not line.strip():
+        continue
+    request = json.loads(line)
+    if request.get("stop"):
+        break
+    calls += 1
+    mode = os.environ.get("SENSELAB_STUB_MODE", "ok")
+    if mode == "raise" and calls == 1:
+        emit({"error": {"type": "ValueError", "message": "stub refused"}})
+        continue
+    if mode == "fatal":
+        emit({"error": {"type": "ValueError", "message": "stub gave up", "fatal": True}})
+        sys.exit(1)
+    if mode == "die":
+        os._exit(7)
+    results = []
+    for job in request["jobs"]:
+        array = np.full((len(job["starts"]), 8), float(calls), dtype="float32")
+        np.save(job["out"], array)
+        results.append({"out": job["out"], "shape": [int(v) for v in array.shape]})
+    emit({"results": results, "batch": 1})
+"""
+
+
+@pytest.fixture
+def protocol_stub(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    """Point the resident worker at a real subprocess speaking the protocol, with no TensorFlow."""
+    import os
+    import sys
+
+    monkeypatch.setattr(hear, "_HEAR_WORKER", _PROTOCOL_STUB)
+    monkeypatch.setattr(hear, "ensure_venv", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(hear, "venv_python", lambda _d: sys.executable)
+    monkeypatch.setattr(hear, "_clean_subprocess_env", lambda: dict(os.environ))
+    monkeypatch.setattr(
+        hear,
+        "stage_hear_snapshot",
+        lambda: (hear.HEAR_REVISION, Path("/tmp/fake-hf-cache/snapshots") / hear.HEAR_REVISION),
+    )
+    yield
+
+
+def _live_process() -> Any:  # noqa: ANN401 — subprocess.Popen, or the stub standing in for one
+    """The running worker's child process, asserting there is one."""
+    worker = hear._WORKER
+    assert worker is not None
+    process = worker._process
+    assert process is not None
+    return process
+
+
+@pytest.mark.usefixtures("protocol_stub")
+def test_the_worker_is_reused_across_calls() -> None:
+    """A second detection must reach the same process, not a fresh one."""
+    first = detect_health_acoustic_events([_ramp_audio(3 * SR)])
+    pid = _live_process().pid  # the process identity is the property under test
+    second = detect_health_acoustic_events([_ramp_audio(3 * SR)])
+    assert _live_process().pid == pid
+    # The stub counts the requests it has served, so a reused process answers 1 then 2.
+    assert next(iter(first[0][0]["label_scores"][0].values())) == 1.0
+    assert next(iter(second[0][0]["label_scores"][0].values())) == 2.0
+
+
+@pytest.mark.usefixtures("protocol_stub")
+def test_shutdown_ends_the_worker_and_the_next_call_starts_another() -> None:
+    """Handing the memory back early must not make the next detection fail."""
+    detect_health_acoustic_events([_ramp_audio(3 * SR)])
+    process = _live_process()
+    hear.shutdown_hear_worker()
+    assert hear._WORKER is None
+    assert process.poll() is not None
+    again = detect_health_acoustic_events([_ramp_audio(3 * SR)])
+    assert next(iter(again[0][0]["label_scores"][0].values())) == 1.0
+
+
+@pytest.mark.usefixtures("protocol_stub")
+def test_a_worker_reported_error_keeps_its_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one-shot parser reconstructed ValueError and TypeError; the resident path must too."""
+    monkeypatch.setenv("SENSELAB_STUB_MODE", "raise")
+    with pytest.raises(ValueError, match="stub refused"):
+        detect_health_acoustic_events([_ramp_audio(3 * SR)])
+
+
+@pytest.mark.usefixtures("protocol_stub")
+def test_a_request_that_raises_leaves_the_worker_loaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One span the detector cannot take must not cost the next span a model load.
+
+    ``_classify_spans_in_batch`` retries a failed batch one span at a time, so a fatal-on-error
+    contract would reload the SavedModel once per span of a failing batch.
+    """
+    monkeypatch.setenv("SENSELAB_STUB_MODE", "raise")
+    with pytest.raises(ValueError, match="stub refused"):
+        detect_health_acoustic_events([_ramp_audio(3 * SR)])
+    pid = _live_process().pid
+    detect_health_acoustic_events([_ramp_audio(3 * SR)])  # the stub refuses only its first request
+    assert _live_process().pid == pid
+
+
+@pytest.mark.usefixtures("protocol_stub")
+def test_a_worker_that_marks_its_error_fatal_is_replaced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure outside the request loop ends the worker; the next call starts a new one."""
+    monkeypatch.setenv("SENSELAB_STUB_MODE", "fatal")
+    with pytest.raises(ValueError, match="stub gave up"):
+        detect_health_acoustic_events([_ramp_audio(3 * SR)])
+    assert hear._WORKER is None or not hear._WORKER.alive
+    monkeypatch.setenv("SENSELAB_STUB_MODE", "ok")
+    detect_health_acoustic_events([_ramp_audio(3 * SR)])
+    assert _live_process().poll() is None
+
+
+@pytest.mark.usefixtures("protocol_stub")
+def test_a_dead_worker_is_replaced_rather_than_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A worker that vanished must not block the next call."""
+    monkeypatch.setenv("SENSELAB_STUB_MODE", "die")
+    with pytest.raises(RuntimeError):
+        detect_health_acoustic_events([_ramp_audio(3 * SR)])
+    monkeypatch.setenv("SENSELAB_STUB_MODE", "ok")
+    recovered = detect_health_acoustic_events([_ramp_audio(3 * SR)])
+    assert next(iter(recovered[0][0]["label_scores"][0].values())) == 1.0
+
+
+@pytest.mark.usefixtures("protocol_stub")
+def test_a_worker_built_for_another_device_is_replaced() -> None:
+    """``CUDA_VISIBLE_DEVICES`` is fixed at spawn, so a device change needs a new process."""
+    from senselab.utils.data_structures import DeviceType
+
+    detect_health_acoustic_events([_ramp_audio(3 * SR)], device=DeviceType.CPU)
+    first = _live_process().pid
+    assert hear._WORKER is not None and hear._WORKER.device_type is DeviceType.CPU
+    hear._WORKER.device_type = DeviceType.CUDA  # what a CUDA-built worker would look like
+    detect_health_acoustic_events([_ramp_audio(3 * SR)], device=DeviceType.CPU)
+    assert _live_process().pid != first

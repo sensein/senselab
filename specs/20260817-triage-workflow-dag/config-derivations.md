@@ -458,6 +458,31 @@ host where that 1 GiB is contended -- a shared node, or a driver running several
 parallel in one address space -- and costs 14.4 s per recording to have it back.
 See specs/20260922-yamnet-process-startup-cost/.
 
+## hear
+
+HeAR's event detector, run in its own TensorFlow venv.
+
+hear keep_worker_resident true -- FITTED, on an idle exclusive node2027, 2026-09-22. The same key as
+yamnet.keep_worker_resident and the same shape, over a larger instance of the same cost. One
+detector invocation costs 6.48 s fixed and 0.0026 s per second of audio; the marginal term is real
+here rather than negligible, and is better read per window: 0.0067 s per 2 s window (r2 0.998,
+n=30 over 2-240 s), against 0.254 s for the first window of a process, which is the graph's first
+trace. The 6.48 s decomposes as 1.9-2.1 s interpreter and TensorFlow import, 3.37 s
+tf.saved_model.load of the staged detector, 0.25 s first-call trace, and ~1.0 s of spawn and
+parent-side overhead; ensure_venv and stage_hear_snapshot together cost 0.005 s and are not part of
+it. At the corpus median recording of 7.3 s an invocation is 95.7% start-up. PREPROCESS pays it
+FOUR times per recording, constant -- hear_scores, enhanced_hear, residual_hear and the one batched
+span_hear call -- measured at 25.6-27.7 s per recording and 17.8% of the whole graph over the step
+probe, against YAMNet's 12.5%. What residency costs is memory held rather than memory peaked, the
+same argument as yamnet's: the process already existed at that size during each of the four calls.
+The worker holding the detector alone tops out at 885 MiB over nine recordings of increasing length,
+measured from /proc VmRSS; a process that also loads the 512-d encoder -- which no PREPROCESS pass
+calls -- reaches 2,399 MiB, which is why the worker loads lazily rather than at start-up. false is
+for a host where that is contended, and costs 20.1 s per recording to have it back: the four-call
+shape is 26.0 s one-shot against 5.93 s resident from cold, and the nine-recording detector pass is
+58.84 s against 6.37 s, bitwise identical.
+See specs/20260922-hear-process-startup-cost/.
+
 ## windows
 
 Per-classifier window grids and the thresholds folding scores into label sets.
