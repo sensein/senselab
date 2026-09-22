@@ -85,6 +85,28 @@ text) is not copied, so the block stays free of transcript text.
   of this change's scope. Owed a decision: it is a reader-relevant observation with a category and
   no text, and nothing about it argues for staying invisible.
 
+## What the printed page shows, and the 4-item cap left alone
+
+The decision page prints a branch's deduplicated deviation **type names** from its `branch_report`
+(`deviation: stimulus_mismatch`), and separately the **first four** items of that branch's evidence
+block with their extents, then `N additional item(s) in summary JSON`. So the types were never the
+missing thing on the page; the located, per-instance evidence was, and it was missing from the JSON
+outright.
+
+Ranking each recording's SPEECH and VOICE evidence items exactly as the report orders them
+(`branch-evidence-assertions-rank-sweep.py`, same job shape, 96 GB):
+
+| | recordings | typed findings |
+| --- | --- | --- |
+| with a SPEECH or VOICE typed finding | 18,858 | 140,528 |
+| at least one now printed within the 4-item cap | 10,198 (54.1%) | 14,291 (10.2%) |
+| none printed; all past the cap, all in the JSON | 8,660 (45.9%) | — |
+
+Ordering typed findings ahead of spans inside the cap would take the first row to 100%. It was not
+done: the page already names every type above the evidence lines, so what the reordering buys is
+one instance's extent in place of a span's, and it would displace the branch's own proposals from
+the only place they are printed. The JSON carries all 140,528 either way.
+
 ## Method
 
 `specs/20260817-triage-workflow-dag/branch-evidence-assertions-sweep.py` is the sweep, stdlib-only
