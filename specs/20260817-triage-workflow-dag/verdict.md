@@ -90,16 +90,18 @@ names are new, each a code literal written down at the value the code already us
 
 ### Two counts, and only one of them may be gated
 
-`expected_event_count` holds two unlike things. The counted-breath, cough and loudness families take
-their number from the instruction: it is in the task's own name (`fivebreaths`,
-`threequickbreaths`) or enumerated in `tokens` (`('hey','hey','hey')`). The diadochokinesis families'
-10 and 30 come from nobody — that task asks for repetition as fast as possible, no number is spoken,
-and individuals vary.
+The counted-breath, cough and loudness families take their number from the instruction: it is in
+the task's own name (`fivebreaths`, `threequickbreaths`) or enumerated in `tokens`
+(`('hey','hey','hey')`). The diadochokinesis families' 10 and 30 came from nobody — that task asks
+for repetition as fast as possible, no number is spoken, and individuals vary.
 
-A **required** count may be gated, with a tolerance still to be derived. A **statistically expected**
-count may never be gated; it is a covariate beside the rate it qualifies. Until each row declares
-which kind it carries, **no gate reads the field at all** — which costs the DDK families nothing,
-because a count nobody asked for should never have decided anything.
+`expected_event_count` held both. It is replaced by `required_count` and `typical_count`, whose
+types say which kind a row carries, what unit it counts in, and whether anything may be judged
+against it: a **required** count may be gated, with a tolerance still to be derived; a
+**statistically expected** one may never be, and `gates.UNGATEABLE_READINGS` refuses a table that
+binds it. No gate reads either today — which costs the DDK families nothing, because a count nobody
+asked for should never have decided anything. See
+`specs/20260921-required-and-typical-counts/design.md`.
 
 The full design, with the gate/instrument split in full and the measurements each gate reads, is
 `specs/20260921-gates-in-verdict/design.md`.
@@ -125,10 +127,9 @@ names — and both the family and the default layer ship empty, because every va
 current setting and nothing is universal. **Which layer supplied each bound is recorded**, so a
 reader can tell a family-specific bound from an inherited one without opening the config.
 
-**No gate reads `expected_event_count`.** It holds a count the instruction gave and a count nobody
-gave under one name, and until each row says which it carries, a bound on it would judge a
-participant against a number never spoken to them. `events_min` and `repetitions_min` read what the
-instrument found, at a bound of one.
+**No gate reads either count.** `required_count` may be bound once a tolerance is derived;
+`typical_count` may never be, and the gate table refuses it at import. `events_min` and
+`repetitions_min` read what the instrument found, at a bound of one.
 
 A branch now writes **no conformance at all**: `Result` carries spans and findings and has no field
 for one, and every `branch_report` is written `UNDETERMINED`. This fold reads the gates' inputs off
