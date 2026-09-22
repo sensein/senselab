@@ -21,6 +21,9 @@ torch-based, so TensorFlow runs in an isolated venv — the same pattern as
 ``classification/yamnet.py``, and for the same reason: TF in senselab's core dependency set is
 both heavy and prone to conflicting with the torch stack.
 
+The worker in that venv stays resident across calls within one process, holding each SavedModel
+it has been asked for; :func:`shutdown_hear_worker` ends it early.
+
 A torch conversion **does** exist, ``google/hear-pytorch``, and PR #366 used it via
 ``transformers.AutoModel``. It was rejected here on three counts, checked rather than assumed:
 
@@ -89,10 +92,15 @@ interactive login: PR #366's ``notebook_login()`` prompt cannot work in a batch 
 
 from __future__ import annotations
 
+import atexit
 import json
+import queue
 import subprocess
 import tempfile
+import threading
+import time
 import warnings
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -109,7 +117,6 @@ from senselab.utils.portable_audio_io import write_audio
 from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
-    parse_subprocess_result,
     venv_python,
 )
 
@@ -180,33 +187,62 @@ _HEAR_REQUIREMENTS = ["tensorflow>=2.16,<3", "numpy", "soundfile"]
 _HEAR_PYTHON = "3.11"
 
 _DEFAULT_TIMEOUT_S = 1800
+"""Wall-clock ceiling on one request, and separately on the worker's start-up import."""
+
+# A line protocol over the worker's stdin/stdout, one JSON object per line.
+#
+# Run request (stdin):   {"saved_model_dir": str, "window_samples": int, "batch_size": int,
+#                         "jobs": [{"wav": str, "starts": [int, ...], "out": str}, ...]}
+# Run reply (stdout):    {"results": [{"out": str, "shape": [int, int]}, ...], "batch": int}
+# Stop request (stdin):  {"stop": True}
+# Ready reply (stdout):  {"ready": True, "load_s": float}
+#
+# Arrays travel as ``.npy`` files the parent named, not through the pipe, so what a caller reads
+# back is the same bytes either path produced. Every reply carries ``_WORKER_MARKER``, and
+# ``sys.stdout`` is redirected to stderr before any heavy import, so TensorFlow's own chatter can
+# never be mistaken for an answer. A request that raises is reported as
+# {"error": {"type": str, "message": str}} and the worker keeps its models; a failure outside the
+# request loop carries ``"fatal": True`` and ends it.
+_WORKER_MARKER = "@@SENSELAB_HEAR@@"
 
 _HEAR_WORKER = r"""
 import json
 import sys
+import time
 
-try:
-    import numpy as np
-    import soundfile as sf
-    import tensorflow as tf
+MARKER = "@@MARKER@@"
+_replies = sys.stdout
+sys.stdout = sys.stderr
 
-    args = json.loads(sys.stdin.read())
-    win = int(args["window_samples"])
 
-    saved_model = tf.saved_model.load(args["saved_model_dir"])
-    fn = saved_model.signatures["serving_default"]
-    spec = fn.structured_input_signature[1]
-    input_name = list(spec.keys())[0]
+def emit(payload):
+    _replies.write(MARKER + json.dumps(payload) + "\n")
+    _replies.flush()
 
-    # The detector's signature pins the batch dimension at 1 (``audio_wav: (1, 32000)``) while
-    # the encoder's is free (``x: (None, 32000)``). Read it off the graph rather than trusting
-    # the caller: feeding 2 windows to the detector does not degrade, it raises
-    # InvalidArgumentError from deep inside the frontend's reshape.
-    static_batch = spec[input_name].shape[0]
-    batch = 1 if static_batch is not None else max(1, int(args.get("batch_size", 1)))
+
+def signature_of(tf, loaded, saved_model_dir):
+    entry = loaded.get(saved_model_dir)
+    if entry is None:
+        saved_model = tf.saved_model.load(saved_model_dir)
+        fn = saved_model.signatures["serving_default"]
+        spec = fn.structured_input_signature[1]
+        input_name = list(spec.keys())[0]
+        # The detector's signature pins the batch dimension at 1 (``audio_wav: (1, 32000)``) while
+        # the encoder's is free (``x: (None, 32000)``). Read it off the graph rather than trusting
+        # the caller: feeding 2 windows to the detector does not degrade, it raises
+        # InvalidArgumentError from deep inside the frontend's reshape.
+        entry = (saved_model, fn, input_name, spec[input_name].shape[0])
+        loaded[saved_model_dir] = entry
+    return entry[1], entry[2], entry[3]
+
+
+def handle(np, sf, tf, loaded, request):
+    win = int(request["window_samples"])
+    fn, input_name, static_batch = signature_of(tf, loaded, request["saved_model_dir"])
+    batch = 1 if static_batch is not None else max(1, int(request.get("batch_size", 1)))
 
     results = []
-    for job in args["jobs"]:
+    for job in request["jobs"]:
         x, sr = sf.read(job["wav"], dtype="float32", always_2d=False)
         if x.ndim > 1:
             x = x.mean(axis=1)
@@ -233,12 +269,262 @@ try:
         array = np.concatenate(outs, axis=0).astype("float32")
         np.save(job["out"], array)
         results.append({"out": job["out"], "shape": [int(v) for v in array.shape]})
+    return {"results": results, "batch": batch}
 
-    print(json.dumps({"results": results, "batch": batch}))
+
+def main():
+    started = time.monotonic()
+    import numpy as np
+    import soundfile as sf
+    import tensorflow as tf
+
+    loaded = {}
+    emit({"ready": True, "load_s": round(time.monotonic() - started, 3)})
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            return
+        if not line.strip():
+            continue
+        request = json.loads(line)
+        if request.get("stop"):
+            return
+        try:
+            emit(handle(np, sf, tf, loaded, request))
+        except Exception as exc:
+            emit({"error": {"type": type(exc).__name__, "message": str(exc)}})
+
+
+try:
+    main()
 except Exception as exc:
-    print(json.dumps({"error": {"type": type(exc).__name__, "message": str(exc)}}))
+    emit({"error": {"type": type(exc).__name__, "message": str(exc), "fatal": True}})
     sys.exit(1)
-"""
+""".replace("@@MARKER@@", _WORKER_MARKER)
+
+
+class _HearWorker:
+    """One venv subprocess with TensorFlow imported, answering run requests until it is stopped.
+
+    A SavedModel is loaded on first request for it and kept, keyed by its directory, so a process
+    that only ever runs the event detector never loads the encoder.
+
+    Attributes:
+        device_type: The device the worker was started for; a request for another needs a new one.
+        load_s: How long starting it and importing TensorFlow took.
+    """
+
+    def __init__(self, device_type: DeviceType) -> None:
+        """Record the worker's state. Starting it is :meth:`start`.
+
+        Args:
+            device_type: The device this worker's environment will be built for.
+        """
+        self.device_type = device_type
+        self.load_s = 0.0
+        self._process: Optional["subprocess.Popen[str]"] = None
+        self._replies: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+        self._noise: "deque[str]" = deque(maxlen=40)
+
+    def start(self, timeout_s: int) -> None:
+        """Build the venv if needed, spawn the worker and wait for its TensorFlow import.
+
+        Args:
+            timeout_s: Wall-clock ceiling on the import.
+
+        Raises:
+            RuntimeError: If the worker died, raised, or did not report ready in time.
+        """
+        venv_dir = ensure_venv(_HEAR_VENV, _HEAR_REQUIREMENTS, python_version=_HEAR_PYTHON)
+        env = _clean_subprocess_env()
+        if self.device_type is DeviceType.CPU:
+            # TensorFlow has no per-call device argument here; hiding the GPUs is how a CPU
+            # request is honoured, and the environment is fixed when the process starts.
+            env["CUDA_VISIBLE_DEVICES"] = "-1"
+        began = time.monotonic()
+        self._process = subprocess.Popen(  # noqa: S603 — the interpreter is this repo's own venv
+            [venv_python(venv_dir), "-c", _HEAR_WORKER],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+        threading.Thread(target=self._pump_replies, daemon=True).start()
+        threading.Thread(target=self._pump_noise, daemon=True).start()
+        self._await(timeout_s)
+        self.load_s = round(time.monotonic() - began, 3)
+
+    @property
+    def alive(self) -> bool:
+        """Whether the worker process is still running and still holding its models."""
+        return self._process is not None and self._process.poll() is None
+
+    def run(self, payload: Dict[str, Any], timeout_s: int) -> Dict[str, Any]:
+        """Run one batch of jobs, writing each one's array to the ``out`` path the payload names.
+
+        Args:
+            payload: As :func:`build_worker_payload` assembles it.
+            timeout_s: Wall-clock ceiling on this batch alone.
+
+        Returns:
+            The worker's reply: ``results`` (one entry per job, in order) and ``batch``.
+
+        Raises:
+            RuntimeError: If the worker died, raised, or did not answer in time.
+        """
+        self._send(payload)
+        return self._await(timeout_s)
+
+    def close(self) -> None:
+        """End the worker, releasing its models. Safe to call on a worker that never started."""
+        process, self._process = self._process, None
+        if process is None:
+            return
+        try:
+            if process.stdin is not None and not process.stdin.closed:
+                process.stdin.write(json.dumps({"stop": True}) + "\n")
+                process.stdin.flush()
+                process.stdin.close()
+            process.wait(timeout=5)
+        except Exception:  # noqa: BLE001 — a worker that will not stop politely is killed
+            process.kill()
+            try:
+                process.wait(timeout=30)
+            except Exception:  # noqa: BLE001, S110 — nothing further is owed to an unreapable child
+                pass
+
+    def _send(self, payload: Dict[str, Any]) -> None:
+        """Write one request line, turning a closed pipe into the failure the caller reports.
+
+        Args:
+            payload: The request.
+
+        Raises:
+            RuntimeError: If the worker is gone or its stdin will not take the line.
+        """
+        if self._process is None or self._process.stdin is None:
+            raise RuntimeError("HeAR worker is not running")
+        try:
+            self._process.stdin.write(json.dumps(payload) + "\n")
+            self._process.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError) as exc:
+            raise RuntimeError(f"HeAR worker closed its input: {exc}\n{self._tail()}") from exc
+
+    def _await(self, timeout_s: int) -> Dict[str, Any]:
+        """Wait for one reply, raising what the one-shot path would have raised for the same reply.
+
+        A worker-reported error is reconstructed exactly as
+        :func:`~senselab.utils.subprocess_venv.parse_subprocess_result` reconstructs it, so the
+        failure a caller sees does not depend on which path produced it. The worker survives such
+        an error unless it marked it fatal; a timeout or a dead worker ends it here.
+
+        Args:
+            timeout_s: How long to wait.
+
+        Returns:
+            The reply.
+
+        Raises:
+            RuntimeError: On a timeout, a dead worker, or a worker-reported exception whose type is
+                not one of the two the one-shot parser reconstructs.
+            ValueError: A worker-reported ``ValueError``.
+            TypeError: A worker-reported ``TypeError``.
+        """
+        try:
+            reply = self._replies.get(timeout=timeout_s)
+        except queue.Empty:
+            self.close()
+            raise RuntimeError(f"HeAR worker did not answer in {timeout_s}s\n{self._tail()}") from None
+        if "error" in reply:
+            error = reply["error"] or {}
+            if error.get("fatal"):
+                self.close()
+            exc_class = {"ValueError": ValueError, "TypeError": TypeError}.get(str(error.get("type", "")), RuntimeError)
+            raise exc_class(str(error.get("message", "unknown error")))
+        if reply.get("eof"):
+            self.close()
+            raise RuntimeError(f"HeAR venv failed:\n{self._tail()}")
+        return reply
+
+    def _pump_replies(self) -> None:
+        """Drain stdout into the reply queue, forwarding anything unmarked to the noise tail."""
+        process = self._process
+        if process is None or process.stdout is None:
+            return
+        for line in process.stdout:
+            if line.startswith(_WORKER_MARKER):
+                try:
+                    self._replies.put(json.loads(line[len(_WORKER_MARKER) :]))
+                except ValueError:
+                    self._noise.append(line.rstrip())
+            elif line.strip():
+                self._noise.append(line.rstrip())
+        self._replies.put({"eof": True})
+
+    def _pump_noise(self) -> None:
+        """Drain stderr so a chatty loader cannot fill its pipe and deadlock the worker."""
+        process = self._process
+        if process is None or process.stderr is None:
+            return
+        for line in process.stderr:
+            if line.strip():
+                self._noise.append(line.rstrip())
+
+    def _tail(self) -> str:
+        """The worker's last lines of output, for a failure message that says what it was doing."""
+        return "\n".join(self._noise)
+
+
+_WORKER_LOCK = threading.Lock()
+_WORKER: Optional[_HearWorker] = None
+
+
+def shutdown_hear_worker() -> None:
+    """End the process's HeAR worker, releasing every SavedModel it holds.
+
+    A later call starts a new one. Registered to run at interpreter exit, so a caller only needs
+    this to hand the memory back earlier than that.
+    """
+    global _WORKER
+    with _WORKER_LOCK:
+        worker, _WORKER = _WORKER, None
+    if worker is not None:
+        worker.close()
+
+
+atexit.register(shutdown_hear_worker)
+
+
+def _worker(device_type: DeviceType, timeout_s: int) -> _HearWorker:
+    """The running worker for ``device_type``, started if there is not a live one already.
+
+    Args:
+        device_type: The device the request is for; a worker built for another is replaced,
+            because ``CUDA_VISIBLE_DEVICES`` is fixed when the process starts.
+        timeout_s: Wall-clock ceiling on a start, when one is needed.
+
+    Returns:
+        The worker, with TensorFlow imported.
+
+    Raises:
+        Exception: Whatever stopped the worker from starting.
+    """
+    global _WORKER
+    if _WORKER is not None and _WORKER.alive and _WORKER.device_type is device_type:
+        return _WORKER
+    if _WORKER is not None:
+        _WORKER.close()
+        _WORKER = None
+    worker = _HearWorker(device_type)
+    try:
+        worker.start(timeout_s)
+    except Exception:
+        worker.close()
+        raise
+    _WORKER = worker
+    return worker
 
 
 def resolve_event_detector(model: str) -> str:
@@ -545,6 +831,8 @@ def run_hear(
 ) -> List[np.ndarray]:
     """Run one HeAR SavedModel over pre-planned windows, in the isolated TensorFlow venv.
 
+    The worker holding the SavedModel outlives the call; :func:`shutdown_hear_worker` ends it.
+
     Args:
         audios: Audios **already at** :data:`HEAR_SAMPLING_RATE` (use
             :func:`prepare_audio_for_hear`).
@@ -557,7 +845,7 @@ def run_hear(
         device: ``DeviceType.CPU`` hides every GPU from TensorFlow; ``DeviceType.CUDA`` lets it
             place ops itself. MPS is not a TensorFlow device — Apple GPUs need the separate
             ``tensorflow-metal`` plugin, which this venv does not install — so it is not offered.
-        timeout: Seconds before the worker is killed.
+        timeout: Wall-clock ceiling on this request, after which the worker is killed.
 
     Returns:
         One array per audio: ``[n_windows, 512]`` for the encoder, ``[n_windows, 8]`` for a
@@ -578,9 +866,6 @@ def run_hear(
     logger.debug("HeAR staged at %s@%s (%s)", HEAR_MODEL_ID, sha, snapshot)
     saved_model_dir = snapshot / subdir if subdir else snapshot
 
-    venv_dir = ensure_venv(_HEAR_VENV, _HEAR_REQUIREMENTS, python_version=_HEAR_PYTHON)
-    python = venv_python(venv_dir)
-
     with tempfile.TemporaryDirectory(prefix="senselab-hear-") as tmpdir:
         tmp = Path(tmpdir)
         jobs: List[Dict[str, Any]] = []
@@ -594,19 +879,7 @@ def run_hear(
             write_hear_wav(wav, audio)
             jobs.append({"wav": str(wav), "starts": [int(s) for s in starts], "out": str(tmp / f"out_{index}.npy")})
 
-        env = _clean_subprocess_env()
-        if device_type is DeviceType.CPU:
-            # TensorFlow has no per-call device argument here; hiding the GPUs is how a CPU
-            # request is honoured.
-            env["CUDA_VISIBLE_DEVICES"] = "-1"
-
-        result = subprocess.run(
-            [python, "-c", _HEAR_WORKER],
-            input=json.dumps(build_worker_payload(str(saved_model_dir), jobs, batch_size)),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-        output = parse_subprocess_result(result, "HeAR")
+        payload = build_worker_payload(str(saved_model_dir), jobs, batch_size)
+        with _WORKER_LOCK:
+            output = _worker(device_type, timeout).run(payload, timeout)
         return [np.load(entry["out"]) for entry in output["results"]]
