@@ -900,8 +900,29 @@ def _nested_transitions(title: str, table: Mapping[str, Mapping[str, int]], tota
     return [*lines, ""]
 
 
-def _nested_gained_lost(title: str, table: Mapping[str, Mapping[str, Mapping[str, int]]], total: int) -> list[str]:
-    """Render one node-keyed gained-and-lost table.
+def _nested_recordings(title: str, table: Mapping[str, Mapping[str, Mapping[str, int]]], total: int) -> list[str]:
+    """Render one node-keyed table of how many recordings gained and lost a name.
+
+    Args:
+        title: The section's heading.
+        table: Node to name to its ``gained``/``lost`` counts.
+        total: The denominator every share is taken against.
+
+    Returns:
+        The section's lines, empty when there is nothing to count.
+    """
+    if not table:
+        return []
+    lines = [f"### {title}", "", "| node | name | gained | lost | net |", "|---|---|---:|---:|---:|"]
+    for node, names in table.items():
+        for name, counts in names.items():
+            gained, lost = counts.get("gained", 0), counts.get("lost", 0)
+            lines.append(f"| `{node}` | `{name}` | {gained} | {lost} | {gained - lost:+d} |")
+    return [*lines, ""]
+
+
+def _nested_totals(title: str, table: Mapping[str, Mapping[str, Mapping[str, int]]], total: int) -> list[str]:
+    """Render one node-keyed table of what each pass wrote and how many recordings moved.
 
     Args:
         title: The section's heading.
@@ -913,12 +934,13 @@ def _nested_gained_lost(title: str, table: Mapping[str, Mapping[str, Mapping[str
     """
     if not table:
         return []
-    lines = [f"### {title}", "", "| node | name | gained | lost | before | after |", "|---|---|---:|---:|---:|---:|"]
+    header = "| node | name | before | after | rose on | fell on |"
+    lines = [f"### {title}", "", header, "|---|---|---:|---:|---:|---:|"]
     for node, names in table.items():
         for name, counts in names.items():
             lines.append(
-                f"| `{node}` | `{name}` | {counts.get('gained', 0)} | {counts.get('lost', 0)} | "
-                f"{counts.get(BEFORE, 0)} | {counts.get(AFTER, 0)} |"
+                f"| `{node}` | `{name}` | {counts.get(BEFORE, 0)} | {counts.get(AFTER, 0)} | "
+                f"{counts.get('gained', 0)} | {counts.get('lost', 0)} |"
             )
     return [*lines, ""]
 
@@ -988,10 +1010,10 @@ def render_markdown(report: ReplayDiff, source: Path | str) -> str:
     lines += _nested_transitions("Hint reading", report.hints, total)
     lines += _nested_transitions("Node run state", report.ran, total)
     lines += ["## Typed findings", ""]
-    lines += _nested_gained_lost("Deviation types in the file decision", report.deviations, total)
-    lines += _nested_gained_lost("Deviation types in the branch's own report", report.report_deviations, total)
-    lines += _nested_gained_lost("Deviation assertions written", report.deviation_assertions, total)
-    lines += _nested_gained_lost("Unmeasured config paths", report.unmeasured, total)
+    lines += _nested_recordings("Deviation types in the file decision", report.deviations, total)
+    lines += _nested_recordings("Deviation types in the branch's own report", report.report_deviations, total)
+    lines += _nested_totals("Deviation assertions written", report.deviation_assertions, total)
+    lines += _nested_recordings("Unmeasured config paths", report.unmeasured, total)
     lines += ["## What the PII change did", ""]
     lines += _stem_lines(report.pii_scanned_then_not, total)
     lines += [
