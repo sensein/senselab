@@ -37,10 +37,12 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.nodes.gates import (
     DEFAULT_LAYER,
+    FLAG_GATES,
     GATE_SECTION,
     GATE_SPECS,
     AppliedGate,
     GateBounds,
+    apply_flag_gates,
     apply_gates,
     conformance_gate_names,
     load_gate_bounds,
@@ -394,13 +396,16 @@ class GateOutcome:
         node: The branch whose report the conformance belongs to, or None when nothing was gated.
         conformance: What the gates decided.
         bounds: The group's configured gates, or None when no group was resolved.
-        applied: One record per gate applied, in the order the group declares them.
+        applied: One record per conformance gate applied, in the order the group declares them.
+        flagging: One record per :data:`FLAG_GATES` gate applied. These decide no conformance;
+            each one that did not pass is a flag ground of its own.
     """
 
     node: str | None
     conformance: Conformance
     bounds: GateBounds | None
     applied: tuple[AppliedGate, ...]
+    flagging: tuple[AppliedGate, ...] = ()
 
     @property
     def unmeasured(self) -> tuple[str, ...]:
@@ -412,14 +417,15 @@ class GateOutcome:
             ``verdict.unmeasured_points_flag`` reaches a gate the same way it reaches an
             instrument setting.
         """
-        return tuple(_gate_path(gate) for gate in self.applied if gate.bound is None)
+        return tuple(_gate_path(gate) for gate in (*self.applied, *self.flagging) if gate.bound is None)
 
     def record(self) -> dict[str, Any]:
         """This application, as the verdict records it.
 
         Returns:
-            The node, the group and its bounds, and every gate applied. Empty when no group was
-            resolved, which is every recording that declares no task this graph holds a row for.
+            The node, the group and its bounds, every conformance gate applied and every flagging
+            gate applied. Empty when no group was resolved, which is every recording that declares
+            no task this graph holds a row for.
         """
         if self.bounds is None:
             return {}
@@ -427,6 +433,7 @@ class GateOutcome:
             "node": self.node,
             **self.bounds.record(),
             "applied": [gate.record() for gate in self.applied],
+            "flagging": [gate.record() for gate in self.flagging],
         }
 
 
@@ -453,12 +460,15 @@ def gate_conformance(
         return GateOutcome(None, UNDETERMINED, None, ())
     branch, expectation = owner
     bounds = load_gate_bounds(config, expectation.pattern, declared_family)
+    # The flag gates ask about the recording's circumstances, not about the instruction, so they
+    # are applied whether or not the owning branch evaluated the task in family.
+    flagging = apply_flag_gates(bounds, gate_readings(store, tuple(FLAG_GATES)))
     reported = next((report for report in reports if report.node == branch and report.in_family), None)
     if reported is None:
-        return GateOutcome(branch, UNDETERMINED, bounds, ())
+        return GateOutcome(branch, UNDETERMINED, bounds, (), tuple(flagging))
     names = conformance_gate_names(expectation.pattern, anti_pattern=expectation.anti_pattern)
     conformance, applied = apply_gates(names, bounds, gate_readings(store, names))
-    return GateOutcome(branch, conformance, bounds, tuple(applied))
+    return GateOutcome(branch, conformance, bounds, tuple(applied), tuple(flagging))
 
 
 def _derived_ran(
@@ -545,6 +555,7 @@ def verdict(
         llm_redaction=annotation,
         critical_absences=_critical_absences(store),
         gates=outcome.record(),
+        flag_gates=[gate.record() for gate in outcome.flagging],
         policy=FoldPolicy.from_config(config),
     )
 

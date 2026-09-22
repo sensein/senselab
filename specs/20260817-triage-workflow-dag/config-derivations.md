@@ -1729,6 +1729,46 @@ verdict.gates.by_group.gap_off_task_min_s: 1.0          [ORDERED_TOKENS, FREE_RE
   Shorter than a second, a gap is a breath or a pause within the task; a full second of nothing is
   a region that did not serve it.
 
+verdict.gates.by_group.dominant_speaker_share_min: 0.9          [ORDERED_TOKENS, FREE_RESPONSE, ITEM_LIST, SYLLABLE_TRAIN, SYLLABLE_SEQUENCE]
+  UNFITTED. This number has not been fitted against anything and must not be read as though it
+  had been. What is derived is its *shape*, its *scope* and its *sense*; only the value is a
+  placeholder.
+
+  It reads `extent_dominant_speaker_share`: the largest contributor's seconds inside the task
+  extent over every attributed second inside it, from
+  `specs/20260922-speakers-within-the-task-extent/design.md`. It is the only gate in
+  `gates.FLAG_GATES` — its failure is a flag ground of its own and never a term in the task's
+  conformance, because a second person speaking does not mean the participant failed to perform
+  the instruction.
+
+  The five groups it is keyed under are exactly the five SPEECH owns, and no other branch owns
+  any of them, so the keying is what scopes the gate to SPEECH. AIRWAY's and VOICE's groups carry
+  it deliberately: another person breathing, coughing, holding a vowel or gliding inside a
+  participant's recording is implausible, and pyannote has no defined behaviour on that audio, so
+  a bound there would be reading the diarizer's response to out-of-domain input.
+
+  0.9 was chosen for the two cases the share's continuity separates. A diarizer that splits 0.2 s
+  of breath off as a second label on a 20 s task moves the share to about 0.99 and passes; a
+  genuine examiner turn of 2 s in the same task reads 0.90 and sits on the bound.
+
+  The distribution IS measured, over the 38,980 SPEECH recordings of the replayed corpus at
+  /orcd/scratch/bcs/002/satra/triage_replay_20260922/out/ that carry both a task extent and an
+  enhanced diarization. p10, p25 and p50 are all exactly 1.00: on nine SPEECH recordings in ten,
+  one voice holds every attributed second of the task. Below each candidate bound:
+
+      1.00 -> 2,045 (5.25%)    0.95 -> 859 (2.20%)    0.80 -> 358 (0.92%)
+      0.99 -> 1,490 (3.82%)    0.90 -> 613 (1.57%)    0.70 -> 210 (0.54%)
+
+  The 555 recordings between 0.99 and 1.00 are the sliver-of-a-second artefact mode the
+  continuity argument predicted; 0.99 would flag all of them and 0.9 does not. That is what the
+  scan establishes and the whole of it.
+
+  What it does NOT establish: no recording in that corpus carries a label saying whether a second
+  person was in the room, so the 613 the bound flags cannot be split into true and false. The
+  measurement that would fit it is the same distribution against adjudicated verdicts on that
+  question. Until it exists this is a placeholder chosen for its distance from a known artefact
+  mode, not a fitted operating point.
+
 ```
 
 ### The five gates that were code literals

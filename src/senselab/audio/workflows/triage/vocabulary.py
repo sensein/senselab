@@ -175,6 +175,14 @@ Controlled vocabulary, with the reviewer's categories appended; the substrings a
 stay in the store's ``redaction_llm_review`` measurements.
 """
 
+EXTRA_SPEAKER_IN_EXTENT = "another speaker holds part of the task extent"
+"""The flag ground the multi-speaker gate contributes to the triage axis.
+
+Controlled vocabulary, with the gate's reading and bound appended. It is
+``gates.FLAG_GATES["dominant_speaker_share_min"]``, spelled here because the fold names its own
+grounds and imports no gate table.
+"""
+
 
 @dataclass(frozen=True)
 class NodeVerdict:
@@ -525,6 +533,7 @@ def fold_file_verdict(
     llm_redaction: Mapping[str, Any] | None = None,
     critical_absences: Mapping[str, Mapping[str, str]] | None = None,
     gates: Mapping[str, Any] | None = None,
+    flag_gates: Sequence[Mapping[str, Any]] | None = None,
     policy: FoldPolicy | None = None,
 ) -> FileVerdict:
     """Decide the file, from the deciding nodes' verdicts and the reporting nodes' reports.
@@ -555,6 +564,9 @@ def fold_file_verdict(
             recorded absence behind it, as ``routing`` wrote them. Non-empty flags, never discards.
         gates: The task group's gates and the ones this fold's caller applied to the declared
             task's readings, carried onto the verdict so the conformance can be read backwards.
+        flag_gates: The gates the caller applied that decide no conformance, each as its own
+            ``AppliedGate`` record. One that did not pass is a flag ground, named by its
+            ``ground``; one that answered :data:`UNDETERMINED` is never one.
         policy: What to do with what was reported, from the ``verdict.*`` config section. None is
             the packaged policy.
 
@@ -629,6 +641,18 @@ def fold_file_verdict(
         reasons.append(
             NodeVerdict(
                 _VERDICT, Outcome.FLAG, None, f"{LLM_REDACTION_RESIDUE}: {named}" if named else LLM_REDACTION_RESIDUE
+            )
+        )
+    for record in flag_gates or ():
+        if record.get("passed") is not False:
+            continue
+        reasons.append(
+            NodeVerdict(
+                _VERDICT,
+                Outcome.FLAG,
+                None,
+                f"{record.get('ground', record.get('gate'))}: "
+                f"{record.get('reading')} read {record.get('value')} against {record.get('bound')}",
             )
         )
     for name, report in reports.items():
