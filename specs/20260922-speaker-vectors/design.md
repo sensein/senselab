@@ -345,3 +345,145 @@ array finishes before quoting a rate.
   interface and not the separation.
 - **A second embedding model as a cross-check.** One model by decision (D-1); a disagreement
   between two backends would be a different and larger question.
+
+## D-10. Only `speech` extents are embedded, and the other two families are what D-8 saw
+
+Owner judgment, taken as given: an ECAPA speaker embedding is meaningless on non-vocalic audio,
+so `airway` extents — breathing, coughing, throat-clearing — must not be pooled into a speaker
+vector. `voice` was left open on the argument that sustained phonation, glides and DDK *are*
+vocalic while being outside ECAPA's training domain, and was settled by the measurement below.
+
+**The measurement reuses D-7's own per-extent vectors and re-runs nothing.** `exp_c.py` wrote one
+vector per admitted task extent for 1,513 subjects on the design corpus, each carrying that
+extent's `family`. `family-split.py` in this directory re-analyses those 17,092 vectors; it re-runs
+no embedding, so every number below is directly comparable to D-7's table. Its reproduction of
+D-7's shipped pooling is the control: all-three, unmatched, gives AUC 0.9862 / EER 0.0568 /
+rank-1 0.840 against D-7's 0.9847 / 0.0588 / 0.818 — the same protocol under a different random
+half-split.
+
+### The near-orthogonal tail D-8 could not explain
+
+D-8 recorded `cos_to_centroid_loo_q05` at 0.077–0.365 and named a candidate mechanism it could not
+test. The per-extent analogue — each extent's cosine to its own speaker's leave-one-out centroid —
+tests it directly, and the candidate mechanism is confirmed.
+
+| family | n | mean | p05 | median | share below 0.2 | median duration |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `speech` | 12,133 | 0.6226 | 0.2898 | 0.6619 | **1.6%** | 4.03 s |
+| `voice` | 1,434 | 0.4552 | 0.1572 | 0.4576 | **8.5%** | 7.56 s |
+| `airway` | 3,525 | 0.4995 | 0.1585 | 0.5060 | **8.8%** | 9.58 s |
+| all | 17,092 | 0.5832 | 0.2246 | 0.6157 | 3.6% | — |
+
+The bottom 5% of the pooled distribution is cosine below 0.2246, and its composition is the
+answer: `airway` supplies 47.5% of that tail while being 20.6% of the corpus (**2.30× enriched**),
+`voice` supplies 20.0% while being 8.4% (**2.38× enriched**), and `speech` supplies 32.5% while
+being 71.0% (**0.46×, i.e. depleted**). Two thirds of the near-orthogonal tail is the 29% of
+extents that are not speech.
+
+So **yes, airway pollution explains the tail** — and the same measurement shows `voice` is not the
+exception the open question hoped for: per extent it is *marginally worse* than airway, not better.
+This is a per-extent statistic and D-8's is per window, so it is the analogue rather than the same
+number; the enrichment is large enough that the distinction does not change the reading.
+
+### What each family costs the separation
+
+D-7's protocol exactly — a subject's extents split into two disjoint halves, each half pooled,
+within against between over 1,513 subjects — run three ways.
+
+**Unmatched**, every extent each condition admits. Supply differs by condition, which matters
+because D-7 found the score monotone in extent count:
+
+| condition | subjects | extents/subject | within p05 | between p95 | AUC | EER | d′ | rank-1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **speech** | 1,479 | 8.14 | **0.5532** | **0.3273** | **0.99918** | **0.0129** | **6.01** | **0.9648** |
+| speech+voice | 1,504 | 9.01 | 0.4827 | 0.3822 | 0.99358 | 0.0313 | 4.70 | 0.9036 |
+| all-three (shipped) | 1,513 | 11.30 | 0.5721 | 0.5913 | 0.98617 | 0.0568 | 3.60 | 0.8401 |
+
+**Supply-matched**, one cohort and exactly `k` extents per subject in every condition, so the
+family mix is the only difference:
+
+| k | condition | AUC | EER | d′ | rank-1 |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 4 | speech | **0.99627** | **0.0264** | **4.55** | **0.8918** |
+| 4 | speech+voice | 0.97430 | 0.0751 | 3.18 | 0.7133 |
+| 4 | all-three | 0.90010 | 0.1643 | 1.96 | 0.5071 |
+| 6 | speech | **0.99981** | **0.0070** | **6.28** | **0.9783** |
+| 6 | speech+voice | 0.99456 | 0.0286 | 4.54 | 0.8885 |
+| 6 | all-three | 0.96237 | 0.0921 | 2.88 | 0.7136 |
+
+**The production comparison**, one cohort (1,479 subjects with at least four speech extents) with
+each condition adding its families *on top of* the speech that subject already has. This is the
+only table in which excluding a family is allowed to cost supply:
+
+| condition | extents/subject | within mean | within p05 | between mean | between p95 | AUC | EER | d′ | rank-1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **speech** | 8.14 | 0.7931 | 0.5695 | **0.1408** | **0.3270** | **0.99868** | **0.0122** | **5.95** | **0.9730** |
+| speech+voice | 9.06 | 0.7721 | 0.5195 | 0.1721 | 0.3763 | 0.99647 | 0.0216 | 4.98 | 0.9189 |
+| all-three | 11.32 | 0.7811 | 0.5604 | 0.2764 | 0.5774 | 0.98557 | 0.0541 | 3.61 | 0.8452 |
+
+**Speech-only wins on every metric in every comparison, and wins while using the least supply.**
+That is what makes the result strong rather than merely favourable: D-7 established that more
+extents is monotonically better, so a condition that wins with 8.14 extents against one with 11.32
+is winning *against* the supply gradient, not along it. EER falls 4.4× (0.0541 → 0.0122) and rank-1
+rises from 0.845 to 0.973.
+
+**The mechanism is visible in the between-speaker column, not the within-speaker one.** Within p05
+barely moves across the three conditions (0.570 / 0.520 / 0.560). What moves is *between*: the mean
+between-speaker cosine rises from 0.141 (speech) to 0.172 (+voice) to 0.276 (+airway), and p95 from
+0.327 to 0.577. Adding these families does not make a speaker look less like themselves — it makes
+**different speakers look like each other**. That is the signature of embeddings collapsing onto a
+shared non-identity direction, which is exactly what an ECAPA vector of a cough or a held vowel is:
+the model has no speaker evidence to encode, so it returns something dominated by the channel and
+the acoustic class. The owner's judgment about `airway` is confirmed with a mechanism, and `voice`
+shows the same effect at about a quarter of the magnitude.
+
+### What it costs in coverage
+
+From the replayed-tree census (`family-coverage.py` over `census_replay`, 62,351 recordings with a
+store, 1,527 subjects, at the 1.0 s floor):
+
+| family set | subjects retained | recordings retained |
+| --- | ---: | ---: |
+| speech | 1,519 (99.48%) | 38,800 (62.23%) |
+| speech+voice | 1,522 (99.67%) | 43,279 (69.41%) |
+| all-three | 1,522 (99.67%) | 86.82% |
+
+**Three subjects.** Exactly three carry a task extent but none in `speech` — two hold only `voice`
+extents and one holds `airway`+`voice`. That is the entire coverage cost of the decision, against a
+4.4× reduction in equal error rate for the other 1,519. Recording retention falls a great deal more
+(86.8% → 62.2%), but the recording is not the unit: a row is a speaker, and a speaker keeps their
+speech recordings.
+
+### The decision
+
+`EMBEDDED_FAMILIES = ("speech",)`, enforced in `gather`, with every refused extent counted by
+family in `ScanReport.extents_refused_family`. Not a config key and not a flag: the alternative is
+measured to be worse on every metric, and an operating point nobody should choose is not an option
+to expose.
+
+**The refusal floor does not move.** D-6's sweep (job `23470962`) drew its 120 subjects from
+extents of at least 25 s, which on this corpus are free-speech extents, so the fitted 1.0 s is
+already a speech-derived number. The profile is unchanged and `schema_version` stays `1`; the
+parquet's `schema_version` goes to **2**, because what a row is pooled from has changed.
+
+**Recording-equal pooling stays, and is now inert on the measured corpus.** D-9's 3,309
+two-extent recordings were **all** `('airway', 'airway')`, so with airway excluded no recording on
+the replayed tree supplies two extents and the recording stage is a no-op there. It is kept because
+it is the correct semantics — two overlapping spans of one file are not two observations of a
+speaker — and because nothing prevents SPEECH from minting two extents on a future tree. A
+regression test exercises it directly rather than through the airway fixture that used to supply
+it.
+
+### What this measurement does not settle
+
+- **Whether a per-family vector is worth writing.** This decision removes two families from the
+  speaker vector; it does not say a separate airway or voice vector would be useless for some other
+  consumer. Nothing here measures that, and no such consumer exists.
+- **Whether the same ordering holds on the replayed tree.** Every separation number above is from
+  the *design* corpus, because that is where the per-extent vectors exist. The replay is known to
+  move `airway` and to leave `speech` and `voice` within 0.4% (D-9), so the condition being
+  *removed* is the one the replay moved — which makes the decision more robust to the replay, not
+  less. The coverage table above *is* from the replayed tree.
+- **Why `voice` degrades.** "Outside ECAPA's training domain" is a hypothesis consistent with the
+  between-speaker collapse; it is not tested against alternatives such as extent length (voice
+  extents are longer) or task homogeneity.

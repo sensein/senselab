@@ -190,6 +190,35 @@ def test_an_extent_below_the_floor_is_refused_and_counted(tmp_path: Path) -> Non
     assert report.subjects_without_extent == []
 
 
+def test_only_speech_extents_are_embedded_and_the_rest_are_counted(tmp_path: Path) -> None:
+    """A non-vocalic or out-of-domain extent is refused by family, not quietly pooled."""
+    build_recording(
+        tmp_path,
+        stem="sub-mix_ses-s0_task-x",
+        duration_s=40.0,
+        extents=((1.0, 12.0, "speech"), (13.0, 24.0, "airway"), (25.0, 36.0, "voice")),
+    )
+    grouped, report = sv.gather(tmp_path)
+    assert [extent.family for extent in grouped["sub-mix"]] == ["speech"]
+    assert report.extents_refused_family == {"airway": 1, "voice": 1}
+    assert report.extents_admitted == 1
+
+
+def test_a_subject_whose_whole_supply_is_out_of_family_is_refused_not_dropped(tmp_path: Path) -> None:
+    """Refusing every extent by family is a reported outcome, never an absent subject."""
+    build_recording(
+        tmp_path,
+        stem="sub-airway_ses-s0_task-x",
+        duration_s=30.0,
+        extents=((1.0, 20.0, "airway"),),
+    )
+    grouped, report = sv.gather(tmp_path)
+    assert grouped == {}
+    assert report.subjects_all_refused == ["sub-airway"]
+    assert report.subjects_without_extent == []
+    assert report.extents_refused_family == {"airway": 1}
+
+
 def test_a_subject_that_minted_no_extent_is_reported_apart_from_one_that_was_refused(tmp_path: Path) -> None:
     """Nothing to embed and everything too short are different facts about a speaker."""
     build_recording(tmp_path, stem="sub-none_ses-s0_task-x", extents=())
@@ -481,16 +510,16 @@ def test_a_long_extent_does_not_outvote_a_short_one(tmp_path: Path, monkeypatch:
 def test_two_overlapping_extents_of_one_recording_cast_one_vote(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The replayed AIRWAY branch mints two nested spans; that is one recording, not two."""
+    """Two near-identical spans of one file are one observation of the speaker, not two."""
     import senselab.audio.tasks.speaker_embeddings.windowing as windowing
     from senselab.audio.tasks.speaker_embeddings.windowing import WindowEmbedding
 
     # One recording minting two near-identical extents, and one minting a single extent.
     build_recording(
         tmp_path,
-        stem="sub-v_ses-s0_task-respiration",
+        stem="sub-v_ses-s0_task-narrative",
         duration_s=30.0,
-        extents=((2.24, 25.74, "airway"), (2.24, 26.69, "airway")),
+        extents=((2.24, 25.74, "speech"), (2.24, 26.69, "speech")),
     )
     build_recording(tmp_path, stem="sub-v_ses-s1_task-harvard", duration_s=12.0, extents=((1.0, 9.0, "speech"),))
     grouped, _ = sv.gather(tmp_path)
@@ -501,7 +530,7 @@ def test_two_overlapping_extents_of_one_recording_cast_one_vote(
     east[0], north[1] = 1.0, 1.0
 
     def _windows(*, audio: Audio, **_kwargs: object) -> dict[str, list[WindowEmbedding]]:
-        # The two airway cuts are both over 20 s; the speech cut is 8 s.
+        # The two overlapping cuts are both over 20 s; the single-extent recording's cut is 8 s.
         seconds = audio.waveform.shape[-1] / audio.sampling_rate
         direction = east if seconds > 20.0 else north
         return {sv.MODEL_ID: [WindowEmbedding(0.0, 2.0, direction), WindowEmbedding(1.0, 3.0, direction)]}
@@ -510,6 +539,6 @@ def test_two_overlapping_extents_of_one_recording_cast_one_vote(
     vector = np.asarray(sv.embed_subject("sub-v", extents, tmp_path)["vector"])
 
     # Two recordings, one vote each: the centroid sits exactly between the two directions.
-    # Per-extent weighting would have given the airway recording two of three votes (0.89/0.45).
+    # Per-extent weighting would have given the two-extent recording two of three votes (0.89/0.45).
     assert vector[0] == pytest.approx(0.7071, abs=1e-3)
     assert vector[1] == pytest.approx(0.7071, abs=1e-3)
