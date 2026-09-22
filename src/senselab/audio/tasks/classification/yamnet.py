@@ -2,19 +2,25 @@
 
 YAMNet is a TensorFlow-based model that classifies audio into 521
 AudioSet classes. It runs in an isolated subprocess venv to avoid
-TF/PyTorch conflicts.
+TF/PyTorch conflicts. The worker stays resident across calls within one
+process; :func:`shutdown_yamnet_worker` ends it early.
 """
 
+import atexit
 import json
+import queue
 import subprocess
 import tempfile
+import threading
+import time
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
 
 
 def write_worker_wav(path: "Path | str", waveform: Any, sampling_rate: int) -> Dict[str, Any]:  # noqa: ANN401
@@ -54,11 +60,36 @@ _YAMNET_REQUIREMENTS = [
 ]
 _YAMNET_PYTHON = "3.12"
 
-_YAMNET_WORKER = r"""
+# A line protocol over the worker's stdin/stdout, one JSON object per line.
+#
+# Classify request (stdin):  {"audio_paths": [str, ...], "top_k": int}
+# Classify reply (stdout):   {"results": [[{"label_scores": [{label: score}, ...]}, ...], ...]}
+# Stop request (stdin):      {"stop": True}
+# Ready reply (stdout):      {"ready": True, "load_s": float}
+#
+# Every reply carries ``_WORKER_MARKER``, and ``sys.stdout`` is redirected to stderr before any
+# heavy import, so TensorFlow's own chatter can never be mistaken for an answer. A raised exception
+# is reported as {"error": {"type": str, "message": str}} and ends the worker.
+_WORKER_MARKER = "@@SENSELAB_YAMNET@@"
+
+_YAMNET_WORKER = (
+    r"""
 import json
 import sys
+import time
 
-try:
+MARKER = "%s"
+_replies = sys.stdout
+sys.stdout = sys.stderr
+
+
+def emit(payload):
+    _replies.write(MARKER + json.dumps(payload) + "\n")
+    _replies.flush()
+
+
+def load():
+    import csv
     import os
     import pathlib
     import shutil
@@ -67,18 +98,9 @@ try:
     import soundfile as sf
     import tensorflow_hub as hub
 
-    args = json.loads(sys.stdin.read())
-    audio_paths = args["audio_paths"]
-    top_k = args.get("top_k", 5)
-
-    # Load YAMNet.
-    #
     # The TF-Hub cache defaults to $TMPDIR, which is wrong twice over: it is discarded between
     # reboots so the model is re-fetched, and a partially-written entry is reused forever
-    # because TF-Hub only checks that the directory exists. That second failure is not
-    # hypothetical — it took YAMNet out of a real run with
-    # "contains neither 'saved_model.pb' nor 'saved_model.pbtxt'", leaving the axis a signal
-    # short with no indication the cause was a corrupt download rather than the audio.
+    # because TF-Hub only checks that the directory exists.
     _HUB_URL = "https://tfhub.dev/google/yamnet/1"
     cache_root = pathlib.Path(
         os.environ.get("SENSELAB_TFHUB_CACHE")
@@ -87,28 +109,26 @@ try:
     cache_root.mkdir(parents=True, exist_ok=True)
     os.environ["TFHUB_CACHE_DIR"] = str(cache_root)
 
-    def _load_yamnet():
-        try:
-            return hub.load(_HUB_URL)
-        except (ValueError, OSError) as exc:
-            # A corrupt entry must be a cache miss, not a permanent failure. Discard the
-            # incomplete directory and fetch once more; a second failure is real.
-            if "saved_model" not in str(exc):
-                raise
-            for stale in cache_root.iterdir():
-                if stale.is_dir() and not any(stale.glob("saved_model.pb*")):
-                    shutil.rmtree(stale, ignore_errors=True)
-            return hub.load(_HUB_URL)
+    try:
+        model = hub.load(_HUB_URL)
+    except (ValueError, OSError) as exc:
+        # A corrupt entry must be a cache miss, not a permanent failure. Discard the
+        # incomplete directory and fetch once more; a second failure is real.
+        if "saved_model" not in str(exc):
+            raise
+        for stale in cache_root.iterdir():
+            if stale.is_dir() and not any(stale.glob("saved_model.pb*")):
+                shutil.rmtree(stale, ignore_errors=True)
+        model = hub.load(_HUB_URL)
 
-    model = _load_yamnet()
-
-    # Load class names from the model's assets
-    import csv
     class_map_path = model.class_map_path().numpy().decode("utf-8")
     with open(class_map_path) as f:
         reader = csv.DictReader(f)
         class_names = [row["display_name"] for row in reader]
+    return sf, model, class_names
 
+
+def classify(sf, model, class_names, audio_paths, top_k):
     all_results = []
     for audio_path in audio_paths:
         # Audio is already resampled to 16kHz mono by the caller
@@ -127,12 +147,249 @@ try:
                 "label_scores": [{class_names[idx]: float(frame_scores[idx])} for idx in top_indices],
             })
         all_results.append(windows)
+    return all_results
 
-    print(json.dumps({"results": all_results}))
+
+def main():
+    started = time.monotonic()
+    sf, model, class_names = load()
+    emit({"ready": True, "load_s": round(time.monotonic() - started, 3)})
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            return
+        if not line.strip():
+            continue
+        request = json.loads(line)
+        if request.get("stop"):
+            return
+        emit({
+            "results": classify(
+                sf, model, class_names, request["audio_paths"], request.get("top_k", 5)
+            )
+        })
+
+
+try:
+    main()
 except Exception as exc:
-    print(json.dumps({"error": {"type": type(exc).__name__, "message": str(exc)}}))
+    emit({"error": {"type": type(exc).__name__, "message": str(exc)}})
     sys.exit(1)
 """
+    % _WORKER_MARKER
+)
+
+
+_REQUEST_TIMEOUT_S = 600
+"""Wall-clock ceiling on one classify request, and separately on the worker's start-up load."""
+
+
+class _YAMNetWorker:
+    """One venv subprocess with YAMNet loaded, answering classify requests until it is stopped.
+
+    Attributes:
+        load_s: How long starting it and loading the model took.
+    """
+
+    def __init__(self) -> None:
+        """Record the worker's state. Starting it is :meth:`start`."""
+        self.load_s = 0.0
+        self._process: Optional["subprocess.Popen[str]"] = None
+        self._replies: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+        self._noise: "deque[str]" = deque(maxlen=40)
+
+    def start(self, timeout_s: int) -> None:
+        """Build the venv if needed, spawn the worker and wait for its model.
+
+        Args:
+            timeout_s: Wall-clock ceiling on the load.
+
+        Raises:
+            RuntimeError: If the worker died, raised, or did not report ready in time.
+        """
+        venv_dir = ensure_venv(_YAMNET_VENV, _YAMNET_REQUIREMENTS, python_version=_YAMNET_PYTHON)
+        began = time.monotonic()
+        self._process = subprocess.Popen(  # noqa: S603 — the interpreter is this repo's own venv
+            [venv_python(venv_dir), "-c", _YAMNET_WORKER],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=_clean_subprocess_env(),
+        )
+        threading.Thread(target=self._pump_replies, daemon=True).start()
+        threading.Thread(target=self._pump_noise, daemon=True).start()
+        self._await(timeout_s)
+        self.load_s = round(time.monotonic() - began, 3)
+
+    @property
+    def alive(self) -> bool:
+        """Whether the worker process is still running and still holding its model."""
+        return self._process is not None and self._process.poll() is None
+
+    def classify(self, audio_paths: List[str], top_k: int, timeout_s: int) -> List[List[Dict[str, Any]]]:
+        """Ask the loaded model for one batch of per-window scores.
+
+        Args:
+            audio_paths: 16 kHz mono WAVs, already written by the caller.
+            top_k: Number of top labels per window.
+            timeout_s: Wall-clock ceiling on this batch alone.
+
+        Returns:
+            One list of windows per input path, in the same order.
+
+        Raises:
+            RuntimeError: If the worker died, raised, or did not answer in time.
+        """
+        self._send({"audio_paths": audio_paths, "top_k": int(top_k)})
+        reply = self._await(timeout_s)
+        return list(reply.get("results", []))
+
+    def close(self) -> None:
+        """End the worker, releasing the model. Safe to call on a worker that never started."""
+        process, self._process = self._process, None
+        if process is None:
+            return
+        try:
+            if process.stdin is not None and not process.stdin.closed:
+                process.stdin.write(json.dumps({"stop": True}) + "\n")
+                process.stdin.flush()
+                process.stdin.close()
+            process.wait(timeout=5)
+        except Exception:  # noqa: BLE001 — a worker that will not stop politely is killed
+            process.kill()
+            try:
+                process.wait(timeout=30)
+            except Exception:  # noqa: BLE001, S110 — nothing further is owed to an unreapable child
+                pass
+
+    def _send(self, payload: Dict[str, Any]) -> None:
+        """Write one request line, turning a closed pipe into the failure the caller reports.
+
+        Args:
+            payload: The request.
+
+        Raises:
+            RuntimeError: If the worker is gone or its stdin will not take the line.
+        """
+        if self._process is None or self._process.stdin is None:
+            raise RuntimeError("YAMNet worker is not running")
+        try:
+            self._process.stdin.write(json.dumps(payload) + "\n")
+            self._process.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError) as exc:
+            raise RuntimeError(f"YAMNet worker closed its input: {exc}\n{self._tail()}") from exc
+
+    def _await(self, timeout_s: int) -> Dict[str, Any]:
+        """Wait for one reply, killing the worker on anything that is not one.
+
+        The exception a worker-reported error becomes is the one
+        :func:`~senselab.utils.subprocess_venv.parse_subprocess_result` would have raised for the
+        same payload, so the failure a caller sees does not depend on which path produced it.
+
+        Args:
+            timeout_s: How long to wait.
+
+        Returns:
+            The reply.
+
+        Raises:
+            RuntimeError: On a timeout, a dead worker, or a worker-reported exception whose type is
+                not one of the two the one-shot parser reconstructs.
+            ValueError: A worker-reported ``ValueError``.
+            TypeError: A worker-reported ``TypeError``.
+        """
+        try:
+            reply = self._replies.get(timeout=timeout_s)
+        except queue.Empty:
+            self.close()
+            raise RuntimeError(f"YAMNet worker did not answer in {timeout_s}s\n{self._tail()}") from None
+        if "error" in reply:
+            self.close()
+            error = reply["error"] or {}
+            exc_class = {"ValueError": ValueError, "TypeError": TypeError}.get(str(error.get("type", "")), RuntimeError)
+            raise exc_class(str(error.get("message", "unknown error")))
+        if reply.get("eof"):
+            self.close()
+            raise RuntimeError(f"YAMNet worker exited without answering\n{self._tail()}")
+        return reply
+
+    def _pump_replies(self) -> None:
+        """Drain stdout into the reply queue, forwarding anything unmarked to the noise tail."""
+        process = self._process
+        if process is None or process.stdout is None:
+            return
+        for line in process.stdout:
+            if line.startswith(_WORKER_MARKER):
+                try:
+                    self._replies.put(json.loads(line[len(_WORKER_MARKER) :]))
+                except ValueError:
+                    self._noise.append(line.rstrip())
+            elif line.strip():
+                self._noise.append(line.rstrip())
+        self._replies.put({"eof": True})
+
+    def _pump_noise(self) -> None:
+        """Drain stderr so a chatty loader cannot fill its pipe and deadlock the worker."""
+        process = self._process
+        if process is None or process.stderr is None:
+            return
+        for line in process.stderr:
+            if line.strip():
+                self._noise.append(line.rstrip())
+
+    def _tail(self) -> str:
+        """The worker's last lines of output, for a failure message that says what it was doing."""
+        return "\n".join(self._noise)
+
+
+_WORKER_LOCK = threading.Lock()
+_WORKER: Optional[_YAMNetWorker] = None
+
+
+def shutdown_yamnet_worker() -> None:
+    """End the process's YAMNet worker, releasing its model.
+
+    A later classification starts a new one. Registered to run at interpreter exit, so a caller only
+    needs this to hand the memory back earlier than that.
+    """
+    global _WORKER
+    with _WORKER_LOCK:
+        worker, _WORKER = _WORKER, None
+    if worker is not None:
+        worker.close()
+
+
+atexit.register(shutdown_yamnet_worker)
+
+
+def _worker(timeout_s: int) -> _YAMNetWorker:
+    """The running worker, started if there is not a live one already.
+
+    Args:
+        timeout_s: Wall-clock ceiling on a load, when one is needed.
+
+    Returns:
+        The worker with its model loaded.
+
+    Raises:
+        Exception: Whatever stopped the worker from starting.
+    """
+    global _WORKER
+    if _WORKER is not None and _WORKER.alive:
+        return _WORKER
+    if _WORKER is not None:
+        _WORKER.close()
+        _WORKER = None
+    worker = _YAMNetWorker()
+    try:
+        worker.start(timeout_s)
+    except Exception:
+        worker.close()
+        raise
+    _WORKER = worker
+    return worker
 
 
 class YAMNetClassifier:
@@ -153,6 +410,8 @@ class YAMNetClassifier:
         YAMNet uses its own internal windowing (0.96s windows, 0.48s hop).
         Each audio produces multiple per-window results.
 
+        The worker holding the model outlives the call; :func:`shutdown_yamnet_worker` ends it.
+
         Args:
             audios: Audio objects (mono, any sample rate — resampled to 16kHz internally).
             top_k: Number of top labels per window.
@@ -161,9 +420,6 @@ class YAMNetClassifier:
             List of per-audio results, each containing per-window dicts
             with ``labels``, ``scores``, ``start``, ``end``.
         """
-        venv_dir = ensure_venv(_YAMNET_VENV, _YAMNET_REQUIREMENTS, python_version=_YAMNET_PYTHON)
-        python = venv_python(venv_dir)
-
         with tempfile.TemporaryDirectory(prefix="senselab-yamnet-") as tmpdir:
             tmp = Path(tmpdir)
 
@@ -186,28 +442,12 @@ class YAMNetClassifier:
                 audio_paths.append(path)
                 durations.append(resampled.waveform.shape[1] / resampled.sampling_rate)
 
-            input_json = json.dumps(
-                {
-                    "audio_paths": audio_paths,
-                    "top_k": top_k,
-                }
-            )
-
-            env = _clean_subprocess_env()
-            result = subprocess.run(
-                [python, "-c", _YAMNET_WORKER],
-                input=input_json,
-                capture_output=True,
-                text=True,
-                timeout=600,
-                env=env,
-            )
-
-            output = parse_subprocess_result(result, "YAMNet")
+            with _WORKER_LOCK:
+                batched = _worker(_REQUEST_TIMEOUT_S).classify(audio_paths, top_k, _REQUEST_TIMEOUT_S)
 
             # Add timestamps to each window based on YAMNet's fixed windowing
             all_results: List[List[Dict[str, Any]]] = []
-            for audio_idx, windows in enumerate(output.get("results", [])):
+            for audio_idx, windows in enumerate(batched):
                 duration = durations[audio_idx]
                 timestamped = []
                 for i, w in enumerate(windows):
