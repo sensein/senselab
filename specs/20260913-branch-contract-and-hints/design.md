@@ -800,7 +800,7 @@ per-word assertion at all, and the claim it carried is now on the span: `attribu
 from the run's words and stamped on the proposed span, with `nontarget` derived beside it
 (`speech.py:1869-1884`). The destination the decision named as `propose` — *one span per contiguous
 run attributed to the same speaker, minted `family: "speech"`* — is what the code does
-(`_SpeakerRun` at `speech.py:610`, `MINT` at `:646-647`).
+(`_SpeakerRun` at `speech.py:609`, `MINT` at `:646-647`).
 
 The `refine` half was never needed: because the span is minted carrying the attribution rather than
 having it added afterwards, there is no prior value to correct. What stays settled is that
@@ -1172,8 +1172,9 @@ and `rewrite_consensus_taxonomy` recomputes what will be a SCREEN product. The c
 original pass**; what it appends is a derivative every downstream reader treats identically, and the
 only difference is when the store was open.
 
-`extend.py:3-6` already holds this position — "the layout is the workflow's, not any one driver's" —
-so this spec does not correct that docstring; an earlier draft mis-attributed the opposite view to it.
+`extend.py:1-6` already holds this position — the module carries the operations "every extend driver
+needs over that layout", the layout being the run root's rather than any one driver's — so this spec
+does not correct that docstring; an earlier draft mis-attributed the opposite view to it.
 
 ---
 
@@ -1230,10 +1231,10 @@ deviation is disqualifying is task-specific, needs ground truth, and is not deci
 Dependency order, with the pieces that are genuinely independent marked:
 
 1. **The three hint breakages** — read the sidecars, rename the override key, fix the value casing.
-   **Independent.** Note `make_hints.py` also reads `routing.hint_kind_map` and raises when it is
-   absent (`:414-416`, validated at `:20-23` and `:429-439`), so renaming only `override.yaml` breaks
-   hint generation; both move together.
-2. **The `preprocess.py:1533` continuity derivation bug.** **Independent, small**, split out of piece 9.
+   **Independent, and still owed.** Note `make_hints.py` also reads `routing.hint_kind_map` and
+   raises when it is absent (`:414-416`, validated at `:429-441`), so renaming only `override.yaml`
+   breaks hint generation; both move together.
+2. **The `preprocess.py:1970` continuity derivation bug.** **Independent, small**, split out of piece 9. Still open.
 3. **Span cleanliness (a) and (b)** — the attribution filter and background typing, scoped to
    `span_yamnet`. Includes the before-and-after gate-firing count on the corpus and a
    `rewrite_consensus_taxonomy` pass over existing stores.
@@ -1242,33 +1243,27 @@ Dependency order, with the pieces that are genuinely independent marked:
 5. **The declaration** — the two-grain table, SCREEN's `declaration` measurement, the `metadata` key
    contract. Depends on 1. **Its dependency on 4 is optional** — the measurement can be written by
    TAXONOMY pre-merge — and decoupling it removes the only blocking dependency on the largest piece.
-6. **Whole-file diarization** — the extend driver, then SPEECH's diarize step becoming a read. The
-   streams and the SPEECH read are both settled by the owner decisions of 2026-09-15 in § *Whole-file
-   diarization as a shared derivative*, so **no pilot is owed**; an earlier revision of this list put
-   one first. **Not independent of 5**: `speaker_count` needs the declaration's single-target claim.
-7. **Widen REPORT's assertion read — by verb, not by branch.** `report.py:1123` already filters to
-   `_EVIDENCE_BRANCHES` (defined at `:56`), so `:1127` is purely the AIRWAY-on-assertions
-   restriction, and lifting it branch-wise would admit SPEECH's `verb: "attribute"` assertions —
-   **one per word** (`speech.py:790-793`). Admit the contract's five verbs plus `abstain` and `flag`,
-   and `deviate` with them
+6. **Whole-file diarization** — the extend driver, then SPEECH's diarize step becoming a read.
+   **Done.** Both halves landed; `diarization.streams` narrowed to `[enhanced]` on 2026-09-20.
+7. **Widen REPORT's assertion read — by verb, not by branch.** **Still owed.** `report.py:1189`
+   already filters to
+   `_EVIDENCE_BRANCHES` (defined at `:83`), so `:1202` is purely the AIRWAY-on-assertions
+   restriction. The per-word `attribute` assertions that made a branch-wise lift unsafe are gone, so
+   the objection to lifting it branch-wise has weakened — but the verb-wise rule is still the right
+   one. Admit `deviate` and `contest`, the two verbs `write_findings` emits
    ([`../20260817-triage-workflow-dag/branch-conventions.md`](../20260817-triage-workflow-dag/branch-conventions.md)
-   § *Deviations and counts are stored*); leave `measure` (`preprocess.py:1835`, `:1842`, `:1860`) and
-   `withdraw` (`:599`) out. **`attribute` is on the leave-out list only until its migration lands** —
-   under § *`refine` covers metadata as well as extent* it becomes `refine` or `propose`, both
-   admitted. Either order works; doing 7 first makes the migrated assertions visible the day they are
-   written.
+   § *Deviations and counts are stored*), and any of the contract's five a branch comes to write;
+   leave `measure` (`preprocess.py:2324`, `:2331`, `:2349`), `withdraw` (`:601`) and REDACT's
+   `exempt` (`redact.py:951`) out.
    **Independent of the branch work and a prerequisite for it**; without it a branch can be built and
-   its annotations be invisible.
-8. **The branch contract, per branch** — SPEECH first (closest to it), then AIRWAY (which also closes
-   the `_windows_covering` gap), then VOICE (which needs a proposer before it has a subject), then
-   DDK (which needs a node). Depends on 5, on 6 for `speaker_count`, and on 7 to be visible.
-
-   **The owner decisions of 2026-09-15 change VOICE's place in this piece**: its subject is a
-   ruleset-written label, which lands in SCREEN rather than here, and VOICE's own work is the
-   `refine` over it. The settled flow is at
-   [`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
-   § *The subject is the spans the ruleset labelled, and VOICE refines them*.
-9. **Boundary reconciliation** — blocked on a parameter-free definition, per (c).
+   its annotations be invisible. Today that is not hypothetical: every `deviate` SPEECH and VOICE
+   write is already invisible.
+8. **The branch contract, per branch** — **largely done, by a different route than this list
+   planned.** All three branches are built on the propose-only foundation with the two-mode
+   dispatch. What is not done is the annotating half: `refine` and `trim` are written by nothing,
+   so a branch improving a span it did not propose has no way to say so. DDK is not a piece of this
+   at all — it is SPEECH's syllable-train instrument, not a branch.
+9. **Boundary reconciliation** — blocked on a parameter-free definition, per (c). Still open.
 
 **One ordering inversion is accepted and budgeted.** Piece 9 changes every span extent, hence which
 spans clear 0.96 s — the whole basis of piece 3 — and which need refining in piece 8. Since 9 is
@@ -1279,18 +1274,22 @@ lands**; that re-measurement is part of 9's cost, not a surprise.
 
 ## Explicitly unresolved
 
-**Every fitted threshold awaits ground truth.** `spans.k_db`, `airway.contest_labels`, the speech
-quality floors, the deviation thresholds. The corpus is labelled by declaration, not by
-verification. Nothing is refit until something has been listened to.
+**Every fitted threshold awaits ground truth.** `spans.k_db`, the speech quality floors
+(`speech.speech_test_stoi_floor` and `speech.speech_test_si_sdr_floor`, both null at
+`default.yaml:238-239`), the deviation thresholds, and every numeric key under `verdict.gates`. The
+corpus is labelled by declaration, not by
+verification. Nothing is refit until something has been listened to. `airway.contest_labels` has
+left the list by leaving the config: AIRWAY contests on its own criterion now and reads no fitted
+label list.
 
 **The boundary reconciliation rule** (c) — no parameter-free definition yet.
 
-**Which source gives VOICE its subject is settled, 2026-09-15**: amplitude spans with a
-ruleset-written label, refined by VOICE. The flow and the evidence behind it are at
-[`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
-§ *The subject is the spans the ruleset labelled, and VOICE refines them*. **What remains unresolved is whose family a
-ruleset-written label puts a span in**, since a branch `refine`s only a span of the family it
-proposes into — at
+**Which source gives VOICE its subject is settled, and the code took the simpler half of the
+settlement**: PREPROCESS's `amplitude` spans, qualified by `phonation_tracks` and
+`continuity_trace`, over which VOICE mints its own `family: "voice"` spans (`voice.py:8-11`). No
+ruleset-written label is involved, because no rule writes one. **What remains unresolved is whose
+family a ruleset-written label would put a span in**, and it is now hypothetical rather than
+blocking — at
 [`../20260817-triage-workflow-dag/branch-conventions.md`](../20260817-triage-workflow-dag/branch-conventions.md)
 § *The two owner decisions of 2026-09-15 leave the minting rule alone and open one question*.
 
@@ -1305,13 +1304,23 @@ rule, currently written as three special cases. **Recommendation: state it once 
 general contract** — a writer may stop emitting a value, a reader may never stop accepting one — with
 the three instances as its examples. Not edited here; `store.md` is out of this spec's scope.
 
-**Whether a branch may run a classifier pass at branch time.** Nothing does today, and
-`airway.py:171-173` makes not re-running HeAR an explicit design point, so a proposed span carries no
+**Whether a branch may run a classifier pass at branch time.** Nothing does today —
+`airway.py:1-9` and `speech.py:8` both make running no model an explicit design point — so a
+proposed span carries no
 per-span classifier evidence. Adding such a pass is out of scope here.
 
-**DDK has a contract, which is not the same as being specified.** What DDK concludes about a segment
-rate, and what its findings are, is undecided. Until the node exists, recordings with DDK content
-flag.
+**DDK is specified and built, as SPEECH's instrument rather than as a branch.** The ten
+`diadochokinesis-*` families carry their instruction as a phoneme sequence
+(`branches.py:608-621`, the rows at `:815-848`), `nodes/ddk.py` reads the train off the envelope's
+modulation peak and off a cyclic template decode over a posteriorgram, and what it measures is
+SPEECH's. No recording with DDK content flags for want of a node.
+
+**Rate and regularity are reported rather than judged.** Each syllable-repetition row carries a
+`typical_count` — a corpus median with its derivation (`branches.py:553-601`, the medians'
+provenance at `:604-605`) — and `count_beside_typical` (`:305-322`) writes the count beside it
+under an explicit rule that nothing may be judged against a median — enforced at import by
+`UNGATEABLE_READINGS` (`gates.py:97`), which makes a gate table naming `typical_count` raise. What
+a *required* count may be gated at, once a tolerance is derived, is still open.
 
 **Whether a deviation is disqualifying**, per task.
 
@@ -1326,10 +1335,11 @@ extent.
 **Whether VERDICT should write the durable description as its own entity**, rather than REPORT
 assembling it.
 
-**Raw vs enhanced for diarization is resolved, 2026-09-15** — the streams are `enhanced` and
-`residual`, and no pilot is owed (§ *Whole-file diarization as a shared derivative*). It was listed
-here as unresolved until that date, and the line is kept so a reader of the older text finds where it
-went.
+**Raw vs enhanced for diarization is resolved, 2026-09-15** — the streams were `enhanced` and
+`residual`, and no pilot was owed (§ *Whole-file diarization as a shared derivative*); the config
+narrowed to `[enhanced]` alone on 2026-09-20 for want of a reader. It was listed
+here as unresolved until 2026-09-15, and the line is kept so a reader of the older text finds where
+it went.
 
 **The corpus size disagrees with itself by 28.** `20260910-taxonomy-routing-evidence/measurements.md:1,18-19`
 and two other documents attest **62,550 recordings / 62,547 stores read**; a
@@ -1343,22 +1353,28 @@ the attested 62,550 until the 28 are accounted for.
 
 ## Corrections to things already written down
 
-**Three documents wrongly assert that FIGURE and REPORT read `consensus_taxonomy`**: `taxonomy.md:64-65`,
-`20260912-ruleset-in-pipeline/design.md:367-369`, and `taxonomy.py:6`. They do not — `figure.py:603-617`
-reads `<classifier>_label_summary`, `report.py:425,484-487` reads PREPROCESS's `<classifier>_windows`,
-and the only production consumer is `features.py:755`. `dag.md:358` is the one that has it right.
-**All three are to be corrected**; the error was inherited into an earlier draft of this spec and
-removed.
+**One document still wrongly asserts that FIGURE and REPORT read `consensus_taxonomy`**:
+`taxonomy.py:6`, whose docstring says "ROUTING, FIGURE and REPORT read them". They do not —
+`figure.py:619` reads `<classifier>_label_summary`, `report.py:510,528` reads PREPROCESS's
+`<classifier>_windows`, and the only production consumer is `features.py:756`. The two other
+documents named here have since been corrected: `taxonomy.md:90-94` now states the same thing this
+spec does, and `20260912-ruleset-in-pipeline/design.md:384` with it. **`taxonomy.py:6` is the one
+left**; the error was inherited into an earlier draft of this spec and removed.
 
-**`dag.md:1111-1116` is wrong about gap spans.** It states their background content reaches no
-decision; they are written with no `family` (`preprocess.py:1583-1592`) and `airway.py:198` selects
-`family is None`, so they *are* AIRWAY evidence. `dag.md:1210` contradicts `dag.md:1116` within the
-same document. Fix dag.md.
+**`dag.md`'s gap-span claim is no longer locatable.** This spec cited `dag.md:1111-1116` and
+`:1210` as stating that a gap span's background content reaches no decision, and as contradicting
+each other. `dag.md` is 388 lines and carries no such passage, so there is nothing left to fix
+there. The underlying facts hold: gaps are written with no `family` (`preprocess.py:2016-2031`),
+`candidate_spans` selects `family in (None, "airway")` (`airway.py:196-210`), so they *are* AIRWAY
+evidence, and `off_task` reads them as `off_task_extent` deviations (`branches.py:1535-1554`).
 
-**`preprocess.md` is stale in three places**: `:67-68` and `:160-195` document `phonation_spans` as
-live and feeding VOICE, which has not been true since 2026-09-04; `:152` says AIRWAY reads and may
-adjust `spans.k_db`, which contradicts `config-derivations.md:106,116-119` and the code (`airway.py`
-reads no `k_db`); `:141-148`'s span algorithm contradicts `dag.md:643-656` and `default.yaml:37-40`.
+**`preprocess.md`'s three stale places have gone two different ways.** `:67-68` now marks
+`phonation_spans` as retired 2026-09-04 and names the section below it as "a design for a detector
+that does not exist", and `:171` states outright that `airway.py` reads no `k_db` and that there is
+no `airway.k_db` key — both corrections landed. What remains is `:179-221`, which is still that
+non-existent detector's design, kept deliberately under the flag at `:67`. The span-algorithm
+sketch is at `:160-167`, and it should be read against `default.yaml:37-42` rather than against
+`dag.md`, whose corresponding passage is gone.
 
 **The 94%-of-taxonomy-rows figure predates its own fix.**
 `benchmarks/taxonomy-vs-task-2026-09-07.md:203-288` measured that 360 of 384 `consensus_taxonomy`
