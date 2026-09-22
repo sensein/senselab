@@ -141,9 +141,10 @@ What is wrong is the label attached to it afterwards.
 load-bearing.**
 
 `_span_yamnet` gives a span shorter than the native window the overlap-weighted scores of the
-whole-file windows that *cover* it, marked `attribution: "covering_windows"` with
-`covering_windows_n` and `covering_seconds` (`preprocess.py:1981-1985`); a long span gets
-`attribution: "native"` (`preprocess.py:2026`). A covering-window label is a statement about up to a
+whole-file windows that *cover* it (`_covering_window_attribution`, `preprocess.py:365-397`), marked
+`attribution: "covering_windows"` with
+`covering_windows_n` and `covering_seconds` (`preprocess.py:2465-2467`); a long span gets
+`attribution: "native"` (`preprocess.py:2509`). A covering-window label is a statement about up to a
 second of audio attributed to a fifth of it.
 
 `_span_hear` does something different. `span_hear_input` places a span shorter than
@@ -158,23 +159,23 @@ exists and is already written; nothing filters on it today.
 
 | reader | what changes |
 | --- | --- |
-| `consensus_taxonomy` rows (`taxonomy.py:192`) | a covering-window score does not contribute a row or a `peak_by_classifier` entry |
-| `RecordingFeatures` span-label stats (`features.py:1137 _label_span_statistics`, via `_absorb_span_window`) | covering-window scores excluded from `span_label_stats` and `span_label_set_stats` |
+| `consensus_taxonomy` rows (`taxonomy.py:191`) | a covering-window score does not contribute a row or a `peak_by_classifier` entry |
+| `RecordingFeatures` span-label stats (`features.py:898 _label_span_statistics`, via `_absorb_span_window` at `:358`) | covering-window scores excluded from `span_label_stats` and `span_label_set_stats` |
 | figure, report | rendered as attributed-from-outside, not as the span's own label |
 
-**AIRWAY is not on that list, and an earlier revision wrongly put it there.** AIRWAY reads
-**`span_hear`** (`airway.py:242`, and its docstring says so at `:171`), and `attribution` is written
-only by `_span_yamnet`. With `_windows_covering` deferred below, **AIRWAY's own reads are untouched
-by rule (a)** — but `airway.cough` is a *routing gate*, so rule (a) still changes whether AIRWAY runs
-at all. The two senses must not be conflated: the rule cannot alter what AIRWAY sees, and can alter
-whether it is asked to look.
+**AIRWAY's own reads changed after this was written, and the conclusion does not.** AIRWAY read
+`span_hear` alone when this section was drafted; `classifier_windows` (`airway.py:213-222`) now
+returns every `span_hear` **and** `span_yamnet` measurement together, so a covering-window YAMNet
+label is inside what AIRWAY sees. Rule (a) therefore reaches AIRWAY's own reads as well as the
+routing gate — the earlier "AIRWAY's reads are untouched" scoping is gone. The two senses still
+must not be conflated: one is what AIRWAY sees, the other is whether it is asked to look.
 
-**So rule (a) either moves routing or does nothing.** `airway.cough`'s feature is
-`span_label_set_stat` over `yamnet.cough_labels.peak_over_floor_db_max` (`default.yaml:245-248`),
+**So rule (a) moves routing.** `airway.cough`'s feature is
+`span_label_set_stat` over `yamnet.cough_labels.peak_over_floor_db_max` (`default.yaml:462-463`),
 built by `_label_span_statistics` from exactly these per-span measurements with no attribution check,
 and coughs are usually shorter than 0.96 s. There is no scoping that keeps the rule's benefit without
-changing the router: branch evidence is empty, and `consensus_taxonomy`'s only production consumer is
-`features.py:755` — routing's own reduction. An earlier revision offered "scope away from
+changing the router: `consensus_taxonomy`'s only production consumer is
+`features.py:756` — routing's own reduction. An earlier revision offered "scope away from
 `RecordingFeatures`, apply to the consensus and to branch evidence" as a fallback; that fallback is
 vacuous and is withdrawn.
 
@@ -198,21 +199,20 @@ attached to shipping it.
 No PREPROCESS re-run is needed; existing stores need `rewrite_consensus_taxonomy` re-run to pick up
 the consensus change.
 
-**The count itself needs a fix first.** `features.py:1079-1091` appends every live span to
-`live_spans` with no `family` filter, and `_span_statistics`'s `all.*` bucket includes them. That is
+**The count itself needs a fix first.** `features.py:1123-1135` appends every live span to
+`live_spans` with no `family` filter, and `_span_statistics`'s (`:977`) `all.*` bucket includes them.
+That is
 harmless in-run, because routing precedes the branches and no family span exists yet — but **not in
 an offline recompute over finished stores** (`scripts/analyze_routing_evidence.py:158`), which is how
 a gate count would be produced. Branch-proposed spans would enter the router's own statistics. The
-family filter lands before the count does.
+family filter lands before the count does, and is still unwritten.
 
-**The remedy is incomplete, and the gap is named rather than closed.** AIRWAY has a *second*
-covering-window mechanism the flag does not touch: `_windows_covering(store, "yamnet", hear_extent)`
-(helper `airway.py:51-66`, called at `:295`) takes every **whole-file** `yamnet_window` measurement
-merely overlapping a HeAR window and lets its labels confirm or contest. Those are whole-file windows
-and carry no `attribution` key at all — the flag is a property of `span_yamnet`, which these are not.
-**Rule (a) is therefore scoped to `span_yamnet` measurements.** AIRWAY's whole-file corroboration is
-a separate mechanism with the same underlying weakness, and closing it is deferred to the AIRWAY
-piece of the branch contract, where the confirm/contest logic is being rewritten anyway.
+**The second covering-window mechanism this section deferred has gone with AIRWAY's rewrite.**
+`_windows_covering(store, "yamnet", hear_extent)` took every **whole-file** `yamnet_window`
+measurement merely overlapping a HeAR window and let its labels confirm or contest. No such helper
+is in `airway.py` any more, and the confirm/contest loop it fed went with it; what AIRWAY reads now
+is `classifier_windows` (`:213-222`), which is per-span measurements only. **Rule (a) stays scoped
+to `span_yamnet` measurements**, and that scoping now leaves nothing of AIRWAY's outside it.
 
 HeAR's isolation has its own caveat, and it is a different one: a 200 ms event centred in 1.8 s of
 digital silence is not what the model saw in training. Whether that distorts its scores is
@@ -221,11 +221,11 @@ digital silence is not what the model saw in training. Whether that distorts its
 ### (b) Gap spans are background, never events
 
 Gap spans are the complement of the **kept** spans — `covered` is built from `combined`, the four
-sources' surviving proposals (`preprocess.py:1572`) — not the complement of everything proposed. A
-gap shorter than `min_duration_ms` is not emitted at all. They carry `measure: "gap"` and
-`merged_proposals: 0` (`preprocess.py:1586-1591`) and, being written with no `family`
-(`preprocess.py:1583-1592`), they are selected by AIRWAY's `family is None` filter (`airway.py:198`)
-as ordinary evidence.
+sources' surviving proposals (`preprocess.py:2007`) — not the complement of everything proposed. A
+gap shorter than `min_duration_ms` is not emitted at all (`:2011`, `:2014`). They carry
+`measure: "gap"` and `merged_proposals: 0` and are written with no `family`
+(`preprocess.py:2016-2031`), so they are selected by `candidate_spans`'s
+`family in (None, "airway")` filter (`airway.py:196-210`) as ordinary AIRWAY evidence.
 
 Type them as background. They stay measured and visible; they stop being eligible to be something
 that happened.
@@ -239,7 +239,8 @@ branch-proposed events is **unresolved**.
 
 ### (c) Boundaries reconciled, not first-writer-wins
 
-`_novel` (`preprocess.py:1467-1492`) appends a record to `corroborated_by` on every span a later
+`_novel` (`preprocess.py:1906-1929`, written onto the span at `:1997-1999`) appends a record to
+`corroborated_by` on every span a later
 candidate overlaps, and keeps the earlier proposer's extent unchanged. Four sources agreeing on an
 event is precisely when its boundary can be stated well, and that is the moment the current code
 discards the information.
@@ -251,9 +252,11 @@ choosing between them by measurement on this corpus. A reconciliation rule must 
 until something has been listened to. **Unresolved**, deliberately, and it is why (c) is sequenced
 last.
 
-The one part of (c) that is not blocked is a plain bug: continuity spans are `wasDerivedFrom` the
-energy envelope rather than the continuity trace (`preprocess.py:1533` — `state["envelope_id"]`),
-even though the trace is in the activity's `reads` (`:1440-1441`). The provenance edge names the
+The one part of (c) that is not blocked is a plain bug, and it is still there: continuity spans are
+`wasDerivedFrom` the
+energy envelope rather than the continuity trace (`preprocess.py:1970` — `state["envelope_id"]`,
+carried to the edge at `:2003`),
+even though the trace is in the activity's `reads` (`:1879-1880`). The provenance edge names the
 wrong source. Small, independent, and split out of (c) below.
 
 ### Refitting `spans.k_db` was considered and rejected
