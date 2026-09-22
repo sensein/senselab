@@ -131,28 +131,41 @@ against a partly-finished replay is a normal thing to do.
 
 ## What it was tested against
 
-`67b7dd1d`, on `mit_quicktest`, while replay array `23468946` was still running.
+On `mit_quicktest`, while replay array `23468946` was still running, so every real tree read here
+was partial and read-only.
+
+**34 tests** over synthetic stores, each built by the replay driver's own sequence — write under one
+run id, read back under `replay_run_id`, `retire_decisions`, write the second pass, write the
+marker — rather than by hand-assembling a two-generation store.
+
+**627 real rows at `2fa5179d`**, before the not-replayable exclusion existed:
 
 | tree | rows | compared | identical | statuses |
 | --- | --- | --- | --- | --- |
 | `smoke_out`, all 16 | 16 | 16 | 16 | 16 `ok` |
 | `out`, slices 0, 37, 101, 199 of 400 | 611 | 554 | 519 | 554 `ok`, 57 `no_store` |
 
-No `error`, no `unreadable`. 30 tests over synthetic stores built by the replay's own sequence, plus
-these 627 real ones.
-
-What the 35 movements are, on the four real slices: eleven `AIRWAY` conformances `False →
+No `error`, no `unreadable`. What the 35 movements were: eleven `AIRWAY` conformances `False →
 UNDETERMINED` and five `True → UNDETERMINED`, eleven `truncation` deviations gained — 0 assertions
 before, 11 after — six `AIRWAY` findings `absent → present` with the matching `mismatch → agree` and
-`no_claim → found_unclaimed`, and eleven losses of the `AIRWAY` non-conformance ground. No triage or
-release outcome moved on these slices.
+`no_claim → found_unclaimed`, and eleven losses of the `AIRWAY` non-conformance ground. No triage
+and no release outcome moved on those slices.
 
-One recording read on the leaking direction of the PII axis:
-`sub-6afb0324-…_task-diadochokinesis-ka`, scanned before and not scanned now. Cross-checked against
-its store by hand — the retired `pii_scan` names `gliner`, `presidio` and `rules` as having run, and
-the replayed one carries `scanned: false` with the carrier reason. Its decision did not otherwise
-move and it found nothing either way, which is what makes it exactly the case a count of moved
-decisions would miss.
+**The exclusion, at `ee7bcfca`, against the replay's own error log.** Over the 58,179 rows the
+replay had written by then, 23 carry `QUALITY: LookupError: no stream named 'recording'`. Handed
+exactly those 23 stems, the differential returns 23 `not_replayable`, all with
+`ADMIT_DID_NOT_ADMIT`, and compares none of them. The detector reads the store, not the row log, so
+the agreement is between two independent readings of the same fact.
 
-Cost: 157 rows in 30 s on one core, so 62,548 rows is 3.3 core-hours. The array is 64 slices of
-~977 at ~3.5 min each.
+**One recording on the leaking direction of the PII axis**, found at `2fa5179d` and cross-checked
+against its store by hand: `sub-6afb0324-…_task-diadochokinesis-ka`. Its retired `pii_scan` names
+`gliner`, `presidio` and `rules` as having run; its replayed one carries `scanned: false` with the
+carrier reason. Its decision did not otherwise move and it found nothing either way, which is
+exactly the case a count of moved decisions would miss.
+
+**Cost.** 157 rows in 30 s on one core on a quiet allocation, 35 s a slice under the replay array's
+own load — so 62,548 rows is 3.3 to 4 core-hours. The array is 64 slices of ~977 at under 10 min
+each against a 1 h limit. Both figures were taken on a shared node and are upper bounds.
+
+**Not verified.** That every real store reads `ok` once the replay finishes: the array was at 93%
+when this was written, so the tail of the manifest has only been exercised as `no_store`.
