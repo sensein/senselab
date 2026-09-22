@@ -28,7 +28,7 @@ assumptions about how they are laid out.
 | column | type | meaning |
 | --- | --- | --- |
 | `speaker_id` | `string` | The BIDS `sub-<id>`. The only speaker key the corpus has; see `coverage.md` for what that assumes. |
-| `vector` | `list<double>` | The pooled embedding. Length `dim`. Not L2-normalised on the way out — `describe_embedding_distribution` normalises its inputs, so the returned centroid is already a unit direction, but a reader comparing rows should normalise rather than assume. |
+| `vector` | `list<double>` | The pooled embedding, unit norm. Length `dim`. **Raw, not corpus-centred.** Centring the corpus improves verification and costs identification; `design.md` D-7 has both numbers, and the corpus mean is recoverable from this column in one pass. |
 | `dim` | `int32` | 192 for ECAPA. |
 | `n_extents` | `int32` | Task extents that contributed a window. |
 | `n_recordings` | `int32` | Distinct stems behind those extents. At most one extent per recording, so this equals `n_extents` unless a recording minted more than one — which no recording in the measured corpus did. |
@@ -41,7 +41,7 @@ assumptions about how they are laid out.
 | `model_id` | `string` | `speechbrain/spkrec-ecapa-voxceleb`. |
 | `model_commit_sha` | `string` | The **resolved 40-hex commit** the vector was produced with. Never a ref. Null only when resolution failed. |
 | `unresolved_reason` | `string` | Why the sha is null. Non-null exactly when the sha is null. |
-| `method` | `string` | The aggregator, `spherical_mean`. |
+| `method` | `string` | The pooling rule, `extent_equal_spherical_mean`: the spherical mean of each extent's own windows, then the spherical mean of those per-extent centroids. Measured against the one-stage window-weighted alternative in `design.md` D-7. |
 | `window_s`, `hop_s` | `float64` | The window grid, 2.0 and 1.0. |
 | `schema_version` | `int32` | 1. |
 | `corpus_root` | `string` | The tree the extents were read from — which matters, because the replay moves task extent. |
@@ -59,7 +59,9 @@ assumptions about how they are laid out.
 ### Diagnostics — is this one speaker?
 
 Each is paired with a closed-form null where one exists, so nothing here needs a fitted threshold.
-None of them is a verdict.
+None of them is a verdict. **All of them describe the window cloud**, not the per-extent
+centroids the stored vector is pooled from — one embedding pass feeds both, and the distribution
+block is computed over every window with its extent id as the file id.
 
 | column | type | meaning |
 | --- | --- | --- |
