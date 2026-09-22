@@ -149,8 +149,9 @@ second of audio attributed to a fifth of it.
 
 `_span_hear` does something different. `span_hear_input` places a span shorter than
 `HEAR_WINDOW_SECONDS` in a silent 2 s buffer, "so its only detector result describes the span
-itself" (`hear.py:426-443`); a longer span is passed through (`hear.py:444-446`) and its native
-windows are mapped back by `hear_window_extent`. HeAR's short-span label is about the span.
+itself" (`audio/tasks/health_acoustics/hear.py:426-443`); a longer span is passed through (`:444-446`)
+and its native windows are mapped back by `hear_window_extent` (`:449`). HeAR's short-span label is
+about the span.
 
 **The rule: a covering-window label is recorded, and is not eligible as evidence.** The flag already
 exists and is already written; nothing filters on it today.
@@ -570,17 +571,17 @@ entities and invalidate or shadow the original. That was wrong, and the reason i
 **two** addressing mechanisms and re-minting breaks both.
 
 **Per-span measurements are addressed by the `span_id` attribute, not by traversal.**
-`airway.py:242-245` builds `span_hear_by_span` from `window.attributes.get("span_id")` and looks up
-`span_hear_by_span.get(span.id, [])` at `:256`; `features.py:350` and `:886-926`, `taxonomy.py:103-122`
-and `figure.py:1834-1835` all key the same way. **A re-minted span carries zero labels under all
-four, silently**, while `features.py:1074` drops the invalidated original. So a `refine` would
-*delete* the span's classifier evidence from `span_label_set_stats` — including the feature
+PREPROCESS stamps `span_id` on every per-span window (`preprocess.py:350`), and every reader keys on
+it: `airway.py:430-454 decided_label_sets`, `features.py:358` and `:898-963`,
+`taxonomy.py:110-122` and `figure.py:441-448`. **A re-minted span carries zero labels under all
+of them, silently**, while `features.py:1117-1118` drops the invalidated original. So a `refine`
+would *delete* the span's classifier evidence from `span_label_set_stats` — including the feature
 `airway.cough` is built on. "Readers traverse `wasDerivedFrom`" is not a contract that can be
 adopted: it is four rewrites plus a reverse index `ProvStore` does not expose, since `derived_from`
 resolves one way only.
 
 **And carrying a measurement forward is wrong on its own terms.** `attribution: "native"`
-(`preprocess.py:2026`) and `isolated_span: True` (`:344`) are claims about how the **old** extent was
+(`preprocess.py:2509`) and `isolated_span: True` (`:355`) are claims about how the **old** extent was
 fed to a model. After a narrowing refine, a traversing reader would get a label flagged `native` for
 an extent containing no native window — rule (a)'s premise inverted by rule (a)'s own spec.
 
@@ -589,11 +590,11 @@ an extent containing no native window — rule (a)'s premise inverted by rule (a
 
 **The contract adopts the store's existing spellings rather than inventing new ones.** An earlier
 revision renamed `label`→`mark` and `contest`→`refute`; that is withdrawn, and the rename is not
-merely unnecessary but unsafe. `verb: "label"` is written by **SPEECH as well as AIRWAY** —
-`speech.py:961` writes `{"verb": "label", "label": "pii", ...}` and `redact.py:237` selects on
+merely unnecessary but unsafe. `verb: "label"` is SPEECH's PII mark —
+`speech.py:1981` writes `{"verb": "label", "label": "pii", ...}` and `redact.py:259` selects on
 exactly that pair to decide what gets redacted. Renaming `label` stops PII redaction firing,
-silently. The real readers of `verb` are `redact.py:237`, `report.py:196`, `report.py:327` and
-`extend.py:542`; it appears in neither `verdict.py` nor `figure.py`.
+silently. The readers of `verb` are `redact.py:259`, `report.py:208`, `report.py:1209` and
+`extend.py:517`; it appears in neither `verdict.py` nor `figure.py`.
 
 | verb | `verb:` value | writes | carries | mints |
 | --- | --- | --- | --- | --- |
@@ -603,51 +604,58 @@ silently. The real readers of `verb` are `redact.py:237`, `report.py:196`, `repo
 | trim | `"trim"` | `assertion`, `wasDerivedFrom` the span | `task_extent: [start, end]`, plus the `off_task_extent` finding | no |
 | propose | — | `span`, `family: "<branch>"`, `wasDerivedFrom` its evidence | a region PREPROCESS did not find | **yes** |
 
-`label` and `contest` already exist and keep their meanings. **`refine`, `trim` and `propose` are
-written by nothing in the graph** — swept over `nodes/` and `extend.py` on 2026-09-15, the full
-inventory of `verb:` values any node writes is:
+`label` and `contest` already exist and keep their meanings. **`refine` and `trim` are
+written by nothing in the graph, and `propose` is now the only verb a branch has.** Swept over
+`nodes/` and `extend.py`, the full inventory of `verb:` values any node writes is:
 
 | verb written | by | site |
 | --- | --- | --- |
-| `label` | AIRWAY, SPEECH | `airway.py:266`; `speech.py:961`, carrying `label: "pii"` |
-| `confirm` | AIRWAY | the loop pair at `airway.py:303`, written at `:310` |
-| `contest` | AIRWAY, QUALITY | the same loop pair at `airway.py:303`, written at `:310`; `quality.py:291` via `CONTEST_VERB` (`:62`) |
-| `abstain` | AIRWAY | `airway.py:332` |
-| `flag` | AIRWAY | `airway.py:368`, `reason: lexical_contamination` |
-| `measure` | PREPROCESS | `preprocess.py:1835`, `:1842`, `:1860` |
-| `withdraw` | PREPROCESS | `preprocess.py:599` via `WITHDRAW_VERB` (`:136`) |
-| `attribute` | SPEECH | `speech.py:793`, one per word |
-| `refine`, `trim`, `propose` | — | **nothing writes them** |
+| `deviate` | AIRWAY, SPEECH, VOICE | `branches.py:478-481`, from every `deviation()` finding |
+| `contest` | AIRWAY, SPEECH, VOICE, QUALITY | `branches.py:478-481`, from every `contest()` finding — `airway.py:1089`, `speech.py:1358`, `voice.py:802`; `quality.py:279` via `CONTEST_VERB` (`:46`) |
+| `label` | SPEECH | `speech.py:1981`, carrying `label: "pii"` |
+| `measure` | PREPROCESS | `preprocess.py:2324`, `:2331`, `:2349` |
+| `withdraw` | PREPROCESS | `preprocess.py:601` via `WITHDRAW_VERB` |
+| `exempt` | REDACT | `redact.py:951` |
+| `refine`, `trim` | — | **nothing writes them** |
 
-So three of the contract's five verbs are unwritten, and six verbs are written that the table does
-not carry. Of those six, `abstain` and `flag` are sanctioned below as keeping their meanings outside
-the table, and `confirm` has a settled migration (§ *Where each branch already stands* — `confirm`
-becomes a `label` carrying its corroborating window ids). **`attribute`, `measure` and `withdraw`
-have no such standing.** `attribute` acquires one in § *`refine` covers metadata as well as extent*
-below; `measure` and `withdraw` are PREPROCESS's and are untouched by these decisions.
+**The branch verb set collapsed rather than grew, and that is the change this section most needs to
+record.** Both entry points of every branch "write by `propose` only" (`branches.py:6`,
+`speech.py:6`, `voice.py:8`): a branch mints spans in its own family through `propose_span`
+(`branches.py:378-407`), which writes no `verb` at all, and everything else it has to say is a
+`Finding` of one of four kinds — `deviation`, `count`, `measure`, `contest` (`FINDING_KINDS`,
+`branches.py:112`). `write_findings` (`:425-497`) turns a `deviation` into a `verb: "deviate"`
+assertion keyed `deviation_type`, a `contest` into a `verb: "contest"` assertion keyed `claim`, a
+`measure` into its own measurement, and folds every `count` into one `counts` measurement carrying
+`found` beside `declared`.
 
-**`abstain` and `flag` also keep their current meanings** and are not folded into this table:
-`abstain` records that colocated evidence existed and decided nothing, and `flag` is a branch-level
-finding rather than a span-level one.
+So `label` is no longer a branch verb — AIRWAY's `label`, `confirm`, `abstain` and `flag` assertions
+all went with its rewrite, and SPEECH's PII mark is the only `label` left in the graph. `attribute`
+is gone too; SPEECH writes no per-word assertion. `deviate` is the verb the contract's typed
+deviations actually carry, and the contract's table below does not name it.
 
-**The corrected extent goes in a named attribute, never in `assertion.extent`.** Every existing
-assertion sets `extent=span.extent` (`airway.py:272`, `:308`, `:330`) and `report.py:1144`'s
+**Of the contract's five verbs, `propose` and `contest` are live, `label` survives only as
+REDACT's input, and `refine` and `trim` remain unwritten.**
+
+**The corrected extent goes in a named attribute, never in `assertion.extent`.** A `contest`
+assertion is written with the contested span's own extent (`branches.py:260-272`, the write at
+`:480-482`), as is QUALITY's (`quality.py:275-277`), and `report.py:1176`'s
 `_timing` relies on that convention, so a `refine` that moved `assertion.extent` would be read as
 timing the span itself. Hence `corrected_extent` and `task_extent` as attributes, with
 `assertion.extent` continuing to name the span being annotated.
 
-**The precedent for reading these already exists.** `figure.py:577-585` consumes SQUIM *assertions*
-by walking `store.derived_from(entity.id)` — assertion → span, the one direction the store resolves.
-That is exactly the traversal the annotating verbs need, already in production.
+**The precedent for reading these already exists.** `figure.py:572-590` consumes SQUIM *assertions*
+by walking `store.derived_from(entity.id)` (`:585`) — assertion → span, the one direction the store
+resolves. That is exactly the traversal the annotating verbs need, already in production.
 
 `refine` and `trim` still emit their deviations; they simply do not rewrite the store's spans. A
 corrected extent is a claim beside the original — attributable, reversible, and never in competition
 with it for a reader keying on `span_id`.
 
-**But SPEECH's, VOICE's and DDK's *assertions* currently reach no reader.** `report.py:1127` drops
-every assertion whose branch is not AIRWAY, and `figure.py:577-578` reads assertions only where
-`name == "squim"`. Their **spans** are read — `report.py:1130-1139` has explicit arms for them, and
-`propose` mints spans — so it is precisely the four annotating verbs whose output is invisible.
+**But SPEECH's and VOICE's *assertions* still reach no reader.** `report.py:1202` drops
+every assertion whose branch is not AIRWAY, and `figure.py:583` reads assertions only where
+`name == "squim"`. Their **spans** are read — `report.py:1205-1215` has explicit arms for them, and
+`propose` mints spans — so it is precisely the annotating verbs whose output is invisible, and that
+now includes every `deviate` assertion SPEECH and VOICE write.
 Widening REPORT's assertion read is a piece of work in its own right, listed below, and not something
 the existing readers absorb for free.
 
@@ -658,22 +666,25 @@ one. Annotation needs no cascade, so there is none to enumerate.
 
 It also makes `trim` non-destructive by construction, which is what the no-suppression rule wanted
 and what the previous revision's "retires nothing" could not deliver while still double-counting in
-`features.py:1080-1093`.
+`features.py:1123-1135`.
 
-**A branch's own output is invisible to AIRWAY**, which selects `family is None` (`airway.py:198`).
-Anything written as `family: "<branch>"` — including AIRWAY's own proposals — is outside that filter.
-Under the annotation model this affects only `propose`, and it is a constraint the AIRWAY piece must
-address rather than a defect in the contract.
+**AIRWAY now sees its own family and no other branch's.** `candidate_spans` selects
+`family in (None, "airway")` (`airway.py:196-210`), a widening of the `family is None` filter this
+section was written against. Anything written as `family: "speech"` or `family: "voice"` is still
+outside it, and it is a constraint the AIRWAY piece must address rather than a defect in the
+contract.
 
-**Nothing measures a proposed span.** No node runs a model at branch time, and `airway.py:171-173`
-makes not re-running HeAR an explicit design point. **A proposed span therefore carries its branch's
+**Nothing measures a proposed span.** No node runs a model at branch time: AIRWAY's docstring states
+that both its modes read PREPROCESS's own derivatives and run nothing (`airway.py:1-9`), and SPEECH
+"runs no ASR and no diarizer" (`speech.py:8`). **A proposed span therefore carries its branch's
 own evidence and no per-span classifier measurement at all**; adding a branch-time classifier pass is
 out of scope for this design and is listed as unresolved.
 
 Even if one were added, **YAMNet could not classify a short proposed span**: `span_yamnet_input`
 raises `SpanTooShortForYAMNet` below 0.96 s (`yamnet.py:257-258`), so rule (a)'s own motivating case —
 a 200 ms cough — can never acquire a native YAMNet window, whatever proposes it. HeAR has the
-capability, via the silent buffer (`hear.py:426-443`), but no mechanism invokes it at branch time.
+capability, via the silent buffer (`health_acoustics/hear.py:441-443`), but no mechanism invokes it
+at branch time.
 
 ### `refine` covers metadata as well as extent — owner decision, 2026-09-15
 
@@ -711,8 +722,9 @@ A `refine` assertion carries **one or both** of two named attributes, and must c
 | `corrected_extent` | the span's extent | `[start, end]` |
 | `corrected_attributes` | the span's metadata | a mapping from the span attribute's own key to the corrected value |
 
-`assertion.extent` continues to name the span being annotated, for the reason given above: every
-existing assertion sets `extent=span.extent` (`airway.py:272`, `:308`, `:330`) and `report.py:1144`'s
+`assertion.extent` continues to name the span being annotated, for the reason given above: a
+`contest` assertion is written with the contested span's own extent (`branches.py:260-272`) and
+`report.py:1176`'s
 `_timing` reads it as that span's timing. A metadata refinement gets a named attribute for exactly
 the same reason an extent correction does.
 
@@ -724,8 +736,8 @@ than a convention, and the one shape a reader may reject.
 
 **Why a nested mapping rather than a flat `corrected_<key>` per field.** Because the store has
 readers that key on an assertion's **top-level** attribute names without testing `verb` at all:
-`figure.py:578` and `routing_analysis/features.py:1092` both select assertions on
-`attributes.get("name") == "squim"`, and `report.py:1129` builds an entity's rendered description
+`figure.py:583` and `routing_analysis/features.py:1140` both select assertions on
+`attributes.get("name") == "squim"`, and `report.py:1204` builds an entity's rendered description
 from `attributes.get("name") or attributes.get("family")` for every branch entity it lists. A
 corrected value written at the top level under the span's own key — `name`, `family`, `label` — is
 therefore one field name away from being read as the assertion's own property. Nesting puts every
@@ -735,8 +747,8 @@ were meant.
 
 **The prior value is not copied into the assertion, and does not need to be.** For the extent,
 `assertion.extent` already carries it. For the metadata, the span carries it: nothing rewrites a
-span's attributes, the module's only `was_invalidated_by` call is `extend.py:327`, and `quality.py:27`
-states the rule outright — *"PREPROCESS's spans are never invalidated here: the store is
+span's attributes, the module's only `was_invalidated_by` call is `extend.py:322`, and `quality.py:11`
+states the rule outright — *"It withdraws no span: the store is
 append-only"*. So the span reached through `store.derived_from(assertion.id)` still holds what the
 refiner read. An absent key on that span additionally distinguishes *correcting* a value from
 *supplying* one, with no extra attribute.
@@ -753,15 +765,16 @@ so it mints under the rule as written.
 
 **What it is `wasDerivedFrom`: every span it aggregates, plus the evidence that built it.** This is
 production practice rather than a new rule. SPEECH's `family: "speech"` span is already
-`wasDerivedFrom` every live non-SPEECH span it overlaps (`speech.py:893-895`, over the `prior_spans`
-set built at `:577-578`), and `ProvStore.derived_from` returns a **list** (`utils/prov_store.py:525`),
+`wasDerivedFrom` every live non-SPEECH span it overlaps (`speech.py:1872-1881`, over the
+`prior_spans` set built at `:1509-1511`), and `ProvStore.derived_from` returns a **list**
+(`utils/prov_store.py:530-532`),
 so many-to-one derivation is a capability of the store and not a tolerated irregularity. The one
 production reader that walks the relation iterates it — `for span_id in store.derived_from(entity.id)`
-at `figure.py:580` — so an aggregate does not break it.
+at `figure.py:585` — so an aggregate does not break it.
 
 **Whether the spans it aggregates are left untouched: yes, and it is a property of the code, not only
 of the design.** Nothing under `nodes/` invalidates anything; the module's single `was_invalidated_by`
-call is `extend.py:327`, inside `withdraw_contradicted_clips`. An aggregate neither retires nor
+call is `extend.py:322`, inside the clip-contest supersession. An aggregate neither retires nor
 contradicts the spans beneath it — the same shape as § *(b) Gap spans are background, never events*,
 where a branch-proposed span inside a background extent supersedes the typing for that extent and
 retires nothing.
@@ -772,23 +785,19 @@ span is refinable by the branch at all — is untouched by this decision and sta
 [`../20260817-triage-workflow-dag/branch-conventions.md`](../20260817-triage-workflow-dag/branch-conventions.md)
 § *The two owner decisions of 2026-09-15 leave the minting rule alone and open one question*.
 
-#### SPEECH's `attribute` writes become `refine` or `propose` — owed a code change
+#### SPEECH's `attribute` writes became `propose` — landed
 
-`speech.py:793` writes one `verb: "attribute"` assertion per word — the highest-volume verb in the
-store and not one of the contract's five. Under this decision it has two destinations and no third:
+`speech.py` wrote one `verb: "attribute"` assertion per word when this was decided: the
+highest-volume verb in the store and not one of the contract's five. It is gone. SPEECH writes no
+per-word assertion at all, and the claim it carried is now on the span: `attributed_to` is computed
+from the run's words and stamped on the proposed span, with `nontarget` derived beside it
+(`speech.py:1869-1884`). The destination the decision named as `propose` — *one span per contiguous
+run attributed to the same speaker, minted `family: "speech"`* — is what the code does
+(`_SpeakerRun` at `speech.py:610`, `MINT` at `:646-647`).
 
-- **`refine`**, where the claim is *this span's speaker is X*: adding or adjusting the span's speaker
-  metadata, carried in `corrected_attributes`. The span-level home already exists — SPEECH computes
-  `attributed_to` from its words (`speech.py:877-878`), writes it on the span (`:885`) and derives
-  `nontarget` from it (`:886-888`) — so what the migration moves is the per-word assertion, not the
-  claim itself.
-- **`propose`**, where resolving across speakers produces an **aggregated span**: one span per
-  contiguous run attributed to the same speaker, minted `family: "speech"` under the three answers
-  above.
-
-Which words land in which is SPEECH's own piece to settle, not this section's; what is settled is
-that `attribute` has no standing as a fifth branch verb and that these two are its destinations.
-Recorded against the branch at
+The `refine` half was never needed: because the span is minted carrying the attribution rather than
+having it added afterwards, there is no prior value to correct. What stays settled is that
+`attribute` has no standing as a branch verb. Recorded against the branch at
 [`../20260817-triage-workflow-dag/branch-speech.md`](../20260817-triage-workflow-dag/branch-speech.md)
 § *S6 — Word→speaker attribution*.
 
