@@ -32,15 +32,19 @@ from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY, EXPECT
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
+    find_measurements,
     software_agent,
     write_verdict,
 )
 from senselab.audio.workflows.triage.nodes.gates import (
+    AT_LEAST,
     DEFAULT_LAYER,
+    FLAG_GATES,
     GATE_SECTION,
     GATE_SPECS,
     AppliedGate,
     GateBounds,
+    apply_flag_gates,
     apply_gates,
     conformance_gate_names,
     load_gate_bounds,
@@ -372,6 +376,37 @@ def gate_readings(store: ProvStore, names: Sequence[str]) -> dict[str, Any]:
     return readings
 
 
+def flag_gate_readings(store: ProvStore, names: Sequence[str]) -> dict[str, Any]:
+    """The worst reading each flag gate can be answered with, over every extent that carries one.
+
+    A branch mints one task extent per component, so a reading can be written more than once. A
+    flag gate asks whether the recording carries the circumstance anywhere, so the answer is the
+    reading that is hardest on it: the smallest for an ``at_least`` gate, the largest for an
+    ``at_most`` one.
+
+    Args:
+        store: The provenance store.
+        names: The gates whose readings to look for.
+
+    Returns:
+        Reading name to its worst value. A reading nothing live carries, and one written only as
+        null, is absent.
+    """
+    readings: dict[str, Any] = {}
+    for name in names:
+        spec = GATE_SPECS[name]
+        if spec.reading is None:
+            continue
+        values = [
+            float(measurement.attributes["value"])
+            for measurement in find_measurements(store, spec.reading)
+            if measurement.attributes.get("value") is not None
+        ]
+        if values:
+            readings[spec.reading] = min(values) if spec.op == AT_LEAST else max(values)
+    return readings
+
+
 def _gate_path(gate: AppliedGate) -> str:
     """Where a gate's bound was configured, as a dotted config path.
 
@@ -394,13 +429,16 @@ class GateOutcome:
         node: The branch whose report the conformance belongs to, or None when nothing was gated.
         conformance: What the gates decided.
         bounds: The group's configured gates, or None when no group was resolved.
-        applied: One record per gate applied, in the order the group declares them.
+        applied: One record per conformance gate applied, in the order the group declares them.
+        flagging: One record per :data:`FLAG_GATES` gate applied. These decide no conformance;
+            each one that did not pass is a flag ground of its own.
     """
 
     node: str | None
     conformance: Conformance
     bounds: GateBounds | None
     applied: tuple[AppliedGate, ...]
+    flagging: tuple[AppliedGate, ...] = ()
 
     @property
     def unmeasured(self) -> tuple[str, ...]:
@@ -412,14 +450,15 @@ class GateOutcome:
             ``verdict.unmeasured_points_flag`` reaches a gate the same way it reaches an
             instrument setting.
         """
-        return tuple(_gate_path(gate) for gate in self.applied if gate.bound is None)
+        return tuple(_gate_path(gate) for gate in (*self.applied, *self.flagging) if gate.bound is None)
 
     def record(self) -> dict[str, Any]:
         """This application, as the verdict records it.
 
         Returns:
-            The node, the group and its bounds, and every gate applied. Empty when no group was
-            resolved, which is every recording that declares no task this graph holds a row for.
+            The node, the group and its bounds, every conformance gate applied and every flagging
+            gate applied. Empty when no group was resolved, which is every recording that declares
+            no task this graph holds a row for.
         """
         if self.bounds is None:
             return {}
@@ -427,6 +466,7 @@ class GateOutcome:
             "node": self.node,
             **self.bounds.record(),
             "applied": [gate.record() for gate in self.applied],
+            "flagging": [gate.record() for gate in self.flagging],
         }
 
 
@@ -453,12 +493,15 @@ def gate_conformance(
         return GateOutcome(None, UNDETERMINED, None, ())
     branch, expectation = owner
     bounds = load_gate_bounds(config, expectation.pattern, declared_family)
+    # The flag gates ask about the recording's circumstances, not about the instruction, so they
+    # are applied whether or not the owning branch evaluated the task in family.
+    flagging = apply_flag_gates(bounds, flag_gate_readings(store, tuple(FLAG_GATES)))
     reported = next((report for report in reports if report.node == branch and report.in_family), None)
     if reported is None:
-        return GateOutcome(branch, UNDETERMINED, bounds, ())
+        return GateOutcome(branch, UNDETERMINED, bounds, (), tuple(flagging))
     names = conformance_gate_names(expectation.pattern, anti_pattern=expectation.anti_pattern)
     conformance, applied = apply_gates(names, bounds, gate_readings(store, names))
-    return GateOutcome(branch, conformance, bounds, tuple(applied))
+    return GateOutcome(branch, conformance, bounds, tuple(applied), tuple(flagging))
 
 
 def _derived_ran(
@@ -545,6 +588,7 @@ def verdict(
         llm_redaction=annotation,
         critical_absences=_critical_absences(store),
         gates=outcome.record(),
+        flag_gates=[gate.record() for gate in outcome.flagging],
         policy=FoldPolicy.from_config(config),
     )
 
