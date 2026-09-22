@@ -14,15 +14,33 @@ thing driven by one parquet.
 | spans by source | rectangles, five rows | `(row, t0, t1)` triples |
 | YAMNet / HeAR per-span scores | a small matrix | per span, the top label index and its score |
 | SQUIM per span | three traces | three values per span |
-| consensus ASR | words with extents **and text** | extents only — see below |
+| consensus ASR | words with extents and text | extents **and text**, with PII spans marked — see below |
 | branch lanes | rectangles with roles | `(role, t0, t1)` triples |
 
 Everything that remains is a polyline or a rectangle. Nothing is an image.
 
-**No transcript text, and no detected string, enters the parquet.** The ASR lane becomes word
-*extents* without words. This is not a size decision: the corpus scan measured 25,853 recordings
-carrying a PII finding, a file meant for a browser is the least controlled artefact the project
-produces, and a word extent is enough to draw the lane.
+**The parquet carries transcript text and marks its PII.** Owner-directed 2026-09-22: *PII can be
+stored in this and indicated. That's ok — this is all for my viewing.* So the ASR lane keeps its
+words, and every `pii` entity in the store becomes a marked span carrying its category, so the
+recording view can show what was detected and where.
+
+That makes the parquet a **sensitive artefact**, and it inherits the handling the corpus PII census
+already has:
+
+- **mode 600, and never committed.** No path under the repository, and `.gitignore` carries the
+  name so it cannot be added by accident.
+- **Never published, never attached, never copied to a shared location.** It goes to the owner's
+  own machine or to the mode-700 tree on ORCD scratch, and nowhere else.
+- **The HTML that reads it inherits the same status.** A page that renders detected PII is not a
+  page to host; it is opened from disk by the person the data belongs to.
+- **The corpus-level artefacts stay clean.** `corpus_decisions.json`, the measurement distributions
+  and everything committed to `specs/` remain counts and categories only. This exemption is for one
+  file, for one reader.
+
+Marking rather than omitting is also the more useful choice: a reader looking at a recording whose
+release was withheld can see *why* — which of the twenty-one categories fired, over which words —
+and that is exactly the judgement the census showed the detectors get wrong 91% of the time on DDK
+carriers.
 
 ## The encoding
 
