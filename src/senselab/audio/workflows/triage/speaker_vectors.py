@@ -299,7 +299,7 @@ class ScanReport:
     subjects_written: int = 0
     subjects_without_extent: list[str] = field(default_factory=list)
     subjects_all_refused: list[str] = field(default_factory=list)
-    subjects_failed: list[str] = field(default_factory=list)
+    subjects_failed: dict[str, str] = field(default_factory=dict)
     recordings_seen: int = 0
     recordings_with_extent: int = 0
     recordings_unreadable: int = 0
@@ -653,8 +653,11 @@ def scan(
         subjects: Optional explicit subject allowlist, for a targeted re-run.
 
     Returns:
-        ``(rows, report)``. A subject whose estimate raised is counted in
-        ``report.subjects_failed`` and contributes no row.
+        ``(rows, report)``. A subject whose estimate raised contributes no row and appears in
+        ``report.subjects_failed`` keyed by subject with the exception that ended it -- an opaque
+        count would hide the one failure mode the floor does not cover, a subject whose whole
+        supply is a single extent shorter than :data:`WINDOW_S`, which yields one window where the
+        distribution describer needs two.
     """
     grouped, report = gather(root, slice_index, slices)
     wanted = set(subjects) if subjects is not None else None
@@ -664,8 +667,8 @@ def scan(
             continue
         try:
             rows.append(embed_subject(subject, grouped[subject], root, device=device, created_at=created_at))
-        except Exception:  # noqa: BLE001 -- one subject's failure must not end the shard
-            report.subjects_failed.append(subject)
+        except Exception as exc:  # noqa: BLE001 -- one subject's failure must not end the shard
+            report.subjects_failed[subject] = f"{type(exc).__name__}: {exc}"
             continue
     report.subjects_written = len(rows)
     return rows, report

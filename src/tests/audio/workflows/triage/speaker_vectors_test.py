@@ -416,3 +416,20 @@ def test_the_pooling_and_window_grid_are_recorded_on_the_row() -> None:
     row = _row()
     assert row["method"] == sv.AGGREGATOR
     assert (row["window_s"], row["hop_s"]) == (sv.WINDOW_S, sv.HOP_S)
+
+
+def test_a_subject_whose_estimate_raises_is_recorded_with_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An opaque failure count would hide the one case the floor does not cover."""
+    build_subject(tmp_path, "sub-boom", (("a", 1.0, 15.0),))
+
+    def _boom(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        raise ValueError("need at least 2 non-zero vectors to describe a distribution; got 1")
+
+    monkeypatch.setattr(sv, "embed_subject", _boom)
+    rows, report = sv.scan(tmp_path)
+    assert rows == []
+    assert report.subjects_written == 0
+    assert "sub-boom" in report.subjects_failed
+    assert "2 non-zero vectors" in report.subjects_failed["sub-boom"]
