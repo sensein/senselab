@@ -156,8 +156,15 @@ does.
 | | per recording | share of the graph, measured |
 | --- | --- | --- |
 | HeAR today | 25.6–27.7 s, median 25.9 | 17.8% |
-| resident within a recording | ~6.5 s | ~4.5% |
-| resident across recordings in a task | ~0.3 s | ~0.2% |
+| resident within a recording | 5.93 s, measured from cold | ~4.1% |
+| resident across recordings in a task | 0.1–0.5 s | ~0.2% |
+
+The 5.93 s is the four-call shape run end to end against the same shape on the pre-change module,
+26.0 s, in the equivalence job below — not a projection from the intercept. Applied to the corpus
+run's own totals as a ratio, HeAR is on the order of **16% of the whole corpus's wall clock** and
+nearly all of it goes. Stated as a ratio deliberately: these are idle-node seconds and the corpus
+ran at load averages in the hundreds, where process start-up costs more than 6.48 s and the saving
+is correspondingly larger, not smaller.
 
 ## Is a shared helper warranted now that there are three?
 
@@ -235,7 +242,38 @@ a request crossed with another — rather than a rounding artefact. The probe re
 absolute difference alongside the verdict, so a non-bitwise result would be quantified rather than
 merely failing.
 
-Results: job 23466540, pending at the time of writing.
+**12 comparisons, 0 mismatches, every one bitwise.** Job 23466540, node2027, `loadavg_start` 0.00,
+exclusive. `equiv-23466540.jsonl`:
+
+| model | recording s | windows | identical | max abs diff | old path s | new path s | worker RSS MiB |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| detector | 2.79 | 2 | yes | 0.0 | 6.91 | 5.73 (cold) | 849 |
+| detector | 3.72 | 2 | yes | 0.0 | 6.34 | 0.02 | 852 |
+| detector | 4.54 | 3 | yes | 0.0 | 6.48 | 0.03 | 855 |
+| detector | 5.58 | 3 | yes | 0.0 | 6.47 | 0.03 | 862 |
+| detector | 7.29 | 4 | yes | 0.0 | 6.26 | 0.04 | 863 |
+| detector | 10.18 | 6 | yes | 0.0 | 6.49 | 0.05 | 866 |
+| detector | 18.32 | 10 | yes | 0.0 | 6.57 | 0.08 | 875 |
+| detector | 30.02 | 16 | yes | 0.0 | 6.55 | 0.12 | 882 |
+| detector | 73.54 | 37 | yes | 0.0 | 6.78 | 0.28 | 885 |
+| encoder | 2.79 | 2 | yes | 0.0 | 6.12 | 3.28 (first load) | 2335 |
+| encoder | 3.72 | 2 | yes | 0.0 | 5.99 | 0.38 | 2350 |
+| encoder | 4.54 | 3 | yes | 0.0 | 6.05 | 1.12 | 2399 |
+| **detector total** | | | **0 mismatches** | | **58.84** | **6.37** | |
+
+The last two columns are the whole result: **9.2x** over the nine detector runs, and a call that is
+not the first costs 0.02–0.28 s against 6.3–6.9 s. The same job also ran the
+four-invocations-per-recording shape from cold: **26.0 s old, 5.93 s new**.
+
+`detector_after_encoder_identical: true` is the model-cache check: after the worker had loaded the
+encoder, a detector request came back bitwise equal to what the one-shot path produced, so holding
+two SavedModels in one process does not cross their answers.
+
+`worker_rss_mib` is the same worker growing across the run. The detector alone tops out at **885
+MiB** over nine recordings of increasing length. Loading the encoder alongside it takes the same
+process to **2,399 MiB** — that is the figure to size against for any driver that uses both, still
+7.3% of a corpus task's 32 GB, and it is why the worker loads lazily rather than loading both at
+start-up: a PREPROCESS run never calls the encoder and never pays for it.
 
 ## What was not measured
 
@@ -245,8 +283,8 @@ Results: job 23466540, pending at the time of writing.
 - **Resident-worker RSS as its own probe.** YAMNet had `probe_worker_rss.py`; here the equivalence
   run's `worker_rss_mib` column is the only memory measurement, taken from `/proc` of the live
   worker as it grows across the nine recordings. No separate sweep of a single worker against
-  recording length was taken, and no measurement was taken of a worker holding both SavedModels
-  after many requests.
+  recording length was taken, and the both-SavedModels figure of 2,399 MiB is from three encoder
+  calls, not from a long run.
 - **The GPU path.** Everything here is `CUDA_VISIBLE_DEVICES=-1`. Whether a CUDA-built worker's
   residency is as cheap as the CPU one's is not known, and the LLM check is the standing warning
   that it may not be.

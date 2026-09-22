@@ -475,7 +475,12 @@ FOUR times per recording, constant -- hear_scores, enhanced_hear, residual_hear 
 span_hear call -- measured at 25.6-27.7 s per recording and 17.8% of the whole graph over the step
 probe, against YAMNet's 12.5%. What residency costs is memory held rather than memory peaked, the
 same argument as yamnet's: the process already existed at that size during each of the four calls.
-false is for a host where that is contended, and costs 19.4 s per recording to have it back.
+The worker holding the detector alone tops out at 885 MiB over nine recordings of increasing length,
+measured from /proc VmRSS; a process that also loads the 512-d encoder -- which no PREPROCESS pass
+calls -- reaches 2,399 MiB, which is why the worker loads lazily rather than at start-up. false is
+for a host where that is contended, and costs 20.1 s per recording to have it back: the four-call
+shape is 26.0 s one-shot against 5.93 s resident from cold, and the nine-recording detector pass is
+58.84 s against 6.37 s, bitwise identical.
 See specs/20260922-hear-process-startup-cost/.
 
 ## windows
