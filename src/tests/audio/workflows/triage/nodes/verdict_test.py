@@ -18,6 +18,7 @@ from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.run import GRAPH_ORDER
 from senselab.audio.workflows.triage.vocabulary import (
+    EXTRA_SPEAKER_IN_EXTENT,
     LLM_REDACTION_RESIDUE,
     REDACTION_LLM_ANNOTATION,
     TASK,
@@ -1203,3 +1204,114 @@ class TestTheGatesDecideTheDeclaredTask:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
         assert result.file_verdict.gates == {}
+
+
+class TestAnotherSpeakerInsideTheTaskExtentIsAFlag:
+    """The owner's rule: inside the task extent it flags, outside it passes.
+
+    The reading is SPEECH's within-extent one, never the whole-file ``speaker_count``, and the
+    gate is not a term in the task's conformance. The design is in
+    ``specs/20260922-the-multi-speaker-instrument/design.md``.
+    """
+
+    READING = "extent_dominant_speaker_share"
+
+    @staticmethod
+    def _store(readings: Mapping[str, Any], *, family: str = "picture-description") -> ProvStore:
+        """A store carrying one in-family SPEECH report and the readings a gate reads.
+
+        Args:
+            readings: Measurement name to value; a None value writes no measurement at all.
+            family: The declared task family.
+
+        Returns:
+            The store.
+        """
+        store = ProvStore(run_id="speaker-gate-test")
+        agent = software_agent(store)
+        store.entity(
+            prov_type="stream",
+            extent=(0.0, 12.0),
+            attributes={"name": "recording", "path": f"sub-a_ses-1_task-{family}.wav"},
+        )
+        activity = store.activity(node="SPEECH", step="seed", parameters={})
+        store.was_associated_with(activity, agent)
+        for name, value in readings.items():
+            if value is None:
+                continue
+            entity = store.entity(
+                prov_type="measurement", extent=None, attributes={"name": name, "value": value, "signal": "enhanced"}
+            )
+            store.was_generated_by(entity, activity)
+            store.was_attributed_to(entity, agent)
+        write_report(
+            store,
+            activity,
+            agent,
+            node="SPEECH",
+            kind="speech",
+            conformance=UNDETERMINED,
+            conformance_of=TASK,
+            deviations=(),
+            in_family=True,
+            detail={},
+        )
+        return store
+
+    def _flagged(self, result: Any) -> list[str]:  # noqa: ANN401
+        """Every flag reason the fold recorded.
+
+        Args:
+            result: What VERDICT returned.
+
+        Returns:
+            The reasons, as written.
+        """
+        return [str(reason["why"]) for reason in result.file_verdict.record()["reasons"]]
+
+    def test_a_second_voice_inside_the_task_extent_flags(self, config: TriageConfig, tmp_path: Path) -> None:
+        """An interjection in the middle of the task: the gate's whole purpose."""
+        store = self._store({self.READING: 0.6, "response_duration_s": 8.0})
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.triage is Triage.FLAG
+        assert any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))
+
+    def test_a_speaker_only_outside_the_task_extent_does_not_flag(self, config: TriageConfig, tmp_path: Path) -> None:
+        """An examiner prompt before the task. Whole-file two speakers; inside the task, one."""
+        store = self._store({self.READING: 1.0, "speaker_count": 2, "response_duration_s": 8.0})
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert not any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))
+
+    def test_the_gate_reads_the_within_extent_share_and_not_the_whole_file_count(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A whole-file count of four cannot trip a gate no layer points at it."""
+        store = self._store({self.READING: 1.0, "speaker_count": 4, "response_duration_s": 8.0})
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        applied = {entry["gate"]: entry for entry in result.file_verdict.gates["flagging"]}
+        assert applied["dominant_speaker_share_min"]["reading"] == self.READING
+        assert applied["dominant_speaker_share_min"]["passed"] is True
+
+    def test_an_absent_reading_is_undetermined_and_never_a_flag(self, config: TriageConfig, tmp_path: Path) -> None:
+        """No diarization derivative is not a claim that one voice held the task."""
+        store = self._store({self.READING: None, "response_duration_s": 8.0})
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        applied = {entry["gate"]: entry for entry in result.file_verdict.gates["flagging"]}
+        assert applied["dominant_speaker_share_min"]["passed"] == UNDETERMINED
+        assert not any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))
+
+    def test_the_speaker_gate_is_not_a_term_in_the_tasks_conformance(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A second voice does not mean the participant failed to perform the task."""
+        store = self._store({self.READING: 0.1, "response_duration_s": 8.0})
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.conformance["SPEECH"] is True
+        assert "dominant_speaker_share_min" not in {entry["gate"] for entry in result.file_verdict.gates["applied"]}
+
+    def test_a_voice_task_carries_no_speaker_gate_at_all(self, config: TriageConfig, tmp_path: Path) -> None:
+        """Source separation separates voices; a held vowel's group names no such gate."""
+        store = self._store({self.READING: 0.1}, family="maximum-phonation-time")
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.gates["flagging"] == []
+        assert not any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))

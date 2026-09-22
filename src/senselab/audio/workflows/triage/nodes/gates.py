@@ -134,6 +134,7 @@ GATE_SPECS: dict[str, GateSpec] = _gate_specs(
         "omissions_max": GateSpec("expected_tokens_omitted", AT_MOST, int),
         "response_min_s": GateSpec("response_duration_s", AT_LEAST, float),
         "coverage_min": GateSpec("source_content_coverage", AT_LEAST, float),
+        "dominant_speaker_share_min": GateSpec("extent_dominant_speaker_share", AT_LEAST, float),
         "items_min": GateSpec("items_produced", AT_LEAST, int),
         "events_min": GateSpec("airway_events_found", AT_LEAST, int),
         "repetitions_min": GateSpec("ddk_repetitions_found", AT_LEAST, int),
@@ -181,6 +182,21 @@ CONFORMANCE_GATES: dict[Pattern, tuple[str, ...]] = {
 A group with none answers :data:`UNDETERMINED`, which is what a group whose instruction states no
 conformable expectation should answer.
 """
+
+FLAG_GATES: dict[str, str] = {
+    "dominant_speaker_share_min": "another speaker holds part of the task extent",
+}
+"""Gates whose failure is a flag ground of its own, and the ground each one names.
+
+A flag gate is never a term in the task's conformance: it says something about the recording's
+circumstances, not about whether the participant performed the instruction. VERDICT applies every
+one the group configures, beside :data:`CONFORMANCE_GATES`, and a group that names none applies
+none.
+"""
+
+_shared = sorted(set(FLAG_GATES) & {name for names in CONFORMANCE_GATES.values() for name in names})
+if _shared:
+    raise ValueError(f"gates {_shared} are both a conformance term and a flag ground; a gate is one or the other")
 
 RECALL_CONFORMANCE_GATES: tuple[str, ...] = ("coverage_min",)
 """The conformance gates of a ``FREE_RESPONSE`` row whose anti-pattern is ``verbatim_source``.
@@ -400,11 +416,20 @@ class AppliedGate:
     op: str
     passed: bool | Literal["UNDETERMINED"]
 
+    @property
+    def ground(self) -> str | None:
+        """The flag ground this gate names, or None when it is a conformance term.
+
+        Returns:
+            The :data:`FLAG_GATES` entry for this gate's name, or None.
+        """
+        return FLAG_GATES.get(self.name)
+
     def record(self) -> dict[str, Any]:
         """This application, as the verdict records it.
 
         Returns:
-            Every field, JSON-ready.
+            Every field, JSON-ready. ``ground`` is present only for a flag gate.
         """
         return {
             "gate": self.name,
@@ -416,6 +441,7 @@ class AppliedGate:
             "keyed_under": self.keyed_under,
             "op": self.op,
             "passed": self.passed,
+            **({"ground": self.ground} if self.ground is not None else {}),
         }
 
 
@@ -476,3 +502,18 @@ def apply_gates(
     if not applied or any(gate.passed == UNDETERMINED for gate in applied):
         return UNDETERMINED, applied
     return all(gate.passed is True for gate in applied), applied
+
+
+def apply_flag_gates(bounds: GateBounds, readings: Mapping[str, Any]) -> list[AppliedGate]:
+    """Apply the flag gates this group configures, which decide no conformance.
+
+    Args:
+        bounds: The group's configured bounds.
+        readings: Reading name to the value the reporting node wrote.
+
+    Returns:
+        One record per flag gate applied, in :data:`FLAG_GATES` order. Empty when the group names
+        none.
+    """
+    _, applied = apply_gates(tuple(FLAG_GATES), bounds, readings)
+    return applied
