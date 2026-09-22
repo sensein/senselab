@@ -39,6 +39,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     branch_params,
     contest,
     count,
+    count_against_instruction,
     declared_duration_count,
     deviation,
     deviation_names,
@@ -729,7 +730,7 @@ def _airway_event_series(
 ) -> Result:
     """One span per event, plus ``task_extent`` over their hull.
 
-    The count read against the instruction's ``expected_event_count`` is the number of these spans.
+    The count read against the instruction's ``required_count`` is the number of these spans.
 
     Args:
         expectation: The row.
@@ -756,15 +757,16 @@ def _airway_event_series(
 
     components = event_proposals(events, kind, store=store, evidence=evidence, graded=graded)
     carriers = sorted({event.span_id for event in events})
-    findings: list[Finding] = [
-        count("expected_event_count", len(events), expectation.expected_event_count, *carriers),
+    required = expectation.required_count
+    findings: list[Finding] = [] if required is None else [count_against_instruction(required, len(events), *carriers)]
+    findings.append(
         count(
             "events_with_carrier_boundaries",
             sum(1 for event in events if event.boundaries == CARRIER_BOUNDARIES),
             None,
             *carriers,
-        ),
-    ]
+        )
+    )
 
     onsets = [event.start for event in events]
     intervals = [round(later - earlier, 3) for earlier, later in zip(onsets, onsets[1:])]
@@ -798,7 +800,8 @@ def _airway_event_series(
                 *evidence,
                 label=kind,
                 events_n=len(events),
-                declared_event_count=expectation.expected_event_count,
+                required_count=None if required is None else required.value,
+                required_count_unit=None if required is None else required.unit.value,
                 declared_route=route,
             )
         )
@@ -874,16 +877,19 @@ def _airway_alternation(expectation: Expectation, store: ProvStore, params: Bran
     cycles = sum(1 for cough in coughs if any(breath[0] >= cough.end for breath in breaths))
     cough_carriers = sorted({cough.span_id for cough in coughs})
     breath_carriers = sorted({span.id for span in carriers})
-    findings: list[Finding] = [
-        count("expected_event_count", len(coughs), expectation.expected_event_count, *cough_carriers),
+    required = expectation.required_count
+    findings: list[Finding] = (
+        [] if required is None else [count_against_instruction(required, len(coughs), *cough_carriers)]
+    )
+    findings.append(
         count(
             "cough_then_breathe_cycles",
             cycles,
-            expectation.expected_event_count,
+            None if required is None else required.value,
             *cough_carriers,
             *breath_carriers,
-        ),
-    ]
+        )
+    )
     task = hull([(component.start, component.end) for component in components])
     if task is not None:
         components.append(

@@ -32,6 +32,11 @@ without the distribution in front of it, and this is what it looks like when tha
 `ddk_repetition_count_from_ppg_decode`, against a configured `expected_event_count` of 10 for the
 single-syllable families and 30 for the multi-syllable ones.
 
+> **Acted on 2026-09-21.** The p50 column below is now what these five rows declare, as a
+> `typical_count` in **repetitions**, citing this file:
+> `specs/20260921-required-and-typical-counts/design.md`. The `configured` column is the retired
+> `expected_event_count`.
+
 | family | n | p5 | **p50** | p95 | configured |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `diadochokinesis-pa` | 895 | 4 | **11** | 24 | 10 |

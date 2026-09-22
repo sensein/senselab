@@ -91,6 +91,11 @@ alternative, a thirteenth `DETECT` group, would duplicate four values with nothi
 Owner-directed, and it required no change here: none of the thirteen readings a gate reads is that
 field, and a test now says so structurally rather than by inspection.
 
+> **Followed on 2026-09-21** by `specs/20260921-required-and-typical-counts/design.md`, which
+> splits the field into `required_count` and `typical_count`. The structural test below became a
+> test that the gate table *refuses* to bind the measured kind, at import. What that change did not
+> do is bind the required kind: the tolerance is still underived and no gate reads either count.
+
 The field holds two unlike things. `respiration-and-cough-fivebreaths` asks for five breaths and
 says so in its own name; a participant who gives four departed from the instruction.
 `diadochokinesis-pa` carries a ten nobody ever spoke — the instruction is *repeat as fast as you

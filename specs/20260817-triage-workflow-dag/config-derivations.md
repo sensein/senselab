@@ -1613,13 +1613,15 @@ per-family difference has been derived; what the layer buys today is that a diff
 `maximum-phonation-time` declaring `expect_inhale` where its v2 does not — one group, two
 instructions — becomes expressible without a code change.
 
-**No gate reads `expected_event_count`**, and none may until each expectation row declares which
-kind of count it carries. The field holds a count the instruction gave (`fivebreaths` asks for
-five, and says so in its own name) beside a count nobody gave (`diadochokinesis-pa`'s ten, on a
-task whose instruction is *repeat as fast as you can*). A bound on the second would judge a
-participant against a number never spoken to them, and individuals vary. `events_min` and
-`repetitions_min` read what the instrument **found**, at a bound of one — did the asked-for sound
-happen at all — never what the row declared. The declared count stays a reported covariate.
+**No gate reads either count.** Each expectation row declares which kind it carries: a
+`required_count` is a number the instruction gave (`fivebreaths` asks for five, and says so in its
+own name) and may be gated once a tolerance is derived; a `typical_count` is a median measured over
+the corpus (`diadochokinesis-pa`'s eleven, on a task whose instruction is *repeat as fast as you
+can*) and may never be, which `gates.UNGATEABLE_READINGS` enforces at import. A bound on the second
+would judge a participant against a number never spoken to them, and individuals vary. `events_min`
+and `repetitions_min` read what the instrument **found**, at a bound of one — did the asked-for
+sound happen at all — never what the row declared. Both counts stay reported covariates. See
+`specs/20260921-required-and-typical-counts/design.md`.
 
 ```
 verdict.gates.by_group.score_min: 0.2          [EVENT_SERIES, EVENT_ALTERNATION, SOUND_COVERAGE]

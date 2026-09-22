@@ -58,7 +58,7 @@ different DDK tasks are different in requirements.* The DDK families show it exa
 
 | families | pattern | what the instruction asks |
 | --- | --- | --- |
-| `diadochokinesis-pa`, `-ta`, `-ka` | `SYLLABLE_TRAIN` | a **count**: `expected_event_count=10` |
+| `diadochokinesis-pa`, `-ta`, `-ka` | `SYLLABLE_TRAIN` | a **count**: `expected_event_count=10` (since 2026-09-21 a measured `typical_count`) |
 | `diadochokinesis-pataka`, `-buttercup` | `SYLLABLE_SEQUENCE` | a **count**: 30, being 10 of a 3-syllable carrier |
 | `diadochokinesis-v2-puh`, `-tuh`, `-kuh` | `SYLLABLE_TRAIN` | a **duration**: `declared_duration_s=5.0`, no count |
 | `diadochokinesis-v2-puhtuhkuh`, `-v2-buttercup` | `SYLLABLE_SEQUENCE` | a **duration**: 5 s |
@@ -126,6 +126,10 @@ Until each row declares its kind, no gate may read `expected_event_count` at all
 correct behaviour for this change**: the DDK families lose nothing, because a count nobody asked for
 should never have decided anything, and the counted-breath families keep their reading as a
 measurement until the kind is declared and a tolerance derived.
+
+> **Done, 2026-09-21**, in `specs/20260921-required-and-typical-counts/design.md`: the field is
+> replaced by `required_count` and `typical_count`, and the gate table refuses to bind the second
+> at import. No gate reads either yet — deriving the required kind's tolerance is still owed.
 
 ## The mechanism
 

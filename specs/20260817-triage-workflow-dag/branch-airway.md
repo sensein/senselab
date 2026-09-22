@@ -239,8 +239,8 @@ absence rule.
 **Emits.** `propose` spans for events PREPROCESS did not find, `family: "airway"`, subject to the
 `propose`/`refine` rule in [`branch-conventions.md`](branch-conventions.md); a per-span measurement
 carrying breath-event durations and inter-event intervals, with the I:E measure present only where
-both phases were detected; and a `counts` entry `expected_event_count` carrying `found` and
-`declared`.
+both phases were detected; and, on a family whose instruction speaks a number, a `counts` entry
+`required_count` carrying `found`, `required` and `unit`.
 
 **Owed — the operating points, not only the validation.** Envelope smoothing window, peak/trough
 criterion, and minimum breath-event duration are all required for the capability to execute and none
@@ -291,7 +291,7 @@ fit the declaration.
 **A deviation is not evidence of a bad recording.** See
 [`branch-conventions.md`](branch-conventions.md).
 
-`expected_event_count` is a `counts` entry, not a deviation (A5). AIRWAY emits no
+`required_count` is a `counts` entry, not a deviation (A5). AIRWAY emits no
 `stimulus_mismatch` and no `filler`: no airway task carries a stimulus text.
 
 ## Quality covariates
@@ -360,7 +360,8 @@ measurements <kind>_peak_over_floor_db per event, with its spectral balance and
              its extent's acquisition covariates; breath_coverage_fraction;
              measured_route and every `unviable` row the expectation names;
              event_instrument when the derivative a mode needs is absent
-counts       expected_event_count {found, declared}, events_with_carrier_boundaries,
+counts       required_count {found, required, unit} where the instruction counts,
+             events_with_carrier_boundaries,
              inter_onset_interval_s and intervals_over_p_interval_max_s on the
              timed families, cough_then_breathe_cycles on the alternation,
              declared_route, declared_duration_s, <kind>_events and airway_events

@@ -24,7 +24,11 @@ from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes import speech as speech_module
-from senselab.audio.workflows.triage.nodes.branches import NOT_SEPARABLE_BY_THIS_DESIGN, SPEECH_EXPECTATIONS
+from senselab.audio.workflows.triage.nodes.branches import (
+    NOT_SEPARABLE_BY_THIS_DESIGN,
+    SPEECH_EXPECTATIONS,
+    CountUnit,
+)
 from senselab.audio.workflows.triage.nodes.common import (
     find_branch_report,
     find_measurement,
@@ -2591,7 +2595,8 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         result = speech(store, "plain", syllable_config, self._declared("diadochokinesis-buttercup"), run_dir=tmp_path)
         detail = _report_entity(store, "SPEECH").attributes
         assert detail["expectation"]["task_family"] == "diadochokinesis-buttercup"
-        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].expected_event_count == 30
+        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].typical_count is not None
+        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].typical_count.unit is CountUnit.REPETITIONS
         assert detail["trains_n"] == 0
         assert detail["modulation_unit"] == "cycles_or_syllables_per_s"
         assert not [entity for entity in live_entities(store, "span") if entity.attributes.get("role") == "task_extent"]
