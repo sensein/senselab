@@ -8,7 +8,7 @@ per invocation: `yamnet.py` ran a fresh interpreter, a fresh TensorFlow import a
 load on every call, and PREPROCESS calls it more than once per recording.
 
 Two things came out of testing it. The fixed cost is real and dominant. The 46.6% is not: it is an
-off-by-one in the probe that produced it, and the step it names costs 4.87 s.
+off-by-one in the probe that produced it, and the step it names costs 4.98 s.
 
 ## How these figures were taken
 
