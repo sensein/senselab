@@ -136,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"shard {args.slice}/{args.slices}: {report.subjects_written} speakers, "
         f"{report.extents_admitted} extents, {report.extents_refused_short} refused short, "
+        f"{sum(report.extents_refused_family.values())} refused by family, "
         f"{size} bytes, {per_row} B/row"
     )
     return 0 if report.subjects_written else 1

@@ -4,9 +4,10 @@ A row is a speaker, not a recording: :mod:`senselab.audio.workflows.triage.recor
 the per-recording sibling and the two share their scan and shard conventions but nothing else.
 
 The unit of input is the ``task_extent`` span -- the single interval a branch mints in align mode
-to delimit the portion of a recording that serves its declared task. A recording that minted none
-contributes nothing; there is no fallback to the whole file, because absence of the span is itself
-the branch's record that it found no task.
+to delimit the portion of a recording that serves its declared task, and only where that span's
+family is in :data:`EMBEDDED_FAMILIES`. A recording that minted none contributes nothing; there is
+no fallback to the whole file, because absence of the span is itself the branch's record that it
+found no task.
 
 The column list, the pooling rule and the refusal floor are specified in
 ``specs/20260922-speaker-vectors/schema.md``, which is the interface a reader decodes against. No
@@ -29,7 +30,7 @@ from typing import Any, Optional
 import numpy as np
 import pyarrow as pa
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 """Bumped whenever a column is added, removed or retyped, or the pooling rule changes."""
 
 STORE_NAME = "store.jsonl"
@@ -45,7 +46,14 @@ of them identically. Why ``plain`` and not ``enhanced`` or ``redacted``:
 
 TASK_EXTENT_ROLE = "task_extent"
 SPAN_TYPE = "span"
-BRANCH_FAMILIES = ("airway", "speech", "voice")
+
+EMBEDDED_FAMILIES = ("speech",)
+"""The extent families this module will embed.
+
+An extent of any other family is refused and counted in
+:attr:`ScanReport.extents_refused_family`. Not configurable: what the other two families cost is
+measured in ``specs/20260922-speaker-vectors/design.md`` (D-10).
+"""
 
 MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
 WINDOW_S = 2.0
@@ -323,6 +331,7 @@ class ScanReport:
     recordings_unreadable: int = 0
     extents_admitted: int = 0
     extents_refused_short: int = 0
+    extents_refused_family: dict[str, int] = field(default_factory=dict)
     extents_missing_audio: int = 0
 
 
@@ -335,8 +344,8 @@ def gather(root: Path, slice_index: int = 0, slices: int = 1) -> tuple[dict[str,
         slices: How many workers share the tree.
 
     Returns:
-        ``({subject: [Extent, ...]}, report)``. Extents below the profile floor, and those whose
-        stream file is missing, are excluded and counted.
+        ``({subject: [Extent, ...]}, report)``. Extents outside :data:`EMBEDDED_FAMILIES`, those
+        below the profile floor, and those whose stream file is missing are excluded and counted.
     """
     floor = load_min_extent_s()
     report = ScanReport()
@@ -359,6 +368,10 @@ def gather(root: Path, slice_index: int = 0, slices: int = 1) -> tuple[dict[str,
                 report.recordings_with_extent += 1
             for extent in extents:
                 saw_any = True
+                if extent.family not in EMBEDDED_FAMILIES:
+                    key = str(extent.family)
+                    report.extents_refused_family[key] = report.extents_refused_family.get(key, 0) + 1
+                    continue
                 if extent.duration_s < floor:
                     report.extents_refused_short += 1
                     continue
@@ -762,6 +775,7 @@ def scan(
 
 __all__ = [
     "AGGREGATOR",
+    "EMBEDDED_FAMILIES",
     "EMBEDDING_DIM",
     "EMBED_STREAM",
     "HOP_S",
