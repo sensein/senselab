@@ -189,6 +189,10 @@ embedded rather than referenced**:
 - **Every claim names the store elements behind it.** Each entry under `steps` carries the
   `element_ids` it summarises, so any number in the JSON is traceable to the assertion that produced
   it. This is what makes the JSON a view of the store rather than a second copy of it.
+- **`evidence.branches` carries every branch's typed findings**, not one branch's — each as
+  `<branch> <verb>: <type>` beside its extent. See
+  [`branch-evidence-assertions.md`](branch-evidence-assertions.md) for what the previous
+  AIRWAY-only filter hid, counted on the corpus.
 
 ## Placement
 
@@ -299,9 +303,30 @@ Rendering reads the structured object rather than independently reading the stor
 JSON a first-class companion rather than a text extraction of a PDF, and prevents a later page-only
 change from silently changing a decision claim.
 
-### Open: the legacy top-level fields
+### The top-level fields, resolved (2026-09-22, `triage-summary/v8`)
 
-`_report_document` still emits `file`, `verdict`, `branches`, `steps`, `llm_check`,
-`llm_annotation` and `transcript` at the top level as duplicates of the `recording`, `decisions`,
-`screening`, `routing` and `evidence` blocks. They were kept so existing consumers could migrate
-deliberately. Pre-alpha policy is to rename and replace outright, so these are owed a removal.
+The block was labelled "legacy top-level duplicates of the structured blocks above". Read against
+the code, only two of the nine keys were duplicates, and both are gone:
+
+- **`branches`** was the same Python object as `routing`, with no reader anywhere — deleted.
+- **`file`** was a strict subset of `recording` (`recording` is `{**_file(store),
+  **_task_context(...)}`) — deleted, and its one renderer (`_blocks`) and one test repointed at
+  `recording`.
+
+The remaining seven are not duplicates and stay: `verdict` alone carries `ran` and `element_id`;
+`steps` alone carries each node's `element_ids` and branch measure detail; `llm_check` and
+`llm_annotation` alone carry REDACT's review chain; `transcript` alone carries the three joined
+strings (`evidence.*_transcript_tokens` are token records, not text); `categories` alone carries
+the label rollup; `provenance` alone carries the config hash, the commit and the model list. They
+are the document's only home for those facts and the renderer's only source for them, so removing
+them would delete information, not an alias. What is owed is a placement decision — which
+structured block each belongs under — not a deletion.
+
+### Removed: the `raw_scores` fallback
+
+`_window_label_scores` fell back to the thresholded `scores` when `raw=True` and `raw_scores` was
+absent, for stores written before `raw_scores` existed. Every current writer emits it
+unconditionally (`preprocess.py` `_span_window_attributes` and `_windows`), and no window
+measurement in the 20260919 corpus omits it — the sampled stores carry no `*_window` measurement at
+all. The only thing exercising the fallback was the report test's own seeder, which wrote `scores`
+without `raw_scores` and so did not resemble PREPROCESS's output; it now writes both.

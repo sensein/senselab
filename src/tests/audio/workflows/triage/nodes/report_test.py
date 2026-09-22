@@ -15,6 +15,7 @@ import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.nodes.branches import contest, deviation, write_findings
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_report, write_verdict
 from senselab.audio.workflows.triage.nodes.figure import SUMMARY_LANES
 from senselab.audio.workflows.triage.nodes.report import (
@@ -182,6 +183,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
     scan: str = "complete",
     syllable: bool = False,
     duration_s: float = _DURATION_S,
+    typed_findings: bool = False,
 ) -> None:
     """Write what a completed graph would have left behind, so REPORT has a store to read.
 
@@ -209,6 +211,8 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
             which is what routing declining SPEECH leaves behind.
         syllable: Whether SPEECH ran in family on a syllable-repetition task, so its report
             detail carries the syllable instrument's measures beside its own.
+        typed_findings: Whether SPEECH and VOICE each write typed findings through
+            ``write_findings``: a located deviation, a contest, and a per-recording deviation.
     """
     config = load_triage_config()
     software = software_agent(store)
@@ -292,6 +296,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
                     "signal": "plain",
                     "labels": [label, *extra],
                     "scores": {name: 0.9 for name in (label, *extra)},
+                    "raw_scores": {name: 0.9 for name in (label, *extra)},
                 },
             )
             start += grid
@@ -458,11 +463,22 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
 
     speech = store.activity(node="SPEECH", step="corroborate", parameters={})
     store.was_associated_with(speech, software)
-    _entity(
+    speech_span = _entity(
         "span",
         (0.0, 1.0),
         {"family": "speech", "words_n": len(every_word), "attributed_to": "SPEAKER_00", "nontarget": False},
     )
+    if typed_findings:
+        write_findings(
+            store,
+            speech,
+            software,
+            [
+                deviation("stimulus_mismatch", 0.4, 0.55, speech_span, expected_index=2),
+                contest(speech_span, (0.0, 1.0), "speech", "no_consensus_word_inside"),
+            ],
+            signal="plain",
+        )
     for _, category in marked_words:
         _entity(
             "pii",
@@ -506,7 +522,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         store.was_associated_with(plan_only, software)
         fold_verdict(store, None, config, None, run_dir=tmp_path)
         return
-    _entity(
+    voice_span = _entity(
         "span",
         (3.0, 3.8),
         {
@@ -520,6 +536,17 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
             "marks_n": 12,
         },
     )
+    if typed_findings:
+        write_findings(
+            store,
+            voice,
+            software,
+            [
+                deviation("truncation", 3.0, 3.8, voice_span, reading="right_censored"),
+                deviation("omission", None, None, expected="sustained"),
+            ],
+            signal="plain",
+        )
     write_report(
         store,
         voice,
@@ -565,7 +592,7 @@ class TestBothProductsAlways:
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         payload = json.loads(artifacts["json"].read_text())
         assert payload["verdict"]["triage"] == "discard"
-        assert payload["branches"] == {}
+        assert payload["routing"] == {}
         assert artifacts["summary"].exists()
 
     def test_a_store_holding_nothing_at_all_still_emits_both(self, store: ProvStore, tmp_path: Path) -> None:
@@ -626,7 +653,7 @@ class TestTheStructuredJsonCompanion:
         artifacts = report(store, tmp_path / "summary", pdf_config)
         payload = json.loads(artifacts["json"].read_text())
         assert artifacts["summary"].exists() and artifacts["json"].exists()
-        assert payload["schema_version"] == "triage-summary/v7"
+        assert payload["schema_version"] == "triage-summary/v8"
         assert payload["decisions"]["file_triage"] == payload["verdict"]["triage"]
         assert payload["decisions"]["release"] == payload["verdict"]["release"]
         assert payload["artifacts"]["summary"]["path"] == artifacts["summary"].name
@@ -669,6 +696,31 @@ class TestTheStructuredJsonCompanion:
         assert not any(description.endswith(_UNLABELLED_LABEL) for description in descriptions)
         source = [item for item in descriptions if item.startswith("airway source span: ")]
         assert source and all(item.endswith(" dB") for item in source)
+
+    def test_speech_and_voice_typed_deviations_reach_the_evidence(self, store: ProvStore, tmp_path: Path) -> None:
+        """A typed, located deviation from any branch renders its type, as AIRWAY's already does."""
+        _seed_report_store(store, tmp_path, full=True, typed_findings=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        branches = payload["evidence"]["branches"]
+        speech = {item["description"]: item for item in branches["SPEECH"]}
+        voice = {item["description"]: item for item in branches["VOICE"]}
+        assert "speech deviate: stimulus_mismatch" in speech
+        assert speech["speech deviate: stimulus_mismatch"]["timing"] == {"start_s": 0.4, "end_s": 0.55}
+        assert "speech contest: speech" in speech
+        assert "voice deviate: truncation" in voice
+        assert voice["voice deviate: truncation"]["timing"] == {"start_s": 3.0, "end_s": 3.8}
+        assert voice["voice deviate: omission"]["timing"] is None
+        typed = [item for item in (*speech.values(), *voice.values()) if " deviate: " in item["description"]]
+        assert len(typed) == 3
+        assert all(item["type"] == "assertion" and item["provenance"]["node"] in {"SPEECH", "VOICE"} for item in typed)
+
+    def test_pii_label_assertions_stay_out_of_the_branch_evidence(self, store: ProvStore, tmp_path: Path) -> None:
+        """The per-word PII markings are the redacted transcript's business, not the audit lane."""
+        _seed_report_store(store, tmp_path, full=True, typed_findings=True, marked_words=[("alice", "PERSON")])
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        items = [item for branch in payload["evidence"]["branches"].values() for item in branch]
+        assert not any("label" in str(item["description"]) for item in items)
+        assert not any("alice" in json.dumps(item) for item in items)
 
     def test_json_exposes_context_routing_and_timed_evidence(self, store: ProvStore, tmp_path: Path) -> None:
         """A consumer can audit a branch without parsing PDF prose."""
@@ -1436,8 +1488,8 @@ class TestTheRefusalPage:
         _seed_report_store(store, tmp_path, admit_failed=True)
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         payload = json.loads(artifacts["json"].read_text())
-        assert payload["file"]["path"] is not None and payload["file"]["path"].endswith("refused.wav")
-        assert payload["file"]["duration_s"] is None
+        assert payload["recording"]["path"] is not None and payload["recording"]["path"].endswith("refused.wav")
+        assert payload["recording"]["duration_s"] is None
 
     def test_the_page_itself_carries_the_name_the_dash_and_the_reason(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
