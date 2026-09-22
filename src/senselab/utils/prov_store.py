@@ -531,6 +531,17 @@ class ProvStore:
         """Return the entities an entity was derived from."""
         return self._targets("wasDerivedFrom", entity_id)
 
+    def invalidated_by(self, entity_id: str) -> list[str]:
+        """Return the activities that invalidated an entity, in the order recorded.
+
+        Args:
+            entity_id: The entity's id.
+
+        Returns:
+            The activity ids, empty when the entity is still live.
+        """
+        return self._targets("wasInvalidatedBy", entity_id)
+
     def is_invalidated(self, entity_id: str) -> bool:
         """Whether an entity has been invalidated."""
         return bool(self._targets("wasInvalidatedBy", entity_id))
