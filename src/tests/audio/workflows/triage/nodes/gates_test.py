@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from senselab.audio.workflows.triage.config import (
     UnknownConfigKey,
     load_triage_config,
 )
+from senselab.audio.workflows.triage.nodes import gates as gates_module
 from senselab.audio.workflows.triage.nodes.branches import (
     DETECT_GROUP,
     EXPECTATIONS,
@@ -31,9 +33,14 @@ from senselab.audio.workflows.triage.nodes.gates import (
     GATE_SPECS,
     GROUP_LAYER,
     LAYERS,
+    REQUIRED_COUNT,
+    TYPICAL_COUNT,
     UNDETERMINED,
+    UNGATEABLE_READINGS,
     GateBounds,
+    GateSpec,
     Pattern,
+    _gate_specs,
     apply_gates,
     conformance_gate_names,
     load_gate_bounds,
@@ -412,11 +419,39 @@ class TestAGateResolvesFamilyThenGroupThenDefault:
 
 
 class TestNoGateReadsACountNobodyGave:
-    """``expected_event_count`` holds two unlike things, so no bound may be put on it."""
+    """A measured median is reported beside a reading; no bound may ever be put on it."""
 
-    def test_no_gate_reads_the_declared_event_count(self) -> None:
+    def test_no_gate_reads_a_typical_count(self) -> None:
         """Ten `/pa/` was never spoken to anyone; a participant giving eight did the task."""
-        assert "expected_event_count" not in {spec.reading for spec in GATE_SPECS.values()}
+        assert TYPICAL_COUNT in UNGATEABLE_READINGS
+        assert TYPICAL_COUNT not in {spec.reading for spec in GATE_SPECS.values()}
+
+    def test_a_gate_table_that_reads_a_typical_count_is_refused_at_import(self) -> None:
+        """Structural, not a convention: the table itself refuses the binding."""
+        with pytest.raises(ValueError, match="which no gate may be bound to"):
+            _gate_specs({"typical_min": GateSpec(TYPICAL_COUNT, AT_LEAST, int)})
+
+    def test_a_required_count_is_not_refused(self) -> None:
+        """A number the instruction spoke may be gated once a tolerance is derived."""
+        assert REQUIRED_COUNT not in UNGATEABLE_READINGS
+        assert _gate_specs({"required_min": GateSpec(REQUIRED_COUNT, AT_LEAST, int)})
+
+    def test_the_shipped_table_is_built_through_the_refusal(self) -> None:
+        """A table assigned around the factory would make the refusal unreachable."""
+        tree = ast.parse(Path(gates_module.__file__).read_text())
+        assigned = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "GATE_SPECS"
+        ]
+        [statement] = assigned
+        assert isinstance(statement.value, ast.Call)
+        assert isinstance(statement.value.func, ast.Name) and statement.value.func.id == "_gate_specs"
+
+    def test_no_gate_reads_either_count_today(self) -> None:
+        """Deriving a tolerance for the required kind is separate work this change enables."""
+        readings = {spec.reading for spec in GATE_SPECS.values()}
+        assert not readings & {REQUIRED_COUNT, TYPICAL_COUNT}
 
     def test_the_airway_event_gate_reads_what_was_found_and_not_what_was_declared(self) -> None:
         """``events_min`` asks whether the sound happened at all, not whether the count was met."""

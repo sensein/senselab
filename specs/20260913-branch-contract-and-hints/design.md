@@ -338,8 +338,11 @@ are knowable only at the recording grain. So:
   match. Each entry quotes the sidecar's `instructions` verbatim as its derivation.
 - **An entry's keys are**: `expected_content` (which branch's subject the task asks for),
   `expected_event_class` and `expected_event_count` (what `expected_event_count`'s `declared` half
-  reads, absent for tasks with no countable event), `targeted_speaker_count` (what `speaker_count`'s
-  `declared` half reads, and the "single target" claim a branch conditions on), and `instructions`.
+  reads, absent for tasks with no countable event — **since 2026-09-21 the field is two,
+  `required_count` and `typical_count`, and lives on the `Expectation` row rather than in a YAML
+  map; see `specs/20260921-required-and-typical-counts/design.md`**), `targeted_speaker_count`
+  (what `speaker_count`'s `declared` half reads, and the "single target" claim a branch conditions
+  on), and `instructions`.
   Nothing else in this spec reads a field of an entry.
 - **Versioned by filename**, as the detector profile is, and named in the `declaration` measurement
   so a run says which table it read.

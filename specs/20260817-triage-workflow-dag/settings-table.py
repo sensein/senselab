@@ -1,7 +1,6 @@
 """Emit the per-family settings table: what each task asks for, grouped by identical settings."""
 
 import collections
-import dataclasses
 
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
@@ -61,11 +60,29 @@ for name in gate_names:
 
 out.append("\n## What else differs is the expectation row\n")
 
+
+def render(key: str, value: object) -> str:
+    """One setting as the table shows it, with a count declaration rendered in its own unit.
+
+    Args:
+        key: The field name.
+        value: Its value, as ``as_mapping`` wrote it.
+
+    Returns:
+        The cell text.
+    """
+    if isinstance(value, dict) and key == "required_count":
+        return f"{value['value']} {value['unit']}, from the instruction"
+    if isinstance(value, dict) and key == "typical_count":
+        return f"{value['median']} {value['unit']}, measured median"
+    return str(value)
+
+
 by_settings = collections.defaultdict(list)
 for branch, table in EXPECTATIONS.items():
     for fam, e in table.items():
-        d = dataclasses.asdict(e) if dataclasses.is_dataclass(e) else dict(vars(e))
-        live = tuple(sorted((k, str(v)) for k, v in d.items() if v not in (None, (), [], {}, False)))
+        d = e.as_mapping()
+        live = tuple(sorted((k, render(k, v)) for k, v in d.items() if v not in (None, (), [], {}, False)))
         by_settings[(branch, live)].append(fam)
 
 out.append(
@@ -77,7 +94,7 @@ for branch in sorted({b for b, _ in by_settings}):
     rows = [(k, f) for k, f in by_settings.items() if k[0] == branch]
     for (_, key), fams in sorted(rows, key=lambda kv: -len(kv[1])):
         d = dict(key)
-        pat = d.pop("pattern", "?").split(".")[-1]
+        pat = d.pop("pattern", "?").split(".")[-1].upper()
         s = "; ".join(f"`{k}`={v}" for k, v in sorted(d.items())) or "—"
         out.append(f"| `{pat}` | {s[:160]} | {', '.join(sorted(fams))} |")
 print("\n".join(out))

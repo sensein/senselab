@@ -228,7 +228,7 @@ class TestTheLaneReadsWhatTheBranchesWrote:
             "ppg_syllable_rate_hz": 5.1,
             "ppg_cycle_rate_hz": 1.7,
             "ppg_repetitions": 8,
-            "ppg_declared_event_count": 30,
+            "ppg_typical_repetitions": 10,
             "ppg_period_s": 0.588,
             "ppg_period_cv": 0.41,
             "ppg_period_trend_s_per_step": 0.001,

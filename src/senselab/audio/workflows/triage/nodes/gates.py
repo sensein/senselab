@@ -88,29 +88,65 @@ class GateSpec:
     read_as: Callable[[Any], Any]
 
 
-GATE_SPECS: dict[str, GateSpec] = {
-    "production_min_s": GateSpec("carrier_duration_s", AT_LEAST, float),
-    "voiced_fraction_min": GateSpec("carrier_voiced_fraction", AT_LEAST, float),
-    "f0_spread_max_semitones": GateSpec("carrier_f0_spread_semitones", AT_MOST, float),
-    "continuity_min": GateSpec("carrier_continuity", AT_LEAST, float),
-    "dominant_segment_min_fraction": GateSpec("sweep_dominant_fraction", AT_LEAST, float),
-    "monotone_tolerance_semitones": GateSpec("sweep_monotone_reversal_semitones", AT_MOST, float),
-    "expected_tokens_matched_min": GateSpec("expected_tokens_matched", AT_LEAST, int),
-    "omissions_max": GateSpec("expected_tokens_omitted", AT_MOST, int),
-    "response_min_s": GateSpec("response_duration_s", AT_LEAST, float),
-    "coverage_min": GateSpec("source_content_coverage", AT_LEAST, float),
-    "items_min": GateSpec("items_produced", AT_LEAST, int),
-    "events_min": GateSpec("airway_events_found", AT_LEAST, int),
-    "repetitions_min": GateSpec("ddk_repetitions_found", AT_LEAST, int),
-    "repeat_overlap_min": GateSpec(None, AT_LEAST, float),
-    "echo_overlap_max": GateSpec(None, AT_MOST, float),
-    "verbatim_overlap_max": GateSpec(None, AT_MOST, float),
-    "gap_off_task_min_s": GateSpec(None, AT_LEAST, float),
-    "interval_max_s": GateSpec(None, AT_MOST, float),
-    "score_min": GateSpec(None, AT_LEAST, float),
-    "train_min_s": GateSpec(None, AT_LEAST, float),
-    "rate_prominence_min": GateSpec(None, AT_LEAST, float),
-}
+REQUIRED_COUNT = "required_count"
+"""The count finding a row's ``RequiredCount`` writes. Gateable once a tolerance is derived."""
+
+TYPICAL_COUNT = "typical_count"
+"""The count finding a row's ``TypicalCount`` writes. Never gateable."""
+
+UNGATEABLE_READINGS = frozenset({TYPICAL_COUNT})
+"""Readings no gate may be bound to. :func:`_gate_specs` refuses a table naming one, at import.
+
+See ``specs/20260921-required-and-typical-counts/design.md``.
+"""
+
+
+def _gate_specs(specs: dict[str, GateSpec]) -> dict[str, GateSpec]:
+    """The gate table, refused if any gate reads something nothing may be judged against.
+
+    Args:
+        specs: The table as written.
+
+    Returns:
+        The same table.
+
+    Raises:
+        ValueError: If a gate names a reading in :data:`UNGATEABLE_READINGS`.
+    """
+    refused = sorted(name for name, spec in specs.items() if spec.reading in UNGATEABLE_READINGS)
+    if refused:
+        raise ValueError(
+            f"gates {refused} read one of {sorted(UNGATEABLE_READINGS)}, which no gate may be bound to: "
+            "the reading is a measured central tendency nobody asked the participant for"
+        )
+    return specs
+
+
+GATE_SPECS: dict[str, GateSpec] = _gate_specs(
+    {
+        "production_min_s": GateSpec("carrier_duration_s", AT_LEAST, float),
+        "voiced_fraction_min": GateSpec("carrier_voiced_fraction", AT_LEAST, float),
+        "f0_spread_max_semitones": GateSpec("carrier_f0_spread_semitones", AT_MOST, float),
+        "continuity_min": GateSpec("carrier_continuity", AT_LEAST, float),
+        "dominant_segment_min_fraction": GateSpec("sweep_dominant_fraction", AT_LEAST, float),
+        "monotone_tolerance_semitones": GateSpec("sweep_monotone_reversal_semitones", AT_MOST, float),
+        "expected_tokens_matched_min": GateSpec("expected_tokens_matched", AT_LEAST, int),
+        "omissions_max": GateSpec("expected_tokens_omitted", AT_MOST, int),
+        "response_min_s": GateSpec("response_duration_s", AT_LEAST, float),
+        "coverage_min": GateSpec("source_content_coverage", AT_LEAST, float),
+        "items_min": GateSpec("items_produced", AT_LEAST, int),
+        "events_min": GateSpec("airway_events_found", AT_LEAST, int),
+        "repetitions_min": GateSpec("ddk_repetitions_found", AT_LEAST, int),
+        "repeat_overlap_min": GateSpec(None, AT_LEAST, float),
+        "echo_overlap_max": GateSpec(None, AT_MOST, float),
+        "verbatim_overlap_max": GateSpec(None, AT_MOST, float),
+        "gap_off_task_min_s": GateSpec(None, AT_LEAST, float),
+        "interval_max_s": GateSpec(None, AT_MOST, float),
+        "score_min": GateSpec(None, AT_LEAST, float),
+        "train_min_s": GateSpec(None, AT_LEAST, float),
+        "rate_prominence_min": GateSpec(None, AT_LEAST, float),
+    }
+)
 """Every gate name, and what it reads. The one declaration of the set.
 
 A ``reading`` of None marks a gate whose finding carries an extent — a rejected carrier, a located

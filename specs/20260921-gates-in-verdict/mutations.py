@@ -127,7 +127,7 @@ MUTATIONS = [
         "M15 a gate is put on the count nobody gave",
         TRIAGE / "nodes/gates.py",
         '    "events_min": GateSpec("airway_events_found", AT_LEAST, int),',
-        '    "events_min": GateSpec("expected_event_count", AT_LEAST, int),',
+        '    "events_min": GateSpec(TYPICAL_COUNT, AT_LEAST, int),',
         f"{TESTS}/nodes/gates_test.py {TESTS}/nodes/airway_test.py",
     ),
     (

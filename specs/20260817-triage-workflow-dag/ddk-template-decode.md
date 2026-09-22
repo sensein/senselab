@@ -477,8 +477,9 @@ expected count is not a target it's a heuristic."*
 This is the governing constraint on everything the decode reports, and the shipped graph already
 honours it, so the requirement is **not to regress it**:
 
-- `expected_event_count` reaches the store only through `count(...)` findings, which write `found`
-  beside `declared` and whose docstring says *"Asserts no discrepancy"* (`branches.py:280`).
+- A row's declared count reaches the store only through a count finding — since 2026-09-21,
+  `typical_count` on these families, which writes `found` beside `typical` and asserts no
+  discrepancy.
 - `write_findings` folds those into a `counts` measurement; `deviation_names` ignores counts, so a
   count can never become a deviation; and `verdict.deviation_flags` ships `false` in any case.
 
@@ -518,6 +519,11 @@ uncertainty where it belongs: a low realised mass is honestly ambiguous between 
 and *read poorly*, and the instrument says so rather than choosing.
 
 ### What `expected_event_count` means — the owner's ruling
+
+> **Superseded 2026-09-21** by `specs/20260921-required-and-typical-counts/design.md`, which builds
+> the per-task count-kind property this section calls owed. The field is gone: a row now declares
+> `required_count` or `typical_count`, and the debt stated at the end of this section — *a reader
+> of a DDK row has no field telling them the declared count is a guide* — is paid.
 
 The design proposed renaming it to `declared_event_count` and carrying it as a covariate rather than
 the second half of a `count`. **The owner kept the name**, and gave the reason:
@@ -922,7 +928,7 @@ must not be presented as standing in for A5.
 
 ### Explicitly not in the acceptance test
 
-- Any comparison of a decoded count against `expected_event_count`, in any direction.
+- Any comparison of a decoded count against the row's declared count, in any direction.
 - Any sensitivity or specificity figure. The instrument classifies nothing
   (`branch-ddk-ppg-instrument.md`: the declared task label is ground truth for "is this DDK").
 - Any threshold fitted on these ten families and then applied to them.
@@ -1153,7 +1159,9 @@ is what a later reader will want.
    describe these mappings as campaign-overridable and the schema rejects such an override today.
 
 9. **`expected_event_count` is KEPT, not renamed**, and the owner's refinement changes the design
-   rather than merely declining the proposal:
+   rather than merely declining the proposal. *(Superseded 2026-09-21: the count-kind property this
+   item sequences separately is built in `specs/20260921-required-and-typical-counts/design.md`,
+   and the rename follows from it — a field that carries a kind cannot keep a name asserting one.)*
 
    > "there are certain places where this is true: for example 2 or 3 heys, 3/5 breaths etc. keep
    > expected but use it based on underlying task."

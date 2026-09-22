@@ -27,6 +27,8 @@ from senselab.audio.workflows.triage.nodes.gates import (
     FAMILY_LAYER,
     GATE_SECTION,
     GATE_SPECS,
+    REQUIRED_COUNT,
+    TYPICAL_COUNT,
     GateBounds,
     Pattern,
     load_gate_bounds,
@@ -285,6 +287,41 @@ def count(name: str, found: Any, declared: Any, *derived_from: str) -> Finding: 
     return Finding("count", name, None, None, {"found": found, "declared": declared}, tuple(derived_from))
 
 
+def count_against_instruction(required: "RequiredCount", found: int, *derived_from: str) -> Finding:
+    """What was produced, against the number the instruction spoke. Asserts no discrepancy.
+
+    Args:
+        required: The row's required count.
+        found: How many were produced, in the declaration's own unit.
+        *derived_from: The entity ids counted over.
+
+    Returns:
+        The finding, named :data:`~...nodes.gates.REQUIRED_COUNT`.
+    """
+    evidence = {"found": found, "required": required.value, "unit": required.unit.value}
+    return Finding("count", REQUIRED_COUNT, None, None, evidence, tuple(derived_from))
+
+
+def count_beside_typical(typical: "TypicalCount", found: int, *derived_from: str) -> Finding:
+    """What was produced, beside the corpus median. Nothing may be judged against the median.
+
+    Args:
+        typical: The row's typical count.
+        found: How many were produced, in the declaration's own unit.
+        *derived_from: The entity ids counted over.
+
+    Returns:
+        The finding, named :data:`~...nodes.gates.TYPICAL_COUNT`.
+    """
+    evidence = {
+        "found": found,
+        "typical": typical.median,
+        "unit": typical.unit.value,
+        "derivation": typical.derivation,
+    }
+    return Finding("count", TYPICAL_COUNT, None, None, evidence, tuple(derived_from))
+
+
 def measured(
     name: str,
     start: float | None,
@@ -463,6 +500,111 @@ def write_findings(
 # --------------------------------------------------------------------- the expectation, as data
 
 
+class CountUnit(Enum):
+    """What a declared count counts. One unit per declaration, named on the declaration."""
+
+    EVENTS = "events"
+    TOKENS = "tokens"
+    REPETITIONS = "repetitions"
+
+
+@dataclass(frozen=True)
+class RequiredCount:
+    """A count the instruction spoke, in the unit it spoke it in. A bound may be derived against it.
+
+    Attributes:
+        value: The number the instruction gave.
+        unit: What that number counts.
+    """
+
+    value: int
+    unit: CountUnit
+
+    def __post_init__(self) -> None:
+        """Refuse a count no instruction could have given.
+
+        Raises:
+            ValueError: If the value is not positive.
+        """
+        if self.value < 1:
+            raise ValueError(f"a required count is a number an instruction spoke, not {self.value}")
+
+    def as_mapping(self) -> dict[str, Any]:
+        """This declaration as plain data.
+
+        Returns:
+            The value and the unit's own spelling.
+        """
+        return {"value": self.value, "unit": self.unit.value}
+
+    @classmethod
+    def from_mapping(cls, mapping: Mapping[str, Any]) -> "RequiredCount":
+        """Rebuild a declaration from :meth:`as_mapping`'s output.
+
+        Args:
+            mapping: What :meth:`as_mapping` returned.
+
+        Returns:
+            The declaration.
+        """
+        return cls(value=int(mapping["value"]), unit=CountUnit(mapping["unit"]))
+
+
+@dataclass(frozen=True)
+class TypicalCount:
+    """A central tendency measured over the corpus, in the unit it was measured in.
+
+    Nothing may be judged against it: it is reported beside the reading it qualifies, and
+    :data:`~...nodes.gates.UNGATEABLE_READINGS` names the finding it writes.
+
+    Attributes:
+        median: The measured median.
+        unit: What that number counts.
+        derivation: The spec path the median was measured in.
+    """
+
+    median: int
+    unit: CountUnit
+    derivation: str
+
+    def __post_init__(self) -> None:
+        """Refuse a measured number that cites no measurement.
+
+        Raises:
+            ValueError: If the median is negative, or the derivation is empty.
+        """
+        if self.median < 0:
+            raise ValueError(f"a measured median is not {self.median}")
+        if not self.derivation.strip():
+            raise ValueError("a typical count cites the measurement it came from; none was given")
+
+    def as_mapping(self) -> dict[str, Any]:
+        """This declaration as plain data.
+
+        Returns:
+            The median, the unit's own spelling, and the derivation.
+        """
+        return {"median": self.median, "unit": self.unit.value, "derivation": self.derivation}
+
+    @classmethod
+    def from_mapping(cls, mapping: Mapping[str, Any]) -> "TypicalCount":
+        """Rebuild a declaration from :meth:`as_mapping`'s output.
+
+        Args:
+            mapping: What :meth:`as_mapping` returned.
+
+        Returns:
+            The declaration.
+        """
+        return cls(
+            median=int(mapping["median"]), unit=CountUnit(mapping["unit"]), derivation=str(mapping["derivation"])
+        )
+
+
+DDK_MEDIANS = "specs/20260817-triage-workflow-dag/measure-distributions.md"
+"""Where the syllable-repetition medians were measured, over 62,273 recordings."""
+
+
 PA = ("p", "aa")
 TA = ("t", "aa")
 KA = ("k", "aa")
@@ -487,7 +629,9 @@ class Expectation:
         pattern: Which matcher the branch's entry point selects.
         tokens: The tokens the instruction prescribes, when it prescribes them literally.
         token_source: Where the tokens come from when they are not literal.
-        expected_event_count: How many events the instruction asks for, when it counts them.
+        required_count: The count the instruction spoke, when it spoke one.
+        typical_count: The measured central tendency, when the instruction spoke no count and
+            one has been measured. Nothing may be judged against it.
         declared_duration_s: How long the instruction runs, when it is timed rather than counted.
         label_set: Which entry of ``branch.label_sets`` names this task's own sound.
         sequence: The phoneme sequence the train repeats, one ARPAbet phoneme per position in
@@ -512,7 +656,8 @@ class Expectation:
     pattern: Pattern
     tokens: tuple[str, ...] | None = None
     token_source: str | None = None
-    expected_event_count: int | None = None
+    required_count: RequiredCount | None = None
+    typical_count: TypicalCount | None = None
     declared_duration_s: float | None = None
     label_set: str | None = None
     sequence: tuple[str, ...] | None = None
@@ -543,6 +688,8 @@ class Expectation:
             value = getattr(self, field_.name)
             if isinstance(value, Pattern):
                 out[field_.name] = value.value
+            elif isinstance(value, (RequiredCount, TypicalCount)):
+                out[field_.name] = value.as_mapping()
             elif isinstance(value, tuple):
                 out[field_.name] = [list(item) if isinstance(item, tuple) else item for item in value]
             else:
@@ -561,6 +708,10 @@ class Expectation:
         """
         values = dict(mapping)
         values["pattern"] = Pattern(values["pattern"])
+        if values.get("required_count") is not None:
+            values["required_count"] = RequiredCount.from_mapping(values["required_count"])
+        if values.get("typical_count") is not None:
+            values["typical_count"] = TypicalCount.from_mapping(values["typical_count"])
         if values.get("tokens") is not None:
             values["tokens"] = tuple(values["tokens"])
         if values.get("sequence") is not None:
@@ -590,10 +741,12 @@ VOICE_EXPECTATIONS_PENDING_DECLARATION: dict[str, Expectation] = {
     "loudness": Expectation(
         pattern=Pattern.EFFORT,
         tokens=("hey",),
-        expected_event_count=3,
+        required_count=RequiredCount(3, CountUnit.EVENTS),
         unviable=(("effort_absolute", "`level` is uncalibrated and no SPL reference exists in the graph"),),
     ),
-    "loudness-v2": Expectation(pattern=Pattern.EFFORT, tokens=("hey",), expected_event_count=2, contrast=True),
+    "loudness-v2": Expectation(
+        pattern=Pattern.EFFORT, tokens=("hey",), required_count=RequiredCount(2, CountUnit.EVENTS), contrast=True
+    ),
     "cape-v-sentences": Expectation(pattern=Pattern.PER_SENTENCE, token_source="stimulus_text"),
     "cape-v-sentences-v2": Expectation(pattern=Pattern.PER_SENTENCE, token_source="stimulus_text"),
 }
@@ -612,8 +765,12 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
     "word-color-stroop": Expectation(
         pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text", declared_duration_s=75.0, emit_filler=False
     ),
-    "loudness": Expectation(pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey", "hey"), expected_event_count=3),
-    "loudness-v2": Expectation(pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey"), expected_event_count=2),
+    "loudness": Expectation(
+        pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey", "hey"), required_count=RequiredCount(3, CountUnit.TOKENS)
+    ),
+    "loudness-v2": Expectation(
+        pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey"), required_count=RequiredCount(2, CountUnit.TOKENS)
+    ),
     "free-speech": Expectation(
         pattern=Pattern.FREE_RESPONSE, token_source="stimulus_text", anti_pattern="verbatim_prompt"
     ),
@@ -655,18 +812,36 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
         repetition_from_category=True,
         unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
     ),
-    "diadochokinesis-pa": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=PA, expected_event_count=10),
-    "diadochokinesis-ta": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=TA, expected_event_count=10),
-    "diadochokinesis-ka": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=KA, expected_event_count=10),
+    "diadochokinesis-pa": Expectation(
+        pattern=Pattern.SYLLABLE_TRAIN,
+        sequence=PA,
+        typical_count=TypicalCount(11, CountUnit.REPETITIONS, DDK_MEDIANS),
+    ),
+    "diadochokinesis-ta": Expectation(
+        pattern=Pattern.SYLLABLE_TRAIN,
+        sequence=TA,
+        typical_count=TypicalCount(11, CountUnit.REPETITIONS, DDK_MEDIANS),
+    ),
+    "diadochokinesis-ka": Expectation(
+        pattern=Pattern.SYLLABLE_TRAIN,
+        sequence=KA,
+        typical_count=TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS),
+    ),
     "diadochokinesis-v2-puh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=PUH, declared_duration_s=5.0),
     "diadochokinesis-v2-tuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=TUH, declared_duration_s=5.0),
     "diadochokinesis-v2-kuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=KUH, declared_duration_s=5.0),
-    "diadochokinesis-pataka": Expectation(pattern=Pattern.SYLLABLE_SEQUENCE, sequence=PATAKA, expected_event_count=30),
+    "diadochokinesis-pataka": Expectation(
+        pattern=Pattern.SYLLABLE_SEQUENCE,
+        sequence=PATAKA,
+        typical_count=TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS),
+    ),
     "diadochokinesis-v2-puhtuhkuh": Expectation(
         pattern=Pattern.SYLLABLE_SEQUENCE, sequence=PUHTUHKUH, declared_duration_s=5.0
     ),
     "diadochokinesis-buttercup": Expectation(
-        pattern=Pattern.SYLLABLE_SEQUENCE, sequence=BUTTERCUP, expected_event_count=30
+        pattern=Pattern.SYLLABLE_SEQUENCE,
+        sequence=BUTTERCUP,
+        typical_count=TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS),
     ),
     "diadochokinesis-v2-buttercup": Expectation(
         pattern=Pattern.SYLLABLE_SEQUENCE, sequence=BUTTERCUP, declared_duration_s=5.0
@@ -681,18 +856,21 @@ See ``specs/20260817-triage-workflow-dag/ddk-template-decode.md`` and
 """
 
 AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
-    "respiration-and-cough-cough": Expectation(pattern=Pattern.EVENT_SERIES, label_set="cough", expected_event_count=5),
+    "respiration-and-cough-cough": Expectation(
+        pattern=Pattern.EVENT_SERIES, label_set="cough", required_count=RequiredCount(5, CountUnit.EVENTS)
+    ),
     "respiration-and-cough-v2-hardcough": Expectation(
         pattern=Pattern.EVENT_SERIES,
         label_set="cough",
-        expected_event_count=None,
         unviable=(("effort_absolute", "no within-recording contrast and no SPL reference; `hard` is not measurable"),),
     ),
-    "voluntary-cough": Expectation(pattern=Pattern.EVENT_ALTERNATION, label_set="cough", expected_event_count=3),
+    "voluntary-cough": Expectation(
+        pattern=Pattern.EVENT_ALTERNATION, label_set="cough", required_count=RequiredCount(3, CountUnit.EVENTS)
+    ),
     "respiration-and-cough-fivebreaths": Expectation(
         pattern=Pattern.EVENT_SERIES,
         label_set="breath",
-        expected_event_count=5,
+        required_count=RequiredCount(5, CountUnit.EVENTS),
         route_from_index=True,
         unviable=(
             (
@@ -705,22 +883,28 @@ AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
     "respiration-and-cough-v2-threebreathsnose": Expectation(
         pattern=Pattern.EVENT_SERIES,
         label_set="breath",
-        expected_event_count=3,
+        required_count=RequiredCount(3, CountUnit.EVENTS),
         declared_route="nose",
         unviable=(("route", "as `fivebreaths`"),),
     ),
     "respiration-and-cough-v2-threebreathsmouth": Expectation(
         pattern=Pattern.EVENT_SERIES,
         label_set="breath",
-        expected_event_count=3,
+        required_count=RequiredCount(3, CountUnit.EVENTS),
         declared_route="mouth",
         unviable=(("route", "as `fivebreaths`"),),
     ),
     "respiration-and-cough-threequickbreaths": Expectation(
-        pattern=Pattern.EVENT_SERIES, label_set="breath", expected_event_count=3, timed_intervals=True
+        pattern=Pattern.EVENT_SERIES,
+        label_set="breath",
+        required_count=RequiredCount(3, CountUnit.EVENTS),
+        timed_intervals=True,
     ),
     "respiration-and-cough-v2-threebreaths": Expectation(
-        pattern=Pattern.EVENT_SERIES, label_set="breath", expected_event_count=3, timed_intervals=True
+        pattern=Pattern.EVENT_SERIES,
+        label_set="breath",
+        required_count=RequiredCount(3, CountUnit.EVENTS),
+        timed_intervals=True,
     ),
     "respiration-and-cough-breath": Expectation(
         pattern=Pattern.SOUND_COVERAGE, label_set="breath", declared_duration_s=30.0
@@ -735,7 +919,7 @@ AIRWAY_EXPECTATIONS: dict[str, Expectation] = {
     "breath-sounds": Expectation(
         pattern=Pattern.EVENT_SERIES,
         label_set="breath",
-        expected_event_count=3,
+        required_count=RequiredCount(3, CountUnit.EVENTS),
         declared_route="mouth",
         relax_s=60.0,
         declared_duration_s=73.0,
