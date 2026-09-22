@@ -536,16 +536,18 @@ hold the branch's subject — it may not — but because a branch that returns b
 was given has reviewed nothing. Where the branch's own family is absent, the answer is the annotations
 it made on what was there.
 
-**VOICE is where this is visible, and the inconsistency is worth stating plainly.** **VOICE is
-routed by a measurement on `amplitude` spans and then fails for want of a `phonation` span.**
-`voice.sustained`'s feature is `[span_longest, amplitude]` — the longest live amplitude span in
-seconds, cut 3.0 s (`default.yaml:252-255`) — while the selector at `voice.py:230` admits only
-`_PHONATION_FAMILY` (`:40`). The amplitude spans the route was decided on are live in the store,
-unexamined, when the branch takes the no-span return at `voice.py:235-264`. Measured on 13 real b2ai
-recordings, **6 of 6 VOICE-routed recordings returned `Outcome.FAIL`** there, including a
+**VOICE was where this was visible, and the inconsistency has since been closed by taking exactly
+this decision.** VOICE was routed by a measurement on `amplitude` spans and then failed for want of
+a `phonation` span: `voice.sustained`'s feature is `[span_longest, amplitude]` — the longest live
+amplitude span in seconds (`default.yaml:446`) — while its selector admitted only the `phonation`
+family, and the amplitude spans the route was decided on sat live in the store, unexamined.
+Measured on 13 real b2ai
+recordings on 2026-09-15, **6 of 6 VOICE-routed recordings returned `Outcome.FAIL`** there,
+including a
 maximum-phonation-time recording whose `voice.sustained` read **15.89 s** and a glide at **12.27 s**
 ([`../20260817-triage-workflow-dag/benchmarks/hints-and-routing-2026-09-15.md`](../20260817-triage-workflow-dag/benchmarks/hints-and-routing-2026-09-15.md)
-§ D).
+§ D). VOICE now reads those same amplitude spans as its subject (`voice.py:8-11`), so the
+measurement is a record of the defect rather than of the branch.
 
 **And the second half of the owner's sentence carries as much as the first.** A branch must also do
 its best on *other tasks assigned to it* — a recording routed to it whose declared family is none of
@@ -555,14 +557,19 @@ task outside its declared families does its best to find, mark, refine or refute
 kind, rather than failing for want of a declared subject.** For VOICE that is the common case rather
 than the edge case — it routed 22,277 recordings against 8,306 declaring a voice family.
 
-**This is also what `voice.py:333-346` does wrongly today.** It mints a *second* span from an input
-span, re-keyed by period-aligned onset and carrying `onset_kind` — the re-minting the annotating verbs
-replace with a `refine` assertion, and the reason `_spans_of_family` (`report.py:289-306`) must split
-one family into two populations on `("onset_kind" in attributes)`. Once the minting becomes a
-`refine`, that split has nothing to separate.
+**That generalisation is now the shape of every branch.** `dispatch` (`branches.py:1048-1078`)
+picks between two entry points from the declared task family: `align_<branch>` for a task of the
+branch's own kind, `detect_<branch>` for a task of any other, which "evaluates nothing" and returns
+`UNDETERMINED`. No branch fails for want of a declared subject, because the out-of-family mode is a
+first-class entry point rather than an error path.
+
+**The second minting this section called out has gone.** VOICE minted a *second* span from an input
+span, re-keyed by period-aligned onset and carrying `onset_kind` — the re-minting the annotating
+verbs were to replace with a `refine` assertion, and the reason `_spans_of_family` had to split one
+family into two populations. VOICE proposes once, into `voice`, and the split went with it.
 [`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
-§ *The state of this branch* already states that; what the decision adds is that improving those spans
-**is VOICE's work**, not a precondition it is entitled to wait for.
+§ *The state of this branch* states the old shape; what the decision added is that improving those
+spans **is VOICE's work**, not a precondition it is entitled to wait for, and that is what shipped.
 
 ### What each verb writes — four annotate, one mints
 
@@ -823,104 +830,78 @@ reason § *Explicitly unresolved* gives for the writer/reader vocabulary rule.
 ### Where each branch already stands
 
 **SPEECH already does it, unnamed.** It takes no subject from the general span set, groups lexical
-word runs into its own spans, and writes them with `family: "speech"` (`speech.py:879-883`). It is
+word runs into its own spans, and mints them with `family: "speech"` (`MINT` at `speech.py:646-647`,
+the runs at `:1865-1884`). It is
 the working instance of the contract. It does not *ignore* the general set, and an earlier revision
-said so: it `used`s every live non-SPEECH span (`speech.py:577-578`, the edges at `:600-601`) and
-makes each of its own spans `wasDerivedFrom` the ones it overlaps (`:893-895`) — which is the
+said so: it `used`s every live non-SPEECH span (`speech.py:1509-1511`, the edges at `:1532-1533`) and
+makes each of its own spans `wasDerivedFrom` the ones it overlaps (`:1872-1881`) — which is the
 provenance shape § *An aggregated span is a `propose`* generalises.
 
-**VOICE was designed to and cannot.** Its subject is every live span whose `family` is `phonation`
-(`voice.py:230`, `_PHONATION_FAMILY` at `:40`). **Nothing reachable proposes one.** The detector that
-did was retired 2026-09-04; VOICE itself writes the family at `voice.py:337`, but that code sits
-downstream of the no-span path it always takes, so it never runs. The branch returns `Outcome.FAIL`
-on every recording.
+**VOICE was designed to and could not; it has since been rebuilt, and the fix taken was this
+section's.** Its subject was every live span whose `family` was `phonation`, nothing reachable
+proposed one, and the branch returned `Outcome.FAIL` on every recording. That is no longer the
+shape. VOICE's subject is now *"PREPROCESS's `amplitude` spans qualified by `phonation_tracks` and
+`continuity_trace`, over which VOICE mints its own `family: "voice"` spans. It waits for no
+`phonation` span and edits none"* (`voice.py:8-11`). `_PHONATION_FAMILY` is gone, and so is the
+no-span return.
 
-Under this contract **the branch is the proposer**, and that is the whole fix — **with the selector
-changed to the branch family.** `propose` writes `family: "voice"`, so VOICE's input filter and its
-output family coincide, which is what the contract wants.
-
-**"The whole fix" is now the ruleset's label plus VOICE's `refine`, on the owner decisions of
-2026-09-15 above.** A ruleset-written phonation label gives VOICE a labelled amplitude span to
-`refine` without any proposer, and that is the settled flow:
+So **the branch became the proposer, with its output family as its own**, which is what this section
+called the whole fix and what the contract wants. The alternative route the owner decisions of
+2026-09-15 opened — a ruleset-written phonation label that VOICE `refine`s — was not the one taken:
+no rule writes a span label today, and VOICE reads the amplitude spans directly. The settled flow at
 [`../20260817-triage-workflow-dag/branch-voice.md`](../20260817-triage-workflow-dag/branch-voice.md)
-§ *The subject is the spans the ruleset labelled, and VOICE refines them*. Neither the
-`consensus_taxonomy` rework nor a replacement detector is the span source any more; V1 stays as the
-specification of the refiner. Everything in the rest of
-this section — the selector change, the family rename, what it costs REPORT — applies to whichever
-source mints or labels the span, so none of it is withdrawn.
+§ *The subject is the spans the ruleset labelled, and VOICE refines them* describes a source the code
+does not use; the amplitude-span reading beneath it is what shipped.
 
-**That rename is not costless, and an earlier revision wrongly called it so.** `phonation` is the
-family VOICE **writes today** (`voice.py:337`), and REPORT reads it: `_spans_of_family(store,
-"phonation", voice=False)` at `report.py:673`, the `voice=True` reads at `:715` and `:1154`, the
-descriptions at `:1134` and `:1173`, and VOICE's summary keyed on `phonation_s` at `:104`.
-`_spans_of_family` (`report.py:289-306`) exists precisely to separate the detector-proposed
-population from VOICE's own, by `onset_kind`. So this is a **writer-vocabulary change on a family
-REPORT reads**, and it is settled by the rule this spec already invokes twice: **the writer's
-vocabulary may shrink, the reader's may not.**
+**The family rename landed, and it cost REPORT less than this section budgeted for.** `phonation`
+is no longer a span family anywhere: `report.py` reads `_spans_of_family(store, "voice")` (`:1229`,
+`:778`) and holds no `phonation` family read and no `voice=True`
+parameter. `_spans_of_family` (`report.py:299`) now takes one `family: str` and nothing else,
+because there is only one population to read. The **historical** half of the rule this section
+invoked — *the writer's vocabulary may shrink, the reader's may not* — was **not** honoured here:
+a finished store written before the rename carries `phonation` spans that nothing in REPORT will
+ever read again. Whether that is acceptable, or whether `_spans_of_family` should read both, is
+worth deciding rather than discovering.
 
-`phonation` becomes a **historical family** — VOICE writes `voice`, and REPORT keeps reading
-`phonation` forever, because finished stores carry those spans forever. This is the same shape as the
-`kind` entity type in `PROV_TYPE` (`prov_store.py`, retired 2026-09-13 and kept readable for exactly
-this reason), and the `kind` fix is the precedent to follow rather than re-derive.
+`phonation_s` survived as a name and changed owner: it is VOICE's own `_detail` field
+(`voice.py:878`, `:910`, declared for the report at `common.py:637`) rather than a REPORT summary
+key, and it still names seconds of phonation rather than a family.
 
-Concretely: `report.py:104`'s `phonation_s` **stays**. It names seconds of phonation, not a family,
-and it sums spans of both — `phonation` from stores written before the change, `voice` after.
-`_spans_of_family` (`report.py:289-306`) grows to read both families; it currently takes a single
-`family: str`, so it needs either a sequence parameter or two calls merged.
+The `onset_kind` two-population split went with the rename. `onset_kind` and `offset_kind` are
+written nowhere, the second period-aligned minting that wrote them is gone, and nothing needs the
+distinction between the detector's spans and VOICE's own — VOICE's are the only ones.
 
-**One consequence to record rather than paper over.** `_spans_of_family`'s `voice` parameter splits on
-`("onset_kind" in span.attributes)`, and `onset_kind` is written only by the second minting at
-`voice.py:333-346` — the very minting this contract replaces with a `refine` assertion. So for stores
-written under the contract **nothing carries `onset_kind`, and the `voice=True` reads at
-`report.py:715` and `:1154` return empty.** The split remains correct for historical stores and
-becomes vacuous for new ones; what replaces it is the distinction between a span and a `refine`
-assertion over it. REPORT's VOICE arms need that substitution, not just the family widening.
+**AIRWAY's five assertion verbs are gone.** It wrote `label`, `confirm`, `contest`, `abstain` and
+`flag` when this was written. It now writes by `propose` and by `Finding` alone, like every other
+branch; the only assertion verbs its activity generates are `deviate` and `contest`, both through
+`write_findings`.
 
-**VOICE is the worked example of the contract, and of what it forbids.** `voice.py:333-346` mints a
-second, period-aligned span from an input span, carrying `onset_kind` and `offset_kind` — **that is
-exactly the re-mint the annotating verbs replace.** Under this contract that minting becomes a
-`refine` assertion carrying `corrected_extent`, the original span keeps its id and its measurements,
-and `_spans_of_family`'s two-population problem dissolves with it.
+**`contest`'s contract meaning is settled, and AIRWAY now has a criterion.** The contract's
+definition is the one in the verb table — *the span does not carry what was proposed* — and
+QUALITY's clip contradiction (`quality.py:273-290`) is an instance of it under a completely
+different criterion. The two must not be conflated.
 
-**AIRWAY has half the verbs already**, writing `label`, `confirm`, `contest`, `abstain` and `flag`
-assertions across its first three steps (`airway.py:230` through `:373`).
+**The criterion AIRWAY took is not the one this section proposed, and it is threshold-free by a
+different route.** This section proposed *contest a span when no evidence of any kind is found
+within its extent*. What `detect_airway` does instead is contest a span the classifier windows
+decided a label set for, where the event walk marked no event overlapping it — the reason string is
+`no_raw_score_over_p_score_min` (`airway.py:1084-1089`). It contests on a label that did not survive
+the raw-score reading, not on absent evidence. `airway.contest_labels`, whose nullity was the
+problem this section was solving, is no longer a config key at all, and `_contest_labels` is gone
+with it.
 
-Two of those are the contract's own verbs already, which is why the contract adopts their spellings
-rather than renaming them. `confirm` becomes a `label` carrying its corroborating window ids;
-`abstain` and `flag` keep their current meanings.
+**The compounding with rule (a) is still real and still uncounted.** Rule (a) makes covering-window
+labels ineligible as evidence and coughs are usually sub-0.96 s, so it moves which spans have a
+decided label set at all — which is the input to AIRWAY's contest test. **The same before-and-after
+count rule (a) requires is required here.**
 
-**`contest`'s contract meaning is already settled; what AIRWAY needs is a criterion for applying
-it.** The contract's definition is the one in the verb table — *the span does not carry what was
-proposed* — and QUALITY's clip contradiction (`quality.py:285-295`) is an instance of it under a
-completely different criterion. The two must not be conflated.
-
-**AIRWAY's criterion needs to be threshold-free, and gets one — with the same budget rule (a) gets.**
-`airway.contest_labels` is `null` (`default.yaml:138`), so `_contest_labels` returns the empty set
-(`airway.py:150`) and `contested_n` is structurally zero; the ground-truth rule forbids fitting the
-list. So AIRWAY contests without one: **it contests a span when it finds no evidence of any kind
-within that span's extent.** That is AIRWAY's particular test, not the contract's, and it leaves the
-fitted list as a later refinement letting AIRWAY contest on *contrary* evidence rather than only on
-absent evidence.
-
-**That definition interacts badly with rule (a) and must be counted before it ships.** Rule (a) makes
-covering-window labels ineligible as evidence, and coughs are usually sub-0.96 s, so "no evidence of
-any kind" would contest most short spans. `contested_n` would go from structurally zero to
-near-total. **The same before-and-after count rule (a) requires is required here**, and for the same
-reason: the two changes compound.
-
-**Every contest flags the file**, by one of two chains. The usual one is short: contests → AIRWAY's
-`flags` → AIRWAY `Outcome.FLAG` (`airway.py:379-380`) → the any-FLAG fold at `vocabulary.py:423` →
-`Triage.FLAG`. The mismatch ground at `vocabulary.py:393` plays no part in it, because `_agreement`
-runs over `findings` and `_resolved` (`:209-220`) maps every non-FAIL outcome to `present`.
-
-But a recording whose spans are *all* contested on absence takes `not labels_by_span`
-(`airway.py:376-378`) and returns **FAIL**, which resolves `absent` and therefore does reach the
-mismatch ground — and that is exactly the population a contest-on-absence targets. Both chains end in
-a flagged file; the budget is required either way.
-
-`contested_n` also needs redefining before it can be counted: it increments inside the per-label loop
-(`airway.py:289`, `:323-324`), and a span with no members never enters that loop (`:260-261`) — which
-is exactly the population a contest-on-absence targets.
+**A contest no longer flags the file by itself.** The two chains this section traced both ran
+through an `Outcome` a branch no longer returns. AIRWAY returns a `BranchReport` carrying no
+outcome, and `contested_n` is a `_detail` field counted off the findings
+(`airway.py:1205`) that reaches no flag ground. What a contest can still do is arrive at VERDICT as
+a `conformance` of False through the declared family's gates, or as a `mismatch` when the branch
+proposed no span and routing routed it (`vocabulary.py:652-655`). Whether AIRWAY's contests *should*
+flag is a question this contract reopens rather than answers.
 
 **Background-typed gap spans are not contestable, and the reason is the verb's object, not the
 evidence.** A gap span carries real branch-readable evidence — gaps are appended to `span_ids`
