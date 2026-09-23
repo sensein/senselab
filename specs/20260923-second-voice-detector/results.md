@@ -21,21 +21,27 @@ ground-truth span; precision is the share of that label's own seconds falling in
 | backend | speakers | segs | minority label | recall | precision | wall s | needs |
 |---|---|---|---|---|---|---|---|
 | pyannote community-1 (incumbent) | **1** | 9 | — | **0** | — | 1.67 | in-process |
-| pyannote community-1, `num_speakers=2` | 2 | 9 | 12.22 s | **0.81** | ~1.0 | ~1.7 | in-process; the only backend honouring the hint |
+| pyannote community-1, `num_speakers=2` | 2 | 9 | 12.22 s (0.03–15.66) | **0.775** | **0.959** | ~1.7 | in-process; the only backend honouring the hint |
 | NVIDIA Sortformer `diar_sortformer_4spk-v1` | **1** | 25 | — | **0** | — | 54.8 | subprocess venv (NeMo); structural cap 4 |
 | VibeVoice-ASR-HF | **1** | 4 | — | **0** | — | 104.0 | in-process, `transformers>=5.3` |
 | **MOSS-Transcribe-Diarize** | **2** | 12 | 9.37 s (3.68–15.68) | **0.617** | **0.996** | 93.1 | subprocess venv, `transformers>=5.6` |
 | DiariZen `diarizen-wavlm-large-s80-md` | 2 | 25 | 1.12 s (0.51–2.49) | **0.074** | 1.000 | 44.9 | subprocess venv; **weights CC BY-NC 4.0** |
-| USC-SAIL child-adult | pending | | | | | | subprocess venv, CUDA only, role labels, cap 2 |
+| USC-SAIL child-adult | 2 | 28 | CHILD 0.18 s | **0.012** | 1.000 | 105.5 | subprocess venv, CUDA only, role labels, cap 2 |
 
 **MOSS-Transcribe-Diarize is the only backend that found the second voice unprompted.** It
 placed 9.33 of its 9.37 minority seconds inside the true span and recovered the turn change
 at 15.68 / 15.69 s to within 0.01 s. It missed only the administrator's first utterance
 (0.39–2.55 s), which it gave to the participant.
 
-DiariZen reports two speakers but its second is a **1.12 s** fragment — the same shape as
-the micro-splits that dominate the corpus's existing two-speaker population, not a finding
-about the 15 s turn. Counting it as a hit would be reading a true count off a false reason.
+DiariZen and child-adult both report two, but their second label holds **1.12 s** and
+**0.18 s** — the same shape as the micro-splits that dominate the corpus's existing
+two-speaker population, not a finding about the 15 s turn. Counting either as a hit would be
+reading a true count off a false reason. Child-adult's labels are roles, not identities, so
+even a correct count would not say "a second person".
+
+One stream observation, recorded and not pursued because the owner ruled the stream
+comparison out: on the `enhanced` stream VibeVoice returns **2** speakers where on `plain`
+it returns 1, while pyannote and Sortformer return 1 on both.
 
 ## 2. Retuning the incumbent: the documented knob is inert
 
@@ -117,14 +123,27 @@ Both refuse it, and given the AUCs above, both are right to be conservative.
 
 ## 4. Cost
 
-Measured on an idle H100, 63.60 s recording, model already resident:
+Amortized over 73 recordings on an idle A100, models resident, median audio 39.9 s:
 
-| step | wall s | × realtime |
+| step | median wall s | × realtime |
 |---|---|---|
-| pyannote diarization (free) | 1.67 | 38 |
-| pyannote diarization (`num_speakers=2`) | ~1.7 | 38 |
-| ECAPA over 63 windows at 2.0 s / 1.0 s | pending | |
+| pyannote diarization, free | 0.32 | 125 |
+| pyannote diarization, `num_speakers=2` | 0.32 | 125 |
+| ECAPA over the 2.0 s / 1.0 s window grid | 0.04 | 1,080 |
 
-Corpus scale: **43,335 recordings run SPEECH**, mean 34.7 s, median 24.7 s (corpus census).
-A second pyannote pass at 38× realtime is therefore about **11 GPU-hours** for the corpus —
-cheap. That cost is not the obstacle; the false-positive rate is.
+Cold-start figures for the subprocess-venv backends on one 63.6 s recording (first call,
+venv already built, weights already cached): Sortformer 54.8 s, VibeVoice 104.0 s, MOSS
+93.1 s, DiariZen 44.9 s, child-adult 105.5 s. These are dominated by process start and model
+load, so a corpus pass amortizes them — the MOSS sample run is what prices that honestly.
+
+Corpus scale: **43,335 recordings run SPEECH**, mean 34.7 s, median 24.7 s (corpus census),
+so about **418 hours of audio**.
+
+| candidate | rate | corpus pass |
+|---|---|---|
+| second pyannote pass with `num_speakers=2` | 125 × realtime | **3.3 GPU-hours** |
+| ECAPA window grid | 1,080 × realtime | **0.4 GPU-hours** |
+| MOSS-Transcribe-Diarize | pending (sample run) | pending |
+
+For the pyannote and ECAPA candidates cost is not the obstacle; the false-positive rate is.
+For MOSS, cost is a real question and the sample run answers it.
