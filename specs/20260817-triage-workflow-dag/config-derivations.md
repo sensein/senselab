@@ -1967,6 +1967,21 @@ fewer detectors says so; the config_hash then names that choice. The local-LLM d
 deliberately absent for the same reason it is absent from default_detectors(): it is never
 default-on, so requiring it would make every scan incomplete.
 
+### No duration bound on a finding -- REJECTED 2026-09-22
+
+There is deliberately no `pii.max_finding_s` and no ratio ceiling, and one should not be added
+without a new measurement. The proposal was that a finding far longer than the token it came from
+is untrustworthy and should be refused, clamped or flagged. Measured over the 115,753 live findings
+of the 17,980 replayed recordings where REDACT ran, it is not: a finding's duration tracks the
+words it covers, median ratio 0.98 and p90 1.35, and the findings raised on nothing but a bracketed
+transcription token -- the population the bound was for -- are *shorter* than ordinary ones, median
+0.28 s against 0.80 s. The best absolute bound catches 2.6% of them while refusing 3,490 findings
+that overlap no bracket at all, and the best ratio bound catches 2.2% while refusing 1,147; both
+refusals are in the unsafe direction. The genuine long tail is a different mechanism -- 1,288 of the
+2,153 findings over ten seconds are the deliberate whole-transcript widening applied when `_locate`
+places a finding nowhere -- whose discriminator is locatability, not length. Full tables in
+`specs/20260922-brackets-are-not-speech/measurements.md`.
+
 ## redaction
 
 What a released transcript replaces, and by how much padding.
