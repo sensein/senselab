@@ -43,6 +43,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome
 from senselab.audio.workflows.triage.run import entity_subdir, prepare_run_layout, run_triage
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
+    NO_TRANSCRIPT,
     TASK,
     UNDETERMINED,
     BranchReport,
@@ -817,12 +818,13 @@ class TestAdmitFailShortCircuits:
     def test_the_file_verdict_discards_and_nothing_is_released(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """An unmeasurable recording discards on triage and is never assessed for release."""
+        """An unmeasurable recording discards on triage; nothing was transcribed, so nothing is redactable."""
         graph(admit_outcome=Outcome.FAIL)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
         assert result.file_verdict.triage is Triage.DISCARD
-        assert result.file_verdict.release is Release.NOT_ASSESSED
+        assert result.file_verdict.release is Release.NOTHING_TO_REDACT
+        assert result.file_verdict.release_ground == NO_TRANSCRIPT
         assert result.released == {}
         assert result.store_path.is_file()
 
