@@ -14,15 +14,28 @@ Every model loaded at a resolved 40-hex commit. Pyannote
 Jobs 23558004 (`sv-backends`). `plain` stream, mono 16 kHz, 63.60 s. Ground truth: one
 second voice holding 0.5 – 15.6 s.
 
-| backend | speakers | segments | found the second voice | wall s | needs |
-|---|---|---|---|---|---|
-| pyannote community-1 (incumbent) | 1 | 9 | **no** | 1.67 | in-process, GPU optional |
-| pyannote community-1, `num_speakers=2` | 2 | 9 | **yes — 0.03–15.66 / 15.73–61.78, the true boundary** | ~1.7 | in-process; only backend honouring the hint |
-| NVIDIA Sortformer `diar_sortformer_4spk-v1` | 1 | 25 | **no** | 54.8 | subprocess venv (NeMo), weights 
-| VibeVoice-ASR-HF | 1 | 4 | **no** | 104.0 | in-process, `transformers>=5.3`, large download |
-| MOSS-Transcribe-Diarize | pending | | | | subprocess venv, `transformers>=5.6` |
-| DiariZen `diarizen-wavlm-large-s80-md` | pending | | | | subprocess venv; **weights CC BY-NC 4.0** |
-| USC-SAIL child-adult | pending | | | | subprocess venv, CUDA only, role labels, cap 2 |
+Scoring: the **minority label** is each backend's claim about the second voice, since the
+participant holds the bulk of every recording in this corpus. Recall is of the 15.13 s
+ground-truth span; precision is the share of that label's own seconds falling inside it.
+
+| backend | speakers | segs | minority label | recall | precision | wall s | needs |
+|---|---|---|---|---|---|---|---|
+| pyannote community-1 (incumbent) | **1** | 9 | — | **0** | — | 1.67 | in-process |
+| pyannote community-1, `num_speakers=2` | 2 | 9 | 12.22 s | **0.81** | ~1.0 | ~1.7 | in-process; the only backend honouring the hint |
+| NVIDIA Sortformer `diar_sortformer_4spk-v1` | **1** | 25 | — | **0** | — | 54.8 | subprocess venv (NeMo); structural cap 4 |
+| VibeVoice-ASR-HF | **1** | 4 | — | **0** | — | 104.0 | in-process, `transformers>=5.3` |
+| **MOSS-Transcribe-Diarize** | **2** | 12 | 9.37 s (3.68–15.68) | **0.617** | **0.996** | 93.1 | subprocess venv, `transformers>=5.6` |
+| DiariZen `diarizen-wavlm-large-s80-md` | 2 | 25 | 1.12 s (0.51–2.49) | **0.074** | 1.000 | 44.9 | subprocess venv; **weights CC BY-NC 4.0** |
+| USC-SAIL child-adult | pending | | | | | | subprocess venv, CUDA only, role labels, cap 2 |
+
+**MOSS-Transcribe-Diarize is the only backend that found the second voice unprompted.** It
+placed 9.33 of its 9.37 minority seconds inside the true span and recovered the turn change
+at 15.68 / 15.69 s to within 0.01 s. It missed only the administrator's first utterance
+(0.39–2.55 s), which it gave to the participant.
+
+DiariZen reports two speakers but its second is a **1.12 s** fragment — the same shape as
+the micro-splits that dominate the corpus's existing two-speaker population, not a finding
+about the 15 s turn. Counting it as a hit would be reading a true count off a false reason.
 
 ## 2. Retuning the incumbent: the documented knob is inert
 
