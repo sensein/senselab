@@ -37,6 +37,14 @@ KEYED_ATTRIBUTES = ("name", "family", "role", "verb")
 MINIMUM_SELECTOR_HELPERS = 4
 """How many selector helpers the sweep must discover before it is reading the tree at all."""
 
+PROPOSER_REGISTRY = "PROPOSERS"
+PROPOSER_FACTORY = "proposer"
+PROPOSER_PARAMS = ["role", "extent"]
+"""The span proposer's positional parameters, named here because two functions in the tree are
+called ``_propose`` and the signature sweep cannot tell them apart. A branch mints through a
+module-level alias of the proposer, which is what :func:`_proposer_aliases` resolves, so that a
+role minted through one reads as written."""
+
 UNWRITTEN_ON_PURPOSE: dict[tuple[str, str], str] = {}
 """Selections knowingly matching no writer. Each entry is a reader whose absent result is the
 design, not a defect; anything else here is the defect this file exists to stop."""
@@ -101,7 +109,38 @@ def _signatures() -> dict[str, list[str]]:
                 params = [argument.arg for argument in (*node.args.posonlyargs, *node.args.args)]
                 if len(params) >= len(found.get(node.name, [])):
                     found[node.name] = params
+    found.update(dict.fromkeys(_proposer_aliases(), PROPOSER_PARAMS))
     return found
+
+
+def _proposer_aliases() -> set[str]:
+    """Module-level names bound to a span proposer, which stamp ``role`` through it.
+
+    A branch mints its spans through a partial of the proposer factory — ``MINT = PROPOSERS[NODE]``,
+    ``speech_span = PROPOSERS["SPEECH"]``, ``quality_span = proposer("quality")``. The call then
+    names no function this sweep has a signature for, so every role minted through one used to
+    read as written by nobody.
+
+    Returns:
+        Every such alias name in the tree.
+    """
+    aliases: set[str] = set()
+    for tree in TREES.values():
+        for node in tree.body:
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target, value = node.targets[0], node.value
+            if not isinstance(target, ast.Name):
+                continue
+            if (
+                isinstance(value, ast.Subscript)
+                and isinstance(value.value, ast.Name)
+                and value.value.id == PROPOSER_REGISTRY
+            ):
+                aliases.add(target.id)
+            elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == PROPOSER_FACTORY:
+                aliases.add(target.id)
+    return aliases
 
 
 SIGNATURES = _signatures()

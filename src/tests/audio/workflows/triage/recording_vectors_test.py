@@ -529,11 +529,17 @@ def test_the_waveform_and_the_traces_are_the_declared_widths(one_row: dict[str, 
 
 
 def test_every_measurement_has_a_column_and_a_reading_count() -> None:
-    """The 29 names the corpus scan enumerated, each with the count that explains its null."""
+    """Every name the corpus scan enumerated has a column and the count that explains its null.
+
+    A subset rather than an equality: the stats file is a measurement of one dated corpus, and the
+    multi-speaker instrument writes four readings that corpus predates. The guard in the other
+    direction — a measurement the graph writes that this schema has no column for — is
+    ``ScanReport.anomalies``, which counts exactly that per name on every shard.
+    """
     names = set(json.loads(MEASURE_STATS.read_text()))
-    assert set(rv.MEASUREMENTS) == names
+    assert names <= set(rv.MEASUREMENTS), names - set(rv.MEASUREMENTS)
     columns = {field.name for field in rv.schema()}
-    for name in names:
+    for name in set(rv.MEASUREMENTS) | names:
         assert f"m_{name}" in columns
         assert f"m_{name}_n" in columns
 
