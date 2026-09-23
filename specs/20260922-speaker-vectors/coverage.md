@@ -116,9 +116,12 @@ recordings — 13.2% of the corpus**. Read the other way: a diadochokinesis or c
 mints an extent ~99% of the time and a glide recording 44.5% of the time. So the honest summary
 is *a per-recording failure whose rate is a property of the task*, not a property of either alone.
 
-Collapsed family coverage, worst first (n ≥ 200):
+Collapsed family coverage, worst first (n ≥ 200). **The percentage is coverage — the share that
+*has* an extent — not the share missing.** Read the wrong way round it inverts every row: this was
+misread once, and `maximum-phonation-time` was reported as missing on 68.9% when it misses on 31.1%
+and is the best-covered of the five VOICE families.
 
-| task family | with extent / total | | missing |
+| task family | with extent / total | coverage | missing |
 | --- | ---: | ---: | ---: |
 | `random-item-generation` | 0 / 265 | 0.0% | 265 |
 | `random-item-generation-v2` | 0 / 207 | 0.0% | 207 |
