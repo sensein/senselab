@@ -2119,6 +2119,78 @@ class TestTheMultiSpeakerInstrument:
         }
         assert authored <= {"measurement", "span"}, "no assertion, no verdict, no conformance"
 
+    def test_a_span_says_where_the_other_source_is(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`solo_extent` says where the loudest source is alone; this says where anything else is."""
+        config = _override(tmp_path, self.CONFIG)
+        self._two_voices(store, tmp_path, monkeypatch)
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        other = [
+            e
+            for e in live_entities(store, "span")
+            if e.attributes.get("role") == speech_module.SECONDARY_SOURCE_EXTENT_ROLE
+        ]
+        assert len(other) == 1, "one span per run a source other than the loudest holds"
+        assert other[0].extent is not None
+        assert other[0].extent[0] == pytest.approx(1.8, abs=0.06)
+        assert other[0].extent[1] == pytest.approx(2.6, abs=0.06)
+        assert other[0].attributes["speaker"] == "SPEAKER_01"
+        assert other[0].attributes["source_index"] == 1
+        task = [e for e in live_entities(store, "span") if e.attributes.get("role") == speech_module.TASK_EXTENT_ROLE]
+        assert other[0].attributes["refines"] == task[0].id
+
+    def test_the_reading_names_the_other_sources_spans_without_a_cross_reference(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The report detail answers "where" on its own; `dominant_index` need not be resolved."""
+        config = _override(tmp_path, self.CONFIG)
+        self._two_voices(store, tmp_path, monkeypatch)
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        localisation = _report_entity(store, "SPEECH").attributes["source_localisation"]
+        [span] = localisation["secondary_spans"]
+        assert span["start"] == pytest.approx(1.8, abs=0.06)
+        assert span["end"] == pytest.approx(2.6, abs=0.06)
+        assert span["speaker"] == "SPEAKER_01"
+        assert span["source_index"] == 1
+
+    def test_the_branch_says_in_words_where_the_other_source_is(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reader of the rendered summary gets the seconds without opening the store."""
+        config = _override(tmp_path, self.CONFIG)
+        self._two_voices(store, tmp_path, monkeypatch)
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        notes = _report_entity(store, "SPEECH").attributes["notes"]
+        [note] = [n for n in notes if "other than the loudest" in n]
+        assert "1.80-2.60s" in note
+        assert "SPEAKER_01" in note
+
+    def test_no_note_and_no_span_when_one_source_holds_the_whole_extent(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing to point at is said by saying nothing, not by a span of zero length."""
+        config = _override(tmp_path, self.CONFIG)
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two", "three"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0), (3.0, 3.6)],
+            duration_s=5.0,
+            diarization=False,
+        )
+        _seed_diarization(store, tmp_path, [(1.0, 3.6, "SPEAKER_00")])
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        _stub_separator(monkeypatch, sources=2, active=[[(1.0, 3.6)], []])
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        assert not [
+            e
+            for e in live_entities(store, "span")
+            if e.attributes.get("role") == speech_module.SECONDARY_SOURCE_EXTENT_ROLE
+        ]
+        notes = _report_entity(store, "SPEECH").attributes["notes"]
+        assert not [n for n in notes if "other than the loudest" in n]
+
     def test_an_extent_past_the_shortest_separated_source_reads_empty_rather_than_raising(self) -> None:
         """The separator may return a source shorter than the mixture, so the extent can miss it."""
         short = [
