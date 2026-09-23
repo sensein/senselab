@@ -94,3 +94,57 @@ Loading the document under jsdom with `runScripts: "dangerously"` exercises the 
 the initial status line, the redaction three-way, the release checkboxes, the reset link and the
 search box all report counts that must reconcile with the extract report — 6,691 with findings plus
 5,010 without is 11,701, and `withheld` is 2,972 either way.
+
+## Measured again, 2026-09-23, with findings as first-class objects
+
+Job 23549767 on `pi_satra`, same corpus and pinned checkout. `pi_satra` takes `--qos=normal` for
+this account; `--qos=pi_satra` is rejected, and **`mit_preemptible` does not exist — the partition
+is `mit_preemptable`**.
+
+| | |
+| --- | --- |
+| recordings, participants, characters | unchanged: 11,701 / 1,514 / 2,914,546 |
+| reviewable marks | 15,595 |
+| extract output | 19.4 MB JSONL |
+| rendered page | 18.5 MB, one file |
+| extract wall clock | ~100 s on 16 cores |
+
+## Reviewing
+
+Click a mark, or tab to it and press Enter. The panel takes `1`–`4` for the four verdicts, or a
+click; pressing the same verdict again clears it. `Esc` closes. Notes are per finding in the panel
+and per recording under each card. The rail shows how many of the 15,595 findings are judged and
+filters to the unjudged.
+
+`Export JSON` puts the record in the textarea and offers it as a download. `Import` merges an export
+back in, from the textarea or from a file. Nothing is published; the export is a local file.
+
+## Verified under jsdom
+
+No browser extension was reachable, so the page was driven under jsdom with
+`runScripts: "dangerously"` — real event dispatch against the real script, not a reimplementation.
+
+```bash
+npm install --no-save jsdom
+node --max-old-space-size=12288 <harness.mjs> ~/Downloads/free-speech-review/free-speech-review.html
+```
+
+What the harness exercised, and what reconciles:
+
+- facet counts against the independent measurement — `DATE_TIME` alone selects 6,397 marks and
+  `PERSON` alone 7,034, matching the sidebar and the offline count exactly; bracket-overlap alone
+  selects 542; `PERSON` + `gliner/name` + bracketed selects 201;
+- combination and reset, span-length and findings-per-recording thresholds;
+- the panel: verdict by click and by key, un-judging by re-pressing, per-finding note, per-recording
+  note, progress line, filter to unjudged (15,593 of 15,595 after two judgments);
+- export → fresh page → import → marks repaint with their verdicts;
+- the storage-failure path, on an opaque origin where `localStorage` throws: all 11,701 cards still
+  render, the status line says judgments are memory-only, and export still works.
+
+Zero jsdom errors, and the document still contains no `http`, `<link>`, `<img>` or `src=`.
+
+**Not verified:** the page has never been opened in a real browser in this session. jsdom does not
+lay out or paint, so nothing here tests the CSS — the dark-mode palette, the dimming of non-matching
+marks, the sticky rail at this document size, and scroll performance over 11,701 cards are all
+unobserved. jsdom also does not implement download behaviour, so the `<a download>` path is
+untested; the textarea fallback is what was exercised.
