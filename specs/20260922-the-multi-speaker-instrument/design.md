@@ -299,6 +299,39 @@ because the graph runs one recording at a time and `separate_audios` is handed a
 inside the branch as the graph is structured, so it is a real 12.6 hours and not an avoidable one
 without a change nobody has asked for.
 
+### A resident worker is not warranted here, and the numbers say why
+
+YAMNet and HeAR were both fixed with a resident worker
+(`specs/20260922-yamnet-process-startup-cost/`, `specs/20260922-hear-process-startup-cost/`),
+and separation has the same shape of defect — a subprocess, a torch import and a checkpoint load
+paid once per recording because the graph hands `separate_audios` a list of one. It is not the same
+size of defect, and size is the whole argument:
+
+| call | fixed | at the corpus median recording | share of the call that is start-up |
+| --- | --- | --- | --- |
+| YAMNet | 4.81 s | 7.3 s of audio | **99.9%** |
+| HeAR | 6.48 s | 7.3 s of audio | **95.7%** |
+| MossFormer2_SS_16K | 19.6 s | 24.7 s of audio *(the trigger's own median)* | **12.9%** |
+
+At the trigger's *mean* recording of 34.7 s it is 9.5%. So a perfect resident worker recovers at
+most **12.6 of the 132 CPU-hours**, and only if every call after the first is free — whereas for
+YAMNet it recovered essentially the entire bill. Separation is dominated by its own arithmetic at
+5.36 s of wall per second of audio, which no transport change touches.
+
+**So: do not build one.** And the owner's standing judgment sharpens the same conclusion from the
+other side — three hand-rolled resident workers already exist, and a fourth should prompt
+extracting the shared transport rather than copying it a fourth time. Paying that extraction to
+recover 9.5% of a bill that only falls on 3.69% of the corpus is the wrong order of work. If the
+transport is ever extracted for its own sake, separation is a candidate to adopt it; it is not a
+reason to extract it.
+
+The other route to the same 12.6 hours needs no worker at all: `separate_audios` already takes a
+list and amortises the constant across it (`run_clearvoice_over_audios` writes every input into one
+subprocess call). Nothing inside the branch can batch, because the graph runs one recording at a
+time — but a corpus-level pass that separated in batches would collect the whole saving without any
+new machinery. That, too, is not worth doing for 12.6 hours today; it is recorded so the option is
+not rediscovered as novel.
+
 **A cheaper trigger is available and is not taken here.** Narrowing the trigger from "whole-file
 speakers > 1" to "within-extent speakers > 1" would drop 260 of the 2,305 firings — an 11.3%
 saving, about 15 CPU-hours — and would skip exactly the recordings where the second speaker never
@@ -338,6 +371,16 @@ the instrument reports the fragmentation rather than smoothing it away. That is 
 behaviour and it is also the honest reading of this run — the seconds and spans are as good as
 MossFormer2's decomposition, and here that was not good. **Nothing has validated the separation on
 this corpus, and this test does not.**
+
+## Speaker verification, assessed and not wired in
+
+`speaker-verification-assessment.md` beside this file asks whether verification against a
+per-subject embedding could say that the second voice is *not the participant*, and answers no on
+the current evidence: the turns to adjudicate are mostly shorter than the 1.0 s floor below which
+the embedding's same-speaker and impostor tails overlap, the per-subject enrollment is built from
+the very task extents suspected of holding the intruder, and the only method measured to settle a
+case on this corpus needs impostor windows from other subjects, which a per-recording node cannot
+reach. Nothing was built.
 
 ## Tests
 
