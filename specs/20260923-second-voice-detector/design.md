@@ -52,6 +52,15 @@ This is the single most important finding here, because it reframes the question
 candidate is not necessarily *a different diarizer* but *a different decision rule over the
 one already running*.
 
+The same holds on the stream the pipeline actually diarized. The stored sidecars read:
+
+* `enhanced_diarization.npz` — 10 segments, 1 speaker, and a segment boundary at
+  15.657 / 15.725 s, again exactly the turn change.
+* `residual_diarization.npz` — 2 segments, 1 speaker, 7.9 s of speech total.
+
+So the already-computed second stream does not catch it either, and the boundary the
+diarizer needed was in its own output all along.
+
 ### Consequence for the `speech.second_diarizer` slot
 
 The archived design for that slot runs a second diarizer **only when pyannote's count is not

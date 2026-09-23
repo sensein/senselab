@@ -41,7 +41,12 @@ def build(threshold: float, sha: str, device: str) -> Any:  # noqa: ANN401
 def run(pipe: Any, path: Path) -> dict[str, Any]:  # noqa: ANN401
     """One pipeline call, summarised by label."""
     t0 = time.time()
-    ann = pipe(str(path))
+    out = pipe(str(path))
+    # pyannote.audio 4 returns a DiarizeOutput carrying both views; take the overlapping one,
+    # matching the `exclusive=False` the production call uses.
+    ann = getattr(out, "speaker_diarization", None)
+    if ann is None:
+        ann = getattr(out, "exclusive_speaker_diarization", out)
     per: dict[str, float] = {}
     n = 0
     for seg, _, lab in ann.itertracks(yield_label=True):
