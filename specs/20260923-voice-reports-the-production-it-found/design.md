@@ -201,6 +201,41 @@ Still open, and belonging to PREPROCESS and the owner rather than to this change
    campaign above. A validity reading and a subharmonic reading are not the same thing and should not
    be conflated by one statistic.
 
+### The acceptance criterion, and why `undetermined_flags` is not touched
+
+The owner's criterion on `sub-652def69…`: "if this file got flagged it would be ok." Not that the
+branch must mint an extent — that a recording where every carrier was found and refused must not
+pass triage silently.
+
+It is met, by the chain the contract already provides rather than by a new mechanism:
+
+1. The branch proposes the 8.152 s carrier and writes `carrier_f0_spread_semitones = 11.856`.
+2. `verdict.gate_conformance` (`nodes/verdict.py:506-537`) applies the SUSTAINED conformance gates to
+   that reading and replaces the branch report's conformance (`verdict.py:597-604`). The gate fails,
+   so conformance is `False`, not `UNDETERMINED`.
+3. `conformance_flags: true` makes a reported non-conformance a flag ground
+   (`vocabulary.py:741-744`), so the file is flagged.
+
+Before the change, step 1 wrote nothing, so step 2 had `value: null` and answered `UNDETERMINED`,
+and step 3 did not fire. **That null was the whole defect.** The proposal to flag on UNDETERMINED was
+a way of reaching the file without fixing the null; fixing the null reaches it with a reason
+attached, which is strictly better — the flag names the gate, the reading and the bound.
+
+`undetermined_flags` therefore stays `false`, and the "unasked versus unanswerable" split is not
+built. It would have been the right shape had the null remained. What it would still cover after
+this change is a genuinely smaller and different population: recordings where **every** carrier
+failed an *existence* criterion — all below `production_min_s`, or no voicing, or no monotone run.
+That is "the branch looked and found nothing measurable", and whether it should flag is the owner's
+call, not one this change should pre-empt. The evidence for it is already in the store as
+`carrier_rejected` measures with reading, value and bound, and the branch report's
+`carriers_rejected_n` counts them; what is missing is only VERDICT keying on it.
+
+**Blast radius.** The number of files that gain a flag under this change is exactly the
+found-and-refused population the census below counts: a recording with no extent that held a
+rejected carrier of usable length now gets an extent, a failing reading and a flag. The owner has
+accepted flagging this one file and has not accepted flagging fifteen thousand. That number is not
+yet known, and is the thing to read before this lands anywhere but a branch.
+
 ### The census
 
 Job `23526686`, `mit_preemptable`, over the 62,548 replayed runs at
