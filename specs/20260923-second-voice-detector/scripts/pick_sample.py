@@ -25,6 +25,21 @@ from typing import Any
 # voice in one of these is a recording fault, not a protocol feature.
 SINGLE_SPEAKER_TASKS = ("task-prolonged-vowel", "task-maximum-phonation-time", "task-diadochokinesis", "task-glides")
 
+# Connected-speech tasks the incumbent calls one speaker. These are the negatives that
+# actually matter: they are the same length and the same kind of signal as the recordings a
+# detector would fire on, so a false positive here is a false positive in production. The
+# sustained-vowel arm above is too short to window and too unlike speech to generalise from.
+SINGLE_SPEECH_TASKS = (
+    "task-caterpillar",
+    "task-harvard",
+    "task-picture-description",
+    "task-story-recall",
+    "task-free-speech",
+    "task-rainbow",
+    "task-cinderella",
+)
+MIN_SPEECH_S = 20.0
+
 _TASK = re.compile(r"_(task-[^_]+)")
 
 
@@ -41,12 +56,12 @@ def main() -> int:
     ap.add_argument("--corpus", required=True, help="run tree to resolve each stem's audio against")
     ap.add_argument("--n-multi", type=int, default=20)
     ap.add_argument("--n-single", type=int, default=20)
+    ap.add_argument("--n-speech", type=int, default=40, help="long connected-speech single-speaker negatives")
     ap.add_argument("--seed", type=int, default=17)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    multi: list[dict[str, Any]] = []
-    single: list[dict[str, Any]] = []
+    pools: dict[str, list[dict[str, Any]]] = {"multi": [], "single": [], "speech_single": []}
     for p in sorted(Path(args.slices).rglob("*.jsonl")):
         with open(p) as fh:
             for line in fh:
@@ -58,16 +73,20 @@ def main() -> int:
                 if not stem or n is None:
                     continue
                 task = task_of(stem)
-                if n >= 2:
-                    multi.append({"stem": stem, "task": task, "prior_n_speakers": n, "arm": "multi"})
+                speech_s = float(r.get("enhanced_speech_s") or 0.0)
+                base = {"stem": stem, "task": task, "prior_n_speakers": n, "prior_speech_s": round(speech_s, 2)}
+                if n >= 2 and speech_s >= MIN_SPEECH_S:
+                    pools["multi"].append({**base, "arm": "multi"})
                 elif n == 1 and task.startswith(SINGLE_SPEAKER_TASKS):
-                    single.append({"stem": stem, "task": task, "prior_n_speakers": n, "arm": "single"})
+                    pools["single"].append({**base, "arm": "single"})
+                elif n == 1 and task.startswith(SINGLE_SPEECH_TASKS) and speech_s >= MIN_SPEECH_S:
+                    pools["speech_single"].append({**base, "arm": "speech_single"})
 
     rng = random.Random(args.seed)
-    rng.shuffle(multi)
-    rng.shuffle(single)
-    chosen = multi[: args.n_multi] + single[: args.n_single]
-    print(f"pool: multi={len(multi)} single={len(single)}; chose {len(chosen)}")
+    for v in pools.values():
+        rng.shuffle(v)
+    chosen = pools["multi"][: args.n_multi] + pools["single"][: args.n_single] + pools["speech_single"][: args.n_speech]
+    print("pool: " + " ".join(f"{k}={len(v)}" for k, v in pools.items()) + f"; chose {len(chosen)}")
 
     corpus = Path(args.corpus)
     written = 0

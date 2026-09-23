@@ -27,11 +27,17 @@ def build(threshold: float, sha: str, device: str) -> Any:  # noqa: ANN401
     from pyannote.audio import Pipeline
 
     pipe = Pipeline.from_pretrained(PYANNOTE, revision=sha)
-    pipe.instantiate(
-        {
-            **pipe.parameters(instantiated=True),
-            "clustering": {**pipe.parameters(instantiated=True)["clustering"], "threshold": threshold},
-        }
+    before = pipe.parameters(instantiated=True)
+    pipe.instantiate({**before, "clustering": {**before["clustering"], "threshold": threshold}})
+    after = pipe.parameters(instantiated=True)
+    # A sweep over a parameter the pipeline ignores would look exactly like a flat result, so
+    # say out loud what the object actually holds after instantiation.
+    clus = getattr(pipe, "clustering", None)
+    print(
+        f"  [params] asked={threshold} before={before.get('clustering')} after={after.get('clustering')} "
+        f"obj_threshold={getattr(clus, 'threshold', 'n/a')} obj={type(clus).__name__ if clus else None}",
+        file=sys.stderr,
+        flush=True,
     )
     if device != "cpu":
         pipe.to(torch.device(device))
