@@ -2144,3 +2144,57 @@ class TestWhatTheStoreRecords:
             span for span in spans if span.extent is not None and span.extent[0] < 1.5 and span.extent[1] > 1.0
         )
         assert marking.id in store.derived_from(widened.id), "the widened span names the marking that caused it"
+
+
+class TestTheReScanDoesNotReadBracketedTokens:
+    """SPEECH stopped scanning them; the verification re-scan must stop too, or nothing releases.
+
+    See ``specs/20260922-brackets-are-not-speech/design.md``.
+    """
+
+    def test_the_rescan_is_handed_no_bracketed_token(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A filler token survives into the released transcript and must not be re-scanned."""
+        _seed_redact_store(
+            store, tmp_path, words=["[UH]", "my", "name", "is", "alice"], findings=[("PERSON", (4.0, 4.5))]
+        )
+        scanned = _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert scanned == ["my name is [PERSON]"]
+
+    def test_the_released_transcript_still_carries_it(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Dropping it from the scan is not dropping it from the transcript."""
+        _seed_redact_store(
+            store, tmp_path, words=["[UH]", "my", "name", "is", "alice"], findings=[("PERSON", (4.0, 4.5))]
+        )
+        _stub_pii(monkeypatch, findings=[])
+        release = _release(tmp_path)
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=release)
+        assert result.verdict.outcome is Outcome.PASS
+        assert (release / "transcript.txt").read_text().strip() == "[UH] my name is [PERSON]"
+
+    def test_a_survivor_outside_the_brackets_still_fails_the_release(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The guard against over-narrowing: a real survivor is still a fail."""
+        _seed_redact_store(
+            store, tmp_path, words=["[UH]", "my", "name", "is", "alice"], findings=[("PERSON", (4.0, 4.5))]
+        )
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is not Outcome.PASS
