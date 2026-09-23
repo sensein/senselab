@@ -107,11 +107,32 @@ class RunState(Enum):
 
 
 class Release(Enum):
-    """Whether a redacted artifact may be handed on."""
+    """Whether a redacted artifact may be handed on.
+
+    Four states, because a recording that needed no redaction is a determination and not an
+    absence of one. ``specs/20260817-triage-workflow-dag/verdict.md`` holds the fold.
+    """
 
     RELEASABLE = "releasable"
     WITHHELD = "withheld"
+    NOTHING_TO_REDACT = "nothing_to_redact"
     NOT_ASSESSED = "not_assessed"
+
+
+NO_TRANSCRIPT = "SPEECH did not run, so no transcript exists for a redaction to read"
+NO_LEXICAL_WORD = "SPEECH ran and the consensus transcript carries no lexical word"
+NOTHING_BEYOND_STIMULUS = "every lexical word is in the task's own stimulus, so the scan was declined"
+SCAN_FOUND_NOTHING = "the scan ran over the transcript and found nothing to redact"
+
+RELEASE_DETERMINED_GROUNDS = (NO_TRANSCRIPT, NO_LEXICAL_WORD, NOTHING_BEYOND_STIMULUS, SCAN_FOUND_NOTHING)
+"""Why nothing was redactable. One of these stands behind every :attr:`Release.NOTHING_TO_REDACT`."""
+
+SPEECH_UNREAD = "SPEECH left no lexical count, so whether the recording carries redactable content is unknown"
+REDACTION_OWED = "the scan found content to redact and REDACT left no verdict over it"
+SCAN_UNRECORDED = "SPEECH read lexical words and recorded no scan either way"
+
+RELEASE_UNKNOWN_GROUNDS = (SPEECH_UNREAD, REDACTION_OWED, SCAN_UNRECORDED)
+"""Why the graph could not tell. One of these stands behind every :attr:`Release.NOT_ASSESSED`."""
 
 
 @dataclass(frozen=True)
@@ -371,6 +392,9 @@ class FileVerdict:
     Attributes:
         triage: What should happen to the recording.
         release: Whether REDACT's artifacts may be handed on. Never describes the store.
+        release_ground: Why the release axis reads as it does, in controlled vocabulary, for the
+            two states REDACT left no verdict behind — one of :data:`RELEASE_DETERMINED_GROUNDS`
+            or :data:`RELEASE_UNKNOWN_GROUNDS`. None wherever REDACT itself decided.
         discard_ground: ``"unmeasurable"``, ``"acoustically_empty"`` or None.
         findings: What each branch found, as a :class:`KindState` value, read off the spans it
             proposed in its own family. ``uncertain`` where it left no report at all.
@@ -404,6 +428,7 @@ class FileVerdict:
     triage: Triage
     release: Release
     discard_ground: str | None = None
+    release_ground: str | None = None
     findings: dict[str, str] = field(default_factory=dict)
     conformance: dict[str, Conformance] = field(default_factory=dict)
     conformance_of: dict[str, str] = field(default_factory=dict)
@@ -435,6 +460,7 @@ class FileVerdict:
             "triage": self.triage.value,
             "release": self.release.value,
             "discard_ground": self.discard_ground,
+            "release_ground": self.release_ground,
             "declared_family": self.declared_family,
             "findings": dict(self.findings),
             "conformance": dict(self.conformance),
