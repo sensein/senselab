@@ -255,3 +255,7 @@ recording_vectors*.summary.json
 speaker_vectors*.parquet
 speaker_vectors*.report.json
 speaker_vectors*.summary.json
+
+# Playwright harness for the recording-vectors viewer (installed locally, not vendored)
+node_modules/
+package-lock.json

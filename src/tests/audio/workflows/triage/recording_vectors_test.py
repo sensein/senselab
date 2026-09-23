@@ -20,6 +20,76 @@ MEASURE_STATS = Path(__file__).parents[5] / "specs" / "20260817-triage-workflow-
 # ------------------------------------------------------------------------------ a synthetic store
 
 
+GATES: dict[str, Any] = {
+    "node": "SPEECH",
+    "group": "syllable_train",
+    "family": "diadochokinesis-pa",
+    "bounds": {"repetitions_min": 1, "train_min_s": 1.0, "dominant_speaker_share_min": 0.9},
+    "layers": {"repetitions_min": "by_group", "train_min_s": "by_group"},
+    "applied": [
+        {
+            "gate": "repetitions_min",
+            "group": "syllable_train",
+            "reading": "ddk_repetitions_found",
+            "value": 10,
+            "bound": 1,
+            "layer": "by_group",
+            "keyed_under": "SYLLABLE_TRAIN",
+            "op": "at_least",
+            "passed": True,
+        },
+        {
+            "gate": "train_min_s",
+            "group": "syllable_train",
+            "reading": "train_duration_s",
+            "value": 0.0,
+            "bound": 1.0,
+            "layer": "by_group",
+            "keyed_under": "SYLLABLE_TRAIN",
+            "op": "at_least",
+            "passed": False,
+        },
+        {
+            "gate": "rate_prominence_min",
+            "group": "syllable_train",
+            "reading": "rate_prominence",
+            "value": None,
+            "bound": 2.0,
+            "layer": "by_group",
+            "keyed_under": "SYLLABLE_TRAIN",
+            "op": "at_least",
+            "passed": "UNDETERMINED",
+        },
+    ],
+    "flagging": [
+        {
+            "gate": "dominant_speaker_share_min",
+            "group": "syllable_train",
+            "reading": "extent_dominant_speaker_share",
+            "value": 0.39,
+            "bound": 0.9,
+            "layer": "by_group",
+            "keyed_under": "SYLLABLE_TRAIN",
+            "op": "at_least",
+            "passed": False,
+            "ground": "another speaker holds part of the task extent",
+        }
+    ],
+}
+"""A fold's gates: one passing, one failing on a genuine zero, one undetermined, one flagging."""
+
+RESIDUAL: dict[str, Any] = {
+    "name": "residual",
+    "signal": "residual",
+    "energy_fraction": 0.01,
+    "enhanced_energy_fraction": 1.0,
+    "rms_dbfs": -60.0,
+    "peak_dbfs": -40.0,
+    "gain_db": 1.5,
+}
+"""The decomposition's energies. A hundredfold energy ratio is exactly 20 dB."""
+
+
 def _entity(entity_id: str, prov_type: str, extent: Any, **attributes: Any) -> str:  # noqa: ANN401 -- store values
     return json.dumps(
         {"record": "entity", "id": entity_id, "prov_type": prov_type, "extent": extent, "attributes": attributes}
@@ -48,6 +118,8 @@ def build_recording(
     pii_findings: int = 1,
     with_routing: bool = True,
     with_fold: bool = True,
+    gates: dict[str, Any] | None = None,
+    residual: dict[str, Any] | None = None,
     with_derivatives: bool = True,
     with_stream_file: bool = True,
     measurements: tuple[tuple[str, Any], ...] = (("voiced_duration_s", 2.5),),
@@ -66,6 +138,8 @@ def build_recording(
         pii_findings: How many ``pii`` entities to write.
         with_routing: Whether ``branch_decision`` entities exist.
         with_fold: Whether VERDICT's fold exists.
+        gates: The fold's ``gates`` attribute, or None for :data:`GATES`.
+        residual: The ``residual`` measurement's attributes, or None for :data:`RESIDUAL`.
         with_derivatives: Whether the envelope and continuity npz files exist.
         with_stream_file: Whether the conditioned flac exists.
         measurements: ``(name, value)`` pairs to write as measurement entities.
@@ -126,6 +200,9 @@ def build_recording(
 
     for index, (name, value) in enumerate(measurements):
         lines.append(_entity(f"measurement-m{index}", "measurement", None, name=name, value=value))
+
+    if residual is not None or with_preprocess:
+        lines.append(_entity("measurement-residual", "measurement", None, **(residual or RESIDUAL)))
 
     if with_preprocess:
         lines.append(_entity("verdict-pre", "verdict", None, node="PREPROCESS", outcome="pass", absent={}))
@@ -202,6 +279,8 @@ def build_recording(
                 release=Release.WITHHELD.value,
                 discard_ground=None,
                 declared_family="diadochokinesis-pa",
+                release_ground="speech_detected",
+                gates=GATES if gates is None else gates,
                 conformance={"SPEECH": True, "VOICE": "UNDETERMINED"},
                 routes={"SPEECH": "routed", "VOICE": "routed", "AIRWAY": "declined"},
                 route_state="routed",
@@ -729,3 +808,157 @@ def test_the_extracted_continuity_does_not_let_one_sample_become_a_bucket(tmp_pa
     assert row is not None
     peak = max(rv.dequantise_value(b, *rv.CONTINUITY_RANGE) for b in row["continuity"])
     assert peak == pytest.approx(0.1, abs=0.02)
+
+
+# ------------------------------------------------------------------------------------ the gates
+
+
+def test_the_gate_column_order_is_the_registry_the_graph_applies() -> None:
+    """``GATE_NAMES`` is the registry's own order, so a new gate fails until the schema is bumped."""
+    from senselab.audio.workflows.triage.nodes.gates import GATE_KEYS
+
+    assert rv.GATE_NAMES == GATE_KEYS
+
+
+def test_every_gate_has_a_reading_a_bound_and_an_outcome_column() -> None:
+    """Three columns per gate, and the schema carries no gate the registry does not name."""
+    names = {field.name for field in rv.schema()}
+    for gate in rv.GATE_NAMES:
+        assert {f"gate_{gate}", f"gate_{gate}_bound", f"gate_{gate}_passed"} <= names
+
+
+def test_an_applied_gate_carries_its_reading_its_bound_and_its_outcome(one_row: dict[str, Any]) -> None:
+    """The passing gate's three columns are exactly what the fold recorded."""
+    assert one_row["gate_repetitions_min"] == 10.0
+    assert one_row["gate_repetitions_min_bound"] == 1.0
+    assert one_row["gate_repetitions_min_passed"] == "true"
+
+
+def test_a_gate_that_failed_on_a_genuine_zero_reads_zero_not_null(one_row: dict[str, Any]) -> None:
+    """A reading of 0.0 is a measured value; only an absent reading is null."""
+    assert one_row["gate_train_min_s"] == 0.0
+    assert one_row["gate_train_min_s_passed"] == "false"
+
+
+def test_a_gate_whose_reading_was_absent_is_undetermined_with_a_null_reading(one_row: dict[str, Any]) -> None:
+    """Null reading, real bound, and an outcome that is neither true nor false."""
+    assert one_row["gate_rate_prominence_min"] is None
+    assert one_row["gate_rate_prominence_min_bound"] == 2.0
+    assert one_row["gate_rate_prominence_min_passed"] == "undetermined"
+
+
+def test_a_gate_the_fold_did_not_apply_is_null_in_all_three_columns(one_row: dict[str, Any]) -> None:
+    """A gate no layer named for this group carries no reading, no bound and no outcome."""
+    assert one_row.get("gate_coverage_min") is None
+    assert one_row.get("gate_coverage_min_bound") is None
+    assert one_row.get("gate_coverage_min_passed") is None
+
+
+def test_a_flagging_gate_lands_in_the_same_columns_as_a_conformance_gate(one_row: dict[str, Any]) -> None:
+    """``dominant_speaker_share_min`` decides no conformance but reads like any other gate."""
+    assert one_row["gate_dominant_speaker_share_min"] == 0.39
+    assert one_row["gate_dominant_speaker_share_min_bound"] == 0.9
+    assert one_row["gate_dominant_speaker_share_min_passed"] == "false"
+    assert one_row["gate_flagged_names"] == ["dominant_speaker_share_min"]
+
+
+def test_the_fold_summarises_which_gates_it_applied_and_which_refused(one_row: dict[str, Any]) -> None:
+    """The counts and the failing names, so a breakdown needs no per-gate scan."""
+    assert one_row["gate_node"] == "SPEECH"
+    assert one_row["gate_group"] == "syllable_train"
+    assert one_row["gate_family"] == "diadochokinesis-pa"
+    assert one_row["gate_applied_n"] == 3
+    assert one_row["gate_flagging_n"] == 1
+    assert one_row["gate_failed_n"] == 2
+    assert one_row["gate_undetermined_n"] == 1
+    assert one_row["gate_failed_names"] == ["dominant_speaker_share_min", "train_min_s"]
+
+
+def test_a_recording_whose_fold_resolved_no_group_carries_no_gates(tmp_path: Path) -> None:
+    """An empty ``gates`` record leaves every gate column null and every count zero."""
+    run_root = build_recording(tmp_path, gates={})
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert row["gate_node"] is None and row["gate_group"] is None
+    assert row["gate_applied_n"] == 0 and row["gate_failed_n"] == 0
+    assert row.get("gate_repetitions_min") is None
+    assert row["gate_failed_names"] == []
+    table = rv.to_table([row])
+    assert table.column("gate_repetitions_min").null_count == 1
+
+
+# ------------------------------------------------------ enhanced over residual, from the energies
+
+
+def test_the_enhanced_stream_sits_above_the_residual_by_the_energy_ratio(one_row: dict[str, Any]) -> None:
+    """A hundredfold energy ratio is 20 dB, and the enhanced level follows the residual's."""
+    assert one_row["enhanced_over_residual_rms_db"] == pytest.approx(20.0)
+    assert one_row["residual_rms_dbfs"] == pytest.approx(-60.0)
+    assert one_row["enhanced_rms_dbfs"] == pytest.approx(-40.0)
+    assert one_row["residual_peak_dbfs"] == pytest.approx(-40.0)
+
+
+def test_the_fitted_difference_adds_the_decompositions_own_gain(one_row: dict[str, Any]) -> None:
+    """``plain = g * enhanced + residual``, so the fitted component sits ``gain_db`` higher."""
+    assert one_row["enhanced_over_residual_rms_fitted_db"] == pytest.approx(21.5)
+
+
+def test_a_store_with_no_residual_measurement_carries_no_levels(tmp_path: Path) -> None:
+    """Every level column is null rather than zero when PREPROCESS wrote no decomposition."""
+    run_root = build_recording(tmp_path, with_preprocess=False)
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    for column in ("residual_rms_dbfs", "enhanced_rms_dbfs", "enhanced_over_residual_rms_db"):
+        assert row[column] is None
+
+
+def test_a_zero_energy_fraction_yields_no_difference_rather_than_an_infinity(tmp_path: Path) -> None:
+    """A silent residual would divide by zero; the column is null instead."""
+    run_root = build_recording(tmp_path, residual={**RESIDUAL, "energy_fraction": 0.0})
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert row["enhanced_over_residual_rms_db"] is None
+    assert row["residual_rms_dbfs"] == pytest.approx(-60.0)
+
+
+# ------------------------------------------------------------------ the multi-speaker instrument
+
+
+def test_a_recording_nothing_separated_carries_zero_sources_and_no_spans(one_row: dict[str, Any]) -> None:
+    """Counts are zero where the instrument ran and found nothing; span seconds stay null."""
+    assert one_row["separated_n"] == 0
+    assert one_row["secondary_extent_n"] == 0
+    assert one_row["secondary_extent_s"] is None
+    assert one_row["solo_extent_s"] is None
+
+
+def test_the_secondary_runs_and_the_solo_run_are_counted_and_totalled(tmp_path: Path) -> None:
+    """Two secondary runs and one solo run, summed on the recording's own axis."""
+    extra = [
+        _entity("stream-sep0", "stream", [0.0, 4.0], name="separated_0"),
+        _entity("stream-sep1", "stream", [0.0, 4.0], name="separated_1"),
+        _entity("span-sec0", "span", [1.0, 1.5], family="speech", role="secondary_source_extent"),
+        _entity("span-sec1", "span", [2.0, 2.25], family="speech", role="secondary_source_extent"),
+        _entity("span-solo", "span", [0.0, 1.0], family="speech", role="solo_extent"),
+    ]
+    run_root = build_recording(tmp_path)
+    store = run_root / "run" / "store.jsonl"
+    store.write_text(store.read_text() + "\n".join(extra) + "\n")
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert row["separated_n"] == 2
+    assert row["secondary_extent_n"] == 2
+    assert row["secondary_extent_s"] == pytest.approx(0.75)
+    assert row["solo_extent_s"] == pytest.approx(1.0)
+
+
+def test_the_dominant_share_is_folded_by_min_as_the_gate_folds_it(tmp_path: Path) -> None:
+    """The worst extent answers, which is what VERDICT's flag gate reads."""
+    run_root = build_recording(
+        tmp_path,
+        measurements=(("extent_dominant_speaker_share", 0.9), ("extent_dominant_speaker_share", 0.4)),
+    )
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert row["extent_dominant_speaker_share_min"] == pytest.approx(0.4)
+    assert row["m_extent_dominant_speaker_share"] == pytest.approx(0.65)
