@@ -52,8 +52,9 @@ it returns 1, while pyannote and Sortformer return 1 on both.
 * the parameter is demonstrably applied — the instrumentation prints
   `after={'threshold': 0.05, …} obj_threshold=0.05 obj=VBxClustering` at each step.
 
-Swept across 24 recordings at 0.6 / 0.5 / 0.45 / 0.4 / 0.35 / 0.3, every recording returned
-identical per-speaker seconds at every value.
+Swept across the calibration sample too: 24 recordings at 0.6 / 0.5 / 0.45 / 0.4 / 0.35 /
+0.3, then 72 recordings at 0.6 / 0.4 / 0.2. **Zero of the 96 recordings changed their
+output at any value** — not the count, not the per-speaker seconds.
 
 **So this pipeline's speaker count is not reachable through the threshold parameter its own
 config exposes.** Retuning the incumbent is not a candidate, at least not through that knob.
