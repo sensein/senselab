@@ -210,6 +210,21 @@ def _extents_from_findings(findings: list[Entity]) -> list[RedactionExtent]:
     return extents
 
 
+def _verification_text(records: list[dict[str, Any]]) -> str:
+    """The redacted transcript as the re-scan reads it, the bracketed tokens dropped.
+
+    See ``specs/20260922-brackets-are-not-speech/design.md``.
+
+    Args:
+        records: :func:`_render`'s records.
+
+    Returns:
+        The join of every released surface and placeholder except a bracketed consensus word's.
+    """
+    kept = [record for record in records if not (record["kind"] == "word" and record["bracketed"])]
+    return " ".join(token for token in (_token(record) for record in kept) if token)
+
+
 def _verify(transcript_text: str, required: list[str]) -> _Verification:
     """Re-scan the redacted consensus text with the same detectors; no recognizer runs.
 
@@ -884,7 +899,7 @@ def redact(
     planned = plan_redactions(extents, padding_ms=padding_ms)
     records, transcript_text, unplaced_n = _render(words, planned)
     checked = (
-        _verify(transcript_text, required_detectors)
+        _verify(_verification_text(records), required_detectors)
         if not scan_incomplete
         else _Verification(verified=False, survived=[], scan_ran=False, failed=[], missing=[])
     )
@@ -907,7 +922,7 @@ def redact(
                 widened.append((hull, marks[category]))
         planned = plan_redactions(extents, padding_ms=padding_ms)
         records, transcript_text, unplaced_n = _render(words, planned)
-        checked = _verify(transcript_text, required_detectors)
+        checked = _verify(_verification_text(records), required_detectors)
         attributed = _expected_survivors(checked.survived, words, marked, planned, exempt_word_ids)
         outstanding = [category for category in checked.survived if category not in attributed]
         unremediable = list(outstanding)

@@ -86,3 +86,16 @@ leaves the text and the located tokens derived by two different rules.
 a finding whose covered words are all bracketed. It leaves a detector call on content that cannot
 disclose, it spends LLM review budget on it when `llm_check` is on, and it cannot express the
 per-source case, where the same position is legitimate in one haystack and a bracket in another.
+
+## REDACT's verification re-scan
+
+Fix (a) has a consequence one node downstream. REDACT re-scans the redacted consensus text and
+treats any surviving finding as a release failure. Before the fix, a bracketed token that a
+detector flagged had already been replaced by a `[CATEGORY]` placeholder, so the re-scan saw
+nothing. After it, the bracket is released intact and the same detector flags it again — turning
+"releases, having destroyed the task" into "never releases", on the same population.
+
+`_verification_text` therefore builds the text the re-scan reads from `_render`'s records with the
+bracketed word records dropped, leaving the redaction placeholders and every lexical surface. The
+released `transcript.txt` and `consensus.json` are unchanged: dropping a token from a scan is not
+dropping it from the transcript.
