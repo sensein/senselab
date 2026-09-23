@@ -31,6 +31,13 @@ task" is this span. The boundary is a single clean turn change at ≈ 15.7 s, no
 interjections — which matters, because it is the easiest possible case for any detector and a
 candidate that misses it will miss everything harder.
 
+One part of the span is genuinely uncertain and is worth stating rather than smoothing over:
+the first two utterances, 0.51 – 2.55 s, could belong to either talker from the transcript
+alone. Pyannote with `num_speakers=2` assigns them to the second voice; MOSS assigns them to
+the participant. Every score below uses 0.51 – 15.64 as the truth span, which is the
+reading least favourable to MOSS. The turn change at ≈ 15.7 s is not in doubt under either
+reading.
+
 ## What the incumbent actually gets wrong
 
 Pyannote `speaker-diarization-community-1`, revision `3533c8cf8e369892e6b79ff1bf80f7b0286a54ee`,
