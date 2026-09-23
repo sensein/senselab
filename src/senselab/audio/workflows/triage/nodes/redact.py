@@ -11,10 +11,11 @@ assertion). Extents are padded by ``redaction.padding_ms`` and merged by ``plan_
 filled with ``redaction.fill`` at ``redaction.bleep_hz`` when that is a bleep. A word carries its
 PII marking through a live ``assertion`` whose ``verb`` is ``"label"`` and ``label`` is ``"pii"``.
 
-No recognizer runs here: verification is a re-scan of the redacted consensus text with the same
-detectors, judged complete by ``pii.required_detectors``. A surviving finding is a fail, an
-incomplete re-scan is a flag, and a finding the verifier still sees is re-planned exactly once, what
-survives that being ``unremediable``; ``audio_check`` is the constant ``"bounded"`` on every path.
+No recognizer runs here: verification is a re-scan of the redacted consensus text, its bracketed
+tokens dropped, with the same detectors, judged complete by ``pii.required_detectors``. A
+surviving finding is a fail, an incomplete re-scan is a flag, and a finding the verifier still
+sees is re-planned exactly once, what survives that being ``unremediable``; ``audio_check`` is
+the constant ``"bounded"`` on every path.
 An optional LLM check (``redaction.llm_check``) re-reads the redacted transcript for up to
 ``max_iterations`` rounds, asked only where a release was in prospect. Each round's chain of thought
 is a ``redaction_llm_review`` measurement carrying its ``elapsed_s``, ``load_s`` and generated
