@@ -810,6 +810,10 @@ def _target_speaker_embedding() -> TargetSpeakerEmbedding:
 def _no_model_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     """One speaker, plausible SQUIM, no PII, and no constructor that would resolve against the Hub.
 
+    The separator is stubbed rather than forbidden: `speech.separation_backend` ships a checkpoint,
+    so a two-speaker seed separates. A test that needs the call log or a shaped decomposition
+    re-stubs it with ``_stub_separator``.
+
     Args:
         monkeypatch: The patcher.
     """
@@ -826,11 +830,7 @@ def _no_model_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(speech_module, "_second_diarizer_model", lambda model_id: _FakeModel(model_id))
     monkeypatch.setattr(speech_module, "_clearvoice_model", lambda model_id: _FakeModel(model_id))
     monkeypatch.setattr(speech_module, "_embedding_model", lambda model_id, revision: _FakeModel(model_id, revision))
-    monkeypatch.setattr(
-        speech_module,
-        "separate_audios",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("separation must not run")),
-    )
+    _stub_separator(monkeypatch, sources=2)
     monkeypatch.setattr(
         speech_module,
         "extract_speaker_embeddings_from_audios",
@@ -1885,17 +1885,18 @@ class TestEnrollment:
         assert any("identifies the target by enrollment" in note for note in notes)
 
 
-class TestSeparationIsMeasurementGated:
-    """Neither backend is selected by default, and the choice is a config key."""
+class TestSeparationIsConfigured:
+    """Which backend runs is a config key, and a null one separates nothing."""
 
     def test_a_null_backend_does_not_separate(
-        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A count of 2 with no ranked backend records the absence rather than picking one."""
+        """A count of 2 under an override that clears the backend records the absence."""
+        config = _override(tmp_path, "speech:\n  separation_backend: null\n")
         _seed_speech_store(store, tmp_path, words=["hello", "world"], diarized=2)
         _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
         separator = _stub_separator(monkeypatch)
-        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
         assert separator == []
         assert _report_entity(store, "SPEECH").attributes["separation"] == "not_selected"
 
@@ -1956,7 +1957,20 @@ class TestTheMultiSpeakerInstrument:
     The design is in ``specs/20260922-the-multi-speaker-instrument/design.md``.
     """
 
-    CONFIG = "speech:\n  separation_backend: MossFormer2_SS_16K\n"
+    CONFIG = ""
+
+    def test_the_packaged_configuration_runs_the_instrument(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The instrument is on by default: no override names the separator, and it still fires."""
+        self._two_voices(store, tmp_path, monkeypatch)
+        separator = _stub_separator(monkeypatch, sources=2, active=[[(1.0, 1.8), (2.6, 3.6)], [(1.8, 2.6)]])
+        speech(store, "plain", _speech_config(tmp_path), self._hint(), run_dir=tmp_path, enrollment=None)
+        assert [call["model"] for call in separator] == ["alibabasglab/MossFormer2_SS_16K"]
+        separated = self._separated(store)
+        assert [int(e.attributes["source_index"]) for e in separated] == [0, 1]
+        [localise] = [a for a in store.activities() if a.step == speech_module.LOCALISE_STEP]
+        assert {e.id for e in separated} <= set(store.uses_of(localise.id))
 
     def _stream_id(self, store: ProvStore, name: str) -> str:
         """One live stream entity's id, by name.

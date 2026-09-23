@@ -124,10 +124,12 @@ have served it:
   lot.
 
 The separation's own `extent_secondary_source_s` was *not* made the gate's input, although it is
-the richer measurement. It exists only where separation ran, and `speech.separation_backend` ships
-null, so gating on it would make the gate inapplicable on every recording today. The gate reads a
-number every SPEECH recording with a diarization derivative carries; the separation sharpens the
-picture for a reader without being load-bearing for the decision.
+the richer measurement. It exists only where separation ran — which, now that
+`speech.separation_backend` ships `MossFormer2_SS_16K`, is the 5.32% of SPEECH the trigger fires
+on, and not the other 94.68%. Gating on it would make the gate inapplicable on nineteen SPEECH
+recordings in twenty. The gate reads a number every SPEECH recording with a diarization derivative
+carries; the separation sharpens the picture for a reader without being load-bearing for the
+decision.
 
 ### Why it is a flag ground and not a conformance term
 
@@ -215,7 +217,9 @@ placeholder chosen for its distance from a known artefact mode, not a fitted ope
 from a derivative PREPROCESS already measured, so turning the gate on adds no inference to any
 recording. Over the corpus it would flag 613 recordings — 1.57% of SPEECH, and 30% of the 2,045
 whose task extent holds more than one diarized speaker. Everything below is the *instrument's*
-bill, and the instrument is off by default (`speech.separation_backend` ships null).
+bill, and the instrument is **on** by default: `speech.separation_backend` ships
+`MossFormer2_SS_16K` as of 2026-09-23, derived in
+`specs/20260817-triage-workflow-dag/config-derivations.md` § speech.
 
 22.22 hours of audio over 2,305 recordings — mean 34.7 s, median 24.7 s — every time the corpus is
 processed with `speech.separation_backend` set.
