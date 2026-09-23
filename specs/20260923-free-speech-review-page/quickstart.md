@@ -148,3 +148,35 @@ lay out or paint, so nothing here tests the CSS — the dark-mode palette, the d
 marks, the sticky rail at this document size, and scroll performance over 11,701 cards are all
 unobserved. jsdom also does not implement download behaviour, so the `<a download>` path is
 untested; the textarea fallback is what was exercised.
+
+## Measured again, 2026-09-23, with the determination panel
+
+Job 23556083 on `pi_satra` (`--qos=normal`). Same corpus, same pinned checkout `71324c35`.
+
+| | |
+| --- | --- |
+| recordings, participants, marks | 11,701 / 1,514 / 15,595 |
+| extract output | 40.3 MB JSONL |
+| rendered page | 24.2 MB, one file, 11,701 cards and 11,701 panels |
+
+The extract grew because each row now carries its determination; the page grew far less than that,
+because the account is interned into one pooled payload and the panel is built on demand.
+
+## Reading why
+
+Each card has a *what determined this status* button. It opens over a scrim and closes on `Esc`.
+It shows the decisive line (which of REDACT or the fold decided, and what it said), the LLM
+reviewer's state in plain words, every gate with its reading and bound, every node with its run
+state and outcome, the findings with their detectors and stimulus check, and what the stimulus
+check had to work with.
+
+## Verified under jsdom, this pass
+
+Three recordings covering all three decision shapes — one withheld by REDACT, one released by
+REDACT, one decided by the fold — plus the scrim, the close button, and the reset of all earlier
+filters and review controls. Zero jsdom errors. The document still contains no `http`, `<link>`,
+`<img>` or `src=`.
+
+**Still not verified in a real browser.** jsdom neither lays out nor paints, so the panel's
+appearance at this width, its scrolling inside a 24 MB document, the dark palette and the scrim's
+z-order are unobserved.

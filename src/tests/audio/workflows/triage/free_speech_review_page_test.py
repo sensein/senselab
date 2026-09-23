@@ -596,3 +596,261 @@ def test_the_store_reads_and_writes_are_guarded() -> None:
     """Storage throws outright in some contexts, so the page must render without it."""
     assert page._SCRIPT.count("try{") >= 2
     assert "catch(e){store={findings:{},recordings:{}};}" in page._SCRIPT
+
+
+def test_in_stimulus_keeps_none_apart_from_false() -> None:
+    """A task with no stimulus text yields None, which is not the same claim as 'not in it'."""
+    assert page.tristate(True) == 1
+    assert page.tristate(False) == 0
+    assert page.tristate(None) == -1
+
+
+def test_a_finding_on_a_task_with_no_stimulus_reports_the_unchecked_state(tmp_path: Path) -> None:
+    """The third artefact family is only visible if None survives the extract."""
+    records = [
+        _word(0, "Sonnenschein"),
+        _entity(
+            "pii-1",
+            "pii",
+            {"category": "NAME", "source": "rules/ner", "haystack": "consensus", "in_stimulus": None},
+            [0, 1],
+        ),
+        *_label("assertion-1", "NAME", "word-0"),
+        _verdict("withheld", family="cinderella-story"),
+    ]
+    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
+    row = page.recording_record(run_root, page.free_response_families())
+    assert row is not None
+    assert row["pii"][0]["stim"] == -1
+
+
+def _determined_store(tmp_path: Path) -> Path:
+    """A store carrying a passing gate, a declared-but-unevaluated gate and a failing REDACT.
+
+    Args:
+        tmp_path: The temporary root.
+
+    Returns:
+        The run directory.
+    """
+    verdict = _entity(
+        "verdict-file",
+        "verdict",
+        {
+            "node": "VERDICT",
+            "outcome": "pass",
+            "triage": "pass",
+            "release": "withheld",
+            "release_ground": None,
+            "declared_family": "cinderella-story",
+            "why": "folded the node verdicts",
+            "llm_redaction": {"status": "not_run", "iterations": 0, "model_id": "", "flagged": [], "failure": "none"},
+            "ran": {"REDACT": "completed", "SPEECH": "completed", "VOICE": "skipped"},
+            "critical_absences": {},
+            "reasons": [
+                {"node": "SPEECH", "outcome": "pass", "why": "spoke"},
+                {"node": "REDACT", "outcome": "fail", "why": "verification found pii on the redacted transcript"},
+            ],
+            "gates": {
+                "applied": [
+                    {
+                        "gate": "response_min_s",
+                        "reading": "response_duration_s",
+                        "op": "at_least",
+                        "bound": 0.5,
+                        "value": 242.085,
+                        "passed": True,
+                        "group": "free_response",
+                        "keyed_under": "FREE_RESPONSE",
+                        "layer": "by_group",
+                    }
+                ],
+                "flagging": [],
+                "bounds": {"response_min_s": 0.5, "coverage_min": 0.5, "echo_overlap_max": 0.5},
+                "layers": {"response_min_s": "by_group"},
+                "group": "free_response",
+            },
+        },
+    )
+    records = [
+        _word(0, "word"),
+        _entity("verdict-redact", "verdict", {"node": "REDACT", "outcome": "fail", "why": "pii survived"}),
+        _entity(
+            "measurement-ex",
+            "measurement",
+            {"name": "redaction_exemptions", "expected_speech_declared": False, "n": 0, "n_findings": 3},
+        ),
+        verdict,
+    ]
+    return _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
+
+
+def test_determination_records_who_decided_and_what_never_ran(tmp_path: Path) -> None:
+    """The account distinguishes a failed gate, an unevaluated gate and a component that skipped."""
+    row = page.recording_record(_determined_store(tmp_path), page.free_response_families())
+    assert row is not None
+    determination = row["d"]
+    assert determination["redact"]["outcome"] == "fail"
+    assert determination["redact"]["why"] == "pii survived"
+    assert determination["llm"]["status"] == "not_run"
+    assert determination["ran"]["VOICE"] == "skipped"
+    assert [gate["gate"] for gate in determination["gates"]["applied"]] == ["response_min_s"]
+    assert set(determination["gates"]["bounds"]) == {"response_min_s", "coverage_min", "echo_overlap_max"}
+    assert determination["exempt"] == {"declared": False, "n": 0, "n_findings": 3, "recorded": True}
+    assert [node["node"] for node in determination["nodes"]] == ["SPEECH", "REDACT"]
+
+
+def test_the_measurement_kept_is_the_exemption_one_too(tmp_path: Path) -> None:
+    """read_store_light must not drop redaction_exemptions along with the derivative arrays."""
+    run_root = _store(
+        tmp_path,
+        _FAMILY_STEM,
+        [
+            _entity("measurement-big", "measurement", {"name": "gammatone", "values": [0.0] * 8}),
+            _entity("measurement-ex", "measurement", {"name": "redaction_exemptions", "n": 0}),
+            _entity("measurement-scan", "measurement", {"name": "pii_scan", "scanned": True}),
+        ],
+    )
+    view = page.read_store_light(run_root / "run" / "store.jsonl")
+    assert sorted(str(e.attributes["name"]) for e in view.live("measurement")) == [
+        "pii_scan",
+        "redaction_exemptions",
+    ]
+
+
+def test_the_pool_deduplicates_what_repeats() -> None:
+    """Nine node names over 11,701 recordings must cost nine entries, not a hundred thousand."""
+    pool = page.ValuePool()
+    assert pool.add("REDACT") == 0
+    assert pool.add("REDACT") == 0
+    assert pool.add({"a": 1}) == 1
+    assert pool.add({"a": 1}) == 1
+    assert pool.values == ["REDACT", {"a": 1}]
+
+
+def test_pooled_determination_keeps_the_per_recording_gate_reading() -> None:
+    """The gate specification pools; its measured value does not."""
+    pool = page.ValuePool()
+    determination = {
+        "redact": {"outcome": "fail", "why": "pii survived"},
+        "nodes": [{"node": "REDACT", "outcome": "fail", "why": "pii survived"}],
+        "llm": {"status": "not_run"},
+        "gates": {
+            "applied": [
+                {
+                    "gate": "response_min_s",
+                    "reading": "response_duration_s",
+                    "op": "at_least",
+                    "bound": 0.5,
+                    "value": 242.085,
+                    "passed": True,
+                }
+            ],
+            "flagging": [],
+            "bounds": {"response_min_s": 0.5, "coverage_min": 0.5},
+            "layers": {},
+            "group": "free_response",
+        },
+        "ran": {"REDACT": "completed"},
+        "absences": [],
+        "exempt": {"declared": False, "n": 0, "n_findings": 1, "recorded": True},
+        "findings": [{"c": "NAME", "s": "rules/ner", "h": "consensus", "stim": -1}],
+    }
+    record = page.pooled_determination(determination, pool)
+    assert record["g"] == [[record["g"][0][0], 242.085, 1]]
+    assert page.gate_state(True) == 1
+    assert page.gate_state(False) == 0
+    assert page.gate_state("UNDETERMINED") == -1
+    spec = pool.values[record["g"][0][0]]
+    assert spec["gate"] == "response_min_s"
+    assert spec["kind"] == "applied"
+    assert "value" not in spec
+    assert record["f"][0][3] == -1
+
+
+def test_the_page_says_the_reviewer_did_not_run_rather_than_leaving_a_blank() -> None:
+    """A reviewer that never ran must never be readable as one that agreed."""
+    assert "did not run." in page._SCRIPT
+    assert "neither corroborated nor contradicted" in page._SCRIPT
+
+
+def test_the_page_names_an_unevaluated_gate_as_such() -> None:
+    """A gate with a bound and no reading did not pass and did not fail."""
+    assert "never evaluated" in page._SCRIPT
+    assert "did not pass and did not fail" in page._SCRIPT
+
+
+def test_the_page_names_a_task_with_no_stimulus_text() -> None:
+    """The third artefact family needs saying, not inferring from a blank."""
+    assert "no stimulus text" in page._SCRIPT
+    assert "no stimulus to check" in page._SCRIPT
+
+
+def test_render_carries_the_determination_payload() -> None:
+    """The page ships the pooled account and a trigger on every card."""
+    corpus = page.Corpus()
+    corpus.add(
+        _row(
+            "sub-a",
+            rel="withheld",
+            d={
+                "redact": {"outcome": "fail", "why": "pii survived"},
+                "nodes": [{"node": "REDACT", "outcome": "fail", "why": "pii survived"}],
+                "llm": {"status": "not_run"},
+                "gates": {"applied": [], "flagging": [], "bounds": {}, "layers": {}, "group": ""},
+                "ran": {"REDACT": "completed"},
+                "absences": [],
+                "exempt": {"declared": False, "n": 0, "n_findings": 0, "recorded": True},
+            },
+        )
+    )
+    document = page.render(corpus, "Review")
+    assert 'id="whydata"' in document
+    assert 'class="whybtn" data-stem="sub-a_ses-b_task-free-speech-1"' in document
+    assert "what determined this status" in document
+    assert '"pool"' in document and '"rows"' in document
+
+
+def test_an_unanswerable_gate_is_not_a_passing_one() -> None:
+    """``passed`` is the string UNDETERMINED, which is truthy; a bool coercion would pass it."""
+    pool = page.ValuePool()
+    determination = {
+        "redact": {"outcome": "", "why": ""},
+        "nodes": [],
+        "llm": {},
+        "gates": {
+            "applied": [
+                {
+                    "gate": "coverage_min",
+                    "reading": "coverage",
+                    "op": "at_least",
+                    "bound": 0.5,
+                    "value": None,
+                    "passed": "UNDETERMINED",
+                }
+            ],
+            "flagging": [],
+            "bounds": {"coverage_min": 0.5},
+            "layers": {},
+            "group": "free_response",
+        },
+        "ran": {},
+        "absences": [],
+        "exempt": {},
+        "findings": [],
+    }
+    record = page.pooled_determination(determination, pool)
+    assert record["g"][0][2] == -1
+
+
+def test_the_page_separates_the_five_reviewer_states() -> None:
+    """'disabled' and 'absent' are neither 'did not run for lack of need' nor 'clean'."""
+    assert "switched off in the configuration" in page._SCRIPT
+    assert "tried and could not load" in page._SCRIPT
+    assert "ran and flagged nothing" in page._SCRIPT
+
+
+def test_the_page_says_a_ground_is_empty_by_construction() -> None:
+    """A ground is null exactly when REDACT decided; a blank must not read as a missing reason."""
+    assert "empty by construction" in page._SCRIPT
+    assert "REDACT decided it" in page._SCRIPT
