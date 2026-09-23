@@ -22,8 +22,10 @@ without ``--hints`` the replay passes none, which is a different run and is reco
 every row.
 
 ``--out-root DIR`` writes each replayed run into a fresh root under ``DIR`` instead of in place,
-with the finished run's ``derivatives/`` and ``streams/`` reachable through symlinks. Use it when
-the finished tree must not be modified.
+with the finished run's ``derivatives/`` and the streams the replay only reads reachable through
+symlinks. A stream a replayed node writes -- REDACT's ``redacted``, SPEECH's ``separated_*`` -- is
+never linked, so that write lands in the new root. Use it when the finished tree must not be
+modified.
 
 A store already carrying this configuration's replay marker is skipped and not rewritten.
 
@@ -62,12 +64,29 @@ from senselab.audio.workflows.triage.extend import (
     take_slice,
     write_store,
 )
-from senselab.audio.workflows.triage.nodes.common import describe_exception
+from senselab.audio.workflows.triage.nodes.common import STREAM_SUFFIX, describe_exception
+from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
+from senselab.audio.workflows.triage.nodes.speech import SEPARATED_PREFIX
 from senselab.audio.workflows.triage.run import LOG_FILE, RELEASE_SUBDIR, SUMMARY_SUBDIR, entity_subdir
 
 DERIVATION = "replay"
 STREAMS_SUBDIR = "streams"
 DERIVATIVES_SUBDIR = "derivatives"
+WRITTEN_STREAM_STEMS = (REDACTED_STREAM, SEPARATED_PREFIX)
+"""The stems a replayed node writes into ``streams/``: REDACT's, and SPEECH's per-source prefix."""
+
+
+def written_by_a_replayed_node(name: str) -> bool:
+    """Whether a stream file name is one a replayed node writes rather than only reads.
+
+    Args:
+        name: The file name inside ``streams/``.
+
+    Returns:
+        True when a replayed node writes this name.
+    """
+    stem = name[: -len(STREAM_SUFFIX)] if name.endswith(STREAM_SUFFIX) else name
+    return any(stem == each or stem.startswith(each) for each in WRITTEN_STREAM_STEMS)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -142,8 +161,9 @@ def source_of(run_root: Path) -> Path:
 def mirror_run_root(run_root: Path, out_root: Path, stem: str) -> Path:
     """A writable run root under ``out_root`` whose sidecars read through to the finished one.
 
-    ``derivatives/`` is a symlink because no replayed node writes there; ``streams/`` is a real
-    directory of symlinks because REDACT writes a redacted stream into it.
+    ``derivatives/`` is a symlink because no replayed node writes there. ``streams/`` is a real
+    directory holding a symlink per stream the replay only *reads*; a stream a replayed node writes
+    is never linked, so the write lands here and not in the finished tree.
 
     Args:
         run_root: The finished run root.
@@ -159,11 +179,13 @@ def mirror_run_root(run_root: Path, out_root: Path, stem: str) -> Path:
     (dest / RELEASE_SUBDIR).mkdir(parents=True, exist_ok=True)
     finished = run_root / RUN_SUBDIR
     derivatives = run_dir / DERIVATIVES_SUBDIR
-    if not derivatives.exists():
+    if not derivatives.is_symlink() and not derivatives.exists():
         derivatives.symlink_to(finished / DERIVATIVES_SUBDIR)
     for stream in sorted((finished / STREAMS_SUBDIR).glob("*")):
+        if written_by_a_replayed_node(stream.name):
+            continue
         link = run_dir / STREAMS_SUBDIR / stream.name
-        if not link.exists():
+        if not link.is_symlink() and not link.exists():
             link.symlink_to(stream)
     return dest
 
