@@ -380,6 +380,7 @@ var CorpusView = (function () {
           ctx.strokeStyle = '#3a4150';
           ctx.beginPath(); ctx.moveTo(x - 4, y); ctx.lineTo(x, y); ctx.stroke();
         }
+        this.paintBounds(ctx, a, g);
       } else {
         var cats = s.categories;
         var span = g.bandBottom - g.bandTop;
@@ -399,6 +400,56 @@ var CorpusView = (function () {
       }
     }
     ctx.restore();
+  };
+
+  /**
+   * The distinct bounds in force on one gate axis over the currently drawn set.
+   *
+   * A bound is resolved per recording — family over group over default — so a gate axis can carry
+   * more than one. Each is returned with how many drawn recordings it governs, commonest first.
+   */
+  CorpusView.prototype.boundsFor = function (a) {
+    var s = this.summaries[a];
+    if (!s || !s.col || !s.col.boundColumn) return [];
+    var counts = {};
+    for (var i = 0; i < this.rows.length; i++) {
+      if (this.selected[i] !== 1) continue;
+      var v = this.rows[i][s.col.boundColumn];
+      if (v == null || typeof v !== 'number' || !isFinite(v)) continue;
+      counts[v] = (counts[v] || 0) + 1;
+    }
+    return Object.keys(counts)
+      .map(function (k) { return { bound: Number(k), n: counts[k] }; })
+      .sort(function (p, q) { return q.n - p.n || p.bound - q.bound; });
+  };
+
+  /** Draw each bound in force on a gate axis, and shade the side of it that fails. */
+  CorpusView.prototype.paintBounds = function (ctx, a, g) {
+    var s = this.summaries[a];
+    if (!s || s.kind !== 'numeric' || !s.col || !s.col.boundColumn) return;
+    var bounds = this.boundsFor(a);
+    if (!bounds.length || bounds.length > 4) return;
+    var x = g.xs[a];
+    var half = 30;
+    for (var b = 0; b < bounds.length; b++) {
+      var frac = SchemaAxes.position(s, bounds[b].bound);
+      if (frac == null) continue;
+      var y = g.bandBottom - frac * (g.bandBottom - g.bandTop);
+      // the failing side: below the line for at_least, above it for at_most
+      var failTop = s.col.op === 'at_least' ? y : g.bandTop;
+      var failBottom = s.col.op === 'at_least' ? g.bandBottom : y;
+      ctx.fillStyle = 'rgba(200, 80, 80, 0.10)';
+      ctx.fillRect(x - half, failTop, half * 2, Math.max(0, failBottom - failTop));
+      ctx.strokeStyle = '#d06060';
+      ctx.setLineDash([5, 3]);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x - half, y); ctx.lineTo(x + half, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1;
+      ctx.fillStyle = '#e08a8a';
+      ctx.textAlign = 'left';
+      ctx.fillText(formatNumber(bounds[b].bound), x + half + 4, y);
+    }
   };
 
   /** Present/absent counts on one axis over the currently drawn set. */
