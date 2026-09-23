@@ -26,7 +26,7 @@ def main() -> int:
     n = np.array([r["n_speakers"] for r in ok])
     sp = np.array([r["speech_s"] for r in ok])
     ov = np.array([r["overlap_s"] for r in ok])
-    print(f"speaker counts: " + ", ".join(f"{k}:{int((n == k).sum())}" for k in sorted(set(n.tolist()))))
+    print("speaker counts: " + ", ".join(f"{k}:{int((n == k).sum())}" for k in sorted(set(n.tolist()))))
     print(f"  >=2: {int((n >= 2).sum())} = {100 * float((n >= 2).mean()):.2f}%")
     print(f"overlap_s > 0: {int((ov > 0).sum())} = {100 * float((ov > 0).mean()):.2f}%")
     long = sp >= args.min_speech_s
