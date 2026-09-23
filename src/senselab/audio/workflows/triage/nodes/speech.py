@@ -8,7 +8,8 @@ declared task family, and both write by ``propose`` only.
 It runs no ASR and no diarizer: the transcript is PREPROCESS's consensus and the speakers are
 PREPROCESS's whole-file ``<stream>_diarization`` derivative, both read back. Speech spans come from
 the lexical consensus words' timings. The target speaker is identified by a caller-supplied
-enrollment, never by a per-file hint. The PII scan marks; it removes nothing.
+enrollment, never by a per-file hint. The PII scan reads the lexical tokens of the consensus
+transcript and of each recognizer's own, bracketed tokens excluded; it marks and removes nothing.
 
 Every parameter's derivation is in ``data/config/default.yaml``; the design is in
 ``specs/20260817-triage-workflow-dag/branch-speech.md`` and what porting it decided is in
