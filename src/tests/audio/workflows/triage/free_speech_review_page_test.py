@@ -595,7 +595,7 @@ def test_a_recording_note_refreshes_the_progress_line() -> None:
 def test_the_store_reads_and_writes_are_guarded() -> None:
     """Storage throws outright in some contexts, so the page must render without it."""
     assert page._SCRIPT.count("try{") >= 2
-    assert "catch(e){store={findings:{},recordings:{}};}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},triage:{}};}" in page._SCRIPT
 
 
 def test_in_stimulus_keeps_none_apart_from_false() -> None:
@@ -854,3 +854,74 @@ def test_the_page_says_a_ground_is_empty_by_construction() -> None:
     """A ground is null exactly when REDACT decided; a blank must not read as a missing reason."""
     assert "empty by construction" in page._SCRIPT
     assert "REDACT decided it" in page._SCRIPT
+
+
+def test_the_row_vocabulary_is_the_owners_own() -> None:
+    """Three states, named as the owner named them, with their keys."""
+    assert [value for value, _, _ in page.ROW_TRIAGE] == ["+1", "-1", "flag"]
+    assert [key for _, key, _ in page.ROW_TRIAGE] == ["+", "-", "f"]
+
+
+def test_the_row_keys_do_not_collide_with_the_finding_keys() -> None:
+    """A row mark and a finding verdict must never be one keystroke apart."""
+    row = {key for _, key, _ in page.ROW_TRIAGE}
+    finding = {key for _, key, _ in page.VERDICTS}
+    assert not row & finding
+
+
+def test_a_card_carries_the_row_controls() -> None:
+    """Every recording gets the three buttons; the card's own stem names the row."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert document.count('class="trigroup"') == 1
+    for value, key, slug in page.ROW_TRIAGE:
+        assert f'class="tri t-{slug}" data-v="{value}"' in document
+        assert f"<kbd>{key}</kbd>" in document
+    assert 'data-stem="sub-a_ses-b_task-free-speech-1"' in document
+
+
+def test_the_row_control_markup_does_not_repeat_the_stem() -> None:
+    """Three buttons on 11,701 cards: a repeated stem and title cost megabytes for nothing."""
+    assert "data-stem" not in page._TRIAGE_GROUP
+    assert "title=" not in page._TRIAGE_GROUP
+
+
+def test_the_row_mark_is_a_separate_collection_from_the_finding_verdicts() -> None:
+    """Two records in the export, distinguishable, neither shadowing the other."""
+    assert "triage:store.triage" in page._SCRIPT
+    assert "findings:store.findings" in page._SCRIPT
+    assert "version:2" in page._SCRIPT
+
+
+def test_the_row_mark_persists_and_degrades_like_the_finding_verdicts() -> None:
+    """Same namespace, same guarded access, same three collections restored on load."""
+    assert "triage:parsed.triage||{}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},triage:{}};}" in page._SCRIPT
+
+
+def test_re_pressing_a_row_mark_clears_it() -> None:
+    """Matching the un-judging behaviour the finding panel already has."""
+    assert "if(held===value)delete store.triage[stem];" in page._SCRIPT
+
+
+def test_the_row_mark_reaches_the_filters_and_the_progress_line() -> None:
+    """The reader can sweep the unmarked, or read back only what they marked +1."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert 'id="tri"' in document
+    for value in ("marked", "unmarked", "+1", "-1", "flag"):
+        assert f'<option value="{value}">' in document
+    assert "rows marked" in page._SCRIPT
+
+
+def test_the_row_keys_are_inert_while_typing() -> None:
+    """A minus typed into a note must not mark the row."""
+    assert "e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'" in page._SCRIPT
+
+
+def test_the_page_says_the_reviewer_could_not_have_run_on_a_withheld_recording() -> None:
+    """REDACT short-circuits before the enabled check, so not_run is not 'switched off'."""
+    assert "could not have run" in page._SCRIPT
+    assert "whether or not the reviewer is " in page._SCRIPT
