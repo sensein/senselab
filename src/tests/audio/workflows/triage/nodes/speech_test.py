@@ -810,6 +810,10 @@ def _target_speaker_embedding() -> TargetSpeakerEmbedding:
 def _no_model_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     """One speaker, plausible SQUIM, no PII, and no constructor that would resolve against the Hub.
 
+    The separator is stubbed rather than forbidden: `speech.separation_backend` ships a checkpoint,
+    so a two-speaker seed separates. A test that needs the call log or a shaped decomposition
+    re-stubs it with ``_stub_separator``.
+
     Args:
         monkeypatch: The patcher.
     """
@@ -826,11 +830,7 @@ def _no_model_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(speech_module, "_second_diarizer_model", lambda model_id: _FakeModel(model_id))
     monkeypatch.setattr(speech_module, "_clearvoice_model", lambda model_id: _FakeModel(model_id))
     monkeypatch.setattr(speech_module, "_embedding_model", lambda model_id, revision: _FakeModel(model_id, revision))
-    monkeypatch.setattr(
-        speech_module,
-        "separate_audios",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("separation must not run")),
-    )
+    _stub_separator(monkeypatch, sources=2)
     monkeypatch.setattr(
         speech_module,
         "extract_speaker_embeddings_from_audios",
@@ -1885,17 +1885,18 @@ class TestEnrollment:
         assert any("identifies the target by enrollment" in note for note in notes)
 
 
-class TestSeparationIsMeasurementGated:
-    """Neither backend is selected by default, and the choice is a config key."""
+class TestSeparationIsConfigured:
+    """Which backend runs is a config key, and a null one separates nothing."""
 
     def test_a_null_backend_does_not_separate(
-        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A count of 2 with no ranked backend records the absence rather than picking one."""
+        """A count of 2 under an override that clears the backend records the absence."""
+        config = _override(tmp_path, "speech:\n  separation_backend: null\n")
         _seed_speech_store(store, tmp_path, words=["hello", "world"], diarized=2)
         _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
         separator = _stub_separator(monkeypatch)
-        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
         assert separator == []
         assert _report_entity(store, "SPEECH").attributes["separation"] == "not_selected"
 
@@ -1956,7 +1957,20 @@ class TestTheMultiSpeakerInstrument:
     The design is in ``specs/20260922-the-multi-speaker-instrument/design.md``.
     """
 
-    CONFIG = "speech:\n  separation_backend: MossFormer2_SS_16K\n"
+    CONFIG = ""
+
+    def test_the_packaged_configuration_runs_the_instrument(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The instrument is on by default: no override names the separator, and it still fires."""
+        self._two_voices(store, tmp_path, monkeypatch)
+        separator = _stub_separator(monkeypatch, sources=2, active=[[(1.0, 1.8), (2.6, 3.6)], [(1.8, 2.6)]])
+        speech(store, "plain", _speech_config(tmp_path), self._hint(), run_dir=tmp_path, enrollment=None)
+        assert [call["model"] for call in separator] == ["alibabasglab/MossFormer2_SS_16K"]
+        separated = self._separated(store)
+        assert [int(e.attributes["source_index"]) for e in separated] == [0, 1]
+        [localise] = [a for a in store.activities() if a.step == speech_module.LOCALISE_STEP]
+        assert {e.id for e in separated} <= set(store.uses_of(localise.id))
 
     def _stream_id(self, store: ProvStore, name: str) -> str:
         """One live stream entity's id, by name.
@@ -2104,6 +2118,78 @@ class TestTheMultiSpeakerInstrument:
             if store.generated_by(entity.id) in {a.id for a in localise}
         }
         assert authored <= {"measurement", "span"}, "no assertion, no verdict, no conformance"
+
+    def test_a_span_says_where_the_other_source_is(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`solo_extent` says where the loudest source is alone; this says where anything else is."""
+        config = _override(tmp_path, self.CONFIG)
+        self._two_voices(store, tmp_path, monkeypatch)
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        other = [
+            e
+            for e in live_entities(store, "span")
+            if e.attributes.get("role") == speech_module.SECONDARY_SOURCE_EXTENT_ROLE
+        ]
+        assert len(other) == 1, "one span per run a source other than the loudest holds"
+        assert other[0].extent is not None
+        assert other[0].extent[0] == pytest.approx(1.8, abs=0.06)
+        assert other[0].extent[1] == pytest.approx(2.6, abs=0.06)
+        assert other[0].attributes["speaker"] == "SPEAKER_01"
+        assert other[0].attributes["source_index"] == 1
+        task = [e for e in live_entities(store, "span") if e.attributes.get("role") == speech_module.TASK_EXTENT_ROLE]
+        assert other[0].attributes["refines"] == task[0].id
+
+    def test_the_reading_names_the_other_sources_spans_without_a_cross_reference(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The report detail answers "where" on its own; `dominant_index` need not be resolved."""
+        config = _override(tmp_path, self.CONFIG)
+        self._two_voices(store, tmp_path, monkeypatch)
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        localisation = _report_entity(store, "SPEECH").attributes["source_localisation"]
+        [span] = localisation["secondary_spans"]
+        assert span["start"] == pytest.approx(1.8, abs=0.06)
+        assert span["end"] == pytest.approx(2.6, abs=0.06)
+        assert span["speaker"] == "SPEAKER_01"
+        assert span["source_index"] == 1
+
+    def test_the_branch_says_in_words_where_the_other_source_is(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reader of the rendered summary gets the seconds without opening the store."""
+        config = _override(tmp_path, self.CONFIG)
+        self._two_voices(store, tmp_path, monkeypatch)
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        notes = _report_entity(store, "SPEECH").attributes["notes"]
+        [note] = [n for n in notes if "other than the loudest" in n]
+        assert "1.80-2.60s" in note
+        assert "SPEAKER_01" in note
+
+    def test_no_note_and_no_span_when_one_source_holds_the_whole_extent(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing to point at is said by saying nothing, not by a span of zero length."""
+        config = _override(tmp_path, self.CONFIG)
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two", "three"],
+            word_extents=[(1.0, 1.4), (1.6, 2.0), (3.0, 3.6)],
+            duration_s=5.0,
+            diarization=False,
+        )
+        _seed_diarization(store, tmp_path, [(1.0, 3.6, "SPEAKER_00")])
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        _stub_separator(monkeypatch, sources=2, active=[[(1.0, 3.6)], []])
+        speech(store, "plain", config, self._hint(), run_dir=tmp_path, enrollment=None)
+        assert not [
+            e
+            for e in live_entities(store, "span")
+            if e.attributes.get("role") == speech_module.SECONDARY_SOURCE_EXTENT_ROLE
+        ]
+        notes = _report_entity(store, "SPEECH").attributes["notes"]
+        assert not [n for n in notes if "other than the loudest" in n]
 
     def test_an_extent_past_the_shortest_separated_source_reads_empty_rather_than_raising(self) -> None:
         """The separator may return a source shorter than the mixture, so the extent can miss it."""

@@ -431,8 +431,10 @@ def _localise_sources(
 
     Returns:
         ``sources``, one record per source carrying its ``active_s``, ``active_spans`` and the
-        diarized ``speaker`` it best matches; ``dominant_index``; ``secondary_s``; and ``solo``,
-        the dominant source's longest run, or None when it holds none.
+        diarized ``speaker`` it best matches; ``dominant_index``; ``secondary_s``;
+        ``secondary_spans``, every run a source other than the dominant one holds, earliest first,
+        each naming its source and diarized speaker; and ``solo``, the dominant source's longest
+        run, or None when it holds none.
     """
     energies = [_frame_rms(audio, frame_s) for audio in separated]
     width = energies[0][1] if energies else frame_s
@@ -472,15 +474,42 @@ def _localise_sources(
             }
         )
     if not sources:
-        return {"sources": [], "dominant_index": None, "secondary_s": 0.0, "solo": None}
+        return {"sources": [], "dominant_index": None, "secondary_s": 0.0, "secondary_spans": [], "solo": None}
     dominant = max(sources, key=lambda record: record["active_s"])["source_index"]
     held = spans.get(dominant, [])
+    secondary = [
+        {"start": start, "end": end, "source_index": record["source_index"], "speaker": record["speaker"]}
+        for record in sources
+        if record["source_index"] != dominant
+        for start, end in record["active_spans"]
+    ]
     return {
         "sources": sources,
         "dominant_index": dominant,
         "secondary_s": round(sum(record["active_s"] for record in sources if record["source_index"] != dominant), 6),
+        "secondary_spans": sorted(secondary, key=lambda span: span["start"]),
         "solo": max(held, key=lambda span: span[1] - span[0]) if held else None,
     }
+
+
+def _where_the_other_source_is(extent: tuple[float, float], reading: dict[str, Any]) -> str:
+    """One sentence naming the longest run a source other than the loudest one holds.
+
+    Args:
+        extent: The task extent the reading was taken over.
+        reading: One :func:`_localise_sources` return, whose ``secondary_spans`` is non-empty.
+
+    Returns:
+        The note.
+    """
+    spans = reading["secondary_spans"]
+    longest = max(spans, key=lambda span: span["end"] - span["start"])
+    speaker = "an unmatched speaker" if longest["speaker"] is None else str(longest["speaker"])
+    return (
+        f"inside the task extent {extent[0]:.2f}-{extent[1]:.2f}s a source other than the loudest holds "
+        f"{reading['secondary_s']:.2f}s over {len(spans)} run(s); the longest is "
+        f"{longest['start']:.2f}-{longest['end']:.2f}s, which is {speaker}'s"
+    )
 
 
 def _author_node(store: ProvStore, entity_id: str) -> str | None:
@@ -881,6 +910,13 @@ SOLO_EXTENT_ROLE = "solo_extent"
 
 The longest run inside the task extent over which one separated source holds every attributed
 frame. It is minted beside the task extent, never over it.
+"""
+
+SECONDARY_SOURCE_EXTENT_ROLE = "secondary_source_extent"
+"""The role of a span over which a separated source other than the loudest one holds every frame.
+
+The counterpart of :data:`SOLO_EXTENT_ROLE`, and the span that answers *where* a second voice is.
+One per contiguous run, minted beside the task extent it refines, never over it.
 """
 
 LOCALISE_STEP = "localise_speakers"
@@ -2087,6 +2123,24 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                         ),
                     )
                 )
+            for other in reading["secondary_spans"]:
+                view.append(
+                    propose_span(
+                        store,
+                        localise_act,
+                        software,
+                        MINT(
+                            SECONDARY_SOURCE_EXTENT_ROLE,
+                            (float(other["start"]), float(other["end"])),
+                            *evidence,
+                            source_index=other["source_index"],
+                            speaker=other["speaker"],
+                            refines=span_id,
+                        ),
+                    )
+                )
+            if reading["secondary_spans"]:
+                notes.append(_where_the_other_source_is(extent, reading))
             localised.append(reading)
         localisation = localised[0] if len(localised) == 1 else localised
 
