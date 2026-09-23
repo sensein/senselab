@@ -26,7 +26,7 @@ from typing import Any, Iterable, Iterator, Sequence
 import numpy as np
 import pyarrow as pa
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """Bumped whenever a column is added, removed or retyped, or a binary layout changes."""
 
 STORE_NAME = "store.jsonl"
@@ -68,6 +68,10 @@ SCALAR_MEASUREMENTS = (
     "ddk_syllable_rate_from_envelope_modulation_hz",
     "ddk_syllable_rate_from_ppg_decode_hz",
     "expected_sequence_repeat_fraction",
+    "extent_dominant_speaker_share",
+    "extent_secondary_source_s",
+    "extent_source_active_s",
+    "extent_speaker_count",
     "glide_extent_semitones",
     "interruptions",
     "pause_fraction_of_response",
@@ -97,6 +101,48 @@ MEASUREMENTS = SCALAR_MEASUREMENTS + VECTOR_MEASUREMENTS + MATRIX_MEASUREMENTS +
 BRANCH_NODES = ("AIRWAY", "SPEECH", "VOICE", "QUALITY")
 ROUTED_BRANCHES = ("AIRWAY", "SPEECH", "VOICE")
 FLAG_OUTCOMES = frozenset({"flag", "fail", "discard"})
+
+GATE_NAMES = (
+    "production_min_s",
+    "voiced_fraction_min",
+    "f0_spread_max_semitones",
+    "continuity_min",
+    "dominant_segment_min_fraction",
+    "monotone_tolerance_semitones",
+    "expected_tokens_matched_min",
+    "omissions_max",
+    "response_min_s",
+    "coverage_min",
+    "dominant_speaker_share_min",
+    "items_min",
+    "events_min",
+    "repetitions_min",
+    "repeat_overlap_min",
+    "echo_overlap_max",
+    "verbatim_overlap_max",
+    "gap_off_task_min_s",
+    "interval_max_s",
+    "score_min",
+    "train_min_s",
+    "rate_prominence_min",
+)
+"""The gate column order, pinned against ``nodes.gates.GATE_KEYS`` by ``recording_vectors_test``.
+
+Spelled here rather than imported so that reading a store costs no model-framework import, and so
+that a gate added to the registry fails a test until this schema is bumped with it.
+"""
+
+GATE_UNDETERMINED = "undetermined"
+"""What a gate's ``_passed`` column carries when either the reading or the bound was absent."""
+
+RESIDUAL_MEASUREMENT = "residual"
+"""The PREPROCESS measurement carrying the enhanced/residual decomposition's energies."""
+
+SECONDARY_ROLE = "secondary_source_extent"
+SOLO_ROLE = "solo_extent"
+SEPARATED_PREFIX = "separated_"
+DOMINANT_SHARE = "extent_dominant_speaker_share"
+"""The reading ``dominant_speaker_share_min`` gates. Folded by ``min``, as the gate folds it."""
 
 SPANS_LAYOUT = "BHH"
 SPAN_LABELS_LAYOUT = "HBB"
@@ -610,6 +656,130 @@ def _conformance(value: Any) -> str | None:  # noqa: ANN401 -- the stored value 
     return str(value).lower()
 
 
+def _number(value: Any) -> float | None:  # noqa: ANN401 -- a stored reading is any type
+    """One stored reading as a finite float.
+
+    Args:
+        value: The stored value.
+
+    Returns:
+        The float, or None when the value is absent, not a number or not finite.
+    """
+    if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(float(value)) else None
+
+
+def _gate_columns(decision: dict[str, Any]) -> dict[str, Any]:
+    """Every gate VERDICT resolved, as one column group per gate plus the fold's own summary.
+
+    Args:
+        decision: The VERDICT fold's attributes.
+
+    Returns:
+        ``gate_<name>``, ``gate_<name>_bound`` and ``gate_<name>_passed`` for every gate the fold
+        applied, and the summary columns. A gate the fold did not apply is null in all three.
+    """
+    gates = decision.get("gates")
+    gates = gates if isinstance(gates, dict) else {}
+    applied = [g for g in (gates.get("applied") or []) if isinstance(g, dict)]
+    flagging = [g for g in (gates.get("flagging") or []) if isinstance(g, dict)]
+
+    row: dict[str, Any] = {
+        "gate_node": gates.get("node"),
+        "gate_group": gates.get("group"),
+        "gate_family": gates.get("family"),
+    }
+    outcomes: dict[str, str | None] = {}
+    for record in (*applied, *flagging):
+        name = str(record.get("gate"))
+        if name not in GATE_NAMES:
+            continue
+        row[f"gate_{name}"] = _number(record.get("value"))
+        row[f"gate_{name}_bound"] = _number(record.get("bound"))
+        outcomes[name] = _conformance(record.get("passed"))
+        row[f"gate_{name}_passed"] = outcomes[name]
+
+    row["gate_applied_n"] = len(applied)
+    row["gate_flagging_n"] = len(flagging)
+    row["gate_failed_n"] = sum(1 for v in outcomes.values() if v == "false")
+    row["gate_undetermined_n"] = sum(1 for v in outcomes.values() if v == GATE_UNDETERMINED)
+    row["gate_failed_names"] = sorted(name for name, v in outcomes.items() if v == "false")
+    row["gate_flagged_names"] = sorted(str(g.get("gate")) for g in flagging if _conformance(g.get("passed")) == "false")
+    return row
+
+
+def _residual_levels(view: StoreView) -> dict[str, float | None]:
+    """The enhanced and residual stream levels, and how far the first sits above the second.
+
+    Args:
+        view: The store.
+
+    Returns:
+        The residual's own stored levels, the enhanced stream's RMS, and the two RMS differences.
+        All null when PREPROCESS wrote no residual measurement.
+
+    The enhanced RMS and both differences are reconstructed from the two energy fractions the
+    measurement already carries, which share one denominator and one aligned length; the
+    derivation is in ``specs/20260923-enhanced-over-residual/design.md``.
+    """
+    keys = (
+        "residual_peak_dbfs",
+        "residual_rms_dbfs",
+        "enhanced_rms_dbfs",
+        "enhanced_over_residual_rms_db",
+        "enhanced_over_residual_rms_fitted_db",
+    )
+    out: dict[str, float | None] = dict.fromkeys(keys)
+    measurement = view.last("measurement", name=RESIDUAL_MEASUREMENT)
+    if measurement is None:
+        return out
+    attributes = measurement.attributes
+    out["residual_peak_dbfs"] = _number(attributes.get("peak_dbfs"))
+    residual_rms = _number(attributes.get("rms_dbfs"))
+    out["residual_rms_dbfs"] = residual_rms
+    enhanced_fraction = _number(attributes.get("enhanced_energy_fraction"))
+    residual_fraction = _number(attributes.get("energy_fraction"))
+    if not enhanced_fraction or not residual_fraction or enhanced_fraction <= 0 or residual_fraction <= 0:
+        return out
+    difference = 10.0 * math.log10(enhanced_fraction / residual_fraction)
+    out["enhanced_over_residual_rms_db"] = difference
+    if residual_rms is not None:
+        out["enhanced_rms_dbfs"] = residual_rms + difference
+    gain_db = _number(attributes.get("gain_db"))
+    if gain_db is not None:
+        out["enhanced_over_residual_rms_fitted_db"] = difference + gain_db
+    return out
+
+
+def _speaker_columns(view: StoreView, readings: dict[str, list[Any]]) -> dict[str, Any]:
+    """What the multi-speaker instrument found: separation, the secondary runs and the solo run.
+
+    Args:
+        view: The store.
+        readings: Every measurement reading, grouped by name.
+
+    Returns:
+        How many sources were separated, the secondary runs and their total seconds, the solo
+        run's seconds, and the worst dominant-speaker share over the recording's task extents.
+
+    The share is folded by ``min`` because that is the fold VERDICT's flag gate applies; the
+    ``m_extent_dominant_speaker_share`` column beside it is the mean, as every measurement column
+    is, and the two disagree whenever a recording carries more than one task extent.
+    """
+    separated = [e for e in view.live("stream") if str(e.attributes.get("name") or "").startswith(SEPARATED_PREFIX)]
+    secondary = [e for e in view.live("span") if e.attributes.get("role") == SECONDARY_ROLE and e.extent]
+    solo = [e for e in view.live("span") if e.attributes.get("role") == SOLO_ROLE and e.extent]
+    shares = [v for v in (_number(value) for value in readings.get(DOMINANT_SHARE, [])) if v is not None]
+    return {
+        "separated_n": len(separated),
+        "secondary_extent_n": len(secondary),
+        "secondary_extent_s": sum(e.extent[1] - e.extent[0] for e in secondary if e.extent) if secondary else None,
+        "solo_extent_s": sum(e.extent[1] - e.extent[0] for e in solo if e.extent) if solo else None,
+        "extent_dominant_speaker_share_min": min(shares) if shares else None,
+    }
+
+
 def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None) -> dict[str, Any] | None:
     """One recording's row.
 
@@ -671,6 +841,8 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         row[f"conformance_{node.lower()}"] = _conformance(conformance.get(node))
     for branch in ROUTED_BRANCHES:
         row[f"route_{branch.lower()}"] = routes.get(branch)
+    row.update(_gate_columns(decision))
+    row.update(_residual_levels(view))
 
     speech_report = view.last("branch_report", node="SPEECH")
     scanned = bool(speech_report and isinstance(speech_report.attributes.get("pii"), dict))
@@ -678,6 +850,7 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
     row["pii_findings_n"] = len(pii_entities) if scanned else None
 
     readings = _measurement_readings(view)
+    row.update(_speaker_columns(view, readings))
     if anomalies is not None:
         for name in readings:
             if name not in MEASUREMENTS:
@@ -840,6 +1013,34 @@ def schema() -> pa.Schema:
         *[pa.field(f"conformance_{node.lower()}", pa.string()) for node in BRANCH_NODES],
         *[pa.field(f"route_{branch.lower()}", pa.string()) for branch in ROUTED_BRANCHES],
         pa.field("pii_findings_n", pa.int32()),
+        pa.field("gate_node", pa.string()),
+        pa.field("gate_group", pa.string()),
+        pa.field("gate_family", pa.string()),
+        pa.field("gate_applied_n", pa.int32()),
+        pa.field("gate_flagging_n", pa.int32()),
+        pa.field("gate_failed_n", pa.int32()),
+        pa.field("gate_undetermined_n", pa.int32()),
+        pa.field("gate_failed_names", pa.list_(pa.string())),
+        pa.field("gate_flagged_names", pa.list_(pa.string())),
+        *[
+            field
+            for name in GATE_NAMES
+            for field in (
+                pa.field(f"gate_{name}", pa.float64()),
+                pa.field(f"gate_{name}_bound", pa.float64()),
+                pa.field(f"gate_{name}_passed", pa.string()),
+            )
+        ],
+        pa.field("separated_n", pa.int32()),
+        pa.field("secondary_extent_n", pa.int32()),
+        pa.field("secondary_extent_s", pa.float64()),
+        pa.field("solo_extent_s", pa.float64()),
+        pa.field("extent_dominant_speaker_share_min", pa.float64()),
+        pa.field("residual_peak_dbfs", pa.float64()),
+        pa.field("residual_rms_dbfs", pa.float64()),
+        pa.field("enhanced_rms_dbfs", pa.float64()),
+        pa.field("enhanced_over_residual_rms_db", pa.float64()),
+        pa.field("enhanced_over_residual_rms_fitted_db", pa.float64()),
     ]
     for name in MEASUREMENTS:
         if name in SCALAR_MEASUREMENTS:
