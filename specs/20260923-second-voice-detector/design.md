@@ -148,13 +148,27 @@ The false-positive rate on the `single` arm is what decides whether a candidate 
 trusted on 43,000 recordings. A detector that finds two speakers everywhere is worse than
 the incumbent, which is at least reliably conservative.
 
-## Measurements pending
+## Where the measurements landed
 
-* The threshold sweep on the incumbent's VBx clustering.
-* Per-arm silhouette distributions for every candidate clusterer.
-* The five alternative backends on the known case and on both arms (GPU job, subprocess
-  venvs building first).
-* Per-recording runtime on an idle GPU node, and the corpus-pass cost that follows from it.
+See `results.md` for the numbers. In short:
+
+* the incumbent's documented clustering threshold is **inert** — 13 values from 0.05 to 0.95
+  return byte-identical output on the known case;
+* **no recording-level statistic over the window embeddings separates** the two arms. The
+  best of 26 catches the known case only by admitting a third of genuine single-speaker
+  connected-speech recordings;
+* **MOSS-Transcribe-Diarize is the only backend that found the second voice unprompted**,
+  recall 0.617 at precision 0.996 on the 15.13 s span;
+* pyannote recovers the span at recall 0.775 when *told* there are two, which is the
+  evidence that its segmentation and embeddings were never the problem.
+
+### The corpus's existing positives are not what they look like
+
+Across the 24 recordings the incumbent already calls two-speaker with at least 20 s of
+speech, the second speaker holds a **median of 0.30 s**. These are micro-splits. The
+incumbent will split off a tenth of a second and will not split off fifteen seconds — which
+is worth stating plainly, because every downstream consumer of `speaker_count` has been
+reading that population as "recordings with two people in them".
 
 ## Defects found on the way
 
