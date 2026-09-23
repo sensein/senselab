@@ -177,11 +177,51 @@ load, so a corpus pass amortizes them — the MOSS sample run is what prices tha
 Corpus scale: **43,335 recordings run SPEECH**, mean 34.7 s, median 24.7 s (corpus census),
 so about **418 hours of audio**.
 
-| candidate | rate | corpus pass |
+Amortized rates measured over the sample runs, models resident:
+
+| candidate | rate | corpus pass over 418 h |
 |---|---|---|
+| pyannote, one pass | 151 × realtime | 2.8 GPU-hours |
 | second pyannote pass with `num_speakers=2` | 125 × realtime | **3.3 GPU-hours** |
 | ECAPA window grid | 1,080 × realtime | **0.4 GPU-hours** |
-| MOSS-Transcribe-Diarize | pending (sample run) | pending |
+| NVIDIA Sortformer | 2.9 × realtime | 147 GPU-hours |
+| **MOSS-Transcribe-Diarize** | **2.7–3.7 × realtime** | **113–155 GPU-hours** |
+| DiariZen | 4.3–5.3 × realtime | 79–97 GPU-hours |
+| VibeVoice-ASR-HF | 4.2 × realtime | 99 GPU-hours |
+| USC-SAIL child-adult | 14.4 × realtime | 29 GPU-hours (2 of 7 failed) |
 
 For the pyannote and ECAPA candidates cost is not the obstacle; the false-positive rate is.
-For MOSS, cost is a real question and the sample run answers it.
+MOSS costs two orders of magnitude more than a second pyannote pass, but 113–155 GPU-hours
+for a one-off corpus pass is comparable to the 132 CPU-hours the separation instrument
+already spends each pass.
+
+## 6. False positives on the matched negative arm — interim
+
+Jobs **23559301** (`sv-mossneg`, negatives first) and **23558701** (`sv-moss`, whole matched
+sample) are still running; **23558004** (`sv-backends`, all six backends over the first
+sample) likewise. What has landed so far, on `speech_single` — long single-speaker
+connected speech, the arm that decides this:
+
+| backend | reported ≥ 2 | with minority ≥ 3 s |
+|---|---|---|
+| MOSS-Transcribe-Diarize | **0 / 9** | 0 / 9 |
+| DiariZen | **0 / 9** | 0 / 9 |
+
+And on the `multi` arm — recordings the incumbent calls two-speaker, which the census above
+suggests are mostly micro-splits:
+
+| backend | reported ≥ 2 | with minority ≥ 3 s | n so far |
+|---|---|---|---|
+| pyannote (incumbent) | 7 / 8 | **1 / 8** | 8 |
+| VibeVoice-ASR-HF | 4 / 7 | 4 / 7 | 7 |
+| USC-SAIL child-adult | 4 / 5 | 0 / 5 | 5 (+2 failed) |
+| MOSS-Transcribe-Diarize | 0 / 7 | 0 / 7 | 7 |
+| DiariZen | 0 / 7 | 0 / 7 | 7 |
+| NVIDIA Sortformer | 0 / 7 | 0 / 7 | 7 |
+
+Read that second table carefully: MOSS, DiariZen and Sortformer *disagree* with the
+incumbent on almost every one of its existing two-speaker calls. Given that the incumbent's
+second speaker there holds a median 0.30 s, and that it calls 10.1 % of sustained-vowel
+recordings two-speaker, the disagreement is most likely the alternatives being right.
+Recall against that population is therefore the wrong thing to ask of a candidate, and the
+only trustworthy positive in this whole exercise is the one recording with ground truth.
