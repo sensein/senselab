@@ -131,3 +131,118 @@ That authorisation has hard edges, and they are structural, not advisory:
 - **The corpus is read-only.** `streams/` under each run are symlinks into the design tree; writing
   through one is how an earlier driver overwrote 17,924 corpus files. This script opens
   `run/store.jsonl` for reading and writes only to its own output path.
+
+---
+
+# The review layer, and facets over the findings
+
+Added 2026-09-23 after the owner read the first page. Three requests, all additive.
+
+## Findings became first-class
+
+The first page marked words and computed the runs in the renderer. Nothing downstream could name a
+finding, so nothing could carry a judgment about one. Marks are now computed in the extractor and
+each carries:
+
+| field | what it is |
+| --- | --- |
+| `k` | the review key — `sha1(stem, categories, first word index, one past last)`, truncated |
+| `c` | the category set, in store order |
+| `d` | the detectors of the findings that plausibly produced it, tightest first |
+| `dn` | how many findings were candidates — the ambiguity, recorded rather than hidden |
+| `i`, `nt`, `nc` | word range, token count, character count |
+| `brk` | whether it touches a bracketed transcription token |
+| `stim` | whether the declared stimulus accounts for it |
+| `tx` | 1 inside the task extent, 0 outside, −1 when the branch minted none |
+
+The key is content-addressed on the consensus word index, which is the position PREPROCESS emitted
+the word at and the only order a reader may use. It therefore survives re-extraction, re-filtering
+and re-ordering of the page — a judgment is not lost because a filter moved a card. It does *not*
+survive a re-run that changes the transcript, and should not: a different transcript is a different
+finding.
+
+## Two joins that are not what they look like
+
+**The task extent is a span, not a duration.** `response_duration_s` is written with `start=None`
+and `end=None` — it is the length of the response hull and records no position, so it cannot say
+whether anything sits inside it. The extent is the `span` entity the in-family branch mints with
+`role="task_extent"`, read as `view.last("span", role="task_extent", family="speech")`. Absence is
+the branch's record that it found no task, not a read failure, which is why `tx` has three states
+and not two.
+
+Measured, this facet discriminates almost nothing here: 15,588 of 15,595 marks are inside, 5
+outside, 2 in recordings with no extent. That is structural rather than surprising — for
+`FREE_RESPONSE` the branch mints the extent as the hull of the lexical consensus words, and every
+marked word is a consensus word, so containment is nearly a tautology. The facet is kept because it
+is cheap and because the 5 exceptions are exactly the kind of thing worth being able to find; it is
+not kept because it is discriminating.
+
+**Detector attribution is geometric and approximate.** The label assertion that marks a word carries
+`{verb, label, category}` and no pointer to the finding, so the join must go through category and
+time. But a `pii` entity's extent is `_timings_hull` over *every recognizer's* placement of its
+words, while the words it marks carry the consensus interval — so the finding's extent is generally
+wider than the mark it produced and can reach neighbouring unmarked words. The extractor prefers a
+finding that contains the mark over one that merely meets it, and the narrowest within each group,
+then records `dn`. Measured: 9,787 marks have exactly one candidate, 3,811 have two, 1,051 three,
+937 four or more, and 9 have none. So attribution is unambiguous for 63% of marks and a ranked guess
+for the rest — which is why `d` is a list and the page shows all of them.
+
+One consequence reaches further than this page. `nodes/speech.py` keys surviving findings on
+`(category, first word, last word)` and keeps the **first** detector to reach that key, in a fixed
+scan order of presidio, gliner, rules. A second detector finding the same span is discarded along
+with its finding. So `source` is a precedence record, not an attribution, and the corpus cannot
+answer "which findings were corroborated". That is a property of the graph, not of this page, and it
+is recorded here because the detector facet would otherwise read as more authoritative than it is.
+
+## The review vocabulary: four terms, not three
+
+| verdict | what it claims | what it implies for a fix |
+| --- | --- | --- |
+| `identifying` | a real disclosure; the redaction is right | nothing to change |
+| `not-identifying` | the category fits, but nobody is identified | tighten the category, or stop acting on it |
+| `not-the-category` | not an instance of the category at all | tighten the detector |
+| `unsure` | needs a second look | nothing yet |
+
+The obvious vocabulary is *real* / *false positive* / *unsure*. It was rejected because this corpus
+contains the two middle cases in bulk and they want opposite fixes:
+
+- 1,007 marked words are bracketed transcription tokens, 723 of them `PERSON`. `[UH]` is not a name
+  by any reading — the detector should never have seen it. That is `not-the-category`, and the fix
+  is a token-level exclusion beside the one already there.
+- 96.5% of `DATE_TIME` marks carry no calendar anchor. A duration genuinely *is* a temporal
+  expression; presidio is not wrong about what it saw. It just identifies nobody. That is
+  `not-identifying`, and the fix is a specificity rule or a release-fold decision, not a detector
+  patch.
+
+Collapsing both into "false positive" would produce an export that cannot tell those two apart,
+which is precisely the decision the measurement is heading toward. The cost is one extra term.
+
+## Persistence: the export is the record
+
+`localStorage` under `senselab.fsreview.v1`, every read and write in `try`/`catch`. It throws
+outright on an opaque origin and comes back empty in a private window, so the page treats it as a
+convenience: a failed write swaps the status line for a warning and the session continues in memory.
+Verified — with storage throwing, all 11,701 cards render, judgments are still recorded and the
+export still works.
+
+The durable artefact is the JSON export: `{schema, version, exported, findings, recordings}`, keyed
+by review key and by BIDS stem. It is written to a textarea *and* offered as a download, because a
+sandbox may block the download and the textarea always works. Import merges rather than replaces, so
+two sessions' judgments can be combined.
+
+The export carries the verdict, the note, a timestamp, and the mark's category and detectors. It
+carries **no transcript text**, so it is the one artefact here that could travel without carrying
+speech — though nothing in this task sends it anywhere.
+
+## Facets
+
+Recording-level filters (family, release, search, redaction-fired, minimum findings) and
+finding-level facets (category, detector, bracket overlap, task extent, span length in tokens,
+review state) compose. When any finding facet is narrowed, a recording shows only if at least one of
+its marks matches, and its non-matching marks dim rather than disappear — so the reader keeps the
+sentence around the finding they selected for. The status line reports participants, recordings and
+matching findings, so the size of a subset is known before it is read.
+
+A compound mark carries its categories joined with `+` in one attribute, and the filter splits on
+that. Matching the whole attribute instead dropped every multi-category mark from every category
+facet — 4,770 of 15,595 marks, silently. There is a test pinned to the split.

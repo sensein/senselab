@@ -574,3 +574,25 @@ def test_write_pages_single_file_is_private(tmp_path: Path) -> None:
     out = tmp_path / "page.html"
     page.write_pages(corpus, out, "Review", shard_size=0)
     assert out.stat().st_mode & 0o777 == 0o600
+
+
+def test_the_category_facet_reaches_a_compound_mark() -> None:
+    """A mark labelled PERSON+NAME must match a PERSON selection, not fall through it.
+
+    The page writes the category set into one ``data-c`` attribute joined with ``+``, so the
+    filter has to split it. Matching the whole attribute against the checkbox values silently
+    dropped every compound mark from every category facet.
+    """
+    assert "m.dataset.c.split('+').some(c=>cats.has(c))" in page._SCRIPT
+    assert ">PERSON+ORG<" in page.paragraph([["Acme", 0, 0]], [_mark("k1", ["PERSON", "ORG"], [], 0, 1)])
+
+
+def test_a_recording_note_refreshes_the_progress_line() -> None:
+    """The note handler has to re-tally, or the count of notes never moves."""
+    assert "save();tally();});" in page._SCRIPT
+
+
+def test_the_store_reads_and_writes_are_guarded() -> None:
+    """Storage throws outright in some contexts, so the page must render without it."""
+    assert page._SCRIPT.count("try{") >= 2
+    assert "catch(e){store={findings:{},recordings:{}};}" in page._SCRIPT
