@@ -31,6 +31,7 @@ A gate says what reading is good enough. A layer that names no value for a gate 
 | `continuity_min` | — | — | — | `0.5` | — | — | — | — | — | — | — | — |
 | `coverage_min` | — | `0.5` | — | — | — | — | — | — | — | — | — | — |
 | `dominant_segment_min_fraction` | — | — | — | — | `0.5` | — | — | — | — | — | — | — |
+| `dominant_speaker_share_min` | `0.9` | `0.9` | `0.9` | — | — | — | — | — | — | — | `0.9` | `0.9` |
 | `echo_overlap_max` | — | `0.5` | — | — | — | — | — | — | — | — | — | — |
 | `events_min` | — | — | — | — | — | — | — | `1` | `1` | — | — | — |
 | `expected_tokens_matched_min` | `1` | — | — | — | — | — | — | — | — | — | — | — |
