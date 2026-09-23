@@ -11,10 +11,11 @@ assertion). Extents are padded by ``redaction.padding_ms`` and merged by ``plan_
 filled with ``redaction.fill`` at ``redaction.bleep_hz`` when that is a bleep. A word carries its
 PII marking through a live ``assertion`` whose ``verb`` is ``"label"`` and ``label`` is ``"pii"``.
 
-No recognizer runs here: verification is a re-scan of the redacted consensus text with the same
-detectors, judged complete by ``pii.required_detectors``. A surviving finding is a fail, an
-incomplete re-scan is a flag, and a finding the verifier still sees is re-planned exactly once, what
-survives that being ``unremediable``; ``audio_check`` is the constant ``"bounded"`` on every path.
+No recognizer runs here: verification is a re-scan of the redacted consensus text, its bracketed
+tokens dropped, with the same detectors, judged complete by ``pii.required_detectors``. A
+surviving finding is a fail, an incomplete re-scan is a flag, and a finding the verifier still
+sees is re-planned exactly once, what survives that being ``unremediable``; ``audio_check`` is
+the constant ``"bounded"`` on every path.
 An optional LLM check (``redaction.llm_check``) re-reads the redacted transcript for up to
 ``max_iterations`` rounds, asked only where a release was in prospect. Each round's chain of thought
 is a ``redaction_llm_review`` measurement carrying its ``elapsed_s``, ``load_s`` and generated
@@ -208,6 +209,21 @@ def _extents_from_findings(findings: list[Entity]) -> list[RedactionExtent]:
             raise ValueError(f"pii finding {finding.id} has no extent; nothing locatable can be redacted")
         extents.append(RedactionExtent(start=finding.extent[0], end=finding.extent[1], category=category))
     return extents
+
+
+def _verification_text(records: list[dict[str, Any]]) -> str:
+    """The redacted transcript as the re-scan reads it, the bracketed tokens dropped.
+
+    See ``specs/20260922-brackets-are-not-speech/design.md``.
+
+    Args:
+        records: :func:`_render`'s records.
+
+    Returns:
+        The join of every released surface and placeholder except a bracketed consensus word's.
+    """
+    kept = [record for record in records if not (record["kind"] == "word" and record["bracketed"])]
+    return " ".join(token for token in (_token(record) for record in kept) if token)
 
 
 def _verify(transcript_text: str, required: list[str]) -> _Verification:
@@ -884,7 +900,7 @@ def redact(
     planned = plan_redactions(extents, padding_ms=padding_ms)
     records, transcript_text, unplaced_n = _render(words, planned)
     checked = (
-        _verify(transcript_text, required_detectors)
+        _verify(_verification_text(records), required_detectors)
         if not scan_incomplete
         else _Verification(verified=False, survived=[], scan_ran=False, failed=[], missing=[])
     )
@@ -907,7 +923,7 @@ def redact(
                 widened.append((hull, marks[category]))
         planned = plan_redactions(extents, padding_ms=padding_ms)
         records, transcript_text, unplaced_n = _render(words, planned)
-        checked = _verify(transcript_text, required_detectors)
+        checked = _verify(_verification_text(records), required_detectors)
         attributed = _expected_survivors(checked.survived, words, marked, planned, exempt_word_ids)
         outstanding = [category for category in checked.survived if category not in attributed]
         unremediable = list(outstanding)

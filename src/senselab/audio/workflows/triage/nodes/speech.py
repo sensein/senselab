@@ -8,7 +8,8 @@ declared task family, and both write by ``propose`` only.
 It runs no ASR and no diarizer: the transcript is PREPROCESS's consensus and the speakers are
 PREPROCESS's whole-file ``<stream>_diarization`` derivative, both read back. Speech spans come from
 the lexical consensus words' timings. The target speaker is identified by a caller-supplied
-enrollment, never by a per-file hint. The PII scan marks; it removes nothing.
+enrollment, never by a per-file hint. The PII scan reads the lexical tokens of the consensus
+transcript and of each recognizer's own, bracketed tokens excluded; it marks and removes nothing.
 
 Every parameter's derivation is in ``data/config/default.yaml``; the design is in
 ``specs/20260817-triage-workflow-dag/branch-speech.md`` and what porting it decided is in
@@ -34,6 +35,7 @@ from senselab.audio.tasks.spans.api import group_extents_into_runs
 from senselab.audio.tasks.speaker_diarization.api import diarize_audios
 from senselab.audio.tasks.speaker_embeddings.api import extract_speaker_embeddings_from_audios
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.consensus import is_bracketed
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
@@ -568,6 +570,33 @@ def _reading(word: Entity, haystack: str) -> str:
     if haystack == "consensus":
         return str(word.attributes.get("text") or "")
     return str(word.attributes["readings"][haystack])
+
+
+def _scan_tokens(words: list[Entity], positions: list[int], haystack: str) -> tuple[list[int], list[str]]:
+    """The tokens one text is scanned as, the bracketed ones dropped.
+
+    See ``specs/20260922-brackets-are-not-speech/design.md``.
+
+    Args:
+        words: The consensus words, in stream order.
+        positions: The positions contributing to this text, in order.
+        haystack: ``"consensus"`` for the consensus text, else a source name.
+
+    Returns:
+        ``(the positions kept, their tokens)``, in order and the same length.
+    """
+    kept: list[int] = []
+    tokens: list[str] = []
+    for position in positions:
+        word = words[position]
+        if word.attributes["bracketed"]:
+            continue
+        token = _reading(word, haystack)
+        if is_bracketed(token.strip()):
+            continue
+        kept.append(position)
+        tokens.append(token)
+    return kept, tokens
 
 
 def _timings_hull(words: list[Entity], covered: list[int]) -> tuple[float, float]:
@@ -1616,7 +1645,6 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     words = [word for word in words if not store.is_invalidated(word.id)]
     lexical_index = [position for position, word in enumerate(words) if not word.attributes["bracketed"]]
     lexical = [words[position] for position in lexical_index]
-    transcript_text = str(consensus.attributes["text"])
     source_names = [str(row["name"]) for row in consensus.attributes["sources"]]
     hypotheses = _hypotheses(store, source_names)
 
@@ -2222,11 +2250,17 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     span_ids = propose_spans(store, corroborate, software, run_proposals)
     view.extend(span_ids)
 
-    # Step 7 — PII: one scan over the consensus transcript and each recognizer's own transcript.
-    haystacks: list[tuple[str, str, list[int]]] = [("consensus", transcript_text, list(range(len(words))))]
-    for name in source_names:
-        positions = [position for position, word in enumerate(words) if name in word.attributes["readings"]]
-        haystacks.append((name, str(hypotheses[name].attributes["transcript"]), positions))
+    # Step 7 — PII: one scan over the consensus transcript and each recognizer's own transcript,
+    # each carrying its lexical tokens only.
+    haystacks: list[tuple[str, str, list[int], list[str]]] = []
+    for name in ("consensus", *source_names):
+        contributing = (
+            list(range(len(words)))
+            if name == "consensus"
+            else [position for position, word in enumerate(words) if name in word.attributes["readings"]]
+        )
+        kept, scanned_tokens = _scan_tokens(words, contributing, name)
+        haystacks.append((name, " ".join(scanned_tokens), kept, scanned_tokens))
     pii_act = store.activity(
         node=NODE, step="pii", parameters={"text": ["consensus_transcript", *(f"asr:{name}" for name in source_names)]}
     )
@@ -2243,7 +2277,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     open_response = invites_disclosure(declared_family)
     scans: list[PiiScan] = []
     if novel_words or open_response:
-        raw_scans = scan_for_pii([text for _, text, _ in haystacks])
+        raw_scans = scan_for_pii([text for _, text, _, _ in haystacks])
         scans = raw_scans if isinstance(raw_scans, list) else [raw_scans]
     else:
         view.append(
@@ -2267,10 +2301,9 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     scanned_by: set[str] = set()
     findings: list[dict[str, Any]] = []
     recorded: set[tuple[str, int, int]] = set()
-    for (haystack, _, positions), scan in zip(haystacks, scans):
+    for (haystack, _, positions, tokens), scan in zip(haystacks, scans):
         failures.update(scan.failures)
         scanned_by.update(scan.detectors_used)
-        tokens = [_reading(words[position], haystack) for position in positions]
         for finding in scan.spans:
             # Every occurrence of this finding, not just its first.
             located = [(positions[first], positions[last]) for first, last in _locate(str(finding.text or ""), tokens)]
