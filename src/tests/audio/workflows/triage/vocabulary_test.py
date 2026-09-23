@@ -14,7 +14,10 @@ from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     CRITICAL_ABSENCE,
     DECLINED,
+    REDACTION_OWED,
     ROUTED,
+    SCAN_UNRECORDED,
+    SPEECH_UNREAD,
     TASK,
     UNAVAILABLE,
     UNDETERMINED,
@@ -29,6 +32,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     FoldPolicy,
     NodeVerdict,
     Outcome,
+    RedactionEvidence,
     Release,
     RunState,
     Triage,
@@ -119,6 +123,26 @@ def _with_redact(redact: Outcome, *, speech: bool | None = None, speech_route: s
         ran={},
         hint_claims={},
         route_state=ROUTED,
+    )
+
+
+def _without_redact(evidence: RedactionEvidence, *, speech: RunState) -> FileVerdict:
+    """A fold REDACT left no verdict on, over one state of the redaction evidence.
+
+    Args:
+        evidence: What the store says about whether anything was redactable.
+        speech: Whether SPEECH ran.
+
+    Returns:
+        The folded file verdict.
+    """
+    return fold_file_verdict(
+        [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+        branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+        ran={"SPEECH": speech},
+        hint_claims={},
+        route_state=ROUTED,
+        redaction=evidence,
     )
 
 
@@ -735,19 +759,85 @@ class TestAConfigTypoIsNamedNotSwallowed:
         assert folded.triage is Triage.DISCARD
 
 
-class TestTheReleaseAxis:
-    """Only a REDACT pass clears an artifact, and not_assessed is not releasable."""
+class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
+    """REDACT runs only where there is something to redact, so its silence decides nothing.
 
-    def test_no_redact_verdict_is_not_assessed(self) -> None:
-        """No speech branch, no words, or no PII found."""
-        folded = fold_file_verdict(
-            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
-            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
-            ran={},
-            hint_claims={},
-            route_state=ROUTED,
+    ``specs/20260817-triage-workflow-dag/verdict.md``, the release fold. Measured over 62,548
+    recordings, the old rule reported 44,623 as unexamined when 44,622 of them were determined.
+    """
+
+    def test_a_scan_that_found_nothing_is_not_unassessed(self) -> None:
+        """The largest population the old rule mislabelled: SPEECH scanned and the transcript was clean."""
+        folded = _without_redact(
+            RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=0), speech=RunState.COMPLETED
+        )
+        assert folded.release is not Release.NOT_ASSESSED
+
+    def test_a_declined_scan_is_not_unassessed(self) -> None:
+        """SPEECH read every lexical word out of the task's own stimulus, so nothing was disclosed."""
+        folded = _without_redact(
+            RedactionEvidence(lexical_words_n=9, scanned=False, findings_n=0), speech=RunState.COMPLETED
+        )
+        assert folded.release is not Release.NOT_ASSESSED
+
+    def test_a_transcript_with_no_lexical_word_is_not_unassessed(self) -> None:
+        """SPEECH ran and the consensus carried no word; a redaction has nothing to read."""
+        folded = _without_redact(
+            RedactionEvidence(lexical_words_n=0, scanned=None, findings_n=0), speech=RunState.COMPLETED
+        )
+        assert folded.release is not Release.NOT_ASSESSED
+
+    def test_a_recording_speech_never_ran_on_is_not_unassessed(self) -> None:
+        """No ASR exists, so by the owner's rule there is nothing redaction could act on."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED)
+        assert folded.release is not Release.NOT_ASSESSED
+
+    def test_the_four_determined_states_name_the_same_state(self) -> None:
+        """One state, four grounds: a determination is not four different answers."""
+        determined = [
+            _without_redact(RedactionEvidence(lexical_words_n=42, scanned=True), speech=RunState.COMPLETED),
+            _without_redact(RedactionEvidence(lexical_words_n=9, scanned=False), speech=RunState.COMPLETED),
+            _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED),
+            _without_redact(RedactionEvidence(), speech=RunState.SKIPPED),
+        ]
+        assert {folded.release for folded in determined} == {Release.NOTHING_TO_REDACT}
+        assert len({folded.release_ground for folded in determined}) == 4
+
+    def test_a_speech_that_errored_is_unassessed(self) -> None:
+        """The one genuine unknown: nothing can say whether the recording carried anything."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.ERRORED)
+        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release_ground == SPEECH_UNREAD
+
+    def test_a_finding_redact_never_answered_is_unassessed(self) -> None:
+        """The scan found something and no redaction verdict stands over it."""
+        folded = _without_redact(
+            RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3), speech=RunState.COMPLETED
         )
         assert folded.release is Release.NOT_ASSESSED
+        assert folded.release_ground == REDACTION_OWED
+
+    def test_lexical_content_with_no_scan_record_is_unassessed(self) -> None:
+        """SPEECH reached words and recorded no scan either way; the graph cannot say."""
+        folded = _without_redact(
+            RedactionEvidence(lexical_words_n=42, scanned=None, findings_n=0), speech=RunState.COMPLETED
+        )
+        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release_ground == SCAN_UNRECORDED
+
+    def test_nothing_to_redact_is_not_releasable(self) -> None:
+        """There is no artifact, so nothing was cleared; the old warning survives the new state."""
+        folded = _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED)
+        assert folded.release is not Release.RELEASABLE
+
+    def test_a_redact_verdict_still_decides_where_one_stands(self) -> None:
+        """Evidence never overrides the node that actually ran."""
+        assert _with_redact(Outcome.PASS).release is Release.RELEASABLE
+        assert _with_redact(Outcome.PASS).release_ground is None
+
+
+class TestTheReleaseAxis:
+    """Only a REDACT pass clears an artifact, and a determination is not a clearance."""
 
     def test_a_redact_flag_withholds(self) -> None:
         """Unresolved is not cleared."""
