@@ -1402,6 +1402,31 @@ class TestAQualityGateDoesNotDecideThatTheProductionNeverHappened:
             "no_voicing"
         ]
 
+    def test_the_mpt_case_carrier_profile_yields_its_duration(self, tmp_path: Path) -> None:
+        """``sub-652def69``: five carriers, three sub-minimum, one silent, one 8.152 s and unsteady."""
+        store, _ = seed(
+            tmp_path,
+            amplitude=((0.5, 1.301), (2.0, 10.152), (12.0, 12.11), (13.0, 13.142), (14.0, 14.063)),
+            tracks=_wobble_tracks(20.0, (2.0, 10.152), 120.0, 6.0),
+        )
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert len(result.components) == 1
+        assert readings_of(result)["carrier_duration_s"] == pytest.approx(8.152, abs=0.05)
+        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is False
+
+    def test_the_glide_case_carrier_profile_yields_its_sweep(self, tmp_path: Path) -> None:
+        """``sub-7d51b647``: six carriers, four sub-minimum, one silent, one 5.447 s and wobbly."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_UP_STEM,
+            amplitude=((0.2, 0.251), (1.0, 2.134), (3.0, 8.447), (9.0, 9.349), (10.0, 10.115), (11.0, 11.169)),
+            tracks=_zigzag_tracks(20.0, (3.0, 8.447), 100.0, 300.0),
+        )
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        assert len(result.components) == 1
+        assert readings_of(result)["carrier_duration_s"] == pytest.approx(5.447, abs=0.05)
+        assert gated_conformance(result, Pattern.GLIDE, settings=config()) is False
+
     def test_the_detect_arm_still_applies_the_quality_qualifier(self, tmp_path: Path) -> None:
         """Nothing declared this recording to hold a held vowel, so steadiness is what separates one."""
         store, _ = seed(

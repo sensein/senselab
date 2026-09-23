@@ -127,7 +127,7 @@ measure for the rest. The align arm proposes over `carriers` and writes the qual
   `verdict.deviation_flags` is `false` corpus-wide, so this flags no files.
 - **`carriers_rejected` in the branch report shrinks for the align arm**, because a quality failure
   is no longer a rejection there. What replaces it is better: a span, with the reading on it.
-- **Corpus-wide effect not measured here.** See the census below.
+- **Corpus-wide effect: 2732 recordings.** See the census below.
 
 ## D-3 — the gate silences recordings in proportion to how disordered the voice is
 
@@ -141,7 +141,8 @@ population the corpus exists to characterise is exactly the population the gate 
 
 `maximum-phonation-time` mints no task extent on 68.9% of its recordings, the worst coverage of any
 family (`specs/20260922-speaker-vectors/coverage.md`). How much of that is found-and-refused rather
-than never-found is the size of this blind spot, and is being counted (below).
+than never-found is the size of this blind spot. It is now counted: **96.1%** of it, corpus-wide
+across the three voice families. See the census below.
 
 ### Why the 11.856 reading cannot settle it, and does not need to
 
@@ -231,23 +232,99 @@ call, not one this change should pre-empt. The evidence for it is already in the
 `carriers_rejected_n` counts them; what is missing is only VERDICT keying on it.
 
 **Blast radius.** The number of files that gain a flag under this change is exactly the
-found-and-refused population the census below counts: a recording with no extent that held a
-rejected carrier of usable length now gets an extent, a failing reading and a flag. The owner has
-accepted flagging this one file and has not accepted flagging fifteen thousand. That number is not
-yet known, and is the thing to read before this lands anywhere but a branch.
+found-and-refused population the census below counts: **2732** across the three voice families. The
+owner has accepted flagging one file and has not accepted flagging fifteen thousand; this is neither.
 
-### The census
+### The census — measured
 
-Job `23526686`, `mit_preemptable`, over the 62,548 replayed runs at
-`/orcd/scratch/bcs/002/satra/triage_replay_20260922/out/` (3,510 MPT, 1,596 glides-low-to-high,
-1,554 glides-high-to-low). It counts, per family: recordings with no voice `task_extent`; of those,
-how many hold a `carrier_rejected` of at least 0.5 s, broken down by gate; and the distribution of
-`carrier_s` and `value_read` for `f0_spread_max_semitones` and `dominant_segment_min_fraction`. The
-population above the 2.0 bound is the candidate instability/diplophonia cohort and its size is the
-size of the blind spot.
+Job `23526686`, `mit_preemptable`, over all 62,548 replayed runs at
+`/orcd/scratch/bcs/002/satra/triage_replay_20260922/out/`. No store missing, none unreadable.
+Results at `/orcd/scratch/bcs/002/satra/voice_gate_census_20260923/results/census.json`.
 
-Results land at `/orcd/scratch/bcs/002/satra/voice_gate_census_20260923/results/census.json` and
-`census.txt`. **Unread at the time of writing.** No figure in this document is taken from it.
+| family | recordings | no `task_extent` | found and refused (≥0.5 s) | never found |
+|---|---:|---:|---:|---:|
+| `maximum-phonation-time` | 3510 | 1095 (31.2%) | **1006** (91.9%) | 89 (8.1%) |
+| `glides-low-to-high` | 1596 | 885 (55.5%) | **876** (99.0%) | 9 (1.0%) |
+| `glides-high-to-low` | 1554 | 862 (55.5%) | **850** (98.6%) | 12 (1.4%) |
+| **all three** | 6660 | 2842 | **2732 (96.1%)** | 110 (3.9%) |
+
+**96.1% of the silence was a production found and refused.** "The production was never found" is
+not the failure mode; it accounts for 110 recordings out of 2842. The gates are the failure mode.
+
+Which gate did the refusing, as recordings with at least one rejection at `carrier_s >= 0.5`
+(a recording may appear under more than one):
+
+| family | `voiced_fraction_min` | `f0_spread_max_semitones` | `dominant_segment_min_fraction` |
+|---|---:|---:|---:|
+| MPT | 745 (68.0%) | 489 (44.7%) | 0 |
+| glides-low-to-high | 368 (41.6%) | 0 | 700 (79.1%) |
+| glides-high-to-low | 402 (46.6%) | 0 | 633 (73.4%) |
+
+Two facts the counts settle:
+
+- **Neither quality gate ever fires on a short carrier.** The ≥0.5 s filter removes nothing from
+  either focus gate in any family — 639/639, 751/751, 660/660 identical to the unfiltered counts.
+  Both are ordered after the duration gate, so every one of these refusals is of a production long
+  enough to be real. `production_min_s`, by contrast, refuses 954 MPT / 800 / 759 recordings at some
+  carrier length and essentially none at ≥0.5 s, which is exactly the job it is for.
+- **The refusals are not marginal.** `f0_spread_max_semitones` on MPT: median reading **9.35
+  semitones** against a 2.0 bound (p90 14.80, max 41.09), on carriers of median **7.18 s** (p90
+  17.84, max 36.50). `dominant_segment_min_fraction` on the glides: median reading **0.329** against
+  a 0.5 bound (p90 0.459), on carriers of median **4.9 s**. These are not near-misses being rescued;
+  they are a population the bound was never going to admit.
+
+A 7-second median carrier refused for a 9.35-semitone spread is the D-3 argument in one line. The
+bound describes a steady healthy vowel, and half the refused population is more than four times
+outside it.
+
+**Note a discrepancy to resolve elsewhere.** `specs/20260922-speaker-vectors/coverage.md` reports
+`maximum-phonation-time` minting no extent on 68.9% of its recordings; this census finds 31.2% over
+the replayed corpus. Different trees, possibly a different denominator. Not reconciled here; the
+census figure is the one measured over `triage_replay_20260922`.
+
+### Blast radius
+
+Every found-and-refused recording gains an extent, a failing reading and therefore a flag:
+**2732 recordings across the three voice families**, 41% of those 6660. Not the fifteen thousand the
+coordinator feared, and not one file either. The owner has accepted flagging one; this number is
+what he needs to see before the change lands anywhere but a branch, and it is why this is on a
+branch.
+
+### The f0 search range is not the cause
+
+Job `23527859`, same corpus, testing whether an unnarrowed `[50, 600]` Hz Praat search range — which
+would make octave-halving of a ~165 Hz voice representable — is what distinguishes the
+`f0_spread_max_semitones` refusals. `derive_f0_range` lives at
+`src/senselab/audio/tasks/phonation/api.py:49` and its output reaches the store as `f0_min_hz` /
+`f0_max_hz` on the `phonation_tracks` measurement.
+
+Corpus-wide, 61,780 of 62,548 runs record a range. Median floor 70.45 Hz, median ceiling 600 Hz;
+**87.6% narrowed at least one bound, 12.4% came back at the full `[50, 600]`.**
+
+The cross-tab, over the three voice families:
+
+| slice | n | unnarrowed | % |
+|---|---:|---:|---:|
+| refused by `f0_spread_max_semitones` | 628 | 65 | **10.35%** |
+| not so refused | 6032 | 656 | **10.91%** |
+
+**The hypothesis does not survive.** The refused group is very slightly *less* likely to carry an
+unnarrowed range. Within MPT alone the contrast runs the other way by 1.5 points (10.35% against
+8.86%) on 628 cases, which is far too small to carry a root-cause claim and reverses once the other
+families are pooled. About one recording in ten has an unnarrowed range whether or not its carrier
+was refused.
+
+So the search floor is not what produces a 9.35-semitone median spread on sustained phonation — at
+least not as a between-recording effect. A within-recording octave error on an already-narrowed
+range remains consistent with these numbers; this census cannot see it, because the store keeps the
+range and not the track.
+
+One caveat carried forward: "unnarrowed" is *inferred* as `floor == 50.0 and ceiling == 600.0`,
+because `extract_pitch_values` computes a `pitch_range_fell_back` flag and `derive_f0_range`
+discards it. Floor-at-50 alone (26.1%) and ceiling-at-600 alone (52.6%) are each far commoner than
+the conjunction, so the conjunction is the right discriminator, but it may over-count the genuine
+fallback slightly. Threading that flag into the `phonation_tracks` attributes is a one-line
+PREPROCESS change and would settle it; it is not recoverable from the existing stores.
 
 ## The same shape elsewhere, not fixed here
 
