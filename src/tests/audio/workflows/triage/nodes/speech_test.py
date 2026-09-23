@@ -3245,3 +3245,114 @@ class TestTheCarrierIsPartOfWhatTheTaskAskedFor:
         speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
         assert scanned, "one word outside the carrier must bring the scan"
         assert len(live_entities(store, "pii")) == 1
+
+
+class TestBracketedTokensNeverReachTheScan:
+    """A bracket is a transcription convention, not speech, and cannot carry a disclosure.
+
+    See ``specs/20260817-triage-workflow-dag/config-derivations.md``.
+    """
+
+    COUNT_IN = ["One", "two", "three", "[UH]", "[UH]"]
+    COUNT_IN_EXTENTS = [(0.42, 0.74), (1.60, 1.98), (2.32, 2.67), (3.13, 4.30), (5.45, 8.83)]
+
+    def _seed_count_in(self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
+        """Seed the prolonged-vowel recording whose count-in opened the scan.
+
+        Args:
+            store: The store to seed.
+            tmp_path: The run directory.
+            monkeypatch: The patcher.
+
+        Returns:
+            Nothing; the store and the run directory carry the state.
+        """
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=self.COUNT_IN,
+            word_extents=self.COUNT_IN_EXTENTS,
+            duration_s=12.0,
+        )
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        return _seed_speech_store
+
+    def test_the_count_in_still_opens_the_scan(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gate is unchanged: three counted words are three words the task did not ask for."""
+        self._seed_count_in(store, tmp_path, monkeypatch)
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", "[UH]")], only_where_present=True)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert scanned, "the count-in is outside the stimulus, so the scan must still run"
+
+    def test_no_scanned_text_carries_a_bracketed_token(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """What the detector is handed, not merely whether it is called."""
+        self._seed_count_in(store, tmp_path, monkeypatch)
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", "[UH]")], only_where_present=True)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert scanned
+        assert not [text for text in scanned if "[" in text or "]" in text]
+
+    def test_no_finding_is_minted_from_a_bracketed_token(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The six seconds REDACT blanked: a filler read as a name, and the task extent with it."""
+        self._seed_count_in(store, tmp_path, monkeypatch)
+        _stub_pii(monkeypatch, findings=[("PERSON", "[UH]")], only_where_present=True)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert live_entities(store, "pii") == []
+
+    def test_no_bracketed_word_is_marked_for_redaction(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """REDACT plans off this marking; a bracketed word must never carry one."""
+        self._seed_count_in(store, tmp_path, monkeypatch)
+        _stub_pii(monkeypatch, findings=[("PERSON", "[UH]")], only_where_present=True)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        marked = [
+            entity
+            for entity in live_entities(store, "assertion")
+            if entity.attributes.get("verb") == "label" and entity.attributes.get("label") == "pii"
+        ]
+        assert marked == []
+
+    def test_a_disclosure_beside_a_bracketed_token_is_still_found(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard against over-narrowing: dropping the brackets must drop nothing else."""
+        _seed_speech_store(store, tmp_path, words=["[UH]", "my", "name", "is", "alice", "[UH]"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", "alice")], only_where_present=True)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert all("alice" in text for text in scanned), "the lexical words must survive intact"
+        assert len(live_entities(store, "pii")) == 1
+        marked = [
+            entity
+            for entity in live_entities(store, "assertion")
+            if entity.attributes.get("verb") == "label" and entity.attributes.get("label") == "pii"
+        ]
+        assert len(marked) == 1
+
+    def test_the_finding_is_placed_on_the_lexical_word_and_not_the_filler(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dropped token must not shift what the surviving positions point at."""
+        _seed_speech_store(store, tmp_path, words=["[UH]", "my", "name", "is", "alice", "[UH]"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")], only_where_present=True)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        [marked] = [
+            entity
+            for entity in live_entities(store, "assertion")
+            if entity.attributes.get("verb") == "label" and entity.attributes.get("label") == "pii"
+        ]
+        word = next(
+            entity
+            for entity in live_entities(store, "word")
+            if entity.extent is not None and marked.extent is not None and entity.extent == marked.extent
+        )
+        assert word.attributes["text"] == "alice"
+        assert word.attributes["bracketed"] is False
