@@ -1,0 +1,117 @@
+# Results
+
+Everything below was measured on ORCD, pinned checkout `0f7997bc` at
+`/orcd/scratch/bcs/002/satra/senselab-secondvoice`, work directory
+`/orcd/scratch/bcs/002/satra/secondvoice_20260923`. Timings are from an idle H100 (node2803)
+or A100 (node3805) allocation; the laptop figures taken earlier are discarded because the
+machine was under load 17–25 and they are upper bounds at best.
+
+Every model loaded at a resolved 40-hex commit. Pyannote
+`speaker-diarization-community-1` = `3533c8cf8e369892e6b79ff1bf80f7b0286a54ee`.
+
+## 1. The known case, per backend
+
+Jobs 23558004 (`sv-backends`). `plain` stream, mono 16 kHz, 63.60 s. Ground truth: one
+second voice holding 0.5 – 15.6 s.
+
+| backend | speakers | segments | found the second voice | wall s | needs |
+|---|---|---|---|---|---|
+| pyannote community-1 (incumbent) | 1 | 9 | **no** | 1.67 | in-process, GPU optional |
+| pyannote community-1, `num_speakers=2` | 2 | 9 | **yes — 0.03–15.66 / 15.73–61.78, the true boundary** | ~1.7 | in-process; only backend honouring the hint |
+| NVIDIA Sortformer `diar_sortformer_4spk-v1` | 1 | 25 | **no** | 54.8 | subprocess venv (NeMo), weights 
+| VibeVoice-ASR-HF | 1 | 4 | **no** | 104.0 | in-process, `transformers>=5.3`, large download |
+| MOSS-Transcribe-Diarize | pending | | | | subprocess venv, `transformers>=5.6` |
+| DiariZen `diarizen-wavlm-large-s80-md` | pending | | | | subprocess venv; **weights CC BY-NC 4.0** |
+| USC-SAIL child-adult | pending | | | | subprocess venv, CUDA only, role labels, cap 2 |
+
+## 2. Retuning the incumbent: the documented knob is inert
+
+`config.yaml` ships `params.clustering.threshold: 0.6` for `VBxClustering`. Swept across
+**0.05, 0.1, 0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95** on the known case:
+
+* every value returns **1 speaker, 51.705 s**, byte-identical.
+* the parameter is demonstrably applied — the instrumentation prints
+  `after={'threshold': 0.05, …} obj_threshold=0.05 obj=VBxClustering` at each step.
+
+Swept across 24 recordings at 0.6 / 0.5 / 0.45 / 0.4 / 0.35 / 0.3, every recording returned
+identical per-speaker seconds at every value.
+
+**So this pipeline's speaker count is not reachable through the threshold parameter its own
+config exposes.** Retuning the incumbent is not a candidate, at least not through that knob.
+
+## 3. Clustering on voice embeddings: measured, and it does not separate
+
+ECAPA `speechbrain/spkrec-ecapa-voxceleb`, 2.0 s windows on a 1.0 s hop over pyannote's own
+speech spans — every window exactly 2.0 s, so duration is controlled by construction.
+
+**Positives** (`multi`): 24 recordings the incumbent calls two-speaker, ≥ 20 s of speech.
+**Negatives** (`speech_single`): 40 connected-speech recordings of comparable length that
+the incumbent calls one-speaker (caterpillar, harvard sentences, picture description, story
+recall, free speech). A third arm of 8 sustained-vowel / DDK recordings is reported but is
+too short to window (median 6.2 s, only 3 usable) and is not the operating comparison.
+
+Mann-Whitney AUC of positives over negatives, best statistics first by distance from chance:
+
+| statistic | AUC | pos median | neg median | known case | negatives admitted to catch it |
+|---|---|---|---|---|---|
+| AHC-Ward minority share | 0.680 | 0.405 | 0.283 | 0.321 | 0.42 |
+| AHC-complete centroid cosine | 0.371 | 0.683 | 0.780 | 0.712 | **0.33** |
+| AHC-average centroid cosine | 0.381 | 0.475 | 0.575 | 0.664 | 0.80 |
+| AHC-Ward separation margin | 0.379 | −0.095 | −0.071 | −0.033 | 0.70 |
+| k-means minority share | 0.603 | 0.405 | 0.351 | 0.302 | 0.70 |
+| AHC-Ward silhouette | 0.407 | 0.129 | 0.144 | 0.178 | 0.78 |
+| hinted-run minority seconds | 0.584 | 16.83 | 12.88 | 12.22 | 0.60 |
+| AHC-complete silhouette | 0.560 | 0.179 | 0.159 | 0.188 | 0.45 |
+| hinted-run minority share | 0.457 | 0.399 | 0.403 | 0.236 | 0.90 |
+| AHC-Ward centroid cosine | 0.500 | 0.810 | 0.818 | 0.750 | 0.85 |
+
+Twenty-six statistics were scored; none reaches 0.70 AUC and several are inverted. **The best
+of them catches the known case only by also calling a third of genuine single-speaker
+connected-speech recordings two-speaker.** On 43,000 recordings that is roughly 14,000 false
+flags to win one true one.
+
+Two caveats that cut in opposite directions and are both worth stating:
+
+* the positive arm is weak. In the `multi` arm the incumbent's second speaker holds a median
+  of **0.30 s** out of 20–90 s of speech. These are micro-splits, not conversations, so the
+  AUC is partly measuring "can the embedding tell a micro-split from a clean recording",
+  which is not the question asked.
+* the `neg ≥ target` column does not depend on the positive arm at all. It compares the
+  known case directly against 40 recordings that really do hold one voice, and 0.33 is the
+  best any of the 26 statistics achieves. That number stands on its own.
+
+### Why it fails, concretely
+
+At the ground-truth labelling of the known case: centroid cosine between the two speakers
+**0.7285**, mean within-speaker cosine **0.7604** (the 15 s administrator) and **0.7133**
+(the 45 s participant). The between-speaker distance is *smaller* than the within-speaker
+spread of the larger talker. Cosine silhouette of the true labels is **0.1817** — the median
+for a genuine single-speaker recording forced into two groups is **0.159** (AHC-complete).
+
+The partition is nonetheless recoverable: AHC with **complete** linkage gives ARI **0.697**
+and Ward **0.708** against ground truth, while **average** linkage — the linkage
+`select_dominant_vectors` uses — gives **−0.063**, peeling three outliers off one speaker's
+cloud instead. So the embedding knows *where* the boundary is and cannot tell you *whether*
+there is one.
+
+### What the shipped entry points say on this recording
+
+* `select_dominant_vectors` (AHC average, fitted merge-gap margin 5.0): **one cluster**.
+* `cluster_pass_speakers` (spectral, silhouette sweep): **`n_speakers: 1`**, best silhouette
+  0.187.
+
+Both refuse it, and given the AUCs above, both are right to be conservative.
+
+## 4. Cost
+
+Measured on an idle H100, 63.60 s recording, model already resident:
+
+| step | wall s | × realtime |
+|---|---|---|
+| pyannote diarization (free) | 1.67 | 38 |
+| pyannote diarization (`num_speakers=2`) | ~1.7 | 38 |
+| ECAPA over 63 windows at 2.0 s / 1.0 s | pending | |
+
+Corpus scale: **43,335 recordings run SPEECH**, mean 34.7 s, median 24.7 s (corpus census).
+A second pyannote pass at 38× realtime is therefore about **11 GPU-hours** for the corpus —
+cheap. That cost is not the obstacle; the false-positive rate is.
