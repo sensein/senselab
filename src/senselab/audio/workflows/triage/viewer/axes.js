@@ -53,7 +53,7 @@ var SchemaAxes = (function () {
   // Orders for the closed vocabularies. Anything not listed orders by frequency.
   var ORDERINGS = {
     verdict: ['pass', 'flag', 'discard'],
-    release: ['releasable', 'not_assessed', 'withheld'],
+    release: ['releasable', 'nothing_to_redact', 'withheld', 'not_assessed'],
     conformance_airway: ['true', 'undetermined', 'false'],
     conformance_speech: ['true', 'undetermined', 'false'],
     conformance_voice: ['true', 'undetermined', 'false'],
@@ -87,6 +87,7 @@ var SchemaAxes = (function () {
     column({ name: 'session', kind: 'categorical', group: 'identity', nullMeans: 'the stem carries no ses-' }),
     column({ name: 'declared_family', kind: 'categorical', group: 'identity', nullMeans: 'nothing was declared' }),
     column({ name: 'release', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote none' }),
+    column({ name: 'release_ground', kind: 'categorical', group: 'decision', nullMeans: 'REDACT itself decided' }),
     column({ name: 'grounds', kind: 'categorical', group: 'decision', nullMeans: 'nothing was discarded' }),
     column({ name: 'route_state', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote none' }),
     column({ name: 'conformance_airway', kind: 'categorical', group: 'branch', nullMeans: 'AIRWAY wrote no branch report' }),

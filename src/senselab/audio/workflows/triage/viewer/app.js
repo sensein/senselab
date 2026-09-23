@@ -533,6 +533,7 @@
     dl.innerHTML = '';
     field(dl, 'verdict', row.verdict, 'verdict ' + row.verdict);
     field(dl, 'release', row.release);
+    field(dl, 'release_ground', row.release_ground);
     field(dl, 'grounds', row.grounds);
     field(dl, 'route_state', row.route_state);
     field(dl, 'flags_n', row.flags_n);

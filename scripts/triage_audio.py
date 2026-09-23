@@ -249,7 +249,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if result.file_verdict is not None:
         print(f"Triage:  {result.file_verdict.triage.value}")
-        print(f"Release: {result.file_verdict.release.value}")
+        ground = result.file_verdict.release_ground
+        print(f"Release: {result.file_verdict.release.value}" + (f" — {ground}" if ground else ""))
         for name, released in result.released.items():
             print(f"  {name}: {released}")
     else:

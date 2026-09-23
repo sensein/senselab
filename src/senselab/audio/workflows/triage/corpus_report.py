@@ -62,6 +62,7 @@ class CorpusReport:
         errored: Node name to how many recordings recorded an error there.
         triage: Triage outcome to count.
         release: Release outcome to count.
+        release_ground: Why the release axis read as it did, counted, where the fold gave a ground.
         discard_ground: Ground to count, over the discarded.
         route_state: File route state to count.
         routes: Branch to its route state counts.
@@ -87,6 +88,7 @@ class CorpusReport:
     errored: dict[str, int] = field(default_factory=dict)
     triage: dict[str, int] = field(default_factory=dict)
     release: dict[str, int] = field(default_factory=dict)
+    release_ground: dict[str, int] = field(default_factory=dict)
     discard_ground: dict[str, int] = field(default_factory=dict)
     route_state: dict[str, int] = field(default_factory=dict)
     routes: dict[str, dict[str, int]] = field(default_factory=dict)
@@ -178,6 +180,7 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
     errored: Counter[str] = Counter()
     triage: Counter[str] = Counter()
     release: Counter[str] = Counter()
+    release_ground: Counter[str] = Counter()
     ground: Counter[str] = Counter()
     route_state: Counter[str] = Counter()
     families: Counter[str] = Counter()
@@ -217,6 +220,8 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
         if outcome != "pass":
             flagged[family] += 1
         release[str(decision.get("release"))] += 1
+        if decision.get("release_ground"):
+            release_ground[str(decision["release_ground"])] += 1
         if decision.get("discard_ground"):
             ground[str(decision["discard_ground"])] += 1
         route_state[str(decision.get("route_state"))] += 1
@@ -254,6 +259,7 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
         errored=dict(errored.most_common()),
         triage=dict(triage.most_common()),
         release=dict(release.most_common()),
+        release_ground=dict(release_ground.most_common()),
         discard_ground=dict(ground.most_common()),
         route_state=dict(route_state.most_common()),
         routes=_nested(routes),
@@ -360,6 +366,7 @@ def render_markdown(report: CorpusReport, source: Path | str) -> str:
     ]
     lines += _table("Triage", report.triage, total)
     lines += _table("Release", report.release, total)
+    lines += _table("Release ground", report.release_ground, total)
     lines += _table("Discard ground", report.discard_ground, total)
     lines += _table("Declared family", report.families, total)
     lines += _table("Flagged, by declared family", report.flagged_families, total)
