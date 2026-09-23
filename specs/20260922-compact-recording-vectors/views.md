@@ -81,7 +81,7 @@ chosen against the distributions over this corpus, not from the candidate list a
 | `duration_s` | 100% | p5 2.7 s, p50 7.3 s, p95 57.1 s, 16,140 distinct — the highest-resolution numeric in the file |
 | `conformance_airway` | 38.6% | true 9,942 / undetermined 11,252 / false 2,907 |
 | `conformance_speech` | 69.5% | true 36,683 / false 4,014 / undetermined 2,717 |
-| `conformance_voice` | 36.2% | true 4,615 / undetermined 17,995 |
+| `gate_failed_n` | 100% | never null; the count of VERDICT's gates that refused this recording |
 | `flags_n` | 100% | 0–4; 10,761 recordings carry at least one |
 | `pii_findings_n` | 69.5% | 89 distinct; **and 30.5% null, which is the axis the null rule exists for** |
 | `release` | 100% | not_assessed 44,526 / releasable 13,555 / withheld 4,407 |
@@ -98,6 +98,64 @@ Rejected for a default slot, with reasons:
 - **`route_airway` / `route_speech` / `route_voice`** — 99.9% non-null, and they are exactly the
   *explanation* of the conformance nulls (`declined` ⟺ no branch report). Genuinely useful, but
   paired with the conformance axes they would spend six of ten slots on three facts.
+
+### Schema 3 traded `conformance_voice` for `gate_failed_n`
+
+The owner asked for VERDICT's decision gates to be visible. With ten slots and twenty-two gates,
+no per-gate reading can be a default without displacing something measured; and the picker alone
+would mean the page opens showing no gate at all. One slot therefore goes to the fold's own
+summary of what its gates did.
+
+`conformance_voice` gave up the slot because it is the weakest of the ten on the criterion the
+others were chosen by: 36.2% non-null, only two values in practice (true 4,615 / undetermined
+17,995, no `false` at all), and VOICE answers on only **55.6%** of the 8,294 recordings it owns.
+It separates less than any other default and is one `selectOption` away in the picker.
+`gate_failed_n` is never null.
+
+### Why no gate *reading* is a default
+
+Gate coverage was predicted from the 09-22 corpus by resolving every `declared_family` through
+`declared_expectation` to its `Pattern` and asking `load_gate_bounds` which gates that group
+names. 48 of 49 families resolve; the 49th is the 29 recordings that declare nothing.
+
+Only two of the twenty-two gates clear both bars at once:
+
+| gate | resolvable | reading | why it is not a default |
+| --- | ---: | --- | --- |
+| `dominant_speaker_share_min` | 65.9% | `extent_dominant_speaker_share`, a bounded `[0,1]` fraction | best candidate by far, and the only high-coverage gate immune to VOICE's report ceiling because a flag gate runs whether or not the branch reported in family — **but its spread is unmeasured**, and if diarization returns one speaker on most single-target recordings it piles at 1.0 and the axis is degenerate |
+| `coverage_min` | 18.7% resolvable, 2.5% as a conformance term | `source_content_coverage` | the best-behaved reading measured — 1,547 non-null, 152 distinct values, sd 0.169, 79.5% below its 0.5 bound — but a default blank on 97.5% of lines is worse than no axis |
+
+Seven of the twenty-two — `repeat_overlap_min`, `echo_overlap_max`, `verbatim_overlap_max`,
+`gap_off_task_min_s`, `interval_max_s`, `score_min`, `train_min_s`, `rate_prominence_min` —
+carry `reading: None`. They are applied where their finding is located, inside the reporting
+node, so they have no per-recording scalar and **cannot be a value axis at all**, whatever their
+coverage. `gap_off_task_min_s` is the coverage leader at 73.9% and is one of them.
+
+`expected_tokens_matched_min` and `omissions_max` reach 33.4% each but are integer counts whose
+range is the stimulus length, so they are not comparable across `harvard-sentences-list` and
+`word-color-stroop` on one axis without normalising.
+
+**Promotion is one measurement away.** When the 09-23 parquet lands, the thing to check first is
+`gate_dominant_speaker_share_min`'s spread. If it is not degenerate it should take a slot, and
+the row above should be replaced with its measured distribution rather than this prediction.
+
+### How a gate reaches the page
+
+Three columns per gate, in their own picker groups so they do not crowd the measurement list:
+`gate_<name>` (the reading, a numeric axis), `gate_<name>_bound` (what it was read against) and
+`gate_<name>_passed` (`true` / `false` / `undetermined`, ordered that way).
+
+On a gate reading axis the **bound is drawn as a dashed reference line and the failing side is
+shaded** — below the line for `at_least`, above it for `at_most`. The bound resolves family over
+group over default, so one axis can carry more than one bound over the drawn set;
+`CorpusView.boundsFor` returns each with the number of drawn recordings it governs, and each is
+drawn and labelled. Above four distinct bounds nothing is drawn, because a band crossed by five
+reference lines reads as noise. In the packaged config no gate's bound varies by group, so in
+practice there is one line.
+
+The bound is a property of the *recording*, not of the axis, which is why it travels as a column
+rather than as a constant in the page. A future `by_family` layer changes the picture without
+changing the page.
 
 ### `duration_s` needed a second scale
 
