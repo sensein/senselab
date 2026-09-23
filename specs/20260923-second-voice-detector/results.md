@@ -204,8 +204,10 @@ connected speech, the arm that decides this:
 
 | backend | reported ≥ 2 | with minority ≥ 3 s |
 |---|---|---|
-| MOSS-Transcribe-Diarize | **0 / 9** | 0 / 9 |
-| DiariZen | **0 / 9** | 0 / 9 |
+| MOSS-Transcribe-Diarize | **0 / 10** | **0 / 10** |
+| DiariZen | 1 / 10 | 0 / 10 |
+
+DiariZen's one call gives its second label under 0.5 s — the micro-split signature again.
 
 And on the `multi` arm — recordings the incumbent calls two-speaker, which the census above
 suggests are mostly micro-splits:
