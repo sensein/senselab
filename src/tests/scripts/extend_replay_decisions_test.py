@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.extend import (
     DECISION_SUPERSEDED,
@@ -32,7 +33,7 @@ from senselab.audio.workflows.triage.extend import (
     retire_decisions,
 )
 from senselab.audio.workflows.triage.nodes.admit import admit
-from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
+from senselab.audio.workflows.triage.nodes.common import software_agent, write_stream, write_verdict
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, Outcome
 from senselab.utils.prov_store import ProvStore
 
@@ -73,7 +74,8 @@ def _seed_run(root: Path, *, decided: bool = True) -> Path:
     (run_dir / "derivatives").mkdir(parents=True, exist_ok=True)
     source = root.parent / f"{root.name}.wav"
     sf.write(str(source), _samples(), SR)
-    sf.write(str(run_dir / "streams" / "enhanced.flac"), _samples(), SR)
+    for name in ("enhanced", "plain", "redacted", "separated_0"):
+        sf.write(str(run_dir / "streams" / f"{name}.flac"), _samples(), SR)
 
     store = ProvStore(run_id=root.name)
     config = load_triage_config()
@@ -258,8 +260,48 @@ def test_mirror_run_root_is_writable_and_reads_through_to_the_finished_run(tmp_p
     assert (mirrored / "run" / "streams" / "enhanced.flac").is_symlink()
     assert (mirrored / "released").is_dir()
 
-    (mirrored / "run" / "streams" / "redacted.flac").write_text("new", encoding="utf-8")
-    assert not (root / "run" / "streams" / "redacted.flac").exists()
+    assert not (mirrored / "run" / "streams" / "redacted.flac").exists()
+
+
+def test_a_stream_a_replayed_node_writes_is_never_a_link_into_the_finished_run(tmp_path: Path) -> None:
+    """REDACT and SPEECH write into ``streams/``; a link there would carry the write to the source."""
+    root = tmp_path / "finished" / "sub-01_ses-01_task-x_20260920-030808"
+    _seed_run(root)
+
+    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", "sub-01_ses-01_task-x")
+
+    links = {path.name for path in (mirrored / "run" / "streams").iterdir()}
+    assert links == {"enhanced.flac", "plain.flac"}, "only the streams a replay reads may be linked"
+
+
+def test_a_replayed_redact_write_leaves_the_finished_tree_byte_identical(tmp_path: Path) -> None:
+    """The defect: 17,924 ``redacted.flac`` under the 2026-09-19 corpus were overwritten this way."""
+    root = tmp_path / "finished" / "sub-01_ses-01_task-x_20260920-030808"
+    _seed_run(root)
+    before = {path.name: path.read_bytes() for path in sorted((root / "run" / "streams").iterdir()) if path.is_file()}
+
+    mirrored = cli.mirror_run_root(root, tmp_path / "replayed", "sub-01_ses-01_task-x")
+    for stem in ("redacted", "separated_0"):
+        write_stream(Audio(waveform=_samples()[None, :] * 0.5, sampling_rate=SR), mirrored / "run", stem)
+
+    after = {path.name: path.read_bytes() for path in sorted((root / "run" / "streams").iterdir()) if path.is_file()}
+    assert after == before, "a replayed run must not write into the tree it reads"
+    assert (mirrored / "run" / "streams" / "redacted.flac").read_bytes() != before["redacted.flac"]
+
+
+def test_a_stream_write_replaces_the_entry_rather_than_following_it(tmp_path: Path) -> None:
+    """The chokepoint's own property, independent of how any mirror was built."""
+    source = tmp_path / "source.flac"
+    sf.write(str(source), _samples(), SR)
+    run_dir = tmp_path / "run"
+    (run_dir / "streams").mkdir(parents=True)
+    (run_dir / "streams" / "redacted.flac").symlink_to(source)
+    before = source.read_bytes()
+
+    write_stream(Audio(waveform=_samples()[None, :] * 0.5, sampling_rate=SR), run_dir, "redacted")
+
+    assert source.read_bytes() == before
+    assert not (run_dir / "streams" / "redacted.flac").is_symlink()
 
 
 def test_mirror_run_root_is_idempotent(tmp_path: Path) -> None:

@@ -578,6 +578,10 @@ def write_stream(audio: Audio, run_dir: Path, stem: str) -> tuple[str, AudioWrit
     otherwise clip is scaled down, and the gain comes back in the report. See
     ``specs/20260907-triage-stream-compression/design.md``.
 
+    Any existing entry at the destination is removed first, so the write replaces the name rather
+    than following whatever it points at. See
+    ``specs/20260922-replay-decisions-over-a-finished-corpus/design.md``.
+
     Args:
         audio: The stream's audio.
         run_dir: The run directory streams live under.
@@ -589,7 +593,9 @@ def write_stream(audio: Audio, run_dir: Path, stem: str) -> tuple[str, AudioWrit
         the write scaled the samples down to fit).
     """
     relative = f"streams/{stem}{STREAM_SUFFIX}"
-    report = audio.save_to_file(str(run_dir / relative), out_of_range=NORMALIZE)
+    destination = run_dir / relative
+    destination.unlink(missing_ok=True)
+    report = audio.save_to_file(str(destination), out_of_range=NORMALIZE)
     return relative, report
 
 

@@ -1342,6 +1342,17 @@ class TestAQualityGateDoesNotDecideThatTheProductionNeverHappened:
         result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
         assert [finding for finding in result.deviations if finding.name == "carrier_rejected"] == []
 
+    def test_the_reading_reaches_the_store_where_the_verdict_reads_it(self, tmp_path: Path) -> None:
+        """The whole point: the gate had no value to read, so the file passed triage clean."""
+        store, _ = seed(
+            tmp_path,
+            amplitude=((2.0, 10.15),),
+            tracks=_wobble_tracks(20.0, (2.0, 10.15), 120.0, 6.0),
+        )
+        voice(store, "plain", config(), None, run_dir=tmp_path)
+        assert _node_readings(store)["carrier_f0_spread_semitones"] > MEASURED["f0_spread_max_semitones"]
+        assert _node_readings(store)["carrier_duration_s"] == pytest.approx(8.15, abs=0.1)
+
     def test_a_low_continuity_production_is_still_a_task_extent(self, tmp_path: Path) -> None:
         """``continuity_min`` is the other SUSTAINED quality reading."""
         store, _ = seed(tmp_path, continuity=0.1)

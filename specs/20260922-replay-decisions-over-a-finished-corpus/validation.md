@@ -2,8 +2,22 @@
 
 `scripts/extend_replay_decisions.py` at `31a008ad`, over twelve runs of the finished 2026-09-19
 corpus at `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/`, writing into a scratch tree
-with `--out-root`. Job 23463307 on `pi_satra`, 8 CPUs, 3 min 35 s for both passes. Nothing under
-the corpus tree was written, checked afterwards with `find -newermt` over `run/out` — no hits.
+with `--out-root`. Job 23463307 on `pi_satra`, 8 CPUs, 3 min 35 s for both passes.
+
+> **This section originally read "Nothing under the corpus tree was written, checked afterwards with
+> `find -newermt` over `run/out` — no hits." That claim was false.**
+>
+> The `find -newermt` check did return no hits, but it could not have: none of the twelve sampled
+> runs had a live `redacted.flac` for a replayed REDACT to overwrite, so the failing case was never
+> in the sample. The full 2026-09-22 corpus replay did exercise it. **In the window after that
+> replay began, 17,924 `redacted.flac` files under
+> `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out/` were overwritten** — exactly the
+> count of recordings where REDACT ran. The mirror seeded `streams/redacted.flac` as a symlink into
+> the corpus tree, and REDACT's truncating write followed it.
+>
+> Stores and all other streams were untouched: 0 in the same window. The damage is confined to a
+> derived, regenerable artefact, superseded by the replay's own REDACT output, and is not being
+> restored. The mechanism and its fix are in `design.md`, "The write-through defect".
 
 ## How the twelve were chosen
 
@@ -46,9 +60,14 @@ run id a regenerated decision takes a new id, so the live count is what the repl
 retired count is what the corpus run wrote — the branch wrote one entity more than before. That is
 the gates change showing up, and it is the reason for doing this.
 
-`summary.pdf` and `summary.json` were rendered for all twelve. In the mirrored root the five
-streams are symlinks into the finished run and `derivatives/` is a symlink to its directory, so
-REDACT can write a redacted stream without the finished tree being writable.
+`summary.pdf` and `summary.json` were rendered for all twelve. In the mirrored root the streams the
+replay only reads are symlinks into the finished run and `derivatives/` is a symlink to its
+directory.
+
+At the time of this validation `redacted.flac` was linked too, which is the defect above: REDACT's
+write followed the link into the finished tree. It is no longer linked, and `write_stream` no longer
+follows a link it finds, so REDACT now writes a redacted stream into the mirror without the finished
+tree being writable. The sentence this paragraph replaced asserted that property as already true.
 
 ## Every node's inputs were there
 

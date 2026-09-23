@@ -120,6 +120,8 @@ DIARIZATION_DERIVATIVE = "diarization"
 CLEARVOICE_ORG = "alibabasglab"
 UNASDIFF_BACKEND = "unasdiff"
 SEPARABLE_SOURCES = 2
+SEPARATED_PREFIX = "separated_"
+"""The stem prefix of each separated source stream, ``separated_<index>``."""
 NONTARGET_LEGS = ("level_db", "tilt_db_per_octave", "d_to_r_db")
 REPETITION_ALLOWED_CATEGORIES = ("Letters", "Numbers")
 """The `random-item-generation` categories whose own instruction permits repeating an item."""
@@ -1972,12 +1974,12 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         for position, stream_audio in enumerate(separated):
             meta = dict(stream_audio.metadata.get("clearvoice") or {})
             index = int(meta.get("source_index", position))
-            path, written = write_stream(stream_audio, run_dir, f"separated_{index}")
+            path, written = write_stream(stream_audio, run_dir, f"{SEPARATED_PREFIX}{index}")
             stream_id = store.entity(
                 prov_type="stream",
                 extent=stream_span,
                 attributes={
-                    "name": f"separated_{index}",
+                    "name": f"{SEPARATED_PREFIX}{index}",
                     **path_attributes(path, run_dir),
                     "sampling_rate": int(stream_audio.sampling_rate),
                     "channels": 1,
