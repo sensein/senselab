@@ -30,6 +30,7 @@ from senselab.audio.workflows.triage.extend import (
     RUN_SUBDIR,
     STORE_FILE,
 )
+from senselab.audio.workflows.triage.vocabulary import PII_SCAN, SCANNED
 from senselab.utils.prov_store import Entity, ProvStore
 
 VERDICT_NODE = "VERDICT"
@@ -44,12 +45,6 @@ RECORDING_STREAM = "recording"
 
 COMPLETED = "completed"
 """The run state a node that ran to the end carries."""
-
-PII_SCAN = "pii_scan"
-"""The measurement SPEECH writes for its PII scan, whether or not the scan ran."""
-
-SCANNED_KEY = "scanned"
-"""The key a ``pii_scan`` measurement carries only when the scan was skipped."""
 
 DEVIATE_VERB = "deviate"
 """The verb on the assertion a branch writes for one typed deviation."""
@@ -104,6 +99,7 @@ ABSENT = "absent"
 _TRANSITION_KEYS = (
     "triage",
     "release",
+    "release_ground",
     "route_state",
     "discard_ground",
     "declared_family",
@@ -302,7 +298,7 @@ def _scanned(scans: Sequence[Mapping[str, Any]]) -> bool | None:
     """
     if not scans:
         return None
-    return not any(scan.get(SCANNED_KEY) is False for scan in scans)
+    return not any(scan.get(SCANNED) is False for scan in scans)
 
 
 def _grounds(decision: Mapping[str, Any] | None) -> tuple[str, ...]:
@@ -413,7 +409,7 @@ def _pii_axis(before: Generation, after: Generation) -> dict[str, Any]:
         ``[before, after]``, plus the categories whose count moved.
     """
     axis: dict[str, Any] = {
-        SCANNED_KEY: [before.pii_scanned, after.pii_scanned],
+        SCANNED: [before.pii_scanned, after.pii_scanned],
         "findings_n": [before.pii_findings(), after.pii_findings()],
         "speech_ran": [before.mapping("ran").get(SPEECH_NODE, ABSENT), after.mapping("ran").get(SPEECH_NODE, ABSENT)],
         "redact_ran": [before.mapping("ran").get(REDACT_NODE, ABSENT), after.mapping("ran").get(REDACT_NODE, ABSENT)],
@@ -749,7 +745,7 @@ class _Tally:
             if key == "categories" or not (isinstance(value, list) and len(value) == 2):
                 continue
             self.pii.setdefault(str(key), Counter())[_transition(value[0], value[1])] += 1
-        scanned = axis.get(SCANNED_KEY) or [None, None]
+        scanned = axis.get(SCANNED) or [None, None]
         if scanned[0] is True and scanned[1] is not True:
             self.pii_stems["scanned_then_not"].append(stem)
         if scanned[0] is not True and scanned[1] is True:

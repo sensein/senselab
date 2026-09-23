@@ -1088,6 +1088,7 @@ def _verdict(store: ProvStore) -> dict[str, Any]:
         return {
             "triage": None,
             "release": None,
+            "release_ground": None,
             "discard_ground": None,
             "declared_family": None,
             "reasons": [],
@@ -1359,6 +1360,7 @@ def _report_document(
         "decisions": {
             "file_triage": verdict.get("triage"),
             "release": verdict.get("release"),
+            "release_ground": verdict.get("release_ground"),
             "discard_ground": verdict.get("discard_ground"),
             "flags": [reason for reason in reasons if reason.get("outcome") in {"flag", "fail", "discard"}],
             "reasons": reasons,

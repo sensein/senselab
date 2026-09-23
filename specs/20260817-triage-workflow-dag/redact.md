@@ -11,12 +11,18 @@ only the first reaches this step:
 | state | REDACT | release axis |
 | --- | --- | --- |
 | SPEECH ran and found PII | **runs** | `releasable` on a pass, `withheld` otherwise |
-| SPEECH ran and found no PII | does not run | `not_assessed` |
-| SPEECH did not run, or failed for want of words | does not run | `not_assessed` |
+| SPEECH ran and found no PII | does not run | `nothing_to_redact` |
+| SPEECH did not run, or failed for want of words | does not run | `nothing_to_redact` |
 
 A wordless recording has no PII scan, no REDACT verdict, and no withheld release. There is no
 incomplete-scan row here, because there is no scan to be incomplete: a file with nothing to redact is
 not a file whose redaction failed.
+
+**Not running is not an unknown.** The last two rows are the *ordinary* case — 71% of the b2ai adult
+corpus — and until 2026-09-22 [`verdict.md`](verdict.md) read them off REDACT's silence as
+`not_assessed`. They are determinations, and VERDICT now makes them from the evidence: SPEECH's
+lexical count, its scan record and the live findings. Which of the four determined grounds a row
+lands on is in that file's release fold; nothing about *this* node's gate changed.
 
 ## Signature
 

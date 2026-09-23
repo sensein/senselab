@@ -43,6 +43,8 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome
 from senselab.audio.workflows.triage.run import entity_subdir, prepare_run_layout, run_triage
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
+    NO_TRANSCRIPT,
+    SCAN_FOUND_NOTHING,
     TASK,
     UNDETERMINED,
     BranchReport,
@@ -91,7 +93,9 @@ def _conclude(store: ProvStore, node: str, outcome: Outcome, kind: str | None) -
     )
 
 
-def _report(store: ProvStore, node: str, kind: str | None, *, found: bool = True) -> tuple[str, BranchReport]:
+def _report(
+    store: ProvStore, node: str, kind: str | None, *, found: bool = True, detail: dict[str, Any] | None = None
+) -> tuple[str, BranchReport]:
     """Write one fake branch's ``branch_report`` entity so the real VERDICT can fold it.
 
     Args:
@@ -103,6 +107,7 @@ def _report(store: ProvStore, node: str, kind: str | None, *, found: bool = True
             an outcome, so a fake branch that proposes none reads ``absent`` regardless of
             ``conformance`` — this is what keeps a routed, conforming fake branch from reading as a
             route/finding mismatch.
+        detail: The observation fields the report carries, as a real branch's would.
     """
     activity = store.activity(node=node, step=None, parameters={})
     agent = software_agent(store)
@@ -122,7 +127,7 @@ def _report(store: ProvStore, node: str, kind: str | None, *, found: bool = True
         conformance=True,
         conformance_of=TASK,
         deviations=(),
-        detail={},
+        detail=detail or {},
     )
 
 
@@ -266,11 +271,17 @@ def _fakes(
         enrollment: Any = None,  # noqa: ANN401
     ) -> BranchResult:
         _record("SPEECH")
+        scan = store.activity(node="SPEECH", step="pii", parameters={})
+        measurement = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={"name": "pii_scan", "signal": "consensus_transcript", "scanned_by": ["rules"], "failed": []},
+        )
+        store.was_generated_by(measurement, scan)
         if pii:
-            scan = store.activity(node="SPEECH", step="pii", parameters={})
             finding = store.entity(prov_type="pii", extent=(0.0, 1.0), attributes={"category": "name"})
             store.was_generated_by(finding, scan)
-        entity_id, report = _report(store, "SPEECH", "speech")
+        entity_id, report = _report(store, "SPEECH", "speech", detail={"words_n": 12})
         return BranchResult(report=report, view=(entity_id,), report_entity_id=entity_id)
 
     def _voice(
@@ -657,12 +668,13 @@ class TestConditionalExecution:
     def test_speech_running_without_a_finding_still_skips_redact(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """redact.md: SPEECH ran and found no PII, so the release axis reads not_assessed."""
+        """SPEECH ran, scanned and found no PII, so the axis is determined and REDACT is not needed."""
         calls = graph(routed=("SPEECH",), pii=False)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert "SPEECH" in calls and "REDACT" not in calls
         assert result.file_verdict is not None
-        assert result.file_verdict.release is Release.NOT_ASSESSED
+        assert result.file_verdict.release is Release.NOTHING_TO_REDACT
+        assert result.file_verdict.release_ground == SCAN_FOUND_NOTHING
 
     def test_speech_running_with_a_finding_reaches_redact(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
@@ -817,12 +829,13 @@ class TestAdmitFailShortCircuits:
     def test_the_file_verdict_discards_and_nothing_is_released(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """An unmeasurable recording discards on triage and is never assessed for release."""
+        """An unmeasurable recording discards on triage; nothing was transcribed, so nothing is redactable."""
         graph(admit_outcome=Outcome.FAIL)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
         assert result.file_verdict.triage is Triage.DISCARD
-        assert result.file_verdict.release is Release.NOT_ASSESSED
+        assert result.file_verdict.release is Release.NOTHING_TO_REDACT
+        assert result.file_verdict.release_ground == NO_TRANSCRIPT
         assert result.released == {}
         assert result.store_path.is_file()
 

@@ -232,7 +232,7 @@ with itself it says so rather than resolving the disagreement by precedence.
 | axis | question | values |
 | --- | --- | --- |
 | `triage` | what should happen to this recording | `pass` \| `flag` \| `discard` |
-| `release` | is a redacted artifact safe to hand on | `releasable` \| `withheld` \| `not_assessed` |
+| `release` | is a redacted artifact safe to hand on | `releasable` \| `withheld` \| `nothing_to_redact` \| `not_assessed` |
 
 Collapsing them would make a recording with clean measurements and surviving PII look like a
 measurement problem, and a recording with an empty transcript and no PII look releasable.
@@ -401,14 +401,69 @@ reason to re-derive, not a reason to keep flagging.
 
 ## The release fold
 
-| condition | `release` |
-| --- | --- |
-| REDACT did not run — no speech branch, no words, or no PII found | `not_assessed` |
-| REDACT returned `fail` — a finding survived verification | `withheld` |
-| REDACT returned `flag` — verification was incomplete | `withheld`; unresolved is not cleared |
-| REDACT returned `pass` | `releasable`, for **its artifacts only** |
+### REDACT's absence decides nothing — owner decision, 2026-09-22
 
-Only `pass` clears an artifact, which makes the mapping total.
+> "redact is only a function of whether asr exists and contains lexical words, you can't redact
+> anything else. so redact not-running is completely fine and should have no implication on
+> assessment. that's verdict's job to determine and not dependent on redact."
+
+Until 2026-09-22 `_release_from` read the whole axis off one question — did REDACT leave a verdict?
+— and answered `not_assessed` when it had not. But the runner calls REDACT only when
+`"SPEECH" in selected and _speech_found_pii(store)`, so its silence is the *ordinary* case, not an
+anomaly. That is REDACT deciding by its own absence, which the graph's contract forbids: a branch
+reports, VERDICT decides.
+
+**Measured over 62,548 replayed recordings** (`triage_replay_20260922`, probed store by store; see
+[the population table](#what-the-old-rule-was-reporting) below), the old rule reported 44,623 —
+71.34% of the corpus — as unexamined. Exactly **one** of them was.
+
+### The table
+
+Read in order; the first row that matches wins.
+
+| condition | `release` | `release_ground` |
+| --- | --- | --- |
+| REDACT left a verdict, `pass` | `releasable`, for **its artifacts only** | — |
+| REDACT left a verdict, `flag` or `fail` | `withheld`; unresolved is not cleared | — |
+| live `pii` findings and no REDACT verdict | `not_assessed` | `REDACTION_OWED` |
+| SPEECH errored | `not_assessed` | `SPEECH_UNREAD` |
+| SPEECH left no lexical count and did not complete | `nothing_to_redact` | `NO_TRANSCRIPT` |
+| SPEECH completed and left no lexical count | `not_assessed` | `SPEECH_UNREAD` |
+| SPEECH read no lexical word | `nothing_to_redact` | `NO_LEXICAL_WORD` |
+| the scan was declined — every word is in the stimulus | `nothing_to_redact` | `NOTHING_BEYOND_STIMULUS` |
+| the scan ran and found nothing | `nothing_to_redact` | `SCAN_FOUND_NOTHING` |
+| SPEECH read lexical words and recorded no scan | `not_assessed` | `SCAN_UNRECORDED` |
+
+The table is total: the last row is the fall-through.
+
+**Why one axis and not two.** "Was there anything to redact" and "did redaction succeed" are
+different questions, and collapsing them is what produced the defect — so the split was considered
+and rejected. The reason is that the second question does not exist wherever the first answers *no*:
+when nothing needed redacting REDACT produces **no artifact at all**, so "did redaction succeed" is
+not unanswered, it is not asked. A two-axis product would be a cross-product most of whose cells are
+impossible, and the one question a consumer actually has — *may I hand this artifact on?* — would
+require joining them. One axis with the states enumerated over the evidence answers it directly;
+`release_ground` carries the decomposition without a second axis, exactly as `discard_ground`
+already does for triage.
+
+**`nothing_to_redact` is not `releasable`.** There is no artifact, so nothing was cleared. Folding
+the two together would assert a clearance for a file that does not exist. This is the old
+"`not_assessed` is not `releasable`" warning, kept and narrowed: a recording with no speech, or with
+speech and no PII, was never redacted and must not be read as cleared of content a transcript could
+not carry.
+
+**`not_assessed` now means only what it says.** Three grounds reach it, and all three are cases
+where the graph genuinely could not tell: SPEECH errored, SPEECH reached lexical content and left no
+scan record, or a scan found something and no redaction verdict stands over it. The third is a
+safety-relevant gap and used to be indistinguishable from the 44,622 recordings that were simply
+clean.
+
+**A SPEECH withheld by a critical failure reads `NO_TRANSCRIPT`, not `not_assessed`.** The graph
+wanted to run SPEECH and could not, so what the recording carries is genuinely unknown — but there
+is no artifact and no transcript either way, so the release axis has nothing to withhold. That
+circumstance is already a `CRITICAL_ABSENCE` flag on the **triage** axis, which is the axis that
+asks whether a human must look. Keeping it off the release axis is what stops one circumstance from
+being counted twice.
 
 **Nothing an annotating detector concluded reaches this axis.** REDACT's optional LLM re-read of the
 redacted transcript used to downgrade REDACT's own outcome from `pass` to `flag`, which this table
@@ -420,11 +475,74 @@ annotation now reaches the triage axis and only the triage axis; see
 **`releasable` never applies to the store.** The store holds the unredacted consensus transcript by
 design and is append-only. `release` describes REDACT's artifacts and nothing else.
 
-**`not_assessed` is not `releasable`.** A recording with no speech, or with speech and no PII, was
-never redacted, and must not be read as cleared of content a transcript could not carry.
-
 **The goal on this axis is to minimise `withheld`**: a withhold is a file no consumer can use, and
 every withhold that rests on a scan of text nobody uttered is one the graph created.
+
+### The evidence VERDICT reads
+
+`RedactionEvidence`, gathered by `nodes/verdict._redaction_evidence` and nowhere else:
+
+| field | source | meaning |
+| --- | --- | --- |
+| `lexical_words_n` | SPEECH's `branch_report`, `words_n` | how many lexical words the consensus carried; None where SPEECH left no report |
+| `scanned` | every live `pii_scan` measurement | True scanned, False declined, None no record |
+| `findings_n` | live `pii` entities | how many findings stand |
+
+This is the owner's rule read literally: *whether asr exists* is `lexical_words_n is not None`
+joined to `ran["SPEECH"]`, and *contains lexical words* is `lexical_words_n > 0`. `scanned` only
+separates the two ways a transcript with words can carry nothing.
+
+### What the old rule was reporting
+
+Measured 2026-09-22 over every store under `triage_replay_20260922/out/` — 62,548 recordings, read
+directly rather than through the differential's aggregate, with the "after" generation recovered
+from the invalidation edges the way `replay_diff.split_generations` recovers it. Slurm array
+23515058, 64 tasks, `mit_preemptable`; zero read errors.
+
+| old `release` | n | % |
+| --- | ---: | ---: |
+| `not_assessed` | 44,623 | 71.34 |
+| `releasable` | 13,521 | 21.62 |
+| `withheld` | 4,404 | 7.04 |
+
+| new `release` | `release_ground` | n | % |
+| --- | --- | ---: | ---: |
+| `nothing_to_redact` | `NO_TRANSCRIPT` | 19,097 | 30.53 |
+| `releasable` | — | 13,521 | 21.62 |
+| `nothing_to_redact` | `NOTHING_BEYOND_STIMULUS` | 12,980 | 20.75 |
+| `nothing_to_redact` | `SCAN_FOUND_NOTHING` | 11,124 | 17.78 |
+| `withheld` | — | 4,404 | 7.04 |
+| `nothing_to_redact` | `NO_LEXICAL_WORD` | 1,421 | 2.27 |
+| `not_assessed` | `SPEECH_UNREAD` | 1 | 0.00 |
+
+Every movement is `not_assessed -> nothing_to_redact`, 44,622 of them. No recording changes between
+`releasable`, `withheld` and anything else, which is the property that makes this safe: the rule
+touches only the state REDACT's absence used to produce.
+
+These figures are 31 higher than the differential's on the `NO_TRANSCRIPT` row because the probe
+covers all 62,548 stores and the differential compares the 62,516 it could replay; 31 of the 32
+not-replayable recordings are ones ADMIT rejected, so SPEECH never ran on them.
+
+### `scanned is None` is three different things
+
+20,519 recordings carry no `pii_scan` measurement, and they are **not one population**. Probed, they
+decompose with no overlap and no residue:
+
+| what | n | how it presents |
+| --- | ---: | --- |
+| SPEECH never ran | 19,097 | no `branch_report`, `ran["SPEECH"] == skipped` |
+| SPEECH ran and the consensus carried no lexical word | 1,421 | `words_n == 0`, `diarization == "no_words"`, the note *no consensus word* |
+| SPEECH errored | 1 | activity, no report |
+
+All 1,421 of the middle row carry **all three** markers, which identifies them as exactly the
+`if not lexical:` early return in `nodes/speech.py` — the one path that reports without reaching
+step 7, so it writes no scan record. That is why the fold keys on `lexical_words_n` and not on
+`scanned`: the lexical count is written on both paths and distinguishes the three cases directly,
+where `scanned is None` conflates them.
+
+Two guards were checked over the same 62,548 and are empty: no recording has lexical words and no
+scan record, and no recording completed SPEECH without leaving a report. The `SCAN_UNRECORDED` row
+of the table therefore fires on nothing in this corpus and exists so that it cannot fire silently.
 
 ## A REDACT `fail` does not flip triage, and no non-pass is invisible
 
@@ -443,8 +561,9 @@ record and cannot mistake one for the other.
 
 ```
 triage:   pass | flag | discard
-release:  releasable | withheld | not_assessed
+release:  releasable | withheld | nothing_to_redact | not_assessed
 discard_ground: "unmeasurable" | "acoustically_empty" | null
+release_ground: one of the seven controlled grounds | null   # null wherever REDACT itself decided
 llm_redaction: { status, iterations, flagged, model_id, revision, failure }   # {} when REDACT wrote none
 reasons:  [ { node, outcome, kind?, why } ]        # every contributing verdict, in order
 ran:      { node: "completed" | "skipped" | "errored" }
