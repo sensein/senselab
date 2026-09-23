@@ -1215,8 +1215,44 @@ SPEECH's enrollment, separation, diarization and non-target settings.
 speech v2 -- branch-speech.md. speech.enrollment_model names the speaker-embedding model AND its
 revision that enrollment is estimated with; null, and while null an enrollment is refused rather than
 compared. speech.separation_backend chooses between unasdiff in speech_sound mode and
-MossFormer2_SS_16K; null until the two are ranked on this corpus, and while null separation does not
-run. speech.separation_sound_class is the FSD class name unasdiff's sound slot is conditioned on.
+MossFormer2_SS_16K, and ships **MossFormer2_SS_16K**, which turns the multi-speaker instrument on.
+
+THE TWO WERE NOT RANKED, AND THE VALUE IS NOT A RANKING. The earlier null said "until the two are
+ranked on this corpus"; that ranking never happened and cannot, because only one of the two is
+runnable. unasdiff's speech_sound mode refuses to run without a conditioning class for its sound
+slot, branch-speech.md says the slot stands for any background and should not be conditioned on
+one, and the capability to leave it unconditioned is absent upstream (see separation_sound_class
+below). So the choice is between the one backend that runs and no separation at all, and the
+ranking that would have justified preferring a loser is not owed -- there is no loser. What the
+value IS is the decision to pay for separation, and that has a measured price rather than a fit.
+
+The trigger is not this key: separation runs only where the diarizer counted more than one speaker
+on the enhanced stream, which over the 62,392 recordings of the replayed run at
+/orcd/scratch/bcs/002/satra/triage_replay_20260922/out/ is 2,305 recordings -- 5.32% of the 43,335
+SPEECH ran on, 3.69% of the corpus -- carrying 22.22 h of audio (mean 34.7 s, median 24.7 s).
+2,303 of those hold exactly 2 speakers and are separable; 2 hold 3 and are reported rather than
+decomposed, because the checkpoint fixes n_sources at 2.
+
+The price, timed through separate_audios on the corpus's own enhanced streams (job 23478224,
+mit_preemptable, 4 cores, CPU-only, six recordings from 4.4 s to 27.6 s, every residual under 2 s):
+
+    wall_seconds = 19.6 + 5.36 x audio_seconds
+
+which over the 2,305 firings is 12.6 CPU-hours of fixed per-call cost plus 119.1 of marginal,
+about 132 CPU-hours for one pass over the corpus, roughly 5.4x realtime on four cores. The ~20 s
+constant is subprocess start, torch import and checkpoint load, paid once per recording because the
+graph hands separate_audios a list of one. A seventh, first recording took 405 s creating the
+clearvoice subprocess venv; that is once per host and excluded from the fit.
+
+What the value does NOT establish: that MossFormer2's decomposition is correct on this corpus. No
+recording here carries a label saying who spoke when, so the separation is unvalidated and every
+number the instrument reports downstream of it is as good as the decomposition. The gate
+(verdict.gates ... dominant_speaker_share_min) deliberately does not read any of them -- it reads
+extent_dominant_speaker_share, which comes off the diarizer and exists whether or not separation
+ran. Turning this key on therefore adds a reading and adds no decision. The design and the full
+cost accounting are in specs/20260922-the-multi-speaker-instrument/design.md.
+
+speech.separation_sound_class is the FSD class name unasdiff's sound slot is conditioned on.
 It is null for a DIFFERENT reason from every other null here, and the distinction matters: nobody
 needs to measure anything for it. branch-speech.md says the slot stands for any background and
 should not be conditioned on a class, and separate_audios refuses speech_sound without one ("index 0

@@ -244,7 +244,7 @@ speech:
   speech_test_si_sdr_floor:            # SI-SDR floor, same
   hint_tags: [speech, read-speech]     # unread as of v2; hints route through routing.hint_branch_map alone
   enrollment_model:                    # speaker-embedding model AND revision enrollment is computed with
-  separation_backend:                  # which separator runs on overlapping speech
+  separation_backend: MossFormer2_SS_16K  # which separator runs on overlapping speech
   separation_sound_class:              # the sound class that separator is asked for
   nontarget:                           # what marks a diarized speaker as not the target
     level_db:                          # level difference from the target
