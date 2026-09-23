@@ -122,7 +122,44 @@ there is one.
 
 Both refuse it, and given the AUCs above, both are right to be conservative.
 
-## 4. Cost
+## 4. What the incumbent currently counts, corpus-wide
+
+Every `enhanced_diarization.npz` in `triage_rerun_20260923/out` read back (job 23559165):
+**62,518 recordings, all readable.**
+
+| count | recordings |
+|---|---|
+| 0 speakers | 12,254 |
+| 1 speaker | 47,500 |
+| 2 speakers | 2,762 |
+| 3 speakers | 2 |
+| **≥ 2** | **2,764 = 4.42 %** |
+
+Overlap greater than zero: 2,723 = 4.36 %.
+
+Restricted to the 8,062 recordings with at least 20 s of speech, 12.88 % get two.
+
+Two-speaker rate by task, tasks with ≥ 200 recordings:
+
+| task | rate |
+|---|---|
+| cinderella-story | 26.4 % |
+| caterpillar-passage | 19.6 % |
+| story-recall-v2 | 18.3 % |
+| random-item-generation | 14.3 % |
+| story-recall | 13.5 % |
+| word-color-stroop | 11.9 % |
+| free-speech | 10.5 % |
+| picture-description | 10.5 % |
+| **maximum-phonation-time-v2-1** | **10.1 %** |
+
+The last row is the tell. **A sustained-vowel task — one person holding a single vowel —
+gets a second speaker on one recording in ten.** Together with the median second-speaker
+duration of 0.30 s in the sampled positives, this says the existing `speaker_count ≥ 2`
+population is substantially diarizer noise, and any consumer treating it as "two people were
+present" is reading it wrong.
+
+## 5. Cost
 
 Amortized over 73 recordings on an idle A100, models resident, median audio 39.9 s:
 
