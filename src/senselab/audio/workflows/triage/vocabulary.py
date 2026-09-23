@@ -191,6 +191,7 @@ _SECTION = "verdict"
 _ADMIT = "ADMIT"
 _PREPROCESS = "PREPROCESS"
 _REDACT = "REDACT"
+_SPEECH = "SPEECH"
 _VERDICT = "VERDICT"
 _ROUTING = "routing"
 
@@ -519,8 +520,11 @@ def _release_from(
     node_verdicts: Sequence[NodeVerdict],
     evidence: RedactionEvidence,
     ran: Mapping[str, RunState],
-) -> Release:
-    """REDACT's outcome as a release state; an absent verdict means unexamined, never releasable.
+) -> tuple[Release, str | None]:
+    """The release axis, decided from the evidence rather than from whether REDACT left a verdict.
+
+    REDACT runs only where a scan found something, so its absence is the ordinary case and carries
+    no implication of its own. The table is in ``specs/20260817-triage-workflow-dag/verdict.md``.
 
     Args:
         node_verdicts: Every node verdict the fold was given.
@@ -528,14 +532,29 @@ def _release_from(
         ran: Whether each node ran.
 
     Returns:
-        The release state for REDACT's artifacts only — never for anything in the store. Only
-        ``pass`` clears an artifact; every other outcome, and an absent verdict, withholds.
+        The state, for REDACT's artifacts only and never for anything in the store, and the ground
+        behind it. Only a REDACT ``pass`` clears an artifact; the ground is None wherever REDACT
+        itself decided, and one of the controlled grounds otherwise.
     """
-    del evidence, ran
     redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
-    if redact is None:
-        return Release.NOT_ASSESSED
-    return Release.RELEASABLE if redact.outcome is Outcome.PASS else Release.WITHHELD
+    if redact is not None:
+        return (Release.RELEASABLE if redact.outcome is Outcome.PASS else Release.WITHHELD), None
+    if evidence.findings_n > 0:
+        return Release.NOT_ASSESSED, REDACTION_OWED
+    speech = ran.get(_SPEECH)
+    if speech is RunState.ERRORED:
+        return Release.NOT_ASSESSED, SPEECH_UNREAD
+    if evidence.lexical_words_n is None:
+        if speech is RunState.COMPLETED:
+            return Release.NOT_ASSESSED, SPEECH_UNREAD
+        return Release.NOTHING_TO_REDACT, NO_TRANSCRIPT
+    if evidence.lexical_words_n == 0:
+        return Release.NOTHING_TO_REDACT, NO_LEXICAL_WORD
+    if evidence.scanned is False:
+        return Release.NOTHING_TO_REDACT, NOTHING_BEYOND_STIMULUS
+    if evidence.scanned is True:
+        return Release.NOTHING_TO_REDACT, SCAN_FOUND_NOTHING
+    return Release.NOT_ASSESSED, SCAN_UNRECORDED
 
 
 def _agreement(route: str, reported: bool, found_state: str) -> str:
@@ -774,10 +793,13 @@ def fold_file_verdict(
     else:
         triage = Triage.PASS
 
+    release, release_ground = _release_from(node_verdicts, redaction or RedactionEvidence(), ran)
+
     return FileVerdict(
         triage=triage,
-        release=_release_from(node_verdicts, redaction or RedactionEvidence(), ran),
+        release=release,
         discard_ground=ground,
+        release_ground=release_ground,
         findings=findings,
         conformance={name: report.conformance for name, report in reports.items()},
         conformance_of={name: report.conformance_of for name, report in reports.items()},

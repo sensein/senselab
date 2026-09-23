@@ -463,10 +463,12 @@ class TestTheRedactInterlockIsUntouched:
         """REDACT keeps its ``Outcome``; the split reached the branches and not it."""
         releasable = _fold(node_verdicts=[NodeVerdict("REDACT", Outcome.PASS, None, "scanned")])
         withheld = _fold(node_verdicts=[NodeVerdict("REDACT", Outcome.FAIL, None, "a finding survived")])
-        unassessed = _fold()
         assert releasable.release is Release.RELEASABLE
         assert withheld.release is Release.WITHHELD
-        assert unassessed.release is Release.NOT_ASSESSED
+
+    def test_redacts_absence_decides_nothing(self) -> None:
+        """REDACT runs only where a scan found something; VERDICT owns every other release state."""
+        assert _fold().release is not Release.NOT_ASSESSED
 
     def test_no_branch_report_can_move_the_release_axis(self) -> None:
         """A branch has no say in it, which is what keeps the interlock a REDACT question."""

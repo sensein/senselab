@@ -26,7 +26,7 @@ from typing import Any, Iterable, Iterator, Sequence
 import numpy as np
 import pyarrow as pa
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 """Bumped whenever a column is added, removed or retyped, or a binary layout changes."""
 
 STORE_NAME = "store.jsonl"
@@ -648,6 +648,7 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         "run_dir": str(run_root.relative_to(root)) if run_root.is_relative_to(root) else str(run_root),
         "declared_family": decision.get("declared_family"),
         "release": decision.get("release"),
+        "release_ground": decision.get("release_ground"),
         "grounds": decision.get("discard_ground"),
         "route_state": decision.get("route_state"),
         "duration_s": duration_s,
@@ -825,6 +826,7 @@ def schema() -> pa.Schema:
         pa.field("run_dir", pa.string()),
         pa.field("declared_family", pa.string()),
         pa.field("release", pa.string()),
+        pa.field("release_ground", pa.string()),
         pa.field("grounds", pa.string()),
         pa.field("route_state", pa.string()),
         pa.field("duration_s", pa.float64()),
