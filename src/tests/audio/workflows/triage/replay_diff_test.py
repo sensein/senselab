@@ -42,6 +42,7 @@ from senselab.audio.workflows.triage.replay_diff import (
     write_report,
 )
 from senselab.audio.workflows.triage.vocabulary import (
+    SCAN_FOUND_NOTHING,
     FileVerdict,
     NodeVerdict,
     Outcome,
@@ -273,6 +274,30 @@ class TestDecisionMovement:
         assert row["transitions"]["triage"] == "flag->pass"
         assert row["transitions"]["release"] == "not_assessed->releasable"
         assert row["identical"] is False
+
+    def test_a_store_predating_release_ground_still_compares(self, tmp_path: Path) -> None:
+        """The verification path for the release-axis change: an old decision against a new one.
+
+        A pass written before ``release_ground`` existed carries no such key, and the differential
+        must still name the movement rather than refuse the row.
+        """
+        row = diff_store(
+            _replayed(
+                tmp_path,
+                {"fold": _fold(), "drop": ("release_ground",)},
+                {
+                    "fold": FileVerdict(
+                        triage=Triage.PASS,
+                        release=Release.NOTHING_TO_REDACT,
+                        release_ground=SCAN_FOUND_NOTHING,
+                        declared_family="syllable",
+                    )
+                },
+            )
+        )
+        assert row["transitions"]["release"] == "not_assessed->nothing_to_redact"
+        assert row["transitions"]["release_ground"] == f"None->{SCAN_FOUND_NOTHING}"
+        assert row["new_keys"] == ["release_ground"]
 
     def test_grounds_gained_and_lost(self, tmp_path: Path) -> None:
         """A ground that appeared and one that went are each named, against their node."""

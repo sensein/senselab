@@ -20,7 +20,11 @@ from senselab.audio.workflows.triage.run import GRAPH_ORDER
 from senselab.audio.workflows.triage.vocabulary import (
     EXTRA_SPEAKER_IN_EXTENT,
     LLM_REDACTION_RESIDUE,
+    NO_LEXICAL_WORD,
+    NOTHING_BEYOND_STIMULUS,
     REDACTION_LLM_ANNOTATION,
+    REDACTION_OWED,
+    SCAN_FOUND_NOTHING,
     TASK,
     UNDETERMINED,
     UNREAD_DECLARATION,
@@ -109,6 +113,9 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
         declared: Sequence[str] = (),
         family: str = "",
         recording_path: str | None = None,
+        words_n: int | None = None,
+        scanned: bool | None = None,
+        pii_n: int = 0,
     ) -> ProvStore:
         store = ProvStore(run_id="verdict-test")
         agent = software_agent(store)
@@ -142,8 +149,10 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
                     conformance=conformance,
                     conformance_of=TASK,
                     deviations=(),
-                    detail={},
+                    detail={} if node != "SPEECH" or words_n is None else {"words_n": words_n},
                 )
+                if node == "SPEECH":
+                    _write_redaction_evidence(store, activity, agent, scanned=scanned, pii_n=pii_n)
                 continue
             write_verdict(
                 store,
@@ -158,6 +167,36 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
         return store
 
     return _make
+
+
+def _write_redaction_evidence(store: ProvStore, activity: str, agent: str, *, scanned: bool | None, pii_n: int) -> None:
+    """SPEECH's own record of its PII scan, as its step 7 writes it.
+
+    Args:
+        store: The provenance store.
+        activity: The activity to attribute the entities to.
+        agent: The software agent.
+        scanned: True for a scan that ran, False for one SPEECH declined, None for no record.
+        pii_n: How many findings the scan left behind.
+    """
+    if scanned is not None:
+        scan = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes=(
+                {"name": "pii_scan", "signal": "consensus_transcript", "scanned_by": ["rules"], "failed": []}
+                if scanned
+                else {"name": "pii_scan", "signal": "consensus", "scanned": False, "why": "all in the stimulus"}
+            ),
+        )
+        store.was_generated_by(scan, activity)
+        store.was_attributed_to(scan, agent)
+    for index in range(pii_n):
+        finding = store.entity(
+            prov_type="pii", extent=None, attributes={"category": "PERSON", "source": "rules", "occurrence": index}
+        )
+        store.was_generated_by(finding, activity)
+        store.was_attributed_to(finding, agent)
 
 
 def _file_verdict_entity(store: ProvStore) -> Entity:
@@ -579,15 +618,47 @@ class TestHintsAreReadThroughRoutingsMap:
 
 
 class TestTheReleaseAxis:
-    """REDACT's verdict, and nothing else, decides whether an artifact may be handed on."""
+    """REDACT decides where it ran; VERDICT reads the store for every other release state.
 
-    def test_no_redact_verdict_is_not_assessed(
+    These go through the real store, so they exercise ``_redaction_evidence`` as well as the fold.
+    """
+
+    def test_a_scan_that_found_nothing_is_determined_not_unexamined(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A recording with no scan is unexamined, which must not read as cleared."""
-        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR)
+        """SPEECH read words, scanned them and found none; there was nothing for REDACT to do."""
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=42, scanned=True)
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.NOTHING_TO_REDACT
+        assert result.file_verdict.release_ground == SCAN_FOUND_NOTHING
+        assert _file_verdict_entity(store).attributes["release_ground"] == SCAN_FOUND_NOTHING
+
+    def test_a_declined_scan_is_determined(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Every lexical word came out of the task's own stimulus, so nothing was disclosed."""
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=9, scanned=False)
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.NOTHING_TO_REDACT
+        assert result.file_verdict.release_ground == NOTHING_BEYOND_STIMULUS
+
+    def test_a_transcript_with_no_lexical_word_is_determined(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """SPEECH's no-lexical exit reports and writes no scan; 1,421 of the corpus take it."""
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=0, scanned=None)
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.NOTHING_TO_REDACT
+        assert result.file_verdict.release_ground == NO_LEXICAL_WORD
+
+    def test_a_finding_no_redact_verdict_answers_is_unassessed(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The safety-relevant gap: the scan found something and the redaction did not conclude."""
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=42, scanned=True, pii_n=2)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.release is Release.NOT_ASSESSED
+        assert result.file_verdict.release_ground == REDACTION_OWED
 
     def test_a_fail_withholds_and_a_pass_releases(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path

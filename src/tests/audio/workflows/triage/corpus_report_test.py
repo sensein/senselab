@@ -15,16 +15,26 @@ from senselab.audio.workflows.triage.corpus_report import (
     decisions,
     render_markdown,
 )
-from senselab.audio.workflows.triage.vocabulary import FileVerdict, NodeVerdict, Outcome, Release, RunState, Triage
+from senselab.audio.workflows.triage.vocabulary import (
+    NO_TRANSCRIPT,
+    SCAN_FOUND_NOTHING,
+    FileVerdict,
+    NodeVerdict,
+    Outcome,
+    Release,
+    RunState,
+    Triage,
+)
 
 
 def _verdict(
     triage: Triage = Triage.PASS,
     family: str | None = "syllable",
+    release: Release = Release.NOT_ASSESSED,
     **kwargs: object,
 ) -> FileVerdict:
     """Build one fold, defaulting everything the tests do not vary."""
-    return FileVerdict(triage=triage, release=Release.NOT_ASSESSED, declared_family=family, **kwargs)  # type: ignore[arg-type]
+    return FileVerdict(triage=triage, release=release, declared_family=family, **kwargs)  # type: ignore[arg-type]
 
 
 def _write_row(root: Path, stem: str, verdict: FileVerdict | None, **extra: object) -> Path:
@@ -100,6 +110,15 @@ class TestCounting:
         assert report.triage == {"discard": 2, "pass": 1}
         assert report.release == {"not_assessed": 3}
         assert report.discard_ground == {"acoustically_empty": 1, "unmeasurable": 1}
+
+    def test_counts_the_release_ground(self, tmp_path: Path) -> None:
+        """71% of a corpus lands on this axis with no REDACT verdict; the ground is what separates them."""
+        _write_row(tmp_path, "sub-a", _verdict(release=Release.NOTHING_TO_REDACT, release_ground=NO_TRANSCRIPT))
+        _write_row(tmp_path, "sub-b", _verdict(release=Release.NOTHING_TO_REDACT, release_ground=SCAN_FOUND_NOTHING))
+        _write_row(tmp_path, "sub-c", _verdict(release=Release.RELEASABLE))
+        report = aggregate(decisions(tmp_path))
+        assert report.release == {"nothing_to_redact": 2, "releasable": 1}
+        assert report.release_ground == {NO_TRANSCRIPT: 1, SCAN_FOUND_NOTHING: 1}
 
     def test_counts_conformance_per_node_and_per_declared_family(self, tmp_path: Path) -> None:
         """The corpus question is per family: a False on a family the branch does not target is not one."""
