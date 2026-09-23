@@ -6,6 +6,10 @@ graph's own liveness rule — `live_entities`, which is `wasInvalidatedBy`-aware
 below is over the **live** generation only. Job `23526646` on `pi_satra`, 32 workers, no read
 errors on any store.
 
+Reproduce with `measure-corpus.py <out.jsonl> <workers>` (one row per recording, run under the
+replay venv with `PYTHONPATH` at a checkout of this commit), then `summarise.py <out.jsonl>` and
+`summarise-bounds.py <out.jsonl>`, both beside this file.
+
 **Population.** 17,980 recordings carry a `REDACT` activity. 17,925 of them carry at least one live
 `pii` entity, holding 115,753 findings between them. The brief's figure of 17,924 matches the
 second of these to within one, not the first; shares below are given against 17,980, and against
