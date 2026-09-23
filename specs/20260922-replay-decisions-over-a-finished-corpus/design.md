@@ -182,14 +182,57 @@ takes `--out-root`, under which each run gets a fresh root that reads through to
 
 - `run/derivatives` is a symlink to the finished run's `derivatives/` — nothing among the replayed
   nodes writes there, only TAXONOMY, AIRWAY and VOICE read from it.
-- `run/streams` is a real directory seeded with a symlink per finished stream, because REDACT does
-  write there (`redact.py:803-804`, `write_stream(redacted, run_dir, STREAM_NAME)`) and so, when
-  separation is configured, does SPEECH (`speech.py:1707`). Separation is off in the packaged
-  config, but the directory must be writable regardless.
+- `run/streams` is a real directory seeded with a symlink per finished stream **that the replay only
+  reads**. REDACT writes into `streams/` (`redact.py:803-804`, `write_stream(redacted, run_dir,
+  STREAM_NAME)`) and so, when separation is configured, does SPEECH (`speech.py:1975`). Those two
+  names — `redacted` and `separated_*` — are therefore never linked, so their writes land in the new
+  root. Everything else is linked, because SPEECH, REDACT and REPORT/FIGURE genuinely read `plain`,
+  `preemphasised`, `recording` and the diarization stream through the mirror.
+
+  **This paragraph originally said the directory was seeded with a symlink per finished stream, full
+  stop, and that this was safe. It was not.** See "The write-through defect" below.
 - `store.jsonl`, `run.json`, `released/` and `summary/` are new files in the new root.
 
 Seven inodes per run plus the products, ~875k inodes and ~100 GB over the corpus, against 26 TB free
 on the group scratch.
+
+### The write-through defect
+
+The mirror as first written seeded a symlink for *every* finished stream, `redacted.flac` included.
+A stream write was a plain truncating open (`sf.write` via `Audio.save_to_file`), which follows a
+symlink. REDACT's write into the mirror therefore resolved through the link and truncated the file
+in the corpus tree — the exact outcome `--out-root` exists to prevent.
+
+**Measured after the 2026-09-22 corpus replay, in the window after it began: 17,924 `redacted.flac`
+files under `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out/` were overwritten.** That
+is exactly the count of recordings where REDACT ran. Stores and every other stream were untouched —
+0 in the same window — so the damage is confined to a derived, regenerable artefact, and the design
+run's redacted audio is in any case superseded by the replay's own REDACT output. It is not being
+restored.
+
+Two things were wrong, and both are fixed:
+
+1. **The mirror offered a writable name as a link.** `mirror_run_root` now skips any stream a
+   replayed node writes, derived from `redact.STREAM_NAME` and `speech.SEPARATED_PREFIX` rather than
+   from a filename list in the driver.
+2. **The write followed whatever the name pointed at.** `write_stream` now unlinks the destination
+   before writing, so writing a stream replaces the entry rather than modifying its target. This is
+   the general property and holds for every writer, every stream and every mirror, however built.
+
+Either alone closes this defect; both are kept because they close it at different layers, and the
+first is the one that also keeps the mirror honest about what it is for.
+
+**Why not stop symlinking `streams/` entirely.** The five PREPROCESS streams are genuinely read
+through the mirror by SPEECH, REDACT, REPORT and FIGURE, and copying them would be ~100 GB of FLAC
+across the corpus for files nothing writes. **Why not special-case `redacted` alone.** It would miss
+`separated_*` and every future replayed writer; the rule is "a name a replayed node writes", not a
+literal.
+
+The validation's `find -newermt` check reported no hits and was believed. It was run over a
+twelve-run sample whose fixtures had no live REDACT output to clobber, so the case was never
+exercised. The regression test that would have caught it is
+`test_a_replayed_redact_write_leaves_the_finished_tree_byte_identical`, which seeds `redacted.flac`
+into the source run and asserts the source bytes are unchanged after a replayed write.
 
 ## Superseding the old decisions
 
