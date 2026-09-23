@@ -24,7 +24,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.nodes.gates import Pattern
@@ -45,6 +45,7 @@ VERDICT_NODE = "VERDICT"
 REDACT_NODE = "REDACT"
 SPEECH_NODE = "SPEECH"
 PII_SCAN = "pii_scan"
+REDACTION_EXEMPTIONS = "redaction_exemptions"
 
 TASK_EXTENT_ROLE = "task_extent"
 """The ``span`` role the in-family branch mints for the interval it judged the task to occupy."""
@@ -53,7 +54,8 @@ SPEECH_FAMILY = "speech"
 """The span family SPEECH stamps; every free-response recording routes to SPEECH."""
 
 MEASUREMENT_MARKER = '"prov_type": "measurement"'
-KEPT_MEASUREMENT_MARKER = f'"name": "{PII_SCAN}"'
+KEPT_MEASUREMENTS = (PII_SCAN, REDACTION_EXEMPTIONS)
+KEPT_MEASUREMENT_MARKERS = tuple(f'"name": "{name}"' for name in KEPT_MEASUREMENTS)
 
 RELEASE_ORDER = ("releasable", "withheld", "nothing_to_redact", "not_assessed", "unrecorded")
 
@@ -87,7 +89,7 @@ def read_store_light(path: Path) -> StoreView:
         for line in handle:
             if not line.strip():
                 continue
-            if MEASUREMENT_MARKER in line and KEPT_MEASUREMENT_MARKER not in line:
+            if MEASUREMENT_MARKER in line and not any(marker in line for marker in KEPT_MEASUREMENT_MARKERS):
                 continue
             try:
                 record = json.loads(line)
@@ -377,13 +379,103 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
                 "c": str(finding.attributes.get("category") or ""),
                 "s": str(finding.attributes.get("source") or ""),
                 "h": str(finding.attributes.get("haystack") or ""),
-                "stim": bool(finding.attributes.get("in_stimulus")),
+                "stim": tristate(finding.attributes.get("in_stimulus")),
             }
             for finding in pii
         ],
+        "d": determination(view, attributes, redact),
         "nw": len(words),
         "nl": lexical,
         "ch": characters,
+    }
+
+
+def tristate(value: Any) -> int:  # noqa: ANN401 -- a store attribute is any type
+    """A three-valued store flag as an integer, keeping None apart from False.
+
+    ``in_stimulus`` is None when the task supplies no stimulus text, so there was no haystack to
+    check the finding against. That is not the same claim as "checked, and not in the stimulus",
+    and collapsing the two is what hides a task-inherent proper noun.
+
+    Args:
+        value: The attribute.
+
+    Returns:
+        1 for True, 0 for False, -1 for None.
+    """
+    if value is None:
+        return -1
+    return 1 if value else 0
+
+
+def _redact_detail(redact: Entity | None) -> dict[str, Any]:
+    """What REDACT itself concluded.
+
+    ``release_ground`` is None exactly when REDACT decided, so for a releasable or a withheld
+    recording this ``why`` is the only account of the decision there is.
+
+    Args:
+        redact: REDACT's verdict entity, or None when it wrote none.
+
+    Returns:
+        Its outcome, reason and the category lists that explain a pass carrying survivors.
+    """
+    if redact is None:
+        return {"outcome": "", "why": ""}
+    attributes = redact.attributes
+    return {
+        "outcome": str(attributes.get("outcome") or ""),
+        "why": str(attributes.get("why") or ""),
+        "outstanding": sorted(str(name) for name in attributes.get("outstanding") or []),
+        "survived": sorted(str(name) for name in attributes.get("survived") or []),
+        "expected_survivors": sorted(str(name) for name in attributes.get("expected_survivors") or []),
+        "redactions_n": int(attributes.get("redactions_n") or 0),
+        "artifacts_withheld": bool(attributes.get("artifacts_withheld")),
+    }
+
+
+def determination(view: StoreView, verdict: Mapping[str, Any], redact: Entity | None) -> dict[str, Any]:
+    """Everything that determined the recording's release state.
+
+    Args:
+        view: The store view.
+        verdict: The live VERDICT entity's attributes.
+        redact: REDACT's own verdict entity, or None when it wrote none.
+
+    Returns:
+        The account a reader needs: which node decided, what each node concluded, whether the LLM
+        reviewer ran, which gates were evaluated against which reading, and what the exemption pass
+        had to work with.
+    """
+    exemptions = view.last("measurement", name=REDACTION_EXEMPTIONS)
+    exempt = exemptions.attributes if exemptions is not None else {}
+    gates = dict(verdict.get("gates") or {})
+    return {
+        "redact": _redact_detail(redact),
+        "nodes": [
+            {
+                "node": str(reason.get("node") or ""),
+                "outcome": str(reason.get("outcome") or ""),
+                "why": str(reason.get("why") or ""),
+            }
+            for reason in verdict.get("reasons") or []
+        ],
+        "llm": dict(verdict.get("llm_redaction") or {}),
+        "gates": {
+            "applied": list(gates.get("applied") or []),
+            "flagging": list(gates.get("flagging") or []),
+            "bounds": dict(gates.get("bounds") or {}),
+            "layers": dict(gates.get("layers") or {}),
+            "group": str(gates.get("group") or ""),
+        },
+        "ran": dict(verdict.get("ran") or {}),
+        "absences": sorted(str(name) for name in (verdict.get("critical_absences") or {})),
+        "exempt": {
+            "declared": bool(exempt.get("expected_speech_declared")),
+            "n": int(exempt.get("n") or 0),
+            "n_findings": int(exempt.get("n_findings") or 0),
+            "recorded": exemptions is not None,
+        },
     }
 
 
@@ -471,6 +563,114 @@ def extract(corpus: Path, out: Path, workers: int) -> dict[str, Any]:
         "participants": len(participants),
         "characters": characters,
         "counts": dict(sorted(counts.items())),
+    }
+
+
+class ValuePool:
+    """A deduplicating table of JSON values, so a repeated string costs one integer.
+
+    The determination of a release state is overwhelmingly repetition: nine node names, a few
+    dozen distinct ``why`` sentences, one gate specification per group. Emitting it verbatim on
+    11,701 cards would cost more than the transcripts do.
+
+    Attributes:
+        values: The distinct values, in first-seen order.
+    """
+
+    def __init__(self) -> None:
+        """Start empty."""
+        self.values: list[Any] = []
+        self._index: dict[str, int] = {}
+
+    def add(self, value: Any) -> int:  # noqa: ANN401 -- any JSON value may be pooled
+        """The index of a value, adding it when it is new.
+
+        Args:
+            value: Any JSON-serialisable value.
+
+        Returns:
+            Its index in :attr:`values`.
+        """
+        key = json.dumps(value, sort_keys=True, separators=(",", ":"))
+        found = self._index.get(key)
+        if found is None:
+            found = len(self.values)
+            self._index[key] = found
+            self.values.append(value)
+        return found
+
+
+GATE_SPEC_KEYS = ("gate", "reading", "op", "bound", "group", "keyed_under", "layer", "ground")
+"""The fields of an evaluated gate that do not vary between recordings."""
+
+UNDETERMINED = "UNDETERMINED"
+"""What ``passed`` reads when the gate was applied and could not be answered."""
+
+
+def gate_state(passed: Any) -> int:  # noqa: ANN401 -- a store attribute is any type
+    """A gate's outcome as an integer, keeping "could not be answered" out of "passed".
+
+    ``passed`` is True, False, or the string ``UNDETERMINED`` — a truthy string, so a boolean
+    coercion turns an unanswerable gate into a passing one.
+
+    Args:
+        passed: The gate record's ``passed`` field.
+
+    Returns:
+        1 passed, 0 failed, -1 applied but unanswerable.
+    """
+    if passed is True:
+        return 1
+    if passed is False:
+        return 0
+    return -1
+
+
+def pooled_determination(determination: Mapping[str, Any], pool: ValuePool) -> dict[str, Any]:
+    """One recording's determination, with every repeated part replaced by a pool index.
+
+    Args:
+        determination: The row's ``d`` mapping.
+        pool: The shared pool.
+
+    Returns:
+        The compact record the page reads.
+    """
+    redact = determination.get("redact") or {}
+    gates = determination.get("gates") or {}
+    evaluated: list[list[Any]] = []
+    for kind in ("applied", "flagging"):
+        for gate in gates.get(kind) or []:
+            spec = {key: gate.get(key) for key in GATE_SPEC_KEYS if gate.get(key) is not None}
+            spec["kind"] = kind
+            evaluated.append([pool.add(spec), gate.get("value"), gate_state(gate.get("passed"))])
+    return {
+        "r": pool.add(redact),
+        "n": [
+            [pool.add(node.get("node") or ""), pool.add(node.get("outcome") or ""), pool.add(node.get("why") or "")]
+            for node in determination.get("nodes") or []
+        ],
+        "l": pool.add(determination.get("llm") or {}),
+        "g": evaluated,
+        "b": pool.add(
+            {
+                "bounds": gates.get("bounds") or {},
+                "layers": gates.get("layers") or {},
+                "group": gates.get("group") or "",
+            }
+        ),
+        "a": pool.add(determination.get("ran") or {}),
+        "x": pool.add(determination.get("absences") or []),
+        "e": pool.add(determination.get("exempt") or {}),
+        "f": [
+            [
+                pool.add(finding.get("c") or ""),
+                pool.add(finding.get("s") or ""),
+                pool.add(finding.get("h") or ""),
+                finding.get("stim", -1),
+            ]
+            for finding in determination.get("findings") or []
+        ],
     }
 
 
@@ -649,6 +849,8 @@ def recording_html(row: dict[str, Any]) -> str:
         f"&middot; findings: {summary}</span></header>"
         f"{ground_html}{why_html}"
         f'<p class="text">{body}</p>'
+        f'<div class="whyrow"><button type="button" class="whybtn" data-stem="{html.escape(stem)}">'
+        f"what determined this status</button></div>"
         f'<div class="recnote"><label>note on this recording '
         f'<textarea class="rnote" rows="1" data-stem="{html.escape(stem)}"></textarea></label></div>'
         f"</article>"
@@ -716,7 +918,16 @@ def render(corpus: Corpus, title: str) -> str:
         for name, count in corpus.detectors.most_common()
     )
     errors = f'<p class="errors">{len(corpus.errors)} stores unreadable</p>' if corpus.errors else ""
+    pool = ValuePool()
+    rows: dict[str, Any] = {}
+    for participant in order:
+        for row in corpus.participants[participant]:
+            determination = dict(row.get("d") or {})
+            determination["findings"] = row.get("pii") or []
+            rows[str(row.get("stem") or "")] = pooled_determination(determination, pool)
+    why = json.dumps({"pool": pool.values, "rows": rows}, separators=(",", ":"))
     return _DOCUMENT.format(
+        why=why.replace("</", "<\\/"),
         title=html.escape(title),
         style=_STYLE,
         script=_SCRIPT,
@@ -848,6 +1059,30 @@ padding:0 3px}
 border:1px solid var(--line);border-radius:6px;padding:4px 6px;resize:vertical}
 #panel .close{float:right;border:0;background:none;color:var(--mut);cursor:pointer;font-size:14px}
 #progress{font-size:11.5px;color:var(--mut);margin-top:6px}
+.whyrow{margin-top:8px}
+.whybtn{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
+border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
+.whybtn:hover{color:var(--fg);border-color:var(--acc)}
+#why{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(760px,92vw);
+max-height:84vh;overflow:auto;background:var(--card);border:1px solid var(--line);
+border-radius:12px;padding:14px 18px;font-size:13px;box-shadow:0 10px 40px rgba(0,0,0,.28);z-index:20}
+#why h3{margin:0 0 4px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--mut)}
+#why h4{margin:14px 0 4px;font-size:12px;letter-spacing:.03em;color:var(--mut);
+text-transform:uppercase}
+#why .decisive{font-size:14px;margin:6px 0 2px}
+#why .decisive b{font-weight:600}
+#why table{border-collapse:collapse;width:100%;font-size:12px}
+#why th{text-align:left;font-weight:500;color:var(--mut);border-bottom:1px solid var(--line);
+padding:3px 6px 3px 0}
+#why td{padding:3px 6px 3px 0;border-bottom:1px solid var(--line);vertical-align:top}
+#why tr.off td{color:var(--mut);font-style:italic}
+#why .ok{color:#2c5c2c}
+#why .bad{color:#8a2f24}
+#why .neutral{color:var(--mut)}
+#why .note{font-size:12px;color:var(--mut);margin:4px 0 0}
+#why .warn{background:var(--pii);border-left:3px solid var(--piib);padding:6px 9px;
+border-radius:4px;margin:8px 0;font-size:12.5px}
+#scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:19}
 #io textarea{width:100%;height:70px;font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
 background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px}
 @media (prefers-color-scheme:dark){
@@ -858,6 +1093,8 @@ background:var(--card);color:var(--fg);border:1px solid var(--line);border-radiu
 .r-nothing_to_redact{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
 .r-not_assessed,.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
 .errors{color:#e8a89e}
+#why .ok{color:#a8d3a8}
+#why .bad{color:#e8a89e}
 mark.pii[data-v="identifying"]{border-bottom-color:#e8a89e}
 mark.pii[data-v="not-identifying"]{border-bottom-color:#a7bce4}
 mark.pii[data-v="not-the-category"]{border-bottom-color:#a8d3a8}
@@ -1080,6 +1317,182 @@ document.getElementById('file').addEventListener('change',e=>{
   reader.readAsText(f);
 });
 
+/* ---- what determined this status ---- */
+let WHY=null;
+try{WHY=JSON.parse(document.getElementById('whydata').textContent);}catch(e){WHY=null;}
+const whyBox=document.getElementById('why');
+const GROUNDS={
+ 'the scan ran over the transcript and found nothing to redact':'scan found nothing',
+ 'every lexical word is in the task\\u2019s own stimulus, so the scan was declined':'all in stimulus'};
+function esc(s){const d=document.createElement('div');d.textContent=String(s);return d.innerHTML;}
+function P(i){return WHY&&WHY.pool[i];}
+function scrimOn(){
+  if(document.getElementById('scrim'))return;
+  const s=document.createElement('div');s.id='scrim';
+  s.addEventListener('click',closeWhy);document.body.appendChild(s);
+}
+function closeWhy(){
+  whyBox.hidden=true;
+  const s=document.getElementById('scrim');if(s)s.remove();
+}
+whyBox.querySelector('.close').addEventListener('click',closeWhy);
+
+function stimWord(v){
+  if(v===1)return '<span class="neutral">in the stimulus</span>';
+  if(v===0)return 'not in the stimulus';
+  return '<span class="neutral">no stimulus to check</span>';
+}
+function buildWhy(stem,card){
+  const r=WHY&&WHY.rows[stem];
+  if(!r)return '<p class="note">this recording carries no recorded determination.</p>';
+  const out=[];
+  const rel=card.dataset.rel;
+  const rd=P(r.r)||{};
+  const ground=card.querySelector('.ground');
+
+  out.push('<p class="decisive">release is <b>'+esc(rel.replace(/_/g,' '))+'</b>');
+  if(rd.outcome)out.push(' \\u2014 <b>REDACT decided it</b>, returning <b>'+esc(rd.outcome)+'</b>');
+  else if(ground)out.push(' \\u2014 <b>the fold decided it</b>: '+esc(ground.textContent));
+  out.push('</p>');
+  if(rd.outcome){
+    out.push('<p>'+esc(rd.why)+'</p>');
+    out.push('<p class="note">A release ground is recorded only when the fold decides. REDACT '
+      +'decided here, so the ground is empty by construction and this sentence is the account.</p>');
+    const bits=[];
+    if(rd.redactions_n!=null)bits.push(esc(rd.redactions_n)+' redaction(s) planned');
+    if(rd.outstanding&&rd.outstanding.length)
+      bits.push('still found after redacting: <b>'+esc(rd.outstanding.join(', '))+'</b>');
+    if(rd.expected_survivors&&rd.expected_survivors.length)
+      bits.push('survived but accounted for by the stimulus: '+esc(rd.expected_survivors.join(', ')));
+    if(bits.length)out.push('<p class="note">'+bits.join(' \\u00b7 ')+'</p>');
+  }else if(!ground){
+    out.push('<p class="note">no release ground was recorded and REDACT left no verdict.</p>');
+  }
+
+  /* the LLM reviewer: never let "did not run" read as "agreed" */
+  const llm=P(r.l)||{};
+  const st=llm.status||'';
+  out.push('<h4>the LLM reviewer</h4>');
+  if(st==='not_run'||st==='disabled'||!st){
+    const because=st==='disabled'?'It is switched off in the configuration.'
+      :st==='not_run'?'The detector path had already withheld the recording, so there was nothing '
+        +'left to review.'
+      :'No annotation was recorded.';
+    out.push('<div class="warn"><b>The reviewer did not run.</b> '
+      +'It neither corroborated nor contradicted the detectors, '
+      +'and its silence carries no information. '+because
+      +(llm.failure?' \\u2014 '+esc(llm.failure):'')+'</div>');
+  }else if(st==='absent'){
+    out.push('<div class="warn"><b>The reviewer tried and could not load.</b> That is not the same '
+      +'as finding nothing. '+(llm.failure?esc(llm.failure):'')+'</div>');
+  }else if(st==='clean'){
+    out.push('<p>It <b>ran and flagged nothing</b>, over '+esc(llm.iterations||0)+' iteration(s)'
+      +(llm.model_id?', model '+esc(llm.model_id):'')+'.</p>');
+  }else{
+    out.push('<p>It <b>flagged '+esc((llm.flagged||[]).length)+'</b>: '
+      +esc((llm.flagged||[]).join(', '))+' \\u2014 over '+esc(llm.iterations||0)+' iteration(s)'
+      +(llm.model_id?', model '+esc(llm.model_id):'')+'.'
+      +(llm.failure?' '+esc(llm.failure):'')+'</p>');
+  }
+
+  /* gates: evaluated, and declared-but-never-evaluated */
+  const evaluated=r.g||[], profile=P(r.b)||{bounds:{},layers:{}};
+  const seen=new Set(evaluated.map(g=>(P(g[0])||{}).gate));
+  out.push('<h4>gates</h4><table><tr><th>gate</th><th>reading</th><th>value</th><th>bound</th>'
+    +'<th>outcome</th></tr>');
+  for(const g of evaluated){
+    const spec=P(g[0])||{};
+    const val=(typeof g[1]==='number')?(Math.round(g[1]*1000)/1000):g[1];
+    const state=g[2];
+    const cell=state===1?'<span class="ok">passed</span>'
+      :state===0?'<span class="bad">FAILED</span>'
+      :'<span class="neutral">could not be answered</span>';
+    const missing=state===-1
+      ?(g[1]==null?' \\u2014 nothing measured the reading':(spec.bound==null
+        ?' \\u2014 nobody has measured the bound':'')):'';
+    out.push('<tr'+(state===-1?' class="off"':'')+'><td>'+esc(spec.gate)
+      +(spec.kind==='flagging'?' <span class="neutral">(flagging)</span>':'')
+      +'</td><td>'+esc(spec.reading||'\\u2014')+'</td><td>'+(g[1]==null?'\\u2014':esc(val))
+      +'</td><td>'+esc((spec.op||'').replace(/_/g,' '))+' '
+      +(spec.bound==null?'\\u2014':esc(spec.bound))
+      +'</td><td>'+cell+missing+'</td></tr>');
+  }
+  let unevaluated=0;
+  for(const name of Object.keys(profile.bounds||{})){
+    if(seen.has(name))continue;
+    unevaluated++;
+    out.push('<tr class="off"><td>'+esc(name)+'</td><td colspan="3">declared for this group, '
+      +'never evaluated \\u2014 no reading was available</td><td>\\u2014</td></tr>');
+  }
+  out.push('</table>');
+  if(!evaluated.length)
+    out.push('<p class="note">No gate was evaluated on this recording'
+      +(unevaluated?' \\u2014 the branch that owns this family left no in-family report, so its '
+        +'conformance is undetermined rather than failed.':'.')+'</p>');
+  const failed=evaluated.filter(g=>g[2]===0).length;
+  const unanswered=evaluated.filter(g=>g[2]===-1).length;
+  out.push('<p class="note">'+evaluated.length+' evaluated ('+failed+' failed, '+unanswered
+    +' unanswerable), '+unevaluated+' declared but never evaluated. A gate that was never '
+    +'evaluated did not pass and did not fail.</p>');
+
+  /* what each node concluded, and what ran */
+  const ran=P(r.a)||{};
+  out.push('<h4>nodes</h4><table><tr><th>node</th><th>state</th><th>outcome</th><th>why</th></tr>');
+  const named=new Set();
+  for(const n of r.n||[]){
+    const name=P(n[0]);named.add(name);
+    const outcome=P(n[1]);
+    out.push('<tr><td>'+esc(name)+'</td><td>'+esc(ran[name]||'\\u2014')+'</td><td class="'
+      +(outcome==='pass'?'ok':outcome==='fail'?'bad':'neutral')+'">'+esc(outcome)
+      +'</td><td>'+esc(P(n[2]))+'</td></tr>');
+  }
+  for(const name of Object.keys(ran)){
+    if(named.has(name))continue;
+    out.push('<tr class="off"><td>'+esc(name)+'</td><td>'+esc(ran[name])
+      +'</td><td>\\u2014</td><td>ran, but folded no verdict of its own</td></tr>');
+  }
+  out.push('</table>');
+  const absences=P(r.x)||[];
+  if(absences.length)
+    out.push('<p class="note">critical absences: '+esc(absences.join(', '))+'</p>');
+
+  /* the findings themselves */
+  const findings=r.f||[];
+  out.push('<h4>findings that drove it ('+findings.length+')</h4>');
+  if(!findings.length){
+    out.push('<p class="note">none.</p>');
+  }else{
+    out.push('<table><tr><th>category</th><th>detector</th><th>read from</th>'
+      +'<th>stimulus check</th></tr>');
+    for(const f of findings)
+      out.push('<tr><td>'+esc(P(f[0]))+'</td><td>'+esc(P(f[1]))+'</td><td>'+esc(P(f[2]))
+        +'</td><td>'+stimWord(f[3])+'</td></tr>');
+    out.push('</table>');
+  }
+
+  /* the stimulus, which is the third artefact family */
+  const ex=P(r.e)||{};
+  out.push('<h4>the stimulus check</h4>');
+  if(!ex.recorded){
+    out.push('<p class="note">no exemption pass was recorded.</p>');
+  }else if(!ex.declared){
+    out.push('<div class="warn">This task declares <b>no stimulus text</b>, so no finding could be '
+      +'checked against it and none was exempted. A proper noun that belongs to the task itself is '
+      +'indistinguishable here from one the participant disclosed.</div>');
+  }else{
+    out.push('<p>'+esc(ex.n)+' of '+esc(ex.n_findings)+' finding(s) were exempted as expected '
+      +'speech.</p>');
+  }
+  return out.join('');
+}
+for(const b of document.querySelectorAll('.whybtn')){
+  b.addEventListener('click',()=>{
+    whyBox.querySelector('.whybody').innerHTML=buildWhy(b.dataset.stem,b.closest('.rec'));
+    whyBox.hidden=false;scrimOn();
+  });
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!whyBox.hidden)closeWhy();});
+
 for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))
   el.addEventListener('change',apply);
 for(const el of [firedSel,brkSel,txSel,revSel,minNf,minNt,maxNt])el.addEventListener('change',apply);
@@ -1156,6 +1569,9 @@ placeholder="the export lands here too; paste an export here and press Import"><
 </nav>
 <main>{sections}</main>
 </div>
+<script type="application/json" id="whydata">{why}</script>
+<div id="why" hidden><button class="close" type="button" title="close">&times;</button>
+<h3>what determined this status</h3><div class="whybody"></div></div>
 <div id="panel" hidden><button class="close" type="button" title="close">&times;</button>
 <h3>this finding</h3><div class="facts"></div><div class="surface"></div>
 <div class="verdicts">{verdicts}</div>
