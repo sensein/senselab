@@ -246,3 +246,65 @@ matching findings, so the size of a subset is known before it is read.
 A compound mark carries its categories joined with `+` in one attribute, and the filter splits on
 that. Matching the whole attribute instead dropped every multi-category mark from every category
 facet — 4,770 of 15,595 marks, silently. There is a test pinned to the split.
+
+---
+
+# A row mark, beside the finding verdicts
+
+Added 2026-09-23. The finding-level vocabulary answers *was this mark right*. This answers
+something coarser about the whole recording, and it is a different question, so it is a different
+record.
+
+## The vocabulary is the owner's
+
+`+1`, `-1`, `flag`, plus unset. Not renamed into something more descriptive, deliberately: they are
+non-specific on purpose, and `flag` means *come back to this*, not a fourth quality judgment. A
+recording can carry a row mark and a dozen finding verdicts at once; neither shadows the other.
+
+| | keys | acts on | cleared by |
+| --- | --- | --- | --- |
+| finding verdict | `1` `2` `3` `4` | the mark selected in the panel | re-pressing the active verdict |
+| row mark | `+` `=` `-` `f` | the card under the pointer, or the one holding focus | re-pressing the active mark |
+
+`=` is there because `+` needs a shift on most layouts and the point of the control is speed over
+11,701 cards. The two key sets are disjoint and a test keeps them so. Both are inert while the
+caret is in a note.
+
+Pointer-or-focus rather than a selection model: the reader is already moving down the page reading,
+so the card they are looking at is the card the mouse is over. Requiring a click to select first
+would double the cost of the common case.
+
+## Persistence and export
+
+Same namespace, same guarded access, a third collection: `{findings, recordings, triage}`. The
+export is v2 and carries all three separately, so a downstream reader can tell a row mark from a
+finding verdict without inferring it from the key shape. Import merges each collection
+independently.
+
+Row marks are keyed by BIDS stem; finding verdicts by the content-addressed mark key. The two key
+spaces cannot collide, which is what makes "separate and distinguishable" true structurally rather
+than by convention.
+
+## Cost
+
+Three buttons on 11,701 cards is 9 MB of HTML if each repeats the recording's stem and a title
+attribute — more than the transcripts. The group is one constant string, identical on every card,
+and the card's own `data-stem` names the row. That is 26.8 MB against 24.2 before, for a control on
+every recording.
+
+---
+
+# Correction: the reviewer cannot review a withheld recording
+
+`nodes/redact.py` reaches `if outcome is not Outcome.PASS` **before** `elif not
+llm_settings["enabled"]`. So a withheld recording records `status: not_run` with the reason *"the
+detector path withheld; there was nothing to release"* whether or not the reviewer is enabled, and
+whether or not a GPU is present.
+
+The page said the reviewer *did not* run. It now says it *could not have* — that REDACT withholds
+before the reviewer is reached, and that enabling it would not change the line. The difference
+matters: across this corpus that is every one of the 2,972 withheld recordings, and a reader
+inferring "someone turned it off" would draw the wrong conclusion about what to fix.
+
+This sharpens rather than reverses the corpus-wide finding in `what-determined-the-status.md`: the
+reviewer ran zero times, and on the withheld half it was structurally unable to.
