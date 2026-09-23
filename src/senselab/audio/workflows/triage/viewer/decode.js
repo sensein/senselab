@@ -10,7 +10,7 @@
 'use strict';
 
 var SchemaDecode = (function () {
-  var SCHEMA_VERSION = 2;
+  var SCHEMA_VERSION = 3;
   var TIME_SCALE = 65535;
   var TRACE_POINTS = 256;
   var UNKNOWN_CODE = 255;

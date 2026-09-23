@@ -19,14 +19,14 @@ function rows(...specs) {
 
 // -------------------------------------------------------------- the catalogue
 
-test('the measurement names are the twenty-nine recording_vectors.py declares', () => {
+test('the measurement names are the thirty-three recording_vectors.py declares', () => {
   const all = A.SCALAR_MEASUREMENTS.concat(A.VECTOR_MEASUREMENTS, A.MATRIX_MEASUREMENTS, A.CATEGORICAL_MEASUREMENTS)
-  assert.equal(all.length, 29)
-  assert.equal(A.SCALAR_MEASUREMENTS.length, 17)
+  assert.equal(all.length, 33)
+  assert.equal(A.SCALAR_MEASUREMENTS.length, 21)
   assert.equal(A.VECTOR_MEASUREMENTS.length, 1)
   assert.equal(A.MATRIX_MEASUREMENTS.length, 1)
   assert.equal(A.CATEGORICAL_MEASUREMENTS.length, 10)
-  assert.equal(new Set(all).size, 29)
+  assert.equal(new Set(all).size, 33)
 })
 
 test('a vector and a matrix are offered but refused, with the reason on the option', () => {

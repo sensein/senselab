@@ -19,6 +19,10 @@ var SchemaAxes = (function () {
     'ddk_syllable_rate_from_envelope_modulation_hz',
     'ddk_syllable_rate_from_ppg_decode_hz',
     'expected_sequence_repeat_fraction',
+    'extent_dominant_speaker_share',
+    'extent_secondary_source_s',
+    'extent_source_active_s',
+    'extent_speaker_count',
     'glide_extent_semitones',
     'interruptions',
     'pause_fraction_of_response',
@@ -50,6 +54,33 @@ var SchemaAxes = (function () {
     return n !== 'carrier_rejected';
   });
 
+  // VERDICT's gates, in the registry's declaration order. Each is a reading, a bound the fold
+  // resolved for this recording's task group, and the side of the bound that passes.
+  var GATES = [
+    ['production_min_s', 'carrier_duration_s', 'at_least', 's'],
+    ['voiced_fraction_min', 'carrier_voiced_fraction', 'at_least', null],
+    ['f0_spread_max_semitones', 'carrier_f0_spread_semitones', 'at_most', 'semitones'],
+    ['continuity_min', 'carrier_continuity', 'at_least', null],
+    ['dominant_segment_min_fraction', 'sweep_dominant_fraction', 'at_least', null],
+    ['monotone_tolerance_semitones', 'sweep_monotone_reversal_semitones', 'at_most', 'semitones'],
+    ['expected_tokens_matched_min', 'expected_tokens_matched', 'at_least', null],
+    ['omissions_max', 'expected_tokens_omitted', 'at_most', null],
+    ['response_min_s', 'response_duration_s', 'at_least', 's'],
+    ['coverage_min', 'source_content_coverage', 'at_least', null],
+    ['dominant_speaker_share_min', 'extent_dominant_speaker_share', 'at_least', null],
+    ['items_min', 'items_produced', 'at_least', null],
+    ['events_min', 'airway_events_found', 'at_least', null],
+    ['repetitions_min', 'ddk_repetitions_found', 'at_least', null],
+    ['repeat_overlap_min', null, 'at_least', null],
+    ['echo_overlap_max', null, 'at_most', null],
+    ['verbatim_overlap_max', null, 'at_most', null],
+    ['gap_off_task_min_s', null, 'at_least', 's'],
+    ['interval_max_s', null, 'at_most', 's'],
+    ['score_min', null, 'at_least', null],
+    ['train_min_s', null, 'at_least', 's'],
+    ['rate_prominence_min', null, 'at_least', null],
+  ];
+
   // Orders for the closed vocabularies. Anything not listed orders by frequency.
   var ORDERINGS = {
     verdict: ['pass', 'flag', 'discard'],
@@ -63,6 +94,7 @@ var SchemaAxes = (function () {
     route_speech: ['routed', 'declined', 'unavailable'],
     route_voice: ['routed', 'declined', 'unavailable'],
   };
+  GATES.forEach(function (g) { ORDERINGS['gate_' + g[0] + '_passed'] = ['true', 'undetermined', 'false']; });
 
   function column(spec) {
     return {
@@ -77,6 +109,9 @@ var SchemaAxes = (function () {
       countColumn: spec.countColumn || null,
       reduction: spec.reduction || null,
       sizeOf: spec.sizeOf || null,
+      boundColumn: spec.boundColumn || null,
+      op: spec.op || null,
+      gate: spec.gate || null,
     };
   }
 
@@ -177,7 +212,108 @@ var SchemaAxes = (function () {
     return out;
   }
 
-  var CATALOGUE = IDENTITY.concat(measurementColumns());
+  // One column group per gate: the reading VERDICT read, the bound it resolved for this
+  // recording's task group, and what it made of the two. The reading is the axis; the bound
+  // rides along on `boundColumn` so the corpus view can draw it as a reference line.
+  function gateColumns() {
+    var out = [];
+    GATES.forEach(function (g) {
+      var name = g[0], reading = g[1], op = g[2], unit = g[3];
+      var asks = op === 'at_least' ? 'at least' : 'at most';
+      out.push(column({
+        name: 'gate_' + name, kind: 'numeric', group: 'gate reading', unit: unit,
+        label: name + ' · ' + (reading || 'located reading'),
+        boundColumn: 'gate_' + name + '_bound', op: op, gate: name,
+        nullMeans: reading
+          ? 'this gate was not applied, or nothing carried ' + reading
+          : 'this gate is applied where its finding is located, not by VERDICT',
+      }));
+      out.push(column({
+        name: 'gate_' + name + '_bound', kind: 'numeric', group: 'gate bound', unit: unit,
+        label: name + ' · bound (' + asks + ')', gate: name,
+        nullMeans: 'no layer named a bound for this recording’s task group',
+      }));
+      out.push(column({
+        name: 'gate_' + name + '_passed', kind: 'categorical', group: 'gate outcome',
+        label: name + ' · passed', gate: name,
+        nullMeans: 'this gate was not applied to this recording',
+      }));
+    });
+    return out;
+  }
+
+  var GATE_SUMMARY = [
+    column({ name: 'gate_group', kind: 'categorical', group: 'gate', nullMeans: 'no task group was resolved' }),
+    column({ name: 'gate_family', kind: 'categorical', group: 'gate', nullMeans: 'no task group was resolved' }),
+    column({ name: 'gate_node', kind: 'categorical', group: 'gate', nullMeans: 'no task group was resolved' }),
+    column({ name: 'gate_applied_n', kind: 'count', group: 'gate', nullMeans: 'never null; 0 means no group resolved' }),
+    column({ name: 'gate_flagging_n', kind: 'count', group: 'gate', nullMeans: 'never null' }),
+    column({ name: 'gate_failed_n', kind: 'count', group: 'gate', nullMeans: 'never null; 0 means nothing refused' }),
+    column({
+      name: 'gate_undetermined_n', kind: 'count', group: 'gate',
+      nullMeans: 'never null; 0 means every applied gate could be answered',
+    }),
+    column({
+      name: 'gate_failed_names', kind: 'set', group: 'gate', assignable: false,
+      reason: 'a set of gate names, not a value — put its size on the axis, or filter by a term',
+      sizeOf: 'gate_failed_names',
+    }),
+    column({
+      name: 'gate_failed_names.size', kind: 'count', group: 'gate',
+      label: 'gate_failed_names · size', sizeOf: 'gate_failed_names',
+    }),
+    column({
+      name: 'gate_flagged_names', kind: 'set', group: 'gate', assignable: false,
+      reason: 'a set of gate names, not a value — put its size on the axis, or filter by a term',
+      sizeOf: 'gate_flagged_names',
+    }),
+    column({
+      name: 'gate_flagged_names.size', kind: 'count', group: 'gate',
+      label: 'gate_flagged_names · size', sizeOf: 'gate_flagged_names',
+    }),
+  ];
+
+  var SPEAKER_AND_LEVEL = [
+    column({ name: 'separated_n', kind: 'count', group: 'speakers', nullMeans: 'never null; 0 means separation did not run' }),
+    column({ name: 'secondary_extent_n', kind: 'count', group: 'speakers', nullMeans: 'never null' }),
+    column({
+      name: 'secondary_extent_s', kind: 'numeric', group: 'speakers', unit: 's',
+      nullMeans: 'no secondary-speaker run was located',
+    }),
+    column({
+      name: 'solo_extent_s', kind: 'numeric', group: 'speakers', unit: 's',
+      nullMeans: 'no solo run was located',
+    }),
+    column({
+      name: 'extent_dominant_speaker_share_min', kind: 'numeric', group: 'speakers',
+      label: 'extent_dominant_speaker_share · worst extent',
+      nullMeans: 'no task extent carried a diarized segment',
+    }),
+    column({
+      name: 'residual_rms_dbfs', kind: 'numeric', group: 'level', unit: 'dBFS',
+      nullMeans: 'PREPROCESS wrote no residual decomposition',
+    }),
+    column({
+      name: 'residual_peak_dbfs', kind: 'numeric', group: 'level', unit: 'dBFS',
+      nullMeans: 'PREPROCESS wrote no residual decomposition',
+    }),
+    column({
+      name: 'enhanced_rms_dbfs', kind: 'numeric', group: 'level', unit: 'dBFS',
+      nullMeans: 'PREPROCESS wrote no residual decomposition',
+    }),
+    column({
+      name: 'enhanced_over_residual_rms_db', kind: 'numeric', group: 'level', unit: 'dB',
+      label: 'enhanced over residual · RMS',
+      nullMeans: 'PREPROCESS wrote no residual decomposition',
+    }),
+    column({
+      name: 'enhanced_over_residual_rms_fitted_db', kind: 'numeric', group: 'level', unit: 'dB',
+      label: 'enhanced over residual · RMS, gain-fitted',
+      nullMeans: 'PREPROCESS wrote no residual decomposition',
+    }),
+  ];
+
+  var CATALOGUE = IDENTITY.concat(GATE_SUMMARY, SPEAKER_AND_LEVEL, gateColumns(), measurementColumns());
   var BY_NAME = {};
   CATALOGUE.forEach(function (c) { BY_NAME[c.name] = c; });
 
@@ -365,6 +501,7 @@ var SchemaAxes = (function () {
     CATEGORICAL_MEASUREMENTS: CATEGORICAL_MEASUREMENTS,
     SENTINEL: SENTINEL,
     SENTINEL_ONLY: SENTINEL_ONLY,
+    GATES: GATES,
     ORDERINGS: ORDERINGS,
     CATALOGUE: CATALOGUE,
     BY_NAME: BY_NAME,
