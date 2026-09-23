@@ -23,7 +23,7 @@ points are gated behind null config.
 | 2 spans | `:571` | live |
 | 3 corroborate | `:577` | measures SQUIM and YAMNet; **both votes inert** |
 | 4 diarize | `:641` | live, scoped to the lexical hull; **becomes a read of PREPROCESS's derivative** by owner decision 2026-09-15 — see S5 |
-| 5 separation | `:704` | **never selected** (`speech.separation_backend` null) |
+| 5 separation | `:704` | live; `speech.separation_backend` ships `MossFormer2_SS_16K` (2026-09-23) and step 5b localises the sources |
 | 6 identify | `:774` | word→speaker live to `:798`; `:800-869` enrollment-gated |
 | 7 PII | `:900` | live; scan call at `:912` |
 | 8 quality | `:991` | SQUIM at `:1006-1014`; reported, never gating |
@@ -347,10 +347,14 @@ coughs, sustained vowels and DDK trains.
 `nontarget_speech_s` is always `None`: `speech.nontarget` (`default.yaml:174`) has all three legs
 null (`:175-177`). Three thresholds, all owed.
 
-### S10 — Separation (**never selected**, step 5)
+### S10 — Separation (**live since 2026-09-23**, step 5)
 
-`speech.separation_backend` is null (`default.yaml:172`), so `separation_state` is `"not_selected"`
-whenever two or more speakers are found (`speech.py:704-772`). Both backends unreached.
+`speech.separation_backend` ships `MossFormer2_SS_16K`, so separation runs wherever the diarizer
+counted more than one speaker on the stream `diarization.streams` names, and step 5b reads the two
+separated streams back as `extent_source_active_s` and `extent_secondary_source_s`. The unasdiff
+backend is still unreached, for the reason `config-derivations.md` § speech gives: its sound slot
+cannot be left unconditioned. The design, the trigger's corpus incidence and the ~132 CPU-hour bill
+are in `specs/20260922-the-multi-speaker-instrument/design.md`.
 
 ### S11 — Language and truncation checks (**not built**)
 

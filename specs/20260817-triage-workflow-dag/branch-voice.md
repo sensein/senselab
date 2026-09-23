@@ -1080,9 +1080,10 @@ Attribution of a short MPT to respiratory or laryngeal cause. Any refit against 
   - **SPEECH writes findings — spans, speakers, PII entities, assertions — and one derivative it is
     easy to miss**: when separation is configured and the speaker count is exactly two, it writes
     `separated_<index>` WAV sidecars as `stream` entities (`speech.py:752-758`). That is signal
-    state, not a conclusion. It is gated on `speech.separation_backend`, which is null by default, so
-    nothing is written today — but the same placement question applies to it, in a weaker form,
-    because the stream is inherently interval-scoped rather than branch-scoped.
+    state, not a conclusion. It is gated on `speech.separation_backend`, which has shipped
+    `MossFormer2_SS_16K` since 2026-09-23, so these are written on the recordings the trigger fires
+    on — and the same placement question applies to them, in a weaker form, because the stream is
+    inherently interval-scoped rather than branch-scoped.
   - **VOICE is the only branch that writes an `.npz`**, at `voice.py:368`, carrying `hnr_db` among
     six arrays.
 

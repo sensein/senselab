@@ -47,11 +47,12 @@ Per task extent, over frames of `branch.smoothing_window_s`:
 | `extent_source_active_s` | `float`, one per source | the seconds inside the extent on which that source is the loudest |
 | `extent_secondary_source_s` | `float` | the seconds a source other than the largest one holds |
 
-and one span:
+and two spans:
 
 | role | what it is |
 | --- | --- |
 | `solo_extent` | the longest run inside the task extent over which the dominant source holds every frame |
+| `secondary_source_extent` | one per contiguous run inside the task extent over which a source *other* than the dominant one holds every frame |
 
 Each `extent_source_active_s` carries `active_spans` — where that source is, not just how much of
 it there is — and `speaker`, the diarized label whose exclusive seconds that source is loudest
@@ -72,6 +73,49 @@ those the diarizer already attributed to somebody — the same union of segments
 denominator of `extent_dominant_speaker_share`. So the two readings share a denominator and can be
 compared, and the instrument adds no number nobody has measured. A frame on which every source
 reads exactly zero is attributed to none.
+
+### Answering *where*, and why the seconds were not enough
+
+The instrument shipped with `extent_secondary_source_s` — **how many** seconds another source holds
+— and `extent_source_active_s`, which carries `active_spans` in its attributes. The seconds are
+where the gate's argument lives; the spans are where a reader's question lives, and they were the
+harder of the two to reach. The attribute survives into `run/store.jsonl` and, through the SPEECH
+report's `detail`, into `summary/summary.json` under `steps.SPEECH.source_localisation`. Nothing
+else saw them: `BRANCH_MEASURES["SPEECH"]` does not name `source_localisation`, so the rendered
+summary omitted it; `evidence.branches.SPEECH` keeps a measurement's name and its **task extent**,
+not its active spans; `recording_vectors.MEASUREMENTS` does not carry the reading, so the parquet
+and the viewer never saw it. And the reader who did open the JSON still had to resolve
+`dominant_index` against `sources[i].source_index` to learn *which* list of spans was the intruder's.
+So the honest statement of the gap was not "the store lacks the answer" — it holds it — but "every
+surface that renders a recording drops it, and the one that keeps it makes the reader do a join".
+
+Three additions close it, all readings:
+
+1. **`secondary_spans` on the reading itself.** Every run held by a source other than the dominant
+   one, earliest first, each naming its `source_index` and the diarized `speaker` that source was
+   matched to. It is a projection of `sources[].active_spans` through `dominant_index`, computed in
+   `_localise_sources` so no reader has to. It lands in `summary.json` at
+   `steps.SPEECH.source_localisation.secondary_spans`.
+2. **A `secondary_source_extent` span per run.** `solo_extent` said where the loudest source is
+   *alone*, which is the inverse of the question — a reader wanting the intruder had to take the
+   complement of one span against the task extent, and the complement of the *longest* run is not
+   the set of intruder runs. The new role is the direct answer and is minted by the same
+   `propose_span` path, so it is family-stamped `speech` and therefore appears in
+   `recording_vectors`'s `branch_lanes` and the viewer's SPEECH sub-row **with no viewer change**:
+   `_branch_lanes` lanes any family-carrying span by `role_kind`, which leaves this role's spelling
+   untouched. It refines the task extent and does not supersede it, for the three reasons below.
+3. **One note per task extent.** `notes` is rendered into the human summary, so this is the only
+   surface that speaks. One sentence, always the same shape: the extent, the seconds, the number of
+   runs, and the longest run with the diarized speaker it belongs to. The longest run is named
+   rather than all of them because the note is prose and the complete list is two keys away in the
+   same file; the choice is a rendering one and moves no measurement.
+
+None of the three is a decision. No threshold is introduced: a run is a maximal stretch of frames
+whose argmax is the same non-dominant source, which is the same argmax the seconds are summed over.
+A consequence worth stating rather than hiding: **the runs are as fragmented as the argmax is.** A
+source that flaps frame to frame mints many short spans, and the instrument does not smooth,
+merge or drop them, because any of those would be an operating point nobody has fitted. The span
+count is itself a reading of how confident the decomposition is.
 
 ### What refining the extent means here, and why it is additive
 
@@ -124,10 +168,12 @@ have served it:
   lot.
 
 The separation's own `extent_secondary_source_s` was *not* made the gate's input, although it is
-the richer measurement. It exists only where separation ran, and `speech.separation_backend` ships
-null, so gating on it would make the gate inapplicable on every recording today. The gate reads a
-number every SPEECH recording with a diarization derivative carries; the separation sharpens the
-picture for a reader without being load-bearing for the decision.
+the richer measurement. It exists only where separation ran — which, now that
+`speech.separation_backend` ships `MossFormer2_SS_16K`, is the 5.32% of SPEECH the trigger fires
+on, and not the other 94.68%. Gating on it would make the gate inapplicable on nineteen SPEECH
+recordings in twenty. The gate reads a number every SPEECH recording with a diarization derivative
+carries; the separation sharpens the picture for a reader without being load-bearing for the
+decision.
 
 ### Why it is a flag ground and not a conformance term
 
@@ -215,7 +261,9 @@ placeholder chosen for its distance from a known artefact mode, not a fitted ope
 from a derivative PREPROCESS already measured, so turning the gate on adds no inference to any
 recording. Over the corpus it would flag 613 recordings — 1.57% of SPEECH, and 30% of the 2,045
 whose task extent holds more than one diarized speaker. Everything below is the *instrument's*
-bill, and the instrument is off by default (`speech.separation_backend` ships null).
+bill, and the instrument is **on** by default: `speech.separation_backend` ships
+`MossFormer2_SS_16K` as of 2026-09-23, derived in
+`specs/20260817-triage-workflow-dag/config-derivations.md` § speech.
 
 22.22 hours of audio over 2,305 recordings — mean 34.7 s, median 24.7 s — every time the corpus is
 processed with `speech.separation_backend` set.
@@ -251,12 +299,88 @@ because the graph runs one recording at a time and `separate_audios` is handed a
 inside the branch as the graph is structured, so it is a real 12.6 hours and not an avoidable one
 without a change nobody has asked for.
 
+### A resident worker is not warranted here, and the numbers say why
+
+YAMNet and HeAR were both fixed with a resident worker
+(`specs/20260922-yamnet-process-startup-cost/`, `specs/20260922-hear-process-startup-cost/`),
+and separation has the same shape of defect — a subprocess, a torch import and a checkpoint load
+paid once per recording because the graph hands `separate_audios` a list of one. It is not the same
+size of defect, and size is the whole argument:
+
+| call | fixed | at the corpus median recording | share of the call that is start-up |
+| --- | --- | --- | --- |
+| YAMNet | 4.81 s | 7.3 s of audio | **99.9%** |
+| HeAR | 6.48 s | 7.3 s of audio | **95.7%** |
+| MossFormer2_SS_16K | 19.6 s | 24.7 s of audio *(the trigger's own median)* | **12.9%** |
+
+At the trigger's *mean* recording of 34.7 s it is 9.5%. So a perfect resident worker recovers at
+most **12.6 of the 132 CPU-hours**, and only if every call after the first is free — whereas for
+YAMNet it recovered essentially the entire bill. Separation is dominated by its own arithmetic at
+5.36 s of wall per second of audio, which no transport change touches.
+
+**So: do not build one.** And the owner's standing judgment sharpens the same conclusion from the
+other side — three hand-rolled resident workers already exist, and a fourth should prompt
+extracting the shared transport rather than copying it a fourth time. Paying that extraction to
+recover 9.5% of a bill that only falls on 3.69% of the corpus is the wrong order of work. If the
+transport is ever extracted for its own sake, separation is a candidate to adopt it; it is not a
+reason to extract it.
+
+The other route to the same 12.6 hours needs no worker at all: `separate_audios` already takes a
+list and amortises the constant across it (`run_clearvoice_over_audios` writes every input into one
+subprocess call). Nothing inside the branch can batch, because the graph runs one recording at a
+time — but a corpus-level pass that separated in batches would collect the whole saving without any
+new machinery. That, too, is not worth doing for 12.6 hours today; it is recorded so the option is
+not rediscovered as novel.
+
 **A cheaper trigger is available and is not taken here.** Narrowing the trigger from "whole-file
 speakers > 1" to "within-extent speakers > 1" would drop 260 of the 2,305 firings — an 11.3%
 saving, about 15 CPU-hours — and would skip exactly the recordings where the second speaker never
 touches the task, which are also the recordings the gate will pass. The owner specified the
 whole-file trigger explicitly, so it stands; the number is recorded here so the trade is visible
 rather than rediscovered.
+
+## What the end-to-end run proved, and what it did not
+
+Every other test of the instrument stubs `separate_audios`. One does not:
+`speech_separation_e2e_test.py`, environment-gated on `SENSELAB_TRIAGE_SEPARATION_E2E`, builds a
+two-voice mixture from the repository's own test recordings — one voice running the whole 5 s, a
+second laid over 1.80-2.60 s — seeds a diarization that names both, and hands it to the packaged
+configuration with only the separator real. Run on macOS/CPU, 32.6 s wall with the venv and the
+checkpoint already warm.
+
+**Proved.** `MossFormer2_SS_16K` loaded at commit `407cb030cd66…`, a full 40-hex SHA and not a ref,
+which the stream entity records. Two `separated_*` WAVs were written under `run/streams/` and
+carried `separation_model` and `separation_commit`. The `localise_speakers` activity ran and its
+`used` edges name both of them. `steps.SPEECH.source_localisation` came back with two sources,
+their active spans, their matched diarized labels, `secondary_spans`, and the note. The chain
+config → `separate_audios` → streams → localisation closes on real weights.
+
+A second probe confirmed the rendering claim without changing the viewer: a
+`secondary_source_extent` span minted through `propose_span` reaches
+`recording_vectors._branch_lanes` as `(SPEECH, 4.20, 5.80)` with `branch_lane_role`
+`secondary_source_extent`, which is what the viewer's SPEECH sub-row draws and labels.
+
+**Not proved, and visible in the same run.** The decomposition is not right on this mixture. The
+second voice was placed at 1.80-2.60 s; the instrument reported source 1 holding 0.80-1.00,
+1.70-1.75, 2.40-2.60 and 3.25-3.40 — 0.60 s over four runs, one of them a single 0.05 s frame, and
+only the third overlapping where the voice actually was. Two things are worth separating here. The
+mixture is synthetic and adversarial for a speaker separator — one voice is a clip looped to fill
+5 s, so the "host" is not a continuous speaker — and nothing about a 5 s toy generalises to the
+corpus. But the shape of the failure is exactly the one predicted above: the argmax fragments, and
+the instrument reports the fragmentation rather than smoothing it away. That is the intended
+behaviour and it is also the honest reading of this run — the seconds and spans are as good as
+MossFormer2's decomposition, and here that was not good. **Nothing has validated the separation on
+this corpus, and this test does not.**
+
+## Speaker verification, assessed and not wired in
+
+`speaker-verification-assessment.md` beside this file asks whether verification against a
+per-subject embedding could say that the second voice is *not the participant*, and answers no on
+the current evidence: the turns to adjudicate are mostly shorter than the 1.0 s floor below which
+the embedding's same-speaker and impostor tails overlap, the per-subject enrollment is built from
+the very task extents suspected of holding the intruder, and the only method measured to settle a
+case on this corpus needs impostor windows from other subjects, which a per-recording node cannot
+reach. Nothing was built.
 
 ## Tests
 
@@ -266,6 +390,11 @@ rather than rediscovered.
 | each separated source's seconds, spans and diarized label inside the extent | `…::test_the_separated_sources_are_localised_inside_the_task_extent` |
 | the secondary seconds are a reading of their own, carrying no outcome | `…::test_the_seconds_another_source_holds_inside_the_task_are_a_reading_of_their_own` |
 | the refined extent is additive; the task extent survives | `…::test_the_refined_extent_is_a_new_span_and_the_task_extent_survives` |
+| the packaged config, with no override, runs the instrument | `…::test_the_packaged_configuration_runs_the_instrument` |
+| a span says where the other source is, and refines the task extent | `…::test_a_span_says_where_the_other_source_is` |
+| the reading names those spans without a `dominant_index` join | `…::test_the_reading_names_the_other_sources_spans_without_a_cross_reference` |
+| the branch says it in words, so the rendered summary carries it | `…::test_the_branch_says_in_words_where_the_other_source_is` |
+| one source holding the whole extent mints no span and writes no note | `…::test_no_note_and_no_span_when_one_source_holds_the_whole_extent` |
 | the localisation writes measurements and spans only | `…::test_the_instrument_writes_no_decision` |
 | a second voice inside the extent flags | `verdict_test.py::TestAnotherSpeakerInsideTheTaskExtentIsAFlag::test_a_second_voice_inside_the_task_extent_flags` |
 | a speaker only outside the extent does not | `…::test_a_speaker_only_outside_the_task_extent_does_not_flag` |
