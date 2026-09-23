@@ -849,12 +849,45 @@ def recording_html(row: dict[str, Any]) -> str:
         f"&middot; findings: {summary}</span></header>"
         f"{ground_html}{why_html}"
         f'<p class="text">{body}</p>'
-        f'<div class="whyrow"><button type="button" class="whybtn" data-stem="{html.escape(stem)}">'
+        f'<div class="whyrow">{_triage_controls(stem)}'
+        f'<button type="button" class="whybtn" data-stem="{html.escape(stem)}">'
         f"what determined this status</button></div>"
         f'<div class="recnote"><label>note on this recording '
         f'<textarea class="rnote" rows="1" data-stem="{html.escape(stem)}"></textarea></label></div>'
         f"</article>"
     )
+
+
+ROW_TRIAGE = (("+1", "+", "plus"), ("-1", "-", "minus"), ("flag", "f", "flag"))
+"""The owner's own row vocabulary, each with its key and the class that styles it.
+
+Deliberately non-specific. ``flag`` means come back to this, not a fourth quality judgment, and
+these are not the finding-level verdicts under another name.
+"""
+
+
+_TRIAGE_GROUP = (
+    '<span class="trigroup">'
+    + "".join(
+        f'<button class="tri t-{slug}" data-v="{html.escape(value)}">{html.escape(value)}'
+        f"<kbd>{html.escape(key)}</kbd></button>"
+        for value, key, slug in ROW_TRIAGE
+    )
+    + "</span>"
+)
+"""The control group, identical on every card; the card's own ``data-stem`` names the row."""
+
+
+def _triage_controls(stem: str) -> str:
+    """The per-recording triage buttons.
+
+    Args:
+        stem: The recording's BIDS stem, carried by the enclosing card rather than repeated.
+
+    Returns:
+        The control group's HTML.
+    """
+    return _TRIAGE_GROUP
 
 
 def participant_html(participant: str, rows: Sequence[dict[str, Any]]) -> str:
@@ -1059,7 +1092,21 @@ padding:0 3px}
 border:1px solid var(--line);border-radius:6px;padding:4px 6px;resize:vertical}
 #panel .close{float:right;border:0;background:none;color:var(--mut);cursor:pointer;font-size:14px}
 #progress{font-size:11.5px;color:var(--mut);margin-top:6px}
-.whyrow{margin-top:8px}
+.whyrow{margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.trigroup{display:inline-flex;gap:3px}
+.tri{font:inherit;font-size:11.5px;padding:2px 7px;border:1px solid var(--line);border-radius:6px;
+background:var(--bg);color:var(--mut);cursor:pointer;display:inline-flex;gap:4px;align-items:center}
+.tri kbd{font-size:9px;color:var(--mut);border:1px solid var(--line);border-radius:3px;padding:0 3px}
+.tri:hover{color:var(--fg);border-color:var(--acc)}
+.tri.on{color:#fff;border-color:transparent}
+.tri.on kbd{color:#fff;border-color:rgba(255,255,255,.5)}
+.t-plus.on{background:#2c5c2c}
+.t-minus.on{background:#8a2f24}
+.t-flag.on{background:#7a4b12}
+.rec[data-t="+1"]{border-left:3px solid #2c5c2c}
+.rec[data-t="-1"]{border-left:3px solid #8a2f24}
+.rec[data-t="flag"]{border-left:3px solid #c98a2b}
+.rec.active{box-shadow:0 0 0 2px var(--line)}
 .whybtn{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
 border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
 .whybtn:hover{color:var(--fg);border-color:var(--acc)}
@@ -1122,13 +1169,14 @@ const panel=document.getElementById('panel');
 const progress=document.getElementById('progress');
 
 /* ---- store: localStorage is a convenience, the export is the record ---- */
-let store={findings:{},recordings:{}};
+let store={findings:{},recordings:{},triage:{}};
 function load(){
   try{
     const raw=localStorage.getItem(KEY);
     if(raw){const parsed=JSON.parse(raw);
-      store={findings:parsed.findings||{},recordings:parsed.recordings||{}};}
-  }catch(e){store={findings:{},recordings:{}};}
+      store={findings:parsed.findings||{},recordings:parsed.recordings||{},
+             triage:parsed.triage||{}};}
+  }catch(e){store={findings:{},recordings:{},triage:{}};}
 }
 function save(){
   try{localStorage.setItem(KEY,JSON.stringify(store));}
@@ -1161,6 +1209,47 @@ for(const t of document.querySelectorAll('.rnote')){
     save();tally();});
 }
 
+/* ---- row triage: the owner's +1 / -1 / flag, one per recording ---- */
+const triSel=document.getElementById('tri');
+const TRIKEYS={'+':'+1','=':'+1','-':'-1','f':'flag','F':'flag'};
+function paintRow(card){
+  const rec=store.triage[card.dataset.stem];
+  const value=rec&&rec.v;
+  if(value)card.dataset.t=value; else card.removeAttribute('data-t');
+  for(const b of card.querySelectorAll('.tri'))b.classList.toggle('on',b.dataset.v===value);
+}
+function setRow(card,value){
+  const stem=card.dataset.stem;
+  const held=(store.triage[stem]||{}).v;
+  if(held===value)delete store.triage[stem];
+  else store.triage[stem]={v:value,t:new Date().toISOString()};
+  save();paintRow(card);tally();
+  if(triSel.value!=='any')apply();
+}
+let activeCard=null;
+function markActive(card){
+  if(activeCard===card)return;
+  if(activeCard)activeCard.classList.remove('active');
+  activeCard=card;
+  if(card)card.classList.add('active');
+}
+for(const card of cards){
+  paintRow(card);
+  card.addEventListener('mouseenter',()=>markActive(card));
+  card.addEventListener('focusin',()=>markActive(card));
+  for(const b of card.querySelectorAll('.tri'))
+    b.addEventListener('click',()=>{markActive(card);setRow(card,b.dataset.v);});
+}
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  const value=TRIKEYS[e.key];
+  if(!value)return;
+  const card=activeCard||(e.target.closest&&e.target.closest('.rec'));
+  if(!card)return;
+  e.preventDefault();setRow(card,value);
+});
+
 /* ---- facets ---- */
 function checked(cls){
   return new Set([...document.querySelectorAll('.'+cls)].filter(i=>i.checked).map(i=>i.value));}
@@ -1187,6 +1276,7 @@ function apply(){
   const fams=checked('fam-f'), rels=checked('rel-f');
   const cats=checked('cat-f'), dets=checked('det-f');
   const fired=firedSel.value, brk=brkSel.value, tx=txSel.value, rev=revSel.value;
+  const tri=triSel.value;
   const nf=+minNf.value||0;
   const lo=+minNt.value||1, hi=+maxNt.value||9999;
   const narrowed=!allChecked('cat-f')||!allChecked('det-f')||brk!=='any'||tx!=='any'
@@ -1196,6 +1286,10 @@ function apply(){
     let any=false;
     for(const r of s.querySelectorAll('.rec')){
       let ok=fams.has(r.dataset.fam)&&rels.has(r.dataset.rel);
+      if(ok&&tri!=='any'){
+        const held=r.dataset.t||'';
+        ok=tri==='marked'?!!held:tri==='unmarked'?!held:held===tri;
+      }
       if(ok&&fired!=='any') ok=r.dataset.fired===fired;
       if(ok&&nf) ok=+r.dataset.nf>=nf;
       if(ok&&needle) ok=haystack.get(r).includes(needle);
@@ -1223,7 +1317,9 @@ function tally(){
   let done=0;
   for(const m of marks)if((store.findings[m.dataset.k]||{}).v)done++;
   const notes=Object.keys(store.recordings).length;
-  progress.textContent=done+' of '+marks.length+' findings judged \\u00b7 '+notes+' recording notes';
+  const rows=Object.keys(store.triage).length;
+  progress.textContent=done+' of '+marks.length+' findings judged \\u00b7 '+rows+' of '
+    +cards.length+' rows marked \\u00b7 '+notes+' recording notes';
 }
 
 /* ---- review panel ---- */
@@ -1281,8 +1377,9 @@ document.addEventListener('keydown',e=>{
 
 /* ---- export and import: the durable artefact ---- */
 function payload(){
-  return JSON.stringify({schema:'senselab.fsreview',version:1,
-    exported:new Date().toISOString(),findings:store.findings,recordings:store.recordings},null,1);
+  return JSON.stringify({schema:'senselab.fsreview',version:2,
+    exported:new Date().toISOString(),findings:store.findings,recordings:store.recordings,
+    triage:store.triage},null,1);
 }
 document.getElementById('export').addEventListener('click',()=>{
   const text=payload();
@@ -1301,9 +1398,11 @@ document.getElementById('import').addEventListener('click',()=>{
   try{
     const parsed=JSON.parse(text);
     store={findings:Object.assign({},store.findings,parsed.findings||{}),
-           recordings:Object.assign({},store.recordings,parsed.recordings||{})};
+           recordings:Object.assign({},store.recordings,parsed.recordings||{}),
+           triage:Object.assign({},store.triage,parsed.triage||{})};
     save();
     for(const m of marks)paint(m);
+    for(const card of cards)paintRow(card);
     for(const t of document.querySelectorAll('.rnote')){
       const rec=store.recordings[t.dataset.stem]; if(rec&&rec.n)t.value=rec.n;}
     apply();
@@ -1375,8 +1474,9 @@ function buildWhy(stem,card){
   out.push('<h4>the LLM reviewer</h4>');
   if(st==='not_run'||st==='disabled'||!st){
     const because=st==='disabled'?'It is switched off in the configuration.'
-      :st==='not_run'?'The detector path had already withheld the recording, so there was nothing '
-        +'left to review.'
+      :st==='not_run'?'It <b>could not have run</b>: REDACT withholds before the reviewer is '
+        +'reached, so a withheld recording records not_run whether or not the reviewer is '
+        +'enabled. Turning it on would not change this line.'
       :'No annotation was recorded.';
     out.push('<div class="warn"><b>The reviewer did not run.</b> '
       +'It neither corroborated nor contradicted the detectors, '
@@ -1495,7 +1595,8 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!whyBox.hidden)clos
 
 for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))
   el.addEventListener('change',apply);
-for(const el of [firedSel,brkSel,txSel,revSel,minNf,minNt,maxNt])el.addEventListener('change',apply);
+for(const el of [firedSel,brkSel,txSel,revSel,triSel,minNf,minNt,maxNt])
+  el.addEventListener('change',apply);
 let timer;q.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(apply,140);});
 for(const [id,cls] of [['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],['nodet','det-f']])
   document.getElementById(id).addEventListener('click',()=>{
@@ -1504,7 +1605,7 @@ for(const [id,cls] of [['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],[
 document.getElementById('all').addEventListener('click',e=>{
   e.preventDefault();
   for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))el.checked=true;
-  firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';
+  firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';triSel.value='any';
   minNf.value='';minNt.value='';maxNt.value='';q.value='';apply();});
 apply();
 """
@@ -1549,6 +1650,10 @@ placeholder="min"> to <input class="num" type="number" id="maxnt" min="1" step="
 placeholder="max"> tokens</div>
 </fieldset>
 <fieldset><legend>my review</legend>
+<select id="tri"><option value="any">row mark, any</option>
+<option value="marked">marked</option><option value="unmarked">unmarked</option>
+<option value="+1">+1</option><option value="-1">-1</option><option value="flag">flag</option>
+</select>
 <select id="rev"><option value="any">judged or not</option>
 <option value="unreviewed">unjudged only</option><option value="reviewed">judged only</option>
 <option value="identifying">identifying</option>

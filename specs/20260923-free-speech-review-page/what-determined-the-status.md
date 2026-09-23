@@ -61,6 +61,12 @@ and `not_run` mean it never ran; `absent` means it tried and the model would not
 means it found something. The panel gives `disabled`/`not_run`/`absent` a highlighted box, because
 silence from a reviewer that never ran carries no information and must not be read as agreement.
 
+`not_run` is stronger than "did not run": `redact.py` tests `outcome is not Outcome.PASS` **before**
+it tests `enabled`, so a withheld recording records `not_run` even with the reviewer switched on and
+a GPU under it. The reviewer is structurally unable to review a withheld recording — nothing is
+released for it to read. The panel says so, because a reader who took `not_run` for "switched off"
+would go and turn on something that was already on.
+
 **A finding checked against the stimulus, one checked and absent from it, and one that could not be
 checked.** `in_stimulus` is `True`, `False` or `None`. The first version of the extract coerced it
 to `bool`, which collapsed `None` into `False` and hid the whole third artefact family — see
