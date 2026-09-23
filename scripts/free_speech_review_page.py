@@ -921,7 +921,7 @@ for(const t of document.querySelectorAll('.rnote')){
     const stem=t.dataset.stem;
     if(t.value.trim())store.recordings[stem]={n:t.value,t:new Date().toISOString()};
     else delete store.recordings[stem];
-    save();});
+    save();tally();});
 }
 
 /* ---- facets ---- */
@@ -930,7 +930,7 @@ function checked(cls){
 function allChecked(cls){
   return [...document.querySelectorAll('.'+cls)].every(i=>i.checked);}
 function markMatches(m,cats,dets,brk,tx,rev,lo,hi){
-  if(!cats.has(m.dataset.c))return false;
+  if(!m.dataset.c.split('+').some(c=>cats.has(c)))return false;
   const own=m.dataset.d.split(' ');
   if(!own.some(d=>dets.has(d)))return false;
   if(brk!=='any'&&m.dataset.brk!==brk)return false;
