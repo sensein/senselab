@@ -9,8 +9,18 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `1`; any
-change to a column or a byte layout bumps it and changes this file with it.
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `3`; any
+change to a column or a byte layout bumps it and changes this file with it. The same number is in
+the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
+reader can check it before decoding a byte.
+
+What each bump added:
+
+| version | added |
+| --- | --- |
+| **1** | the identity and decision columns, the measurements and the binary blocks |
+| **2** | `release_ground` beside `release`, and with it the release vocabulary's fourth state, `nothing_to_redact` — a recording that needed no redaction is a determination, not an absence of one |
+| **3** | VERDICT's gates (§6), the multi-speaker instrument (§7), the enhanced/residual levels (§8), and four measurement names |
 
 ---
 
@@ -70,14 +80,15 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `stem` | string | the BIDS stem, the run directory's name minus its `_YYYYmmdd-HHMMSS` suffix | never |
 | `run_dir` | string | the run directory, relative to the scan root | never |
 | `declared_family` | string | the declared task family, e.g. `story-recall-v2` | nothing was declared |
-| `release` | string | `releasable` \| `withheld` \| `not_assessed` | the fold wrote none |
+| `release` | string | `releasable` \| `withheld` \| `nothing_to_redact` \| `not_assessed` | the fold wrote none |
+| `release_ground` | string | why the release axis reads as it does — one of the seven controlled grounds `vocabulary.py` declares: four behind `nothing_to_redact`, three behind `not_assessed` | **REDACT itself decided**, so the state stands on its own verdict and needs no ground |
 | `grounds` | string | VERDICT's `discard_ground` | **nothing was discarded** — the common case |
 | `route_state` | string | e.g. `routed`, `declined` | the fold wrote none |
 | `duration_s` | double | seconds, the **source** recording | ADMIT's `recording` stream entity is absent |
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `1` | never |
+| `schema_version` | int32 | `3` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -85,15 +96,23 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `route_airway` \| `_speech` \| `_voice` | string | e.g. `routed`, `declined` | routing wrote no state for it |
 | `pii_findings_n` | int32 | how many `pii` entities the store holds | **the PII scan did not run.** A recording never scanned is null, not `0`. `0` means scanned and clean |
 | `wave_peak` | double | amplitude; the scale `wave_minmax` is encoded against | no stream decoded |
-| `floor_dbfs` | double | dBFS; the noise floor, a **scalar** — see §6 | `energy_envelope` is absent |
-| `spans_unrowed_n` | int32 | general spans with no five-row code, left out of `spans` — see §6 | PREPROCESS did not run |
+| `floor_dbfs` | double | dBFS; the noise floor, a **scalar** — see §9 | `energy_envelope` is absent |
+| `spans_unrowed_n` | int32 | general spans with no five-row code, left out of `spans` — see §9 | PREPROCESS did not run |
+
+Three further column groups belong to the decision record and are large enough to have sections of
+their own: the gates VERDICT resolved (§6), the multi-speaker instrument (§7) and the
+enhanced/residual levels (§8).
 
 ---
 
 ## 3. The measurements
 
-The 29 names `specs/20260817-triage-workflow-dag/measure-distributions.md` enumerates. Each gets
-**two** columns, and one gets a third:
+The 33 names the graph writes: the 29
+`specs/20260817-triage-workflow-dag/measure-distributions.md` enumerates over the 2026-09-21
+corpus, and the four the multi-speaker instrument added after that run
+(`extent_dominant_speaker_share`, `extent_secondary_source_s`, `extent_source_active_s`,
+`extent_speaker_count`), whose distributions nothing has measured yet. Each gets **two** columns,
+and one gets a third:
 
 - **`m_<name>`** — the reading. **Null when the graph wrote none for this recording.**
 - **`m_<name>_n`** — `int32`, **never null**, how many readings the store held. `0` is a fact: the
@@ -102,19 +121,28 @@ The 29 names `specs/20260817-triage-workflow-dag/measure-distributions.md` enume
 > **The invariant, enforced by a test:** `m_<name> IS NULL` ⟺ `m_<name>_n == 0`. A reading of
 > `0.0` is a measurement and reads as `0.0` with `_n == 1`. Null is not zero anywhere in this file.
 
-**17 scalar numerics** — `double`, the **arithmetic mean** of the recording's readings. Identical
-to the reading when `_n == 1`, which is the case for 13 of them. Four are written per span or per
-track and routinely repeat — `breath_peak_over_floor_db`, `cough_peak_over_floor_db`,
-`phonation_onset_to_offset_s`, `interruptions` — so read `_n` before treating one as a single
-measurement.
+**21 scalar numerics** — `double`, the **arithmetic mean** of the recording's readings. Identical
+to the reading when `_n == 1`, which is the case for 13 of the 17 that the 2026-09-21 corpus
+measured. Four of those are written per span or per track and routinely repeat —
+`breath_peak_over_floor_db`, `cough_peak_over_floor_db`, `phonation_onset_to_offset_s`,
+`interruptions` — so read `_n` before treating one as a single measurement. The four the
+multi-speaker instrument added are written **once per task extent**, and `extent_source_active_s`
+once per separated source inside each extent, so all four repeat on any recording carrying more
+than one extent; how often, over the corpus, is not yet measured.
 
 `breath_coverage_fraction`, `breath_peak_over_floor_db`, `cough_peak_over_floor_db`,
 `ddk_ppg_period_dispersion`, `ddk_repetition_count_from_ppg_decode`,
 `ddk_syllable_rate_from_envelope_modulation_hz`, `ddk_syllable_rate_from_ppg_decode_hz`,
-`expected_sequence_repeat_fraction`, `glide_extent_semitones`, `interruptions`,
-`pause_fraction_of_response`, `phonation_onset_to_offset_s`, `source_content_coverage`,
+`expected_sequence_repeat_fraction`, `extent_dominant_speaker_share`,
+`extent_secondary_source_s`, `extent_source_active_s`, `extent_speaker_count`,
+`glide_extent_semitones`, `interruptions`, `pause_fraction_of_response`,
+`phonation_onset_to_offset_s`, `source_content_coverage`,
 `speech_rate_from_consensus_words_per_s`, `train_fraction_of_recording`,
 `verbatim_overlap_fraction`, `voiced_duration_s`.
+
+**`m_extent_dominant_speaker_share` is the mean, and `extent_dominant_speaker_share_min` beside it
+is the min.** The two disagree whenever a recording carries more than one task extent; §7 says
+which one VERDICT's gate reads.
 
 **1 vector numeric** — `list<double>`, nulls preserved inside the list.
 `m_ddk_position_realised_mass` is one value per syllable position, each `null` when that position
@@ -262,7 +290,173 @@ The block is the five bytes `02 00 40 00 80`. Decoding: `0x4000 / 65535 × 4.0 =
 
 ---
 
-## 6. Where the design and the stores disagreed
+## 6. The gates
+
+`schema_version` 3 carries every gate VERDICT resolved. A **gate** says what reading is good
+enough. Its bound resolves **family → group → default**, most specific first and key by key, so
+two rows of the same corpus can be judged against different bounds for the same gate — which is
+why the bound is stored per row rather than looked up from the config at read time.
+`nodes/gates.py` holds the one declaration of the set; `GATE_NAMES` is pinned against `GATE_KEYS`
+by a test, so a gate added to the registry fails that test until this schema is bumped with it.
+The design is `specs/20260921-gates-in-verdict/design.md`.
+
+Three columns per gate, 22 gates, 66 columns:
+
+| column | type | what it carries |
+| --- | --- | --- |
+| `gate_<name>` | double | the reading VERDICT read |
+| `gate_<name>_bound` | double | the bound it resolved for this recording |
+| `gate_<name>_passed` | string | `true` \| `false` \| `undetermined` |
+
+Nullability, one case at a time, each stated by its own test:
+
+- **All three are null when the fold did not apply that gate.** No layer named a bound for this
+  recording's task group, or the fold resolved no group at all. Not applied is not failed.
+- **`_passed` is `undetermined` when either the reading or the bound was absent.** A gate whose
+  reading is absent yields UNDETERMINED, **never `false`** — nothing was measured, so nothing
+  refused. `gate_<name>` is then null while `gate_<name>_bound` may still carry the bound it
+  would have been read against.
+- **A reading of `0.0` is a measured value and is not absent.** `gate_train_min_s == 0.0` with
+  `_passed == "false"` is a train of zero seconds against a bound of one second, which is a real
+  refusal. Null is not zero in these columns either.
+
+A gate is **either a conformance term or a flag ground, never both** — `gates.py` raises at import
+if a name appears in both tables — and **both kinds land in the same three columns**. A flag gate
+says something about the recording's circumstances rather than about whether the participant
+performed the instruction, so it decides no conformance; which kind a refusal was is read off
+`gate_flagged_names`, which carries only the flag gates that failed, not off the per-gate
+columns, which are identical for the two kinds. `FLAG_GATES` today names one gate,
+`dominant_speaker_share_min`.
+
+The 22, in column order, with the reading each is read against and the direction it compares:
+
+| gate | reading | op |
+| --- | --- | --- |
+| `production_min_s` | `carrier_duration_s` | `at_least` |
+| `voiced_fraction_min` | `carrier_voiced_fraction` | `at_least` |
+| `f0_spread_max_semitones` | `carrier_f0_spread_semitones` | `at_most` |
+| `continuity_min` | `carrier_continuity` | `at_least` |
+| `dominant_segment_min_fraction` | `sweep_dominant_fraction` | `at_least` |
+| `monotone_tolerance_semitones` | `sweep_monotone_reversal_semitones` | `at_most` |
+| `expected_tokens_matched_min` | `expected_tokens_matched` | `at_least` |
+| `omissions_max` | `expected_tokens_omitted` | `at_most` |
+| `response_min_s` | `response_duration_s` | `at_least` |
+| `coverage_min` | `source_content_coverage` | `at_least` |
+| `dominant_speaker_share_min` | `extent_dominant_speaker_share` | `at_least` |
+| `items_min` | `items_produced` | `at_least` |
+| `events_min` | `airway_events_found` | `at_least` |
+| `repetitions_min` | `ddk_repetitions_found` | `at_least` |
+| `repeat_overlap_min` | *located* | `at_least` |
+| `echo_overlap_max` | *located* | `at_most` |
+| `verbatim_overlap_max` | *located* | `at_most` |
+| `gap_off_task_min_s` | *located* | `at_least` |
+| `interval_max_s` | *located* | `at_most` |
+| `score_min` | *located* | `at_least` |
+| `train_min_s` | *located* | `at_least` |
+| `rate_prominence_min` | *located* | `at_least` |
+
+A gate marked *located* produces a finding that carries an extent — a rejected carrier, a located
+deviation, a per-event count — and is therefore applied inside the reporting node that knows where
+the extent is, against the same bound this table names. It reaches these columns the same way,
+through the fold's record.
+
+Beside them, the fold's own summary, once per row:
+
+| column | type | null means |
+| --- | --- | --- |
+| `gate_node` | string | no task group resolved |
+| `gate_group` | string | no task group resolved |
+| `gate_family` | string | no task group resolved, or the recording declared no family — the out-of-family mode, which reads only the group and default layers |
+| `gate_applied_n` | int32 | never null; `0` means no group resolved |
+| `gate_flagging_n` | int32 | never null |
+| `gate_failed_n` | int32 | never null; `0` means nothing refused |
+| `gate_undetermined_n` | int32 | never null; `0` means every applied gate could be answered |
+| `gate_failed_names` | list\<string\> | never null; `[]` when nothing refused |
+| `gate_flagged_names` | list\<string\> | never null; `[]` when no flag gate refused |
+
+`gate_applied_n` and `gate_flagging_n` count the records the fold wrote, whatever they are named.
+`gate_failed_n`, `gate_undetermined_n` and `gate_failed_names` are read off the outcomes of the
+gates **this schema has a column for**, so a name the registry has gained and this file has not
+lands in the two counts and nowhere else — which is the observable that the pinning test exists to
+make loud. A gate the fold records in both lists holds one outcome, not two.
+
+---
+
+## 7. The multi-speaker instrument
+
+What the separation and localisation steps found, as five scalars. The design is
+`specs/20260922-the-multi-speaker-instrument/design.md`, and the task-extent readings are
+`specs/20260922-speakers-within-the-task-extent/design.md`.
+
+| column | type | units | null means |
+| --- | --- | --- | --- |
+| `separated_n` | int32 | sources | never null; **`0` means separation did not run** |
+| `secondary_extent_n` | int32 | runs | never null |
+| `secondary_extent_s` | double | seconds | no secondary run was located |
+| `solo_extent_s` | double | seconds | no solo run was located |
+| `extent_dominant_speaker_share_min` | double | fraction | no task extent carried a share reading |
+
+`separated_n` counts the live streams whose name begins `separated_`. `secondary_extent_n` counts
+the spans with role `secondary_source_extent`, and `secondary_extent_s` totals their seconds;
+`solo_extent_s` totals the seconds of the spans with role `solo_extent`. The count is never null
+and the seconds are, because a count of zero is a fact about a run that happened and a total of
+zero seconds would be indistinguishable from one.
+
+**`extent_dominant_speaker_share_min` is folded by `min`, and that is the whole reason it exists
+beside `m_extent_dominant_speaker_share`.** The min is the fold VERDICT's flag gate applies — the
+worst extent answers, because one extent another speaker holds is the finding, whatever the others
+did — while `m_extent_dominant_speaker_share`, like every `m_` column in §3, is the **arithmetic
+mean**. The two disagree whenever a recording carries more than one task extent: a row reading,
+say, 0.65 in the `m_` column against 0.4 in the `_min` is not an inconsistency, it is two extents,
+one of them shared.
+
+The secondary and solo spans also reach `branch_lanes` (§5), on the `SPEECH` lane, under the roles
+`secondary_source_extent` and `solo_extent` — so *where* the second voice is can be drawn without
+reading these scalars back.
+
+---
+
+## 8. The enhanced and residual levels
+
+Five doubles, **all null together when PREPROCESS wrote no residual decomposition**.
+
+| column | type | units |
+| --- | --- | --- |
+| `residual_peak_dbfs` | double | dBFS |
+| `residual_rms_dbfs` | double | dBFS |
+| `enhanced_rms_dbfs` | double | dBFS |
+| `enhanced_over_residual_rms_db` | double | dB |
+| `enhanced_over_residual_rms_fitted_db` | double | dB |
+
+**Only the residual's own levels are stored by the graph.** The `residual` measurement carries
+`peak_dbfs` and `rms_dbfs` for the residual stream and nothing equivalent for the enhanced one.
+The other three columns are **reconstructed** from the two energy fractions the same measurement
+carries, `enhanced_energy_fraction` and `energy_fraction`: they share one denominator and one
+aligned length, so their ratio is a ratio of mean square amplitudes and
+
+```
+enhanced_over_residual_rms_db = 10 * log10(enhanced_energy_fraction / energy_fraction)
+```
+
+is **exactly** the RMS difference in dB, not an approximation of it. `enhanced_rms_dbfs` is then
+`residual_rms_dbfs` plus that difference. The `_fitted_` variant adds the decomposition's own
+`gain_db` — `plain = g · enhanced + residual`, so the fitted variant is the **gain-fitted speech
+component** measured against the residual, which is the pair the decomposition actually solved
+for. The derivation is `specs/20260923-enhanced-over-residual/design.md`.
+
+Either fraction absent, zero or negative yields null rather than an infinity — the residual's own
+stored levels still stand in that case. `enhanced_rms_dbfs` additionally needs `rms_dbfs`, since
+it is that level plus the difference; without it the difference stands alone. `gain_db` absent
+yields null for the fitted column alone.
+
+**The enhanced stream's peak is not derivable this way and is therefore not carried.** A peak is
+one sample, an energy fraction is a sum over all of them, and no ratio of sums recovers an
+extremum — a column would have to be either a second stored measurement or a guess, and a guess
+about a clipping headroom is worse than an absent column.
+
+---
+
+## 9. Where the design and the stores disagreed
 
 The design was written from the figure code. Three things read differently against the stores.
 
@@ -280,18 +474,20 @@ block and counts them in `spans_unrowed_n`, so the omission is visible rather th
 redactions themselves are in `branch_lanes` under the `REDACT` lane, which is where the figure
 draws them.
 
-**"Every numeric measurement" is 17 of the 29 names, not 29.** Of the enumerated names, 17 carry
-numbers, 1 carries a vector, 1 a matrix, and 10 carry strings — 9 of those only ever the sentinel
-`NOT_SEPARABLE_BY_THIS_DESIGN`. Each still gets a column, typed by what the graph actually writes;
-only the 17 are usable as a parallel-coordinate axis directly.
+**"Every numeric measurement" is 21 of the 33 names, not 33.** Of the names the graph writes, 21
+carry numbers, 1 carries a vector, 1 a matrix, and 10 carry strings — 9 of those only ever the
+sentinel `NOT_SEPARABLE_BY_THIS_DESIGN`. Each still gets a column, typed by what the graph
+actually writes; only the 21 are usable as a parallel-coordinate axis directly.
 
-A fourth, smaller one: **a measurement name is not unique within a recording.** Four of the 17
-numerics are written per span or per track, and `carrier_rejected` is written a mean of six times.
-A single column per name therefore needs a reduction, which is why `_n` exists beside every one.
+A fourth, smaller one: **a measurement name is not unique within a recording.** Four of the 21
+numerics are written per span or per track, four more once per task extent, and `carrier_rejected`
+is written a mean of six times. A single column per name therefore needs a reduction, which is why
+`_n` exists beside every one — and why one reading, the dominant speaker's share, carries a second
+column under a second reduction (§7).
 
 ---
 
-## 7. Running it
+## 10. Running it
 
 ```bash
 # one shard
@@ -308,7 +504,11 @@ rest as `superseded`. A store with no VERDICT fold is `incomplete` and yields no
 The first build over the 2026-09-19 corpus wrote **62,488 rows in 91.3 MB — 1,462 bytes per
 recording**, transcripts included. What each block costs, what the nulls mean over the whole
 corpus, and the mutation results are in
-[`measurements.md`](measurements.md).
+[`measurements.md`](measurements.md). **Those figures are the `schema_version` 1 build.** The
+columns sections 6, 7 and 8 add are scalars and short string lists rather than blocks, so they
+cost far less per row than a block does — but the schema-3 build is still running on the cluster,
+so no size, no null count and no coverage figure for any of them is measured yet, and none is
+stated here.
 
 Each shard writes `recording_vectors.NNN.parquet` (mode 600) and `recording_vectors.NNN.report.json`
 with `considered`, `written`, `incomplete`, `unreadable`, `superseded` and `anomalies` — the last
