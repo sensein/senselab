@@ -306,6 +306,39 @@ touches the task, which are also the recordings the gate will pass. The owner sp
 whole-file trigger explicitly, so it stands; the number is recorded here so the trade is visible
 rather than rediscovered.
 
+## What the end-to-end run proved, and what it did not
+
+Every other test of the instrument stubs `separate_audios`. One does not:
+`speech_separation_e2e_test.py`, environment-gated on `SENSELAB_TRIAGE_SEPARATION_E2E`, builds a
+two-voice mixture from the repository's own test recordings — one voice running the whole 5 s, a
+second laid over 1.80-2.60 s — seeds a diarization that names both, and hands it to the packaged
+configuration with only the separator real. Run on macOS/CPU, 32.6 s wall with the venv and the
+checkpoint already warm.
+
+**Proved.** `MossFormer2_SS_16K` loaded at commit `407cb030cd66…`, a full 40-hex SHA and not a ref,
+which the stream entity records. Two `separated_*` WAVs were written under `run/streams/` and
+carried `separation_model` and `separation_commit`. The `localise_speakers` activity ran and its
+`used` edges name both of them. `steps.SPEECH.source_localisation` came back with two sources,
+their active spans, their matched diarized labels, `secondary_spans`, and the note. The chain
+config → `separate_audios` → streams → localisation closes on real weights.
+
+A second probe confirmed the rendering claim without changing the viewer: a
+`secondary_source_extent` span minted through `propose_span` reaches
+`recording_vectors._branch_lanes` as `(SPEECH, 4.20, 5.80)` with `branch_lane_role`
+`secondary_source_extent`, which is what the viewer's SPEECH sub-row draws and labels.
+
+**Not proved, and visible in the same run.** The decomposition is not right on this mixture. The
+second voice was placed at 1.80-2.60 s; the instrument reported source 1 holding 0.80-1.00,
+1.70-1.75, 2.40-2.60 and 3.25-3.40 — 0.60 s over four runs, one of them a single 0.05 s frame, and
+only the third overlapping where the voice actually was. Two things are worth separating here. The
+mixture is synthetic and adversarial for a speaker separator — one voice is a clip looped to fill
+5 s, so the "host" is not a continuous speaker — and nothing about a 5 s toy generalises to the
+corpus. But the shape of the failure is exactly the one predicted above: the argmax fragments, and
+the instrument reports the fragmentation rather than smoothing it away. That is the intended
+behaviour and it is also the honest reading of this run — the seconds and spans are as good as
+MossFormer2's decomposition, and here that was not good. **Nothing has validated the separation on
+this corpus, and this test does not.**
+
 ## Tests
 
 | what it pins | where |
