@@ -78,17 +78,17 @@ def main() -> int:
         if not rs:
             print(f"  {arm:14s} {0:>4d}   (no hinted two-speaker result)")
             continue
-        ms = np.array([stats(r["pyannote_k2"])[0] for r in rs])
+        minor = np.array([stats(r["pyannote_k2"])[0] for r in rs])
         sh = np.array([stats(r["pyannote_k2"])[1] for r in rs])
-        sil = [
-            (r.get("candidates") or {}).get("pyannote_k2_labels", {}).get("silhouette")
+        sil: list[float] = [
+            (r.get("candidates") or {})["pyannote_k2_labels"]["silhouette"]
             for r in rs
             if (r.get("candidates") or {}).get("pyannote_k2_labels", {}).get("valid")
         ]
         smed = f"{np.median(sil):.3f}" if sil else "-"
         print(
-            f"  {arm:14s} {len(rs):>4d} {np.percentile(ms, 10):>12.2f} {np.median(ms):>9.2f} "
-            f"{np.percentile(ms, 90):>9.2f} {np.median(sh):>10.3f} {smed:>11s}"
+            f"  {arm:14s} {len(rs):>4d} {np.percentile(minor, 10):>12.2f} {np.median(minor):>9.2f} "
+            f"{np.percentile(minor, 90):>9.2f} {np.median(sh):>10.3f} {smed:>11s}"
         )
 
     print("\n== calls: hinted minority seconds >= T ==")

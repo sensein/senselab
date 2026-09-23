@@ -27,6 +27,8 @@ def build(threshold: float, sha: str, device: str) -> Any:  # noqa: ANN401
     from pyannote.audio import Pipeline
 
     pipe = Pipeline.from_pretrained(PYANNOTE, revision=sha)
+    if pipe is None:
+        raise RuntimeError(f"Pipeline.from_pretrained returned None for {PYANNOTE}@{sha}")
     before = pipe.parameters(instantiated=True)
     pipe.instantiate({**before, "clustering": {**before["clustering"], "threshold": threshold}})
     after = pipe.parameters(instantiated=True)
