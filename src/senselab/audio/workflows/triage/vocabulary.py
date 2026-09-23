@@ -39,6 +39,15 @@ RULESET_ROUTING = "ruleset_routing"
 ``specs/20260912-ruleset-in-pipeline/design.md`` holds its attributes.
 """
 
+PII_SCAN = "pii_scan"
+"""The measurement SPEECH writes its PII scan's own record of itself into.
+
+``specs/20260919-pii-against-the-stimulus/design.md`` holds the declined path's attributes.
+"""
+
+SCANNED = "scanned"
+"""The :data:`PII_SCAN` key a declined scan carries, and a scan that ran does not."""
+
 REDACTION_LLM_ANNOTATION = "redaction_llm_annotation"
 """The measurement REDACT writes its optional LLM re-read's summary into.
 
@@ -103,6 +112,23 @@ class Release(Enum):
     RELEASABLE = "releasable"
     WITHHELD = "withheld"
     NOT_ASSESSED = "not_assessed"
+
+
+@dataclass(frozen=True)
+class RedactionEvidence:
+    """What the store says about whether this recording carried anything a redaction could remove.
+
+    Attributes:
+        lexical_words_n: How many lexical words SPEECH read off the consensus transcript, or None
+            where it left no report to say.
+        scanned: True where SPEECH scanned the transcript, False where it declined to, and None
+            where it recorded no scan either way.
+        findings_n: How many live ``pii`` findings the store holds.
+    """
+
+    lexical_words_n: int | None = None
+    scanned: bool | None = None
+    findings_n: int = 0
 
 
 UNMEASURABLE = "unmeasurable"
@@ -463,16 +489,23 @@ def _silence(state: RunState | None) -> str:
     return "never ran"
 
 
-def _release_from(node_verdicts: Sequence[NodeVerdict]) -> Release:
+def _release_from(
+    node_verdicts: Sequence[NodeVerdict],
+    evidence: RedactionEvidence,
+    ran: Mapping[str, RunState],
+) -> Release:
     """REDACT's outcome as a release state; an absent verdict means unexamined, never releasable.
 
     Args:
         node_verdicts: Every node verdict the fold was given.
+        evidence: What the store says about whether anything was redactable.
+        ran: Whether each node ran.
 
     Returns:
         The release state for REDACT's artifacts only — never for anything in the store. Only
         ``pass`` clears an artifact; every other outcome, and an absent verdict, withholds.
     """
+    del evidence, ran
     redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
     if redact is None:
         return Release.NOT_ASSESSED
@@ -530,6 +563,7 @@ def fold_file_verdict(
     hint_claims: Mapping[str, bool] | None,
     route_state: str | None,
     declared_family: str | None = None,
+    redaction: RedactionEvidence | None = None,
     llm_redaction: Mapping[str, Any] | None = None,
     critical_absences: Mapping[str, Mapping[str, str]] | None = None,
     gates: Mapping[str, Any] | None = None,
@@ -558,6 +592,9 @@ def fold_file_verdict(
             evaluation.
         declared_family: The task family the recording declares, or None. Every conformance
             ground is read against it, under ``policy.conformance_flags_by_family``.
+        redaction: What the store says about whether this recording carried anything redactable —
+            SPEECH's lexical count, its scan record and the live findings. None is the same as
+            :class:`RedactionEvidence` with nothing in it.
         llm_redaction: REDACT's LLM re-read annotation, or None where the node wrote none. Reaches
             the **triage** axis under ``policy.llm_redaction_flags`` and the release axis never.
         critical_absences: Per branch not one of whose gates could be read, each gate and the
@@ -713,7 +750,7 @@ def fold_file_verdict(
 
     return FileVerdict(
         triage=triage,
-        release=_release_from(node_verdicts),
+        release=_release_from(node_verdicts, redaction or RedactionEvidence(), ran),
         discard_ground=ground,
         findings=findings,
         conformance={name: report.conformance for name, report in reports.items()},

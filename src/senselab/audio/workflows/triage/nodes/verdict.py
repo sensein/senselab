@@ -51,8 +51,10 @@ from senselab.audio.workflows.triage.nodes.gates import (
 )
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
+    PII_SCAN,
     REDACTION_LLM_ANNOTATION,
     RULESET_ROUTING,
+    SCANNED,
     TASK,
     UNDETERMINED,
     BranchDecision,
@@ -62,12 +64,16 @@ from senselab.audio.workflows.triage.vocabulary import (
     FoldPolicy,
     NodeVerdict,
     Outcome,
+    RedactionEvidence,
     RunState,
     fold_file_verdict,
 )
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
 NODE = "VERDICT"
+
+SPEECH = "SPEECH"
+"""The branch whose transcript is the only thing a redaction can read."""
 
 _GRAPH_ORDER = GRAPH_ORDER[:-1]
 
@@ -280,6 +286,28 @@ def _llm_redaction(store: ProvStore) -> tuple[dict[str, object] | None, list[str
     return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal")}, [
         measurement.id
     ]
+
+
+def _redaction_evidence(store: ProvStore, reports: Sequence[tuple[Entity, BranchReport]]) -> RedactionEvidence:
+    """What the store says about whether this recording carried anything a redaction could remove.
+
+    Args:
+        store: The provenance store, read for its ``pii_scan`` measurements and its live findings.
+        reports: The reporting nodes' reports, paired with the entities they were read from, so
+            SPEECH's own lexical count can be read off its report.
+
+    Returns:
+        SPEECH's lexical count, its scan record as a tri-state, and how many live ``pii`` findings
+        the store holds.
+    """
+    speech = next((entity for entity, report in reports if report.node == SPEECH), None)
+    words = None if speech is None else speech.attributes.get("words_n")
+    scans = [measurement.attributes for measurement in find_measurements(store, PII_SCAN)]
+    return RedactionEvidence(
+        lexical_words_n=None if words is None else int(words),
+        scanned=None if not scans else not any(scan.get(SCANNED) is False for scan in scans),
+        findings_n=len([finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)]),
+    )
 
 
 def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list[str]]:
@@ -585,6 +613,7 @@ def verdict(
         hint_claims=_hint_claims(decisions, hint, declared_family=declared_family),
         route_state=route_state,
         declared_family=declared_family or None,
+        redaction=_redaction_evidence(store, report_pairs),
         llm_redaction=annotation,
         critical_absences=_critical_absences(store),
         gates=outcome.record(),
