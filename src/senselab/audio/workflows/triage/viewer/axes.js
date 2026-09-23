@@ -326,7 +326,7 @@ var SchemaAxes = (function () {
     'duration_s',
     'conformance_airway',
     'conformance_speech',
-    'conformance_voice',
+    'gate_failed_n',
     'flags_n',
     'pii_findings_n',
     'release',

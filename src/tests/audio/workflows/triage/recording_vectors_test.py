@@ -119,6 +119,7 @@ def build_recording(
     with_routing: bool = True,
     with_fold: bool = True,
     gates: dict[str, Any] | None = None,
+    conformance: dict[str, Any] | None = None,
     residual: dict[str, Any] | None = None,
     with_derivatives: bool = True,
     with_stream_file: bool = True,
@@ -139,6 +140,7 @@ def build_recording(
         with_routing: Whether ``branch_decision`` entities exist.
         with_fold: Whether VERDICT's fold exists.
         gates: The fold's ``gates`` attribute, or None for :data:`GATES`.
+        conformance: The fold's ``conformance`` mapping, or None for SPEECH true, VOICE undetermined.
         residual: The ``residual`` measurement's attributes, or None for :data:`RESIDUAL`.
         with_derivatives: Whether the envelope and continuity npz files exist.
         with_stream_file: Whether the conditioned flac exists.
@@ -281,7 +283,7 @@ def build_recording(
                 declared_family="diadochokinesis-pa",
                 release_ground="speech_detected",
                 gates=GATES if gates is None else gates,
-                conformance={"SPEECH": True, "VOICE": "UNDETERMINED"},
+                conformance={"SPEECH": True, "VOICE": "UNDETERMINED"} if conformance is None else conformance,
                 routes={"SPEECH": "routed", "VOICE": "routed", "AIRWAY": "declined"},
                 route_state="routed",
                 reasons=[
