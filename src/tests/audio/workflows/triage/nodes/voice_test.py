@@ -198,6 +198,28 @@ def _glide_tracks(
     return times, f0, power
 
 
+def _sweep_tracks(
+    duration_s: float, sweeps: tuple[tuple[tuple[float, float], float, float], ...]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One monotone F0 sweep per entry, so a recording can carry more than one attempt.
+
+    Args:
+        duration_s: How long the grid runs.
+        sweeps: ``(extent, low_hz, high_hz)`` per sweep; the F0 runs low to high across each.
+
+    Returns:
+        ``(times_s, f0_hz, strength)``.
+    """
+    times = np.arange(0.0, duration_s, HOP_S)
+    f0 = np.zeros(times.size)
+    power = np.zeros(times.size)
+    for extent, low_hz, high_hz in sweeps:
+        inside = (times >= extent[0]) & (times < extent[1])
+        power[inside] = 0.9
+        f0[inside] = np.linspace(low_hz, high_hz, int(inside.sum()))
+    return times, f0, power
+
+
 def _octave_error_tracks(
     duration_s: float,
     extent: tuple[float, float],
@@ -480,7 +502,12 @@ class TestASustainedVowelYieldsTheHeldVowelSpan:
 
 
 class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
-    """Without it V1 would propose attempts over runs of connected speech on 14,332 recordings."""
+    """Without it the detect arm would propose attempts over connected speech on 14,332 recordings.
+
+    ``Qualification.steady`` is that separation. It is what the detect arm proposes over, because
+    nothing declared those recordings to hold a held vowel. The align arm reads the same qualities
+    and reports them instead, so these tests read ``steady`` rather than ``carriers``.
+    """
 
     def test_a_wandering_f0_fails_the_spread_qualifier(self, tmp_path: Path) -> None:
         """Connected speech has a high voiced fraction and a usable contour; it is not steady."""
@@ -488,7 +515,7 @@ class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
         assert (
             qualifying_phonation(
                 read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
-            ).carriers
+            ).steady
             == []
         )
 
@@ -501,7 +528,7 @@ class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
         assert (
             qualifying_phonation(
                 read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
-            ).carriers
+            ).steady
             != []
         )
 
@@ -511,7 +538,7 @@ class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
         assert (
             qualifying_phonation(
                 read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
-            ).carriers
+            ).steady
             == []
         )
 
@@ -521,7 +548,7 @@ class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
         assert (
             qualifying_phonation(
                 read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
-            ).carriers
+            ).steady
             == []
         )
 
@@ -531,7 +558,7 @@ class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
         assert (
             qualifying_phonation(
                 read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
-            ).carriers
+            ).steady
             == []
         )
 
@@ -815,11 +842,106 @@ class TestTheGlideReadsTheSweepAgainstItsDeclaredDirection:
         assert found and found[0].evidence["value"] == pytest.approx(12.0, abs=0.5)
 
     def test_no_monotone_segment_leaves_the_sweep_undetermined(self, tmp_path: Path) -> None:
-        """A steady vowel is not a sweep, and no sweep found is not the task not performed."""
-        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, amplitude=((2.0, 3.0),), tracks=_tracks(20.0, [(2.0, 2.2)]))
+        """One voiced frame is not a contour, and no sweep found is not the task not performed."""
+        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, amplitude=((2.0, 3.0),), tracks=_tracks(20.0, [(2.0, 2.01)]))
         result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
         assert gated_conformance(result, Pattern.GLIDE, settings=config()) == UNDETERMINED
         assert result.components == []
+        assert [finding.evidence["value"] for finding in result.deviations if finding.name == "carrier_rejected"] == [
+            "no_monotone_run"
+        ]
+
+    def test_a_sweep_that_travelled_nowhere_has_no_direction_to_read(self, tmp_path: Path) -> None:
+        """A flat contour's sign is the sign of a zero difference; reporting it invents a reading."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_DOWN_STEM,
+            amplitude=((2.0, 18.0),),
+            tracks=_glide_tracks(20.0, (2.0, 18.0), 120.0, 120.0),
+        )
+        result = align_voice("glides-high-to-low", store, None, params(), run_dir=tmp_path)
+        assert [finding for finding in result.deviations if finding.name == "sweep_direction_mismatch"] == []
+        assert readings_of(result)["glide_extent_semitones"] == pytest.approx(0.0, abs=0.01)
+
+
+class TestASecondGlideAttemptIsReportedRatherThanDiscarded:
+    """The glide proposes one sweep. Every other attempt is an observation, not a loser."""
+
+    TWO_UP = (((2.0, 8.0), 100.0, 300.0), ((11.0, 19.0), 100.0, 300.0))
+    """Two upward attempts, the later one longer, so the earlier is the repeat."""
+
+    AMPLITUDE = ((2.0, 8.0), (11.0, 19.0))
+    """The carriers the two attempts sit inside."""
+
+    def test_a_second_sweep_is_a_repeat_attempt(self, tmp_path: Path) -> None:
+        """Performing the glide twice is the observation SUSTAINED already reports."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_UP_STEM,
+            amplitude=self.AMPLITUDE,
+            tracks=_sweep_tracks(20.0, self.TWO_UP),
+        )
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        repeats = [finding for finding in result.deviations if finding.name == "repeat_attempt"]
+        assert len(repeats) == 1
+        assert repeats[0].start == pytest.approx(2.0, abs=0.05)
+        assert repeats[0].derived_from
+
+    def test_one_sweep_alone_is_no_repeat(self, tmp_path: Path) -> None:
+        """The discriminating half: the same code on a single attempt."""
+        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 300.0))
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        assert [finding for finding in result.deviations if finding.name == "repeat_attempt"] == []
+
+    def test_the_glide_attempt_count_is_reported_rather_than_only_the_longest(self, tmp_path: Path) -> None:
+        """``attempt_count``, the same counts entry SUSTAINED writes."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_UP_STEM,
+            amplitude=self.AMPLITUDE,
+            tracks=_sweep_tracks(20.0, self.TWO_UP),
+        )
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        found = [finding for finding in result.deviations if finding.name == "attempt_count"]
+        assert found and found[0].evidence["found"] == 2
+
+    def test_the_longest_sweep_is_still_the_only_one_proposed(self, tmp_path: Path) -> None:
+        """A repeat is a deviation, not a competing task extent."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_UP_STEM,
+            amplitude=self.AMPLITUDE,
+            tracks=_sweep_tracks(20.0, self.TWO_UP),
+        )
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        assert len(result.components) == 1
+        assert result.components[0].start == pytest.approx(11.0, abs=0.05)
+
+    def test_a_repeat_running_against_the_declaration_is_a_direction_mismatch(self, tmp_path: Path) -> None:
+        """The winner runs the declared way; the second attempt does not, and that is reported."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_UP_STEM,
+            amplitude=self.AMPLITUDE,
+            tracks=_sweep_tracks(20.0, (((2.0, 8.0), 300.0, 100.0), ((11.0, 19.0), 100.0, 300.0))),
+        )
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        mismatch = [finding for finding in result.deviations if finding.name == "sweep_direction_mismatch"]
+        assert len(mismatch) == 1
+        assert mismatch[0].start == pytest.approx(2.0, abs=0.05)
+        assert mismatch[0].evidence["declared"] == "up"
+        assert mismatch[0].evidence["measured"] == "down"
+
+    def test_two_sweeps_both_running_the_declared_way_mismatch_not_at_all(self, tmp_path: Path) -> None:
+        """The discriminating half: reading every carrier must not invent a mismatch."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_UP_STEM,
+            amplitude=self.AMPLITUDE,
+            tracks=_sweep_tracks(20.0, self.TWO_UP),
+        )
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        assert [finding for finding in result.deviations if finding.name == "sweep_direction_mismatch"] == []
 
 
 class TestTheDeviationsAreTheOnesTheDesignNames:
@@ -1125,8 +1247,8 @@ class TestTheSpreadQualifierJudgesATypicalWindowNotTheWorstOne:
             tracks=_octave_error_tracks(26.0, (1.0, 25.0), 120.0, bursts=6),
         )
         expectation = Expectation(pattern=Pattern.SUSTAINED)
-        assert len(qualifying_phonation(read_evidence(short, tmp_path / "short"), expectation, params()).carriers) == 1
-        assert len(qualifying_phonation(read_evidence(long_, tmp_path / "long"), expectation, params()).carriers) == 1
+        assert len(qualifying_phonation(read_evidence(short, tmp_path / "short"), expectation, params()).steady) == 1
+        assert len(qualifying_phonation(read_evidence(long_, tmp_path / "long"), expectation, params()).steady) == 1
 
     def test_genuine_instability_is_still_discarded(self, tmp_path: Path) -> None:
         """The gate must keep rejecting what it was for; a fix that accepts everything is no fix."""
@@ -1134,8 +1256,10 @@ class TestTheSpreadQualifierJudgesATypicalWindowNotTheWorstOne:
         qualification = qualifying_phonation(
             read_evidence(store, tmp_path), Expectation(pattern=Pattern.SUSTAINED), params()
         )
-        assert qualification.carriers == []
-        assert [rejection.gate for rejection in qualification.rejected] == ["f0_spread_max_semitones"]
+        assert qualification.steady == []
+        assert [rejection.gate for carrier in qualification.carriers for rejection in carrier.failed] == [
+            "f0_spread_max_semitones"
+        ]
 
 
 class TestADiscardedCarrierIsReportedRatherThanVanishing:
@@ -1143,8 +1267,8 @@ class TestADiscardedCarrierIsReportedRatherThanVanishing:
 
     def test_the_rejection_names_the_gate_and_the_value_it_read(self, tmp_path: Path) -> None:
         """Without this the store cannot separate an absent production from a discarded one."""
-        store, _ = seed(tmp_path, continuity=0.1)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        store, _ = seed(tmp_path, stem=COUGH_STEM, continuity=0.1)
+        result = detect_voice(store, params(), run_dir=tmp_path)
         rejected = [finding for finding in result.deviations if finding.name == "carrier_rejected"]
         assert [finding.evidence["value"] for finding in rejected] == ["continuity_min"]
         assert rejected[0].evidence["value_read"] == pytest.approx(0.1, abs=0.01)
@@ -1153,23 +1277,23 @@ class TestADiscardedCarrierIsReportedRatherThanVanishing:
 
     def test_the_rejection_is_a_measurement_and_not_a_deviation(self, tmp_path: Path) -> None:
         """It is a reading of this branch's instrument, not a departure by the speaker."""
-        store, _ = seed(tmp_path, continuity=0.1)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        store, _ = seed(tmp_path, stem=COUGH_STEM, continuity=0.1)
+        result = detect_voice(store, params(), run_dir=tmp_path)
         rejected = [finding for finding in result.deviations if finding.name == "carrier_rejected"]
         assert {finding.kind for finding in rejected} == {"measure"}
         assert "carrier_rejected" not in deviation_names(result.deviations)
 
     def test_the_report_carries_the_rejections_for_a_reader_who_opens_no_findings(self, tmp_path: Path) -> None:
         """The summary a corpus reader sees must not have to be rebuilt from the derivatives."""
-        store, _ = seed(tmp_path, continuity=0.1)
+        store, _ = seed(tmp_path, amplitude=((2.0, 2.2), (5.0, 5.1)), duration_s=10.0)
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
         report = find_branch_report(store, "VOICE")
         assert report is not None
         assert report.attributes["carriers_rejected_n"] >= 1
-        assert report.attributes["carriers_rejected"][0]["gate"] == "continuity_min"
+        assert report.attributes["carriers_rejected"][0]["gate"] == "production_min_s"
         assert result.report.conformance == UNDETERMINED
 
-    def test_the_glide_records_the_sweep_it_located_and_discarded(self, tmp_path: Path) -> None:
+    def test_the_glide_reports_the_sweep_it_located_rather_than_discarding_it(self, tmp_path: Path) -> None:
         """``sweep_found: False`` about a sweep the branch found states more than it measured."""
         store, _ = seed(
             tmp_path,
@@ -1178,15 +1302,108 @@ class TestADiscardedCarrierIsReportedRatherThanVanishing:
             tracks=_zigzag_tracks(20.0, (2.0, 18.0), 100.0, 300.0),
         )
         result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        discarded = [
-            finding
-            for finding in result.deviations
-            if finding.name == "carrier_rejected" and finding.evidence["value"] == "dominant_segment_min_fraction"
+        assert [finding for finding in result.deviations if finding.name == "carrier_rejected"] == []
+        assert [finding for finding in result.deviations if finding.name == "sweep_found"] == []
+        assert result.components and readings_of(result)["sweep_dominant_fraction"] > 0.0
+
+
+class TestAQualityGateDoesNotDecideThatTheProductionNeverHappened:
+    """In the align arm the instruction says what was asked for, so a poor attempt is still one."""
+
+    def test_an_unsteady_eight_second_phonation_is_still_a_task_extent(self, tmp_path: Path) -> None:
+        """MPT measures duration. A wobbly 8 s vowel is an 8 s MPT with an unsteady pitch."""
+        store, _ = seed(
+            tmp_path,
+            amplitude=((2.0, 10.15),),
+            tracks=_wobble_tracks(20.0, (2.0, 10.15), 120.0, 6.0),
+        )
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert len(result.components) == 1
+        assert result.components[0].end - result.components[0].start == pytest.approx(8.15, abs=0.1)
+
+    def test_its_spread_is_reported_for_the_verdict_to_gate(self, tmp_path: Path) -> None:
+        """The branch hands VERDICT the reading rather than deciding on it."""
+        store, _ = seed(
+            tmp_path,
+            amplitude=((2.0, 10.15),),
+            tracks=_wobble_tracks(20.0, (2.0, 10.15), 120.0, 6.0),
+        )
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert readings_of(result)["carrier_f0_spread_semitones"] > MEASURED["f0_spread_max_semitones"]
+        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is False
+
+    def test_an_unsteady_production_is_not_recorded_as_a_rejected_carrier(self, tmp_path: Path) -> None:
+        """It was not rejected; it was measured. A reader must not see both."""
+        store, _ = seed(
+            tmp_path,
+            amplitude=((2.0, 10.15),),
+            tracks=_wobble_tracks(20.0, (2.0, 10.15), 120.0, 6.0),
+        )
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert [finding for finding in result.deviations if finding.name == "carrier_rejected"] == []
+
+    def test_a_low_continuity_production_is_still_a_task_extent(self, tmp_path: Path) -> None:
+        """``continuity_min`` is the other SUSTAINED quality reading."""
+        store, _ = seed(tmp_path, continuity=0.1)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert len(result.components) == 1
+        assert readings_of(result)["carrier_continuity"] == pytest.approx(0.1, abs=0.01)
+
+    def test_a_wobbly_glide_is_still_a_sweep(self, tmp_path: Path) -> None:
+        """``dominant_segment_min_fraction`` asks how clean the sweep was, not whether there was one."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_UP_STEM,
+            amplitude=((2.0, 18.0),),
+            tracks=_zigzag_tracks(20.0, (2.0, 18.0), 100.0, 300.0),
+        )
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        assert len(result.components) == 1
+        assert readings_of(result)["sweep_dominant_fraction"] < MEASURED["dominant_segment_min_fraction"]
+        assert gated_conformance(result, Pattern.GLIDE, settings=config()) is False
+
+    def test_the_glide_span_carries_the_carrier_the_sweep_was_read_off(self, tmp_path: Path) -> None:
+        """The production is the carrier; a reader must not have to infer its length from the sweep."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_UP_STEM,
+            amplitude=((2.0, 18.0),),
+            tracks=_zigzag_tracks(20.0, (2.0, 18.0), 100.0, 300.0),
+        )
+        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
+        assert result.components[0].attributes["carrier_extent"] == [pytest.approx(2.0), pytest.approx(18.0)]
+
+    def test_a_carrier_shorter_than_the_minimum_is_still_no_production(self, tmp_path: Path) -> None:
+        """The discriminating half: ``production_min_s`` is an existence criterion and still filters."""
+        store, _ = seed(tmp_path, amplitude=((2.0, 2.2),), duration_s=5.0)
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert result.components == []
+        assert [finding.evidence["value"] for finding in result.deviations if finding.name == "carrier_rejected"] == [
+            "production_min_s"
         ]
-        assert discarded, "the located sweep must be recorded, not silently dropped"
-        assert discarded[0].evidence["direction"] in ("up", "down")
-        assert discarded[0].evidence["sweep_s"] > 0.0
-        assert gated_conformance(result, Pattern.GLIDE, settings=config()) == UNDETERMINED
+
+    def test_a_carrier_with_no_voicing_at_all_is_still_no_production(self, tmp_path: Path) -> None:
+        """The other existence criterion: nothing was voiced, so there is nothing to measure."""
+        store, _ = seed(tmp_path, amplitude=((2.0, 18.0),), tracks=_tracks(20.0, []))
+        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
+        assert result.components == []
+        assert [finding.evidence["value"] for finding in result.deviations if finding.name == "carrier_rejected"] == [
+            "no_voicing"
+        ]
+
+    def test_the_detect_arm_still_applies_the_quality_qualifier(self, tmp_path: Path) -> None:
+        """Nothing declared this recording to hold a held vowel, so steadiness is what separates one."""
+        store, _ = seed(
+            tmp_path,
+            stem=COUGH_STEM,
+            amplitude=((2.0, 18.0),),
+            tracks=_wobble_tracks(20.0, (2.0, 18.0), 120.0, 6.0),
+        )
+        result = detect_voice(store, params(), run_dir=tmp_path)
+        assert result.components == []
+        assert [finding.evidence["value"] for finding in result.deviations if finding.name == "carrier_rejected"] == [
+            "f0_spread_max_semitones"
+        ]
 
 
 class TestConformanceIsNeverFalse:
