@@ -249,6 +249,27 @@ size of the blind spot.
 Results land at `/orcd/scratch/bcs/002/satra/voice_gate_census_20260923/results/census.json` and
 `census.txt`. **Unread at the time of writing.** No figure in this document is taken from it.
 
+## The same shape elsewhere, not fixed here
+
+`VOICE_EXPECTATIONS` serves exactly two patterns, SUSTAINED and GLIDE, and
+`test_every_voice_row_is_served_by_a_reachable_matcher` enforces that. So there is no third
+`_voice_*` body to check: the asymmetry ran in both directions between these two, and both are
+fixed.
+
+**DDK has the same defect, in a worse form.** `nodes/ddk.py:185-211`, `ddk_carrier`, walks the
+amplitude spans, keeps the longest one that clears `train_min_s` and yields a readable repetition
+rate, and returns only that. Every other candidate — including one that cleared both and merely lost
+the `duration(span.extent) > duration(best.extent)` comparison — is dropped with no record at all:
+no span, no deviation, and not even the `carrier_rejected` measure VOICE wrote. A second DDK train
+is therefore invisible in exactly the way a second glide was, and a carrier that failed
+`train_min_s` or produced no rate leaves no trace either.
+
+Not fixed: it is a different branch with its own expectations table, and no owner case has been
+raised against it. It is the same defect and should be taken up on the same terms — every carrier
+holding a readable train is an attempt; the longest is proposed; each further one is a
+`repeat_attempt`; a criterion that reads how *good* the train was must not decide that no train
+happened.
+
 ## Not done
 
 - **GLIDE's `task_extent` is still the sweep, not the carrier.** The owner's related judgment is that
