@@ -7,6 +7,11 @@ the routing decisions, and hands them to ``vocabulary.fold_file_verdict``. REDAC
 re-read is read here too, as an annotation: its ``flagged`` reaches the triage axis under
 ``verdict.llm_redaction_flags`` and the release axis on no path.
 
+**The release axis is decided here too, from the evidence rather than from whether REDACT ran.**
+REDACT runs only where SPEECH's scan found something, so its silence is the ordinary case;
+:func:`_redaction_evidence` gathers SPEECH's lexical count, the ``pii_scan`` tri-state and the live
+findings, and the fold's table turns them into a state and a ground.
+
 **The declared task's conformance is decided here.** :func:`gate_conformance` reads the declared
 family's task group's gates from ``verdict.gates``, reads their inputs off the branch's own
 ``measure`` findings, and substitutes the answer onto the report of the branch that owns the family
