@@ -16,6 +16,7 @@ See ``specs/20260923-free-speech-review-page/design.md``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import sys
@@ -42,7 +43,14 @@ PII_LABEL = "pii"
 LABEL_VERB = "label"
 VERDICT_NODE = "VERDICT"
 REDACT_NODE = "REDACT"
+SPEECH_NODE = "SPEECH"
 PII_SCAN = "pii_scan"
+
+TASK_EXTENT_ROLE = "task_extent"
+"""The ``span`` role the in-family branch mints for the interval it judged the task to occupy."""
+
+SPEECH_FAMILY = "speech"
+"""The span family SPEECH stamps; every free-response recording routes to SPEECH."""
 
 MEASUREMENT_MARKER = '"prov_type": "measurement"'
 KEPT_MEASUREMENT_MARKER = f'"name": "{PII_SCAN}"'
@@ -148,6 +156,169 @@ def scan_state(view: StoreView) -> bool | None:
     return state
 
 
+def overlaps(first: tuple[float, float], second: tuple[float, float]) -> bool:
+    """Whether two half-open intervals meet.
+
+    Args:
+        first: One interval.
+        second: The other.
+
+    Returns:
+        True when they share any time.
+    """
+    return first[0] < second[1] and first[1] > second[0]
+
+
+def word_hull(word: Entity) -> tuple[float, float]:
+    """A word's extent, widened to every recognizer's placement of it.
+
+    Args:
+        word: A live consensus ``word`` entity.
+
+    Returns:
+        ``(earliest start, latest end)``, or ``(0.0, 0.0)`` when nothing timed it.
+    """
+    spans = [(float(span[0]), float(span[1])) for span in (word.attributes.get("timings") or {}).values()]
+    if word.extent is not None:
+        spans.append((float(word.extent[0]), float(word.extent[1])))
+    if not spans:
+        return (0.0, 0.0)
+    return min(span[0] for span in spans), max(span[1] for span in spans)
+
+
+def finding_key(stem: str, categories: Sequence[str], start: int, end: int) -> str:
+    """A mark's identity, stable across re-extraction and independent of page order.
+
+    Args:
+        stem: The recording's BIDS stem.
+        categories: The mark's categories, in store order.
+        start: The first consensus word index the mark covers.
+        end: One past the last.
+
+    Returns:
+        A short content-addressed key.
+    """
+    payload = "|".join([stem, "+".join(categories), str(start), str(end)])
+    return hashlib.sha1(payload.encode(), usedforsecurity=False).hexdigest()[:16]
+
+
+def marks_of(
+    stem: str,
+    words: Sequence[Entity],
+    categories: Sequence[Sequence[str]],
+    hulls: Sequence[tuple[float, float]],
+    pii: Sequence[Entity],
+    extent: tuple[float, float] | None,
+) -> list[dict[str, Any]]:
+    """The reviewable marks: maximal runs of adjacent words sharing one category set.
+
+    Args:
+        stem: The recording's BIDS stem.
+        words: The consensus words, in index order.
+        categories: Each word's categories, aligned with ``words``.
+        hulls: Each word's timing hull, aligned with ``words``.
+        pii: The live ``pii`` entities, read for detector attribution.
+        extent: The task extent, or None when the recording carries none.
+
+    Returns:
+        One record per mark, in reading order.
+    """
+    marks: list[dict[str, Any]] = []
+    index = 0
+    while index < len(words):
+        current = list(categories[index])
+        if not current:
+            index += 1
+            continue
+        cursor = index + 1
+        while cursor < len(words) and list(categories[cursor]) == current:
+            cursor += 1
+        run = words[index:cursor]
+        hull = (
+            min(hulls[position][0] for position in range(index, cursor)),
+            max(hulls[position][1] for position in range(index, cursor)),
+        )
+        contributing = _contributing(hull, current, pii)
+        surface = " ".join(str(word.attributes.get("text") or "") for word in run)
+        marks.append(
+            {
+                "k": finding_key(stem, current, index, cursor),
+                "c": current,
+                "d": [str(finding.attributes.get("source") or "") for finding in contributing],
+                "dn": len(contributing),
+                "i": [index, cursor],
+                "nt": cursor - index,
+                "nc": len(surface),
+                "brk": 1 if any(word.attributes.get("bracketed") for word in run) else 0,
+                "stim": 1 if any(finding.attributes.get("in_stimulus") for finding in contributing) else 0,
+                "tx": _extent_flag(hull, extent),
+            }
+        )
+        index = cursor
+    return marks
+
+
+def _contributing(hull: tuple[float, float], categories: Sequence[str], pii: Sequence[Entity]) -> list[Entity]:
+    """The findings that plausibly produced one mark, tightest first.
+
+    The join is geometric and approximate. A ``pii`` entity's extent is the hull of every
+    recognizer's placement of its words, so it is generally wider than the mark it produced and can
+    reach neighbouring unmarked words; and the label assertion carries no pointer back to the
+    finding. A finding whose extent contains the mark is preferred over one that merely meets it,
+    and the narrowest comes first, but a store can carry two findings of one category over nested
+    word ranges and then the attribution is genuinely ambiguous — which is what ``dn`` records.
+
+    Args:
+        hull: The mark's timing hull.
+        categories: The mark's categories.
+        pii: The live ``pii`` entities.
+
+    Returns:
+        The candidate findings, containing ones first and narrowest first within each group.
+    """
+    candidates: list[tuple[int, float, Entity]] = []
+    for finding in pii:
+        if str(finding.attributes.get("category") or "") not in categories or finding.extent is None:
+            continue
+        span = (float(finding.extent[0]), float(finding.extent[1]))
+        if not overlaps(hull, span):
+            continue
+        contains = span[0] <= hull[0] and span[1] >= hull[1]
+        candidates.append((0 if contains else 1, span[1] - span[0], finding))
+    return [finding for _, _, finding in sorted(candidates, key=lambda item: (item[0], item[1]))]
+
+
+def _extent_flag(hull: tuple[float, float], extent: tuple[float, float] | None) -> int:
+    """Whether a mark falls inside the task extent.
+
+    Args:
+        hull: The mark's timing hull.
+        extent: The task extent, or None when the recording carries none.
+
+    Returns:
+        1 inside, 0 outside, -1 when the recording declares no extent.
+    """
+    if extent is None:
+        return -1
+    return 1 if overlaps(hull, extent) else 0
+
+
+def task_extent(view: StoreView) -> tuple[float, float] | None:
+    """The interval the in-family branch judged the task to occupy.
+
+    Args:
+        view: The store view.
+
+    Returns:
+        ``(start, end)``, or None when the branch minted no such span. Absence is the branch's
+        record that it found no task, not a read failure.
+    """
+    span = view.last("span", role=TASK_EXTENT_ROLE, family=SPEECH_FAMILY)
+    if span is None or span.extent is None:
+        return None
+    return (float(span.extent[0]), float(span.extent[1]))
+
+
 def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any] | None:
     """One recording's row, or None when it is not a free-response recording.
 
@@ -170,34 +341,28 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         return None
     participant, session, _ = identity(stem)
     marked = marked_words(view)
+    entities = sorted(view.live("word"), key=lambda entity: int(entity.attributes.get("index", 0)))
+    categories = [marked.get(entity.id, []) for entity in entities]
+    hulls = [word_hull(entity) for entity in entities]
+    pii = view.live("pii")
+    marks = marks_of(stem, entities, categories, hulls, pii, task_extent(view))
+    owner = {position: number for number, mark in enumerate(marks) for position in range(mark["i"][0], mark["i"][1])}
     words: list[list[Any]] = []
     characters = 0
     lexical = 0
-    for word in sorted(view.live("word"), key=lambda entity: int(entity.attributes.get("index", 0))):
-        text = str(word.attributes.get("text") or "")
-        bracketed = 1 if word.attributes.get("bracketed") else 0
-        categories = marked.get(word.id, [])
-        entry: list[Any] = [text, bracketed]
-        if categories:
-            entry.append(categories)
-        words.append(entry)
+    for position, entity in enumerate(entities):
+        text = str(entity.attributes.get("text") or "")
+        bracketed = 1 if entity.attributes.get("bracketed") else 0
+        words.append([text, bracketed, owner.get(position, -1)])
         characters += len(text)
         if not bracketed:
             lexical += 1
-    findings = [
-        {
-            "c": str(finding.attributes.get("category") or ""),
-            "s": str(finding.attributes.get("source") or ""),
-            "h": str(finding.attributes.get("haystack") or ""),
-            "stim": bool(finding.attributes.get("in_stimulus")),
-        }
-        for finding in view.live("pii")
-    ]
     redact = view.last("verdict", node=REDACT_NODE)
     return {
         "p": participant or "",
         "ses": session or "",
         "task": task,
+        "stem": stem,
         "fam": declared,
         "rel": str(attributes.get("release") or ""),
         "rg": attributes.get("release_ground"),
@@ -206,7 +371,16 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         "rwhy": str(redact.attributes.get("why") or "") if redact is not None else "",
         "scan": scan_state(view),
         "w": words,
-        "pii": findings,
+        "f": marks,
+        "pii": [
+            {
+                "c": str(finding.attributes.get("category") or ""),
+                "s": str(finding.attributes.get("source") or ""),
+                "h": str(finding.attributes.get("haystack") or ""),
+                "stim": bool(finding.attributes.get("in_stimulus")),
+            }
+            for finding in pii
+        ],
         "nw": len(words),
         "nl": lexical,
         "ch": characters,
@@ -308,9 +482,11 @@ class Corpus:
         participants: Participant id to its recordings, each already in page shape.
         families: Family name to how many recordings carry it.
         releases: Release state to how many recordings carry it.
-        categories: PII category to how many findings carry it.
+        categories: PII category to how many marks carry it.
+        detectors: Detector name to how many marks it contributed to.
         recordings: How many recordings in total.
         characters: How many transcript characters in total.
+        marks: How many reviewable marks in total.
         errors: The rows the sweep could not read.
     """
 
@@ -318,8 +494,10 @@ class Corpus:
     families: Counter[str] = field(default_factory=Counter)
     releases: Counter[str] = field(default_factory=Counter)
     categories: Counter[str] = field(default_factory=Counter)
+    detectors: Counter[str] = field(default_factory=Counter)
     recordings: int = 0
     characters: int = 0
+    marks: int = 0
     errors: list[dict[str, Any]] = field(default_factory=list)
 
     def add(self, row: dict[str, Any]) -> None:
@@ -331,8 +509,12 @@ class Corpus:
         self.participants.setdefault(str(row["p"]), []).append(row)
         self.families[str(row["fam"])] += 1
         self.releases[str(row["rel"]) or "unrecorded"] += 1
-        for finding in row.get("pii") or []:
-            self.categories[str(finding["c"])] += 1
+        for mark in row.get("f") or []:
+            self.marks += 1
+            for category in mark["c"]:
+                self.categories[str(category)] += 1
+            for detector in mark["d"] or ["unattributed"]:
+                self.detectors[str(detector)] += 1
         self.recordings += 1
         self.characters += int(row["ch"])
 
@@ -361,14 +543,15 @@ def load(path: Path) -> Corpus:
     return corpus
 
 
-def paragraph(words: Sequence[Sequence[Any]]) -> str:
+def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -> str:
     """One recording's consensus text as marked-up prose.
 
-    A run of adjacent words carrying the same categories becomes one marked span, so a two-word
-    name reads as one finding rather than two. Bracketed tokens keep their own class.
+    Each mark the extract identified becomes one ``<mark>`` carrying its review key and its facets,
+    so a two-word name reads and reviews as one finding. Bracketed tokens keep their own class.
 
     Args:
-        words: The word entries, ``[text, bracketed]`` or ``[text, bracketed, [categories]]``.
+        words: The word entries, ``[text, bracketed, mark index or -1]``.
+        marks: The recording's marks, indexed by the third field of a word entry.
 
     Returns:
         The HTML for the paragraph's contents.
@@ -376,31 +559,38 @@ def paragraph(words: Sequence[Sequence[Any]]) -> str:
     pieces: list[str] = []
     index = 0
     while index < len(words):
-        categories = _categories(words[index])
-        if not categories:
+        owner = int(words[index][2]) if len(words[index]) > 2 else -1
+        if owner < 0 or owner >= len(marks):
             pieces.append(_plain(words[index]))
             index += 1
             continue
         cursor = index + 1
-        while cursor < len(words) and _categories(words[cursor]) == categories:
+        while cursor < len(words) and len(words[cursor]) > 2 and int(words[cursor][2]) == owner:
             cursor += 1
-        inner = " ".join(_plain(item) for item in words[index:cursor])
-        label = html.escape("+".join(categories))
-        pieces.append(f'<mark class="pii"><span class="cat">{label}</span>{inner}</mark>')
+        pieces.append(_mark(marks[owner], words[index:cursor]))
         index = cursor
     return " ".join(pieces)
 
 
-def _categories(entry: Sequence[Any]) -> list[str]:
-    """The PII categories on one word entry.
+def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
+    """One reviewable mark.
 
     Args:
-        entry: The word entry.
+        mark: The mark record.
+        run: The word entries it covers.
 
     Returns:
-        The categories, empty when the word carries none.
+        The mark's HTML.
     """
-    return [str(name) for name in entry[2]] if len(entry) > 2 else []
+    label = html.escape("+".join(str(name) for name in mark["c"]))
+    detectors = html.escape(" ".join(str(name) for name in mark["d"]) or "unattributed")
+    inner = " ".join(_plain(item) for item in run)
+    return (
+        f'<mark class="pii" data-k="{html.escape(str(mark["k"]))}" data-c="{label}" '
+        f'data-d="{detectors}" data-brk="{mark["brk"]}" data-tx="{mark["tx"]}" '
+        f'data-nt="{mark["nt"]}" data-stim="{mark["stim"]}" tabindex="0">'
+        f'<span class="cat">{label}</span>{inner}</mark>'
+    )
 
 
 def _plain(entry: Sequence[Any]) -> str:
@@ -438,25 +628,30 @@ def recording_html(row: dict[str, Any]) -> str:
     Returns:
         The card's HTML.
     """
-    findings = row.get("pii") or []
-    categories = Counter(str(finding["c"]) for finding in findings)
-    fired = "yes" if findings else "no"
+    marks = row.get("f") or []
+    categories = Counter(str(name) for mark in marks for name in mark["c"])
+    fired = "yes" if marks else "no"
     summary = ", ".join(f"{html.escape(name)}&times;{count}" for name, count in sorted(categories.items())) or "none"
     ground = row.get("rg")
     ground_html = f'<div class="ground">{html.escape(str(ground))}</div>' if ground else ""
     why = row.get("rwhy") or row.get("why") or ""
     why_html = f'<div class="why">{html.escape(str(why))}</div>' if why else ""
     scan_text = {True: "scanned", False: "scan declined", None: "no scan recorded"}[row.get("scan")]
-    body = paragraph(row.get("w") or []) or '<span class="empty">no consensus words</span>'
+    body = paragraph(row.get("w") or [], marks) or '<span class="empty">no consensus words</span>'
+    stem = str(row.get("stem") or f"{row['p']}_{row['ses']}_task-{row['task']}")
     return (
         f'<article class="rec" data-rel="{html.escape(str(row["rel"]) or "unrecorded")}" '
-        f'data-fam="{html.escape(str(row["fam"]))}" data-fired="{fired}">'
+        f'data-fam="{html.escape(str(row["fam"]))}" data-fired="{fired}" '
+        f'data-stem="{html.escape(stem)}" data-nf="{len(marks)}">'
         f'<header><span class="task">{html.escape(str(row["task"]))}</span>'
         f'<span class="fam">{html.escape(str(row["fam"]))}</span>{_chip(str(row["rel"]))}'
         f'<span class="meta">{row["nl"]} lexical / {row["nw"]} tokens &middot; {scan_text} '
         f"&middot; findings: {summary}</span></header>"
         f"{ground_html}{why_html}"
-        f'<p class="text">{body}</p></article>'
+        f'<p class="text">{body}</p>'
+        f'<div class="recnote"><label>note on this recording '
+        f'<textarea class="rnote" rows="1" data-stem="{html.escape(stem)}"></textarea></label></div>'
+        f"</article>"
     )
 
 
@@ -470,7 +665,7 @@ def participant_html(participant: str, rows: Sequence[dict[str, Any]]) -> str:
     Returns:
         The section's HTML.
     """
-    fired = sum(1 for row in rows if row.get("pii"))
+    fired = sum(1 for row in rows if row.get("f"))
     releases = Counter(str(row["rel"]) or "unrecorded" for row in rows)
     tally = " ".join(_chip(name) for name in RELEASE_ORDER if releases.get(name))
     cards = "".join(recording_html(row) for row in rows)
@@ -511,8 +706,14 @@ def render(corpus: Corpus, title: str) -> str:
         if corpus.releases.get(name)
     )
     categories = "".join(
-        f'<span class="cat-chip">{html.escape(name)} <em>{count}</em></span>'
+        f'<label><input type="checkbox" class="cat-f" value="{html.escape(name)}" checked> '
+        f"{html.escape(name)} <em>{count}</em></label>"
         for name, count in corpus.categories.most_common()
+    )
+    detectors = "".join(
+        f'<label><input type="checkbox" class="det-f" value="{html.escape(name)}" checked> '
+        f"{html.escape(name)} <em>{count}</em></label>"
+        for name, count in corpus.detectors.most_common()
     )
     errors = f'<p class="errors">{len(corpus.errors)} stores unreadable</p>' if corpus.errors else ""
     return _DOCUMENT.format(
@@ -522,13 +723,31 @@ def render(corpus: Corpus, title: str) -> str:
         participants=len(order),
         recordings=corpus.recordings,
         characters=f"{corpus.characters:,}",
+        marks=corpus.marks,
         families=families,
         releases=releases,
         categories=categories,
+        detectors=detectors,
+        verdicts=_VERDICT_CONTROLS,
         jump=jump,
         sections=sections,
         errors=errors,
     )
+
+
+VERDICTS = (
+    ("identifying", "1", "a real disclosure; the redaction is right"),
+    ("not-identifying", "2", "the category fits but nobody is identified"),
+    ("not-the-category", "3", "not an instance of the category at all"),
+    ("unsure", "4", "needs a second look"),
+)
+"""The review vocabulary, with its keyboard shortcut and what each verdict claims."""
+
+_VERDICT_CONTROLS = "".join(
+    f'<button class="verdict v-{name}" data-v="{name}" title="{html.escape(why)} (key {key})">'
+    f"{name}<kbd>{key}</kbd></button>"
+    for name, key, why in VERDICTS
+)
 
 
 _STYLE = """
@@ -589,6 +808,48 @@ border-radius:9px;padding:1px 7px;margin:0 3px 3px 0}
 #status{position:fixed;right:14px;bottom:12px;background:var(--card);border:1px solid var(--line);
 border-radius:8px;padding:5px 10px;font-size:12px;color:var(--mut)}
 .hidden{display:none !important}
+mark.pii{cursor:pointer}
+mark.pii:focus{outline:2px solid var(--acc);outline-offset:1px}
+mark.pii.dim{background:transparent;border-bottom:1px dotted var(--line);opacity:.45}
+mark.pii.dim .cat{background:transparent;color:var(--mut)}
+mark.pii.sel{box-shadow:0 0 0 2px var(--acc)}
+mark.pii[data-v]{border-bottom-width:3px}
+mark.pii[data-v="identifying"]{border-bottom-color:#8a2f24}
+mark.pii[data-v="not-identifying"]{border-bottom-color:#2f4670}
+mark.pii[data-v="not-the-category"]{border-bottom-color:#2c5c2c}
+mark.pii[data-v="unsure"]{border-bottom-color:#6b6350;border-bottom-style:dashed}
+.recnote{margin-top:8px}
+.recnote label{font-size:11px;color:var(--mut);display:block}
+.recnote textarea{width:100%;font:inherit;font-size:12.5px;background:var(--bg);color:var(--fg);
+border:1px solid var(--line);border-radius:6px;padding:4px 6px;resize:vertical}
+.recnote textarea:placeholder-shown{opacity:.7}
+#rail .num{width:58px;padding:3px 5px;border:1px solid var(--line);border-radius:5px;
+background:var(--card);color:var(--fg);font-size:12px}
+#rail .row{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--mut);margin-top:3px}
+#rail .facets{max-height:22vh;overflow:auto}
+#rail button{font:inherit;font-size:12px;padding:3px 8px;border:1px solid var(--line);
+border-radius:6px;background:var(--card);color:var(--fg);cursor:pointer}
+#panel{position:fixed;right:14px;bottom:44px;width:330px;background:var(--card);
+border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;
+box-shadow:0 6px 24px rgba(0,0,0,.18);z-index:9}
+#panel h3{margin:0 0 6px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;
+color:var(--mut)}
+#panel .facts{color:var(--mut);font-size:11.5px;margin-bottom:6px;word-break:break-word}
+#panel .surface{background:var(--pii);border-radius:4px;padding:3px 6px;margin-bottom:8px;
+max-height:80px;overflow:auto}
+#panel .verdicts{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
+.verdict{font:inherit;font-size:11.5px;padding:3px 7px;border:1px solid var(--line);
+border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer;display:flex;gap:5px}
+.verdict kbd{font-size:9.5px;color:var(--mut);border:1px solid var(--line);border-radius:3px;
+padding:0 3px}
+.verdict.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.verdict.on kbd{color:#fff;border-color:rgba(255,255,255,.5)}
+#panel textarea{width:100%;font:inherit;font-size:12px;background:var(--bg);color:var(--fg);
+border:1px solid var(--line);border-radius:6px;padding:4px 6px;resize:vertical}
+#panel .close{float:right;border:0;background:none;color:var(--mut);cursor:pointer;font-size:14px}
+#progress{font-size:11.5px;color:var(--mut);margin-top:6px}
+#io textarea{width:100%;height:70px;font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
+background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px}
 @media (prefers-color-scheme:dark){
 :root{--bg:#171614;--fg:#eceae5;--mut:#9a958c;--line:#33312d;--card:#1f1e1b;--acc:#d9a45f;
 --pii:#4a3413;--piib:#c08a38;--brk:#a09b91;--brkbg:#2a2825;--catbg:#5f4418;--catfg:#f0d7a8;}
@@ -597,47 +858,241 @@ border-radius:8px;padding:5px 10px;font-size:12px;color:var(--mut)}
 .r-nothing_to_redact{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
 .r-not_assessed,.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
 .errors{color:#e8a89e}
+mark.pii[data-v="identifying"]{border-bottom-color:#e8a89e}
+mark.pii[data-v="not-identifying"]{border-bottom-color:#a7bce4}
+mark.pii[data-v="not-the-category"]{border-bottom-color:#a8d3a8}
+.verdict.on{color:#171614}
+.verdict.on kbd{color:#171614;border-color:rgba(0,0,0,.4)}
 }
 """
 
 _SCRIPT = """
+const KEY='senselab.fsreview.v1';
 const sections=[...document.querySelectorAll('.participant')];
+const cards=[...document.querySelectorAll('.rec')];
+const marks=[...document.querySelectorAll('mark.pii')];
 const jump=[...document.querySelectorAll('#jump a')];
 const bar=document.getElementById('status');
 const q=document.getElementById('q');
 const firedSel=document.getElementById('fired');
+const brkSel=document.getElementById('brk');
+const txSel=document.getElementById('tx');
+const revSel=document.getElementById('rev');
+const minNf=document.getElementById('minnf');
+const minNt=document.getElementById('minnt');
+const maxNt=document.getElementById('maxnt');
+const panel=document.getElementById('panel');
+const progress=document.getElementById('progress');
+
+/* ---- store: localStorage is a convenience, the export is the record ---- */
+let store={findings:{},recordings:{}};
+function load(){
+  try{
+    const raw=localStorage.getItem(KEY);
+    if(raw){const parsed=JSON.parse(raw);
+      store={findings:parsed.findings||{},recordings:parsed.recordings||{}};}
+  }catch(e){store={findings:{},recordings:{}};}
+}
+function save(){
+  try{localStorage.setItem(KEY,JSON.stringify(store));}
+  catch(e){bar.textContent='judgment kept in memory only \\u2014 storage unavailable, use Export';}
+}
+load();
+
+const byKey=new Map();
+for(const m of marks)byKey.set(m.dataset.k,m);
+const cardOf=new Map();
+for(const m of marks)cardOf.set(m,m.closest('.rec'));
 const haystack=new Map();
-for(const s of sections)for(const r of s.querySelectorAll('.rec'))
-  haystack.set(r,(r.textContent+' '+s.dataset.p).toLowerCase());
+for(const r of cards)haystack.set(r,(r.textContent+' '+r.closest('.participant').dataset.p).toLowerCase());
+const marksIn=new Map();
+for(const r of cards)marksIn.set(r,[...r.querySelectorAll('mark.pii')]);
+
+function paint(m){
+  const rec=store.findings[m.dataset.k];
+  if(rec&&rec.v)m.dataset.v=rec.v; else m.removeAttribute('data-v');
+}
+for(const m of marks)paint(m);
+for(const t of document.querySelectorAll('.rnote')){
+  const rec=store.recordings[t.dataset.stem];
+  if(rec&&rec.n)t.value=rec.n;
+  t.placeholder='';
+  t.addEventListener('change',()=>{
+    const stem=t.dataset.stem;
+    if(t.value.trim())store.recordings[stem]={n:t.value,t:new Date().toISOString()};
+    else delete store.recordings[stem];
+    save();});
+}
+
+/* ---- facets ---- */
 function checked(cls){
   return new Set([...document.querySelectorAll('.'+cls)].filter(i=>i.checked).map(i=>i.value));}
+function allChecked(cls){
+  return [...document.querySelectorAll('.'+cls)].every(i=>i.checked);}
+function markMatches(m,cats,dets,brk,tx,rev,lo,hi){
+  if(!cats.has(m.dataset.c))return false;
+  const own=m.dataset.d.split(' ');
+  if(!own.some(d=>dets.has(d)))return false;
+  if(brk!=='any'&&m.dataset.brk!==brk)return false;
+  if(tx!=='any'&&m.dataset.tx!==tx)return false;
+  const n=+m.dataset.nt;
+  if(n<lo||n>hi)return false;
+  if(rev!=='any'){
+    const v=(store.findings[m.dataset.k]||{}).v||'';
+    if(rev==='unreviewed'){if(v)return false;}
+    else if(rev==='reviewed'){if(!v)return false;}
+    else if(v!==rev)return false;
+  }
+  return true;
+}
 function apply(){
   const needle=q.value.trim().toLowerCase();
-  const fams=checked('fam-f'), rels=checked('rel-f'), fired=firedSel.value;
-  let shownR=0, shownP=0;
+  const fams=checked('fam-f'), rels=checked('rel-f');
+  const cats=checked('cat-f'), dets=checked('det-f');
+  const fired=firedSel.value, brk=brkSel.value, tx=txSel.value, rev=revSel.value;
+  const nf=+minNf.value||0;
+  const lo=+minNt.value||1, hi=+maxNt.value||9999;
+  const narrowed=!allChecked('cat-f')||!allChecked('det-f')||brk!=='any'||tx!=='any'
+    ||rev!=='any'||lo>1||hi<9999;
+  let shownR=0, shownP=0, shownM=0;
   for(const s of sections){
     let any=false;
     for(const r of s.querySelectorAll('.rec')){
       let ok=fams.has(r.dataset.fam)&&rels.has(r.dataset.rel);
       if(ok&&fired!=='any') ok=r.dataset.fired===fired;
+      if(ok&&nf) ok=+r.dataset.nf>=nf;
       if(ok&&needle) ok=haystack.get(r).includes(needle);
+      let hits=0;
+      if(ok){
+        for(const m of marksIn.get(r)){
+          const hit=markMatches(m,cats,dets,brk,tx,rev,lo,hi);
+          m.classList.toggle('dim',narrowed&&!hit);
+          if(hit)hits++;
+        }
+        if(narrowed&&hits===0)ok=false;
+      }
       r.classList.toggle('hidden',!ok);
-      if(ok){any=true;shownR++;}
+      if(ok){any=true;shownR++;shownM+=narrowed?hits:marksIn.get(r).length;}
     }
     s.classList.toggle('hidden',!any);
     if(any)shownP++;
   }
   const live=new Set(sections.filter(s=>!s.classList.contains('hidden')).map(s=>s.dataset.p));
   for(const a of jump)a.parentElement.classList.toggle('hidden',!live.has(a.dataset.p));
-  bar.textContent=shownP+' participants \\u00b7 '+shownR+' recordings shown';
+  bar.textContent=shownP+' participants \\u00b7 '+shownR+' recordings \\u00b7 '+shownM+' findings';
+  tally();
 }
-for(const el of document.querySelectorAll('.fam-f,.rel-f'))el.addEventListener('change',apply);
-firedSel.addEventListener('change',apply);
+function tally(){
+  let done=0;
+  for(const m of marks)if((store.findings[m.dataset.k]||{}).v)done++;
+  const notes=Object.keys(store.recordings).length;
+  progress.textContent=done+' of '+marks.length+' findings judged \\u00b7 '+notes+' recording notes';
+}
+
+/* ---- review panel ---- */
+let current=null;
+function open(m){
+  if(current)current.classList.remove('sel');
+  current=m; m.classList.add('sel');
+  const rec=store.findings[m.dataset.k]||{};
+  panel.hidden=false;
+  panel.querySelector('.surface').textContent=m.textContent.slice(m.dataset.c.length);
+  panel.querySelector('.facts').textContent=
+    m.dataset.c+' \\u00b7 '+(m.dataset.d||'unattributed')+' \\u00b7 '+m.dataset.nt+' token(s)'
+    +(m.dataset.brk==='1'?' \\u00b7 touches a bracketed token':'')
+    +(m.dataset.tx==='1'?' \\u00b7 inside the task extent':m.dataset.tx==='0'?' \\u00b7 outside the task extent':'')
+    +(m.dataset.stim==='1'?' \\u00b7 in the stimulus':'');
+  for(const b of panel.querySelectorAll('.verdict'))b.classList.toggle('on',b.dataset.v===rec.v);
+  panel.querySelector('textarea').value=rec.n||'';
+  panel.querySelector('textarea').focus({preventScroll:true});
+}
+function setVerdict(v){
+  if(!current)return;
+  const k=current.dataset.k;
+  const prev=store.findings[k]||{};
+  if(prev.v===v){delete prev.v;}else{prev.v=v;}
+  prev.t=new Date().toISOString();
+  prev.c=current.dataset.c; prev.d=current.dataset.d;
+  if(!prev.v&&!prev.n)delete store.findings[k]; else store.findings[k]=prev;
+  save(); paint(current);
+  for(const b of panel.querySelectorAll('.verdict'))
+    b.classList.toggle('on',b.dataset.v===(store.findings[k]||{}).v);
+  tally();
+}
+for(const m of marks){
+  m.addEventListener('click',e=>{e.preventDefault();open(m);});
+  m.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open(m);}});
+}
+for(const b of panel.querySelectorAll('.verdict'))
+  b.addEventListener('click',()=>setVerdict(b.dataset.v));
+panel.querySelector('textarea').addEventListener('change',e=>{
+  if(!current)return;
+  const k=current.dataset.k;
+  const prev=store.findings[k]||{};
+  if(e.target.value.trim())prev.n=e.target.value; else delete prev.n;
+  prev.t=new Date().toISOString();
+  prev.c=current.dataset.c; prev.d=current.dataset.d;
+  if(!prev.v&&!prev.n)delete store.findings[k]; else store.findings[k]=prev;
+  save(); tally();});
+panel.querySelector('.close').addEventListener('click',()=>{
+  panel.hidden=true; if(current)current.classList.remove('sel'); current=null;});
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT')return;
+  const hit=[...panel.querySelectorAll('.verdict')].find(b=>b.querySelector('kbd').textContent===e.key);
+  if(hit&&current){e.preventDefault();setVerdict(hit.dataset.v);}
+  if(e.key==='Escape'&&current){panel.hidden=true;current.classList.remove('sel');current=null;}});
+
+/* ---- export and import: the durable artefact ---- */
+function payload(){
+  return JSON.stringify({schema:'senselab.fsreview',version:1,
+    exported:new Date().toISOString(),findings:store.findings,recordings:store.recordings},null,1);
+}
+document.getElementById('export').addEventListener('click',()=>{
+  const text=payload();
+  document.getElementById('iotext').value=text;
+  try{
+    const url=URL.createObjectURL(new Blob([text],{type:'application/json'}));
+    const a=document.createElement('a');
+    a.href=url; a.download='free-speech-review.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),2000);
+  }catch(e){/* the textarea above is the fallback */}
+});
+document.getElementById('import').addEventListener('click',()=>{
+  const text=document.getElementById('iotext').value.trim();
+  if(!text)return;
+  try{
+    const parsed=JSON.parse(text);
+    store={findings:Object.assign({},store.findings,parsed.findings||{}),
+           recordings:Object.assign({},store.recordings,parsed.recordings||{})};
+    save();
+    for(const m of marks)paint(m);
+    for(const t of document.querySelectorAll('.rnote')){
+      const rec=store.recordings[t.dataset.stem]; if(rec&&rec.n)t.value=rec.n;}
+    apply();
+  }catch(e){bar.textContent='import failed: that is not the export JSON';}
+});
+document.getElementById('file').addEventListener('change',e=>{
+  const f=e.target.files&&e.target.files[0]; if(!f)return;
+  const reader=new FileReader();
+  reader.onload=()=>{document.getElementById('iotext').value=String(reader.result);
+    document.getElementById('import').click();};
+  reader.readAsText(f);
+});
+
+for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))
+  el.addEventListener('change',apply);
+for(const el of [firedSel,brkSel,txSel,revSel,minNf,minNt,maxNt])el.addEventListener('change',apply);
 let timer;q.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(apply,140);});
+for(const [id,cls] of [['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],['nodet','det-f']])
+  document.getElementById(id).addEventListener('click',()=>{
+    for(const el of document.querySelectorAll('.'+cls))el.checked=id.startsWith('all');
+    apply();});
 document.getElementById('all').addEventListener('click',e=>{
   e.preventDefault();
-  for(const el of document.querySelectorAll('.fam-f,.rel-f'))el.checked=true;
-  firedSel.value='any';q.value='';apply();});
+  for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))el.checked=true;
+  firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';
+  minNf.value='';minNt.value='';maxNt.value='';q.value='';apply();});
 apply();
 """
 
@@ -651,21 +1106,61 @@ _DOCUMENT = """<!doctype html>
 <nav id="rail">
 <h1>{title}</h1>
 <div class="sum">{participants} participants &middot; {recordings} recordings &middot;
-{characters} characters</div>
+{marks} findings &middot; {characters} characters</div>
 {errors}
 <input type="search" id="q" placeholder="search transcripts, tasks, ids">
-<fieldset><legend>redaction</legend>
-<select id="fired"><option value="any">fired or not</option>
+<fieldset><legend>recording</legend>
+<select id="fired"><option value="any">redaction fired or not</option>
 <option value="yes">findings only</option><option value="no">no findings</option></select>
+<div class="row">at least <input class="num" type="number" id="minnf" min="0" step="1">
+findings</div>
 </fieldset>
 <fieldset><legend>release</legend>{releases}</fieldset>
 <fieldset><legend>family</legend>{families}</fieldset>
-<fieldset><legend>categories seen</legend><div>{categories}</div></fieldset>
+<fieldset><legend>finding &mdash; category
+<button id="allcat" type="button">all</button><button id="nocat" type="button">none</button></legend>
+<div class="facets">{categories}</div></fieldset>
+<fieldset><legend>finding &mdash; detector
+<button id="alldet" type="button">all</button><button id="nodet" type="button">none</button></legend>
+<div class="facets">{detectors}</div></fieldset>
+<fieldset><legend>finding &mdash; shape</legend>
+<select id="brk"><option value="any">bracketed token or not</option>
+<option value="1">touches a bracketed token</option>
+<option value="0">no bracketed token</option></select>
+<select id="tx"><option value="any">task extent, any</option>
+<option value="1">inside the task extent</option>
+<option value="0">outside the task extent</option>
+<option value="-1">no task extent recorded</option></select>
+<div class="row">span <input class="num" type="number" id="minnt" min="1" step="1"
+placeholder="min"> to <input class="num" type="number" id="maxnt" min="1" step="1"
+placeholder="max"> tokens</div>
+</fieldset>
+<fieldset><legend>my review</legend>
+<select id="rev"><option value="any">judged or not</option>
+<option value="unreviewed">unjudged only</option><option value="reviewed">judged only</option>
+<option value="identifying">identifying</option>
+<option value="not-identifying">not-identifying</option>
+<option value="not-the-category">not-the-category</option>
+<option value="unsure">unsure</option></select>
+<div id="progress"></div>
+</fieldset>
+<fieldset id="io"><legend>export &middot; import</legend>
+<div class="row"><button id="export" type="button">Export JSON</button>
+<button id="import" type="button">Import</button></div>
+<input type="file" id="file" accept="application/json,.json">
+<textarea id="iotext" spellcheck="false"
+placeholder="the export lands here too; paste an export here and press Import"></textarea>
+</fieldset>
 <p><a href="#" id="all">reset filters</a></p>
 <fieldset><legend>participants</legend><ul id="jump">{jump}</ul></fieldset>
 </nav>
 <main>{sections}</main>
-</div><div id="status"></div>
+</div>
+<div id="panel" hidden><button class="close" type="button" title="close">&times;</button>
+<h3>this finding</h3><div class="facts"></div><div class="surface"></div>
+<div class="verdicts">{verdicts}</div>
+<textarea rows="2" placeholder="note (optional)"></textarea></div>
+<div id="status"></div>
 <script>{script}</script></body></html>
 """
 
