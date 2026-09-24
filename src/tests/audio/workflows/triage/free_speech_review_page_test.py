@@ -1300,3 +1300,66 @@ def test_the_banner_goes_away_once_a_reviewer_actually_ran() -> None:
     corpus.add(_row("sub-a", d={"llm": {"status": "disabled"}}))
     corpus.add(_row("sub-b", d={"llm": {"status": "clean"}}))
     assert "did not run on any of these" not in page.render(corpus, "Review")
+
+
+def test_a_marks_stimulus_state_is_tri_state_like_its_findings(tmp_path: Path) -> None:
+    """A boolean here collapses "nothing to check against" into "checked and did not match"."""
+    records = [
+        _word(0, "alpha"),
+        _entity(
+            "pii-1",
+            "pii",
+            {"category": "NAME", "source": "rules/ner", "haystack": "consensus", "in_stimulus": None},
+            [0, 1],
+        ),
+        *_label("assertion-1", "NAME", "word-0"),
+        _verdict("withheld", family="cinderella-story"),
+    ]
+    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
+    row = page.recording_record(run_root, page.free_response_families())
+    assert row is not None
+    assert row["f"][0]["stim"] == -1
+
+
+def test_a_mark_matched_by_the_stimulus_reads_as_matched(tmp_path: Path) -> None:
+    """One matching finding is enough for the mark, whatever the others said."""
+    records = [
+        _word(0, "alpha"),
+        _entity(
+            "pii-1",
+            "pii",
+            {"category": "NAME", "source": "rules/ner", "haystack": "consensus", "in_stimulus": False},
+            [0, 1],
+        ),
+        _entity(
+            "pii-2",
+            "pii",
+            {"category": "NAME", "source": "presidio", "haystack": "consensus", "in_stimulus": True},
+            [0, 1],
+        ),
+        *_label("assertion-1", "NAME", "word-0"),
+        _verdict("releasable", family="cinderella-story"),
+    ]
+    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
+    row = page.recording_record(run_root, page.free_response_families())
+    assert row is not None
+    assert row["f"][0]["stim"] == 1
+
+
+@pytest.mark.parametrize(
+    ("states", "expected"),
+    [([True], 1), ([False], 0), ([None], -1), ([None, False], 0), ([False, True], 1), ([], -1)],
+)
+def test_the_mark_stimulus_fold(states: list[Any], expected: int) -> None:
+    """Matched wins over checked, and checked wins over uncheckable."""
+    findings = [
+        page.Entity(id=f"pii-{n}", prov_type="pii", extent=(0.0, 1.0), attributes={"in_stimulus": state})
+        for n, state in enumerate(states)
+    ]
+    assert page._mark_stimulus(findings) == expected
+
+
+def test_the_panel_names_all_three_stimulus_states_on_a_mark() -> None:
+    """The finding panel must not leave "not asked" looking like "asked and no"."""
+    assert "checked, not in the stimulus" in page._SCRIPT
+    assert "no stimulus to check against" in page._SCRIPT
