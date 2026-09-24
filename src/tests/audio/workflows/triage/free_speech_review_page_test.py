@@ -1271,3 +1271,10 @@ def test_the_page_refuses_to_describe_a_reviewer_it_cannot_vouch_for(tmp_path: P
     fresh.version = page.EXTRACT_VERSION
     fresh.add(_row("sub-a"))
     assert "written before the reviewer ladder changed" not in page.render(fresh, "Review")
+
+
+def test_the_status_bar_stays_a_corner_pill_on_a_phone() -> None:
+    """A fixed full-width band covers a line of transcript at every scroll position."""
+    assert "#status{left:auto;right:8px;bottom:8px" in page._STYLE
+    assert "#status{left:8px;right:8px;text-align:center}" not in page._STYLE
+    assert "#status{pointer-events:none}" in page._STYLE
