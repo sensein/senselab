@@ -180,6 +180,25 @@ single largest structure in the data.
 
 ---
 
+## Narrowing is two instruments, not one
+
+Brushing an axis was the only way to narrow the drawn set until 2026-09-24. With ten slots and 195
+columns that makes filtering compete with reading: to keep only one task you had to spend a slot on
+`task`. A **facet panel** now sits to the left of the plot and narrows by what a recording *is* --
+every categorical and `set` column, the 22 gate outcomes included -- leaving all ten slots for
+reading.
+
+The two compose rather than replace: `selected = brushMask AND facetMask`, `clear brushes` leaves
+the facets standing and `clear facets` leaves the brushes standing. Each facet value carries
+`available / total`, and the panel header states the denominator on both sides of the narrowing, so
+a facet can never silently move it. Absence is a selectable value there too, for the same reason it
+is a first-class chip on an axis.
+
+The design, the counts' semantics and what a click costs at this corpus size are in
+[`specs/20260924-recording-vectors-facets/facets.md`](../20260924-recording-vectors-facets/facets.md).
+
+---
+
 ## Null is absent, and the page never says otherwise
 
 The rule is one function, `CorpusView.segmentsFor`, so it can be held by a test rather than
