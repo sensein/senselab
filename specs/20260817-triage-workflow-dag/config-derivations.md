@@ -1779,8 +1779,19 @@ verdict.gates.by_group.echo_overlap_max: 0.5          [FREE_RESPONSE]
 verdict.gates.by_group.verbatim_overlap_max: 0.5          [FREE_RESPONSE]
   The same convention on the same measure, for source content rather than prompt.
 
-verdict.gates.by_group.coverage_min: 0.5          [FREE_RESPONSE]
-  A majority of the expected tokens realised.
+verdict.gates.by_group.coverage_min is **deleted**, not left null.
+
+  It shipped as 0.5, derived as "a majority of the expected tokens realised", and a
+  `FREE_RESPONSE` row whose anti-pattern was `verbatim_source` -- `story-recall` and
+  `story-recall-v2`, and only those two -- had its conformance term *replaced* by it, so the
+  question "did the participant respond to this instruction" was answered by how much of the
+  source story the retelling reproduced. The owner withdrew that on 2026-09-24: the task checks
+  only that a response was produced, and how much was recalled is a content instrument's job.
+  The bound was also never fitted and sits above its own distribution. `source_content_coverage`
+  is still measured and still a column in `recording_vectors`; nothing in the graph is bound to
+  it, and a key nothing reads is worse than a missing one -- the same disposition as
+  `branch.breath_coverage_min` above. The measurement and the corpus effect are in
+  `specs/20260924-recall-conformance-is-production/`.
 
 verdict.gates.by_group.interval_max_s: 2.0          [EVENT_SERIES]
   From the instruction's own word. A series a speaker is told to produce *quickly* does not pause

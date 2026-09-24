@@ -87,7 +87,7 @@ def _gated(result: Result, family: str, settings: TriageConfig, *, group: Patter
 
     Args:
         result: What the mode returned.
-        family: The declared family, whose row names the group and the anti-pattern.
+        family: The declared family, whose row names the group.
         settings: The configuration the bounds come from.
         group: An explicit group, for the out-of-family mode, which declares no family.
 
@@ -96,7 +96,7 @@ def _gated(result: Result, family: str, settings: TriageConfig, *, group: Patter
     """
     row = SPEECH_EXPECTATIONS.get(family)
     pattern = group or (row.pattern if row is not None else Pattern.FREE_RESPONSE)
-    return gated_conformance(result, pattern, settings=settings, anti_pattern=None if row is None else row.anti_pattern)
+    return gated_conformance(result, pattern, settings=settings)
 
 
 def _store(*, family: str | None = None, duration_s: float = 20.0) -> ProvStore:
@@ -526,10 +526,10 @@ class TestFreeSpeechsTwoVersionsExpectOppositeThings:
         assert _of_kind(result, "deviation", "stimulus_mismatch") == []
         assert _of_kind(result, "measure", "verbatim_overlap_fraction") == []
 
-    def test_story_recall_reads_coverage_rather_than_echo(self, tmp_path: Path) -> None:
-        """Recall in your own words: coverage is expected and verbatim reproduction is not."""
+    def test_story_recall_measures_coverage_and_is_gated_on_production(self, tmp_path: Path) -> None:
+        """Recall in your own words: coverage is a reading a content instrument reads, not a term."""
         store, hint = self._spoken("story-recall", self.PROMPT)
-        settings = _config(tmp_path, {"echo_ngram_n": 2, "verbatim_overlap_max": 0.5, "coverage_min": 0.5})
+        settings = _config(tmp_path, {"echo_ngram_n": 2, "verbatim_overlap_max": 0.5, "response_min_s": 0.5})
         result = align_speech("story-recall", store, hint, branch_params(settings))
         [covered] = _of_kind(result, "measure", "source_content_coverage")
         assert covered.evidence["value"] == 1.0

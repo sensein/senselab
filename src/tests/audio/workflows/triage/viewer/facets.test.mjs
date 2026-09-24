@@ -33,10 +33,10 @@ function corpus () {
   const spec = [
     // [n, task, verdict, conformance_speech, gate_failed_names]
     [10, 'story-recall', 'pass', 'true', []],
-    [6, 'story-recall', 'flag', 'false', ['coverage_min']],
+    [6, 'story-recall', 'flag', 'false', ['response_min_s']],
     [4, 'story-recall', 'pass', null, []],
     [7, 'free-speech', 'pass', 'true', []],
-    [3, 'free-speech', 'flag', null, ['coverage_min', 'items_min']],
+    [3, 'free-speech', 'flag', null, ['response_min_s', 'items_min']],
     [2, 'cough', 'discard', 'undetermined', ['items_min']],
     [1, 'cough', 'flag', null, null]
   ]
@@ -76,9 +76,9 @@ test('every categorical and set column is offered, and the two unusable ones are
   for (const f of F.CATALOGUE) assert.ok(['categorical', 'set'].includes(f.col.kind), f.col.name)
 })
 
-test('all 22 gate outcomes are facets, and the set columns face by membership', () => {
+test('all 21 gate outcomes are facets, and the set columns face by membership', () => {
   const passed = F.CATALOGUE.filter(f => /^gate_.*_passed$/.test(f.col.name))
-  assert.equal(passed.length, 22)
+  assert.equal(passed.length, 21)
   assert.equal(F.BY_NAME.gate_failed_names.mode, 'set')
   assert.equal(F.BY_NAME.flag_nodes.mode, 'set')
   assert.equal(F.BY_NAME.verdict.mode, 'scalar')
@@ -176,12 +176,12 @@ test('a set facet is membership, and its absent bucket is null rather than the e
   const m = new F.FacetModel(ROWS)
   const v = m.values('gate_failed_names')
   assert.equal(v.mode, 'set')
-  assert.equal(v.values.find(x => x.term === 'coverage_min').total, 9) // 6 + 3
+  assert.equal(v.values.find(x => x.term === 'response_min_s').total, 9) // 6 + 3
   assert.equal(v.values.find(x => x.term === 'items_min').total, 5) // 3 + 2
   assert.equal(v.values[v.values.length - 1].total, 1) // the one row carrying null, not []
   m.toggle('gate_failed_names', 'items_min')
   assert.equal(m.after(), 5)
-  m.toggle('gate_failed_names', 'coverage_min')
+  m.toggle('gate_failed_names', 'response_min_s')
   assert.equal(m.after(), 11) // union: 9 + 5 - 3 rows carrying both
 })
 

@@ -26,7 +26,7 @@ from typing import Any, Iterable, Iterator, Sequence
 import numpy as np
 import pyarrow as pa
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 """Bumped whenever a column is added, removed or retyped, or a binary layout changes."""
 
 STORE_NAME = "store.jsonl"
@@ -112,7 +112,6 @@ GATE_NAMES = (
     "expected_tokens_matched_min",
     "omissions_max",
     "response_min_s",
-    "coverage_min",
     "dominant_speaker_share_min",
     "items_min",
     "events_min",

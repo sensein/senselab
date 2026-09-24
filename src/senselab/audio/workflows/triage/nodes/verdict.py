@@ -532,7 +532,7 @@ def gate_conformance(
     reported = next((report for report in reports if report.node == branch and report.in_family), None)
     if reported is None:
         return GateOutcome(branch, UNDETERMINED, bounds, (), tuple(flagging))
-    names = conformance_gate_names(expectation.pattern, anti_pattern=expectation.anti_pattern)
+    names = conformance_gate_names(expectation.pattern)
     conformance, applied = apply_gates(names, bounds, gate_readings(store, names))
     return GateOutcome(branch, conformance, bounds, tuple(applied), tuple(flagging))
 

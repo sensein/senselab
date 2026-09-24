@@ -857,9 +857,9 @@ def test_a_gate_whose_reading_was_absent_is_undetermined_with_a_null_reading(one
 
 def test_a_gate_the_fold_did_not_apply_is_null_in_all_three_columns(one_row: dict[str, Any]) -> None:
     """A gate no layer named for this group carries no reading, no bound and no outcome."""
-    assert one_row.get("gate_coverage_min") is None
-    assert one_row.get("gate_coverage_min_bound") is None
-    assert one_row.get("gate_coverage_min_passed") is None
+    assert one_row.get("gate_items_min") is None
+    assert one_row.get("gate_items_min_bound") is None
+    assert one_row.get("gate_items_min_passed") is None
 
 
 def test_a_flagging_gate_lands_in_the_same_columns_as_a_conformance_gate(one_row: dict[str, Any]) -> None:
