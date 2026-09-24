@@ -262,12 +262,31 @@ def marks_of(
                 "nt": cursor - index,
                 "nc": len(surface),
                 "brk": 1 if any(word.attributes.get("bracketed") for word in run) else 0,
-                "stim": 1 if any(finding.attributes.get("in_stimulus") for finding in contributing) else 0,
+                "stim": _mark_stimulus(contributing),
                 "tx": _extent_flag(hull, extent),
             }
         )
         index = cursor
     return marks
+
+
+def _mark_stimulus(contributing: Sequence[Entity]) -> int:
+    """How the stimulus question was answered for one mark, keeping "not asked" its own state.
+
+    Tri-state for the same reason the finding is: a boolean here collapses a mark nothing could be
+    checked against into one that was checked and did not match.
+
+    Args:
+        contributing: The findings attributed to the mark.
+
+    Returns:
+        1 when any contributing finding matched, 0 when one was checked and none matched, -1 when
+        none was checkable or none contributed.
+    """
+    states = [tristate(finding.attributes.get("in_stimulus")) for finding in contributing]
+    if 1 in states:
+        return 1
+    return 0 if 0 in states else -1
 
 
 def _contributing(hull: tuple[float, float], categories: Sequence[str], pii: Sequence[Entity]) -> list[Entity]:
@@ -1575,7 +1594,9 @@ function open(m){
     m.dataset.c+' \\u00b7 '+(m.dataset.d||'unattributed')+' \\u00b7 '+m.dataset.nt+' token(s)'
     +(m.dataset.brk==='1'?' \\u00b7 touches a bracketed token':'')
     +(m.dataset.tx==='1'?' \\u00b7 inside the task extent':m.dataset.tx==='0'?' \\u00b7 outside the task extent':'')
-    +(m.dataset.stim==='1'?' \\u00b7 in the stimulus':'');
+    +(m.dataset.stim==='1'?' \\u00b7 in the stimulus'
+      :m.dataset.stim==='0'?' \\u00b7 checked, not in the stimulus'
+      :' \\u00b7 no stimulus to check against');
   for(const b of panel.querySelectorAll('.verdict'))b.classList.toggle('on',b.dataset.v===rec.v);
   panel.querySelector('textarea').value=rec.n||'';
   panel.querySelector('textarea').focus({preventScroll:true});
