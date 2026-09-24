@@ -40,6 +40,7 @@ from senselab.audio.workflows.triage.nodes.preprocess import (
     diarization_measurement as preprocess_diarization_measurement,
 )
 from senselab.audio.workflows.triage.nodes.speech import speech
+from senselab.audio.workflows.triage.stimulus import NearMatch, near_match
 from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
@@ -3116,55 +3117,110 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         assert marks, "redact.py selects on exactly this verb and label pair"
 
 
+_NEAR = near_match(load_triage_config())
+
+
+class TestANearSpellingIsStillTheStimulusWord:
+    """Owner, 2026-09-23: exact string matching against a stimulus is too brittle for ASR output.
+
+    The bound is fitted in
+    ``specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md``.
+    """
+
+    def test_a_respelled_stimulus_word_reads_as_in_stimulus(self) -> None:
+        """A name the recogniser spells slightly differently still belongs to the task."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
+
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="The rainbow is a division of white light.")])
+        assert in_stimulus("rainbo", stimulus_tokens(hint), _NEAR) is True
+
+    def test_a_respelled_run_of_stimulus_words_reads_as_in_stimulus(self) -> None:
+        """A multi-word surface is placed as a run, each token near its own counterpart."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
+
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="When the sunlight strikes raindrops in the air.")])
+        assert in_stimulus("strikes raindops", stimulus_tokens(hint), _NEAR) is True
+
+    def test_a_short_word_one_edit_away_still_reads_as_out_of_stimulus(self) -> None:
+        """Under the fitted bound a four-letter near miss is a different word."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
+
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="The rainbow is a division of white light.")])
+        assert in_stimulus("wife", stimulus_tokens(hint), _NEAR) is False
+
+    def test_a_different_name_still_reads_as_out_of_stimulus(self) -> None:
+        """The control: a tolerance that admits a genuinely different name is worse than none."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
+
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="The rainbow is a division of white light.")])
+        assert in_stimulus("Springfield", stimulus_tokens(hint), _NEAR) is False
+
+    def test_an_undeclared_stimulus_still_reads_as_never_checked(self) -> None:
+        """The tri-state is the point; a widened comparison must not collapse null into false."""
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
+
+        assert stimulus_tokens(None) is None
+        assert in_stimulus("anything", None, _NEAR) is None
+
+    def test_the_scan_gate_does_not_fire_on_a_respelled_stimulus_word(self) -> None:
+        """The scan runs only on a word the task did not ask for; a respelling was asked for."""
+        from senselab.audio.workflows.triage.nodes.speech import stimulus_tokens, words_outside_stimulus
+
+        hint = AudioHints(expected_speech=[ExpectedSpeech(text="The rainbow is a division of white light.")])
+        tokens = stimulus_tokens(hint)
+        assert words_outside_stimulus(["rainbo", "divisio"], tokens, _NEAR) == []
+        assert words_outside_stimulus(["Springfield"], tokens, _NEAR) == ["springfield"]
+
+
 class TestPiiAgainstTheStimulus:
     """A finding is read against the text the participant was handed, and never suppressed by it."""
 
     def test_a_surface_the_prompt_contains_is_marked(self) -> None:
         """84.6% of read-task findings are substrings of the script; the mark is what says so."""
-        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
 
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="The rainbow is a division of white light.")])
-        haystack = stimulus_haystack(hint)
-        assert in_stimulus("Rainbow", haystack) is True
-        assert in_stimulus("white light", haystack) is True
+        haystack = stimulus_tokens(hint)
+        assert in_stimulus("Rainbow", haystack, _NEAR) is True
+        assert in_stimulus("white light", haystack, _NEAR) is True
 
     def test_a_surface_the_prompt_does_not_contain_is_not_marked(self) -> None:
         """A disclosure inside a read task is exactly what must survive the mark."""
-        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
 
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="The rainbow is a division of white light.")])
-        assert in_stimulus("Springfield", stimulus_haystack(hint)) is False
+        assert in_stimulus("Springfield", stimulus_tokens(hint), _NEAR) is False
 
     def test_a_recording_declaring_no_prompt_gets_no_reading_either_way(self) -> None:
         """An absent declaration is an absence, and must not read as a finding in either direction."""
-        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
 
-        assert stimulus_haystack(None) is None
-        assert stimulus_haystack(AudioHints()) is None
-        assert in_stimulus("anything", None) is None
+        assert stimulus_tokens(None) is None
+        assert stimulus_tokens(AudioHints()) is None
+        assert in_stimulus("anything", None, _NEAR) is None
 
     def test_the_test_ignores_case_and_whitespace_runs(self) -> None:
         """A transcript's spacing is not the prompt's, and neither is its casing."""
-        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
 
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="The  Caterpillar\nPassage")])
-        assert in_stimulus("caterpillar passage", stimulus_haystack(hint)) is True
+        assert in_stimulus("caterpillar passage", stimulus_tokens(hint), _NEAR) is True
 
     def test_an_empty_surface_is_not_contained(self) -> None:
         """Every string contains the empty one; a detector that returned nothing found nothing."""
-        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
 
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="buttercup")])
-        assert in_stimulus("   ", stimulus_haystack(hint)) is False
+        assert in_stimulus("   ", stimulus_tokens(hint), _NEAR) is False
 
     def test_every_prompt_of_a_multi_prompt_declaration_is_searched(self) -> None:
         """A family with several prompts hands the participant all of them."""
-        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_haystack
+        from senselab.audio.workflows.triage.nodes.speech import in_stimulus, stimulus_tokens
 
         hint = AudioHints(
             expected_speech=[ExpectedSpeech(text="first prompt"), ExpectedSpeech(text="second Springfield prompt")]
         )
-        assert in_stimulus("springfield", stimulus_haystack(hint)) is True
+        assert in_stimulus("springfield", stimulus_tokens(hint), _NEAR) is True
 
 
 class TestPiiRunsOnlyOnWordsTheTaskDidNotAskFor:
@@ -3172,23 +3228,23 @@ class TestPiiRunsOnlyOnWordsTheTaskDidNotAskFor:
 
     def test_words_the_prompt_contains_are_not_novel(self) -> None:
         """A DDK carrier repeated ten times is ten words the task asked for."""
-        from senselab.audio.workflows.triage.nodes.speech import stimulus_haystack, words_outside_stimulus
+        from senselab.audio.workflows.triage.nodes.speech import stimulus_tokens, words_outside_stimulus
 
-        haystack = stimulus_haystack(AudioHints(expected_speech=[ExpectedSpeech(text="buttercup")]))
-        assert words_outside_stimulus(["buttercup"] * 10, haystack) == []
+        haystack = stimulus_tokens(AudioHints(expected_speech=[ExpectedSpeech(text="buttercup")]))
+        assert words_outside_stimulus(["buttercup"] * 10, haystack, _NEAR) == []
 
     def test_a_word_the_prompt_lacks_is_novel(self) -> None:
         """One word outside the script is what makes a disclosure possible."""
-        from senselab.audio.workflows.triage.nodes.speech import stimulus_haystack, words_outside_stimulus
+        from senselab.audio.workflows.triage.nodes.speech import stimulus_tokens, words_outside_stimulus
 
-        haystack = stimulus_haystack(AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow")]))
-        assert words_outside_stimulus(["the", "rainbow", "springfield"], haystack) == ["springfield"]
+        haystack = stimulus_tokens(AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow")]))
+        assert words_outside_stimulus(["the", "rainbow", "springfield"], haystack, _NEAR) == ["springfield"]
 
     def test_with_no_declared_prompt_every_word_is_novel(self) -> None:
         """Nothing was asked for, so nothing said was asked for."""
         from senselab.audio.workflows.triage.nodes.speech import words_outside_stimulus
 
-        assert words_outside_stimulus(["my", "name"], None) == ["my", "name"]
+        assert words_outside_stimulus(["my", "name"], None, _NEAR) == ["my", "name"]
 
     def test_a_free_response_family_invites_disclosure(self) -> None:
         """Open response is where disclosure lives; its scan must not hang on a word test."""

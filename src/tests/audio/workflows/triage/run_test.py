@@ -299,6 +299,7 @@ def _fakes(
         *,
         run_dir: Path,
         artifacts_dir: Path,
+        task_family: str | None = None,
     ) -> RedactResult:
         _record("REDACT")
         entity_id, verdict = _conclude(store, "REDACT", Outcome.PASS, None)

@@ -650,6 +650,10 @@ class Expectation:
         timed_intervals: Whether the intervals between events are themselves prescribed.
         anti_pattern: A pattern whose presence is the deviation.
         connected: Whether the production is connected speech, so breath groups are structure.
+        expected_names: The proper nouns a faithful performance is expected to contain, normalised
+            and sorted. A declaration about the instruction, like ``tokens`` and ``sequence``
+            beside it, not a fit; empty on every family whose stimulus is declared per recording
+            and on every family whose content the participant chooses.
         unviable: ``(measurement, why)`` pairs the design states no viable approach for.
     """
 
@@ -675,6 +679,7 @@ class Expectation:
     timed_intervals: bool = False
     anti_pattern: str | None = None
     connected: bool = False
+    expected_names: tuple[str, ...] = ()
     unviable: tuple[tuple[str, str], ...] = ()
 
     def as_mapping(self) -> dict[str, Any]:
@@ -716,6 +721,8 @@ class Expectation:
             values["tokens"] = tuple(values["tokens"])
         if values.get("sequence") is not None:
             values["sequence"] = tuple(str(phoneme) for phoneme in values["sequence"])
+        if values.get("expected_names") is not None:
+            values["expected_names"] = tuple(str(name) for name in values["expected_names"])
         if values.get("unviable") is not None:
             values["unviable"] = tuple((str(pair[0]), str(pair[1])) for pair in values["unviable"])
         return cls(**values)
@@ -756,6 +763,36 @@ Out of family for VOICE under the reference family set, so neither ``align_voice
 :data:`EXPECTATIONS` reads this table.
 """
 
+CINDERELLA_CAST: tuple[str, ...] = (
+    "anastasia",
+    "bruno",
+    "charming",
+    "cinderella",
+    "drizella",
+    "duke",
+    "fairy",
+    "godmother",
+    "gus",
+    "jaq",
+    "king",
+    "lucifer",
+    "prince",
+    "princess",
+    "queen",
+    "stepmother",
+    "stepmothers",
+    "stepsister",
+    "stepsisters",
+    "tremaine",
+)
+"""The cast a Cinderella retelling is expected to name.
+
+Task metadata, not corpus-derived: the proper nouns the instruction itself puts in the speaker's
+mouth. The measurement that says this family needs one is in
+``specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md``.
+"""
+
+
 SPEECH_EXPECTATIONS: dict[str, Expectation] = {
     "harvard-sentences-list": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
     "cape-v-sentences": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
@@ -783,6 +820,7 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
     ),
     "cinderella-story": Expectation(
         pattern=Pattern.FREE_RESPONSE,
+        expected_names=CINDERELLA_CAST,
         unviable=(("source_overlap", "`stimulus_text` is empty on all 258; the source is a physical storybook"),),
     ),
     "productive-vocabulary": Expectation(
@@ -1083,6 +1121,39 @@ def dispatch(
     if intruders:
         raise ValueError(f"{branch} proposed into {intruders}; a branch mints only into {own!r}")
     return result
+
+
+def declared_carrier(task_family: str | None) -> str | None:
+    """The carrier a syllable task asks for, as text, taken from the family that names it.
+
+    ``diadochokinesis-buttercup`` asks for "buttercup"; the expectation holds the same carrier as an
+    ARPAbet sequence, which no transcript can be matched against.
+    See ``specs/20260919-pii-against-the-stimulus/design.md``.
+
+    Args:
+        task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
+
+    Returns:
+        The carrier, case-folded, or None when the family is not a syllable task.
+    """
+    expectation = SPEECH_EXPECTATIONS.get(str(task_family))
+    if expectation is None or expectation.pattern not in (Pattern.SYLLABLE_SEQUENCE, Pattern.SYLLABLE_TRAIN):
+        return None
+    carrier = str(task_family).rsplit("-", 1)[-1].strip().casefold()
+    return carrier or None
+
+
+def expected_names(task_family: str | None) -> tuple[str, ...]:
+    """The proper nouns the declared task expects a faithful performance to contain.
+
+    Args:
+        task_family: The declared family, a key of :data:`SPEECH_EXPECTATIONS`, or None.
+
+    Returns:
+        The declared names, or an empty tuple when the family declares none or is unknown.
+    """
+    expectation = SPEECH_EXPECTATIONS.get(str(task_family))
+    return () if expectation is None else expectation.expected_names
 
 
 def mode_of(branch: str, store: ProvStore, hint: AudioHints | None = None) -> tuple[str, str | None]:

@@ -973,6 +973,192 @@ def _exemptions(store: ProvStore) -> list[Entity]:
     ]
 
 
+class TestTheTaskSOwnCastAccountsForACandidate:
+    """Owner, 2026-09-23: "analyze the task to determine expected names".
+
+    `cinderella-story` declares no `stimulus_text` -- the source is a physical storybook -- so all
+    5,833 of its findings read `in_stimulus: null` and none was ever exempted. 80.54% of them sit
+    within one edit of the cast the task itself puts in the speaker's mouth. See
+    ``specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md``.
+    """
+
+    def test_a_declared_cast_name_is_not_redacted(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The name the instruction asked for is not a disclosure, with no prompt text in sight."""
+        _seed_redact_store(store, tmp_path, words=["and", "then", "cinderella"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "cinderella")])
+        result = redact(
+            store,
+            "recording",
+            redact_config,
+            AudioHints(),
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="cinderella-story",
+        )
+        assert result.verdict.outcome is Outcome.PASS
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 0
+
+    def test_the_exemption_names_the_declaration_that_accounted_for_it(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A reader must be able to audit what was not redacted, and on whose authority."""
+        _seed_redact_store(store, tmp_path, words=["and", "then", "cinderella"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "cinderella")])
+        redact(
+            store,
+            "recording",
+            redact_config,
+            AudioHints(),
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="cinderella-story",
+        )
+        [assertion] = _exemptions(store)
+        assert assertion.attributes["expected_keys"] == ["cinderella"]
+
+    def test_a_respelled_cast_name_is_not_redacted_either(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The cast is matched under the same fitted bound as a declared stimulus."""
+        _seed_redact_store(store, tmp_path, words=["and", "then", "cindarela"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "cindarela")])
+        result = redact(
+            store,
+            "recording",
+            redact_config,
+            AudioHints(),
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="cinderella-story",
+        )
+        assert result.verdict.outcome is Outcome.PASS
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 0
+
+    def test_a_name_outside_the_cast_is_still_redacted(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A retelling that names the speaker's own sister is exactly what must survive."""
+        _seed_redact_store(store, tmp_path, words=["and", "then", "springfield"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "springfield")])
+        redact(
+            store,
+            "recording",
+            redact_config,
+            AudioHints(),
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="cinderella-story",
+        )
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
+        assert _exemptions(store) == []
+
+    def test_a_family_that_declares_no_cast_exempts_nothing(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`picture-description` has an image for a stimulus; no list can cover it and none is used."""
+        _seed_redact_store(store, tmp_path, words=["and", "then", "cinderella"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "cinderella")])
+        redact(
+            store,
+            "recording",
+            redact_config,
+            AudioHints(),
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="picture-description",
+        )
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
+        assert _verdict_entity(store, "REDACT").attributes["expected_speech_declared"] is False
+
+
+class TestANearSpellingOfAStimulusWordIsStillThatWord:
+    """Owner, 2026-09-23: "expected words/near spelling mismatches don't trigger redaction".
+
+    The bound is fitted in
+    ``specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md``.
+    """
+
+    def test_a_stimulus_word_the_recogniser_respelled_is_still_exempt(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One dropped character does not make the task's own word a disclosure."""
+        _seed_redact_store(store, tmp_path, words=["form", "a", "rainbo"], findings=[("LOCATION", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("LOCATION", "rainbo")])
+        result = redact(
+            store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path)
+        )
+        assert result.verdict.outcome is Outcome.PASS
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 0
+
+    def test_the_exemption_records_the_prompt_s_own_spelling_not_the_transcript_s(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """What accounted for it is the stimulus; the transcript is what needed accounting for."""
+        _seed_redact_store(store, tmp_path, words=["form", "a", "rainbo"], findings=[("LOCATION", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("LOCATION", "rainbo")])
+        redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        [assertion] = _exemptions(store)
+        assert assertion.attributes["expected_keys"] == ["rainbow"]
+
+    def test_a_short_word_one_edit_from_a_stimulus_word_is_still_redacted(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Under five characters one edit is a different word, and the fit says so."""
+        _seed_redact_store(store, tmp_path, words=["they", "act", "aa"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "aa")])
+        redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
+        assert _exemptions(store) == []
+
+    def test_a_name_that_is_not_near_any_stimulus_word_is_still_redacted(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The control: a tolerance that admits a genuinely different name is worse than none."""
+        _seed_redact_store(store, tmp_path, words=["form", "a", "springfield"], findings=[("LOCATION", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("LOCATION", "springfield")])
+        redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
+        assert _exemptions(store) == []
+
+
 class TestTheStimulusAccountsForACandidate:
     """A PII-shaped token the prompt asked for is not a disclosure — and never a silent one."""
 
@@ -1484,21 +1670,104 @@ class TestTheLlmCheckIsOffUnlessAskedFor:
         assert _annotation(store)["status"] == "disabled"
         assert _reviews(store) == []
 
-    def test_it_is_not_run_when_the_detector_path_already_withheld(
+    def test_it_is_not_run_when_the_detectors_found_nothing(
         self,
         store: ProvStore,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """It can only withhold, so there is nothing for it to decide over a withheld artifact."""
+        """No finding is the one state with nothing to review; the reviewer is told so, not skipped."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "world"], findings=[])
+        _stub_pii(monkeypatch, findings=[])
+        seen = _stub_review(monkeypatch, [])
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.PASS
+        assert seen == []
+        assert _annotation(store)["status"] == "not_run"
+
+
+class TestTheReviewerSeesEveryRecordingTheDetectorsTouched:
+    """Owner, 2026-09-23: "make sure LLM review for PII runs on anything that goes through the detectors"."""
+
+    def test_a_withheld_recording_is_reviewed_too(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The population most in need of a second reading was the one the short-circuit excluded."""
         config = _override(tmp_path, LLM_ON)
         _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
-        seen = _stub_review(monkeypatch, [])
+        seen = _stub_review(monkeypatch, [_clean()])
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.FAIL
-        assert seen == []
-        assert _annotation(store)["status"] == "not_run"
+        assert seen == ["hello [PERSON]"], "it reads the redacted transcript on this path too"
+        assert _annotation(store)["status"] == "clean"
+
+    def test_the_annotation_names_the_detector_outcome_it_was_read_against(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A clean reading means one thing beside a release and another beside a withholding."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        _stub_review(monkeypatch, [_clean()])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert _annotation(store)["detector_outcome"] == "fail"
+
+    def test_a_clean_reading_does_not_release_a_withheld_recording(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The reviewer may not narrow a withholding any more than it may widen a redaction."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        _stub_review(monkeypatch, [_clean()])
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.FAIL
+        assert result.artifacts == {}
+        assert "llm" not in result.verdict.why
+
+    def test_a_flag_on_a_withheld_recording_is_recorded_as_a_flag(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The safety direction is unchanged: a concern on a withheld recording is still a concern."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        _stub_review(
+            monkeypatch,
+            [_flags(ReviewFinding(text="hello", category="OTHER", why="It narrows it.")), _clean()],
+        )
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        annotation = _annotation(store)
+        assert annotation["status"] == "flagged"
+        assert annotation["flagged"] == ["OTHER"]
+
+    def test_the_reviewer_reads_the_redacted_text_never_the_findings_in_the_clear(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Handing it the surfaces would make it an authority on whether a redaction was warranted."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        seen = _stub_review(monkeypatch, [_clean()])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert all("alice" not in text for text in seen)
 
 
 class TestTheLlmCheckIterates:
@@ -1715,7 +1984,7 @@ class TestTheWeightsAreReleasedUnlessTheRunSaysOtherwise:
         monkeypatch.setattr(redact_module, "_llm_rounds", _boom)
         settings = dict(_llm_settings(_override(tmp_path, LLM_ON)))
         with pytest.raises(RuntimeError):
-            redact_module._llm_check("text", settings)
+            redact_module._llm_check("text", settings, detector_outcome="pass")
         assert released == [False]
 
 
@@ -1863,21 +2132,23 @@ class TestTheReviewerAnnotatesAndVerdictDecides:
         assert any(LLM_REDACTION_RESIDUE in reason.why for reason in folded.reasons)
         assert folded.llm_redaction["revision"] == "a" * 40
 
-    def test_a_surviving_finding_still_withholds_with_no_re_read_in_sight(
+    def test_a_surviving_finding_withholds_even_when_the_reviewer_read_it_clean(
         self,
         store: ProvStore,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The control on the real redaction path: the change must not weaken it."""
+        """The control on the real redaction path: the reviewer now reads it, and still cannot release it."""
         config = _override(tmp_path, LLM_ON)
         _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        _stub_review(monkeypatch, [_clean()])
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.FAIL and result.artifacts == {}
         folded = verdict_node(store, None, config, run_dir=tmp_path).file_verdict
-        assert folded.release is Release.WITHHELD
-        assert folded.llm_redaction["status"] == "not_run"
+        assert folded.release is Release.WITHHELD, "only a human turns a withholding into a release"
+        assert folded.llm_redaction["status"] == "clean"
+        assert folded.llm_redaction["detector_outcome"] == "fail"
 
 
 class TestTheLlmCheckDegradesHonestly:

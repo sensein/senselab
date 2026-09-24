@@ -50,7 +50,7 @@ and nothing else.
 | state | what REDACT's outcome does | what VERDICT does with the annotation |
 | --- | --- | --- |
 | `disabled` | nothing | nothing. The config left it off. |
-| `not_run` | nothing | nothing. The detector path had already withheld. |
+| `not_run` | nothing | nothing. The detectors marked nothing; there was no text to read. |
 | `clean` | nothing | nothing. |
 | `flagged` | **nothing** | raises `triage` to `flag` under `verdict.llm_redaction_flags`. Never `release`. |
 | `absent` | nothing | nothing. Carried in `llm_redaction`; the detector path's answer stands. |
@@ -79,6 +79,74 @@ not the shipped one.**
 
 A round that flags something and is then followed by a round that could not run keeps the flag. A
 concern already raised is not withdrawn because the next round failed.
+
+## Which recordings it reads — owner correction, 2026-09-23
+
+> "let's make sure LLM review for PII runs on anything that goes through the detectors
+> gliner/presidio/etc."
+
+**What was wrong.** The status ladder tested the detector outcome *before* the config:
+
+```python
+if outcome is not Outcome.PASS:
+    llm = _LlmCheck("not_run", ...)
+elif not llm_settings["enabled"]:
+    ...
+```
+
+so `enabled: true` could not reach a withheld recording at all. Over the 62,548-run
+`triage_rerun_20260923` corpus REDACT concluded on 18,850 recordings and the reviewer had run on
+**none** of them: `disabled` on the 13,598 that passed, `not_run` on the 5,252 that failed. The
+population where a second reading is worth most was the one the ladder structurally excluded.
+
+**What it is now.** The config is tested first, and the reviewer runs wherever the detectors marked
+something. `not_run` now means one thing only: *the detectors marked nothing, so there was no
+finding to have a second opinion about*. The order is `disabled` → `not_run` → run.
+
+### What it reads on a withheld recording, and why that is the redacted transcript
+
+The same text the release path shows it. Not the findings in the clear, and not the findings in
+context.
+
+Every one of the 5,252 withheld recordings in that corpus was withheld on the same ground:
+`verification found pii on the redacted transcript` — the re-scan over the *already redacted* text
+still saw a category. (`scan_incomplete` and `verify_incomplete` fired zero times; there were no
+`FLAG` outcomes at all.) So the question a human has about a withheld recording is not an abstract
+one. It is: *the second detector pass says something identifying survived this redaction — did it?*
+That question is asked of the redacted transcript, which is exactly the text the reviewer already
+reads, under exactly the prompt it already has. A second, independent reader of the same text
+either corroborates the re-scan or contradicts it.
+
+Showing it the findings in the clear was considered and rejected. It would answer a different
+question — *were the detectors right to mark these?* — and answering that question is being an
+authority on whether a redaction was warranted. The step's whole contract is that it never edits a
+released artifact and never widens a redaction; an instrument that can argue a redaction *down* is
+a redactor with the sign flipped, and it would need the surfaces the redaction exists to remove in
+order to do it. `test_the_reviewer_reads_the_redacted_text_never_the_findings_in_the_clear` pins
+this.
+
+### What a reviewer verdict can and cannot change
+
+It **can**: raise the file's `triage` axis to `flag` under `verdict.llm_redaction_flags`, on a
+passed recording and now on a withheld one alike; put its whole chain of thought in the store where
+a human reads it; and, through the new `detector_outcome` field on the annotation, make
+"the reviewer read this withheld recording and found nothing" a queryable population rather than an
+inference from two records.
+
+It **cannot**: change REDACT's outcome, release a withheld artifact, narrow or drop a planned
+extent, or write anything into `artifacts_dir`. A `clean` beside a `fail` is a reading a human may
+act on; it is not itself the act. `test_a_clean_reading_does_not_release_a_withheld_recording` and
+`test_a_surviving_finding_withholds_even_when_the_reviewer_read_it_clean` pin both halves.
+
+`detector_outcome` exists because a `clean` beside a `pass` and a `clean` beside a `fail` are
+different facts, and a single `status` field collapsing them is the same mistake `in_stimulus`'s
+tri-state was introduced to avoid.
+
+### What it costs
+
+`llm-check-amortised-load.md` sized the reviewer at the passing population. Widening it to every
+recording the detectors touched changes the arithmetic; `near-match-and-expected-names.md` in
+`specs/20260923-pii-near-match-and-expected-names/` recomputes it against the measured corpus.
 
 ## The loop
 
