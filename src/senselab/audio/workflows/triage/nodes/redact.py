@@ -17,11 +17,13 @@ surviving finding is a fail, an incomplete re-scan is a flag, and a finding the 
 sees is re-planned exactly once, what survives that being ``unremediable``; ``audio_check`` is
 the constant ``"bounded"`` on every path.
 An optional LLM check (``redaction.llm_check``) re-reads the redacted transcript for up to
-``max_iterations`` rounds, asked only where a release was in prospect. Each round's chain of thought
-is a ``redaction_llm_review`` measurement carrying its ``elapsed_s``, ``load_s`` and generated
-tokens; its summary is a ``redaction_llm_annotation`` written on every path, which VERDICT reads
-under ``verdict.llm_redaction_flags``. The ``llm_check`` activity carries ``started`` and ``ended``.
-It annotates and never decides.
+``max_iterations`` rounds, asked wherever the detectors marked something -- withheld or not, and it
+reads the redacted transcript on both paths. Each round's chain of thought is a
+``redaction_llm_review`` measurement carrying its ``elapsed_s``, ``load_s`` and generated tokens;
+its summary is a ``redaction_llm_annotation`` written on every path, carrying the detector outcome
+the reading was taken beside, which VERDICT reads under ``verdict.llm_redaction_flags``. The
+``llm_check`` activity carries ``started`` and ``ended``. It annotates and never decides: it cannot
+release a withheld recording any more than it can widen a redaction.
 
 A pass releases three artifacts under ``artifacts_dir``: the masked audio, the flat redacted
 transcript, and the redacted consensus stream as ``consensus.json``, whose records carry each
@@ -47,7 +49,7 @@ from typing import Any, Callable, Mapping, Sequence
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.nodes.branches import branch_params
+from senselab.audio.workflows.triage.nodes.branches import branch_params, declared_carrier, expected_names
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     consensus_words,
@@ -60,7 +62,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_stream,
     write_verdict,
 )
-from senselab.audio.workflows.triage.stimulus import split_prompts
+from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.text.tasks.pii_detection.api import scan_for_pii
 from senselab.text.tasks.pii_detection.redaction_review import (
@@ -442,20 +444,33 @@ class _Exemption:
     unit_text: str
 
 
-def _expected_units(hint: AudioHints | None, *, terminators: str) -> list[tuple[int, str, list[str]]]:
-    """The declared stimulus, split into structure units and their verbatim tokens.
+def _expected_units(
+    hint: AudioHints | None, task_family: str | None, *, terminators: str
+) -> list[tuple[int, str, list[str]]]:
+    """Everything the task declared, as the structure units a covered run is placed inside.
+
+    Three declaration sources, one unit list: the recording's declared prompts split into their
+    structure units, the carrier a syllable family names, and the proper nouns the family's
+    expectation row declares. Each of the latter two is its own unit, so a run is placed inside one
+    name and never across two.
 
     Args:
         hint: What the recording was declared to contain, or None.
+        task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
         terminators: The characters that close a unit inside one prompt.
 
     Returns:
-        ``(prompt index, unit text, tokens)`` per unit. Empty when there is no hint or no
-        ``expected_speech``.
+        ``(prompt index, unit text, tokens)`` per unit. Empty when the task declared nothing. A
+        unit from a family declaration carries prompt index ``-1``: it came from the expectation
+        row, not from an ``expected_speech`` entry.
     """
-    if hint is None or not hint.expected_speech:
-        return []
-    return split_prompts(list(hint.expected_speech), terminators=terminators)
+    units: list[tuple[int, str, list[str]]] = []
+    if hint is not None and hint.expected_speech:
+        units.extend(split_prompts(list(hint.expected_speech), terminators=terminators))
+    carrier = declared_carrier(task_family)
+    declared = (*((carrier,) if carrier else ()), *expected_names(task_family))
+    units.extend((-1, name, name.split()) for name in declared)
+    return units
 
 
 def _covered_words(finding: Entity, words: Sequence[Entity]) -> list[Entity]:
@@ -474,42 +489,26 @@ def _covered_words(finding: Entity, words: Sequence[Entity]) -> list[Entity]:
     return [word for word in words if word.extent is not None and _overlaps(word_hull(word), bounds)]
 
 
-def _contiguous_run(haystack: Sequence[str], needle: Sequence[str]) -> int | None:
-    """Where ``needle`` occurs in ``haystack`` as a contiguous run, or None.
-
-    Args:
-        haystack: One unit's normalised tokens.
-        needle: The covered words' normalised keys.
-
-    Returns:
-        The offset of the first occurrence, or None. A run, not a subsequence.
-    """
-    if not needle or len(needle) > len(haystack):
-        return None
-    for start in range(len(haystack) - len(needle) + 1):
-        if list(haystack[start : start + len(needle)]) == list(needle):
-            return start
-    return None
-
-
 def _expected_exemptions(
     findings: Sequence[Entity],
     words: Sequence[Entity],
     units: Sequence[tuple[int, str, list[str]]],
     normalise: Callable[[str], str],
+    near: NearMatch,
 ) -> list[_Exemption]:
     """Which findings the declared stimulus accounts for.
 
     A candidate is exempt only when every word its extent reaches carries a non-empty normalised
     key, those words' own hulls span the whole of the extent, and their keys occur in order and
-    contiguously inside one declared unit. A finding that reaches every consensus word is never
-    exempt.
+    contiguously inside one declared unit, each within ``near`` of the unit's own token. A finding
+    that reaches every consensus word is never exempt.
 
     Args:
         findings: The live ``pii`` entities.
         words: PREPROCESS's consensus words, in stream order.
         units: The declared structure from :func:`_expected_units`.
         normalise: The branches' own lexical normaliser, ``BranchParams.p_normalise``.
+        near: How far a transcript token may be from a stimulus token and still be that token.
 
     Returns:
         One exemption per accounted-for finding, in the findings' own order. Empty when ``units``
@@ -534,7 +533,7 @@ def _expected_exemptions(
         ):
             continue
         for unit_index, (prompt_index, unit_text, unit_keys) in enumerate(keyed):
-            offset = _contiguous_run(unit_keys, keys)
+            offset = near.run_offset(unit_keys, keys)
             if offset is None:
                 continue
             exemptions.append(
@@ -595,15 +594,18 @@ class _LlmCheck:
     """What the optional reviewer established, as the ``redaction_llm_annotation`` measurement records it.
 
     Attributes:
-        status: ``disabled`` when the config leaves it off, ``not_run`` when the detector path had
-            already withheld, ``absent`` when the model could not be reached, ``clean`` when it
-            read the transcript and flagged nothing, ``flagged`` when it flagged something.
+        status: ``disabled`` when the config leaves it off, ``not_run`` when the detectors marked
+            nothing, ``absent`` when the model could not be reached, ``clean`` when it read the
+            transcript and flagged nothing, ``flagged`` when it flagged something.
         iterations: How many reviews ran.
         flagged: The categories the reviewer named, sorted. Categories only; the substrings and the
             reasoning are in the per-iteration measurements beside it.
         model_id: The repo asked, or the empty string when nothing was.
         revision: The commit the reviewer loaded, or None.
         failure: Why it did not run, when it did not.
+        detector_outcome: The detector path's own outcome this reading was taken beside, as its
+            value. A ``clean`` beside a ``fail`` and a ``clean`` beside a ``pass`` are different
+            readings and the annotation is the only place that distinction is recorded.
     """
 
     status: str
@@ -612,6 +614,7 @@ class _LlmCheck:
     model_id: str
     revision: str | None
     failure: str | None
+    detector_outcome: str
 
     def as_detail(self) -> dict[str, Any]:
         """The mapping the annotation measurement carries.
@@ -626,6 +629,7 @@ class _LlmCheck:
             "model_id": self.model_id,
             "revision": self.revision,
             "failure": self.failure,
+            "detector_outcome": self.detector_outcome,
         }
 
 
@@ -680,7 +684,9 @@ def _mask_concerns(text: str, findings: Any) -> str:  # noqa: ANN401 — the bac
     return masked
 
 
-def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmCheck, list[dict[str, Any]]]:
+def _llm_check(
+    transcript_text: str, settings: Mapping[str, Any], *, detector_outcome: str
+) -> tuple[_LlmCheck, list[dict[str, Any]]]:
     """Read the redacted transcript back with the reviewer, bounded, capturing every chain of thought.
 
     One review per call: a round that flags something masks it and reviews again, the masking local
@@ -691,8 +697,9 @@ def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmC
     check ends, so nothing else on the card has to live beside them.
 
     Args:
-        transcript_text: The redacted transcript, as it would be released.
+        transcript_text: The redacted transcript, as the release path would have written it.
         settings: :func:`_llm_settings`' mapping.
+        detector_outcome: The detector path's own outcome, recorded beside the reading.
 
     Returns:
         ``(check, reviews)`` — the summary and one payload per round, in order. The first round
@@ -700,18 +707,21 @@ def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmC
         failure beside it.
     """
     try:
-        return _llm_rounds(transcript_text, settings)
+        return _llm_rounds(transcript_text, settings, detector_outcome=detector_outcome)
     finally:
         if not settings["keep_worker_resident"]:
             shutdown_review_worker(forget_failure=False)
 
 
-def _llm_rounds(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmCheck, list[dict[str, Any]]]:
+def _llm_rounds(
+    transcript_text: str, settings: Mapping[str, Any], *, detector_outcome: str
+) -> tuple[_LlmCheck, list[dict[str, Any]]]:
     """The bounded review / mask / re-review loop itself, without the worker's lifetime.
 
     Args:
-        transcript_text: The redacted transcript, as it would be released.
+        transcript_text: The redacted transcript, as the release path would have written it.
         settings: :func:`_llm_settings`' mapping.
+        detector_outcome: The detector path's own outcome, recorded beside the reading.
 
     Returns:
         :func:`_llm_check`'s pair.
@@ -734,17 +744,39 @@ def _llm_rounds(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_Llm
         if not result.available:
             if flagged:
                 return (
-                    _LlmCheck("flagged", iteration, tuple(sorted(set(flagged))), model_id, revision, result.failure),
+                    _LlmCheck(
+                        "flagged",
+                        iteration,
+                        tuple(sorted(set(flagged))),
+                        model_id,
+                        revision,
+                        result.failure,
+                        detector_outcome,
+                    ),
                     reviews,
                 )
-            return _LlmCheck("absent", iteration, (), model_id, revision, result.failure), reviews
+            return (
+                _LlmCheck("absent", iteration, (), model_id, revision, result.failure, detector_outcome),
+                reviews,
+            )
         if not result.findings:
             status = "flagged" if flagged else "clean"
-            return _LlmCheck(status, iteration, tuple(sorted(set(flagged))), model_id, revision, None), reviews
+            return (
+                _LlmCheck(status, iteration, tuple(sorted(set(flagged))), model_id, revision, None, detector_outcome),
+                reviews,
+            )
         flagged.extend(finding.category for finding in result.findings)
         current = _mask_concerns(current, result.findings)
     return (
-        _LlmCheck("flagged", int(settings["max_iterations"]), tuple(sorted(set(flagged))), model_id, revision, None),
+        _LlmCheck(
+            "flagged",
+            int(settings["max_iterations"]),
+            tuple(sorted(set(flagged))),
+            model_id,
+            revision,
+            None,
+            detector_outcome,
+        ),
         reviews,
     )
 
@@ -845,6 +877,7 @@ def redact(
     *,
     run_dir: Path,
     artifacts_dir: Path,
+    task_family: str | None = None,
 ) -> RedactResult:
     """Redact every PII finding from the recording and verify the redacted text before releasing it.
 
@@ -855,9 +888,12 @@ def redact(
         config: The triage configuration.
         hint: What the recording was declared to contain. When it carries ``expected_speech``, a
             PII candidate the declared stimulus accounts for is exempted from redaction and
-            recorded as such; with no hint, nothing is exempted.
+            recorded as such.
         run_dir: The run directory sidecar paths are relative to.
         artifacts_dir: The release directory; must not contain or be contained by ``run_dir``.
+        task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``. Its expectation row's
+            carrier and declared names account for a candidate the same way a declared prompt
+            does; with no family, only the prompt does.
 
     Returns:
         The verdict, the view over what this node wrote, and the released artifacts — empty unless
@@ -888,8 +924,8 @@ def redact(
     scan_incomplete = bool(scan_failed) or bool(scan_missing) or not scanned_by
     findings = _findings(store)
     words = consensus_words(store)
-    units = _expected_units(hint, terminators=str(config.require(_TERMINATORS_KEY)))
-    exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise)
+    units = _expected_units(hint, task_family, terminators=str(config.require(_TERMINATORS_KEY)))
+    exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise, near_match(config))
     exempt_findings = {exemption.finding_id for exemption in exemptions}
     exempt_word_ids = frozenset(word_id for exemption in exemptions for word_id in exemption.word_ids)
     extents = _extents_from_findings([finding for finding in findings if finding.id not in exempt_findings])
@@ -1060,14 +1096,15 @@ def redact(
 
     llm_settings = _llm_settings(config)
     review_started = _stamp()
-    if outcome is not Outcome.PASS:
-        llm = _LlmCheck("not_run", 0, (), "", None, "the detector path withheld; there was nothing to release")
-        reviews: list[dict[str, Any]] = []
-    elif not llm_settings["enabled"]:
-        llm = _LlmCheck("disabled", 0, (), "", None, None)
-        reviews = []
+    reviews: list[dict[str, Any]] = []
+    if not llm_settings["enabled"]:
+        llm = _LlmCheck("disabled", 0, (), "", None, None, outcome.value)
+    elif not findings:
+        llm = _LlmCheck(
+            "not_run", 0, (), "", None, "the detectors marked nothing; there was nothing to review", outcome.value
+        )
     else:
-        llm, reviews = _llm_check(transcript_text, llm_settings)
+        llm, reviews = _llm_check(transcript_text, llm_settings, detector_outcome=outcome.value)
     review_act = store.activity(
         node=NODE,
         step="llm_check",

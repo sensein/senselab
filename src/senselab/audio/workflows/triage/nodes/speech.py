@@ -34,6 +34,7 @@ from senselab.audio.tasks.source_separation.api import separate_audios
 from senselab.audio.tasks.spans.api import group_extents_into_runs
 from senselab.audio.tasks.speaker_diarization.api import diarize_audios
 from senselab.audio.tasks.speaker_embeddings.api import extract_speaker_embeddings_from_audios
+from senselab.audio.workflows.audio_analysis.harmonize import normalise_token
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.consensus import is_bracketed
 from senselab.audio.workflows.triage.enrollment import Enrollment
@@ -55,12 +56,14 @@ from senselab.audio.workflows.triage.nodes.branches import (
     contest,
     count,
     count_against_instruction,
+    declared_carrier,
     declared_duration_count,
     derivative_arrays,
     deviation,
     deviation_names,
     dispatch,
     duration,
+    expected_names,
     group_by_breaks,
     hull,
     inter_word_gaps,
@@ -107,7 +110,13 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     syllable_detail,
 )
 from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
-from senselab.audio.workflows.triage.stimulus import LexicalWord, StimulusAlignment, align_stimulus
+from senselab.audio.workflows.triage.stimulus import (
+    LexicalWord,
+    NearMatch,
+    StimulusAlignment,
+    align_stimulus,
+    near_match,
+)
 from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
 from senselab.utils.data_structures import HFModel, SpeechBrainModel
@@ -937,57 +946,68 @@ diarization derivative -- both of which a gate must turn into ``UNDETERMINED``, 
 """
 
 
-def stimulus_haystack(hint: AudioHints | None) -> str | None:
-    """The recording's own declared prompts, normalised for a containment test.
+def stimulus_tokens(hint: AudioHints | None) -> tuple[str, ...] | None:
+    """The recording's own declared prompts, as the normalised tokens a run is placed against.
 
     Args:
         hint: What the recording was declared to contain.
 
     Returns:
-        The prompts joined and case-folded with runs of whitespace collapsed, or None when the
-        recording declares no prompt text.
+        The prompts' tokens in declared order, each normalised the way a consensus word is, or None
+        when the recording declares no prompt text.
     """
     if hint is None:
         return None
-    texts = [str(prompt.text) for prompt in hint.expected_speech if getattr(prompt, "text", None)]
-    return " ".join(" ".join(text.split()) for text in texts).casefold() or None
+    tokens = [
+        key
+        for prompt in hint.expected_speech
+        if getattr(prompt, "text", None)
+        for key in (normalise_token(token) for token in str(prompt.text).split())
+        if key
+    ]
+    return tuple(tokens) or None
 
 
-def in_stimulus(surface: str, haystack: str | None) -> bool | None:
+def in_stimulus(surface: str, haystack: Sequence[str] | None, near: NearMatch) -> bool | None:
     """Whether a detected surface is text the participant was handed rather than text they chose.
 
     Args:
         surface: The detector's own span text.
-        haystack: :func:`stimulus_haystack`'s result.
+        haystack: :func:`stimulus_tokens`' result.
+        near: How far a transcript token may be from a stimulus token and still be that token.
 
     Returns:
-        True when the surface occurs in the declared prompts, False when it does not, and None when
-        the recording declares none.
+        True when the surface occurs in the declared prompts as an ordered, contiguous run of near
+        matches, False when it does not, and None when the recording declares none.
     """
     if haystack is None:
         return None
-    normalised = " ".join(str(surface).split()).casefold()
-    return bool(normalised) and normalised in haystack
+    keys = [key for key in (normalise_token(token) for token in str(surface).split()) if key]
+    return near.run_offset(haystack, keys) is not None
 
 
-def declared_carrier(task_family: str | None) -> str | None:
-    """The carrier a syllable task asks for, as text, taken from the family that names it.
+def declared_content(hint: AudioHints | None, task_family: str | None) -> tuple[str, ...] | None:
+    """Every token the task's own declaration says a faithful performance contains.
 
-    ``diadochokinesis-buttercup`` asks for "buttercup"; the expectation holds the same carrier as an
-    ARPAbet sequence, which no transcript can be matched against.
-    See ``specs/20260919-pii-against-the-stimulus/design.md``.
+    Three declaration sources, one haystack: the recording's declared prompts, the carrier a
+    syllable family names, and the proper nouns the family's expectation row declares. A family
+    whose stimulus is an image declares none of the three, and the result is None -- which is what
+    keeps ``in_stimulus`` tri-state.
 
     Args:
+        hint: What the recording was declared to contain.
         task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
 
     Returns:
-        The carrier, case-folded, or None when the family is not a syllable task.
+        The declaration's normalised tokens, in declared order, or None when the task declares
+        nothing to check against.
     """
-    expectation = SPEECH_EXPECTATIONS.get(str(task_family))
-    if expectation is None or expectation.pattern not in (Pattern.SYLLABLE_SEQUENCE, Pattern.SYLLABLE_TRAIN):
-        return None
-    carrier = str(task_family).rsplit("-", 1)[-1].strip().casefold()
-    return carrier or None
+    tokens = list(stimulus_tokens(hint) or ())
+    carrier = declared_carrier(task_family)
+    if carrier:
+        tokens.append(normalise_token(carrier))
+    tokens.extend(key for key in (normalise_token(name) for name in expected_names(task_family)) if key)
+    return tuple(tokens) or None
 
 
 def invites_disclosure(task_family: str | None) -> bool:
@@ -1003,22 +1023,22 @@ def invites_disclosure(task_family: str | None) -> bool:
     return expectation is not None and expectation.pattern is Pattern.FREE_RESPONSE
 
 
-def words_outside_stimulus(texts: Iterable[str], haystack: str | None) -> list[str]:
+def words_outside_stimulus(texts: Iterable[str], haystack: Sequence[str] | None, near: NearMatch) -> list[str]:
     """The transcript words the task did not ask for.
 
     Args:
         texts: The lexical words' texts, bracketed tokens already excluded.
-        haystack: :func:`stimulus_haystack`'s result, or None when the recording declares no prompt.
+        haystack: :func:`stimulus_tokens`' result, or None when the recording declares no prompt.
+        near: How far a transcript token may be from a stimulus token and still be that token.
 
     Returns:
         The words that are not in the declared prompts, in order, with repeats kept; every word when
         the recording declares no prompt.
     """
-    words = [" ".join(str(text).split()).casefold() for text in texts]
-    present = [word for word in words if word]
+    present = [key for key in (normalise_token(str(text)) for text in texts) if key]
     if haystack is None:
         return present
-    return [word for word in present if word not in haystack]
+    return [word for word in present if near.run_offset(haystack, [word]) is None]
 
 
 def _consensus_id(store: ProvStore) -> str | None:
@@ -2324,12 +2344,13 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     store.used(pii_act, consensus.id)
     for name in source_names:
         store.used(pii_act, hypotheses[name].id)
-    stimulus_text = stimulus_haystack(hint)
-    # The scan runs only where the participant said something the task did not ask for.
-    # See specs/20260919-pii-against-the-stimulus/design.md.
-    carrier = declared_carrier(declared_family)
-    haystack = " ".join(part for part in (stimulus_text, carrier) if part) or None
-    novel_words = words_outside_stimulus((word_text(word) for word in lexical), haystack)
+    # The scan runs only where the participant said something the task did not ask for, and the
+    # mark it writes reads against the same declaration.
+    # See specs/20260919-pii-against-the-stimulus/design.md and
+    # specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md.
+    near = near_match(config)
+    declared_tokens = declared_content(hint, declared_family)
+    novel_words = words_outside_stimulus((word_text(word) for word in lexical), declared_tokens, near)
     open_response = invites_disclosure(declared_family)
     scans: list[PiiScan] = []
     if novel_words or open_response:
@@ -2385,7 +2406,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                         "category": finding.category,
                         "source": finding.source,
                         "haystack": haystack,
-                        "in_stimulus": in_stimulus(str(finding.text or ""), stimulus_text),
+                        "in_stimulus": in_stimulus(str(finding.text or ""), declared_tokens, near),
                         "sources": sources,
                         "occurrence": occurrences.index((first, last)),
                         "occurrences_n": len(occurrences),

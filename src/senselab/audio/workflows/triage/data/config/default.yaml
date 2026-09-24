@@ -144,6 +144,9 @@ words:
 # outcomes -- and every operating point the consumers want is a branch decision over this output.
 stimulus:
   sentence_terminators: .?!            # characters closing a structure unit inside one prompt; orthographic, not fitted
+  near_match:                          # how far a transcript token may be from a stimulus token and still be it
+    exact_below: 5                     # a normalised token shorter than this must match the stimulus exactly
+    two_edits_from: 8                  # this long or longer may differ by two edits; between the two, by one
 
 # The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
 # read off the recording's own BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`

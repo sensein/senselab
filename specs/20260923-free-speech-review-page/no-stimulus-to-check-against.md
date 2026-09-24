@@ -96,6 +96,16 @@ Three things worth knowing before that call:
 3. `picture-description` would still be uncovered, and it is 1,492 unchecked findings across 1,591
    recordings. An allowlist fixes the concentrated case and not the broad one.
 
+**Decided, 2026-09-23.** The owner asked for it — "analyze the task to determine expected names" —
+and all three points above survived the implementation unchanged. The cast is
+`Expectation.expected_names` on the `cinderella-story` row in `SPEECH_EXPECTATIONS`, a declaration
+beside `sequence` and `tokens` and not a profile. `in_stimulus` becomes answerable for that family
+and stays `null` for `picture-description`, whose stimulus is an image and for which no list can be
+written. The syllable families' carriers were folded into the same declaration at the same time, so
+`diadochokinesis-buttercup`'s 51,066 `null` findings become answerable too. The census and the
+per-category yield are in
+`specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md`.
+
 The review layer is the instrument that turns this into evidence. A reviewer working through
 `cinderella-story` with the category facet set to `PERSON`/`NAME` and marking `not-identifying`
 would produce a measured rate and, incidentally, the allowlist itself.
