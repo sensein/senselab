@@ -265,6 +265,29 @@ test('clearing the facets restores the full set exactly', async ({ page }) => {
   expect(await page.evaluate(() => window.__viewerState.view.facetMask)).toBeNull()
 })
 
+test('the search narrows the panel by facet name and by a value of an opened facet', async ({ page }) => {
+  await open(page)
+  const visible = () => page.$$eval('#facet-list details.facet-group', els => els.map(e => e.dataset.facet))
+  const all = await visible()
+  expect(all.length).toBeGreaterThan(10)
+
+  await page.locator('#facet-search').fill('release')
+  const byName = await visible()
+  expect(byName).toContain('release')
+  expect(byName).toContain('release_ground')
+  expect(byName).not.toContain('verdict')
+
+  // a value of an already-encoded facet surfaces its group, opened on the match
+  const term = await page.evaluate(() => window.__viewerState.facets.values('task').values[0].term)
+  await page.locator('#facet-search').fill(term.slice(0, 5))
+  const byValue = await visible()
+  expect(byValue, `searching "${term}" must surface the task facet`).toContain('task')
+  await expect(value(page, 'task', term)).toBeVisible()
+
+  await page.locator('#facet-search').fill('')
+  expect(await visible(), 'clearing the search restores every offered facet').toEqual(all)
+})
+
 // ------------------------------------------------------------------ zero is not absent
 
 test('a genuine 0.0 reading is a value on the band, and only a null is absent', async ({ page }) => {
