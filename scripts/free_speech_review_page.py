@@ -722,6 +722,7 @@ class Corpus:
         releases: Release state to how many recordings carry it.
         categories: PII category to how many marks carry it.
         detectors: Detector name to how many marks it contributed to.
+        reviewer: Reviewer state to how many recordings carry it.
         recordings: How many recordings in total.
         characters: How many transcript characters in total.
         marks: How many reviewable marks in total.
@@ -734,6 +735,7 @@ class Corpus:
     releases: Counter[str] = field(default_factory=Counter)
     categories: Counter[str] = field(default_factory=Counter)
     detectors: Counter[str] = field(default_factory=Counter)
+    reviewer: Counter[str] = field(default_factory=Counter)
     recordings: int = 0
     characters: int = 0
     marks: int = 0
@@ -747,6 +749,7 @@ class Corpus:
             row: The row.
         """
         self.participants.setdefault(str(row["p"]), []).append(row)
+        self.reviewer[_llm_status(row)] += 1
         self.families[str(row["fam"])] += 1
         self.releases[str(row["rel"]) or "unrecorded"] += 1
         for mark in row.get("f") or []:
@@ -1021,6 +1024,14 @@ def render(corpus: Corpus, title: str) -> str:
         for name, count in corpus.detectors.most_common()
     )
     errors = f'<p class="errors">{len(corpus.errors)} stores unreadable</p>' if corpus.errors else ""
+    if corpus.recordings and not any(corpus.reviewer.get(state) for state in LLM_RAN):
+        states = ", ".join(f"{name} {count}" for name, count in corpus.reviewer.most_common())
+        errors += (
+            f'<p class="noreview"><b>The LLM reviewer did not run on any of these '
+            f"{corpus.recordings} recordings</b> ({states}). Nothing here was corroborated or "
+            f"contradicted by a reviewer, and no reviewer verdict exists to read. A pass with "
+            f"<code>redaction.llm_check.enabled</code> set and a GPU is what would produce one.</p>"
+        )
     if corpus.version < EXTRACT_VERSION:
         errors += (
             f'<p class="errors">This extract is version {corpus.version}, written before the '
@@ -1150,6 +1161,9 @@ font-family:ui-monospace,Menlo,monospace}
 .cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
 border-radius:9px;padding:1px 7px;margin:0 3px 3px 0}
 .errors{color:#8a2f24;font-size:12px}
+.noreview{font-size:11.5px;background:var(--pii);border-left:3px solid var(--piib);
+padding:6px 8px;border-radius:4px;margin:6px 0}
+.noreview code{font-family:ui-monospace,Menlo,monospace;font-size:10.5px}
 #status{position:fixed;right:14px;bottom:12px;max-width:calc(100vw - 28px);background:var(--card);
 border:1px solid var(--line);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--mut);
 z-index:8}
