@@ -53,18 +53,44 @@
     <span id="legend"></span>
   </div>
 
-  <div id="axis-rail"></div>
+  <div class="plotrow">
 
-  <div id="pc-wrap">
-    <canvas id="pc"></canvas>
-    <canvas id="pc-overlay"></canvas>
-  </div>
+    <aside id="facets">
+      <div class="facet-head">
+        <h2>facets</h2>
+        <div id="facet-denominator" class="facet-denominator"></div>
+        <div class="facet-actions">
+          <input id="facet-search" type="search" placeholder="find a facet or a value">
+          <button id="facet-clear" disabled>clear facets</button>
+        </div>
+        <div id="facet-chosen" class="facet-chosen"></div>
+      </div>
+      <div id="facet-list"></div>
+      <p class="facet-note">
+        Within one facet the chosen values are a <b>union</b>; across facets they are an
+        <b>intersection</b>; and the whole selection <b>intersects the axis brushes</b>.
+        Each value carries <b>available&nbsp;/&nbsp;total</b> — the count under every <i>other</i>
+        facet, and the count over the whole corpus. <b>absent</b> is a value with its own count, so
+        a null is chosen rather than silently kept or silently dropped.
+      </p>
+    </aside>
 
-  <div class="underbar">
-    <span id="selcount"></span>
-    <span id="hoverinfo"></span>
-    <span class="grow"></span>
-    <span id="warm" hidden></span>
+    <div class="plotmain">
+      <div id="axis-rail"></div>
+
+      <div id="pc-wrap">
+        <canvas id="pc"></canvas>
+        <canvas id="pc-overlay"></canvas>
+      </div>
+
+      <div class="underbar">
+        <span id="selcount"></span>
+        <span id="hoverinfo"></span>
+        <span class="grow"></span>
+        <span id="warm" hidden></span>
+      </div>
+    </div>
+
   </div>
 
   <p class="explain" style="padding:0 16px">
@@ -116,6 +142,9 @@
 </script>
 <script>
 /*@INLINE:axes.js@*/
+</script>
+<script>
+/*@INLINE:facets.js@*/
 </script>
 <script>
 /*@INLINE:corpus.js@*/

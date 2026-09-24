@@ -192,6 +192,88 @@ table.measures tr.absent-row { background: #14120e; }
 .chip.scale { cursor: pointer; }
 .chip.scale.on { color: var(--good); border-color: var(--good); }
 .chip.scale:disabled { opacity: .4; cursor: default; }
+
+/* ---------------------------------------------------------------- facets */
+
+.plotrow { display: flex; align-items: stretch; gap: 0; }
+.plotmain { flex: 1; min-width: 0; }
+
+#facets {
+  width: 268px; flex: 0 0 268px; border-right: 1px solid var(--line);
+  background: var(--panel-2); display: flex; flex-direction: column;
+  max-height: calc(62vh + 92px); min-height: 460px; overflow: hidden;
+}
+.facet-head { padding: 10px 10px 8px; border-bottom: 1px solid var(--line); }
+.facet-head h2 { margin: 0 0 6px; }
+.facet-denominator { font-size: 12px; color: var(--ink); margin-bottom: 7px; }
+.facet-denominator .before { color: var(--ink-3); }
+.facet-denominator .arrow { color: var(--ink-3); padding: 0 4px; }
+.facet-denominator .after { color: var(--accent); font-weight: 600; }
+.facet-denominator .unfiltered { color: var(--ink-2); }
+.facet-actions { display: flex; gap: 6px; }
+.facet-actions input {
+  flex: 1; min-width: 0; font: inherit; font-size: 11px; padding: 3px 6px;
+  background: var(--ground); color: var(--ink); border: 1px solid var(--line); border-radius: 3px;
+}
+.facet-actions button { font-size: 11px; padding: 3px 7px; }
+.facet-chosen { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.facet-chosen:empty { margin-top: 0; }
+.facet-tag {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 10px; line-height: 1.6;
+  border: 1px solid var(--accent); color: var(--accent); border-radius: 3px; padding: 0 3px 0 5px;
+  background: transparent; cursor: pointer;
+}
+.facet-tag b { font-weight: 600; color: var(--ink); }
+.facet-tag .x { color: var(--ink-3); }
+
+#facet-list { overflow-y: auto; flex: 1; }
+.facet-group { border-bottom: 1px solid var(--line); }
+.facet-group > summary {
+  cursor: pointer; padding: 6px 10px; font-size: 11px; color: var(--ink-2);
+  display: flex; align-items: baseline; gap: 6px; list-style: none;
+}
+.facet-group > summary::-webkit-details-marker { display: none; }
+.facet-group > summary::before { content: '\25B8'; color: var(--ink-3); font-size: 9px; }
+.facet-group[open] > summary::before { content: '\25BE'; }
+.facet-group[open] > summary { color: var(--ink); background: var(--panel); }
+.facet-group .fg-name { font-weight: 600; }
+.facet-group .fg-badge {
+  margin-left: auto; font-size: 10px; color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 8px; padding: 0 5px;
+}
+.facet-group .fg-mode { color: var(--ink-3); font-size: 10px; }
+.facet-values { padding: 2px 6px 8px; }
+.facet-null { color: var(--ink-3); font-size: 10px; padding: 0 4px 5px; }
+
+.facet-value {
+  position: relative; display: flex; align-items: baseline; gap: 6px; width: 100%;
+  border: 0; background: transparent; color: var(--ink-2); font: inherit; font-size: 11px;
+  text-align: left; padding: 2px 5px; border-radius: 3px; cursor: pointer; overflow: hidden;
+}
+.facet-value:hover { background: var(--panel); color: var(--ink); }
+.facet-value .bar {
+  position: absolute; left: 0; top: 0; bottom: 0; background: #1b2740; z-index: 0;
+}
+.facet-value > span { position: relative; z-index: 1; }
+.facet-value .term {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.facet-value .n { color: var(--ink); font-variant-numeric: tabular-nums; }
+.facet-value .of { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.facet-value.on { color: var(--ink); background: #16223a; }
+.facet-value.on .bar { background: #24365c; }
+.facet-value.on .term::before { content: '\2713\00a0'; color: var(--accent); }
+.facet-value.empty { opacity: .45; }
+.facet-value.is-absent .term { color: var(--warn); font-style: italic; }
+.facet-more {
+  border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 10px;
+  cursor: pointer; padding: 2px 5px;
+}
+.facet-note {
+  margin: 0; padding: 8px 10px; border-top: 1px solid var(--line);
+  font-size: 10px; line-height: 1.5; color: var(--ink-3);
+}
+.facet-note b { color: var(--ink-2); }
 </style>
 </head>
 <body>
@@ -237,18 +319,44 @@ table.measures tr.absent-row { background: #14120e; }
     <span id="legend"></span>
   </div>
 
-  <div id="axis-rail"></div>
+  <div class="plotrow">
 
-  <div id="pc-wrap">
-    <canvas id="pc"></canvas>
-    <canvas id="pc-overlay"></canvas>
-  </div>
+    <aside id="facets">
+      <div class="facet-head">
+        <h2>facets</h2>
+        <div id="facet-denominator" class="facet-denominator"></div>
+        <div class="facet-actions">
+          <input id="facet-search" type="search" placeholder="find a facet or a value">
+          <button id="facet-clear" disabled>clear facets</button>
+        </div>
+        <div id="facet-chosen" class="facet-chosen"></div>
+      </div>
+      <div id="facet-list"></div>
+      <p class="facet-note">
+        Within one facet the chosen values are a <b>union</b>; across facets they are an
+        <b>intersection</b>; and the whole selection <b>intersects the axis brushes</b>.
+        Each value carries <b>available&nbsp;/&nbsp;total</b> — the count under every <i>other</i>
+        facet, and the count over the whole corpus. <b>absent</b> is a value with its own count, so
+        a null is chosen rather than silently kept or silently dropped.
+      </p>
+    </aside>
 
-  <div class="underbar">
-    <span id="selcount"></span>
-    <span id="hoverinfo"></span>
-    <span class="grow"></span>
-    <span id="warm" hidden></span>
+    <div class="plotmain">
+      <div id="axis-rail"></div>
+
+      <div id="pc-wrap">
+        <canvas id="pc"></canvas>
+        <canvas id="pc-overlay"></canvas>
+      </div>
+
+      <div class="underbar">
+        <span id="selcount"></span>
+        <span id="hoverinfo"></span>
+        <span class="grow"></span>
+        <span id="warm" hidden></span>
+      </div>
+    </div>
+
   </div>
 
   <p class="explain" style="padding:0 16px">
@@ -1172,6 +1280,415 @@ var SchemaAxes = (function () {
 if (typeof module !== 'undefined' && module.exports) module.exports = SchemaAxes;
 </script>
 <script>
+// Faceted selection over the corpus: narrow the drawn set by what a recording *is*, not by where
+// its line sits on an axis.
+//
+// Within one facet the chosen values are a union; across facets they are an intersection; and the
+// whole facet mask intersects the axis brushes. Absence is a value, not a silent drop: every facet
+// carries an explicit absent bucket with its own count.
+//
+// Two counts are reported per value and they answer different questions. `total` is the count over
+// the whole corpus and never moves. `available` is the count over the set every *other* facet and
+// the brushes admit, so a sibling value keeps a meaningful number after its neighbour is chosen.
+//
+// See specs/20260924-recording-vectors-facets/facets.md.
+
+'use strict';
+
+var SchemaFacets = (function () {
+  var ABSENT = '(absent)';
+
+  /** Facet groups, in the order the panel lists them. */
+  var GROUP_ORDER = ['decision', 'branch', 'identity', 'gate', 'gate outcome'];
+
+  /** Columns never offered as a facet, with the reason the panel shows. */
+  var REFUSED = {
+    participant: '1,527 levels, one per person - a list, not a facet',
+    session: 'one level per session; put participant on an axis instead',
+  };
+
+  /**
+   * Every column the facet panel offers, in panel order.
+   *
+   * A categorical scalar faces by equality; a `set` column faces by membership, which is what its
+   * own catalogue entry already points at ("filter by a term").
+   *
+   * @returns {Array<{col: Object, mode: string}>} the offered columns.
+   */
+  function catalogue() {
+    var out = [];
+    SchemaAxes.CATALOGUE.forEach(function (col) {
+      if (REFUSED[col.name]) return;
+      if (col.name.indexOf('.size') > 0) return;
+      if (col.kind === 'categorical') out.push({ col: col, mode: 'scalar' });
+      else if (col.kind === 'set') out.push({ col: col, mode: 'set' });
+    });
+    var rank = function (g) {
+      var i = GROUP_ORDER.indexOf(g);
+      return i < 0 ? GROUP_ORDER.length : i;
+    };
+    return out.map(function (f, i) { return { f: f, i: i }; })
+      .sort(function (a, b) { return rank(a.f.col.group) - rank(b.f.col.group) || a.i - b.i; })
+      .map(function (x) { return x.f; });
+  }
+
+  var CATALOGUE = catalogue();
+  var BY_NAME = {};
+  CATALOGUE.forEach(function (f) { BY_NAME[f.col.name] = f; });
+
+  /** The facets the panel opens expanded: the ones carrying a decision the reader acts on. */
+  var DEFAULT_OPEN = ['verdict', 'task', 'release', 'conformance_speech'];
+
+  /**
+   * A facet model over one set of rows.
+   *
+   * @param {Array<Object>} rows every recording, in corpus order.
+   */
+  function FacetModel(rows) {
+    this.rows = rows;
+    this.encodings = {};
+    this.selection = {};
+    this.base = null;
+    this._masks = null;
+  }
+
+  /**
+   * Build, once, the coded form of one facet column.
+   *
+   * A scalar becomes an `Int32Array` of term indices with -1 for absent; a set becomes one posting
+   * list of row indices per term. Both are built lazily, because encoding all of the offered
+   * columns up front over a 62,548-row corpus costs more than every interaction that follows.
+   *
+   * @param {string} name the column.
+   * @returns {Object} the encoding.
+   * @throws {Error} when the column is not one the panel offers.
+   */
+  FacetModel.prototype.encode = function (name) {
+    if (this.encodings[name]) return this.encodings[name];
+    var f = BY_NAME[name];
+    if (!f) throw new Error('no facet column ' + name);
+    var rows = this.rows;
+    var terms = [];
+    var index = {};
+    var totals = [];
+    var enc;
+    var i;
+    var j;
+
+    function termIndex(t) {
+      var k = index[t];
+      if (k === undefined) { k = terms.length; terms.push(t); totals.push(0); index[t] = k; }
+      return k;
+    }
+
+    if (f.mode === 'scalar') {
+      var codes = new Int32Array(rows.length);
+      var absent = 0;
+      for (i = 0; i < rows.length; i++) {
+        var v = rows[i][name];
+        if (v == null) { codes[i] = -1; absent++; continue; }
+        var k = termIndex(String(v));
+        codes[i] = k;
+        totals[k]++;
+      }
+      enc = { mode: 'scalar', codes: codes, terms: terms, totals: totals, absent: absent, index: index };
+    } else {
+      var lists = {};
+      var absentRows = [];
+      for (i = 0; i < rows.length; i++) {
+        var list = rows[i][name];
+        if (list == null) { absentRows.push(i); continue; }
+        for (j = 0; j < list.length; j++) {
+          var kk = termIndex(String(list[j]));
+          (lists[kk] || (lists[kk] = [])).push(i);
+          totals[kk]++;
+        }
+      }
+      enc = {
+        mode: 'set',
+        postings: terms.map(function (_, t) { return Int32Array.from(lists[t] || []); }),
+        terms: terms,
+        totals: totals,
+        absent: absentRows.length,
+        absentRows: Int32Array.from(absentRows),
+        index: index,
+      };
+    }
+    this.encodings[name] = enc;
+    return enc;
+  };
+
+  /**
+   * The base mask the facets narrow: the rows the axis brushes admit.
+   *
+   * @param {Uint8Array|null} mask one byte per row, or null for every row.
+   */
+  FacetModel.prototype.setBase = function (mask) {
+    this.base = mask || null;
+  };
+
+  /**
+   * The chosen values of one facet.
+   *
+   * @param {string} name the column.
+   * @returns {Array<string>} the values, as written.
+   */
+  FacetModel.prototype.chosen = function (name) {
+    var sel = this.selection[name];
+    return sel ? sel.slice() : [];
+  };
+
+  /**
+   * Add or remove one value from one facet.
+   *
+   * @param {string} name the column.
+   * @param {string} term the value, or `ABSENT`.
+   * @returns {Array<string>} what is chosen afterwards.
+   */
+  FacetModel.prototype.toggle = function (name, term) {
+    var sel = this.selection[name] || [];
+    var at = sel.indexOf(term);
+    sel = at < 0 ? sel.concat([term]) : sel.slice(0, at).concat(sel.slice(at + 1));
+    if (sel.length) this.selection[name] = sel;
+    else delete this.selection[name];
+    this._masks = null;
+    return this.chosen(name);
+  };
+
+  /**
+   * Drop one facet's choices, or every facet's.
+   *
+   * @param {string|null} name the column, or null for all of them.
+   */
+  FacetModel.prototype.clear = function (name) {
+    if (name == null) this.selection = {};
+    else delete this.selection[name];
+    this._masks = null;
+  };
+
+  /**
+   * The facets currently narrowing anything.
+   *
+   * @returns {Array<string>} their column names, sorted.
+   */
+  FacetModel.prototype.activeNames = function () {
+    var self = this;
+    return Object.keys(this.selection).filter(function (n) { return self.selection[n].length; }).sort();
+  };
+
+  /**
+   * How many values are chosen across every facet.
+   *
+   * @returns {number} the count.
+   */
+  FacetModel.prototype.chosenCount = function () {
+    var self = this;
+    return this.activeNames().reduce(function (n, k) { return n + self.selection[k].length; }, 0);
+  };
+
+  /**
+   * The rows one facet admits on its own.
+   *
+   * A scalar reads its code array once; a set walks only the posting lists of the chosen terms, so
+   * choosing a rare term costs that term's size rather than the corpus's.
+   *
+   * @param {string} name the column.
+   * @returns {Uint8Array} one byte per row.
+   */
+  FacetModel.prototype.passMask = function (name) {
+    var enc = this.encode(name);
+    var sel = this.selection[name] || [];
+    var out = new Uint8Array(this.rows.length);
+    var wantAbsent = sel.indexOf(ABSENT) >= 0;
+    var i;
+    var j;
+    if (enc.mode === 'scalar') {
+      var want = new Uint8Array(enc.terms.length);
+      for (i = 0; i < sel.length; i++) {
+        var k = enc.index[sel[i]];
+        if (k !== undefined) want[k] = 1;
+      }
+      for (i = 0; i < out.length; i++) {
+        var c = enc.codes[i];
+        out[i] = c < 0 ? (wantAbsent ? 1 : 0) : want[c];
+      }
+    } else {
+      for (i = 0; i < sel.length; i++) {
+        var kk = enc.index[sel[i]];
+        if (kk === undefined) continue;
+        var p = enc.postings[kk];
+        for (j = 0; j < p.length; j++) out[p[j]] = 1;
+      }
+      if (wantAbsent) for (j = 0; j < enc.absentRows.length; j++) out[enc.absentRows[j]] = 1;
+    }
+    return out;
+  };
+
+  /** Every active facet's own mask, computed once per selection change. */
+  FacetModel.prototype._ensure = function () {
+    if (this._masks) return this._masks;
+    var self = this;
+    var names = this.activeNames();
+    this._masks = { names: names, per: names.map(function (n) { return self.passMask(n); }) };
+    return this._masks;
+  };
+
+  /**
+   * The facet mask over the corpus.
+   *
+   * @param {string} [excluding] leave this facet out, which is what makes a sibling value's count
+   *   meaningful after its neighbour is chosen.
+   * @returns {Uint8Array|null} one byte per row, or null when nothing is narrowing.
+   */
+  FacetModel.prototype.mask = function (excluding) {
+    var m = this._ensure();
+    var used = [];
+    var a;
+    var i;
+    for (a = 0; a < m.names.length; a++) if (m.names[a] !== excluding) used.push(m.per[a]);
+    if (!used.length) return null;
+    var out = new Uint8Array(this.rows.length);
+    out.set(used[0]);
+    for (a = 1; a < used.length; a++) {
+      var p = used[a];
+      for (i = 0; i < out.length; i++) if (!p[i]) out[i] = 0;
+    }
+    return out;
+  };
+
+  /**
+   * How many rows a mask keeps, the base mask included.
+   *
+   * @param {Uint8Array|null} mask the facet mask, or null.
+   * @returns {number} the count.
+   */
+  FacetModel.prototype.countMask = function (mask) {
+    var base = this.base;
+    var n = 0;
+    for (var i = 0; i < this.rows.length; i++) {
+      if (base && !base[i]) continue;
+      if (mask && !mask[i]) continue;
+      n++;
+    }
+    return n;
+  };
+
+  /**
+   * How many rows the brushes alone admit: the denominator the facets narrow.
+   *
+   * @returns {number} the count.
+   */
+  FacetModel.prototype.before = function () {
+    return this.countMask(null);
+  };
+
+  /**
+   * How many rows survive every facet and the brushes: the denominator after.
+   *
+   * @returns {number} the count.
+   */
+  FacetModel.prototype.after = function () {
+    return this.countMask(this.mask());
+  };
+
+  /**
+   * One facet's values, each with both counts and whether it is chosen.
+   *
+   * Sorted by the column's declared ordering where it has one, so `pass < flag < discard` reads as
+   * severity; by `available` otherwise. The absent bucket is always last and always present, so a
+   * null can be selected rather than silently carried.
+   *
+   * @param {string} name the column.
+   * @returns {Object} `{name, label, mode, nullMeans, chosen, values}`.
+   */
+  FacetModel.prototype.values = function (name) {
+    var f = BY_NAME[name];
+    var enc = this.encode(name);
+    var sel = this.selection[name] || [];
+    var admit = this.mask(name);
+    var base = this.base;
+    var avail = new Int32Array(enc.terms.length);
+    var availAbsent = 0;
+    var i;
+    var j;
+
+    if (enc.mode === 'scalar') {
+      for (i = 0; i < this.rows.length; i++) {
+        if (base && !base[i]) continue;
+        if (admit && !admit[i]) continue;
+        var c = enc.codes[i];
+        if (c < 0) availAbsent++;
+        else avail[c]++;
+      }
+    } else {
+      for (i = 0; i < enc.postings.length; i++) {
+        var p = enc.postings[i];
+        var n = 0;
+        for (j = 0; j < p.length; j++) {
+          var r = p[j];
+          if (base && !base[r]) continue;
+          if (admit && !admit[r]) continue;
+          n++;
+        }
+        avail[i] = n;
+      }
+      for (j = 0; j < enc.absentRows.length; j++) {
+        var rr = enc.absentRows[j];
+        if (base && !base[rr]) continue;
+        if (admit && !admit[rr]) continue;
+        availAbsent++;
+      }
+    }
+
+    var values = enc.terms.map(function (t, k) {
+      return { term: t, label: t, total: enc.totals[k], available: avail[k], chosen: sel.indexOf(t) >= 0, absent: false };
+    });
+    var order = SchemaAxes.ORDERINGS[name];
+    if (order) {
+      values.sort(function (a, b) {
+        var ia = order.indexOf(a.term);
+        var ib = order.indexOf(b.term);
+        if (ia < 0) ia = order.length;
+        if (ib < 0) ib = order.length;
+        return ia - ib || b.available - a.available || (a.term < b.term ? -1 : 1);
+      });
+    } else {
+      values.sort(function (a, b) {
+        return b.available - a.available || b.total - a.total || (a.term < b.term ? -1 : 1);
+      });
+    }
+    values.push({
+      term: ABSENT,
+      label: 'absent',
+      total: enc.absent,
+      available: availAbsent,
+      chosen: sel.indexOf(ABSENT) >= 0,
+      absent: true,
+    });
+    return {
+      name: name,
+      label: f.col.label,
+      mode: f.mode,
+      nullMeans: f.col.nullMeans,
+      chosen: sel.slice(),
+      values: values,
+    };
+  };
+
+  return {
+    ABSENT: ABSENT,
+    CATALOGUE: CATALOGUE,
+    BY_NAME: BY_NAME,
+    GROUP_ORDER: GROUP_ORDER,
+    REFUSED: REFUSED,
+    DEFAULT_OPEN: DEFAULT_OPEN,
+    FacetModel: FacetModel,
+  };
+})();
+
+if (typeof module !== 'undefined' && module.exports) module.exports = SchemaFacets;
+</script>
+<script>
 // The corpus view: one polyline per recording over up to ten axes.
 //
 // The drawing rule: a line is BROKEN wherever its value on an axis is null. Absence is never a
@@ -1206,6 +1723,8 @@ var CorpusView = (function () {
     this.opacity = null;
     this.showStubs = true;
     this.brushes = {};
+    this.facetMask = null;
+    this.brushMask = new Uint8Array(0);
     this.selected = new Uint8Array(0);
     this.selectedCount = 0;
     this.hover = -1;
@@ -1219,6 +1738,9 @@ var CorpusView = (function () {
 
   CorpusView.prototype.setRows = function (rows) {
     this.rows = rows;
+    this.facetMask = null;
+    this.brushMask = new Uint8Array(rows.length);
+    this.brushMask.fill(1);
     this.selected = new Uint8Array(rows.length);
     this.selected.fill(1);
     this.selectedCount = rows.length;
@@ -1333,10 +1855,21 @@ var CorpusView = (function () {
 
   // ------------------------------------------------------------------ brushing
 
+  /**
+   * The drawn set, from the axis brushes and the facet mask together.
+   *
+   * `brushMask` is what the brushes alone admit and is kept separate, because it is the denominator
+   * the facet panel narrows: a facet count computed against the post-facet set would report the
+   * answer the reader already has.
+   */
   CorpusView.prototype.applyBrushes = function () {
     var self = this;
     var active = Object.keys(this.brushes);
     var count = 0;
+    if (!this.brushMask || this.brushMask.length !== this.rows.length) {
+      this.brushMask = new Uint8Array(this.rows.length);
+    }
+    var facetMask = this.facetMask;
     for (var i = 0; i < this.rows.length; i++) {
       var keep = true;
       for (var a = 0; a < active.length; a++) {
@@ -1353,11 +1886,24 @@ var CorpusView = (function () {
           if (b.terms.indexOf(v) < 0) { keep = false; break; }
         }
       }
+      self.brushMask[i] = keep ? 1 : 0;
+      if (keep && facetMask && !facetMask[i]) keep = false;
       self.selected[i] = keep ? 1 : 0;
       if (keep) count++;
     }
     this.selectedCount = count;
     if (this.onSelectionChange) this.onSelectionChange(count);
+  };
+
+  /**
+   * Narrow the drawn set by a facet mask, intersected with the brushes.
+   *
+   * @param {Uint8Array|null} mask one byte per row, or null to draw whatever the brushes admit.
+   */
+  CorpusView.prototype.setFacetMask = function (mask) {
+    this.facetMask = mask && mask.length === this.rows.length ? mask : null;
+    this.applyBrushes();
+    this.draw();
   };
 
   CorpusView.prototype.setBrush = function (name, brush) {
@@ -2223,6 +2769,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RecordingV
     caching: true,
     warm: null,
     current: -1,
+    facets: null,
+    facetOpen: null,
+    facetShowAll: null,
+    facetQuery: '',
+    facetTiming: null,
+    facetBusy: false,
   };
 
   function $(id) { return document.getElementById(id); }
@@ -2344,8 +2896,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RecordingV
       $('selcount').textContent = n.toLocaleString() + ' of ' + state.rows.length.toLocaleString() + ' recordings drawn';
       renderAxisCaptions();
       renderList();
+      // A brush moved the denominator the facets narrow, so their counts are stale.
+      if (state.facets && !state.facetBusy) { state.facets.setBase(view.brushMask); renderFacets(); }
     };
     view.applyBrushes();
+    buildFacets();
     renderAxisRail();
     renderControls();
     wirePointer(view);
@@ -2865,6 +3420,182 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RecordingV
     var a = Math.abs(v);
     if (a >= 1e5 || (a > 0 && a < 1e-4)) return v.toExponential(3);
     return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+  }
+
+  // ---------------------------------------------------------------- facets
+
+  var MAX_VALUES = 12;
+
+  /** Build the facet model over the loaded rows and render the panel for the first time. */
+  function buildFacets() {
+    state.facets = new SchemaFacets.FacetModel(state.rows);
+    state.facetOpen = {};
+    state.facetShowAll = {};
+    state.facetQuery = '';
+    SchemaFacets.DEFAULT_OPEN.forEach(function (n) {
+      if (SchemaFacets.BY_NAME[n]) state.facetOpen[n] = true;
+    });
+    $('facet-search').oninput = function () {
+      state.facetQuery = $('facet-search').value.trim().toLowerCase();
+      renderFacets();
+    };
+    $('facet-clear').onclick = function () { state.facets.clear(null); applyFacets(); };
+    applyFacets();
+  }
+
+  /**
+   * Recompute the facet mask, hand it to the view, then redraw the panel against the new base.
+   *
+   * `facetTiming.mask_ms` covers building the mask and re-deriving the drawn set over every row;
+   * the canvas paint it schedules is deferred to the next frame and is not in that number.
+   */
+  function applyFacets() {
+    state.facetBusy = true;
+    var t0 = performance.now();
+    state.view.setFacetMask(state.facets.mask());
+    var t1 = performance.now();
+    state.facets.setBase(state.view.brushMask);
+    renderFacets();
+    var t2 = performance.now();
+    state.facetBusy = false;
+    state.facetTiming = { mask_ms: t1 - t0, panel_ms: t2 - t1, open: Object.keys(state.facetOpen).length };
+  }
+
+  /** The whole panel: the denominator, the chosen tags, and one collapsible group per column. */
+  function renderFacets() {
+    var model = state.facets;
+    if (!model) return;
+    var before = model.before();
+    var after = model.after();
+    var active = model.activeNames();
+    var total = state.rows.length;
+
+    var den = $('facet-denominator');
+    den.innerHTML = '';
+    if (active.length) {
+      den.appendChild(el('span', 'before', before.toLocaleString()));
+      den.appendChild(el('span', 'arrow', String.fromCharCode(0x2192)));
+      den.appendChild(el('span', 'after', after.toLocaleString()));
+      den.appendChild(el('span', 'unfiltered', ' drawn, of ' + total.toLocaleString() + ' recordings'));
+      den.title = before.toLocaleString() + ' recordings before these facets, '
+        + after.toLocaleString() + ' after, out of ' + total.toLocaleString() + ' in the file';
+    } else {
+      den.appendChild(el('span', 'unfiltered',
+        before.toLocaleString() + ' of ' + total.toLocaleString() + ' recordings, no facet applied'));
+      den.title = 'no facet is narrowing anything';
+    }
+
+    var chosen = $('facet-chosen');
+    chosen.innerHTML = '';
+    active.forEach(function (name) {
+      model.chosen(name).forEach(function (term) {
+        var tag = el('button', 'facet-tag');
+        tag.appendChild(el('b', null, name));
+        tag.appendChild(el('span', null, term === SchemaFacets.ABSENT ? 'absent' : term));
+        tag.appendChild(el('span', 'x', String.fromCharCode(0x2715)));
+        tag.title = 'drop this value from the ' + name + ' facet';
+        tag.dataset.facet = name;
+        tag.dataset.term = term;
+        tag.onclick = function () { model.toggle(name, term); applyFacets(); };
+        chosen.appendChild(tag);
+      });
+    });
+    $('facet-clear').disabled = !active.length;
+
+    var q = state.facetQuery;
+    var list = $('facet-list');
+    list.innerHTML = '';
+    SchemaFacets.CATALOGUE.forEach(function (f) {
+      var name = f.col.name;
+      var hit = !q
+        || name.toLowerCase().indexOf(q) >= 0
+        || String(f.col.label).toLowerCase().indexOf(q) >= 0
+        || model.chosen(name).length > 0;
+      if (!hit) return;
+      list.appendChild(facetGroup(f));
+    });
+  }
+
+  /** One column's collapsible group. Its values are built on first open, not before. */
+  function facetGroup(f) {
+    var name = f.col.name;
+    var d = el('details', 'facet-group');
+    d.dataset.facet = name;
+    var sum = el('summary');
+    sum.appendChild(el('span', 'fg-name', name));
+    if (f.mode === 'set') sum.appendChild(el('span', 'fg-mode', 'contains'));
+    var n = state.facets.chosen(name).length;
+    if (n) sum.appendChild(el('span', 'fg-badge', String(n)));
+    d.appendChild(sum);
+    if (state.facetOpen[name]) { d.open = true; d.appendChild(facetValues(f)); }
+    d.addEventListener('toggle', function () {
+      state.facetOpen[name] = d.open;
+      if (d.open && !d.querySelector('.facet-values')) d.appendChild(facetValues(f));
+    });
+    return d;
+  }
+
+  /**
+   * One column's values, chosen ones first so a selection never hides under the top-K cap.
+   *
+   * Only an open group is counted, because counting every offered column on every click would
+   * walk the corpus once per column for values nobody is looking at.
+   */
+  function facetValues(f) {
+    var name = f.col.name;
+    var v = state.facets.values(name);
+    var box = el('div', 'facet-values');
+    if (v.nullMeans) box.appendChild(el('div', 'facet-null', 'absent means: ' + v.nullMeans));
+    var q = state.facetQuery;
+    var shown = v.values.filter(function (x) {
+      return x.chosen || x.absent || !q || x.term.toLowerCase().indexOf(q) >= 0;
+    });
+    shown = shown.filter(function (x) { return x.chosen; })
+      .concat(shown.filter(function (x) { return !x.chosen; }));
+    var cap = state.facetShowAll[name] ? shown.length : MAX_VALUES;
+    var max = shown.reduce(function (m, x) { return Math.max(m, x.available); }, 0) || 1;
+    shown.slice(0, cap).forEach(function (x) { box.appendChild(facetValue(name, x, max)); });
+    if (shown.length > cap) {
+      var more = el('button', 'facet-more', 'show all ' + shown.length.toLocaleString() + ' values');
+      more.onclick = function () { state.facetShowAll[name] = true; replaceValues(f); };
+      box.appendChild(more);
+    } else if (state.facetShowAll[name] && shown.length > MAX_VALUES) {
+      var less = el('button', 'facet-more', 'show the top ' + MAX_VALUES);
+      less.onclick = function () { state.facetShowAll[name] = false; replaceValues(f); };
+      box.appendChild(less);
+    }
+    return box;
+  }
+
+  /** Redraw one group's value list in place, without disturbing the rest of the panel. */
+  function replaceValues(f) {
+    var d = $('facet-list').querySelector('details[data-facet="' + f.col.name + '"]');
+    if (!d) return;
+    var old = d.querySelector('.facet-values');
+    if (old) d.removeChild(old);
+    d.appendChild(facetValues(f));
+  }
+
+  /** One value: its label, how many are available, how many exist, and a bar for the ratio. */
+  function facetValue(name, x, max) {
+    var cls = 'facet-value';
+    if (x.chosen) cls += ' on';
+    if (!x.available) cls += ' empty';
+    if (x.absent) cls += ' is-absent';
+    var b = el('button', cls);
+    var bar = el('span', 'bar');
+    bar.style.width = Math.round((100 * x.available) / max) + '%';
+    b.appendChild(bar);
+    b.appendChild(el('span', 'term', x.label));
+    b.appendChild(el('span', 'n', x.available.toLocaleString()));
+    b.appendChild(el('span', 'of', '/ ' + x.total.toLocaleString()));
+    b.title = x.label + ': ' + x.available.toLocaleString()
+      + ' available under the other facets and the brushes, '
+      + x.total.toLocaleString() + ' over the whole corpus';
+    b.dataset.facet = name;
+    b.dataset.term = x.term;
+    b.onclick = function () { state.facets.toggle(name, x.term); applyFacets(); };
+    return b;
   }
 
   // ---------------------------------------------------------------- landing
