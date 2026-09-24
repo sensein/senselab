@@ -97,53 +97,91 @@ and values within an open facet.
 
 ## What it costs, measured
 
-Headless Chromium 1600×1000, a **62,540-row** synthetic corpus on the producer's own schema
-(`scripts/triage_viewer_fixture.py --rows 62548`), four facet groups open. Medians and maxima over
-five repetitions of a four-facet sequence, from `artifacts/measure_facets.mjs`.
+Headless Chromium 1600x1000, against the **real 62,548-row** `recording_vectors.parquet`
+(schema 3, 195 columns, 104.6 MB) built 2026-09-24 from `triage_rerun_20260923`. Four facet groups
+open. Medians and maxima over five repetitions of a four-facet sequence, from
+`artifacts/measure_facets.mjs`.
 
 | | median | max |
 | --- | ---: | ---: |
-| **one facet click, whole handler** | **7.2 ms** | 11.7 ms |
-| of which: build the mask and re-derive the drawn set over all 62,540 rows | 4.1 ms | 7.3 ms |
-| of which: recount and redraw the four open groups | 3.3 ms | 4.6 ms |
-| click → the canvas has finished repainting | 210.4 ms | 226.7 ms |
-| *the same, for an axis brush change (unchanged control)* | *214.8 ms* | *221.0 ms* |
-| encode one column, cold (`task` / `verdict` / `gate_failed_names` / a gate outcome) | 8.6–18 ms | |
-| encode **all 52** offered columns | 321 ms | |
-| memory held by all 52 encodings | 12.8 MB | |
+| **one facet click, whole handler** | **5.6 ms** | 10.8 ms |
+| of which: build the mask and re-derive the drawn set over all 62,548 rows | 2.7 ms | 6.2 ms |
+| of which: recount and redraw the four open groups | 2.9 ms | 4.3 ms |
+| click -> the canvas has finished repainting | 196.3 ms | 201.4 ms |
+| *the same, for an axis brush change (unchanged control)* | *206.5 ms* | *209.9 ms* |
+| encode one column, cold (`task` 796 levels / `verdict` / `gate_failed_names` / a gate outcome) | 3.3-8.7 ms | |
+| encode **all 52** offered columns | 245.7 ms | |
+| memory held by all 52 encodings | 12.5 MB | |
+| first paint: parquet chosen -> the panel is on screen | 3.9 s | |
 
-**The repaint is not the facet layer's cost.** A facet click reaches a painted frame in 210 ms and
-an axis brush in 215 ms — the same number, because the paint loop walks every row in 6,000-row
-chunks whatever is selected. Faceting added nothing to it. The number the facet layer owns is the
-7.2 ms handler, which fits inside one frame.
+**The repaint is not the facet layer's cost.** A facet click reaches a painted frame in 196 ms and
+an axis brush in 207 ms -- the same number within noise, because the paint loop walks every row in
+6,000-row chunks whatever is selected. Faceting added nothing to it. The number the facet layer owns
+is the 5.6 ms handler, which fits inside one 16.7 ms frame with room to spare.
 
 Three decisions came out of these numbers.
 
-**Encodings are lazy.** Encoding every offered column up front costs 321 ms — a visible stall on a
+**Encodings are lazy.** Encoding every offered column up front costs 246 ms -- a visible stall on a
 panel that opens with four groups. A column is encoded the first time its group is opened, so the
-first paint pays for four columns (~45 ms) and never for the 48 nobody looked at.
+first paint pays for four columns (~28 ms) and never for the 48 nobody looked at.
 
 **Only open groups are counted.** `values()` walks the corpus once per column. Counting all 52 on
-every click would be 52 passes for values nobody is looking at; counting the open ones is 3.3 ms.
+every click would be 52 passes for values nobody is looking at; counting the open ones is 2.9 ms.
 
 **The mask is typed arrays, not string compares.** A scalar column becomes an `Int32Array` of term
-codes (−1 for absent) and the filter is an array read plus a byte lookup, never a property read and
+codes (-1 for absent) and the filter is an array read plus a byte lookup, never a property read and
 a string comparison. This is the same move the hover hit-test made when it went from 59 ms to
 1.6 ms with a `Float64Array`, for the same reason.
 
 A `set` column instead keeps one posting list of row indices per term, because the membership form
-would need `terms × rows` bytes — 50 MB for `task`'s 796 levels — and the posting form needs one
+would need `terms x rows` bytes -- 50 MB for `task`'s 796 levels -- and the posting form needs one
 entry per membership, which over this corpus is far less than one per row. Choosing a rare term then
-costs that term's size rather than the corpus's.
+costs that term's size rather than the corpus's. It is also why `gate_failed_names` encodes in
+3.3 ms against `verdict`'s 7.1: almost every recording failed no gate, so there is almost nothing to
+post.
+
+The same harness over a 62,540-row *synthetic* corpus of the same schema gives 7.2 ms / 4.1 ms /
+3.3 ms and a 210 ms repaint -- slightly worse than the real file on every line, so the fixture is a
+conservative stand-in for CI.
+
+---
+
+## What the real corpus showed that a fixture would not
+
+**Genuine zeros are wildly uneven across gates, and the rarest is a single row.** Over the 62,548
+recordings the gate readings carry **20,831** genuine `0.0` values, but they are concentrated:
+
+| gate | genuine `0.0` | null |
+| --- | ---: | ---: |
+| `gate_omissions_max` | 18,422 | 41,689 |
+| `gate_expected_tokens_matched_min` | 1,122 | 41,689 |
+| `gate_events_min` | 920 | 52,168 |
+| `gate_response_min_s` | 221 | 52,401 |
+| `gate_repetitions_min` | 69 | 54,564 |
+| `gate_coverage_min` | 58 | 61,000 |
+| `gate_monotone_tolerance_semitones` | 18 | 59,404 |
+| `gate_f0_spread_max_semitones` | **1** | 58,058 |
+
+The zero-versus-absent browser test first picked *the first* gate carrying both a zero and a null,
+which is `gate_f0_spread_max_semitones` -- one recording in 62,548, and that one carries
+`verdict = flag`. Composing it with `verdict = pass` left no zero drawn at all, and the test failed
+on a corpus where the page was behaving correctly. It now picks the gate with the **most** genuine
+zeros, so what it measures is the drawing rule and not whether one row survived an unrelated facet.
+
+A synthetic fixture would never have produced that shape: its zeros are a uniform third of each
+applied gate.
 
 ---
 
 ## What is not measured
 
-- **The panel against the real 09-23 corpus.** Every number above is over a synthetic corpus of the
-  same size on the same schema. The value *distributions* differ — in particular `task`'s real
-  vocabulary is 796 levels against the fixture's 10, which makes the real `task` encoding and its
-  `values()` sort more expensive than measured here, though both are O(rows) with a small constant.
-  Rerun `node artifacts/measure_facets.mjs <parquet>` against the real file.
+- **The panel against an r3 corpus.** Every number above is over the `triage_rerun_20260923` tree.
+  A third replay (`triage_r3_20260923`, job 23604010) carrying PII near-match, `expected_names` and
+  the widened LLM reviewer reach was still running when this was built, so a rebuild against it is
+  owed. The facet layer reads only categorical columns, so its shape should not change, but every
+  count in the tables above will move.
+- **The `verdict` column against the owner's own reading.** The facet counts are what the parquet
+  carries: pass 52,255 / flag 10,264 / discard 29 over 62,548. Nothing here checks that those are
+  the right verdicts, only that the panel reports them faithfully.
 - **Legibility.** The e2e suite asserts the panel sits beside the plot and that its numbers are
   right; it does not assert the panel is readable, and no screenshot is diffed.
