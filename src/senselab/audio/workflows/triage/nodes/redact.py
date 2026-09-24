@@ -17,11 +17,13 @@ surviving finding is a fail, an incomplete re-scan is a flag, and a finding the 
 sees is re-planned exactly once, what survives that being ``unremediable``; ``audio_check`` is
 the constant ``"bounded"`` on every path.
 An optional LLM check (``redaction.llm_check``) re-reads the redacted transcript for up to
-``max_iterations`` rounds, asked only where a release was in prospect. Each round's chain of thought
-is a ``redaction_llm_review`` measurement carrying its ``elapsed_s``, ``load_s`` and generated
-tokens; its summary is a ``redaction_llm_annotation`` written on every path, which VERDICT reads
-under ``verdict.llm_redaction_flags``. The ``llm_check`` activity carries ``started`` and ``ended``.
-It annotates and never decides.
+``max_iterations`` rounds, asked wherever the detectors marked something -- withheld or not, and it
+reads the redacted transcript on both paths. Each round's chain of thought is a
+``redaction_llm_review`` measurement carrying its ``elapsed_s``, ``load_s`` and generated tokens;
+its summary is a ``redaction_llm_annotation`` written on every path, carrying the detector outcome
+the reading was taken beside, which VERDICT reads under ``verdict.llm_redaction_flags``. The
+``llm_check`` activity carries ``started`` and ``ended``. It annotates and never decides: it cannot
+release a withheld recording any more than it can widen a redaction.
 
 A pass releases three artifacts under ``artifacts_dir``: the masked audio, the flat redacted
 transcript, and the redacted consensus stream as ``consensus.json``, whose records carry each
@@ -595,15 +597,18 @@ class _LlmCheck:
     """What the optional reviewer established, as the ``redaction_llm_annotation`` measurement records it.
 
     Attributes:
-        status: ``disabled`` when the config leaves it off, ``not_run`` when the detector path had
-            already withheld, ``absent`` when the model could not be reached, ``clean`` when it
-            read the transcript and flagged nothing, ``flagged`` when it flagged something.
+        status: ``disabled`` when the config leaves it off, ``not_run`` when the detectors marked
+            nothing, ``absent`` when the model could not be reached, ``clean`` when it read the
+            transcript and flagged nothing, ``flagged`` when it flagged something.
         iterations: How many reviews ran.
         flagged: The categories the reviewer named, sorted. Categories only; the substrings and the
             reasoning are in the per-iteration measurements beside it.
         model_id: The repo asked, or the empty string when nothing was.
         revision: The commit the reviewer loaded, or None.
         failure: Why it did not run, when it did not.
+        detector_outcome: The detector path's own outcome this reading was taken beside, as its
+            value. A ``clean`` beside a ``fail`` and a ``clean`` beside a ``pass`` are different
+            readings and the annotation is the only place that distinction is recorded.
     """
 
     status: str
@@ -612,6 +617,7 @@ class _LlmCheck:
     model_id: str
     revision: str | None
     failure: str | None
+    detector_outcome: str
 
     def as_detail(self) -> dict[str, Any]:
         """The mapping the annotation measurement carries.
@@ -626,6 +632,7 @@ class _LlmCheck:
             "model_id": self.model_id,
             "revision": self.revision,
             "failure": self.failure,
+            "detector_outcome": self.detector_outcome,
         }
 
 
@@ -680,7 +687,9 @@ def _mask_concerns(text: str, findings: Any) -> str:  # noqa: ANN401 — the bac
     return masked
 
 
-def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmCheck, list[dict[str, Any]]]:
+def _llm_check(
+    transcript_text: str, settings: Mapping[str, Any], *, detector_outcome: str
+) -> tuple[_LlmCheck, list[dict[str, Any]]]:
     """Read the redacted transcript back with the reviewer, bounded, capturing every chain of thought.
 
     One review per call: a round that flags something masks it and reviews again, the masking local
@@ -691,8 +700,9 @@ def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmC
     check ends, so nothing else on the card has to live beside them.
 
     Args:
-        transcript_text: The redacted transcript, as it would be released.
+        transcript_text: The redacted transcript, as the release path would have written it.
         settings: :func:`_llm_settings`' mapping.
+        detector_outcome: The detector path's own outcome, recorded beside the reading.
 
     Returns:
         ``(check, reviews)`` — the summary and one payload per round, in order. The first round
@@ -700,18 +710,21 @@ def _llm_check(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmC
         failure beside it.
     """
     try:
-        return _llm_rounds(transcript_text, settings)
+        return _llm_rounds(transcript_text, settings, detector_outcome=detector_outcome)
     finally:
         if not settings["keep_worker_resident"]:
             shutdown_review_worker(forget_failure=False)
 
 
-def _llm_rounds(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_LlmCheck, list[dict[str, Any]]]:
+def _llm_rounds(
+    transcript_text: str, settings: Mapping[str, Any], *, detector_outcome: str
+) -> tuple[_LlmCheck, list[dict[str, Any]]]:
     """The bounded review / mask / re-review loop itself, without the worker's lifetime.
 
     Args:
-        transcript_text: The redacted transcript, as it would be released.
+        transcript_text: The redacted transcript, as the release path would have written it.
         settings: :func:`_llm_settings`' mapping.
+        detector_outcome: The detector path's own outcome, recorded beside the reading.
 
     Returns:
         :func:`_llm_check`'s pair.
@@ -734,17 +747,39 @@ def _llm_rounds(transcript_text: str, settings: Mapping[str, Any]) -> tuple[_Llm
         if not result.available:
             if flagged:
                 return (
-                    _LlmCheck("flagged", iteration, tuple(sorted(set(flagged))), model_id, revision, result.failure),
+                    _LlmCheck(
+                        "flagged",
+                        iteration,
+                        tuple(sorted(set(flagged))),
+                        model_id,
+                        revision,
+                        result.failure,
+                        detector_outcome,
+                    ),
                     reviews,
                 )
-            return _LlmCheck("absent", iteration, (), model_id, revision, result.failure), reviews
+            return (
+                _LlmCheck("absent", iteration, (), model_id, revision, result.failure, detector_outcome),
+                reviews,
+            )
         if not result.findings:
             status = "flagged" if flagged else "clean"
-            return _LlmCheck(status, iteration, tuple(sorted(set(flagged))), model_id, revision, None), reviews
+            return (
+                _LlmCheck(status, iteration, tuple(sorted(set(flagged))), model_id, revision, None, detector_outcome),
+                reviews,
+            )
         flagged.extend(finding.category for finding in result.findings)
         current = _mask_concerns(current, result.findings)
     return (
-        _LlmCheck("flagged", int(settings["max_iterations"]), tuple(sorted(set(flagged))), model_id, revision, None),
+        _LlmCheck(
+            "flagged",
+            int(settings["max_iterations"]),
+            tuple(sorted(set(flagged))),
+            model_id,
+            revision,
+            None,
+            detector_outcome,
+        ),
         reviews,
     )
 
@@ -1060,14 +1095,15 @@ def redact(
 
     llm_settings = _llm_settings(config)
     review_started = _stamp()
-    if outcome is not Outcome.PASS:
-        llm = _LlmCheck("not_run", 0, (), "", None, "the detector path withheld; there was nothing to release")
-        reviews: list[dict[str, Any]] = []
-    elif not llm_settings["enabled"]:
-        llm = _LlmCheck("disabled", 0, (), "", None, None)
-        reviews = []
+    reviews: list[dict[str, Any]] = []
+    if not llm_settings["enabled"]:
+        llm = _LlmCheck("disabled", 0, (), "", None, None, outcome.value)
+    elif not findings:
+        llm = _LlmCheck(
+            "not_run", 0, (), "", None, "the detectors marked nothing; there was nothing to review", outcome.value
+        )
     else:
-        llm, reviews = _llm_check(transcript_text, llm_settings)
+        llm, reviews = _llm_check(transcript_text, llm_settings, detector_outcome=outcome.value)
     review_act = store.activity(
         node=NODE,
         step="llm_check",
