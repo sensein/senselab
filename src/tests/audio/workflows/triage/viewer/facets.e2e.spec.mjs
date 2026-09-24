@@ -292,11 +292,16 @@ test('the search narrows the panel by facet name and by a value of an opened fac
 
 test('a genuine 0.0 reading is a value on the band, and only a null is absent', async ({ page }) => {
   await open(page)
+  // The gate carrying the most genuine zeros, not the first one found: over the real corpus
+  // `gate_f0_spread_max_semitones` carries exactly one zero, on one recording, and a test built on
+  // it measures whether that single row survived an unrelated facet rather than the drawing rule.
   const gate = await page.evaluate(() => {
     const rows = window.__viewerState.rows
-    const names = SchemaAxes.GATES.map(g => 'gate_' + g[0])
-      .filter(n => rows.some(r => r[n] === 0) && rows.some(r => r[n] == null))
-    return names[0] || null
+    return SchemaAxes.GATES.map(g => 'gate_' + g[0])
+      .map(n => ({ n, zeros: rows.filter(r => r[n] === 0).length, nulls: rows.filter(r => r[n] == null).length }))
+      .filter(x => x.zeros > 0 && x.nulls > 0)
+      .sort((a, b) => b.zeros - a.zeros)
+      .map(x => x.n)[0] || null
   })
   expect(gate, 'the corpus must carry a gate with both genuine zeros and nulls').not.toBeNull()
 
