@@ -973,6 +973,126 @@ def _exemptions(store: ProvStore) -> list[Entity]:
     ]
 
 
+class TestTheTaskSOwnCastAccountsForACandidate:
+    """Owner, 2026-09-23: "analyze the task to determine expected names".
+
+    `cinderella-story` declares no `stimulus_text` -- the source is a physical storybook -- so all
+    5,833 of its findings read `in_stimulus: null` and none was ever exempted. 80.54% of them sit
+    within one edit of the cast the task itself puts in the speaker's mouth. See
+    ``specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md``.
+    """
+
+    def test_a_declared_cast_name_is_not_redacted(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The name the instruction asked for is not a disclosure, with no prompt text in sight."""
+        _seed_redact_store(store, tmp_path, words=["and", "then", "cinderella"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "cinderella")])
+        result = redact(
+            store,
+            "recording",
+            redact_config,
+            AudioHints(),
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="cinderella-story",
+        )
+        assert result.verdict.outcome is Outcome.PASS
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 0
+
+    def test_the_exemption_names_the_declaration_that_accounted_for_it(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A reader must be able to audit what was not redacted, and on whose authority."""
+        _seed_redact_store(store, tmp_path, words=["and", "then", "cinderella"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "cinderella")])
+        redact(
+            store,
+            "recording",
+            redact_config,
+            AudioHints(),
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="cinderella-story",
+        )
+        [assertion] = _exemptions(store)
+        assert assertion.attributes["expected_keys"] == ["cinderella"]
+
+    def test_a_respelled_cast_name_is_not_redacted_either(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The cast is matched under the same fitted bound as a declared stimulus."""
+        _seed_redact_store(store, tmp_path, words=["and", "then", "cindarela"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "cindarela")])
+        result = redact(
+            store,
+            "recording",
+            redact_config,
+            AudioHints(),
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="cinderella-story",
+        )
+        assert result.verdict.outcome is Outcome.PASS
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 0
+
+    def test_a_name_outside_the_cast_is_still_redacted(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A retelling that names the speaker's own sister is exactly what must survive."""
+        _seed_redact_store(store, tmp_path, words=["and", "then", "springfield"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "springfield")])
+        redact(
+            store,
+            "recording",
+            redact_config,
+            AudioHints(),
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="cinderella-story",
+        )
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
+        assert _exemptions(store) == []
+
+    def test_a_family_that_declares_no_cast_exempts_nothing(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`picture-description` has an image for a stimulus; no list can cover it and none is used."""
+        _seed_redact_store(store, tmp_path, words=["and", "then", "cinderella"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "cinderella")])
+        redact(
+            store,
+            "recording",
+            redact_config,
+            AudioHints(),
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="picture-description",
+        )
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
+        assert _verdict_entity(store, "REDACT").attributes["expected_speech_declared"] is False
+
+
 class TestANearSpellingOfAStimulusWordIsStillThatWord:
     """Owner, 2026-09-23: "expected words/near spelling mismatches don't trigger redaction".
 

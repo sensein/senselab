@@ -49,7 +49,7 @@ from typing import Any, Callable, Mapping, Sequence
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.nodes.branches import branch_params
+from senselab.audio.workflows.triage.nodes.branches import branch_params, declared_carrier, expected_names
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     consensus_words,
@@ -444,20 +444,33 @@ class _Exemption:
     unit_text: str
 
 
-def _expected_units(hint: AudioHints | None, *, terminators: str) -> list[tuple[int, str, list[str]]]:
-    """The declared stimulus, split into structure units and their verbatim tokens.
+def _expected_units(
+    hint: AudioHints | None, task_family: str | None, *, terminators: str
+) -> list[tuple[int, str, list[str]]]:
+    """Everything the task declared, as the structure units a covered run is placed inside.
+
+    Three declaration sources, one unit list: the recording's declared prompts split into their
+    structure units, the carrier a syllable family names, and the proper nouns the family's
+    expectation row declares. Each of the latter two is its own unit, so a run is placed inside one
+    name and never across two.
 
     Args:
         hint: What the recording was declared to contain, or None.
+        task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
         terminators: The characters that close a unit inside one prompt.
 
     Returns:
-        ``(prompt index, unit text, tokens)`` per unit. Empty when there is no hint or no
-        ``expected_speech``.
+        ``(prompt index, unit text, tokens)`` per unit. Empty when the task declared nothing. A
+        unit from a family declaration carries prompt index ``-1``: it came from the expectation
+        row, not from an ``expected_speech`` entry.
     """
-    if hint is None or not hint.expected_speech:
-        return []
-    return split_prompts(list(hint.expected_speech), terminators=terminators)
+    units: list[tuple[int, str, list[str]]] = []
+    if hint is not None and hint.expected_speech:
+        units.extend(split_prompts(list(hint.expected_speech), terminators=terminators))
+    carrier = declared_carrier(task_family)
+    declared = (*((carrier,) if carrier else ()), *expected_names(task_family))
+    units.extend((-1, name, name.split()) for name in declared)
+    return units
 
 
 def _covered_words(finding: Entity, words: Sequence[Entity]) -> list[Entity]:
@@ -864,6 +877,7 @@ def redact(
     *,
     run_dir: Path,
     artifacts_dir: Path,
+    task_family: str | None = None,
 ) -> RedactResult:
     """Redact every PII finding from the recording and verify the redacted text before releasing it.
 
@@ -874,9 +888,12 @@ def redact(
         config: The triage configuration.
         hint: What the recording was declared to contain. When it carries ``expected_speech``, a
             PII candidate the declared stimulus accounts for is exempted from redaction and
-            recorded as such; with no hint, nothing is exempted.
+            recorded as such.
         run_dir: The run directory sidecar paths are relative to.
         artifacts_dir: The release directory; must not contain or be contained by ``run_dir``.
+        task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``. Its expectation row's
+            carrier and declared names account for a candidate the same way a declared prompt
+            does; with no family, only the prompt does.
 
     Returns:
         The verdict, the view over what this node wrote, and the released artifacts — empty unless
@@ -907,7 +924,7 @@ def redact(
     scan_incomplete = bool(scan_failed) or bool(scan_missing) or not scanned_by
     findings = _findings(store)
     words = consensus_words(store)
-    units = _expected_units(hint, terminators=str(config.require(_TERMINATORS_KEY)))
+    units = _expected_units(hint, task_family, terminators=str(config.require(_TERMINATORS_KEY)))
     exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise, near_match(config))
     exempt_findings = {exemption.finding_id for exemption in exemptions}
     exempt_word_ids = frozenset(word_id for exemption in exemptions for word_id in exemption.word_ids)
