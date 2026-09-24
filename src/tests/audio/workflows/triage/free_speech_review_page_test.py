@@ -925,3 +925,131 @@ def test_the_page_says_the_reviewer_could_not_have_run_on_a_withheld_recording()
     """REDACT short-circuits before the enabled check, so not_run is not 'switched off'."""
     assert "could not have run" in page._SCRIPT
     assert "whether or not the reviewer is " in page._SCRIPT
+
+
+def test_the_movement_keys_do_not_collide_with_either_mark_set() -> None:
+    """Three key sets share one document; none may overlap another."""
+    movement = {"j", "k", "J", "K"}
+    row = {key for _, key, _ in page.ROW_TRIAGE}
+    finding = {key for _, key, _ in page.VERDICTS}
+    assert not movement & row
+    assert not movement & finding
+    assert not row & finding
+
+
+def test_the_page_binds_movement_and_leaves_the_arrows_alone() -> None:
+    """The arrows are the page's scroll; taking them would cost more than it buys."""
+    assert "e.key==='j'" in page._SCRIPT
+    assert "e.key==='k'" in page._SCRIPT
+    assert "e.key==='J'" in page._SCRIPT
+    assert "e.key==='K'" in page._SCRIPT
+    assert "ArrowDown" not in page._SCRIPT
+    assert "ArrowUp" not in page._SCRIPT
+
+
+def test_movement_walks_only_the_visible_cards() -> None:
+    """At 11,701 cards, next means the next card the filters left standing."""
+    assert "function visibleCards()" in page._SCRIPT
+    assert "!c.classList.contains('hidden')" in page._SCRIPT
+    assert "const live=visibleCards();" in page._SCRIPT
+
+
+def test_the_navigated_card_becomes_the_mark_target() -> None:
+    """Moving and judging without a mouse means movement sets what the mark keys act on."""
+    assert "markActive(live[next],true)" in page._SCRIPT
+    assert "const card=activeCard||" in page._SCRIPT
+
+
+def test_the_pointer_and_the_keyboard_do_not_fight_over_the_target() -> None:
+    """A scroll under a still mouse fires mouseenter; it must not steal a keyboard target."""
+    assert "let pointerOwns=true;" in page._SCRIPT
+    assert "if(pointerOwns)markActive(card,false);" in page._SCRIPT
+    assert "document.addEventListener('mousemove'" in page._SCRIPT
+    assert "pointerOwns=false;" in page._SCRIPT
+
+
+def test_a_filter_that_hides_the_target_drops_it() -> None:
+    """The active card must never be one the reader cannot see."""
+    assert "activeCard.classList.remove('active');activeCard=null;here(null);" in page._SCRIPT
+
+
+def test_the_keys_are_discoverable_in_the_page() -> None:
+    """A reader should not need the spec to find them."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert 'id="keys"' in document
+    assert "<dt>j / k</dt>" in document
+    assert "<dt>J / K</dt>" in document
+    assert "next / previous sample" in document
+    for _, key, _ in page.ROW_TRIAGE:
+        assert key in document
+
+
+def test_the_outline_extends_the_rail_rather_than_duplicating_it() -> None:
+    """One participant list, carrying progress; a second would duplicate the filter logic."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    corpus.add(_row("sub-b"))
+    document = page.render(corpus, "Review")
+    assert document.count('id="jump"') == 1
+    assert 'id="outline"' in document
+    assert 'id="outsum"' in document
+    assert document.count('class="meter"') == 2
+    assert document.count('class="mr"') == 2
+    assert document.count('class="mj"') == 2
+
+
+def test_the_outline_reports_progress_and_what_the_filters_left() -> None:
+    """It doubles as progress, so it earns the width it takes."""
+    assert "function outline()" in page._SCRIPT
+    assert "rows marked, " in page._SCRIPT
+    assert "findings judged, " in page._SCRIPT
+    assert "' shown'" in page._SCRIPT
+    assert ".jn').textContent=shown" in page._SCRIPT
+
+
+def test_the_outline_shows_where_the_reader_is() -> None:
+    """The entry for the participant under the cursor is marked and scrolled into the rail."""
+    assert "function here(section)" in page._SCRIPT
+    assert "now.classList.add('here')" in page._SCRIPT
+    assert "block:'nearest'" in page._SCRIPT
+
+
+def test_the_layout_is_intrinsic_before_it_is_broken_by_a_query() -> None:
+    """Relative units and wrapping first; the queries only collapse the two-column shell."""
+    assert "grid-template-columns:minmax(190px,230px) minmax(0,1fr)" in page._STYLE
+    assert "max-width:min(" in page._STYLE or "width:min(" in page._STYLE
+    assert page._STYLE.count("@media (max-width") == 2
+
+
+def test_nothing_may_scroll_the_body_sideways() -> None:
+    """A wide table or a long stem must scroll inside its own box, not the page."""
+    assert "html{overflow-x:hidden}" in page._STYLE
+    assert "main{padding:18px 26px 140px;min-width:0;max-width:100%}" in page._STYLE
+    assert "main *{overflow-wrap:anywhere}" in page._STYLE
+    assert "#why .tw{overflow-x:auto;max-width:100%}" in page._STYLE
+
+
+def test_the_overlays_fit_a_narrow_viewport() -> None:
+    """The scrim panel is the element most likely to break on a small screen."""
+    assert "width:min(330px,calc(100vw - 28px))" in page._STYLE
+    assert "width:min(760px,94vw)" in page._STYLE
+    assert "max-width:calc(100vw - 28px)" in page._STYLE
+
+
+def test_the_why_tables_scroll_inside_their_own_box() -> None:
+    """Five columns of gate detail do not fit a phone; the table scrolls, the page does not."""
+    assert page._SCRIPT.count('<div class="tw">') == 3
+    assert page._SCRIPT.count("</table></div>") == 3
+
+
+def test_the_rail_collapses_on_a_narrow_screen() -> None:
+    """A 1,514-entry outline must not be the first screen on a phone."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert 'id="railtoggle"' in document
+    assert 'id="railbody"' in document
+    assert "#rail.open #railbody{display:block}" in page._STYLE
+    assert "railToggle.setAttribute('aria-expanded'" in page._SCRIPT
