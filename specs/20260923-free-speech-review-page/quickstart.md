@@ -180,3 +180,36 @@ filters and review controls. Zero jsdom errors. The document still contains no `
 **Still not verified in a real browser.** jsdom neither lays out nor paints, so the panel's
 appearance at this width, its scrolling inside a 24 MB document, the dark palette and the scrim's
 z-order are unobserved.
+
+## Keys
+
+| | |
+| --- | --- |
+| `j` / `k` | next / previous sample, following the active filters |
+| `J` / `K` | next / previous participant |
+| `+` or `=` / `-` / `f` | mark the target row `+1` / `-1` / `flag`; re-press clears |
+| `1` – `4` | judge the finding selected in the panel; re-press clears |
+| `Esc` | close a panel |
+
+All inert while the caret is in a note or a control. The keys are listed in the rail under
+*keyboard*, so the page is self-documenting.
+
+The target is the card the pointer is over, or the card movement last landed on — whichever device
+acted most recently. Movement scrolls it into view and rings it.
+
+## Verified under jsdom, this pass
+
+Movement forward and back, at both ends, and under a `flag` filter where it walks only the two
+visible cards; `J`/`K` across participants; the target surviving a synthetic `mouseenter` and
+yielding to a synthetic `mousemove`; the target dropped when a filter hides it; movement keys inert
+in a note; the mark keys acting on the navigated card and nothing else; the outline's per-entry
+counts, meters and `here` highlight; the summary line; the rail toggle and its `aria-expanded`; all
+three determination tables wrapped in scroll boxes. Zero jsdom errors; the page still contains no
+`http`, `<link>`, `<img>` or `src=`.
+
+**Layout is not verified and cannot be by this method.** jsdom does not lay out or paint. Put the
+page in a browser at a few widths and check: the shell collapsing at 820px and the `filters` toggle;
+the outline meters; the finding panel and the determination overlay on a phone-width viewport; the
+gate table scrolling inside its box rather than the page scrolling sideways; the dark palette; the
+dimming of non-matching marks; the coloured row borders; the active-card ring; and the scrim's
+z-order over a 27 MB document.
