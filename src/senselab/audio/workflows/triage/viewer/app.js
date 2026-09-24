@@ -768,10 +768,15 @@
     list.innerHTML = '';
     SchemaFacets.CATALOGUE.forEach(function (f) {
       var name = f.col.name;
+      // A query matches a facet's name, or a value of one already encoded. It does not encode a
+      // column to search it: encoding all 52 costs 321 ms, and a search box may not stall the page.
       var hit = !q
         || name.toLowerCase().indexOf(q) >= 0
         || String(f.col.label).toLowerCase().indexOf(q) >= 0
-        || model.chosen(name).length > 0;
+        || model.chosen(name).length > 0
+        || (model.encodings[name] && model.encodings[name].terms.some(function (t) {
+          return t.toLowerCase().indexOf(q) >= 0;
+        }));
       if (!hit) return;
       list.appendChild(facetGroup(f));
     });
@@ -782,13 +787,15 @@
     var name = f.col.name;
     var d = el('details', 'facet-group');
     d.dataset.facet = name;
+    // A query that matched a value rather than the facet's name opens the facet showing it.
+    var openForQuery = state.facetQuery && name.toLowerCase().indexOf(state.facetQuery) < 0;
     var sum = el('summary');
     sum.appendChild(el('span', 'fg-name', name));
     if (f.mode === 'set') sum.appendChild(el('span', 'fg-mode', 'contains'));
     var n = state.facets.chosen(name).length;
     if (n) sum.appendChild(el('span', 'fg-badge', String(n)));
     d.appendChild(sum);
-    if (state.facetOpen[name]) { d.open = true; d.appendChild(facetValues(f)); }
+    if (state.facetOpen[name] || openForQuery) { d.open = true; d.appendChild(facetValues(f)); }
     d.addEventListener('toggle', function () {
       state.facetOpen[name] = d.open;
       if (d.open && !d.querySelector('.facet-values')) d.appendChild(facetValues(f));
