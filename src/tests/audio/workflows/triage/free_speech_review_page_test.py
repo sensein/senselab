@@ -1278,3 +1278,25 @@ def test_the_status_bar_stays_a_corner_pill_on_a_phone() -> None:
     assert "#status{left:auto;right:8px;bottom:8px" in page._STYLE
     assert "#status{left:8px;right:8px;text-align:center}" not in page._STYLE
     assert "#status{pointer-events:none}" in page._STYLE
+
+
+def test_the_page_states_corpus_wide_that_no_review_happened() -> None:
+    """r3 is CPU-only with the reviewer off; disabled must not read as a review that found nothing."""
+    corpus = page.Corpus()
+    corpus.version = page.EXTRACT_VERSION
+    for number in range(3):
+        corpus.add(_row(f"sub-{number}", d={"llm": {"status": "disabled"}}))
+    document = page.render(corpus, "Review")
+    assert "did not run on any of these 3 recordings" in document
+    assert "disabled 3" in document
+    assert "no reviewer verdict exists to read" in document
+    assert "redaction.llm_check.enabled" in document
+
+
+def test_the_banner_goes_away_once_a_reviewer_actually_ran() -> None:
+    """One real reading is enough to make the corpus-wide claim false."""
+    corpus = page.Corpus()
+    corpus.version = page.EXTRACT_VERSION
+    corpus.add(_row("sub-a", d={"llm": {"status": "disabled"}}))
+    corpus.add(_row("sub-b", d={"llm": {"status": "clean"}}))
+    assert "did not run on any of these" not in page.render(corpus, "Review")
