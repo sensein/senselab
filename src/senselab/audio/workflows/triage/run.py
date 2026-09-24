@@ -18,6 +18,7 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
+from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
     NodeResult,
@@ -342,7 +343,15 @@ def drive_decisions(
         redacted = _attempt(
             outcomes,
             "REDACT",
-            lambda: redact(store, _SOURCE_STREAM, config, hint, run_dir=run_dir, artifacts_dir=artifacts_dir),
+            lambda: redact(
+                store,
+                _SOURCE_STREAM,
+                config,
+                hint,
+                run_dir=run_dir,
+                artifacts_dir=artifacts_dir,
+                task_family=declared_task_family(store, hint),
+            ),
         )
         return dict(redacted.artifacts) if redacted is not None else {}
     outcomes["REDACT"] = NodeOutcome(node="REDACT", state=RunState.SKIPPED)

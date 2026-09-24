@@ -56,12 +56,14 @@ from senselab.audio.workflows.triage.nodes.branches import (
     contest,
     count,
     count_against_instruction,
+    declared_carrier,
     declared_duration_count,
     derivative_arrays,
     deviation,
     deviation_names,
     dispatch,
     duration,
+    expected_names,
     group_by_breaks,
     hull,
     inter_word_gaps,
@@ -984,24 +986,28 @@ def in_stimulus(surface: str, haystack: Sequence[str] | None, near: NearMatch) -
     return near.run_offset(haystack, keys) is not None
 
 
-def declared_carrier(task_family: str | None) -> str | None:
-    """The carrier a syllable task asks for, as text, taken from the family that names it.
+def declared_content(hint: AudioHints | None, task_family: str | None) -> tuple[str, ...] | None:
+    """Every token the task's own declaration says a faithful performance contains.
 
-    ``diadochokinesis-buttercup`` asks for "buttercup"; the expectation holds the same carrier as an
-    ARPAbet sequence, which no transcript can be matched against.
-    See ``specs/20260919-pii-against-the-stimulus/design.md``.
+    Three declaration sources, one haystack: the recording's declared prompts, the carrier a
+    syllable family names, and the proper nouns the family's expectation row declares. A family
+    whose stimulus is an image declares none of the three, and the result is None -- which is what
+    keeps ``in_stimulus`` tri-state.
 
     Args:
+        hint: What the recording was declared to contain.
         task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
 
     Returns:
-        The carrier, case-folded, or None when the family is not a syllable task.
+        The declaration's normalised tokens, in declared order, or None when the task declares
+        nothing to check against.
     """
-    expectation = SPEECH_EXPECTATIONS.get(str(task_family))
-    if expectation is None or expectation.pattern not in (Pattern.SYLLABLE_SEQUENCE, Pattern.SYLLABLE_TRAIN):
-        return None
-    carrier = str(task_family).rsplit("-", 1)[-1].strip().casefold()
-    return carrier or None
+    tokens = list(stimulus_tokens(hint) or ())
+    carrier = declared_carrier(task_family)
+    if carrier:
+        tokens.append(normalise_token(carrier))
+    tokens.extend(key for key in (normalise_token(name) for name in expected_names(task_family)) if key)
+    return tuple(tokens) or None
 
 
 def invites_disclosure(task_family: str | None) -> bool:
@@ -2338,13 +2344,13 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     store.used(pii_act, consensus.id)
     for name in source_names:
         store.used(pii_act, hypotheses[name].id)
-    declared_tokens = stimulus_tokens(hint)
-    # The scan runs only where the participant said something the task did not ask for.
-    # See specs/20260919-pii-against-the-stimulus/design.md.
-    carrier = declared_carrier(declared_family)
+    # The scan runs only where the participant said something the task did not ask for, and the
+    # mark it writes reads against the same declaration.
+    # See specs/20260919-pii-against-the-stimulus/design.md and
+    # specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md.
     near = near_match(config)
-    gate_tokens = (*(declared_tokens or ()), *((carrier,) if carrier else ())) or None
-    novel_words = words_outside_stimulus((word_text(word) for word in lexical), gate_tokens, near)
+    declared_tokens = declared_content(hint, declared_family)
+    novel_words = words_outside_stimulus((word_text(word) for word in lexical), declared_tokens, near)
     open_response = invites_disclosure(declared_family)
     scans: list[PiiScan] = []
     if novel_words or open_response:
