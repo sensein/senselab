@@ -308,3 +308,89 @@ inferring "someone turned it off" would draw the wrong conclusion about what to 
 
 This sharpens rather than reverses the corpus-wide finding in `what-determined-the-status.md`: the
 reviewer ran zero times, and on the withheld half it was structurally unable to.
+
+---
+
+# Moving, the outline, and a layout that narrows
+
+Added 2026-09-23.
+
+## Three key sets, disjoint by test
+
+| | keys | acts on |
+| --- | --- | --- |
+| movement | `j` `k` next/previous sample; `J` `K` next/previous participant | the visible list |
+| row mark | `+` `=` `-` `f` | the target card |
+| finding verdict | `1` `2` `3` `4` | the mark selected in the panel |
+
+**The arrows are deliberately not bound.** They are the page's scroll. Taking them would cost a
+reader their scrollbar to gain a second name for `j`/`k`, and on a 27 MB document scrolling is the
+thing most worth leaving alone. `j`/`k` are the reader's convention and are already in the hands.
+
+All three sets are inert while the caret is in a textarea, an input or a select, and a test holds
+the three sets pairwise disjoint so a future addition cannot quietly overlap one.
+
+## Movement follows the filters
+
+`next` is the next card that is not hidden and whose participant section is not hidden — not the
+next in document order. With 11,701 cards that is the whole value: a reader who has filtered to
+`flag`ged rows walks the flagged rows. Pressing past either end holds position rather than
+wrapping, because silently looping a filtered list of two reads as a stuck key.
+
+When a filter change hides the current target, the target is dropped rather than left pointing at
+something invisible, and the next `j` re-enters the list at the end the reader is moving toward.
+
+## Pointer and keyboard compose by modality, not by recency
+
+The row keys act on the *target* card. Before movement existed, the target was simply the last card
+the pointer entered. That rule breaks the moment the keyboard can move: `scrollIntoView` slides the
+document under a stationary mouse, a real browser fires `mouseenter` on whatever passes beneath,
+and the target is stolen back in the same frame the keyboard set it.
+
+So the target is owned by a *modality*, not by the latest event. A card claims it on `mouseenter`
+only while the pointer owns the modality; pressing a movement key hands ownership to the keyboard;
+a genuine `mousemove` — which a scroll does not produce — hands it back. The active card carries a
+ring, so the target is always visible whichever device set it.
+
+## The outline extends the rail
+
+It is not a second structure. A separate outline would need its own copy of the filter logic and
+would compete for exactly the width the narrow layout has least of; one list that already filters
+in step is strictly better than two that must be kept in agreement.
+
+What it gained, so that it earns its width rather than being a list of links:
+
+- **what is left** — each entry's count is now the recordings that survive the active filters, not
+  the participant's total, and an entry whose recordings are all filtered out hides with them;
+- **what is marked** — two meters per entry, rows marked and findings judged, as fractions of that
+  participant's own totals;
+- **where the reader is** — the entry for the participant holding the target is highlighted and
+  scrolled into view within the rail, so movement through the document is legible in the outline;
+- **the whole** — a summary line over the list: rows marked, findings judged, recordings shown.
+
+## Responsive, and what that means here
+
+Intrinsic first. The shell is `minmax(190px,230px) minmax(0,1fr)` rather than a fixed `250px`, the
+content column carries `min-width:0` so a wide child cannot push the grid open, every control group
+wraps, both overlays are sized with `min()` against the viewport, each table in the determination
+panel sits in its own `overflow-x:auto` box, and `overflow-wrap:anywhere` inside the content stops a
+BIDS stem from setting the minimum width of the page. `html{overflow-x:hidden}` is the backstop, not
+the mechanism.
+
+Two queries, not a ladder. At 820px the shell becomes one column and the rail becomes a collapsible
+block behind a `filters` toggle — a 1,514-entry outline must not be the first screen on a phone. At
+420px the padding tightens and the status line spans. A separate `hover:none` query enlarges the tap
+targets, because the row marks are small by design for a mouse.
+
+## What is asserted and what is verified
+
+Everything above about *behaviour* is exercised under jsdom with real event dispatch: movement in
+both directions and at both ends, movement under a filter, the target surviving a synthetic
+`mouseenter` and yielding to a synthetic `mousemove`, the target being dropped when a filter hides
+it, the outline's counts and meters, the rail toggle's state and `aria-expanded`, and the three
+tables being wrapped.
+
+**Nothing above about *layout* is verified.** jsdom neither lays out nor paints. No breakpoint has
+ever been crossed, no column has ever been measured, no overlay has been seen against a small
+viewport, and the palette, the dimming, the coloured row borders and the scrim's z-order have never
+been rendered. Those are stylesheet assertions. They need a browser.
