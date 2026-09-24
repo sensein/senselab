@@ -207,6 +207,24 @@ test('toggling the same value twice is a no-op on the drawn set', () => {
   assert.equal(m.mask(), null)
 })
 
+test('a term that names an Object.prototype key is coded like any other', () => {
+  // A task or a gate name is a value the producer wrote, not a key we chose, so the term index
+  // must not resolve `constructor` or `__proto__` against Object.prototype.
+  const rows = [
+    { __i: 0, task: 'constructor', verdict: 'pass' },
+    { __i: 1, task: '__proto__', verdict: 'pass' },
+    { __i: 2, task: 'constructor', verdict: 'flag' },
+    { __i: 3, task: 'story-recall', verdict: 'pass' }
+  ]
+  const m = new F.FacetModel(rows)
+  const v = m.values('task')
+  assert.equal(v.values.find(x => x.term === 'constructor').total, 2)
+  assert.equal(v.values.find(x => x.term === '__proto__').total, 1)
+  m.toggle('task', 'constructor')
+  assert.equal(m.after(), 2)
+  assert.deepEqual(Array.from(m.mask()), [1, 0, 1, 0])
+})
+
 // ------------------------------------------------------------------ the base mask
 
 test('the base mask is the brushes, and the facet counts are read against it', () => {

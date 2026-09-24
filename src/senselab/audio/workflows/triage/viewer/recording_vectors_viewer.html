@@ -1369,7 +1369,9 @@ var SchemaFacets = (function () {
     if (!f) throw new Error('no facet column ' + name);
     var rows = this.rows;
     var terms = [];
-    var index = {};
+    // A null-prototype map, because a term is a value the producer wrote and `constructor` or
+    // `__proto__` would otherwise resolve against Object.prototype and be silently mis-coded.
+    var index = Object.create(null);
     var totals = [];
     var enc;
     var i;
@@ -1393,7 +1395,7 @@ var SchemaFacets = (function () {
       }
       enc = { mode: 'scalar', codes: codes, terms: terms, totals: totals, absent: absent, index: index };
     } else {
-      var lists = {};
+      var lists = Object.create(null);
       var absentRows = [];
       for (i = 0; i < rows.length; i++) {
         var list = rows[i][name];
