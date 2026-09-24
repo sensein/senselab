@@ -32,6 +32,8 @@ var CorpusView = (function () {
     this.opacity = null;
     this.showStubs = true;
     this.brushes = {};
+    this.facetMask = null;
+    this.brushMask = new Uint8Array(0);
     this.selected = new Uint8Array(0);
     this.selectedCount = 0;
     this.hover = -1;
@@ -45,6 +47,9 @@ var CorpusView = (function () {
 
   CorpusView.prototype.setRows = function (rows) {
     this.rows = rows;
+    this.facetMask = null;
+    this.brushMask = new Uint8Array(rows.length);
+    this.brushMask.fill(1);
     this.selected = new Uint8Array(rows.length);
     this.selected.fill(1);
     this.selectedCount = rows.length;
@@ -159,10 +164,21 @@ var CorpusView = (function () {
 
   // ------------------------------------------------------------------ brushing
 
+  /**
+   * The drawn set, from the axis brushes and the facet mask together.
+   *
+   * `brushMask` is what the brushes alone admit and is kept separate, because it is the denominator
+   * the facet panel narrows: a facet count computed against the post-facet set would report the
+   * answer the reader already has.
+   */
   CorpusView.prototype.applyBrushes = function () {
     var self = this;
     var active = Object.keys(this.brushes);
     var count = 0;
+    if (!this.brushMask || this.brushMask.length !== this.rows.length) {
+      this.brushMask = new Uint8Array(this.rows.length);
+    }
+    var facetMask = this.facetMask;
     for (var i = 0; i < this.rows.length; i++) {
       var keep = true;
       for (var a = 0; a < active.length; a++) {
@@ -179,11 +195,24 @@ var CorpusView = (function () {
           if (b.terms.indexOf(v) < 0) { keep = false; break; }
         }
       }
+      self.brushMask[i] = keep ? 1 : 0;
+      if (keep && facetMask && !facetMask[i]) keep = false;
       self.selected[i] = keep ? 1 : 0;
       if (keep) count++;
     }
     this.selectedCount = count;
     if (this.onSelectionChange) this.onSelectionChange(count);
+  };
+
+  /**
+   * Narrow the drawn set by a facet mask, intersected with the brushes.
+   *
+   * @param {Uint8Array|null} mask one byte per row, or null to draw whatever the brushes admit.
+   */
+  CorpusView.prototype.setFacetMask = function (mask) {
+    this.facetMask = mask && mask.length === this.rows.length ? mask : null;
+    this.applyBrushes();
+    this.draw();
   };
 
   CorpusView.prototype.setBrush = function (name, brush) {
