@@ -26,7 +26,7 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
-from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
+from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS, expected_names
 from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.recording_vectors import (
     RUN_SUBDIR,
@@ -58,6 +58,16 @@ KEPT_MEASUREMENTS = (PII_SCAN, REDACTION_EXEMPTIONS)
 KEPT_MEASUREMENT_MARKERS = tuple(f'"name": "{name}"' for name in KEPT_MEASUREMENTS)
 
 RELEASE_ORDER = ("releasable", "withheld", "nothing_to_redact", "not_assessed", "unrecorded")
+
+EXTRACT_SCHEMA = "senselab.fsreview.extract"
+EXTRACT_VERSION = 3
+"""3 is the first version read from a graph whose reviewer ladder is disabled -> not_run -> run.
+
+The page's sentence for ``not_run`` says the detectors marked nothing, which is what that state
+means from ``7edcfcf2`` onward. Before it, ``not_run`` meant the recording was already withheld, and
+the same sentence would be a false statement about the run. The version is what lets the page refuse
+to say it over an older extract.
+"""
 
 
 def free_response_families() -> frozenset[str]:
@@ -384,6 +394,7 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
             for finding in pii
         ],
         "d": determination(view, attributes, redact),
+        "names": len(expected_names(declared)),
         "nw": len(words),
         "nl": lexical,
         "ch": characters,
@@ -476,7 +487,29 @@ def determination(view: StoreView, verdict: Mapping[str, Any], redact: Entity | 
             "n_findings": int(exempt.get("n_findings") or 0),
             "recorded": exemptions is not None,
         },
+        "stim": _stimulus_tally(view),
     }
+
+
+def _stimulus_tally(view: StoreView) -> list[int]:
+    """How the recording's own findings answered the stimulus question.
+
+    The declaration and the answer came apart once a family could declare a cast: a task with no
+    stimulus text can still have its findings checked, against ``expected_names`` or a declared
+    carrier. So the panel reports what the check actually returned rather than inferring it from
+    whether prompt text was declared.
+
+    Args:
+        view: The store view.
+
+    Returns:
+        ``[in the stimulus, checked and not in it, not checkable]``.
+    """
+    tally = [0, 0, 0]
+    for finding in view.live("pii"):
+        state = tristate(finding.attributes.get("in_stimulus"))
+        tally[0 if state == 1 else 1 if state == 0 else 2] += 1
+    return tally
 
 
 def _worker(payload: tuple[str, list[str]]) -> dict[str, Any] | None:
@@ -544,6 +577,7 @@ def extract(corpus: Path, out: Path, workers: int) -> dict[str, Any]:
     out.parent.mkdir(parents=True, exist_ok=True)
     payloads = [(str(run_root), sorted(families)) for run_root in candidates]
     with out.open("w") as handle:
+        handle.write(json.dumps({"schema": EXTRACT_SCHEMA, "version": EXTRACT_VERSION}) + "\n")
         for row in _rows(payloads, workers):
             if row is None:
                 counts["skipped"] += 1
@@ -559,6 +593,8 @@ def extract(corpus: Path, out: Path, workers: int) -> dict[str, Any]:
             participants.add(str(row["p"]))
             handle.write(json.dumps(row, separators=(",", ":")) + "\n")
     return {
+        "schema": EXTRACT_SCHEMA,
+        "version": EXTRACT_VERSION,
         "candidates": len(candidates),
         "participants": len(participants),
         "characters": characters,
@@ -662,6 +698,8 @@ def pooled_determination(determination: Mapping[str, Any], pool: ValuePool) -> d
         "a": pool.add(determination.get("ran") or {}),
         "x": pool.add(determination.get("absences") or []),
         "e": pool.add(determination.get("exempt") or {}),
+        "s": determination.get("stim") or [0, 0, 0],
+        "nn": int(determination.get("names") or 0),
         "f": [
             [
                 pool.add(finding.get("c") or ""),
@@ -687,6 +725,7 @@ class Corpus:
         recordings: How many recordings in total.
         characters: How many transcript characters in total.
         marks: How many reviewable marks in total.
+        version: The extract's schema version; 2 for one written before the header existed.
         errors: The rows the sweep could not read.
     """
 
@@ -698,6 +737,7 @@ class Corpus:
     recordings: int = 0
     characters: int = 0
     marks: int = 0
+    version: int = 2
     errors: list[dict[str, Any]] = field(default_factory=list)
 
     def add(self, row: dict[str, Any]) -> None:
@@ -734,6 +774,9 @@ def load(path: Path) -> Corpus:
             if not line.strip():
                 continue
             row = json.loads(line)
+            if row.get("schema") == EXTRACT_SCHEMA:
+                corpus.version = int(row.get("version") or EXTRACT_VERSION)
+                continue
             if "error" in row:
                 corpus.errors.append(row)
                 continue
@@ -842,7 +885,8 @@ def recording_html(row: dict[str, Any]) -> str:
     return (
         f'<article class="rec" data-rel="{html.escape(str(row["rel"]) or "unrecorded")}" '
         f'data-fam="{html.escape(str(row["fam"]))}" data-fired="{fired}" '
-        f'data-stem="{html.escape(stem)}" data-nf="{len(marks)}">'
+        f'data-stem="{html.escape(stem)}" data-nf="{len(marks)}" '
+        f'data-llm="{html.escape(_llm_status(row))}">'
         f'<header><span class="task">{html.escape(str(row["task"]))}</span>'
         f'<span class="fam">{html.escape(str(row["fam"]))}</span>{_chip(str(row["rel"]))}'
         f'<span class="meta">{row["nl"]} lexical / {row["nw"]} tokens &middot; {scan_text} '
@@ -888,6 +932,30 @@ def _triage_controls(stem: str) -> str:
         The control group's HTML.
     """
     return _TRIAGE_GROUP
+
+
+LLM_STATES = ("disabled", "not_run", "absent", "clean", "flagged")
+"""Every state the optional reviewer records, in the order the ladder reaches them.
+
+``disabled`` is the config leaving it off; ``not_run`` is the detectors having marked nothing, so
+there was nothing to review; the last three are readings it actually took.
+"""
+
+LLM_RAN = ("absent", "clean", "flagged")
+"""The states in which the reviewer was actually invoked. Only these are a reading."""
+
+
+def _llm_status(row: Mapping[str, Any]) -> str:
+    """The reviewer's state for one recording.
+
+    Args:
+        row: The extract row.
+
+    Returns:
+        One of :data:`LLM_STATES`, or ``unrecorded`` when REDACT left no annotation.
+    """
+    status = str(((row.get("d") or {}).get("llm") or {}).get("status") or "")
+    return status if status in LLM_STATES else "unrecorded"
 
 
 def participant_html(participant: str, rows: Sequence[dict[str, Any]]) -> str:
@@ -953,12 +1021,19 @@ def render(corpus: Corpus, title: str) -> str:
         for name, count in corpus.detectors.most_common()
     )
     errors = f'<p class="errors">{len(corpus.errors)} stores unreadable</p>' if corpus.errors else ""
+    if corpus.version < EXTRACT_VERSION:
+        errors += (
+            f'<p class="errors">This extract is version {corpus.version}, written before the '
+            f"reviewer ladder changed. What the page says about the LLM reviewer does not describe "
+            f"the run that produced it. Re-extract before reading that section.</p>"
+        )
     pool = ValuePool()
     rows: dict[str, Any] = {}
     for participant in order:
         for row in corpus.participants[participant]:
             determination = dict(row.get("d") or {})
             determination["findings"] = row.get("pii") or []
+            determination["names"] = row.get("names") or 0
             rows[str(row.get("stem") or "")] = pooled_determination(determination, pool)
     why = json.dumps({"pool": pool.values, "rows": rows}, separators=(",", ":"))
     return _DOCUMENT.format(
@@ -1219,6 +1294,7 @@ const firedSel=document.getElementById('fired');
 const brkSel=document.getElementById('brk');
 const txSel=document.getElementById('tx');
 const revSel=document.getElementById('rev');
+const llmSel=document.getElementById('llm');
 const minNf=document.getElementById('minnf');
 const minNt=document.getElementById('minnt');
 const maxNt=document.getElementById('maxnt');
@@ -1415,7 +1491,7 @@ function apply(){
   const fams=checked('fam-f'), rels=checked('rel-f');
   const cats=checked('cat-f'), dets=checked('det-f');
   const fired=firedSel.value, brk=brkSel.value, tx=txSel.value, rev=revSel.value;
-  const tri=triSel.value;
+  const tri=triSel.value, llmWant=llmSel.value;
   const nf=+minNf.value||0;
   const lo=+minNt.value||1, hi=+maxNt.value||9999;
   const narrowed=!allChecked('cat-f')||!allChecked('det-f')||brk!=='any'||tx!=='any'
@@ -1428,6 +1504,10 @@ function apply(){
       if(ok&&tri!=='any'){
         const held=r.dataset.t||'';
         ok=tri==='marked'?!!held:tri==='unmarked'?!held:held===tri;
+      }
+      if(ok&&llmWant!=='any'){
+        const st=r.dataset.llm||'';
+        ok=llmWant==='ran'?(st==='absent'||st==='clean'||st==='flagged'):st===llmWant;
       }
       if(ok&&fired!=='any') ok=r.dataset.fired===fired;
       if(ok&&nf) ok=+r.dataset.nf>=nf;
@@ -1616,28 +1696,36 @@ function buildWhy(stem,card){
   /* the LLM reviewer: never let "did not run" read as "agreed" */
   const llm=P(r.l)||{};
   const st=llm.status||'';
+  const beside=llm.detector_outcome
+    ?' It was taken beside a detector <b>'+esc(llm.detector_outcome)+'</b>.':'';
   out.push('<h4>the LLM reviewer</h4>');
-  if(st==='not_run'||st==='disabled'||!st){
-    const because=st==='disabled'?'It is switched off in the configuration.'
-      :st==='not_run'?'It <b>could not have run</b>: REDACT withholds before the reviewer is '
-        +'reached, so a withheld recording records not_run whether or not the reviewer is '
-        +'enabled. Turning it on would not change this line.'
-      :'No annotation was recorded.';
-    out.push('<div class="warn"><b>The reviewer did not run.</b> '
-      +'It neither corroborated nor contradicted the detectors, '
-      +'and its silence carries no information. '+because
-      +(llm.failure?' \\u2014 '+esc(llm.failure):'')+'</div>');
+  if(st==='disabled'){
+    out.push('<div class="warn"><b>Switched off.</b> The reviewer is disabled in the '
+      +'configuration, so no review was attempted and none of what follows was corroborated by '
+      +'one. This is not a verdict about the recording.</div>');
+  }else if(st==='not_run'){
+    out.push('<div class="warn"><b>Nothing was marked for it to review.</b> The reviewer is '
+      +'enabled, and the detectors found nothing, so there was no redacted text to read back. '
+      +'It reached no conclusion about this recording.</div>');
   }else if(st==='absent'){
-    out.push('<div class="warn"><b>The reviewer tried and could not load.</b> That is not the same '
-      +'as finding nothing. '+(llm.failure?esc(llm.failure):'')+'</div>');
+    out.push('<div class="warn"><b>It tried and could not load.</b> That is not the same as '
+      +'finding nothing, and it is not a clean reading. '+(llm.failure?esc(llm.failure):'')
+      +'</div>');
   }else if(st==='clean'){
-    out.push('<p>It <b>ran and flagged nothing</b>, over '+esc(llm.iterations||0)+' iteration(s)'
-      +(llm.model_id?', model '+esc(llm.model_id):'')+'.</p>');
-  }else{
-    out.push('<p>It <b>flagged '+esc((llm.flagged||[]).length)+'</b>: '
+    out.push('<p><b>It ran and flagged nothing</b>, over '+esc(llm.iterations||0)+' iteration(s)'
+      +(llm.model_id?', model '+esc(llm.model_id):'')+'.'+beside+'</p>');
+    if(llm.detector_outcome==='fail')
+      out.push('<p class="note">A clean reading beside a detector failure is a disagreement, not a '
+        +'confirmation: the reviewer read the redacted text and saw nothing the detectors still '
+        +'saw.</p>');
+  }else if(st==='flagged'){
+    out.push('<p><b>It flagged '+esc((llm.flagged||[]).length)+'</b>: '
       +esc((llm.flagged||[]).join(', '))+' \\u2014 over '+esc(llm.iterations||0)+' iteration(s)'
-      +(llm.model_id?', model '+esc(llm.model_id):'')+'.'
+      +(llm.model_id?', model '+esc(llm.model_id):'')+'.'+beside
       +(llm.failure?' '+esc(llm.failure):'')+'</p>');
+  }else{
+    out.push('<div class="warn"><b>No annotation was recorded.</b> REDACT left no reviewer '
+      +'measurement, so nothing is known about whether a review happened.</div>');
   }
 
   /* gates: evaluated, and declared-but-never-evaluated */
@@ -1718,16 +1806,31 @@ function buildWhy(stem,card){
 
   /* the stimulus, which is the third artefact family */
   const ex=P(r.e)||{};
+  const stim=r.s||[0,0,0];
+  const checked=stim[0]+stim[1];
+  const sources=[];
+  if(ex.declared)sources.push('the declared prompt text');
+  if(r.nn)sources.push('the task\\u2019s declared cast of '+esc(r.nn)+' name(s)');
   out.push('<h4>the stimulus check</h4>');
   if(!ex.recorded){
-    out.push('<p class="note">no exemption pass was recorded.</p>');
-  }else if(!ex.declared){
-    out.push('<div class="warn">This task declares <b>no stimulus text</b>, so no finding could be '
-      +'checked against it and none was exempted. A proper noun that belongs to the task itself is '
-      +'indistinguishable here from one the participant disclosed.</div>');
+    out.push('<p class="note">No exemption pass was recorded.</p>');
   }else{
-    out.push('<p>'+esc(ex.n)+' of '+esc(ex.n_findings)+' finding(s) were exempted as expected '
-      +'speech.</p>');
+    if(checked||stim[2]){
+      out.push('<p>Of '+(checked+stim[2])+' finding(s): <b>'+stim[0]+'</b> matched what the task '
+        +'itself supplies, <b>'+stim[1]+'</b> were checked and did not match, and <b>'+stim[2]
+        +'</b> could not be checked at all.</p>');
+    }
+    if(sources.length)
+      out.push('<p class="note">Checked against '+sources.join(' and ')+'.</p>');
+    if(stim[2]&&!sources.length)
+      out.push('<div class="warn">This task supplies <b>no stimulus text and no declared cast</b>, '
+        +'so nothing could be checked. A proper noun belonging to the task itself is '
+        +'indistinguishable here from one the participant disclosed.</div>');
+    else if(stim[2])
+      out.push('<div class="warn">'+stim[2]+' finding(s) could not be checked: what the task '
+        +'declares does not reach them.</div>');
+    out.push('<p class="note">'+esc(ex.n)+' of '+esc(ex.n_findings)+' finding(s) were exempted as '
+      +'expected speech.</p>');
   }
   return out.join('');
 }
@@ -1741,7 +1844,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!whyBox.hidden)clos
 
 for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))
   el.addEventListener('change',apply);
-for(const el of [firedSel,brkSel,txSel,revSel,triSel,minNf,minNt,maxNt])
+for(const el of [firedSel,brkSel,txSel,revSel,triSel,llmSel,minNf,minNt,maxNt])
   el.addEventListener('change',apply);
 let timer;q.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(apply,140);});
 for(const [id,cls] of [['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],['nodet','det-f']])
@@ -1752,6 +1855,7 @@ document.getElementById('all').addEventListener('click',e=>{
   e.preventDefault();
   for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))el.checked=true;
   firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';triSel.value='any';
+  llmSel.value='any';
   minNf.value='';minNt.value='';maxNt.value='';q.value='';apply();});
 const rail=document.getElementById('rail');
 const railToggle=document.getElementById('railtoggle');
@@ -1813,6 +1917,14 @@ placeholder="min"> to <input class="num" type="number" id="maxnt" min="1" step="
 placeholder="max"> tokens</div>
 </fieldset>
 <fieldset><legend>my review</legend>
+<select id="llm"><option value="any">LLM reviewer, any state</option>
+<option value="ran">it actually ran</option>
+<option value="flagged">it flagged something</option>
+<option value="clean">it ran and flagged nothing</option>
+<option value="absent">it could not load</option>
+<option value="not_run">nothing was marked to review</option>
+<option value="disabled">switched off</option>
+</select>
 <select id="tri"><option value="any">row mark, any</option>
 <option value="marked">marked</option><option value="unmarked">unmarked</option>
 <option value="+1">+1</option><option value="-1">-1</option><option value="flag">flag</option>
@@ -1923,6 +2035,78 @@ def _index_html(title: str, corpus: Corpus, written: Iterable[dict[str, Any]]) -
     )
 
 
+def census(path: Path) -> dict[str, Any]:
+    """What one extract holds, in the terms a rebuild is judged by.
+
+    Args:
+        path: The JSONL :func:`extract` wrote.
+
+    Returns:
+        Counts only: totals, and the same totals per family.
+    """
+    totals: Counter[str] = Counter()
+    families: dict[str, Counter[str]] = {}
+    with path.open() as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("schema") == EXTRACT_SCHEMA:
+                continue
+            if "error" in row:
+                totals["unreadable"] += 1
+                continue
+            family = str(row["fam"])
+            per = families.setdefault(family, Counter())
+            for counter in (totals, per):
+                counter["recordings"] += 1
+                counter["findings"] += len(row.get("pii") or [])
+                counter["marks"] += len(row.get("f") or [])
+                counter[f"release:{row['rel'] or 'unrecorded'}"] += 1
+                counter[f"llm:{_llm_status(row)}"] += 1
+            for finding in row.get("pii") or []:
+                key = {1: "in_stimulus", 0: "not_in_stimulus", -1: "unchecked"}[int(finding.get("stim", -1))]
+                totals[key] += 1
+                per[key] += 1
+            for mark in row.get("f") or []:
+                if mark.get("brk"):
+                    totals["bracketed_marks"] += 1
+                    per["bracketed_marks"] += 1
+                    for category in mark["c"]:
+                        totals[f"bracketed:{category}"] += 1
+    return {
+        "totals": dict(sorted(totals.items())),
+        "families": {k: dict(sorted(v.items())) for k, v in sorted(families.items())},
+    }
+
+
+def compare(before: Path, after: Path) -> dict[str, Any]:
+    """What a rebuild changed, against the extract the current page was built from.
+
+    Args:
+        before: The earlier extract.
+        after: The rebuilt one.
+
+    Returns:
+        Each count in both, with its delta; families present in either.
+    """
+    old_census, new_census = census(before), census(after)
+
+    def rows(left: Mapping[str, int], right: Mapping[str, int]) -> dict[str, list[int]]:
+        return {
+            key: [left.get(key, 0), right.get(key, 0), right.get(key, 0) - left.get(key, 0)]
+            for key in sorted(set(left) | set(right))
+        }
+
+    return {
+        "totals": rows(old_census["totals"], new_census["totals"]),
+        "families": {
+            family: rows(old_census["families"].get(family, {}), new_census["families"].get(family, {}))
+            for family in sorted(set(old_census["families"]) | set(new_census["families"]))
+        },
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point.
 
@@ -1948,6 +2132,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     sub.add_parser("families", help="print the free-response family names the graph declares")
 
+    census_parser = sub.add_parser("census", help="what one extract holds, in counts")
+    census_parser.add_argument("data", type=Path)
+
+    compare_parser = sub.add_parser("compare", help="what a rebuild changed against an earlier extract")
+    compare_parser.add_argument("before", type=Path)
+    compare_parser.add_argument("after", type=Path)
+
     arguments = parser.parse_args(argv)
     if arguments.command == "families":
         for name in sorted(free_response_families()):
@@ -1955,6 +2146,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if arguments.command == "extract":
         print(json.dumps(extract(arguments.corpus, arguments.out, arguments.workers), indent=2))
+        return 0
+    if arguments.command == "census":
+        print(json.dumps(census(arguments.data), indent=2))
+        return 0
+    if arguments.command == "compare":
+        print(json.dumps(compare(arguments.before, arguments.after), indent=2))
         return 0
     corpus = load(arguments.data)
     print(json.dumps(write_pages(corpus, arguments.out, arguments.title, arguments.shard_size), indent=2))
