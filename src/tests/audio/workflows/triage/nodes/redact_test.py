@@ -973,6 +973,72 @@ def _exemptions(store: ProvStore) -> list[Entity]:
     ]
 
 
+class TestANearSpellingOfAStimulusWordIsStillThatWord:
+    """Owner, 2026-09-23: "expected words/near spelling mismatches don't trigger redaction".
+
+    The bound is fitted in
+    ``specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md``.
+    """
+
+    def test_a_stimulus_word_the_recogniser_respelled_is_still_exempt(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One dropped character does not make the task's own word a disclosure."""
+        _seed_redact_store(store, tmp_path, words=["form", "a", "rainbo"], findings=[("LOCATION", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("LOCATION", "rainbo")])
+        result = redact(
+            store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path)
+        )
+        assert result.verdict.outcome is Outcome.PASS
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 0
+
+    def test_the_exemption_records_the_prompt_s_own_spelling_not_the_transcript_s(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """What accounted for it is the stimulus; the transcript is what needed accounting for."""
+        _seed_redact_store(store, tmp_path, words=["form", "a", "rainbo"], findings=[("LOCATION", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("LOCATION", "rainbo")])
+        redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        [assertion] = _exemptions(store)
+        assert assertion.attributes["expected_keys"] == ["rainbow"]
+
+    def test_a_short_word_one_edit_from_a_stimulus_word_is_still_redacted(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Under five characters one edit is a different word, and the fit says so."""
+        _seed_redact_store(store, tmp_path, words=["they", "act", "aa"], findings=[("PERSON", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "aa")])
+        redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
+        assert _exemptions(store) == []
+
+    def test_a_name_that_is_not_near_any_stimulus_word_is_still_redacted(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The control: a tolerance that admits a genuinely different name is worse than none."""
+        _seed_redact_store(store, tmp_path, words=["form", "a", "springfield"], findings=[("LOCATION", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("LOCATION", "springfield")])
+        redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
+        assert _exemptions(store) == []
+
+
 class TestTheStimulusAccountsForACandidate:
     """A PII-shaped token the prompt asked for is not a disclosure — and never a silent one."""
 
