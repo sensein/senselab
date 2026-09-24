@@ -123,7 +123,7 @@ Only two of the twenty-two gates clear both bars at once:
 | gate | resolvable | reading | why it is not a default |
 | --- | ---: | --- | --- |
 | `dominant_speaker_share_min` | 65.9% | `extent_dominant_speaker_share`, a bounded `[0,1]` fraction | best candidate by far, and the only high-coverage gate immune to VOICE's report ceiling because a flag gate runs whether or not the branch reported in family — **but its spread is unmeasured**, and if diarization returns one speaker on most single-target recordings it piles at 1.0 and the axis is degenerate |
-| `coverage_min` | 18.7% resolvable, 2.5% as a conformance term | `source_content_coverage` | the best-behaved reading measured — 1,547 non-null, 152 distinct values, sd 0.169, 79.5% below its 0.5 bound — but a default blank on 97.5% of lines is worse than no axis |
+| `coverage_min` | 18.7% resolvable, 2.5% as a conformance term | `source_content_coverage` | the best-behaved reading measured — 1,547 non-null, 152 distinct values, sd 0.169, 79.5% below its 0.5 bound — but a default blank on 97.5% of lines is worse than no axis. **The gate was withdrawn on 2026-09-24** (`specs/20260924-recall-conformance-is-production/design.md`); the reading it names is still a measurement axis |
 
 Seven of the twenty-two — `repeat_overlap_min`, `echo_overlap_max`, `verbatim_overlap_max`,
 `gap_off_task_min_s`, `interval_max_s`, `score_min`, `train_min_s`, `rate_prominence_min` —

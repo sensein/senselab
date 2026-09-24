@@ -208,7 +208,6 @@ def gated_from_store(
     group: Pattern,
     *,
     settings: TriageConfig | None = None,
-    anti_pattern: str | None = None,
 ) -> Any:  # noqa: ANN401 — a Conformance
     """What VERDICT's gates make of the readings a node left in the store.
 
@@ -216,13 +215,12 @@ def gated_from_store(
         store: The provenance store the node wrote into.
         group: The task group whose gates decide.
         settings: The configuration the bounds come from; None is the packaged one.
-        anti_pattern: The expectation row's anti-pattern, where it declares one.
 
     Returns:
         True, False, or ``UNDETERMINED``.
     """
     bounds = load_gate_bounds(settings or load_triage_config(), group)
-    names = conformance_gate_names(group, anti_pattern=anti_pattern)
+    names = conformance_gate_names(group)
     return apply_gates(names, bounds, store_readings(store))[0]
 
 
@@ -231,7 +229,6 @@ def gated_conformance(
     group: Pattern,
     *,
     settings: TriageConfig | None = None,
-    anti_pattern: str | None = None,
 ) -> Any:  # noqa: ANN401 — a Conformance
     """What VERDICT's gates make of what a branch reported.
 
@@ -242,13 +239,12 @@ def gated_conformance(
         result: What a branch entry point returned.
         group: The task group whose gates decide.
         settings: The configuration the bounds come from; None is the packaged one.
-        anti_pattern: The expectation row's anti-pattern, where it declares one.
 
     Returns:
         True, False, or ``UNDETERMINED``.
     """
     bounds = load_gate_bounds(settings or load_triage_config(), group)
-    names = conformance_gate_names(group, anti_pattern=anti_pattern)
+    names = conformance_gate_names(group)
     return apply_gates(names, bounds, readings_of(result))[0]
 
 

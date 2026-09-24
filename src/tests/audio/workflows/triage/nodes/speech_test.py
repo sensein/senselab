@@ -40,12 +40,14 @@ from senselab.audio.workflows.triage.nodes.preprocess import (
     diarization_measurement as preprocess_diarization_measurement,
 )
 from senselab.audio.workflows.triage.nodes.speech import speech
+from senselab.audio.workflows.triage.nodes.verdict import gate_conformance
+from senselab.audio.workflows.triage.recording_vectors import SCALAR_MEASUREMENTS
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match
 from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.nodes.conftest import gated_from_store
+from tests.audio.workflows.triage.nodes.conftest import gated_from_store, store_readings
 
 SR = 16000
 ENROLLMENT_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
@@ -1379,27 +1381,95 @@ class TestAFreeResponseIsReadOffTheWords:
         result = speech(store, "plain", speech_config, self._declared("free-speech"), run_dir=tmp_path)
         assert SPEECH_EXPECTATIONS["free-speech"].anti_pattern == "verbatim_prompt"
         assert result.report.conformance == UNDETERMINED
-        assert (
-            gated_from_store(store, Pattern.FREE_RESPONSE, settings=speech_config, anti_pattern="verbatim_prompt")
-            is True
-        )
+        assert gated_from_store(store, Pattern.FREE_RESPONSE, settings=speech_config) is True
         assert "anti_pattern_verbatim_prompt" in {
             entity.attributes.get("name") for entity in live_entities(store, "measurement")
         }
 
-    def test_a_recall_task_stays_undetermined_when_its_source_is_unreadable(
+    def test_a_recall_whose_source_is_unreadable_still_conforms_on_its_response(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`verbatim_source` reassigns the term from coverage, so no source is no term."""
+        """`verbatim_source` annotates the task; an unreadable source withdraws no conformance."""
         words = [f"w{index}" for index in range(30)]
         _seed_speech_store(store, tmp_path, words=words, duration_s=8.0)
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", speech_config, self._declared("story-recall"), run_dir=tmp_path)
         assert SPEECH_EXPECTATIONS["story-recall"].anti_pattern == "verbatim_source"
         assert result.report.conformance == UNDETERMINED
-        assert (
-            gated_from_store(store, Pattern.FREE_RESPONSE, settings=speech_config, anti_pattern="verbatim_source")
-            == UNDETERMINED
+        assert "source_content_coverage" not in store_readings(store)
+        assert gate_conformance(store, speech_config, [result.report], "story-recall").conformance is True
+
+    SOURCE_STORY = (
+        "the grandfather sat in the wooden chair beside the window and told the children "
+        "about the ship that carried him across the ocean when he was a boy"
+    )
+    """A source a recall is given; the retelling below shares none of its content words."""
+
+    def _recalled(self, family: str) -> AudioHints:
+        """A declaration naming a recall family and the source the participant was read.
+
+        Args:
+            family: The declared task family.
+
+        Returns:
+            The hints.
+        """
+        return AudioHints(metadata={"task_token": family}, expected_speech=[ExpectedSpeech(text=self.SOURCE_STORY)])
+
+    def _retelling(self) -> list[str]:
+        """Forty-nine words of a retelling that reuses none of the source's own words.
+
+        Returns:
+            The words.
+        """
+        return [f"r{index}" for index in range(49)]
+
+    def test_a_recall_in_the_participants_own_words_conforms_on_having_been_produced(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Owner, 2026-09-24: this task checks a response happened, not how much was recalled."""
+        words = self._retelling()
+        extents = [(0.5 + 0.45 * index, 0.5 + 0.45 * index + 0.3) for index in range(len(words))]
+        _seed_speech_store(store, tmp_path, words=words, word_extents=extents, duration_s=24.0)
+        self._stimulus_alignment(store)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", speech_config, self._recalled("story-recall"), run_dir=tmp_path)
+        readings = store_readings(store)
+        assert readings["source_content_coverage"] < 0.5, "the fixture must sit under the withdrawn bound"
+        assert readings["response_duration_s"] > 20.0
+        outcome = gate_conformance(store, speech_config, [result.report], "story-recall")
+        assert [gate.name for gate in outcome.applied] == ["response_min_s"]
+        assert outcome.conformance is True
+
+    def test_the_coverage_of_a_recall_is_still_measured_and_recorded(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The owner withdrew a decision, not a measurement: a content instrument reads this."""
+        words = self._retelling()
+        _seed_speech_store(store, tmp_path, words=words, duration_s=24.0)
+        self._stimulus_alignment(store)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, self._recalled("story-recall"), run_dir=tmp_path)
+        assert "source_content_coverage" in store_readings(store)
+        assert "source_content_coverage" in SCALAR_MEASUREMENTS
+
+    def _stimulus_alignment(self, store: ProvStore) -> str:
+        """Write what PREPROCESS's stimulus alignment leaves in the store.
+
+        Args:
+            store: The store to write into.
+
+        Returns:
+            The measurement entity's id.
+        """
+        return store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": "stimulus_alignment",
+                "signal": "plain",
+                "path": "derivatives/stimulus_alignment.npz",
+            },
         )
 
     def test_a_recording_with_no_lexical_word_still_reads_as_no_response(
