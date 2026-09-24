@@ -1254,10 +1254,13 @@ main{padding:14px 16px 150px}
 #why{width:96vw;padding:12px 14px}
 }
 @media (max-width:420px){
-main{padding:12px 10px 160px}
+main{padding:12px 10px 120px}
 .rec{padding:10px 11px}
-#status{left:8px;right:8px;text-align:center}
+/* Stay a corner pill rather than a full-width band: a fixed bar spanning the
+   column covers a whole line of transcript at every scroll position. */
+#status{left:auto;right:8px;bottom:8px;font-size:11px;padding:4px 8px;opacity:.95}
 }
+#status{pointer-events:none}
 /* A pointer that cannot hover gets larger hit targets. */
 @media (hover:none){
 .tri,.whybtn,.verdict{padding:6px 10px}
