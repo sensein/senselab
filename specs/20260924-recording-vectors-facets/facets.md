@@ -100,7 +100,7 @@ and values within an open facet.
 Headless Chromium 1600x1000, against the **real 62,548-row** `recording_vectors.parquet`
 (schema 3, 195 columns, 104.6 MB) built 2026-09-24 from `triage_rerun_20260923`. Four facet groups
 open. Medians and maxima over five repetitions of a four-facet sequence, from
-`artifacts/measure_facets.mjs`.
+`scripts/triage_viewer_measure.mjs`.
 
 | | median | max |
 | --- | ---: | ---: |

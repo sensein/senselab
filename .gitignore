@@ -256,8 +256,10 @@ speaker_vectors*.parquet
 speaker_vectors*.report.json
 speaker_vectors*.summary.json
 
-# Playwright harness for the recording-vectors viewer (installed locally, not vendored)
-node_modules/
+# Playwright harness for the recording-vectors viewer (installed locally, not vendored).
+# No trailing slash: a worktree that symlinks node_modules at an existing install is not a
+# directory, and the slash form would leave it showing as untracked.
+node_modules
 package-lock.json
 test-results/
 playwright-report/
