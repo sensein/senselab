@@ -133,7 +133,6 @@ GATE_SPECS: dict[str, GateSpec] = _gate_specs(
         "expected_tokens_matched_min": GateSpec("expected_tokens_matched", AT_LEAST, int),
         "omissions_max": GateSpec("expected_tokens_omitted", AT_MOST, int),
         "response_min_s": GateSpec("response_duration_s", AT_LEAST, float),
-        "coverage_min": GateSpec("source_content_coverage", AT_LEAST, float),
         "dominant_speaker_share_min": GateSpec("extent_dominant_speaker_share", AT_LEAST, float),
         "items_min": GateSpec("items_produced", AT_LEAST, int),
         "events_min": GateSpec("airway_events_found", AT_LEAST, int),
@@ -198,28 +197,18 @@ _shared = sorted(set(FLAG_GATES) & {name for names in CONFORMANCE_GATES.values()
 if _shared:
     raise ValueError(f"gates {_shared} are both a conformance term and a flag ground; a gate is one or the other")
 
-RECALL_CONFORMANCE_GATES: tuple[str, ...] = ("coverage_min",)
-"""The conformance gates of a ``FREE_RESPONSE`` row whose anti-pattern is ``verbatim_source``.
 
-A recall's conformance term is how much of the source it realised, not how long it ran.
-"""
-
-VERBATIM_SOURCE = "verbatim_source"
-"""The anti-pattern that reassigns a free response's conformance term to source coverage."""
-
-
-def conformance_gate_names(pattern: Pattern, *, anti_pattern: str | None = None) -> tuple[str, ...]:
+def conformance_gate_names(pattern: Pattern) -> tuple[str, ...]:
     """Which gates decide this task's conformance.
+
+    The group is the whole of it: no expectation row reassigns its group's term.
 
     Args:
         pattern: The group the expectation row declares.
-        anti_pattern: The row's anti-pattern, when it declares one.
 
     Returns:
         The gate names, in the order they are recorded.
     """
-    if pattern is Pattern.FREE_RESPONSE and anti_pattern == VERBATIM_SOURCE:
-        return RECALL_CONFORMANCE_GATES
     return CONFORMANCE_GATES[pattern]
 
 

@@ -416,7 +416,7 @@ table.measures tr.absent-row { background: #14120e; }
 'use strict';
 
 var SchemaDecode = (function () {
-  var SCHEMA_VERSION = 3;
+  var SCHEMA_VERSION = 4;
   var TIME_SCALE = 65535;
   var TRACE_POINTS = 256;
   var UNKNOWN_CODE = 255;
@@ -827,7 +827,6 @@ var SchemaAxes = (function () {
     ['expected_tokens_matched_min', 'expected_tokens_matched', 'at_least', null],
     ['omissions_max', 'expected_tokens_omitted', 'at_most', null],
     ['response_min_s', 'response_duration_s', 'at_least', 's'],
-    ['coverage_min', 'source_content_coverage', 'at_least', null],
     ['dominant_speaker_share_min', 'extent_dominant_speaker_share', 'at_least', null],
     ['items_min', 'items_produced', 'at_least', null],
     ['events_min', 'airway_events_found', 'at_least', null],

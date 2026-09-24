@@ -363,7 +363,6 @@ verdict:
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       FREE_RESPONSE:                     # a task prescribing no words
         response_min_s: 0.5              # shortest extent that counts as a response at all
-        coverage_min: 0.5                # source content a recall must realise; the recall's own term
         dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
         echo_overlap_max: 0.5            # prompt n-gram overlap above which a response echoes its prompt
         verbatim_overlap_max: 0.5        # source content overlap above which a recall is verbatim

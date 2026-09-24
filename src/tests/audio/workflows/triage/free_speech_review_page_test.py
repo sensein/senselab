@@ -666,7 +666,7 @@ def _determined_store(tmp_path: Path) -> Path:
                     }
                 ],
                 "flagging": [],
-                "bounds": {"response_min_s": 0.5, "coverage_min": 0.5, "echo_overlap_max": 0.5},
+                "bounds": {"response_min_s": 0.5, "verbatim_overlap_max": 0.5, "echo_overlap_max": 0.5},
                 "layers": {"response_min_s": "by_group"},
                 "group": "free_response",
             },
@@ -695,7 +695,7 @@ def test_determination_records_who_decided_and_what_never_ran(tmp_path: Path) ->
     assert determination["llm"]["status"] == "not_run"
     assert determination["ran"]["VOICE"] == "skipped"
     assert [gate["gate"] for gate in determination["gates"]["applied"]] == ["response_min_s"]
-    assert set(determination["gates"]["bounds"]) == {"response_min_s", "coverage_min", "echo_overlap_max"}
+    assert set(determination["gates"]["bounds"]) == {"response_min_s", "verbatim_overlap_max", "echo_overlap_max"}
     assert determination["exempt"] == {"declared": False, "n": 0, "n_findings": 3, "recorded": True}
     assert [node["node"] for node in determination["nodes"]] == ["SPEECH", "REDACT"]
 
@@ -747,7 +747,7 @@ def test_pooled_determination_keeps_the_per_recording_gate_reading() -> None:
                 }
             ],
             "flagging": [],
-            "bounds": {"response_min_s": 0.5, "coverage_min": 0.5},
+            "bounds": {"response_min_s": 0.5, "echo_overlap_max": 0.5},
             "layers": {},
             "group": "free_response",
         },
@@ -823,16 +823,16 @@ def test_an_unanswerable_gate_is_not_a_passing_one() -> None:
         "gates": {
             "applied": [
                 {
-                    "gate": "coverage_min",
-                    "reading": "coverage",
+                    "gate": "dominant_speaker_share_min",
+                    "reading": "extent_dominant_speaker_share",
                     "op": "at_least",
-                    "bound": 0.5,
+                    "bound": 0.9,
                     "value": None,
                     "passed": "UNDETERMINED",
                 }
             ],
             "flagging": [],
-            "bounds": {"coverage_min": 0.5},
+            "bounds": {"dominant_speaker_share_min": 0.9},
             "layers": {},
             "group": "free_response",
         },

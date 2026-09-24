@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     DETECT_GROUP,
     EXPECTATIONS,
     PARAM_KEYS,
+    SPEECH_EXPECTATIONS,
     BranchParams,
     Result,
     branch_params,
@@ -45,10 +47,10 @@ from senselab.audio.workflows.triage.nodes.gates import (
     conformance_gate_names,
     load_gate_bounds,
 )
+from senselab.audio.workflows.triage.recording_vectors import SCALAR_MEASUREMENTS
 
 MOVED = (
     "continuity_min",
-    "coverage_min",
     "dominant_segment_min_fraction",
     "echo_overlap_max",
     "f0_spread_max_semitones",
@@ -64,7 +66,10 @@ MOVED = (
     "verbatim_overlap_max",
     "voiced_fraction_min",
 )
-"""The sixteen keys ``specs/20260921-gates-in-verdict/design.md`` moves out of ``branch:``."""
+"""Fifteen of the sixteen keys ``specs/20260921-gates-in-verdict/design.md`` moves out of
+``branch:``. ``coverage_min`` moved with them and was withdrawn on 2026-09-24; see
+``specs/20260924-recall-conformance-is-production/design.md``.
+"""
 
 STAYED = (
     "burst_window_ms",
@@ -262,11 +267,25 @@ class TestEveryConformanceGateHasAReading:
             assert pattern in CONFORMANCE_GATES
             assert load_gate_bounds(config, pattern).group is pattern
 
-    def test_a_recall_is_gated_on_coverage_rather_than_on_how_long_it_ran(self) -> None:
-        """``verbatim_source`` reassigns the conformance term, as the old branch code did."""
-        assert conformance_gate_names(Pattern.FREE_RESPONSE) == ("response_min_s",)
-        assert conformance_gate_names(Pattern.FREE_RESPONSE, anti_pattern="verbatim_source") == ("coverage_min",)
-        assert conformance_gate_names(Pattern.FREE_RESPONSE, anti_pattern="verbatim_prompt") == ("response_min_s",)
+    def test_no_row_reassigns_its_group_conformance_term(self) -> None:
+        """The group is the whole rule; an anti-pattern annotates a task, it does not re-gate it."""
+        assert inspect.signature(conformance_gate_names).parameters.keys() == {"pattern"}
+        for table in EXPECTATIONS.values():
+            for family, row in table.items():
+                assert conformance_gate_names(row.pattern) == CONFORMANCE_GATES[row.pattern], family
+
+    def test_a_recall_conforms_on_whether_a_response_was_produced(self) -> None:
+        """Owner, 2026-09-24: this task checks a response happened, not how much was recalled."""
+        for family in ("story-recall", "story-recall-v2"):
+            row = SPEECH_EXPECTATIONS[family]
+            assert row.anti_pattern == "verbatim_source"
+            assert conformance_gate_names(row.pattern) == ("response_min_s",)
+
+    def test_no_gate_reads_the_source_coverage(self) -> None:
+        """The reading survives as a measurement; nothing in the graph is bound to it."""
+        assert "coverage_min" not in GATE_KEYS
+        assert all(spec.reading != "source_content_coverage" for spec in GATE_SPECS.values())
+        assert "source_content_coverage" in SCALAR_MEASUREMENTS
 
 
 class TestTheBoundsAreReadFromOnePlace:

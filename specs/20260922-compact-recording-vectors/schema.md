@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `3`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `4`; any
 change to a column or a byte layout bumps it and changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
 reader can check it before decoding a byte.
@@ -21,6 +21,7 @@ What each bump added:
 | **1** | the identity and decision columns, the measurements and the binary blocks |
 | **2** | `release_ground` beside `release`, and with it the release vocabulary's fourth state, `nothing_to_redact` — a recording that needed no redaction is a determination, not an absence of one |
 | **3** | VERDICT's gates (§6), the multi-speaker instrument (§7), the enhanced/residual levels (§8), and four measurement names |
+| **4** | removed the three `coverage_min` gate columns; the `source_content_coverage` measurement column is unchanged. See `specs/20260924-recall-conformance-is-production/design.md` |
 
 ---
 
@@ -88,7 +89,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `3` | never |
+| `schema_version` | int32 | `4` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -292,7 +293,7 @@ The block is the five bytes `02 00 40 00 80`. Decoding: `0x4000 / 65535 × 4.0 =
 
 ## 6. The gates
 
-`schema_version` 3 carries every gate VERDICT resolved. A **gate** says what reading is good
+`schema_version` 4 carries every gate VERDICT resolved. A **gate** says what reading is good
 enough. Its bound resolves **family → group → default**, most specific first and key by key, so
 two rows of the same corpus can be judged against different bounds for the same gate — which is
 why the bound is stored per row rather than looked up from the config at read time.
@@ -300,7 +301,7 @@ why the bound is stored per row rather than looked up from the config at read ti
 by a test, so a gate added to the registry fails that test until this schema is bumped with it.
 The design is `specs/20260921-gates-in-verdict/design.md`.
 
-Three columns per gate, 22 gates, 66 columns:
+Three columns per gate, 21 gates, 63 columns:
 
 | column | type | what it carries |
 | --- | --- | --- |
@@ -328,7 +329,7 @@ performed the instruction, so it decides no conformance; which kind a refusal wa
 columns, which are identical for the two kinds. `FLAG_GATES` today names one gate,
 `dominant_speaker_share_min`.
 
-The 22, in column order, with the reading each is read against and the direction it compares:
+The 21, in column order, with the reading each is read against and the direction it compares:
 
 | gate | reading | op |
 | --- | --- | --- |
@@ -341,7 +342,6 @@ The 22, in column order, with the reading each is read against and the direction
 | `expected_tokens_matched_min` | `expected_tokens_matched` | `at_least` |
 | `omissions_max` | `expected_tokens_omitted` | `at_most` |
 | `response_min_s` | `response_duration_s` | `at_least` |
-| `coverage_min` | `source_content_coverage` | `at_least` |
 | `dominant_speaker_share_min` | `extent_dominant_speaker_share` | `at_least` |
 | `items_min` | `items_produced` | `at_least` |
 | `events_min` | `airway_events_found` | `at_least` |
