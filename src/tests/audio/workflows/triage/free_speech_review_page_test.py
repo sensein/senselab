@@ -768,10 +768,12 @@ def test_pooled_determination_keeps_the_per_recording_gate_reading() -> None:
     assert record["f"][0][3] == -1
 
 
-def test_the_page_says_the_reviewer_did_not_run_rather_than_leaving_a_blank() -> None:
-    """A reviewer that never ran must never be readable as one that agreed."""
-    assert "did not run." in page._SCRIPT
-    assert "neither corroborated nor contradicted" in page._SCRIPT
+def test_the_page_keeps_the_three_non_readings_apart() -> None:
+    """Switched off, nothing to review, and could-not-load are three different silences."""
+    assert "Switched off." in page._SCRIPT
+    assert "Nothing was marked for it to review." in page._SCRIPT
+    assert "It tried and could not load." in page._SCRIPT
+    assert "It reached no conclusion about this recording." in page._SCRIPT
 
 
 def test_the_page_names_an_unevaluated_gate_as_such() -> None:
@@ -843,11 +845,34 @@ def test_an_unanswerable_gate_is_not_a_passing_one() -> None:
     assert record["g"][0][2] == -1
 
 
-def test_the_page_separates_the_five_reviewer_states() -> None:
-    """'disabled' and 'absent' are neither 'did not run for lack of need' nor 'clean'."""
-    assert "switched off in the configuration" in page._SCRIPT
+def test_the_page_separates_every_reviewer_state() -> None:
+    """Five states plus an unrecorded one, each with its own sentence."""
+    assert "disabled in the " in page._SCRIPT
     assert "tried and could not load" in page._SCRIPT
-    assert "ran and flagged nothing" in page._SCRIPT
+    assert "It ran and flagged nothing" in page._SCRIPT
+    assert "It flagged " in page._SCRIPT
+    assert "No annotation was recorded." in page._SCRIPT
+    assert page.LLM_STATES == ("disabled", "not_run", "absent", "clean", "flagged")
+    assert page.LLM_RAN == ("absent", "clean", "flagged")
+
+
+def test_not_run_now_means_the_detectors_marked_nothing() -> None:
+    """The short-circuit on a withheld recording is gone; the old wording would now be wrong."""
+    assert "could not have run" not in page._SCRIPT
+    assert "REDACT withholds before the reviewer is reached" not in page._SCRIPT
+    assert "the detectors found nothing, so there was no redacted text to read back" in page._SCRIPT
+
+
+def test_a_clean_reading_beside_a_failure_is_named_a_disagreement() -> None:
+    """detector_outcome is the only record of which decision a reading was taken beside."""
+    assert "llm.detector_outcome" in page._SCRIPT
+    assert "is a disagreement, not a " in page._SCRIPT
+
+
+def test_no_reader_may_infer_a_review_happened() -> None:
+    """Every non-reading says outright that nothing was concluded."""
+    assert "no review was attempted" in page._SCRIPT
+    assert "This is not a verdict about the recording." in page._SCRIPT
 
 
 def test_the_page_says_a_ground_is_empty_by_construction() -> None:
@@ -921,10 +946,26 @@ def test_the_row_keys_are_inert_while_typing() -> None:
     assert "e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'" in page._SCRIPT
 
 
-def test_the_page_says_the_reviewer_could_not_have_run_on_a_withheld_recording() -> None:
-    """REDACT short-circuits before the enabled check, so not_run is not 'switched off'."""
-    assert "could not have run" in page._SCRIPT
-    assert "whether or not the reviewer is " in page._SCRIPT
+def test_the_reviewer_facet_offers_every_state_and_a_did_it_run_shortcut() -> None:
+    """The page must be ready to show real verdicts when a GPU pass lands."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert 'id="llm"' in document
+    for state in page.LLM_STATES:
+        assert f'<option value="{state}">' in document
+    assert '<option value="ran">' in document
+    assert "st==='absent'||st==='clean'||st==='flagged'" in page._SCRIPT
+
+
+def test_a_card_carries_the_reviewer_state_for_the_facet() -> None:
+    """The facet filters recordings, so the state rides on the card."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a", d={"llm": {"status": "clean"}}))
+    corpus.add(_row("sub-b", d={"llm": {}}))
+    document = page.render(corpus, "Review")
+    assert 'data-llm="clean"' in document
+    assert 'data-llm="unrecorded"' in document
 
 
 def test_the_movement_keys_do_not_collide_with_either_mark_set() -> None:
@@ -1053,3 +1094,180 @@ def test_the_rail_collapses_on_a_narrow_screen() -> None:
     assert 'id="railbody"' in document
     assert "#rail.open #railbody{display:block}" in page._STYLE
     assert "railToggle.setAttribute('aria-expanded'" in page._SCRIPT
+
+
+def test_the_row_carries_the_tasks_own_declared_cast() -> None:
+    """cinderella-story declares its cast; picture-description cannot and declares none."""
+    from senselab.audio.workflows.triage.nodes.branches import expected_names
+
+    assert len(expected_names("cinderella-story")) > 0
+    assert expected_names("picture-description") == ()
+    assert expected_names("free-speech") == ()
+
+
+def test_the_stimulus_tally_reports_the_answer_not_the_declaration(tmp_path: Path) -> None:
+    """A task can declare no prompt text and still have its findings checked, against its cast."""
+    records = [
+        _word(0, "alpha"),
+        _word(1, "beta"),
+        _word(2, "gamma"),
+        _entity(
+            "pii-1",
+            "pii",
+            {"category": "NAME", "source": "rules/ner", "haystack": "consensus", "in_stimulus": True},
+            [0, 1],
+        ),
+        _entity(
+            "pii-2",
+            "pii",
+            {"category": "PERSON", "source": "presidio", "haystack": "consensus", "in_stimulus": False},
+            [1, 2],
+        ),
+        _entity(
+            "pii-3",
+            "pii",
+            {"category": "MISC", "source": "rules/ner", "haystack": "consensus", "in_stimulus": None},
+            [2, 3],
+        ),
+        *_label("assertion-1", "NAME", "word-0"),
+        *_label("assertion-2", "PERSON", "word-1"),
+        *_label("assertion-3", "MISC", "word-2"),
+        _entity(
+            "measurement-ex",
+            "measurement",
+            {"name": "redaction_exemptions", "expected_speech_declared": False, "n": 1, "n_findings": 3},
+        ),
+        _verdict("withheld", family="cinderella-story"),
+    ]
+    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
+    row = page.recording_record(run_root, page.free_response_families())
+    assert row is not None
+    assert row["d"]["stim"] == [1, 1, 1]
+    assert row["d"]["exempt"]["declared"] is False
+    assert row["names"] > 0
+
+
+def test_the_panel_no_longer_infers_unchecked_from_an_undeclared_prompt() -> None:
+    """The old sentence asserted nothing could be checked whenever no prompt text was declared."""
+    assert "so no finding could be checked against it and none was exempted" not in page._SCRIPT
+    assert "no stimulus text and no declared cast" in page._SCRIPT
+    assert "declared cast of " in page._SCRIPT
+    assert "matched what the task " in page._SCRIPT
+
+
+def test_the_pooled_record_carries_the_tally_and_the_cast() -> None:
+    """Both vary per recording and per family, so the panel can state them."""
+    pool = page.ValuePool()
+    record = page.pooled_determination(
+        {
+            "redact": {"outcome": "", "why": ""},
+            "nodes": [],
+            "llm": {},
+            "gates": {"applied": [], "flagging": [], "bounds": {}, "layers": {}, "group": ""},
+            "ran": {},
+            "absences": [],
+            "exempt": {},
+            "findings": [],
+            "stim": [4, 2, 1],
+            "names": 20,
+        },
+        pool,
+    )
+    assert record["s"] == [4, 2, 1]
+    assert record["nn"] == 20
+
+
+def _census_row(participant: str, **rest: Any) -> str:  # noqa: ANN401 -- mixed-type page fields
+    """One extract line.
+
+    Args:
+        participant: The participant id.
+        **rest: Overrides.
+
+    Returns:
+        The JSON line.
+    """
+    return json.dumps(_row(participant, **rest))
+
+
+def test_census_counts_what_a_rebuild_is_judged_by(tmp_path: Path) -> None:
+    """Findings, marks, release, the stimulus tri-state and the bracketed marks."""
+    data = tmp_path / "rows.jsonl"
+    data.write_text(
+        "\n".join(
+            [
+                _census_row(
+                    "sub-a",
+                    rel="withheld",
+                    pii=[
+                        {"c": "NAME", "s": "rules/ner", "h": "consensus", "stim": 1},
+                        {"c": "PERSON", "s": "presidio", "h": "consensus", "stim": -1},
+                    ],
+                    f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1, brk=1)],
+                    d={"llm": {"status": "disabled"}},
+                ),
+                _census_row("sub-b", rel="releasable", d={"llm": {"status": "clean"}}),
+            ]
+        )
+        + "\n"
+    )
+    counted = page.census(data)
+    totals = counted["totals"]
+    assert totals["recordings"] == 2
+    assert totals["findings"] == 2
+    assert totals["marks"] == 1
+    assert totals["in_stimulus"] == 1
+    assert totals["unchecked"] == 1
+    assert totals["bracketed_marks"] == 1
+    assert totals["bracketed:PERSON"] == 1
+    assert totals["release:withheld"] == 1
+    assert totals["llm:disabled"] == 1
+    assert totals["llm:clean"] == 1
+    assert counted["families"]["free-speech"]["recordings"] == 2
+
+
+def test_compare_reports_each_count_in_both_with_its_delta(tmp_path: Path) -> None:
+    """The rebuild has to be measurable against the extract the current page was built from."""
+    before = tmp_path / "before.jsonl"
+    after = tmp_path / "after.jsonl"
+    before.write_text(_census_row("sub-a", pii=[{"c": "NAME", "s": "rules/ner", "h": "consensus", "stim": -1}]) + "\n")
+    after.write_text(_census_row("sub-a", pii=[{"c": "NAME", "s": "rules/ner", "h": "consensus", "stim": 1}]) + "\n")
+    moved = page.compare(before, after)
+    assert moved["totals"]["unchecked"] == [1, 0, -1]
+    assert moved["totals"]["in_stimulus"] == [0, 1, 1]
+    assert moved["totals"]["recordings"] == [1, 1, 0]
+    assert moved["families"]["free-speech"]["unchecked"] == [1, 0, -1]
+
+
+def test_an_extract_carries_its_schema_version(tmp_path: Path) -> None:
+    """The header is what lets the page know which graph the rows came from."""
+    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("releasable")])
+    out = tmp_path / "out.jsonl"
+    report = page.extract(tmp_path, out, workers=1)
+    assert report["version"] == page.EXTRACT_VERSION
+    first = json.loads(out.read_text().splitlines()[0])
+    assert first == {"schema": page.EXTRACT_SCHEMA, "version": page.EXTRACT_VERSION}
+    corpus = page.load(out)
+    assert corpus.version == page.EXTRACT_VERSION
+    assert corpus.recordings == 1
+
+
+def test_an_extract_without_a_header_reads_as_the_older_version(tmp_path: Path) -> None:
+    """The extract the current page was built from predates the header."""
+    data = tmp_path / "old.jsonl"
+    data.write_text(json.dumps(_row("sub-a")) + "\n")
+    corpus = page.load(data)
+    assert corpus.version == 2
+    assert corpus.recordings == 1
+
+
+def test_the_page_refuses_to_describe_a_reviewer_it_cannot_vouch_for(tmp_path: Path) -> None:
+    """Version 2 rows under version 3 wording would make the not_run sentence a false claim."""
+    data = tmp_path / "old.jsonl"
+    data.write_text(json.dumps(_row("sub-a")) + "\n")
+    document = page.render(page.load(data), "Review")
+    assert "written before the reviewer ladder changed" in document
+    fresh = page.Corpus()
+    fresh.version = page.EXTRACT_VERSION
+    fresh.add(_row("sub-a"))
+    assert "written before the reviewer ladder changed" not in page.render(fresh, "Review")
