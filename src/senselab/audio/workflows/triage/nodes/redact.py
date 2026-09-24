@@ -62,7 +62,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_stream,
     write_verdict,
 )
-from senselab.audio.workflows.triage.stimulus import split_prompts
+from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.text.tasks.pii_detection.api import scan_for_pii
 from senselab.text.tasks.pii_detection.redaction_review import (
@@ -476,42 +476,26 @@ def _covered_words(finding: Entity, words: Sequence[Entity]) -> list[Entity]:
     return [word for word in words if word.extent is not None and _overlaps(word_hull(word), bounds)]
 
 
-def _contiguous_run(haystack: Sequence[str], needle: Sequence[str]) -> int | None:
-    """Where ``needle`` occurs in ``haystack`` as a contiguous run, or None.
-
-    Args:
-        haystack: One unit's normalised tokens.
-        needle: The covered words' normalised keys.
-
-    Returns:
-        The offset of the first occurrence, or None. A run, not a subsequence.
-    """
-    if not needle or len(needle) > len(haystack):
-        return None
-    for start in range(len(haystack) - len(needle) + 1):
-        if list(haystack[start : start + len(needle)]) == list(needle):
-            return start
-    return None
-
-
 def _expected_exemptions(
     findings: Sequence[Entity],
     words: Sequence[Entity],
     units: Sequence[tuple[int, str, list[str]]],
     normalise: Callable[[str], str],
+    near: NearMatch,
 ) -> list[_Exemption]:
     """Which findings the declared stimulus accounts for.
 
     A candidate is exempt only when every word its extent reaches carries a non-empty normalised
     key, those words' own hulls span the whole of the extent, and their keys occur in order and
-    contiguously inside one declared unit. A finding that reaches every consensus word is never
-    exempt.
+    contiguously inside one declared unit, each within ``near`` of the unit's own token. A finding
+    that reaches every consensus word is never exempt.
 
     Args:
         findings: The live ``pii`` entities.
         words: PREPROCESS's consensus words, in stream order.
         units: The declared structure from :func:`_expected_units`.
         normalise: The branches' own lexical normaliser, ``BranchParams.p_normalise``.
+        near: How far a transcript token may be from a stimulus token and still be that token.
 
     Returns:
         One exemption per accounted-for finding, in the findings' own order. Empty when ``units``
@@ -536,7 +520,7 @@ def _expected_exemptions(
         ):
             continue
         for unit_index, (prompt_index, unit_text, unit_keys) in enumerate(keyed):
-            offset = _contiguous_run(unit_keys, keys)
+            offset = near.run_offset(unit_keys, keys)
             if offset is None:
                 continue
             exemptions.append(
@@ -924,7 +908,7 @@ def redact(
     findings = _findings(store)
     words = consensus_words(store)
     units = _expected_units(hint, terminators=str(config.require(_TERMINATORS_KEY)))
-    exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise)
+    exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise, near_match(config))
     exempt_findings = {exemption.finding_id for exemption in exemptions}
     exempt_word_ids = frozenset(word_id for exemption in exemptions for word_id in exemption.word_ids)
     extents = _extents_from_findings([finding for finding in findings if finding.id not in exempt_findings])

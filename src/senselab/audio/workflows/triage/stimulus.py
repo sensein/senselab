@@ -10,10 +10,13 @@ and its measurements are in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 from senselab.audio.data_structures.audio_hints import ExpectedSpeech
 from senselab.audio.workflows.audio_analysis.harmonize import align_pair, normalise_token
+
+if TYPE_CHECKING:  # pragma: no cover — import cycle: config imports nothing from here at runtime
+    from senselab.audio.workflows.triage.config import TriageConfig
 
 __all__ = [
     "ALGORITHM",
@@ -21,14 +24,18 @@ __all__ = [
     "ROUTINE",
     "ExpectedToken",
     "LexicalWord",
+    "NearMatch",
     "Realisation",
     "StimulusAlignment",
     "StructureUnit",
     "TokenRun",
     "UnexpectedWord",
     "align_stimulus",
+    "near_match",
     "split_prompts",
 ]
+
+_NEAR_MATCH_SECTION = "stimulus.near_match"
 
 ALGORITHM = "weighted_levenshtein_alignment"
 ROUTINE = "senselab.audio.workflows.triage.stimulus.align_stimulus"
@@ -205,6 +212,118 @@ class StimulusAlignment:
                 omissions=tuple(token for token in run if token.realisation == "absent"),
             )
         return None
+
+
+@dataclass(frozen=True)
+class NearMatch:
+    """How far a transcript token may be from a stimulus token and still be a spelling of it.
+
+    Attributes:
+        exact_below: A normalised token shorter than this must match the stimulus exactly.
+        two_edits_from: A normalised token this long or longer may differ by two edits; one between
+            the two bounds may differ by one.
+    """
+
+    exact_below: int
+    two_edits_from: int
+
+    def tolerance(self, length: int) -> int:
+        """How many edits a pair of this length may differ by.
+
+        Args:
+            length: The longer of the two normalised tokens.
+
+        Returns:
+            0, 1 or 2.
+
+        Raises:
+            ValueError: If ``two_edits_from`` is below ``exact_below``.
+        """
+        if self.two_edits_from < self.exact_below:
+            raise ValueError(
+                f"{_NEAR_MATCH_SECTION}.two_edits_from ({self.two_edits_from}) must be at least "
+                f"exact_below ({self.exact_below}); below it the short tokens are the loosest ones"
+            )
+        if length < self.exact_below:
+            return 0
+        return 1 if length < self.two_edits_from else 2
+
+    def matches(self, a: str, b: str) -> bool:
+        """Whether two normalised tokens are the same token under this bound.
+
+        Args:
+            a: One normalised token.
+            b: The other.
+
+        Returns:
+            Whether their edit distance is within the tolerance their length allows.
+        """
+        allowed = self.tolerance(max(len(a), len(b)))
+        return _within(a, b, allowed)
+
+    def run_offset(self, haystack: Sequence[str], needle: Sequence[str]) -> int | None:
+        """Where ``needle`` occurs in ``haystack`` as a contiguous, ordered run of near matches.
+
+        Only the per-token comparison is widened: the run is still contiguous and still in order.
+
+        Args:
+            haystack: One unit's normalised tokens.
+            needle: The tokens to place, normalised.
+
+        Returns:
+            The offset of the first occurrence, or None.
+        """
+        if not needle or len(needle) > len(haystack):
+            return None
+        for start in range(len(haystack) - len(needle) + 1):
+            if all(self.matches(token, haystack[start + offset]) for offset, token in enumerate(needle)):
+                return start
+        return None
+
+
+def _within(a: str, b: str, allowed: int) -> bool:
+    """Whether two strings are within ``allowed`` edits of one another.
+
+    Args:
+        a: One string.
+        b: The other.
+        allowed: The edit budget.
+
+    Returns:
+        Whether the Levenshtein distance is at most ``allowed``.
+    """
+    if a == b:
+        return True
+    if allowed <= 0 or abs(len(a) - len(b)) > allowed:
+        return False
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        current = [i]
+        for j, cb in enumerate(b, start=1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (ca != cb)))
+        if min(current) > allowed:
+            return False
+        previous = current
+    return previous[-1] <= allowed
+
+
+def near_match(config: "TriageConfig") -> NearMatch:
+    """The run's own near-match bound, read from its config.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        The bound.
+
+    Raises:
+        ValueError: If either key is unmeasured. They are read together, so an override cannot
+            leave half a rule in place.
+    """
+    return NearMatch(
+        exact_below=int(config.require(f"{_NEAR_MATCH_SECTION}.exact_below")),
+        two_edits_from=int(config.require(f"{_NEAR_MATCH_SECTION}.two_edits_from")),
+    )
 
 
 def split_prompts(prompts: Sequence[ExpectedSpeech], *, terminators: str) -> list[tuple[int, str, list[str]]]:

@@ -660,6 +660,39 @@ in `transcript-alignment.md`. They were designed for exactly the reference-again
 this derivative is, which is a weaker assumption than the ASR-against-ASR case they are already
 serving.
 
+stimulus.near_match.exact_below `5` and stimulus.near_match.two_edits_from `8` -- how far one
+normalised transcript token may be from one normalised stimulus token and still be a spelling of
+it. Below 5 characters it must match exactly; 5 to 7 may differ by one edit; 8 or more by two. The
+two keys are read together (`near_match()` in `stimulus.py`) so an override cannot leave half a
+rule in place, and `two_edits_from < exact_below` raises rather than silently making the short
+tokens the loosest ones.
+
+**Fitted, not chosen.** Over the 62,548-run `triage_rerun_20260923` corpus, with the stimulus
+aligner as the oracle -- it has already decided per consensus word whether it sits on a declared
+stimulus position or nowhere in the stimulus -- and a grid of 40 `(exact_below, two_edits_from)`
+pairs evaluated against the shipped exemption predicate, only the per-token comparison widened:
+
+| rule | admits, on-stimulus findings (n=29,485) | admits, unrelated donor stimulus (n=224,769) | admits, name categories (n=191,642) |
+| --- | --- | --- | --- |
+| exact (today) | 44.59% | 0.17% | 367 |
+| `5, 8` (shipped) | 46.34% | 0.21% | 391 |
+| `4, 7` | 47.32% | 0.88% | — |
+| `3, 6` | 48.06% | 1.29% | — |
+
+The knee is at `exact_below = 5`: relaxing it to 4 quadruples the donor false-admit rate
+(0.21% -> 0.88%) to buy one further point of yield. `two_edits_from = 8` is the loosest second
+bound that costs nothing: at `exact_below = 5` the donor admits are 478 at both `two_edits_from` 8
+and 99, while the yield is 46.34% against 46.03%, so the two-edit band below 8 is where the cost
+starts (500 at 7, 713 at 6).
+
+The rate that decides it is the name one, because *"a tolerance that also admits genuinely
+different names is worse than none"*. Against a donor stimulus the finding has nothing to do with,
+the shipped bound admits 391 of 191,642 PERSON/NAME/LOCATION findings where exact matching admits
+367 -- **24 further false admits, 1.3 per 10,000 name findings**. PERSON goes 307 -> 327 of
+114,371 (0.27% -> 0.29%), NAME 38 -> 42 of 65,041, LOCATION 22 -> 22 of 12,230. The measurement,
+its donor control and the honest statement of what it does *not* fix are in
+`specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md`.
+
 ## routing
 
 The optional second declaration source. The primary one carries no key in this block: the declared
