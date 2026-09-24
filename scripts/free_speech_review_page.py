@@ -926,7 +926,9 @@ def render(corpus: Corpus, title: str) -> str:
     sections = "".join(participant_html(participant, corpus.participants[participant]) for participant in order)
     jump = "".join(
         f'<li><a href="#{html.escape(participant)}" data-p="{html.escape(participant)}">'
-        f"{html.escape(participant[4:16])}<em>{len(corpus.participants[participant])}</em></a></li>"
+        f'<span class="jp">{html.escape(participant[4:16])}</span>'
+        f'<span class="meter"><i class="mr"></i><i class="mj"></i></span>'
+        f'<em class="jn">{len(corpus.participants[participant])}</em></a></li>'
         for participant in order
     )
     families = "".join(
@@ -1000,10 +1002,24 @@ _STYLE = """
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
 font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;}
-#wrap{display:grid;grid-template-columns:250px minmax(0,1fr);align-items:start}
-#rail{position:sticky;top:0;height:100vh;overflow:auto;border-right:1px solid var(--line);
-padding:14px 10px;background:var(--bg)}
-#rail h1{font-size:15px;margin:0 0 8px}
+html{overflow-x:hidden}
+#wrap{display:grid;grid-template-columns:minmax(190px,230px) minmax(0,1fr);align-items:start;
+max-width:100%}
+#rail{position:sticky;top:0;height:100dvh;overflow:auto;border-right:1px solid var(--line);
+padding:14px 10px;background:var(--bg);min-width:0}
+#rail h1{font-size:15px;margin:0}
+.railhead{display:flex;gap:8px;align-items:baseline;justify-content:space-between;
+margin-bottom:8px}
+#railtoggle{display:none}
+#keys{margin:0 0 6px;font-size:12px}
+#keys summary{cursor:pointer;color:var(--mut);font-size:11px;text-transform:uppercase;
+letter-spacing:.06em}
+#keys dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:1px 8px;margin:6px 0 0}
+#keys dt{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--acc);
+white-space:nowrap}
+#keys dd{margin:0;font-size:11.5px;color:var(--mut)}
+#keys .note{font-size:11px;margin:6px 0 0}
+#outsum{font-weight:400;text-transform:none;letter-spacing:0}
 #rail .sum{font-size:12px;color:var(--mut);margin-bottom:10px}
 #rail input[type=search],#rail select{width:100%;padding:6px 8px;border:1px solid var(--line);
 border-radius:6px;font-size:13px;background:var(--card);color:var(--fg)}
@@ -1013,19 +1029,29 @@ padding:0;margin-bottom:4px}
 #rail label{display:block;font-size:12.5px;cursor:pointer;white-space:nowrap;overflow:hidden;
 text-overflow:ellipsis}
 #rail label em,#jump em,.cat-chip em{color:var(--mut);font-style:normal;font-size:11px}
-#jump{list-style:none;padding:0;margin:6px 0 0;font-size:12px;max-height:40vh;overflow:auto}
-#jump a{display:flex;justify-content:space-between;gap:6px;padding:2px 4px;border-radius:4px;
-color:var(--fg);text-decoration:none;font-variant-numeric:tabular-nums;
-font-family:ui-monospace,Menlo,monospace}
+#jump{list-style:none;padding:0;margin:6px 0 0;font-size:12px;max-height:38dvh;overflow:auto}
+#jump a{display:grid;grid-template-columns:minmax(0,1fr) 34px auto;gap:6px;align-items:center;
+padding:2px 4px;border-radius:4px;color:var(--fg);text-decoration:none;
+font-variant-numeric:tabular-nums}
 #jump a:hover{background:var(--line)}
-main{padding:18px 26px 120px;min-width:0}
+#jump a.here{background:var(--line);outline:1px solid var(--acc)}
+.jp{font-family:ui-monospace,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;
+white-space:nowrap}
+.meter{position:relative;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.meter i{position:absolute;top:0;bottom:0;left:0;width:0}
+.meter .mr{background:var(--acc);opacity:.85}
+.meter .mj{background:#2c5c2c;opacity:.9;top:3px}
+.jn{font-size:11px;color:var(--mut);font-style:normal;min-width:2ch;text-align:right}
+main{padding:18px 26px 140px;min-width:0;max-width:100%}
+main *{overflow-wrap:anywhere}
 .participant{margin:0 0 26px;border-top:1px solid var(--line);padding-top:14px}
 .participant h2{font-size:14px;margin:0 0 10px;display:flex;gap:10px;align-items:baseline;
 flex-wrap:wrap}
 .pid{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
 .count{color:var(--mut);font-weight:400;font-size:12px}
 .rec{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
-margin:0 0 10px;max-width:76ch}
+margin:0 0 10px;max-width:76ch;scroll-margin-top:12px;scroll-margin-bottom:96px}
+.rec.active{outline:2px solid var(--acc);outline-offset:1px}
 .rec header{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:12px;
 margin-bottom:6px}
 .task{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--acc)}
@@ -1049,8 +1075,9 @@ font-family:ui-monospace,Menlo,monospace}
 .cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
 border-radius:9px;padding:1px 7px;margin:0 3px 3px 0}
 .errors{color:#8a2f24;font-size:12px}
-#status{position:fixed;right:14px;bottom:12px;background:var(--card);border:1px solid var(--line);
-border-radius:8px;padding:5px 10px;font-size:12px;color:var(--mut)}
+#status{position:fixed;right:14px;bottom:12px;max-width:calc(100vw - 28px);background:var(--card);
+border:1px solid var(--line);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--mut);
+z-index:8}
 .hidden{display:none !important}
 mark.pii{cursor:pointer}
 mark.pii:focus{outline:2px solid var(--acc);outline-offset:1px}
@@ -1073,7 +1100,8 @@ background:var(--card);color:var(--fg);font-size:12px}
 #rail .facets{max-height:22vh;overflow:auto}
 #rail button{font:inherit;font-size:12px;padding:3px 8px;border:1px solid var(--line);
 border-radius:6px;background:var(--card);color:var(--fg);cursor:pointer}
-#panel{position:fixed;right:14px;bottom:44px;width:330px;background:var(--card);
+#panel{position:fixed;right:14px;bottom:44px;width:min(330px,calc(100vw - 28px));
+max-height:60dvh;overflow:auto;background:var(--card);
 border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;
 box-shadow:0 6px 24px rgba(0,0,0,.18);z-index:9}
 #panel h3{margin:0 0 6px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;
@@ -1106,19 +1134,20 @@ background:var(--bg);color:var(--mut);cursor:pointer;display:inline-flex;gap:4px
 .rec[data-t="+1"]{border-left:3px solid #2c5c2c}
 .rec[data-t="-1"]{border-left:3px solid #8a2f24}
 .rec[data-t="flag"]{border-left:3px solid #c98a2b}
-.rec.active{box-shadow:0 0 0 2px var(--line)}
+
 .whybtn{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
 border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
 .whybtn:hover{color:var(--fg);border-color:var(--acc)}
-#why{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(760px,92vw);
-max-height:84vh;overflow:auto;background:var(--card);border:1px solid var(--line);
+#why{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(760px,94vw);
+max-height:86dvh;overflow:auto;background:var(--card);border:1px solid var(--line);
 border-radius:12px;padding:14px 18px;font-size:13px;box-shadow:0 10px 40px rgba(0,0,0,.28);z-index:20}
+#why .tw{overflow-x:auto;max-width:100%}
 #why h3{margin:0 0 4px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--mut)}
 #why h4{margin:14px 0 4px;font-size:12px;letter-spacing:.03em;color:var(--mut);
 text-transform:uppercase}
 #why .decisive{font-size:14px;margin:6px 0 2px}
 #why .decisive b{font-weight:600}
-#why table{border-collapse:collapse;width:100%;font-size:12px}
+#why table{border-collapse:collapse;width:100%;min-width:380px;font-size:12px}
 #why th{text-align:left;font-weight:500;color:var(--mut);border-bottom:1px solid var(--line);
 padding:3px 6px 3px 0}
 #why td{padding:3px 6px 3px 0;border-bottom:1px solid var(--line);vertical-align:top}
@@ -1130,8 +1159,36 @@ padding:3px 6px 3px 0}
 #why .warn{background:var(--pii);border-left:3px solid var(--piib);padding:6px 9px;
 border-radius:4px;margin:8px 0;font-size:12.5px}
 #scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:19}
-#io textarea{width:100%;height:70px;font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
-background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px}
+#io textarea{width:100%;max-width:100%;height:70px;font-family:ui-monospace,Menlo,monospace;
+font-size:10.5px;background:var(--card);color:var(--fg);border:1px solid var(--line);
+border-radius:6px}
+#io input[type=file]{max-width:100%;font-size:11px}
+
+/* One column once the rail and a readable measure no longer both fit. */
+@media (max-width:820px){
+#wrap{grid-template-columns:minmax(0,1fr)}
+#rail{position:static;height:auto;max-height:none;overflow:visible;border-right:0;
+border-bottom:1px solid var(--line)}
+#railtoggle{display:inline-block}
+#railbody{display:none}
+#rail.open #railbody{display:block}
+#jump{max-height:46dvh}
+main{padding:14px 16px 150px}
+.rec{max-width:100%}
+#panel{left:8px;right:8px;bottom:52px;width:auto}
+#why{width:96vw;padding:12px 14px}
+}
+@media (max-width:420px){
+main{padding:12px 10px 160px}
+.rec{padding:10px 11px}
+#status{left:8px;right:8px;text-align:center}
+}
+/* A pointer that cannot hover gets larger hit targets. */
+@media (hover:none){
+.tri,.whybtn,.verdict{padding:6px 10px}
+mark.pii{padding:1px 3px}
+}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto !important}}
 @media (prefers-color-scheme:dark){
 :root{--bg:#171614;--fg:#eceae5;--mut:#9a958c;--line:#33312d;--card:#1f1e1b;--acc:#d9a45f;
 --pii:#4a3413;--piib:#c08a38;--brk:#a09b91;--brkbg:#2a2825;--catbg:#5f4418;--catfg:#f0d7a8;}
@@ -1223,23 +1280,66 @@ function setRow(card,value){
   const held=(store.triage[stem]||{}).v;
   if(held===value)delete store.triage[stem];
   else store.triage[stem]={v:value,t:new Date().toISOString()};
-  save();paintRow(card);tally();
+  save();paintRow(card);tally();outline();
   if(triSel.value!=='any')apply();
 }
 let activeCard=null;
-function markActive(card){
-  if(activeCard===card)return;
-  if(activeCard)activeCard.classList.remove('active');
+let pointerOwns=true;
+function markActive(card,scroll){
+  if(activeCard&&activeCard!==card)activeCard.classList.remove('active');
   activeCard=card;
-  if(card)card.classList.add('active');
+  if(!card)return;
+  card.classList.add('active');
+  if(scroll)card.scrollIntoView({block:'center',behavior:'smooth'});
+  here(card.closest('.participant'));
 }
+document.addEventListener('mousemove',()=>{pointerOwns=true;},{passive:true});
 for(const card of cards){
   paintRow(card);
-  card.addEventListener('mouseenter',()=>markActive(card));
-  card.addEventListener('focusin',()=>markActive(card));
+  card.addEventListener('mouseenter',()=>{if(pointerOwns)markActive(card,false);});
+  card.addEventListener('focusin',()=>markActive(card,false));
   for(const b of card.querySelectorAll('.tri'))
-    b.addEventListener('click',()=>{markActive(card);setRow(card,b.dataset.v);});
+    b.addEventListener('click',()=>{markActive(card,false);setRow(card,b.dataset.v);});
 }
+
+/* ---- moving between samples, following the filters ---- */
+function visibleCards(){
+  return cards.filter(c=>!c.classList.contains('hidden')
+    &&!c.closest('.participant').classList.contains('hidden'));
+}
+function step(delta){
+  const live=visibleCards();
+  if(!live.length)return;
+  pointerOwns=false;
+  let at=activeCard?live.indexOf(activeCard):-1;
+  if(at<0){
+    /* not on a visible card: enter the list at whichever end the reader is moving toward */
+    markActive(delta>0?live[0]:live[live.length-1],true);
+    return;
+  }
+  const next=Math.min(live.length-1,Math.max(0,at+delta));
+  markActive(live[next],true);
+}
+function stepParticipant(delta){
+  const live=visibleCards();
+  if(!live.length)return;
+  pointerOwns=false;
+  const current=activeCard?activeCard.closest('.participant'):null;
+  const order=[];
+  for(const c of live){const s=c.closest('.participant');if(order[order.length-1]!==s)order.push(s);}
+  let at=current?order.indexOf(current):-1;
+  if(at<0){markActive(delta>0?live[0]:live[live.length-1],true);return;}
+  const target=order[Math.min(order.length-1,Math.max(0,at+delta))];
+  markActive(live.find(c=>c.closest('.participant')===target),true);
+}
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  if(e.key==='j'){e.preventDefault();step(1);}
+  else if(e.key==='k'){e.preventDefault();step(-1);}
+  else if(e.key==='J'){e.preventDefault();stepParticipant(1);}
+  else if(e.key==='K'){e.preventDefault();stepParticipant(-1);}
+});
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
   if(e.metaKey||e.ctrlKey||e.altKey)return;
@@ -1249,6 +1349,45 @@ document.addEventListener('keydown',e=>{
   if(!card)return;
   e.preventDefault();setRow(card,value);
 });
+
+/* ---- the outline ---- */
+const jumpOf=new Map();
+for(const a of jump)jumpOf.set(a.dataset.p,a);
+const sectionCards=new Map();
+for(const s of sections)sectionCards.set(s.dataset.p,[...s.querySelectorAll('.rec')]);
+const sectionMarks=new Map();
+for(const s of sections)sectionMarks.set(s.dataset.p,[...s.querySelectorAll('mark.pii')]);
+let hereP=null;
+function here(section){
+  const key=section&&section.dataset.p;
+  if(hereP===key)return;
+  const was=hereP&&jumpOf.get(hereP);
+  if(was)was.classList.remove('here');
+  hereP=key;
+  const now=key&&jumpOf.get(key);
+  if(now){now.classList.add('here');
+    if(now.scrollIntoView)now.scrollIntoView({block:'nearest'});}
+}
+function outline(){
+  let seen=0,markedRows=0,judged=0,totalMarks=0;
+  for(const s of sections){
+    const key=s.dataset.p;
+    const own=sectionCards.get(key)||[];
+    const shown=own.filter(c=>!c.classList.contains('hidden')).length;
+    const marked=own.filter(c=>c.dataset.t).length;
+    const own2=sectionMarks.get(key)||[];
+    const done=own2.filter(m=>m.hasAttribute('data-v')).length;
+    seen+=shown;markedRows+=marked;judged+=done;totalMarks+=own2.length;
+    const a=jumpOf.get(key);
+    if(!a)continue;
+    a.querySelector('.jn').textContent=shown;
+    a.querySelector('.mr').style.width=own.length?(100*marked/own.length)+'%':'0';
+    a.querySelector('.mj').style.width=own2.length?(100*done/own2.length)+'%':'0';
+  }
+  const out=document.getElementById('outsum');
+  if(out)out.textContent='\\u2014 '+markedRows+' rows marked, '+judged+' findings judged, '
+    +seen+' shown';
+}
 
 /* ---- facets ---- */
 function checked(cls){
@@ -1311,6 +1450,11 @@ function apply(){
   const live=new Set(sections.filter(s=>!s.classList.contains('hidden')).map(s=>s.dataset.p));
   for(const a of jump)a.parentElement.classList.toggle('hidden',!live.has(a.dataset.p));
   bar.textContent=shownP+' participants \\u00b7 '+shownR+' recordings \\u00b7 '+shownM+' findings';
+  if(activeCard&&(activeCard.classList.contains('hidden')
+    ||activeCard.closest('.participant').classList.contains('hidden'))){
+    activeCard.classList.remove('active');activeCard=null;here(null);
+  }
+  outline();
   tally();
 }
 function tally(){
@@ -1350,7 +1494,8 @@ function setVerdict(v){
   save(); paint(current);
   for(const b of panel.querySelectorAll('.verdict'))
     b.classList.toggle('on',b.dataset.v===(store.findings[k]||{}).v);
-  tally();
+  tally();outline();
+  if(revSel.value!=='any')apply();
 }
 for(const m of marks){
   m.addEventListener('click',e=>{e.preventDefault();open(m);});
@@ -1498,8 +1643,8 @@ function buildWhy(stem,card){
   /* gates: evaluated, and declared-but-never-evaluated */
   const evaluated=r.g||[], profile=P(r.b)||{bounds:{},layers:{}};
   const seen=new Set(evaluated.map(g=>(P(g[0])||{}).gate));
-  out.push('<h4>gates</h4><table><tr><th>gate</th><th>reading</th><th>value</th><th>bound</th>'
-    +'<th>outcome</th></tr>');
+  out.push('<h4>gates</h4><div class="tw"><table><tr><th>gate</th><th>reading</th>'
+    +'<th>value</th><th>bound</th><th>outcome</th></tr>');
   for(const g of evaluated){
     const spec=P(g[0])||{};
     const val=(typeof g[1]==='number')?(Math.round(g[1]*1000)/1000):g[1];
@@ -1524,7 +1669,7 @@ function buildWhy(stem,card){
     out.push('<tr class="off"><td>'+esc(name)+'</td><td colspan="3">declared for this group, '
       +'never evaluated \\u2014 no reading was available</td><td>\\u2014</td></tr>');
   }
-  out.push('</table>');
+  out.push('</table></div>');
   if(!evaluated.length)
     out.push('<p class="note">No gate was evaluated on this recording'
       +(unevaluated?' \\u2014 the branch that owns this family left no in-family report, so its '
@@ -1537,7 +1682,8 @@ function buildWhy(stem,card){
 
   /* what each node concluded, and what ran */
   const ran=P(r.a)||{};
-  out.push('<h4>nodes</h4><table><tr><th>node</th><th>state</th><th>outcome</th><th>why</th></tr>');
+  out.push('<h4>nodes</h4><div class="tw"><table><tr><th>node</th><th>state</th>'
+    +'<th>outcome</th><th>why</th></tr>');
   const named=new Set();
   for(const n of r.n||[]){
     const name=P(n[0]);named.add(name);
@@ -1551,7 +1697,7 @@ function buildWhy(stem,card){
     out.push('<tr class="off"><td>'+esc(name)+'</td><td>'+esc(ran[name])
       +'</td><td>\\u2014</td><td>ran, but folded no verdict of its own</td></tr>');
   }
-  out.push('</table>');
+  out.push('</table></div>');
   const absences=P(r.x)||[];
   if(absences.length)
     out.push('<p class="note">critical absences: '+esc(absences.join(', '))+'</p>');
@@ -1562,12 +1708,12 @@ function buildWhy(stem,card){
   if(!findings.length){
     out.push('<p class="note">none.</p>');
   }else{
-    out.push('<table><tr><th>category</th><th>detector</th><th>read from</th>'
-      +'<th>stimulus check</th></tr>');
+    out.push('<div class="tw"><table><tr><th>category</th><th>detector</th>'
+      +'<th>read from</th><th>stimulus check</th></tr>');
     for(const f of findings)
       out.push('<tr><td>'+esc(P(f[0]))+'</td><td>'+esc(P(f[1]))+'</td><td>'+esc(P(f[2]))
         +'</td><td>'+stimWord(f[3])+'</td></tr>');
-    out.push('</table>');
+    out.push('</table></div>');
   }
 
   /* the stimulus, which is the third artefact family */
@@ -1607,6 +1753,13 @@ document.getElementById('all').addEventListener('click',e=>{
   for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))el.checked=true;
   firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';triSel.value='any';
   minNf.value='';minNt.value='';maxNt.value='';q.value='';apply();});
+const rail=document.getElementById('rail');
+const railToggle=document.getElementById('railtoggle');
+railToggle.addEventListener('click',()=>{
+  const open=rail.classList.toggle('open');
+  railToggle.setAttribute('aria-expanded',open?'true':'false');
+});
+if(window.matchMedia&&window.matchMedia('(min-width:821px)').matches)rail.classList.add('open');
 apply();
 """
 
@@ -1618,10 +1771,20 @@ _DOCUMENT = """<!doctype html>
 <style>{style}</style></head>
 <body><div id="wrap">
 <nav id="rail">
-<h1>{title}</h1>
+<div class="railhead"><h1>{title}</h1>
+<button id="railtoggle" type="button" aria-expanded="true">filters</button></div>
+<div id="railbody">
 <div class="sum">{participants} participants &middot; {recordings} recordings &middot;
 {marks} findings &middot; {characters} characters</div>
 {errors}
+<details id="keys"><summary>keyboard</summary><dl>
+<dt>j / k</dt><dd>next / previous sample</dd>
+<dt>J / K</dt><dd>next / previous participant</dd>
+<dt>+ or = / - / f</dt><dd>mark the row +1 / -1 / flag</dd>
+<dt>1 &ndash; 4</dt><dd>judge the selected finding</dd>
+<dt>Esc</dt><dd>close a panel</dd>
+</dl><p class="note">Movement follows the filters, and the card it lands on is what the mark keys
+act on.</p></details>
 <input type="search" id="q" placeholder="search transcripts, tasks, ids">
 <fieldset><legend>recording</legend>
 <select id="fired"><option value="any">redaction fired or not</option>
@@ -1670,8 +1833,9 @@ placeholder="max"> tokens</div>
 placeholder="the export lands here too; paste an export here and press Import"></textarea>
 </fieldset>
 <p><a href="#" id="all">reset filters</a></p>
-<fieldset><legend>participants</legend><ul id="jump">{jump}</ul></fieldset>
-</nav>
+<fieldset id="outline"><legend>outline <span id="outsum"></span></legend>
+<ul id="jump">{jump}</ul></fieldset>
+</div></nav>
 <main>{sections}</main>
 </div>
 <script type="application/json" id="whydata">{why}</script>
