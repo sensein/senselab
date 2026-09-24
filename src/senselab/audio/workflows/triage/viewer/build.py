@@ -21,6 +21,7 @@ PARTS = (
     "vendor/hyparquet-1.31.1-fzstd-0.1.1.bundle.js",
     "decode.js",
     "axes.js",
+    "facets.js",
     "corpus.js",
     "recording.js",
     "app.js",
