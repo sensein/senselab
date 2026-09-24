@@ -47,18 +47,28 @@ in the other direction and should forbid in this one.
 
 ### What it costs
 
-`llm-check-amortised-load.md` sized ~13.5 GPU-hours amortised over ~13,600 recordings — that is
-the *passing* population, 13,598 here, so the figure is ~3.6 s of amortised GPU per recording.
-Widening to every recording the detectors touched takes the population to 18,850, a **1.386×**
-increase: **~18.7 GPU-hours** for this corpus at the same per-recording cost, +5.2 hours.
+`llm-check-amortised-load.md` sized the pass over "≈13,600 of 62,578" recordings — the ones that
+carry a finding *and clear the detector path*. This corpus puts that population at **13,598**, so
+the sizing holds exactly. Widening to every recording the detectors touched takes it to **18,850**,
+a **1.386×** increase. At the same per-recording figures:
 
-Two caveats the arithmetic does not carry. A withheld recording is one whose redacted transcript
-still scans dirty, so its reviews are more likely to flag and therefore to use more of the
-`max_iterations: 3` budget than a passing one; the per-recording cost on that population is an
-upper-bounded unknown until it is measured, and **it has not been measured**. And
-`keep_worker_resident: true` remains off: the worker holds 70.4 GiB and OOMed a corpus driver
-(19 of 22 recordings died), so the load is paid per recording and the widening pays 5,252 more
-loads, which is where the 5.2 hours actually goes.
+| load policy | per recording | ≈13,600 (as sized) | 18,850 (as widened) |
+| --- | --- | --- | --- |
+| as arm A measures it | 20.3 s | ~77 GPU-hours | **~106 GPU-hours** |
+| amortised, arm B | 3.6 s | ~13.5 GPU-hours | **~18.9 GPU-hours** |
+
+Two caveats the arithmetic does not carry, and the first is the larger.
+
+**The per-recording cost is the passing population's.** Arm B's 3.6 s assumes one round per
+recording, measured 12 of 12 on recordings that passed. A withheld recording is by construction one
+whose redacted transcript still scans dirty, so its rounds are more likely to flag and to spend
+more of the `max_iterations: 3` budget. No reviewer has ever run on a withheld recording, so the
+true figure for the 5,252 is unknown; the worst case at the bound is 3× on that slice, which is
+~29 GPU-hours amortised rather than ~18.9.
+
+**Arm B is not what a corpus driver can run today.** `keep_worker_resident: true` is what amortises
+the load, and it OOMed a driver — the worker held 70.4 GiB and 19 of 22 recordings died. Until that
+is resolved the operative row is arm A, where the widening costs **~29 GPU-hours more**, not ~5.
 
 ## 2. The near-match bound
 
