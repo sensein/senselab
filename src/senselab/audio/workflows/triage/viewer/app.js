@@ -30,6 +30,12 @@
     caching: true,
     warm: null,
     current: -1,
+    facets: null,
+    facetOpen: null,
+    facetShowAll: null,
+    facetQuery: '',
+    facetTiming: null,
+    facetBusy: false,
   };
 
   function $(id) { return document.getElementById(id); }
@@ -151,8 +157,11 @@
       $('selcount').textContent = n.toLocaleString() + ' of ' + state.rows.length.toLocaleString() + ' recordings drawn';
       renderAxisCaptions();
       renderList();
+      // A brush moved the denominator the facets narrow, so their counts are stale.
+      if (state.facets && !state.facetBusy) { state.facets.setBase(view.brushMask); renderFacets(); }
     };
     view.applyBrushes();
+    buildFacets();
     renderAxisRail();
     renderControls();
     wirePointer(view);
@@ -672,6 +681,189 @@
     var a = Math.abs(v);
     if (a >= 1e5 || (a > 0 && a < 1e-4)) return v.toExponential(3);
     return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+  }
+
+  // ---------------------------------------------------------------- facets
+
+  var MAX_VALUES = 12;
+
+  /** Build the facet model over the loaded rows and render the panel for the first time. */
+  function buildFacets() {
+    state.facets = new SchemaFacets.FacetModel(state.rows);
+    state.facetOpen = {};
+    state.facetShowAll = {};
+    state.facetQuery = '';
+    SchemaFacets.DEFAULT_OPEN.forEach(function (n) {
+      if (SchemaFacets.BY_NAME[n]) state.facetOpen[n] = true;
+    });
+    $('facet-search').oninput = function () {
+      state.facetQuery = $('facet-search').value.trim().toLowerCase();
+      renderFacets();
+    };
+    $('facet-clear').onclick = function () { state.facets.clear(null); applyFacets(); };
+    applyFacets();
+  }
+
+  /**
+   * Recompute the facet mask, hand it to the view, then redraw the panel against the new base.
+   *
+   * `facetTiming.mask_ms` covers building the mask and re-deriving the drawn set over every row;
+   * the canvas paint it schedules is deferred to the next frame and is not in that number.
+   */
+  function applyFacets() {
+    state.facetBusy = true;
+    var t0 = performance.now();
+    state.view.setFacetMask(state.facets.mask());
+    var t1 = performance.now();
+    state.facets.setBase(state.view.brushMask);
+    renderFacets();
+    var t2 = performance.now();
+    state.facetBusy = false;
+    state.facetTiming = { mask_ms: t1 - t0, panel_ms: t2 - t1, open: Object.keys(state.facetOpen).length };
+  }
+
+  /** The whole panel: the denominator, the chosen tags, and one collapsible group per column. */
+  function renderFacets() {
+    var model = state.facets;
+    if (!model) return;
+    var before = model.before();
+    var after = model.after();
+    var active = model.activeNames();
+    var total = state.rows.length;
+
+    var den = $('facet-denominator');
+    den.innerHTML = '';
+    if (active.length) {
+      den.appendChild(el('span', 'before', before.toLocaleString()));
+      den.appendChild(el('span', 'arrow', String.fromCharCode(0x2192)));
+      den.appendChild(el('span', 'after', after.toLocaleString()));
+      den.appendChild(el('span', 'unfiltered', ' drawn, of ' + total.toLocaleString() + ' recordings'));
+      den.title = before.toLocaleString() + ' recordings before these facets, '
+        + after.toLocaleString() + ' after, out of ' + total.toLocaleString() + ' in the file';
+    } else {
+      den.appendChild(el('span', 'unfiltered',
+        before.toLocaleString() + ' of ' + total.toLocaleString() + ' recordings, no facet applied'));
+      den.title = 'no facet is narrowing anything';
+    }
+
+    var chosen = $('facet-chosen');
+    chosen.innerHTML = '';
+    active.forEach(function (name) {
+      model.chosen(name).forEach(function (term) {
+        var tag = el('button', 'facet-tag');
+        tag.appendChild(el('b', null, name));
+        tag.appendChild(el('span', null, term === SchemaFacets.ABSENT ? 'absent' : term));
+        tag.appendChild(el('span', 'x', String.fromCharCode(0x2715)));
+        tag.title = 'drop this value from the ' + name + ' facet';
+        tag.dataset.facet = name;
+        tag.dataset.term = term;
+        tag.onclick = function () { model.toggle(name, term); applyFacets(); };
+        chosen.appendChild(tag);
+      });
+    });
+    $('facet-clear').disabled = !active.length;
+
+    var q = state.facetQuery;
+    var list = $('facet-list');
+    list.innerHTML = '';
+    SchemaFacets.CATALOGUE.forEach(function (f) {
+      var name = f.col.name;
+      // A query matches a facet's name, or a value of one already encoded. It does not encode a
+      // column to search it: encoding all 52 costs 321 ms, and a search box may not stall the page.
+      var hit = !q
+        || name.toLowerCase().indexOf(q) >= 0
+        || String(f.col.label).toLowerCase().indexOf(q) >= 0
+        || model.chosen(name).length > 0
+        || (model.encodings[name] && model.encodings[name].terms.some(function (t) {
+          return t.toLowerCase().indexOf(q) >= 0;
+        }));
+      if (!hit) return;
+      list.appendChild(facetGroup(f));
+    });
+  }
+
+  /** One column's collapsible group. Its values are built on first open, not before. */
+  function facetGroup(f) {
+    var name = f.col.name;
+    var d = el('details', 'facet-group');
+    d.dataset.facet = name;
+    // A query that matched a value rather than the facet's name opens the facet showing it.
+    var openForQuery = state.facetQuery && name.toLowerCase().indexOf(state.facetQuery) < 0;
+    var sum = el('summary');
+    sum.appendChild(el('span', 'fg-name', name));
+    if (f.mode === 'set') sum.appendChild(el('span', 'fg-mode', 'contains'));
+    var n = state.facets.chosen(name).length;
+    if (n) sum.appendChild(el('span', 'fg-badge', String(n)));
+    d.appendChild(sum);
+    if (state.facetOpen[name] || openForQuery) { d.open = true; d.appendChild(facetValues(f)); }
+    d.addEventListener('toggle', function () {
+      state.facetOpen[name] = d.open;
+      if (d.open && !d.querySelector('.facet-values')) d.appendChild(facetValues(f));
+    });
+    return d;
+  }
+
+  /**
+   * One column's values, chosen ones first so a selection never hides under the top-K cap.
+   *
+   * Only an open group is counted, because counting every offered column on every click would
+   * walk the corpus once per column for values nobody is looking at.
+   */
+  function facetValues(f) {
+    var name = f.col.name;
+    var v = state.facets.values(name);
+    var box = el('div', 'facet-values');
+    if (v.nullMeans) box.appendChild(el('div', 'facet-null', 'absent means: ' + v.nullMeans));
+    var q = state.facetQuery;
+    var shown = v.values.filter(function (x) {
+      return x.chosen || x.absent || !q || x.term.toLowerCase().indexOf(q) >= 0;
+    });
+    shown = shown.filter(function (x) { return x.chosen; })
+      .concat(shown.filter(function (x) { return !x.chosen; }));
+    var cap = state.facetShowAll[name] ? shown.length : MAX_VALUES;
+    var max = shown.reduce(function (m, x) { return Math.max(m, x.available); }, 0) || 1;
+    shown.slice(0, cap).forEach(function (x) { box.appendChild(facetValue(name, x, max)); });
+    if (shown.length > cap) {
+      var more = el('button', 'facet-more', 'show all ' + shown.length.toLocaleString() + ' values');
+      more.onclick = function () { state.facetShowAll[name] = true; replaceValues(f); };
+      box.appendChild(more);
+    } else if (state.facetShowAll[name] && shown.length > MAX_VALUES) {
+      var less = el('button', 'facet-more', 'show the top ' + MAX_VALUES);
+      less.onclick = function () { state.facetShowAll[name] = false; replaceValues(f); };
+      box.appendChild(less);
+    }
+    return box;
+  }
+
+  /** Redraw one group's value list in place, without disturbing the rest of the panel. */
+  function replaceValues(f) {
+    var d = $('facet-list').querySelector('details[data-facet="' + f.col.name + '"]');
+    if (!d) return;
+    var old = d.querySelector('.facet-values');
+    if (old) d.removeChild(old);
+    d.appendChild(facetValues(f));
+  }
+
+  /** One value: its label, how many are available, how many exist, and a bar for the ratio. */
+  function facetValue(name, x, max) {
+    var cls = 'facet-value';
+    if (x.chosen) cls += ' on';
+    if (!x.available) cls += ' empty';
+    if (x.absent) cls += ' is-absent';
+    var b = el('button', cls);
+    var bar = el('span', 'bar');
+    bar.style.width = Math.round((100 * x.available) / max) + '%';
+    b.appendChild(bar);
+    b.appendChild(el('span', 'term', x.label));
+    b.appendChild(el('span', 'n', x.available.toLocaleString()));
+    b.appendChild(el('span', 'of', '/ ' + x.total.toLocaleString()));
+    b.title = x.label + ': ' + x.available.toLocaleString()
+      + ' available under the other facets and the brushes, '
+      + x.total.toLocaleString() + ' over the whole corpus';
+    b.dataset.facet = name;
+    b.dataset.term = x.term;
+    b.onclick = function () { state.facets.toggle(name, x.term); applyFacets(); };
+    return b;
   }
 
   // ---------------------------------------------------------------- landing
