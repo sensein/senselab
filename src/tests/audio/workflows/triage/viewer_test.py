@@ -22,6 +22,7 @@ from senselab.audio.workflows.triage import viewer
 VIEWER_DIR = viewer.SOURCE_DIR
 DECODE_JS = (VIEWER_DIR / "decode.js").read_text(encoding="utf-8")
 AXES_JS = (VIEWER_DIR / "axes.js").read_text(encoding="utf-8")
+FACETS_JS = (VIEWER_DIR / "facets.js").read_text(encoding="utf-8")
 JS_TESTS = Path(__file__).parent / "viewer"
 
 
@@ -236,6 +237,39 @@ class TestTheAxisDefaultsAreTheOnesTheSpecDerives:
         assert binary <= named, f"the app never reads {sorted(binary - named)}"
 
 
+class TestTheFacetPanelOffersColumnsTheProducerWrites:
+    """A facet naming a column the parquet does not carry would list an empty, silent filter."""
+
+    def test_every_facet_the_panel_opens_with_is_a_real_parquet_column(self) -> None:
+        """The default-open facets must exist, or the panel opens on nothing."""
+        written = {field.name for field in rv.schema()}
+        for name in _js_array(FACETS_JS, "DEFAULT_OPEN"):
+            assert name in written, f"{name} is opened by default but is not a column"
+
+    def test_the_refused_columns_are_refused_for_a_reason_that_is_written(self) -> None:
+        """A column kept out of the panel says why, in the panel."""
+        refused = re.search(r"var REFUSED = \{(?P<body>.*?)\n  \};", FACETS_JS, re.S)
+        assert refused is not None
+        names = re.findall(r"^\s{4}(\w+):", refused.group("body"), re.M)
+        assert set(names) == {"participant", "session"}
+        for name in names:
+            assert f"{name}:" in refused.group("body")
+
+    def test_the_facet_catalogue_is_drawn_from_the_axis_catalogue(self) -> None:
+        """One catalogue, so a column can never be offered as a facet and missing as an axis."""
+        assert "SchemaAxes.CATALOGUE.forEach" in FACETS_JS
+        assert "kind === 'categorical'" in FACETS_JS
+        assert "kind === 'set'" in FACETS_JS
+
+    def test_the_absent_bucket_is_a_token_no_value_can_collide_with(self) -> None:
+        """Absence is selectable, so its key must not be a value the producer could write."""
+        token = re.search(r"var ABSENT = '(?P<t>[^']+)';", FACETS_JS)
+        assert token is not None
+        assert token.group("t") == "(absent)"
+        empty = rv.schema().empty_table()
+        assert token.group("t") not in {field.name for field in empty.schema}
+
+
 # ---------------------------------------------------------------- the JavaScript suites
 
 
@@ -249,7 +283,7 @@ def _node() -> str | None:
 
 
 @pytest.mark.skipif(_node() is None, reason="node is not on PATH; the JavaScript suites cannot run")
-@pytest.mark.parametrize("suite", ["decode.test.mjs", "axes.test.mjs"])
+@pytest.mark.parametrize("suite", ["decode.test.mjs", "axes.test.mjs", "facets.test.mjs"])
 def test_the_javascript_suite_passes(suite: str) -> None:
     """Run one ``node --test`` suite and fail with its output when it does not pass.
 

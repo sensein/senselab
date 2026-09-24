@@ -71,18 +71,19 @@ def _pick(rng: random.Random, weighted: Sequence[tuple[str | None, int]]) -> str
     return rng.choices([v for v, _ in weighted], weights=[w for _, w in weighted], k=1)[0]
 
 
-def rows(seed: int = SEED) -> list[dict[str, object]]:
+def rows(seed: int = SEED, participants: int = PARTICIPANTS) -> list[dict[str, object]]:
     """Every synthetic row, in a stable order.
 
     Args:
         seed: The generator's seed.
+        participants: How many participants to write, at :data:`PER_PARTICIPANT` recordings each.
 
     Returns:
         One dict per recording, on the producer's schema.
     """
     rng = random.Random(seed)
     out: list[dict[str, object]] = []
-    for p in range(PARTICIPANTS):
+    for p in range(participants):
         participant = f"sub-f{p:04d}"
         session = f"ses-{rng.choice(['s0', 's1'])}"
         for k in range(PER_PARTICIPANT):
@@ -188,9 +189,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", type=Path, default=Path("artifacts/viewer_e2e"), help="Where the fixture goes.")
     parser.add_argument("--seed", type=int, default=SEED, help="The generator's seed.")
+    parser.add_argument(
+        "--rows", type=int, default=PARTICIPANTS * PER_PARTICIPANT, help="Roughly how many rows to write."
+    )
     args = parser.parse_args(argv)
 
-    built = rows(args.seed)
+    built = rows(args.seed, max(1, round(args.rows / PER_PARTICIPANT)))
     args.out.mkdir(parents=True, exist_ok=True)
     path = args.out / "facets_fixture.parquet"
     pq.write_table(to_table(built), path, compression=COMPRESSION, row_group_size=ROW_GROUP_SIZE, write_page_index=True)
