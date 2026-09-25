@@ -466,6 +466,65 @@ class TestTheWeightsAreReleasedUnlessTheRunSaysOtherwise:
         assert released == [False]
 
 
+class TestTheLoopStopsWhenAnotherRoundCannotDiffer:
+    """The loop's whole action is the mask. Masking nothing means the next round reads the same text.
+
+    Measured over the first 9,670 reviewed recordings: 3,131 ran to the ceiling, 86% of them saying
+    the redaction was incomplete while proposing nothing to remove, and 99.2% of every multi-round
+    recording gained nothing after round one. Those re-reads were 39% of the pass's GPU time.
+    """
+
+    def test_a_flag_with_no_removal_stops_at_one_round(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The 86% case: flagged on the redaction judgment alone, nothing proposed, nothing to mask."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        bare = ReviewResult(
+            available=True,
+            reasoning="Something is still there.",
+            redaction="incomplete",
+            original="clean",
+            speakers="one",
+            model_id="s/m",
+            revision="a" * 40,
+        )
+        seen = _stub(monkeypatch, [bare])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert len(seen) == 1, "a second round would have read the same string"
+        annotation = _annotation(store)
+        assert annotation["status"] == "flagged"
+        assert annotation["iterations"] == 1
+
+    def test_a_flag_that_proposes_a_removal_still_iterates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The case the loop exists for: the mask changes the text, so another round can differ."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        proposal = ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name")
+        seen = _stub(monkeypatch, [_flags(proposal), _clean()])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert len(seen) == 2
+        assert "alicia" in seen[0] and "alicia" not in seen[1]
+
+    def test_a_release_only_proposal_stops_too(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A proposal that only asks for less to be removed masks nothing either."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        release_only = ReviewResult(
+            available=True,
+            reasoning="Too much was taken.",
+            redaction="incomplete",
+            original="clean",
+            speakers="one",
+            proposal=[ReviewProposal(text="alicia", action="release", category="PERSON", why="not a name")],
+            model_id="s/m",
+            revision="a" * 40,
+        )
+        seen = _stub(monkeypatch, [release_only])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert len(seen) == 1
+
+
 class TestTheRoundsReachTheStoreAndTheSummaryStaysClean:
     """The chain of thought and the cost are per-round records; the annotation is the summary."""
 

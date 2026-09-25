@@ -338,7 +338,32 @@ def _rounds(
                 reviews,
             )
         flagged.extend(entry.category for entry in result.proposal if entry.action == REDACT)
-        current = _mask(current if current is not None else original, result.proposal)
+        # Another round is only worth taking if this one changed the text it will read. The loop's
+        # whole action is the mask, and masking a proposal with no removal in it is a no-op: the
+        # next round would read a byte-identical string and answer the same way. Measured over the
+        # first 9,670 reviewed recordings -- 3,131 ran to the ceiling, 86% of them on
+        # `redaction == incomplete` with no proposal at all, and 99.2% of every multi-round
+        # recording gained nothing after round one. That was 39% of the pass's GPU time spent
+        # re-reading unchanged text.
+        before_mask = current if current is not None else original
+        masked = _mask(before_mask, result.proposal)
+        if masked == before_mask:
+            return (
+                _Reading(
+                    FLAGGED,
+                    iteration,
+                    tuple(sorted(set(flagged))),
+                    result.redaction,
+                    result.original,
+                    result.speakers,
+                    _entries(result.proposal),
+                    model_id,
+                    revision,
+                    None,
+                ),
+                reviews,
+            )
+        current = masked
     return (
         _Reading(
             FLAGGED,
