@@ -111,14 +111,36 @@ var SchemaAxes = (function () {
       boundColumn: spec.boundColumn || null,
       op: spec.op || null,
       gate: spec.gate || null,
+      shortKey: spec.shortKey || null,
     };
   }
 
+  // A BIDS id is a prefix and a UUID: 40 characters, of which the axis needs only enough to name
+  // one subject. `shortKey` is the prefix the label drops; KEY_CHARS is what it keeps after it.
+  // Display only: the column still carries the whole id, and every panel that names a recording
+  // shows it whole. specs/20260922-compact-recording-vectors/views.md holds the collision margin.
+  var KEY_CHARS = 8;
+
+  /** The label an axis tick, legend swatch or brush chip carries for one categorical value. */
+  function categoryLabel(col, value) {
+    if (value == null) return value;
+    var s = String(value);
+    var c = typeof col === 'string' ? BY_NAME[col] : col;
+    if (!c || !c.shortKey || s.indexOf(c.shortKey) !== 0) return s;
+    return s.slice(c.shortKey.length, c.shortKey.length + KEY_CHARS);
+  }
+
   var IDENTITY = [
-    column({ name: 'participant', kind: 'categorical', group: 'identity', nullMeans: 'the stem carries no sub-' }),
+    column({
+      name: 'participant', kind: 'categorical', group: 'identity', shortKey: 'sub-',
+      nullMeans: 'the stem carries no sub-',
+    }),
     column({ name: 'task', kind: 'categorical', group: 'identity', nullMeans: 'the stem carries no task-' }),
     column({ name: 'verdict', kind: 'categorical', group: 'decision', nullMeans: 'never null' }),
-    column({ name: 'session', kind: 'categorical', group: 'identity', nullMeans: 'the stem carries no ses-' }),
+    column({
+      name: 'session', kind: 'categorical', group: 'identity', shortKey: 'ses-',
+      nullMeans: 'the stem carries no ses-',
+    }),
     column({ name: 'declared_family', kind: 'categorical', group: 'identity', nullMeans: 'nothing was declared' }),
     column({ name: 'release', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote none' }),
     column({ name: 'release_ground', kind: 'categorical', group: 'decision', nullMeans: 'REDACT itself decided' }),
@@ -316,19 +338,21 @@ var SchemaAxes = (function () {
   var BY_NAME = {};
   CATALOGUE.forEach(function (c) { BY_NAME[c.name] = c; });
 
-  // Owner-directed: participant, task, verdict first. Then the columns that actually
-  // discriminate over this corpus — see specs/20260922-compact-recording-vectors/views.md.
+  // Owner-directed: participant, task, verdict first. The remaining seven are ranked by
+  // discrimination — separation times decision-relevance, under a redundancy cut and a
+  // resolution floor — over the r3 corpus. specs/20260922-compact-recording-vectors/views.md
+  // holds the statistic, the ranking over all 175 assignable columns and what each slot beat.
   var DEFAULT_AXES = [
     'participant',
     'task',
     'verdict',
-    'duration_s',
-    'conformance_airway',
-    'conformance_speech',
-    'gate_failed_n',
-    'flags_n',
-    'pii_findings_n',
+    'declared_family',
     'release',
+    'flags_n',
+    'gate_applied_n',
+    'route_speech',
+    'duration_s',
+    'enhanced_over_residual_rms_db',
   ];
   var MAX_AXES = 10;
 
@@ -478,6 +502,9 @@ var SchemaAxes = (function () {
         (summary.scale === 'log' ? ' · log10 scale' : ''));
     } else {
       bits.push(summary.categories.length + ' ordered categories');
+      if (summary.col.shortKey) {
+        bits.push('labelled by the first ' + KEY_CHARS + ' of the id · the recording panel carries it whole');
+      }
     }
     if (summary.col.reduction === 'mean') {
       bits.push(
@@ -506,6 +533,8 @@ var SchemaAxes = (function () {
     BY_NAME: BY_NAME,
     DEFAULT_AXES: DEFAULT_AXES,
     MAX_AXES: MAX_AXES,
+    KEY_CHARS: KEY_CHARS,
+    categoryLabel: categoryLabel,
     corpusColumns: corpusColumns,
     readValue: readValue,
     summarise: summarise,

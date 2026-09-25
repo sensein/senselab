@@ -297,7 +297,9 @@
         (b.absent === 'include' ? ' + absent' : '');
     }
     if (b.terms && b.terms.length) {
-      return b.terms.length === 1 ? String(b.terms[0]) : b.terms.length + ' categories';
+      return b.terms.length === 1
+        ? String(SchemaAxes.categoryLabel(s.col, b.terms[0]))
+        : b.terms.length + ' categories';
     }
     return b.absent === 'include' ? 'absent included' : 'brushed';
   }
@@ -332,7 +334,9 @@
         var s = el('span', 'swatch');
         s.style.background = cm.map[c];
         var w = el('span', 'legend-item');
-        w.appendChild(s); w.appendChild(document.createTextNode(CorpusView.truncate(c, 22)));
+        w.appendChild(s);
+        w.appendChild(document.createTextNode(CorpusView.truncate(SchemaAxes.categoryLabel(cm.summary.col, c), 22)));
+        w.title = String(c);
         box.appendChild(w);
       });
       if (cm.summary.categories.length > CorpusView.PALETTE.length) {
@@ -537,6 +541,12 @@
     dl.appendChild(dd);
   }
 
+  /** A BIDS id, whole, with the key the axis drew it under so the two can be matched up. */
+  function identity(dl, key, value) {
+    var short = SchemaAxes.categoryLabel(key, value);
+    field(dl, key, value == null || short === value ? value : value + '   (on the axis: ' + short + ')');
+  }
+
   function renderDecision(row, ms) {
     var dl = $('rec-decision');
     dl.innerHTML = '';
@@ -551,8 +561,8 @@
       field(dl, 'conformance_' + b, row['conformance_' + b]);
     });
     ['airway', 'speech', 'voice'].forEach(function (b) { field(dl, 'route_' + b, row['route_' + b]); });
-    field(dl, 'participant', row.participant);
-    field(dl, 'session', row.session);
+    identity(dl, 'participant', row.participant);
+    identity(dl, 'session', row.session);
     field(dl, 'task', row.task);
     field(dl, 'declared_family', row.declared_family);
     field(dl, 'run_dir', row.run_dir);

@@ -99,7 +99,8 @@ test('the panel offers every categorical column and refuses participant, with th
     expect(offered, `${n} must be offered`).toContain(n)
   }
   expect(offered).not.toContain('participant')
-  expect(offered.filter(n => /^gate_.*_passed$/.test(n))).toHaveLength(22)
+  const gates = await page.evaluate(() => SchemaAxes.GATES.length)
+  expect(offered.filter(n => /^gate_.*_passed$/.test(n))).toHaveLength(gates)
   expect(await page.evaluate(() => SchemaFacets.REFUSED.participant)).toMatch(/list, not a facet/)
 })
 
@@ -222,12 +223,13 @@ test('a facet composes with an axis brush rather than replacing it', async ({ pa
   await choose(page, 'verdict', term)
   expect(await drawn(page)).toBe(withFacet)
 
-  // brush duration_s (axis slot 3) to its upper half, from the summary the page itself built
+  // brush duration_s to its upper half, from the summary the page itself built
   const cut = await page.evaluate(() => {
-    const s = window.__viewerState.view.summaries[3]
+    const slot = window.__viewerState.view.axes.indexOf('duration_s')
+    const s = window.__viewerState.view.summaries[slot]
     return { name: s.name, lo: (s.min + s.max) / 2, hi: s.max }
   })
-  expect(cut.name).toBe('duration_s')
+  expect(cut.name, 'duration_s must be a default axis for this test to brush it').toBe('duration_s')
   const both = await independently(
     page,
     `r.verdict === ${JSON.stringify(term)} && r.duration_s != null && r.duration_s >= ${cut.lo}`
