@@ -417,7 +417,7 @@ var CorpusView = (function () {
         var every = Math.max(1, Math.ceil(13 / Math.max(step, 1)));
         for (var ci = 0; ci < cats.length; ci += every) {
           var yy = g.bandTop + ci * step;
-          ctx.fillText(truncate(cats[ci], 16), x - 6, yy);
+          ctx.fillText(truncate(SchemaAxes.categoryLabel(s.col, cats[ci]), 16), x - 6, yy);
           ctx.strokeStyle = '#3a4150';
           ctx.beginPath(); ctx.moveTo(x - 4, yy); ctx.lineTo(x, yy); ctx.stroke();
         }
