@@ -1733,6 +1733,13 @@ def _llm_check_lines(check: dict[str, Any] | None, reviews: list[dict[str, Any]]
     ]
     if check.get("flagged"):
         lines.append(f"{prefix}  flagged: {', '.join(str(name) for name in check['flagged'])}")
+    judgments = " ".join(
+        f"{name}={_shown(check.get(name))}"
+        for name in ("redaction", "original", "speakers", "detector_state")
+        if check.get(name)
+    )
+    if judgments:
+        lines.append(f"{prefix}  judged: {judgments}")
     if check.get("failure"):
         lines.append(f"{prefix}  did not run: {check['failure']}")
     for review in reviews:
@@ -1740,8 +1747,8 @@ def _llm_check_lines(check: dict[str, Any] | None, reviews: list[dict[str, Any]]
             f"{prefix}  review {_shown(review.get('iteration'))}: available={review.get('available')} "
             f"elapsed_s={_shown(review.get('elapsed_s'))} load_s={_shown(review.get('load_s'))}"
         )
-        for finding in review.get("findings") or []:
-            lines.append(f"{prefix}    concern [{finding.get('category')}]: {finding.get('why')}")
+        for entry in review.get("proposal") or []:
+            lines.append(f"{prefix}    {entry.get('action')} [{entry.get('category')}]: {entry.get('why')}")
         for line in str(review.get("reasoning") or "").splitlines():
             if line.strip():
                 lines.append(f"{prefix}    reasoning: {line.strip()}")

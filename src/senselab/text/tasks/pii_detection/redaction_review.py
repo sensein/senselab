@@ -656,7 +656,7 @@ _WORKER_REFUSED: Optional[str] = None
 def shutdown_review_worker(*, forget_failure: bool = True) -> None:
     """End the process's review worker, releasing its weights.
 
-    A later :func:`review_redacted_text` starts a new one. Registered to run at interpreter exit, so
+    A later :func:`review_transcript` starts a new one. Registered to run at interpreter exit, so
     a caller only needs this to hand the memory back earlier than that, or to retry a load that
     failed.
 
