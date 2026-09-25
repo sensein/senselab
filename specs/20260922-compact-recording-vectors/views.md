@@ -219,13 +219,13 @@ polylines.
 | 1 | `participant` | 100% | 64 | 0.982 | 0.011 | 0.011 | owner-directed; 1,527 levels, the only axis that shows a subject's session as a bundle |
 | 2 | `task` | 100% | 62 | 0.873 | 0.082 | 0.072 | owner-directed; 796 levels |
 | 3 | `verdict` | 100% | 3 | 0.275 | 0.379 | 0.104 | owner-directed; pass 52,255 / flag 10,264 / discard 29 |
-| 4 | `declared_family` | 100% | 48 | 0.930 | 0.334 | **0.311** | **the strongest column in the file.** 48 families, never null, and the unit the gates actually resolve against — harvard-sentences-list 13,700 / respiration-and-cough-fivebreaths 3,572 / free-speech 3,073 … |
-| 5 | `release` | 100% | 4 | 0.420 | 0.622 | **0.261** | the fold's second published outcome, and independent of `verdict` (NMI 0.00): nothing_to_redact 45,854 / releasable 12,046 / withheld 4,647 / not_assessed 1 |
+| 4 | `declared_family` | 99.95% | 48 | 0.930 | 0.334 | **0.311** | **the strongest column in the file.** 48 families — the 29 nulls are the recordings that declared nothing — and the unit the gates actually resolve against — harvard-sentences-list 13,700 / respiration-and-cough-fivebreaths 3,572 / free-speech 3,073 … |
+| 5 | `release` | 100% | 4 | 0.420 | 0.622 | **0.261** | the fold's second published outcome, and all but independent of `verdict` (NMI 0.002): nothing_to_redact 45,854 / releasable 12,046 / withheld 4,647 / not_assessed 1 |
 | 6 | `flags_n` | 100% | 5 | 0.375 | 0.488 | **0.183** | 0–4; 48,125 recordings carry none. Never null |
-| 7 | `gate_applied_n` | 100% | 4 | 0.626 | 0.094 | 0.059 | how many of VERDICT's gates were applied at all — the scrutiny the recording got. Never null |
+| 7 | `gate_applied_n` | 100% | 4 | 0.626 | 0.094 | 0.059 | how many of VERDICT's gates were applied at all — the scrutiny the recording got: 1 on 30,869, 2 on 20,859, 4 on 8,305, none on 2,515. Never null |
 | 8 | `route_speech` | 100% | 3 | 0.446 | 0.130 | 0.058 | routed 41,565 / declined 20,954 / unavailable 29 |
 | 9 | `duration_s` | 100% | 62 | 0.778 | 0.073 | 0.057 | p5 2.69 s, p50 7.32 s, p95 57.1 s, 16,159 distinct |
-| 10 | `enhanced_over_residual_rms_db` | 100% | 60 | 0.975 | 0.054 | 0.053 | the exact RMS difference in dB between the enhanced and residual streams (§8) — 62,518 distinct, near-uniform over 60 bands, p5 −35.8, p50 28.3, p95 56.4. The resolution slot |
+| 10 | `enhanced_over_residual_rms_db` | 99.95% | 60 | 0.975 | 0.054 | 0.053 | the exact RMS difference in dB between the enhanced and residual streams (§8) — 62,518 distinct, near-uniform over 60 bands, p5 −35.8, p50 28.3, p95 56.4. The resolution slot |
 
 Σdisc **0.981** against the schema-3 set's 0.650, Σsep **4.55** against 2.19.
 
@@ -239,8 +239,8 @@ polylines.
 | `pii_findings_n` | 0.161 | 0.240 | 0.039 | 30.5% null, and NMI 0.273 with `release`, which explains it at full coverage |
 | `release_ground` | 0.361 | 0.542 | 0.196 | see below — it ranks 4th and is excluded anyway |
 
-The consequence worth naming: **every one of the ten is 100% non-null, so 62,518 of 62,548 lines
-are drawn whole** where the schema-3 set drew only 8,425 (13.5%). That is not the earlier design
+The consequence worth naming: **eight of the ten are never null and the other two miss 30 rows and 29,
+so 62,518 of 62,548 lines are drawn whole** where the schema-3 set drew only 8,425 (13.5%). That is not the earlier design
 hiding absence. Absence is still a first-class value — the absent rail, the `absent N` chip and
 the facet panel's `(absent)` are all unchanged, and every axis that has nulls still shows them.
 What has changed is that the page no longer *opens* on a picture that is 86% broken lines, and
