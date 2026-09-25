@@ -924,7 +924,7 @@ def recording_html(row: dict[str, Any]) -> str:
         f"&middot; findings: {summary}</span></header>"
         f"{ground_html}{why_html}"
         f'<p class="text">{body}</p>'
-        f'<div class="whyrow">{_triage_controls(stem)}'
+        f'<div class="whyrow">{_triage_controls(stem)}{_release_controls(stem)}'
         f'<button type="button" class="whybtn" data-stem="{html.escape(stem)}">'
         f"what determined this status</button></div>"
         f'<div class="recnote"><label>note on this recording '
@@ -951,6 +951,40 @@ _TRIAGE_GROUP = (
     + "</span>"
 )
 """The control group, identical on every card; the card's own ``data-stem`` names the row."""
+
+
+RELEASE_DECISIONS = (
+    ("release_without_redaction", "o", "without"),
+    ("release_with_redaction", "d", "with"),
+)
+"""The two releases a reviewer can say a recording warrants, each with its key and its class slug.
+
+The values are the graph's own ``Release`` member values, so an exported decision joins to a verdict
+without a mapping between them. ``specs/20260924-which-artefact-is-releasable/design.md``.
+"""
+
+_DECISION_GROUP = (
+    '<span class="decgroup">'
+    + "".join(
+        f'<button class="dec d-{slug}" data-v="{html.escape(value)}">'
+        f"{html.escape(slug)} redaction<kbd>{html.escape(key)}</kbd></button>"
+        for value, key, slug in RELEASE_DECISIONS
+    )
+    + "</span>"
+)
+"""The release-decision group, identical on every card; the card's own ``data-stem`` names the row."""
+
+
+def _release_controls(stem: str) -> str:
+    """The per-recording release-decision buttons.
+
+    Args:
+        stem: The recording's BIDS stem, carried by the enclosing card rather than repeated.
+
+    Returns:
+        The control group's HTML.
+    """
+    return _DECISION_GROUP
 
 
 def _triage_controls(stem: str) -> str:
@@ -1253,6 +1287,16 @@ background:var(--bg);color:var(--mut);cursor:pointer;display:inline-flex;gap:4px
 .rec[data-t="-1"]{border-left:3px solid #8a2f24}
 .rec[data-t="flag"]{border-left:3px solid #c98a2b}
 
+.decgroup{display:inline-flex;gap:4px;margin-right:8px}
+.dec{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
+border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
+.dec kbd{font-size:9.5px;opacity:.6;margin-left:5px}
+.dec:hover{color:var(--fg);border-color:var(--acc)}
+.dec.on{color:#fff;border-color:transparent}
+.d-without.on{background:#2c5c2c}
+.d-with.on{background:#2f4670}
+.rec[data-dec="release_without_redaction"]{border-right:3px solid #2c5c2c}
+.rec[data-dec="release_with_redaction"]{border-right:3px solid #2f4670}
 .whybtn{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
 border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
 .whybtn:hover{color:var(--fg);border-color:var(--acc)}
@@ -1306,7 +1350,7 @@ main{padding:12px 10px 120px}
 #status{pointer-events:none}
 /* A pointer that cannot hover gets larger hit targets. */
 @media (hover:none){
-.tri,.whybtn,.verdict{padding:6px 10px}
+.tri,.dec,.whybtn,.verdict{padding:6px 10px}
 mark.pii{padding:1px 3px}
 }
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto !important}}
@@ -1348,14 +1392,14 @@ const panel=document.getElementById('panel');
 const progress=document.getElementById('progress');
 
 /* ---- store: localStorage is a convenience, the export is the record ---- */
-let store={findings:{},recordings:{},triage:{}};
+let store={findings:{},recordings:{},triage:{},release:{}};
 function load(){
   try{
     const raw=localStorage.getItem(KEY);
     if(raw){const parsed=JSON.parse(raw);
       store={findings:parsed.findings||{},recordings:parsed.recordings||{},
-             triage:parsed.triage||{}};}
-  }catch(e){store={findings:{},recordings:{},triage:{}};}
+             triage:parsed.triage||{},release:parsed.release||{}};}
+  }catch(e){store={findings:{},recordings:{},triage:{},release:{}};}
 }
 function save(){
   try{localStorage.setItem(KEY,JSON.stringify(store));}
@@ -1405,6 +1449,24 @@ function setRow(card,value){
   save();paintRow(card);tally();outline();
   if(triSel.value!=='any')apply();
 }
+/* ---- the release decision: which artefact this reviewer would hand on ---- */
+const decSel=document.getElementById('dec');
+const DECKEYS={'o':'release_without_redaction','O':'release_without_redaction',
+               'd':'release_with_redaction','D':'release_with_redaction'};
+function paintDecision(card){
+  const rec=store.release[card.dataset.stem];
+  const value=rec&&rec.v;
+  if(value)card.dataset.dec=value; else card.removeAttribute('data-dec');
+  for(const b of card.querySelectorAll('.dec'))b.classList.toggle('on',b.dataset.v===value);
+}
+function setDecision(card,value){
+  const stem=card.dataset.stem;
+  const held=(store.release[stem]||{}).v;
+  if(held===value)delete store.release[stem];
+  else store.release[stem]={v:value,t:new Date().toISOString()};
+  save();paintDecision(card);tally();
+  if(decSel.value!=='any')apply();
+}
 let activeCard=null;
 let pointerOwns=true;
 function markActive(card,scroll){
@@ -1418,10 +1480,13 @@ function markActive(card,scroll){
 document.addEventListener('mousemove',()=>{pointerOwns=true;},{passive:true});
 for(const card of cards){
   paintRow(card);
+  paintDecision(card);
   card.addEventListener('mouseenter',()=>{if(pointerOwns)markActive(card,false);});
   card.addEventListener('focusin',()=>markActive(card,false));
   for(const b of card.querySelectorAll('.tri'))
     b.addEventListener('click',()=>{markActive(card,false);setRow(card,b.dataset.v);});
+  for(const b of card.querySelectorAll('.dec'))
+    b.addEventListener('click',()=>{markActive(card,false);setDecision(card,b.dataset.v);});
 }
 
 /* ---- moving between samples, following the filters ---- */
@@ -1470,6 +1535,15 @@ document.addEventListener('keydown',e=>{
   const card=activeCard||(e.target.closest&&e.target.closest('.rec'));
   if(!card)return;
   e.preventDefault();setRow(card,value);
+});
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  const value=DECKEYS[e.key];
+  if(!value)return;
+  const card=activeCard||(e.target.closest&&e.target.closest('.rec'));
+  if(!card)return;
+  e.preventDefault();setDecision(card,value);
 });
 
 /* ---- the outline ---- */
@@ -1537,7 +1611,7 @@ function apply(){
   const fams=checked('fam-f'), rels=checked('rel-f');
   const cats=checked('cat-f'), dets=checked('det-f');
   const fired=firedSel.value, brk=brkSel.value, tx=txSel.value, rev=revSel.value;
-  const tri=triSel.value, llmWant=llmSel.value;
+  const tri=triSel.value, llmWant=llmSel.value, dec=decSel.value;
   const nf=+minNf.value||0;
   const lo=+minNt.value||1, hi=+maxNt.value||9999;
   const narrowed=!allChecked('cat-f')||!allChecked('det-f')||brk!=='any'||tx!=='any'
@@ -1550,6 +1624,10 @@ function apply(){
       if(ok&&tri!=='any'){
         const held=r.dataset.t||'';
         ok=tri==='marked'?!!held:tri==='unmarked'?!held:held===tri;
+      }
+      if(ok&&dec!=='any'){
+        const said=r.dataset.dec||'';
+        ok=dec==='decided'?!!said:dec==='undecided'?!said:said===dec;
       }
       if(ok&&llmWant!=='any'){
         const st=r.dataset.llm||'';
@@ -1588,8 +1666,10 @@ function tally(){
   for(const m of marks)if((store.findings[m.dataset.k]||{}).v)done++;
   const notes=Object.keys(store.recordings).length;
   const rows=Object.keys(store.triage).length;
+  const said=Object.keys(store.release).length;
   progress.textContent=done+' of '+marks.length+' findings judged \\u00b7 '+rows+' of '
-    +cards.length+' rows marked \\u00b7 '+notes+' recording notes';
+    +cards.length+' rows marked \\u00b7 '+said+' release decisions \\u00b7 '
+    +notes+' recording notes';
 }
 
 /* ---- review panel ---- */
@@ -1650,9 +1730,9 @@ document.addEventListener('keydown',e=>{
 
 /* ---- export and import: the durable artefact ---- */
 function payload(){
-  return JSON.stringify({schema:'senselab.fsreview',version:2,
+  return JSON.stringify({schema:'senselab.fsreview',version:3,
     exported:new Date().toISOString(),findings:store.findings,recordings:store.recordings,
-    triage:store.triage},null,1);
+    triage:store.triage,release:store.release},null,1);
 }
 document.getElementById('export').addEventListener('click',()=>{
   const text=payload();
@@ -1672,10 +1752,11 @@ document.getElementById('import').addEventListener('click',()=>{
     const parsed=JSON.parse(text);
     store={findings:Object.assign({},store.findings,parsed.findings||{}),
            recordings:Object.assign({},store.recordings,parsed.recordings||{}),
-           triage:Object.assign({},store.triage,parsed.triage||{})};
+           triage:Object.assign({},store.triage,parsed.triage||{}),
+           release:Object.assign({},store.release,parsed.release||{})};
     save();
     for(const m of marks)paint(m);
-    for(const card of cards)paintRow(card);
+    for(const card of cards){paintRow(card);paintDecision(card);}
     for(const t of document.querySelectorAll('.rnote')){
       const rec=store.recordings[t.dataset.stem]; if(rec&&rec.n)t.value=rec.n;}
     apply();
@@ -1892,7 +1973,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!whyBox.hidden)clos
 
 for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))
   el.addEventListener('change',apply);
-for(const el of [firedSel,brkSel,txSel,revSel,triSel,llmSel,minNf,minNt,maxNt])
+for(const el of [firedSel,brkSel,txSel,revSel,triSel,decSel,llmSel,minNf,minNt,maxNt])
   el.addEventListener('change',apply);
 let timer;q.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(apply,140);});
 for(const [id,cls] of [['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],['nodet','det-f']])
@@ -1933,6 +2014,7 @@ _DOCUMENT = """<!doctype html>
 <dt>j / k</dt><dd>next / previous sample</dd>
 <dt>J / K</dt><dd>next / previous participant</dd>
 <dt>+ or = / - / f</dt><dd>mark the row +1 / -1 / flag</dd>
+<dt>o / d</dt><dd>release this recording without / with redaction</dd>
 <dt>1 &ndash; 4</dt><dd>judge the selected finding</dd>
 <dt>Esc</dt><dd>close a panel</dd>
 </dl><p class="note">Movement follows the filters, and the card it lands on is what the mark keys
@@ -1976,6 +2058,11 @@ placeholder="max"> tokens</div>
 <select id="tri"><option value="any">row mark, any</option>
 <option value="marked">marked</option><option value="unmarked">unmarked</option>
 <option value="+1">+1</option><option value="-1">-1</option><option value="flag">flag</option>
+</select>
+<select id="dec"><option value="any">release decision, any</option>
+<option value="decided">decided</option><option value="undecided">undecided</option>
+<option value="release_without_redaction">release without redaction</option>
+<option value="release_with_redaction">release with redaction</option>
 </select>
 <select id="rev"><option value="any">judged or not</option>
 <option value="unreviewed">unjudged only</option><option value="reviewed">judged only</option>
