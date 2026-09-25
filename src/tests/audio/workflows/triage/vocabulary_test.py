@@ -883,13 +883,26 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
         """A reader must be able to go from the ground back to the state without the table."""
         assert not set(RELEASE_WITHOUT_REDACTION_GROUNDS) & set(RELEASE_UNKNOWN_GROUNDS)
 
-    def test_the_fold_reads_no_reviewer_record(self) -> None:
-        """A reviewer's reading is never the act; nothing but the store's evidence reaches the axis.
+    def test_the_only_reviewer_input_to_the_axis_is_the_one_that_withholds(self) -> None:
+        """``_release_from``'s parameters are the whole input to the axis.
 
-        ``design.md`` §5. ``_release_from``'s parameters are the whole input to the axis.
+        ``design.md`` §5. The reviewer reaches it through exactly one declared parameter, and that
+        parameter defaults to reading nothing.
         """
-        parameters = set(inspect.signature(_release_from).parameters)
-        assert parameters == {"node_verdicts", "evidence", "ran"}
+        parameters = inspect.signature(_release_from).parameters
+        assert set(parameters) == {"node_verdicts", "evidence", "ran", "reviewer_withholds"}
+        assert parameters["reviewer_withholds"].default is False
+
+    def test_the_reviewer_may_tighten_the_axis_and_never_loosen_it(self) -> None:
+        """The one direction that cannot leak. ``design.md`` §5."""
+        passed = [NodeVerdict("REDACT", Outcome.PASS, None, "the scan concluded")]
+        failed = [NodeVerdict("REDACT", Outcome.FAIL, None, "the scan concluded")]
+        evidence = RedactionEvidence()
+        ran: dict[str, RunState] = {}
+        assert _release_from(passed, evidence, ran)[0] is Release.WITH_REDACTION
+        assert _release_from(passed, evidence, ran, reviewer_withholds=True)[0] is Release.WITHHELD
+        assert _release_from(failed, evidence, ran, reviewer_withholds=False)[0] is Release.WITHHELD
+        assert _release_from(failed, evidence, ran, reviewer_withholds=True)[0] is Release.WITHHELD
 
 
 class TestARedactNonPassIsVisibleWithoutFlippingTriage:

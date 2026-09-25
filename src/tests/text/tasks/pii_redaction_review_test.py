@@ -3,7 +3,7 @@
 The subprocess is real and the line protocol is the shipped one; only the *payload* is fake. The
 worker script is replaced with a few lines of pure Python that speak the same protocol and load no
 weights, so spawn counts, restarts, timeouts and the refusal record are all observable on a laptop.
-A stub of ``review_redacted_text`` — which is what ``redact_test.py`` uses — could not see any of
+A stub of ``review_transcript`` — which is what ``redact_test.py`` uses — could not see any of
 them, because they all live underneath it.
 
 See ``specs/20260817-triage-workflow-dag/llm-check-amortised-load.md``.
@@ -20,7 +20,7 @@ import pytest
 
 from senselab.text.tasks.pii_detection import redaction_review
 from senselab.text.tasks.pii_detection.redaction_review import (
-    review_redacted_text,
+    review_transcript,
     shutdown_review_worker,
 )
 
@@ -89,7 +89,10 @@ def main():
         _replies.flush()
         emit(
             {
-                "completion": "REASONING: nothing identifying remains.\nFINDINGS: []",
+                "completion": (
+                    "REASONING: nothing identifying remains.\nREDACTION: not_applicable\n"
+                    "ORIGINAL: clean\nSPEAKERS: one\nPROPOSAL: []"
+                ),
                 "generate_s": 0.01,
                 "output_tokens": 11,
                 "peak_reserved_mib": 71000,
@@ -167,14 +170,14 @@ class TestTheWeightsAreLoadedOncePerProcess:
 
     def test_three_reviews_pay_one_load(self, harness: Harness) -> None:
         """The whole point: a second review reuses the first one's worker."""
-        results = [review_redacted_text(f"text {n}", model_id="stub/model") for n in range(3)]
+        results = [review_transcript(f"text {n}", model_id="stub/model") for n in range(3)]
         assert all(result.available for result in results)
         assert len(harness.loads) == 1, f"one load expected, the worker was spawned {len(harness.loads)} times"
 
     def test_only_the_round_that_loaded_says_it_loaded(self, harness: Harness) -> None:
         """``load_s`` is how a store separates the amortised rounds from the one that paid."""
-        first = review_redacted_text("one", model_id="stub/model")
-        second = review_redacted_text("two", model_id="stub/model")
+        first = review_transcript("one", model_id="stub/model")
+        second = review_transcript("two", model_id="stub/model")
         assert first.load_s > 0.0, "the first review paid the load and must say so"
         assert second.load_s == 0.0, "a reused worker loaded nothing"
         assert first.elapsed_s >= first.load_s, "the round's clock has to contain the load it paid"
@@ -182,34 +185,34 @@ class TestTheWeightsAreLoadedOncePerProcess:
 
     def test_a_different_commit_is_a_different_worker(self, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
         """Weights already resident are the wrong weights when the resolved commit changes."""
-        review_redacted_text("one", model_id="stub/model")
+        review_transcript("one", model_id="stub/model")
         monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "c" * 40)
-        review_redacted_text("two", model_id="stub/model")
+        review_transcript("two", model_id="stub/model")
         assert [load["revision"] for load in harness.loads] == [SHA, "c" * 40]
 
     def test_shutdown_hands_the_weights_back(self, harness: Harness) -> None:
         """A caller that wants the memory before the process ends can have it."""
-        review_redacted_text("one", model_id="stub/model")
+        review_transcript("one", model_id="stub/model")
         shutdown_review_worker()
-        review_redacted_text("two", model_id="stub/model")
+        review_transcript("two", model_id="stub/model")
         assert len(harness.loads) == 2
 
     def test_the_answer_carries_what_it_generated(self, harness: Harness) -> None:
         """Output tokens are the thing generation cost tracks, so the store carries them."""
-        result = review_redacted_text("one", model_id="stub/model")
+        result = review_transcript("one", model_id="stub/model")
         assert result.output_tokens == 11
         assert result.revision == SHA
 
     def test_the_answer_carries_what_it_holds_on_the_card(self, harness: Harness) -> None:
         """A worker kept alive occupies a GPU; how much decides whether anything else fits beside it."""
-        result = review_redacted_text("one", model_id="stub/model")
+        result = review_transcript("one", model_id="stub/model")
         assert result.peak_reserved_mib == 71000
         assert result.resident_mib == 23000
 
     def test_a_worker_that_did_not_answer_claims_no_memory(self, harness: Harness) -> None:
         """Zero is the honest reading when nothing ran; a stale number would size the next run."""
         harness.directives("fail_load")
-        result = review_redacted_text("one", model_id="stub/model")
+        result = review_transcript("one", model_id="stub/model")
         assert result.peak_reserved_mib == 0 and result.resident_mib == 0
 
 
@@ -219,27 +222,27 @@ class TestAWorkerThatCannotStartCostsOneAttempt:
     def test_the_first_failure_is_recorded_and_not_retried(self, harness: Harness) -> None:
         """The second call reports the same absence without spawning anything."""
         harness.directives("fail_load")
-        first = review_redacted_text("one", model_id="stub/model")
-        second = review_redacted_text("two", model_id="stub/model")
+        first = review_transcript("one", model_id="stub/model")
+        second = review_transcript("two", model_id="stub/model")
         assert not first.available and not second.available
         assert first.failure is not None and "no device found" in first.failure
         assert second.failure == first.failure
         assert len(harness.loads) == 1, f"a refused load was retried: {len(harness.loads)} spawns"
 
     def test_a_refusal_is_an_absence_and_not_a_raise(self, harness: Harness) -> None:
-        """The absent path's contract: a recorded absence, a named failure, no findings."""
+        """The absent path's contract: a recorded absence, a named failure, no proposal."""
         harness.directives("fail_load")
-        result = review_redacted_text("one", model_id="stub/model")
-        assert result.findings == []
+        result = review_transcript("one", model_id="stub/model")
+        assert result.proposal == []
         assert result.model_id == "stub/model"
         assert result.elapsed_s > 0.0
 
     def test_shutdown_clears_the_refusal(self, harness: Harness) -> None:
         """A deliberate retry is the caller's to ask for; a silent one is not."""
         harness.directives("fail_load")
-        review_redacted_text("one", model_id="stub/model")
+        review_transcript("one", model_id="stub/model")
         shutdown_review_worker()
-        assert review_redacted_text("two", model_id="stub/model").available
+        assert review_transcript("two", model_id="stub/model").available
         assert len(harness.loads) == 2
 
     def test_releasing_the_weights_between_recordings_does_not_clear_it(self, harness: Harness) -> None:
@@ -251,7 +254,7 @@ class TestAWorkerThatCannotStartCostsOneAttempt:
         """
         harness.directives("fail_load")
         for _ in range(3):
-            review_redacted_text("a recording", model_id="stub/model")
+            review_transcript("a recording", model_id="stub/model")
             shutdown_review_worker(forget_failure=False)
         assert len(harness.loads) == 1, f"the refusal was forgotten: {len(harness.loads)} load attempts"
 
@@ -262,8 +265,8 @@ class TestAFailedReviewDoesNotPoisonTheProcess:
     def test_a_worker_that_raised_is_replaced(self, harness: Harness) -> None:
         """An out-of-memory on one transcript costs one reload, not every later review."""
         harness.directives("raise")
-        failed = review_redacted_text("one", model_id="stub/model")
-        recovered = review_redacted_text("two", model_id="stub/model")
+        failed = review_transcript("one", model_id="stub/model")
+        recovered = review_transcript("two", model_id="stub/model")
         assert not failed.available and failed.failure is not None
         assert "CUDA out of memory" in failed.failure
         assert recovered.available, "a dead worker must be replaced, not reported dead forever"
@@ -272,18 +275,18 @@ class TestAFailedReviewDoesNotPoisonTheProcess:
     def test_a_worker_that_vanished_is_replaced(self, harness: Harness) -> None:
         """A killed worker answers nothing at all; that is an absence, then a fresh load."""
         harness.directives("exit")
-        failed = review_redacted_text("one", model_id="stub/model")
+        failed = review_transcript("one", model_id="stub/model")
         assert not failed.available
-        assert review_redacted_text("two", model_id="stub/model").available
+        assert review_transcript("two", model_id="stub/model").available
         assert len(harness.loads) == 2
 
     def test_a_worker_that_never_answers_is_an_absence_not_a_hang(self, harness: Harness) -> None:
         """``timeout_s`` still bounds a review; the worker is killed rather than waited on."""
         harness.directives("hang")
-        result = review_redacted_text("one", model_id="stub/model", timeout_s=2)
+        result = review_transcript("one", model_id="stub/model", timeout_s=2)
         assert not result.available
         assert result.failure is not None and "did not answer in 2s" in result.failure
-        assert review_redacted_text("two", model_id="stub/model").available
+        assert review_transcript("two", model_id="stub/model").available
 
 
 class TestTheProtocolIsNotConfusedByTheLoaderSOwnOutput:
@@ -296,16 +299,16 @@ class TestTheProtocolIsNotConfusedByTheLoaderSOwnOutput:
         so it cannot show that the marker does any work. A well-formed object that is not a reply
         can: without the marker it is read as one, and the review returns the wrong completion.
         """
-        result = review_redacted_text("one", model_id="stub/model")
+        result = review_transcript("one", model_id="stub/model")
         assert result.available
         assert "LEAKED" not in result.reasoning and "LEAKED" not in result.raw
         assert result.reasoning == "nothing identifying remains."
         assert result.output_tokens == 11, "a line the loader wrote was read as the model's answer"
-        assert result.findings == []
+        assert result.proposal == []
 
     def test_a_failure_message_carries_what_the_worker_was_last_doing(self, harness: Harness) -> None:
         """A load failure with no context is a bug report nobody can act on."""
         harness.directives("hang")
-        result = review_redacted_text("one", model_id="stub/model", timeout_s=2)
+        result = review_transcript("one", model_id="stub/model", timeout_s=2)
         assert result.failure is not None
         assert "chatter on stdout that is not a reply" in result.failure or "loading shards" in result.failure
