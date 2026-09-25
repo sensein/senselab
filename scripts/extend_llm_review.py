@@ -214,29 +214,57 @@ def standing(store: ProvStore) -> Entity | None:
     return annotation if node == NODE else None
 
 
-def review_one(store: ProvStore, config: TriageConfig, *, run_dir: Path, apply: bool, held: str | None) -> str:
+def live_annotations(store: ProvStore) -> list[str]:
+    """Every live ``redaction_llm_annotation`` in the store, whichever node wrote it.
+
+    Separate from :func:`standing`, and deliberately: whether to read again is a question about
+    REVIEW's own work, while what to retire afterwards is a question about the name. A store
+    replayed before the reviewer moved out of REDACT carries that node's annotation under the same
+    name, and leaving it live puts two of them in the store.
+
+    Every current consumer takes ``find_measurement``, which returns the latest live entity, so the
+    stale one is not what any of them folds. What the retirement buys is the store's own discipline:
+    one live record per name, a reader that does not depend on write order to be correct, and a
+    ``find_measurements`` consumer that cannot double-count.
+
+    Args:
+        store: The run's store.
+
+    Returns:
+        The entity ids, in the store's own order.
+    """
+    return [
+        entity.id
+        for entity in store.entities("measurement")
+        if entity.attributes.get("name") == REDACTION_LLM_ANNOTATION and not store.is_invalidated(entity.id)
+    ]
+
+
+def review_one(store: ProvStore, config: TriageConfig, *, run_dir: Path, apply: bool, held: Sequence[str]) -> str:
     """Read one finished run back, write the refined audio where asked to, and retire what it replaced.
 
-    The retirement happens after the write and only where the new annotation's id differs from the
-    one that stood, which is the ordering the adding drivers use. The store is content-addressed,
-    so a re-read reaching the same conclusion under the same configuration mints the same entity;
-    retiring first would invalidate the re-read along with what it replaced.
+    The retirement happens after the write and only for ids the new annotation did not itself take,
+    which is the ordering the adding drivers use. The store is content-addressed, so a re-read
+    reaching the same conclusion under the same configuration mints the same entity; retiring first
+    would invalidate the re-read along with what it replaced.
 
     Args:
         store: The run's store.
         config: The triage configuration.
         run_dir: The run directory, ``<run_root>/run``.
         apply: Whether to write the redacted stream from the proposal.
-        held: The id of the annotation that stood before this read, or None.
+        held: The ids of every annotation that was live before this read.
 
     Returns:
         The reading's status, with ``+applied`` appended where a stream was written.
     """
     outcome = review(store, config)
-    if held is not None and held != outcome.annotation_id:
+    for entity_id in held:
+        if entity_id == outcome.annotation_id:
+            continue
         supersede(
             store,
-            held,
+            entity_id,
             node=NODE,
             step=ANNOTATION_SUPERSEDED,
             reason=_SUPERSEDED_REASON,
@@ -285,12 +313,11 @@ def extend_one(
     held = standing(store)
     if held is not None and not force:
         return {"status": PRESENT, NODE: str(held.attributes.get("status") or "")}
+    replaced = live_annotations(store)
     before = store.fingerprint()
     with record_venv_use() as used:
         outcome = attempt_derivation(
-            lambda: review_one(
-                store, config, run_dir=run_root / RUN_SUBDIR, apply=apply, held=None if held is None else held.id
-            )
+            lambda: review_one(store, config, run_dir=run_root / RUN_SUBDIR, apply=apply, held=replaced)
         )
     if outcome.failed:
         return {"status": ERROR, NODE: outcome.detail}
