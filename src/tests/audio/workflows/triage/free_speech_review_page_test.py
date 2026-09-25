@@ -223,7 +223,9 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
         _word(1, "[UH]", bracketed=True),
         _word(2, "moved"),
         _entity(
-            "verdict-old", "verdict", {"node": "VERDICT", "release": "releasable", "declared_family": "free-speech"}
+            "verdict-old",
+            "verdict",
+            {"node": "VERDICT", "release": "release_with_redaction", "declared_family": "free-speech"},
         ),
         {"record": "relation", "relation": "wasInvalidatedBy", "source": "verdict-old", "target": "act-replay"},
         _verdict("withheld"),
@@ -243,7 +245,7 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
 def test_recording_record_skips_a_family_outside_the_pattern(tmp_path: Path) -> None:
     """An item-list task under the same tree is not a free response."""
     run_root = _store(
-        tmp_path, "sub-aaa_ses-bbb_task-animal-fluency", [_verdict("releasable", family="animal-fluency")]
+        tmp_path, "sub-aaa_ses-bbb_task-animal-fluency", [_verdict("release_with_redaction", family="animal-fluency")]
     )
     assert page.recording_record(run_root, page.free_response_families()) is None
 
@@ -341,13 +343,15 @@ def test_finding_key_is_stable_and_position_independent() -> None:
 
 def test_extract_writes_one_line_per_recording(tmp_path: Path) -> None:
     """The sweep keeps the free-response recordings and reports its counts."""
-    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("releasable")])
+    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("release_with_redaction")])
     _store(
         tmp_path,
         "sub-ccc_ses-ddd_task-cinderella-story",
-        [_word(0, "two"), _verdict("nothing_to_redact", "x", "cinderella-story")],
+        [_word(0, "two"), _verdict("release_without_redaction", "x", "cinderella-story")],
     )
-    _store(tmp_path, "sub-eee_ses-fff_task-animal-fluency", [_verdict("releasable", family="animal-fluency")])
+    _store(
+        tmp_path, "sub-eee_ses-fff_task-animal-fluency", [_verdict("release_with_redaction", family="animal-fluency")]
+    )
     report = page.extract(tmp_path, tmp_path / "out.jsonl", workers=1)
     assert report["candidates"] == 2
     assert report["participants"] == 2
@@ -462,7 +466,7 @@ def _row(participant: str, **rest: Any) -> dict[str, Any]:  # noqa: ANN401 -- mi
         "task": "free-speech-1",
         "stem": f"{participant}_ses-b_task-free-speech-1",
         "fam": "free-speech",
-        "rel": "releasable",
+        "rel": "release_with_redaction",
         "rg": None,
         "tri": "pass",
         "why": "",
@@ -501,7 +505,7 @@ def test_render_is_self_contained_and_groups_by_participant(tmp_path: Path) -> N
                     "sub-ccc",
                     task="cinderella-story",
                     fam="cinderella-story",
-                    rel="nothing_to_redact",
+                    rel="release_without_redaction",
                     rg="the scan ran over the transcript and found nothing to redact",
                     w=[["two", 0, -1]],
                     ch=3,
@@ -1206,7 +1210,7 @@ def test_census_counts_what_a_rebuild_is_judged_by(tmp_path: Path) -> None:
                     f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1, brk=1)],
                     d={"llm": {"status": "disabled"}},
                 ),
-                _census_row("sub-b", rel="releasable", d={"llm": {"status": "clean"}}),
+                _census_row("sub-b", rel="release_with_redaction", d={"llm": {"status": "clean"}}),
             ]
         )
         + "\n"
@@ -1241,7 +1245,7 @@ def test_compare_reports_each_count_in_both_with_its_delta(tmp_path: Path) -> No
 
 def test_an_extract_carries_its_schema_version(tmp_path: Path) -> None:
     """The header is what lets the page know which graph the rows came from."""
-    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("releasable")])
+    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("release_with_redaction")])
     out = tmp_path / "out.jsonl"
     report = page.extract(tmp_path, out, workers=1)
     assert report["version"] == page.EXTRACT_VERSION
@@ -1266,7 +1270,7 @@ def test_the_page_refuses_to_describe_a_reviewer_it_cannot_vouch_for(tmp_path: P
     data = tmp_path / "old.jsonl"
     data.write_text(json.dumps(_row("sub-a")) + "\n")
     document = page.render(page.load(data), "Review")
-    assert "written before the reviewer ladder changed" in document
+    assert "written before the release axis and the reviewer ladder changed" in document
     fresh = page.Corpus()
     fresh.version = page.EXTRACT_VERSION
     fresh.add(_row("sub-a"))
@@ -1338,7 +1342,7 @@ def test_a_mark_matched_by_the_stimulus_reads_as_matched(tmp_path: Path) -> None
             [0, 1],
         ),
         *_label("assertion-1", "NAME", "word-0"),
-        _verdict("releasable", family="cinderella-story"),
+        _verdict("release_with_redaction", family="cinderella-story"),
     ]
     run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
     row = page.recording_record(run_root, page.free_response_families())

@@ -2127,7 +2127,7 @@ class TestTheReviewerAnnotatesAndVerdictDecides:
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.PASS and result.artifacts != {}
         folded = verdict_node(store, None, config, run_dir=tmp_path).file_verdict
-        assert folded.release is Release.RELEASABLE, "an unmeasured model does not gate a release"
+        assert folded.release is Release.WITH_REDACTION, "an unmeasured model does not gate a release"
         assert folded.triage is Triage.FLAG, "and the safety signal survives the split"
         assert any(LLM_REDACTION_RESIDUE in reason.why for reason in folded.reasons)
         assert folded.llm_redaction["revision"] == "a" * 40

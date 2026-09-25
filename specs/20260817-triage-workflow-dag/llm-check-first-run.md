@@ -155,7 +155,7 @@ result is exactly what the design asks for and nothing more:
 - the round's measurement carries `available: false` and a `failure` naming a
   `RevisionResolutionError` and the Hub's 401, with an empty `reasoning`;
 - the annotation carries `status: absent`, `revision: null`, and the same failure string;
-- **REDACT's own outcome is unchanged (`pass`) and the release stays `releasable`** — the detector
+- **REDACT's own outcome is unchanged (`pass`) and the release stays `release_with_redaction`** — the detector
   path's answer stands, and the recording's fate does not depend on whether a GPU was reachable;
 - nothing about it is silent: the failure is in the store, in the summary JSON's `llm_annotation`,
   and in the file verdict's `llm_redaction`.

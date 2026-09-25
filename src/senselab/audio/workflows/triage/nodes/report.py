@@ -60,7 +60,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "REPORT"
 SUMMARY_STEM = "summary"
 FORMATS = ("png", "pdf")
-REPORT_SCHEMA_VERSION = "triage-summary/v8"
+REPORT_SCHEMA_VERSION = "triage-summary/v9"
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"

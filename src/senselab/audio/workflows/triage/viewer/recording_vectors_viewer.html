@@ -416,7 +416,7 @@ table.measures tr.absent-row { background: #14120e; }
 'use strict';
 
 var SchemaDecode = (function () {
-  var SCHEMA_VERSION = 4;
+  var SCHEMA_VERSION = 5;
   var TIME_SCALE = 65535;
   var TRACE_POINTS = 256;
   var UNKNOWN_CODE = 255;
@@ -844,7 +844,7 @@ var SchemaAxes = (function () {
   // Orders for the closed vocabularies. Anything not listed orders by frequency.
   var ORDERINGS = {
     verdict: ['pass', 'flag', 'discard'],
-    release: ['releasable', 'nothing_to_redact', 'withheld', 'not_assessed'],
+    release: ['release_without_redaction', 'release_with_redaction', 'withheld', 'not_assessed'],
     conformance_airway: ['true', 'undetermined', 'false'],
     conformance_speech: ['true', 'undetermined', 'false'],
     conformance_voice: ['true', 'undetermined', 'false'],

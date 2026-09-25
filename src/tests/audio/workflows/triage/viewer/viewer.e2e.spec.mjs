@@ -36,7 +36,7 @@ test('the page loads the parquet from disk and reports what it read', async ({ p
   await expect(page.locator('#status')).not.toHaveClass(/bad/)
   const info = await page.locator('#file-info').innerText()
   expect(info).toContain('240 rows')
-  expect(info).toContain('schema_version 3')
+  expect(info).toContain('schema_version 5')
   const rows = await page.evaluate(() => window.__viewerState.rows.length)
   expect(rows).toBe(240)
   expect(problems, 'the page raised no error and fetched nothing').toEqual([])

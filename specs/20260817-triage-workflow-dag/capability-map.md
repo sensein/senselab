@@ -434,7 +434,7 @@ free: a truncated final line is a detectable partial write.
 
 **Location.** The store must be written to a directory that is **not** the one REDACT writes its
 artifacts to, and the two must not be siblings that a single "publish this folder" step would sweep
-up together. `release: releasable` never applies to the store.
+up together. No release value ever applies to the store.
 
 **Never in a content-addressable cache.** `artifacts/analyze_audio_cache/` entries are keyed by
 content and reused across runs and hosts. A transcript there is PII in a shared cache with no owner

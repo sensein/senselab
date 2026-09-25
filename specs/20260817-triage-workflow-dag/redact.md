@@ -10,9 +10,9 @@ only the first reaches this step:
 
 | state | REDACT | release axis |
 | --- | --- | --- |
-| SPEECH ran and found PII | **runs** | `releasable` on a pass, `withheld` otherwise |
-| SPEECH ran and found no PII | does not run | `nothing_to_redact` |
-| SPEECH did not run, or failed for want of words | does not run | `nothing_to_redact` |
+| SPEECH ran and found PII | **runs** | `release_with_redaction` on a pass, `withheld` otherwise |
+| SPEECH ran and found no PII | does not run | `release_without_redaction` |
+| SPEECH did not run, or failed for want of words | does not run | `not_assessed`, ground `NO_TRANSCRIPT` — nothing read the recording |
 
 A wordless recording has no PII scan, no REDACT verdict, and no withheld release. There is no
 incomplete-scan row here, because there is no scan to be incomplete: a file with nothing to redact is
@@ -48,7 +48,7 @@ safe to release, and a non-target speaker naming the participant is exactly as u
 | | SPEECH step 7 | REDACT |
 | --- | --- | --- |
 | scope | target speaker's spans | every finding |
-| purpose | does this recording need a human | is this artifact releasable |
+| purpose | does this recording need a human | which artefact may be handed on |
 
 ## What the declared stimulus accounts for
 
@@ -160,7 +160,7 @@ matched text is what keeps the exception out of the logs.
 re-planning splits on it, so a label containing `+` would be silently decomposed. None may contain
 one.
 
-## The store cannot be made releasable
+## The store can never be released
 
 The store holds the unredacted consensus transcript with provenance, by design. Redaction produces a
 **derivative** alongside it and cannot retroactively clean it. Therefore:

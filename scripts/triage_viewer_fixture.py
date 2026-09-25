@@ -50,7 +50,12 @@ TASKS = [
 ]
 FAMILIES = ["speech", "voice", "airway", "ddk"]
 VERDICTS = [("pass", 78), ("flag", 21), ("discard", 1)]
-RELEASES = [("not_assessed", 60), ("releasable", 26), ("withheld", 9), ("nothing_to_redact", 5)]
+RELEASES = [
+    ("release_without_redaction", 43),
+    ("not_assessed", 31),
+    ("release_with_redaction", 19),
+    ("withheld", 7),
+]
 RELEASE_GROUNDS = [("pii_detected", 30), ("scan_declined", 40), (None, 30)]
 ROUTE_STATES = [("routed", 70), ("declined", 22), ("unavailable", 5), ("empty", 3)]
 CONFORMANCE = [("true", 55), ("false", 12), ("undetermined", 33)]
