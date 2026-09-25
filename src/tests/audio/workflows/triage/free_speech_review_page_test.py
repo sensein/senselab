@@ -599,7 +599,7 @@ def test_a_recording_note_refreshes_the_progress_line() -> None:
 def test_the_store_reads_and_writes_are_guarded() -> None:
     """Storage throws outright in some contexts, so the page must render without it."""
     assert page._SCRIPT.count("try{") >= 2
-    assert "catch(e){store={findings:{},recordings:{},triage:{}};}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},triage:{},release:{}};}" in page._SCRIPT
 
 
 def test_in_stimulus_keeps_none_apart_from_false() -> None:
@@ -920,13 +920,13 @@ def test_the_row_mark_is_a_separate_collection_from_the_finding_verdicts() -> No
     """Two records in the export, distinguishable, neither shadowing the other."""
     assert "triage:store.triage" in page._SCRIPT
     assert "findings:store.findings" in page._SCRIPT
-    assert "version:2" in page._SCRIPT
+    assert "version:3" in page._SCRIPT
 
 
 def test_the_row_mark_persists_and_degrades_like_the_finding_verdicts() -> None:
     """Same namespace, same guarded access, same three collections restored on load."""
     assert "triage:parsed.triage||{}" in page._SCRIPT
-    assert "catch(e){store={findings:{},recordings:{},triage:{}};}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},triage:{},release:{}};}" in page._SCRIPT
 
 
 def test_re_pressing_a_row_mark_clears_it() -> None:
@@ -943,6 +943,93 @@ def test_the_row_mark_reaches_the_filters_and_the_progress_line() -> None:
     for value in ("marked", "unmarked", "+1", "-1", "flag"):
         assert f'<option value="{value}">' in document
     assert "rows marked" in page._SCRIPT
+
+
+def test_the_release_decision_is_the_axis_own_vocabulary() -> None:
+    """A reviewer's decision joins to a verdict without a mapping table between them.
+
+    ``specs/20260924-which-artefact-is-releasable/design.md`` §6.
+    """
+    assert [value for value, _, _ in page.RELEASE_DECISIONS] == [
+        "release_without_redaction",
+        "release_with_redaction",
+    ]
+    assert set(value for value, _, _ in page.RELEASE_DECISIONS) <= set(page.RELEASE_ORDER)
+
+
+def test_the_release_decision_keys_collide_with_nothing_else_on_the_page() -> None:
+    """Four key families now share one page; a keystroke must mean exactly one thing."""
+    decision = {key for _, key, _ in page.RELEASE_DECISIONS}
+    row = {key for _, key, _ in page.ROW_TRIAGE}
+    finding = {key for _, key, _ in page.VERDICTS}
+    movement = {"j", "k", "J", "K"}
+    assert not decision & row
+    assert not decision & finding
+    assert not decision & movement
+
+
+def test_a_card_carries_the_release_decision_controls() -> None:
+    """A human reading the recording says which release it warrants, on the card itself."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert document.count('class="decgroup"') == 1
+    for value, key, slug in page.RELEASE_DECISIONS:
+        assert f'class="dec d-{slug}" data-v="{value}"' in document
+        assert f"<kbd>{key}</kbd>" in document
+
+
+def test_the_release_decision_markup_does_not_repeat_the_stem() -> None:
+    """Same argument as the row controls: the enclosing card already names the row."""
+    assert "data-stem" not in page._DECISION_GROUP
+
+
+def test_the_release_decision_is_its_own_collection() -> None:
+    """A row mark says how the row reads; a release decision says which artefact may be handed on."""
+    assert "release:store.release" in page._SCRIPT
+    assert "triage:store.triage" in page._SCRIPT
+    assert "version:3" in page._SCRIPT
+
+
+def test_the_release_decision_persists_and_degrades_like_the_others() -> None:
+    """The same localStorage namespace, the same guarded access, four collections restored."""
+    assert "release:parsed.release||{}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},triage:{},release:{}};}" in page._SCRIPT
+
+
+def test_re_pressing_a_release_decision_clears_it() -> None:
+    """Un-deciding is how a reviewer withdraws one, matching every other control on the page."""
+    assert "if(held===value)delete store.release[stem];" in page._SCRIPT
+
+
+def test_the_release_decision_reaches_the_filters_and_the_progress_line() -> None:
+    """A reviewer must be able to sweep what they have not yet decided."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert 'id="dec"' in document
+    for value in ("decided", "undecided", "release_without_redaction", "release_with_redaction"):
+        assert f'<option value="{value}">' in document
+    assert "release decisions" in page._SCRIPT
+
+
+def test_the_release_decision_does_not_overwrite_the_graphs_own() -> None:
+    """The card shows both: what the graph concluded, and what the reviewer says it warrants."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert 'data-rel="' in document
+    assert "card.dataset.dec" in page._SCRIPT
+    assert "rels.has(r.dataset.rel)" in page._SCRIPT
+
+
+def test_the_release_decision_keys_are_discoverable() -> None:
+    """A control nobody can find is a control nobody uses."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    for _, key, _ in page.RELEASE_DECISIONS:
+        assert f"<kbd>{key}</kbd>" in document
 
 
 def test_the_row_keys_are_inert_while_typing() -> None:
