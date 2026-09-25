@@ -360,7 +360,7 @@ which is what makes row 1 reachable at all. Verified: 2 tasks, `triage: fail`, `
 The same trick handles "did REDACT run". SPEECH emits an optional `marker.transcript.json` — it
 exists iff a recognizer returned a word. REDACT joins on it. A recording with no speech never
 reaches REDACT and `verdict.md` gives `release: not_assessed`, which that document is careful to say
-is **not** `releasable`, because the audio was never examined for content a transcript could not
+releases **neither artefact**, because the audio was never examined for content a transcript could not
 carry. Reading SPEECH's `outcome` to decide this instead would put a verdict in the control flow,
 which is the thing that breaks resumability.
 

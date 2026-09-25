@@ -73,6 +73,11 @@ should become opt-in rather than opt-out.
 Owner-directed, the first three are `participant`, `task`, `verdict`. The remaining seven were
 chosen against the distributions over this corpus, not from the candidate list alone.
 
+> **The release values below are the pre-2026-09-24 vocabulary**, which is what the run they
+> record used. `releasable` is now `release_with_redaction`; `nothing_to_redact` is now
+> `release_without_redaction` on its last three grounds and `not_assessed` on `NO_TRANSCRIPT`.
+> See `specs/20260924-which-artefact-is-releasable/design.md`.
+
 | axis | non-null | what it separates |
 | --- | ---: | --- |
 | `participant` | 100% | 1,527 levels; the only axis that shows a participant's whole session as a bundle |

@@ -225,7 +225,7 @@ convenience: a failed write swaps the status line for a warning and the session 
 Verified — with storage throwing, all 11,701 cards render, judgments are still recorded and the
 export still works.
 
-The durable artefact is the JSON export: `{schema, version, exported, findings, recordings}`, keyed
+The durable artefact is the JSON export: `{schema, version, exported, findings, recordings, triage, release}`, keyed
 by review key and by BIDS stem. It is written to a textarea *and* offered as a download, because a
 sandbox may block the download and the textarea always works. Import merges rather than replaces, so
 two sessions' judgments can be combined.

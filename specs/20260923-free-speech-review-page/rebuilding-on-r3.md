@@ -65,6 +65,11 @@ that is confidently wrong about provenance is worse than one that says nothing.
 From `scripts/free_speech_review_page.py census` over the r2 extract. `compare` diffs two extracts
 key by key, so the rebuild is measured rather than described.
 
+> **The release values below are the pre-2026-09-24 vocabulary**, which is what the run they
+> record used. `releasable` is now `release_with_redaction`; `nothing_to_redact` is now
+> `release_without_redaction` on its last three grounds and `not_assessed` on `NO_TRANSCRIPT`.
+> See `specs/20260924-which-artefact-is-releasable/design.md`.
+
 | | r2 |
 | --- | ---: |
 | recordings | 11,701 |

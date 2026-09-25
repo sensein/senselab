@@ -303,7 +303,7 @@ Rendering reads the structured object rather than independently reading the stor
 JSON a first-class companion rather than a text extraction of a PDF, and prevents a later page-only
 change from silently changing a decision claim.
 
-### The top-level fields, resolved (2026-09-22, `triage-summary/v8`)
+### The top-level fields, resolved (`triage-summary/v9`)
 
 The block was labelled "legacy top-level duplicates of the structured blocks above". Read against
 the code, only two of the nine keys were duplicates, and both are gone:
