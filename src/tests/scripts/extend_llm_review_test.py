@@ -394,6 +394,33 @@ class TestItIsResumableTheWayTheFamilyIs:
         assert len(calls) == 1, "the second pass contacted the model again"
         assert len(_annotations(run_root)) == 1
 
+    def test_a_disabled_reading_review_left_is_not_a_standing_reading(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A replay under the packaged config leaves REVIEW's own ``disabled`` in every store."""
+        run_root = _finished_run(tmp_path / "corpus")
+        store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        software = software_agent(store)
+        activity = store.activity(node="REVIEW", step="llm_check", parameters={"enabled": False})
+        store.was_associated_with(activity, software)
+        stale = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={"name": REDACTION_LLM_ANNOTATION, "signal": "consensus_transcript", "status": "disabled"},
+        )
+        store.was_generated_by(stale, activity)
+        store.write_jsonl(run_root / "run" / "store.jsonl")
+
+        _stub(monkeypatch)
+        summary = cli.run_slice(
+            _manifest(tmp_path, run_root),
+            slice_index=0,
+            slice_count=1,
+            config=_config(tmp_path),
+            log_dir=tmp_path,
+        )
+        assert summary["counts"] == {"ok": 1}, "a switched-off reading must not stand in for one"
+
     def test_an_annotation_redact_left_is_not_a_standing_reading(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

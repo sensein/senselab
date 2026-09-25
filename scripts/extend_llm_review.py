@@ -97,7 +97,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     software_agent,
 )
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
-from senselab.audio.workflows.triage.nodes.review import NODE, apply_proposal, review
+from senselab.audio.workflows.triage.nodes.review import DISABLED, NODE, apply_proposal, review
 from senselab.audio.workflows.triage.run import REPORT_NODE, SUMMARY_SUBDIR
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION
 from senselab.utils.prov_store import Entity, ProvStore
@@ -193,13 +193,14 @@ def standing(store: ProvStore) -> Entity | None:
     replayed before the reviewer became its own node carries a live annotation from REDACT's
     ``llm_check`` step -- ``disabled`` over the whole r4 corpus, because the packaged config leaves
     the reviewer off -- and counting that as a standing reading makes the whole pass a silent no-op
-    that reports ``present`` on every row.
+    that reports ``present`` on every row. The same holds for REVIEW's own ``disabled`` annotation,
+    which a replay under the packaged config writes into every store it touches.
 
     Args:
         store: The run's store.
 
     Returns:
-        The annotation entity, or None where REVIEW has left none.
+        The annotation entity, or None where REVIEW has left none or left only ``disabled``.
     """
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
     if annotation is None:
@@ -211,7 +212,9 @@ def standing(store: ProvStore) -> Entity | None:
         node = store.get_activity(activity_id).node
     except KeyError:
         return None
-    return annotation if node == NODE else None
+    if node != NODE or annotation.attributes.get("status") == DISABLED:
+        return None
+    return annotation
 
 
 def live_annotations(store: ProvStore) -> list[str]:
