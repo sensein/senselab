@@ -199,7 +199,7 @@ auditable from a run rather than only from a re-reduction.
 
 [`REDACT`](redact.md) is a step of SPEECH, not a node beside it. It runs only when SPEECH ran **and**
 SPEECH's PII scan over the consensus transcript found something. A file where SPEECH did not run, or
-ran and found no PII, has no REDACT verdict at all. Its release axis reads `nothing_to_redact`, which
+ran and found no PII, has no REDACT verdict at all. Its release axis reads `release_without_redaction`, which
 VERDICT determines from the evidence rather than from REDACT's silence — see
 [`verdict.md`](verdict.md)'s release fold.
 

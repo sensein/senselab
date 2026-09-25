@@ -287,7 +287,7 @@ carrying `FileVerdict.record()`. It is the graph's only decision about the recor
 | axis | values | decided from |
 | --- | --- | --- |
 | `triage` | `pass`, `flag`, `discard` | every contributing ground below |
-| `release` | `releasable`, `withheld`, `not_assessed` | REDACT's own outcome, and nothing else |
+| `release` | `release_without_redaction`, `release_with_redaction`, `withheld`, `not_assessed` | REDACT's outcome where it left one, the redaction evidence otherwise |
 
 Resolution order: ADMIT `FAIL` → `discard` on ground `unmeasurable`; else any flag ground → `flag`;
 else file route state `empty` → `discard` on ground `acoustically_empty`; else `pass`. The two

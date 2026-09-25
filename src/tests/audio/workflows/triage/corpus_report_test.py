@@ -113,11 +113,15 @@ class TestCounting:
 
     def test_counts_the_release_ground(self, tmp_path: Path) -> None:
         """71% of a corpus lands on this axis with no REDACT verdict; the ground is what separates them."""
-        _write_row(tmp_path, "sub-a", _verdict(release=Release.NOTHING_TO_REDACT, release_ground=NO_TRANSCRIPT))
-        _write_row(tmp_path, "sub-b", _verdict(release=Release.NOTHING_TO_REDACT, release_ground=SCAN_FOUND_NOTHING))
-        _write_row(tmp_path, "sub-c", _verdict(release=Release.RELEASABLE))
+        _write_row(tmp_path, "sub-a", _verdict(release=Release.NOT_ASSESSED, release_ground=NO_TRANSCRIPT))
+        _write_row(tmp_path, "sub-b", _verdict(release=Release.WITHOUT_REDACTION, release_ground=SCAN_FOUND_NOTHING))
+        _write_row(tmp_path, "sub-c", _verdict(release=Release.WITH_REDACTION))
         report = aggregate(decisions(tmp_path))
-        assert report.release == {"nothing_to_redact": 2, "releasable": 1}
+        assert report.release == {
+            "not_assessed": 1,
+            "release_without_redaction": 1,
+            "release_with_redaction": 1,
+        }
         assert report.release_ground == {NO_TRANSCRIPT: 1, SCAN_FOUND_NOTHING: 1}
 
     def test_counts_conformance_per_node_and_per_declared_family(self, tmp_path: Path) -> None:

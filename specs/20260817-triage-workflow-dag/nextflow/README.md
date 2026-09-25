@@ -57,10 +57,10 @@ Stub scenarios, all through real Nextflow:
 
 | `--stub_scenario` | triage | release | what it exercises |
 | --- | --- | --- | --- |
-| `pass_speech` | `flag` | `releasable` | the ordinary speech path. Flags because VOICE's gate is un-derived |
+| `pass_speech` | `flag` | `release_with_redaction` | the ordinary speech path. Flags because VOICE's gate is un-derived |
 | `cough` | `pass` | `not_assessed` | **a branch `fail` that is normal.** SPEECH has no subject; REDACT never runs |
-| `contradiction` | `flag` | `releasable` | TAXONOMY said speech absent, SPEECH passed → contradiction; plus a YAMNet `contest` |
-| `undecided_min_families` | `flag` | `releasable` | the presence rule's own threshold decides the answer → `undecided` |
+| `contradiction` | `flag` | `release_with_redaction` | TAXONOMY said speech absent, SPEECH passed → contradiction; plus a YAMNet `contest` |
+| `undecided_min_families` | `flag` | `release_with_redaction` | the presence rule's own threshold decides the answer → `undecided` |
 | `empty` | `fail` | `not_assessed` | triage **row 3** — measured, nothing in it. Not row 1 |
 | `pii_survives` | `flag` | `withheld` | REDACT verification fails. Nothing published to `release/` |
 | `admit_fail` | `fail` | `not_assessed` | triage **row 1** — could not measure. Nothing else runs |

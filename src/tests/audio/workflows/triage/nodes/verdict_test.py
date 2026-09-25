@@ -629,7 +629,7 @@ class TestTheReleaseAxis:
         """SPEECH read words, scanned them and found none; there was nothing for REDACT to do."""
         store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=42, scanned=True)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.NOTHING_TO_REDACT
+        assert result.file_verdict.release is Release.WITHOUT_REDACTION
         assert result.file_verdict.release_ground == SCAN_FOUND_NOTHING
         assert _file_verdict_entity(store).attributes["release_ground"] == SCAN_FOUND_NOTHING
 
@@ -639,7 +639,7 @@ class TestTheReleaseAxis:
         """Every lexical word came out of the task's own stimulus, so nothing was disclosed."""
         store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=9, scanned=False)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.NOTHING_TO_REDACT
+        assert result.file_verdict.release is Release.WITHOUT_REDACTION
         assert result.file_verdict.release_ground == NOTHING_BEYOND_STIMULUS
 
     def test_a_transcript_with_no_lexical_word_is_determined(
@@ -648,7 +648,7 @@ class TestTheReleaseAxis:
         """SPEECH's no-lexical exit reports and writes no scan; 1,421 of the corpus take it."""
         store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=0, scanned=None)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.NOTHING_TO_REDACT
+        assert result.file_verdict.release is Release.WITHOUT_REDACTION
         assert result.file_verdict.release_ground == NO_LEXICAL_WORD
 
     def test_a_finding_no_redact_verdict_answers_is_unassessed(
@@ -668,8 +668,8 @@ class TestTheReleaseAxis:
         released = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
         assert verdict_module.verdict(withheld, None, config, run_dir=tmp_path).file_verdict.release is Release.WITHHELD
         result = verdict_module.verdict(released, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.RELEASABLE
-        assert _file_verdict_entity(released).attributes["release"] == "releasable"
+        assert result.file_verdict.release is Release.WITH_REDACTION
+        assert _file_verdict_entity(released).attributes["release"] == "release_with_redaction"
 
     def test_a_surviving_finding_does_not_move_the_triage_axis(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -689,7 +689,7 @@ class TestTheReleaseAxis:
             concluded=[*BASE, ("REDACT", Outcome.FAIL, None), ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.RELEASABLE
+        assert result.file_verdict.release is Release.WITH_REDACTION
         assert [r.outcome for r in result.file_verdict.reasons if r.node == "REDACT"] == [Outcome.PASS]
 
 
@@ -739,8 +739,8 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
         _annotate(store, status="flagged", iterations=2, flagged=["LOCATION"], model_id="stub/model", revision="a" * 40)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.RELEASABLE
-        assert _file_verdict_entity(store).attributes["release"] == "releasable"
+        assert result.file_verdict.release is Release.WITH_REDACTION
+        assert _file_verdict_entity(store).attributes["release"] == "release_with_redaction"
 
     def test_a_flagged_re_read_raises_the_triage_axis_under_the_shipped_key(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -783,7 +783,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.PASS
-        assert result.file_verdict.release is Release.RELEASABLE
+        assert result.file_verdict.release is Release.WITH_REDACTION
         assert result.file_verdict.llm_redaction == {
             "status": "absent",
             "iterations": 1,

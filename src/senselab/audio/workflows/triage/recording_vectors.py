@@ -26,8 +26,9 @@ from typing import Any, Iterable, Iterator, Sequence
 import numpy as np
 import pyarrow as pa
 
-SCHEMA_VERSION = 4
-"""Bumped whenever a column is added, removed or retyped, or a binary layout changes."""
+SCHEMA_VERSION = 5
+"""Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
+column's controlled vocabulary changes."""
 
 STORE_NAME = "store.jsonl"
 RUN_SUBDIR = "run"

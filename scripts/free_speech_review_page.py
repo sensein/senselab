@@ -57,16 +57,25 @@ MEASUREMENT_MARKER = '"prov_type": "measurement"'
 KEPT_MEASUREMENTS = (PII_SCAN, REDACTION_EXEMPTIONS)
 KEPT_MEASUREMENT_MARKERS = tuple(f'"name": "{name}"' for name in KEPT_MEASUREMENTS)
 
-RELEASE_ORDER = ("releasable", "withheld", "nothing_to_redact", "not_assessed", "unrecorded")
+RELEASE_ORDER = (
+    "release_without_redaction",
+    "release_with_redaction",
+    "withheld",
+    "not_assessed",
+    "unrecorded",
+)
+"""The graph's own release axis, most permissive first, plus the page's own ``unrecorded``."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 3
-"""3 is the first version read from a graph whose reviewer ladder is disabled -> not_run -> run.
+EXTRACT_VERSION = 4
+"""4 is the first version read from a graph whose release axis names which artefact may be handed on.
 
-The page's sentence for ``not_run`` says the detectors marked nothing, which is what that state
-means from ``7edcfcf2`` onward. Before it, ``not_run`` meant the recording was already withheld, and
-the same sentence would be a false statement about the run. The version is what lets the page refuse
-to say it over an older extract.
+A version-3 row's ``rel`` is the old vocabulary, in which ``releasable`` means what
+``release_with_redaction`` now means and ``nothing_to_redact`` spans both
+``release_without_redaction`` and ``not_assessed``. The chips, the facet and the determination panel
+would all describe the wrong artefact. 3 was the first version read from a graph whose reviewer
+ladder is disabled -> not_run -> run; before it ``not_run`` meant the recording was already
+withheld. The version is what lets the page refuse to speak over an older extract.
 """
 
 
@@ -441,8 +450,8 @@ def tristate(value: Any) -> int:  # noqa: ANN401 -- a store attribute is any typ
 def _redact_detail(redact: Entity | None) -> dict[str, Any]:
     """What REDACT itself concluded.
 
-    ``release_ground`` is None exactly when REDACT decided, so for a releasable or a withheld
-    recording this ``why`` is the only account of the decision there is.
+    ``release_ground`` is None exactly when REDACT decided, so on the two states REDACT decides —
+    ``release_with_redaction`` and ``withheld`` — this ``why`` is the only account there is.
 
     Args:
         redact: REDACT's verdict entity, or None when it wrote none.
@@ -1054,8 +1063,9 @@ def render(corpus: Corpus, title: str) -> str:
     if corpus.version < EXTRACT_VERSION:
         errors += (
             f'<p class="errors">This extract is version {corpus.version}, written before the '
-            f"reviewer ladder changed. What the page says about the LLM reviewer does not describe "
-            f"the run that produced it. Re-extract before reading that section.</p>"
+            f"release axis and the reviewer ladder changed. What the page says about which artefact "
+            f"may be handed on, and about the LLM reviewer, does not describe the run that produced "
+            f"it. Re-extract before reading either.</p>"
         )
     pool = ValuePool()
     rows: dict[str, Any] = {}
@@ -1173,9 +1183,9 @@ mark.pii .cat{font-size:9.5px;letter-spacing:.06em;color:var(--catfg);background
 border-radius:3px;padding:0 3px;margin-right:4px;vertical-align:.18em;
 font-family:ui-monospace,Menlo,monospace}
 .chip{font-size:10.5px;letter-spacing:.04em;padding:1px 7px;border-radius:9px;border:1px solid}
-.r-releasable{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
+.r-release_without_redaction{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
 .r-withheld{background:#fbe6e4;border-color:#d08e86;color:#8a2f24}
-.r-nothing_to_redact{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
+.r-release_with_redaction{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
 .r-not_assessed,.r-unrecorded{background:#f1efe9;border-color:#bdb7a8;color:#6b6350}
 .cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
 border-radius:9px;padding:1px 7px;margin:0 3px 3px 0}
@@ -1303,9 +1313,9 @@ mark.pii{padding:1px 3px}
 @media (prefers-color-scheme:dark){
 :root{--bg:#171614;--fg:#eceae5;--mut:#9a958c;--line:#33312d;--card:#1f1e1b;--acc:#d9a45f;
 --pii:#4a3413;--piib:#c08a38;--brk:#a09b91;--brkbg:#2a2825;--catbg:#5f4418;--catfg:#f0d7a8;}
-.r-releasable{background:#1d2e1d;border-color:#4f7a4f;color:#a8d3a8}
+.r-release_without_redaction{background:#1d2e1d;border-color:#4f7a4f;color:#a8d3a8}
 .r-withheld{background:#331e1b;border-color:#8a4b42;color:#e8a89e}
-.r-nothing_to_redact{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
+.r-release_with_redaction{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
 .r-not_assessed,.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
 .errors{color:#e8a89e}
 #why .ok{color:#a8d3a8}

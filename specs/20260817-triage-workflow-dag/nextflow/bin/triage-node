@@ -1263,7 +1263,7 @@ def node_verdict(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -
     elif red["outcome"] == "fail":
         release, release_why = "withheld", "a finding survived REDACT's verification"
     else:
-        release, release_why = "releasable", "for REDACT's artifacts only; never for the store"
+        release, release_why = "release_with_redaction", "the redacted copy only; never the original"
 
     doc = {
         "triage": triage,
