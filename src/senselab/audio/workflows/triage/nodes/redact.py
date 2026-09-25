@@ -17,8 +17,8 @@ surviving finding is a fail, an incomplete re-scan is a flag, and a finding the 
 sees is re-planned exactly once, what survives that being ``unremediable``; ``audio_check`` is
 the constant ``"bounded"`` on every path.
 An optional LLM check (``redaction.llm_check``) re-reads the redacted transcript for up to
-``max_iterations`` rounds, asked wherever the detectors marked something -- withheld or not, and it
-reads the redacted transcript on both paths. Each round's chain of thought is a
+``max_iterations`` rounds, asked wherever the detectors ran at all -- marked or clean, withheld or
+released -- so that a miss is as readable as a mark. Each round's chain of thought is a
 ``redaction_llm_review`` measurement carrying its ``elapsed_s``, ``load_s`` and generated tokens;
 its summary is a ``redaction_llm_annotation`` written on every path, carrying the detector outcome
 the reading was taken beside, which VERDICT reads under ``verdict.llm_redaction_flags``. The
@@ -594,9 +594,9 @@ class _LlmCheck:
     """What the optional reviewer established, as the ``redaction_llm_annotation`` measurement records it.
 
     Attributes:
-        status: ``disabled`` when the config leaves it off, ``not_run`` when the detectors marked
-            nothing, ``absent`` when the model could not be reached, ``clean`` when it read the
-            transcript and flagged nothing, ``flagged`` when it flagged something.
+        status: ``disabled`` when the config leaves it off, ``nothing_to_read`` when the transcript
+            it would have read is empty, ``absent`` when the model could not be reached, ``clean``
+            when it read the transcript and flagged nothing, ``flagged`` when it flagged something.
         iterations: How many reviews ran.
         flagged: The categories the reviewer named, sorted. Categories only; the substrings and the
             reasoning are in the per-iteration measurements beside it.
@@ -606,6 +606,9 @@ class _LlmCheck:
         detector_outcome: The detector path's own outcome this reading was taken beside, as its
             value. A ``clean`` beside a ``fail`` and a ``clean`` beside a ``pass`` are different
             readings and the annotation is the only place that distinction is recorded.
+        detector_findings_n: How many findings the detectors left for this reading to be taken
+            beside. A ``flagged`` beside zero is a contradicted clean scan; beside more than zero
+            it is a second opinion on a marked one.
     """
 
     status: str
@@ -615,6 +618,7 @@ class _LlmCheck:
     revision: str | None
     failure: str | None
     detector_outcome: str
+    detector_findings_n: int
 
     def as_detail(self) -> dict[str, Any]:
         """The mapping the annotation measurement carries.
@@ -630,6 +634,7 @@ class _LlmCheck:
             "revision": self.revision,
             "failure": self.failure,
             "detector_outcome": self.detector_outcome,
+            "detector_findings_n": self.detector_findings_n,
         }
 
 
@@ -685,7 +690,7 @@ def _mask_concerns(text: str, findings: Any) -> str:  # noqa: ANN401 — the bac
 
 
 def _llm_check(
-    transcript_text: str, settings: Mapping[str, Any], *, detector_outcome: str
+    transcript_text: str, settings: Mapping[str, Any], *, detector_outcome: str, detector_findings_n: int
 ) -> tuple[_LlmCheck, list[dict[str, Any]]]:
     """Read the redacted transcript back with the reviewer, bounded, capturing every chain of thought.
 
@@ -700,6 +705,7 @@ def _llm_check(
         transcript_text: The redacted transcript, as the release path would have written it.
         settings: :func:`_llm_settings`' mapping.
         detector_outcome: The detector path's own outcome, recorded beside the reading.
+        detector_findings_n: How many findings the detectors left, recorded beside the reading.
 
     Returns:
         ``(check, reviews)`` — the summary and one payload per round, in order. The first round
@@ -707,14 +713,16 @@ def _llm_check(
         failure beside it.
     """
     try:
-        return _llm_rounds(transcript_text, settings, detector_outcome=detector_outcome)
+        return _llm_rounds(
+            transcript_text, settings, detector_outcome=detector_outcome, detector_findings_n=detector_findings_n
+        )
     finally:
         if not settings["keep_worker_resident"]:
             shutdown_review_worker(forget_failure=False)
 
 
 def _llm_rounds(
-    transcript_text: str, settings: Mapping[str, Any], *, detector_outcome: str
+    transcript_text: str, settings: Mapping[str, Any], *, detector_outcome: str, detector_findings_n: int
 ) -> tuple[_LlmCheck, list[dict[str, Any]]]:
     """The bounded review / mask / re-review loop itself, without the worker's lifetime.
 
@@ -722,6 +730,7 @@ def _llm_rounds(
         transcript_text: The redacted transcript, as the release path would have written it.
         settings: :func:`_llm_settings`' mapping.
         detector_outcome: The detector path's own outcome, recorded beside the reading.
+        detector_findings_n: How many findings the detectors left, recorded beside the reading.
 
     Returns:
         :func:`_llm_check`'s pair.
@@ -752,17 +761,29 @@ def _llm_rounds(
                         revision,
                         result.failure,
                         detector_outcome,
+                        detector_findings_n,
                     ),
                     reviews,
                 )
             return (
-                _LlmCheck("absent", iteration, (), model_id, revision, result.failure, detector_outcome),
+                _LlmCheck(
+                    "absent", iteration, (), model_id, revision, result.failure, detector_outcome, detector_findings_n
+                ),
                 reviews,
             )
         if not result.findings:
             status = "flagged" if flagged else "clean"
             return (
-                _LlmCheck(status, iteration, tuple(sorted(set(flagged))), model_id, revision, None, detector_outcome),
+                _LlmCheck(
+                    status,
+                    iteration,
+                    tuple(sorted(set(flagged))),
+                    model_id,
+                    revision,
+                    None,
+                    detector_outcome,
+                    detector_findings_n,
+                ),
                 reviews,
             )
         flagged.extend(finding.category for finding in result.findings)
@@ -776,6 +797,7 @@ def _llm_rounds(
             revision,
             None,
             detector_outcome,
+            detector_findings_n,
         ),
         reviews,
     )
@@ -1098,13 +1120,22 @@ def redact(
     review_started = _stamp()
     reviews: list[dict[str, Any]] = []
     if not llm_settings["enabled"]:
-        llm = _LlmCheck("disabled", 0, (), "", None, None, outcome.value)
-    elif not findings:
+        llm = _LlmCheck("disabled", 0, (), "", None, None, outcome.value, len(findings))
+    elif not transcript_text.strip():
         llm = _LlmCheck(
-            "not_run", 0, (), "", None, "the detectors marked nothing; there was nothing to review", outcome.value
+            "nothing_to_read",
+            0,
+            (),
+            "",
+            None,
+            "the transcript is empty; there was no text to read back",
+            outcome.value,
+            len(findings),
         )
     else:
-        llm, reviews = _llm_check(transcript_text, llm_settings, detector_outcome=outcome.value)
+        llm, reviews = _llm_check(
+            transcript_text, llm_settings, detector_outcome=outcome.value, detector_findings_n=len(findings)
+        )
     review_act = store.activity(
         node=NODE,
         step="llm_check",
@@ -1117,7 +1148,7 @@ def redact(
         ended=_stamp(),
     )
     store.was_associated_with(review_act, software)
-    if llm.status not in ("disabled", "not_run"):
+    if llm.status not in ("disabled", "nothing_to_read"):
         if llm.revision is not None:
             store.was_associated_with(
                 review_act, store.agent(agent_type="model", model_id=llm.model_id, commit_sha=llm.revision)
