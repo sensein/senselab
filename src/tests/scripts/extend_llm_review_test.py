@@ -22,7 +22,10 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE
 from senselab.audio.workflows.triage.nodes import review as review_module
+from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
+from senselab.audio.workflows.triage.run import LOG_FILE
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.text.tasks.pii_detection.redaction_review import ReviewProposal, ReviewResult
 from senselab.utils.prov_store import ProvStore
@@ -90,6 +93,44 @@ def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> 
     return run_root
 
 
+def _seed_verdicts(run_root: Path) -> dict[str, str]:
+    """One verdict per deciding node, and the run log a hint is built against.
+
+    Returns:
+        The entity id of each seeded verdict, keyed by node.
+    """
+    store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+    software = software_agent(store)
+    seeded: dict[str, str] = {}
+    for node, outcome in (("ADMIT", Outcome.PASS), ("SPEECH", Outcome.PASS), ("VERDICT", Outcome.FLAG)):
+        activity = store.activity(node=node, step="seed", parameters={})
+        store.was_associated_with(activity, software)
+        entity_id, _ = write_verdict(
+            store, activity, software, node=node, outcome=outcome, kind=None, why="seeded", detail={}
+        )
+        seeded[node] = entity_id
+    store.write_jsonl(run_root / "run" / "store.jsonl")
+    (run_root / "run" / LOG_FILE).write_text(
+        json.dumps({"source": str(run_root / "run" / "streams" / "recording.flac")}), encoding="utf-8"
+    )
+    return seeded
+
+
+def _hints(tmp_path: Path, run_root: Path) -> Path:
+    """A ``hints.py`` naming the one task this run declares, as the replay driver's does."""
+    directory = tmp_path / "scope"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "hints.py").write_text(
+        "from senselab.audio.data_structures import AudioHints\n"
+        "\n"
+        "\n"
+        "def build_hint(path):\n"
+        '    return (AudioHints(task="free-speech"),)\n',
+        encoding="utf-8",
+    )
+    return directory
+
+
 def _manifest(tmp_path: Path, run_root: Path) -> Path:
     """The manifest the extend family takes, over one run."""
     path = tmp_path / "manifest.jsonl"
@@ -149,19 +190,13 @@ class TestItReadsTheStoreAndWritesTheReading:
         assert len(annotations) == 1
         assert annotations[0]["status"] == "clean"
 
-    def test_it_rewrites_no_decision(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The replay driver re-decides; this one must leave every verdict exactly where it was."""
+    def test_no_refold_leaves_every_decision_exactly_where_it_was(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The collecting pass. Readings land, and nothing that was decided is decided again."""
         run_root = _finished_run(tmp_path / "corpus")
+        _seed_verdicts(run_root)
         store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
-        from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
-
-        software = software_agent(store)
-        activity = store.activity(node="SPEECH", step="seed", parameters={})
-        store.was_associated_with(activity, software)
-        write_verdict(
-            store, activity, software, node="SPEECH", outcome=Outcome.PASS, kind="speech", why="seeded", detail={}
-        )
-        store.write_jsonl(run_root / "run" / "store.jsonl")
         before = [dict(entity.attributes) for entity in store.entities("verdict")]
 
         _stub(monkeypatch)
@@ -175,6 +210,108 @@ class TestItReadsTheStoreAndWritesTheReading:
         after_store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
         after = [dict(entity.attributes) for entity in after_store.entities("verdict")]
         assert after == before
+
+
+class TestTheDecisionIsTakenAgainOverTheReading:
+    """REVIEW writes an input VERDICT reads, so the recorded decision must have seen it."""
+
+    def test_a_landed_reading_retires_the_standing_verdict_and_writes_another(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The whole point of the re-fold: the decision on disk is one that read the annotation."""
+        run_root = _finished_run(tmp_path / "corpus")
+        held = _seed_verdicts(run_root)
+        _stub(monkeypatch)
+        summary = cli.run_slice(
+            _manifest(tmp_path, run_root),
+            slice_index=0,
+            slice_count=1,
+            config=_config(tmp_path),
+            log_dir=tmp_path,
+            hints=_hints(tmp_path, run_root),
+        )
+        # The counter is the guard against a re-fold that silently did not run: a skip or a raise
+        # would leave every assertion below satisfied by the seeded verdict alone.
+        assert list(summary["refolds"]) == ["flag/not_assessed"]
+        store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        assert store.is_invalidated(held["VERDICT"])
+        live = [entity for entity in store.entities("verdict") if not store.is_invalidated(entity.id)]
+        assert [entity.attributes["node"] for entity in live].count("VERDICT") == 1
+
+    def test_only_verdicts_own_conclusion_is_retired(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """What separates this from the replay driver: every other node's verdict stands."""
+        run_root = _finished_run(tmp_path / "corpus")
+        held = _seed_verdicts(run_root)
+        _stub(monkeypatch)
+        cli.run_slice(
+            _manifest(tmp_path, run_root),
+            slice_index=0,
+            slice_count=1,
+            config=_config(tmp_path),
+            log_dir=tmp_path,
+            hints=_hints(tmp_path, run_root),
+        )
+        store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        assert not store.is_invalidated(held["SPEECH"])
+        assert not store.is_invalidated(held["ADMIT"])
+
+    def test_the_marker_names_the_configuration_and_the_commit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A re-fold is readable back off the store, the way a replay is."""
+        run_root = _finished_run(tmp_path / "corpus")
+        _seed_verdicts(run_root)
+        _stub(monkeypatch)
+        config = _config(tmp_path)
+        cli.run_slice(
+            _manifest(tmp_path, run_root),
+            slice_index=0,
+            slice_count=1,
+            config=config,
+            log_dir=tmp_path,
+            hints=_hints(tmp_path, run_root),
+            commit="c0ffee",
+        )
+        store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        markers = [
+            activity
+            for activity in store.activities()
+            if activity.node == REFOLD_NODE and activity.step == REFOLD_MARKER_STEP
+        ]
+        assert len(markers) == 1
+        assert markers[0].parameters["commit"] == "c0ffee"
+        assert markers[0].parameters["config_hash"] == config.config_hash
+
+    def test_a_pass_that_read_nothing_new_refolds_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second pass is ``present``, and a decision is not retired for having been looked at."""
+        run_root = _finished_run(tmp_path / "corpus")
+        _seed_verdicts(run_root)
+        _stub(monkeypatch)
+        args = {"slice_index": 0, "slice_count": 1, "config": _config(tmp_path), "log_dir": tmp_path}
+        manifest = _manifest(tmp_path, run_root)
+        hints = _hints(tmp_path, run_root)
+        cli.run_slice(manifest, hints=hints, **args)
+        first = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        settled = [entity.id for entity in first.entities("verdict") if not first.is_invalidated(entity.id)]
+
+        summary = cli.run_slice(manifest, hints=hints, **args)
+        assert summary["counts"] == {"present": 1}
+        second = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        assert [entity.id for entity in second.entities("verdict") if not second.is_invalidated(entity.id)] == settled
+
+    def test_the_cli_refuses_to_run_blind_rather_than_flagging_the_corpus(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Re-folding with no hint reads every declaration as unresolvable, which flags everything."""
+        run_root = _finished_run(tmp_path / "corpus")
+        _stub(monkeypatch)
+        argv = [str(_manifest(tmp_path, run_root)), "--slice-index", "0", "--slice-count", "1"]
+        assert cli.main(argv) == 2
+        assert cli.main([*argv, "--no-refold"]) == 0
 
 
 class TestItIsResumableTheWayTheFamilyIs:
