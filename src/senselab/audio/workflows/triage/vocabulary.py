@@ -534,19 +534,21 @@ def _silence(state: RunState | None) -> str:
 
 
 def _reviewer_found_residue(llm_redaction: Mapping[str, Any] | None) -> bool:
-    """Whether the reading says something identifying is still in what would be released.
+    """Whether the reading asks for something identifying to be hidden that the detectors left.
 
     Args:
         llm_redaction: REVIEW's annotation, or None where it wrote none.
 
     Returns:
-        True only where the reviewer actually read the text and concluded so. ``absent``,
-        ``disabled`` and ``nothing_to_read`` are not readings and conclude nothing.
+        True only where the reviewer read the text, flagged it, and proposed at least one ``redact``
+        entry. A proposal that only releases, or proposes nothing, says the detectors hid too much
+        or nothing, which is not residue. ``absent``, ``disabled`` and ``nothing_to_read`` are not
+        readings and conclude nothing.
     """
     annotation = dict(llm_redaction or {})
     if annotation.get("status") != "flagged":
         return False
-    return annotation.get("redaction") == "incomplete" or annotation.get("original") == "carries_pii"
+    return any(str(entry.get("action")) == "redact" for entry in annotation.get("proposal") or ())
 
 
 def _release_from(
