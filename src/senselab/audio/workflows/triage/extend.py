@@ -21,6 +21,7 @@ See ``specs/20260912-extend-reprocessed-outputs/design.md`` and
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     describe_exception,
     find_branch_report,
     find_measurement,
+    find_verdict,
     live_entities,
     software_agent,
     write_measurement,
@@ -70,8 +72,10 @@ from senselab.audio.workflows.triage.nodes.quality import (
 from senselab.audio.workflows.triage.nodes.report import report
 from senselab.audio.workflows.triage.nodes.taxonomy import NODE as TAXONOMY_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import _write_consensus_taxonomy
+from senselab.audio.workflows.triage.nodes.verdict import NODE as VERDICT_NODE
 from senselab.audio.workflows.triage.nodes.verdict import verdict
 from senselab.audio.workflows.triage.run import (
+    LOG_FILE,
     REPORT_NODE,
     NodeOutcome,
     _attempt,
@@ -107,8 +111,14 @@ SOURCE_STREAM = "recording"
 REPLAY_NODE = "REPLAY"
 """The node name a replay's own activities carry: the retirements and the marker."""
 
+REFOLD_NODE = "REFOLD"
+"""The node name a re-fold's own activities carry: the retirement and the marker."""
+
 REPLAY_MARKER_STEP = "decisions_replayed"
 """The step of the marker activity a replay writes last, carrying its config hash and commit."""
+
+REFOLD_MARKER_STEP = "verdict_refolded"
+"""The step of the marker activity a re-fold writes last, carrying its config hash and commit."""
 
 DECISION_SUPERSEDED = "decision_superseded"
 """The step of the activity retiring one decision a replay is about to make again."""
@@ -539,15 +549,17 @@ def find_replay_marker(store: ProvStore, config_hash: str) -> str | None:
     return None
 
 
-def live_decisions(store: ProvStore) -> list[str]:
-    """Every live entity one of the replayed nodes generated.
+def live_decisions(store: ProvStore, nodes: Sequence[str] = REPLAYED_NODES) -> list[str]:
+    """Every live entity one of the named nodes generated.
 
     Args:
         store: The run's store.
+        nodes: The nodes whose entities to collect. Defaults to every replayed node.
 
     Returns:
         The entity ids, in the store's own order.
     """
+    wanted = set(nodes)
     found: list[str] = []
     for entity in store.entities():
         if store.is_invalidated(entity.id):
@@ -559,7 +571,7 @@ def live_decisions(store: ProvStore) -> list[str]:
             node = store.get_activity(activity_id).node
         except KeyError:
             continue
-        if node in REPLAYED_NODES:
+        if node in wanted:
             found.append(entity.id)
     return found
 
@@ -607,6 +619,124 @@ class ReplayOutcome:
     released: dict[str, Path]
     summary: dict[str, Path]
     marker: str
+
+
+def load_hint_builder(directory: Path) -> Callable[[Path], Any]:
+    """The hint populator from a directory holding ``hints.py``.
+
+    Args:
+        directory: The directory holding ``hints.py``.
+
+    Returns:
+        Its ``build_hint``, called with the recording's path.
+
+    Raises:
+        FileNotFoundError: If the directory holds no importable ``hints.py``.
+    """
+    spec = importlib.util.spec_from_file_location("extend_hints", directory / "hints.py")
+    if spec is None or spec.loader is None:
+        raise FileNotFoundError(f"no importable hints.py in {directory}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    builder: Callable[[Path], Any] = module.build_hint
+    return builder
+
+
+def source_of(run_root: Path) -> Path:
+    """The recording a finished run was over, from its own ``run.json``.
+
+    Args:
+        run_root: The run root.
+
+    Returns:
+        The recording's path.
+
+    Raises:
+        FileNotFoundError: If the run holds no log.
+        ValueError: If the log names no source.
+    """
+    log_path = run_root / RUN_SUBDIR / LOG_FILE
+    if not log_path.is_file():
+        raise FileNotFoundError(f"no run log at {log_path}")
+    source = json.loads(log_path.read_text()).get("source")
+    if not source:
+        raise ValueError(f"{log_path} names no source")
+    return Path(str(source))
+
+
+@dataclass(frozen=True)
+class RefoldOutcome:
+    """What one re-fold did to one finished run.
+
+    Attributes:
+        retired: How many live VERDICT entities the re-fold superseded.
+        triage: The triage axis the new fold reached.
+        release: The release axis the new fold reached.
+        summary: REPORT's products, empty when REPORT itself raised.
+        errors: The nodes that raised and what they raised, keyed by node name.
+        marker: The marker activity's id.
+    """
+
+    retired: int
+    triage: str
+    release: str
+    summary: dict[str, Path]
+    errors: dict[str, str]
+    marker: str
+
+
+def refold_verdict(
+    store: ProvStore,
+    config: TriageConfig,
+    hint: AudioHints | None,
+    *,
+    run_dir: Path,
+    summary_dir: Path,
+    commit: str | None = None,
+) -> RefoldOutcome:
+    """Decide the file again over a store a driver has just added a measurement to, and re-render it.
+
+    The narrow counterpart to :func:`replay_decisions`: every other node's verdict and every branch
+    report stand, and only VERDICT's own conclusion is retired and taken again. A driver that adds
+    an input VERDICT reads — REVIEW's ``redaction_llm_annotation`` is the one this was written
+    for — must call this, or the store ends up holding a reading the recorded decision never saw.
+
+    The hint is not optional in practice. VERDICT reads it to score each branch's declaration, and
+    ``fold_file_verdict`` treats an unresolvable declaration as a flag ground of its own, so
+    re-folding without one turns every recording's triage axis to ``flag``. The caller builds it the
+    same way the replay driver does.
+
+    Args:
+        store: The finished run's store, already carrying whatever the driver added.
+        config: The triage configuration.
+        hint: What the recording was declared to contain.
+        run_dir: The run directory sidecar paths resolve against.
+        summary_dir: Where REPORT's products go.
+        commit: The code revision the re-fold ran under, recorded on the marker.
+
+    Returns:
+        What the re-fold did, including the marker it wrote last.
+    """
+    software = software_agent(store)
+    retired = retire_decisions(store, live_decisions(store, nodes=(VERDICT_NODE,)), software=software)
+    outcomes: dict[str, NodeOutcome] = {}
+    _attempt(outcomes, VERDICT_NODE, lambda: verdict(store, None, config, hint, run_dir=run_dir))
+    summary = _attempt_artifacts(outcomes, REPORT_NODE, lambda: report(store, summary_dir, config, run_dir=run_dir))
+    folded = find_verdict(store, VERDICT_NODE)
+    marker = store.activity(
+        node=REFOLD_NODE,
+        step=REFOLD_MARKER_STEP,
+        parameters={"config_hash": config.config_hash, "commit": commit, "retired": len(retired)},
+    )
+    store.was_associated_with(marker, software)
+    return RefoldOutcome(
+        retired=len(retired),
+        triage="" if folded is None else str(folded.attributes.get("outcome") or ""),
+        release="" if folded is None else str(folded.attributes.get("release") or ""),
+        summary=summary,
+        errors={node: outcome.error for node, outcome in outcomes.items() if outcome.error is not None},
+        marker=marker,
+    )
 
 
 def replay_decisions(

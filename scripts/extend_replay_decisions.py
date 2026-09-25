@@ -38,7 +38,6 @@ Install:
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 import time
@@ -56,11 +55,13 @@ from senselab.audio.workflows.triage.extend import (
     ReplayOutcome,
     export_prov,
     find_replay_marker,
+    load_hint_builder,
     read_manifest,
     read_store,
     replay_decisions,
     replay_run_id,
     run_root_of,
+    source_of,
     take_slice,
     write_store,
 )
@@ -113,49 +114,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
     return parser
-
-
-def load_hint_builder(directory: Path) -> Callable[[Path], Any]:
-    """The hint populator from a directory holding ``hints.py``.
-
-    Args:
-        directory: The directory holding ``hints.py``.
-
-    Returns:
-        Its ``build_hint``, called with the recording's path.
-
-    Raises:
-        FileNotFoundError: If the directory holds no importable ``hints.py``.
-    """
-    spec = importlib.util.spec_from_file_location("replay_hints", directory / "hints.py")
-    if spec is None or spec.loader is None:
-        raise FileNotFoundError(f"no importable hints.py in {directory}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    builder: Callable[[Path], Any] = module.build_hint
-    return builder
-
-
-def source_of(run_root: Path) -> Path:
-    """The recording a finished run was over, from its own ``run.json``.
-
-    Args:
-        run_root: The run root.
-
-    Returns:
-        The recording's path.
-
-    Raises:
-        FileNotFoundError: If the run holds no log.
-        ValueError: If the log names no source.
-    """
-    log_path = run_root / RUN_SUBDIR / LOG_FILE
-    if not log_path.is_file():
-        raise FileNotFoundError(f"no run log at {log_path}")
-    source = json.loads(log_path.read_text()).get("source")
-    if not source:
-        raise ValueError(f"{log_path} names no source")
-    return Path(str(source))
 
 
 def mirror_run_root(run_root: Path, out_root: Path, stem: str) -> Path:

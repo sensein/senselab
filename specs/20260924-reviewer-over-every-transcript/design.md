@@ -215,3 +215,33 @@ a diagnosis was disclosed, and constructing one by searching for diagnosis terms
 what a term list already knows, which is the thing a reviewer is supposed to improve on. Only human
 review over a sample of what the reviewer flags as `CONDITION` can establish a rate. The prompt
 names the class so the reviewer can raise it; nothing here claims to have measured it.
+
+## The review-only pass decides again
+
+Added 2026-09-25, after the merge into the design branch.
+
+REVIEW's `redaction_llm_annotation` is an input VERDICT reads — under `verdict.llm_redaction_flags`
+on the triage axis, and under `verdict.llm_redaction_withholds` on the release axis. The first
+version of `scripts/extend_llm_review.py` wrote the annotation and stopped, so a corpus reviewed
+that way would have held the reading beside a decision made blind to it: the annotation on disk and
+the verdict on disk disagreeing about what was known. That is the failure the store's
+append-and-supersede discipline exists to prevent, and it would have been invisible — every row
+would have read `ok`.
+
+`extend.refold_verdict` is the narrow counterpart to `replay_decisions`. It retires **only** the
+live VERDICT entity, runs VERDICT again over the store as it now stands, re-renders REPORT, and
+writes a `REFOLD`/`verdict_refolded` marker carrying the config hash and the commit. Every branch
+report, every other node's verdict and every measurement stand untouched, which is the whole
+difference from a replay: the replay driver re-runs TAXONOMY through REPORT, and over this corpus
+that is the graph's cost paid to get at one node's.
+
+**`--hints` is required.** VERDICT scores each branch against what the recording was declared to
+contain, and `fold_file_verdict` treats a declaration it cannot resolve as a flag ground of its own,
+so a re-fold with no hint would turn every recording's triage axis to `flag` — a corpus-wide
+corruption that looks like a finding. The CLI refuses to start rather than allow it; `--no-refold`
+is the explicit way to run a collecting pass that changes no decision.
+
+A re-fold runs only where a reading actually landed. A `present` row — the resumable case, where
+this configuration's annotation already stood — leaves the recorded decision alone, so resubmitting
+a preempted array task cannot stack two retirements. A REPORT that raises is reported beside the
+decision rather than conflated with it: the decision landed, only its rendering is missing.
