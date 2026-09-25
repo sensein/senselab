@@ -1089,6 +1089,31 @@ class TestGraphOrderAndRan:
         assert any("errored without a verdict" in r.why for r in result.file_verdict.reasons)
         assert _file_verdict_entity(store).attributes["ran"]["SPEECH"] == "errored"
 
+    def test_review_concludes_with_its_annotation(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """REVIEW writes no verdict and no report; its annotation is what says it ran."""
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR)
+        _annotate(store, status="clean", flagged=[])
+        store.activity(node="REVIEW", step="llm_check", parameters={})
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.ran["REVIEW"] is RunState.COMPLETED
+
+    def test_an_activity_whose_outputs_were_all_retired_was_superseded_not_attempted(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A replay retires the earlier pass's REDACT; that pass did not error in this one."""
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR)
+        software = software_agent(store)
+        earlier = store.activity(node="REDACT", step="plan", parameters={"pass": "earlier"})
+        span = store.entity(prov_type="span", extent=(0.0, 1.0), attributes={"name": "redaction"})
+        store.was_generated_by(span, earlier)
+        retire = store.activity(node="REPLAY", step="decision_superseded", parameters={"superseded": span})
+        store.was_associated_with(retire, software)
+        store.was_invalidated_by(span, retire)
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.ran["REDACT"] is RunState.SKIPPED
+
 
 class TestTheFoldIsWiredNotReimplemented:
     """The node maps store facts onto the fold's inputs and does not decide anything itself."""
