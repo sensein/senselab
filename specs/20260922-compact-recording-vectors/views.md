@@ -70,14 +70,17 @@ should become opt-in rather than opt-out.
 
 ## The subject axis draws a key, not the id
 
-A BIDS subject id is `sub-` and a UUID: **40 characters**. On a categorical axis the tick labels
-are right-aligned against the axis line and truncated at 16, so the subject column spent about
-96 px of a ~140 px gap on a label the reader could not finish and could not tell from its
-neighbour. The owner's word for it was *swamps the column*.
+A BIDS subject id is `sub-` and a UUID: **40 characters**. A categorical axis right-aligns its
+tick labels against the axis line and truncates them at 16, so the subject column drew
+`sub-<11 hex digits>…` and spent about **96 px of a ~140 px gap** on it. That label was unique —
+eleven hex digits are plenty — but four of its sixteen characters were the constant `sub-`, one
+was an ellipsis, and the whole of it ran into the ticks of the axis to its left. The owner's word
+for it was *swamps the column*.
 
 The axis now draws the **first eight hex digits of the UUID** — the UUID's own first group, with
-the `sub-` dropped. `session` gets the same treatment against `ses-`. Everything else
-is drawn exactly as the column carries it.
+the `sub-` dropped: half the width, every character of it informative, and still unique.
+`session` gets the same treatment against `ses-`. Everything else is drawn exactly as the column
+carries it.
 
 ### The margin, measured on the r3 corpus
 
