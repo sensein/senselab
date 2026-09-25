@@ -9,6 +9,12 @@ r"""Run REVIEW over a finished triage corpus, in place, without replaying the gr
 path of that recording's ``run/streams/enhanced.flac``) -- the manifest every ``extend_*`` driver
 takes, and the run root is derived from ``enhanced`` the same way.
 
+A row may also carry ``source``, the recording the run was over, which is what the hint is built
+from. It is optional and it is how this driver runs over a **mirrored** tree: a replayed corpus
+holds ``store.jsonl``, ``streams/`` and a ``derivatives`` symlink, and no ``run.json``, so
+:func:`~senselab.audio.workflows.triage.extend.source_of` has nothing to read there. Where the row
+names no source the run's own log is read, which is the in-place case.
+
 ``--slice-index`` / ``--slice-count`` shard the manifest for a Slurm array: task *i* of *n* takes
 ``rows[i::n]``.
 
@@ -345,6 +351,8 @@ def process(
         build_hint: The hint populator, or None to leave each recorded verdict as it stands.
         commit: The code revision to record on each re-fold marker.
 
+    A row's own ``source`` wins over the run's log, because a mirrored run root carries no log.
+
     Returns:
         One outcome record per input row, in order.
     """
@@ -358,8 +366,8 @@ def process(
         source: Path | None = None
         if build_hint is not None:
             try:
-                source = source_of(finished)
-            except (OSError, ValueError) as error:
+                source = Path(str(row["source"])) if row.get("source") else source_of(finished)
+            except (OSError, ValueError, KeyError) as error:
                 out.append({**row, "status": ERROR, NODE: f"source: {describe_exception(error)}"})
                 continue
         run_root = mirror_run_root(finished, out_root) if out_root is not None else finished
