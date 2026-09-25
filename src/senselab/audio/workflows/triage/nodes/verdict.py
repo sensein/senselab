@@ -82,6 +82,8 @@ SPEECH = "SPEECH"
 
 _GRAPH_ORDER = GRAPH_ORDER[:-1]
 
+_REVIEW = "REVIEW"
+
 
 @dataclass(frozen=True)
 class VerdictResult(NodeResult):
@@ -542,7 +544,9 @@ def _derived_ran(
 ) -> dict[str, RunState]:
     """Whether each graph node ran, as far as the store can say.
 
-    A node that reported counts as having concluded exactly as one that decided does.
+    A node that reported counts as having concluded exactly as one that decided does, and REVIEW,
+    which writes neither, concludes with its live annotation. An activity every output of which a
+    later pass retired was superseded, not attempted.
 
     Args:
         store: The provenance store, read for which nodes have an activity.
@@ -550,11 +554,22 @@ def _derived_ran(
         reports: Every branch report read from the store.
 
     Returns:
-        ``COMPLETED`` for a node carrying a verdict or a report, ``ERRORED`` for one carrying an
-        activity but neither, and ``SKIPPED`` for one carrying none of the three.
+        ``COMPLETED`` for a node carrying a verdict, a report or (REVIEW) an annotation, ``ERRORED``
+        for one carrying a live activity but none of those, and ``SKIPPED`` for one carrying none.
     """
     concluded = {v.node for v in verdicts} | {r.node for r in reports}
-    attempted = {activity.node for activity in store.activities()}
+    if find_measurement(store, REDACTION_LLM_ANNOTATION) is not None:
+        concluded.add(_REVIEW)
+    outputs: dict[str, list[str]] = {}
+    for entity in store.entities():
+        activity_id = store.generated_by(entity.id)
+        if activity_id is not None:
+            outputs.setdefault(activity_id, []).append(entity.id)
+    attempted = {
+        activity.node
+        for activity in store.activities()
+        if not (outputs.get(activity.id) and all(store.is_invalidated(entity_id) for entity_id in outputs[activity.id]))
+    }
     return {
         node: RunState.COMPLETED if node in concluded else RunState.ERRORED if node in attempted else RunState.SKIPPED
         for node in _GRAPH_ORDER
