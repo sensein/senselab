@@ -46,7 +46,7 @@ process SPEECH {
     tuple val(meta), path("streams"),                      emit: streams, optional: true
     // A PRODUCT, not an outcome: it exists iff a transcript exists to redact. REDACT joins on it,
     // so a recording with no speech never reaches REDACT and `verdict.md` gives
-    // release = not_assessed rather than a `releasable` that examined nothing.
+    // release = not_assessed rather than a release value over audio nothing examined.
     tuple val(meta), path("store/marker.transcript.json"), emit: marker, optional: true
     path  "versions.yml",                                  emit: versions
 

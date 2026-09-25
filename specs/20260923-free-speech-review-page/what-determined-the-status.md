@@ -39,9 +39,9 @@ things, and the panel says 19 because that is what `redaction_exemptions.n_findi
 ## Why `release_ground` is blank exactly where it matters
 
 `_release_from` sets `release_ground` only when the *fold* decides. When REDACT wrote a verdict, its
-outcome maps straight through — `pass` → `releasable`, `flag`/`fail` → `withheld` — and the ground
-is `None` by construction. So a page showing `release_ground` alone is blank on every releasable
-and every withheld recording, which is precisely the set a reader cares about. The account has to
+outcome maps straight through — `pass` → `release_with_redaction`, `flag`/`fail` → `withheld` — and
+the ground is `None` by construction. So a page showing `release_ground` alone is blank on every
+with-redaction and every withheld recording, which is precisely the set a reader cares about. The account has to
 fall back to REDACT's own `why`, and the panel says why the ground is empty rather than leaving an
 absence to be misread as missing data.
 
@@ -76,6 +76,11 @@ to `bool`, which collapsed `None` into `False` and hid the whole third artefact 
 
 | | |
 | --- | --- |
+> **The release values below are the pre-2026-09-24 vocabulary**, which is what the run they
+> record used. `releasable` is now `release_with_redaction`; `nothing_to_redact` is now
+> `release_without_redaction` on its last three grounds and `not_assessed` on `NO_TRANSCRIPT`.
+> See `specs/20260924-which-artefact-is-releasable/design.md`.
+
 | release × REDACT outcome | `releasable`/`pass` 3,719 · `withheld`/`fail` 2,972 · `nothing_to_redact`/no verdict 5,009 · `not_assessed`/no verdict 1 |
 | LLM reviewer | `disabled` 3,719 · `not_run` 2,972 · no annotation 5,010 · **`clean` 0 · `flagged` 0 · `absent` 0** |
 | evaluated gates | 21,492 passed · 1,607 failed · 292 unanswerable |

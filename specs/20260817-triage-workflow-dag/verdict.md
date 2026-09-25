@@ -457,11 +457,12 @@ means findings were found and removed — is `release_with_redaction`, and the t
 `not_assessed`. The vocabulary, the argument on both sides, and the corpus split are in
 `specs/20260924-which-artefact-is-releasable/design.md`.
 
-**`not_assessed` now means only what it says.** Three grounds reach it, and all three are cases
-where the graph genuinely could not tell: SPEECH errored, SPEECH reached lexical content and left no
-scan record, or a scan found something and no redaction verdict stands over it. The third is a
-safety-relevant gap and used to be indistinguishable from the 44,622 recordings that were simply
-clean.
+**`not_assessed` now means only what it says.** Four grounds reach it, and all four are cases where
+the graph genuinely could not tell: SPEECH never ran, SPEECH errored, SPEECH reached lexical
+content and left no scan record, or a scan found something and no redaction verdict stands over
+it. The last is a safety-relevant gap and used to be indistinguishable from the recordings that
+were simply clean; the first joined them on 2026-09-24, when the axis began describing the
+original recording and not only REDACT's copy of it.
 
 **A SPEECH withheld by a critical failure reads `NO_TRANSCRIPT`, which is now a `not_assessed`
 ground.** Until 2026-09-24 it was a determination, on the argument that there is no artifact and no

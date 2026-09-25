@@ -26,8 +26,8 @@ The chain, one link at a time:
    of that word.
 5. Nothing verifies it: `redaction.llm_check.enabled` is `false` by default.
 6. REDACT pads, plans, masks, re-scans the redacted text, finds it clean, and reports *"every
-   finding redacted; the redacted transcript re-scans clean"*. The file is marked `releasable`
-   with 6.3 s of the task destroyed.
+   finding redacted; the redacted transcript re-scans clean"*. The file is marked
+   `release_with_redaction` with 6.3 s of the task destroyed.
 
 Every layer did what it was told. The gate reasons about whether to scan, not about what to scan.
 

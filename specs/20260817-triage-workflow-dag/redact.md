@@ -18,11 +18,14 @@ A wordless recording has no PII scan, no REDACT verdict, and no withheld release
 incomplete-scan row here, because there is no scan to be incomplete: a file with nothing to redact is
 not a file whose redaction failed.
 
-**Not running is not an unknown.** The last two rows are the *ordinary* case — 71% of the b2ai adult
-corpus — and until 2026-09-22 [`verdict.md`](verdict.md) read them off REDACT's silence as
-`not_assessed`. They are determinations, and VERDICT now makes them from the evidence: SPEECH's
-lexical count, its scan record and the live findings. Which of the four determined grounds a row
-lands on is in that file's release fold; nothing about *this* node's gate changed.
+**Not running is not an unknown, and not running is not the same as not looking.** The last two
+rows are the *ordinary* case — 71% of the b2ai adult corpus — and until 2026-09-22
+[`verdict.md`](verdict.md) read them off REDACT's silence as `not_assessed`. VERDICT now makes
+them from the evidence: SPEECH's lexical count, its scan record and the live findings. That
+evidence separates them, which is why they no longer share a row: a scan that ran and cleared the
+transcript is one of three grounds behind `release_without_redaction`, while a SPEECH that never
+ran is one of four behind `not_assessed`. Which ground a row lands on is in that file's release
+fold; nothing about *this* node's gate changed.
 
 ## Signature
 

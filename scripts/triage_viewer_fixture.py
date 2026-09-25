@@ -25,6 +25,11 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage.recording_vectors import SCHEMA_VERSION, to_table
+from senselab.audio.workflows.triage.vocabulary import (
+    NO_TRANSCRIPT,
+    NOTHING_BEYOND_STIMULUS,
+    SCAN_FOUND_NOTHING,
+)
 
 PRIVATE_FILE_MODE = 0o600
 COMPRESSION = "zstd"
@@ -56,7 +61,12 @@ RELEASES = [
     ("release_with_redaction", 19),
     ("withheld", 7),
 ]
-RELEASE_GROUNDS = [("pii_detected", 30), ("scan_declined", 40), (None, 30)]
+RELEASE_GROUNDS = [
+    (SCAN_FOUND_NOTHING, 25),
+    (NOTHING_BEYOND_STIMULUS, 30),
+    (NO_TRANSCRIPT, 30),
+    (None, 15),
+]
 ROUTE_STATES = [("routed", 70), ("declined", 22), ("unavailable", 5), ("empty", 3)]
 CONFORMANCE = [("true", 55), ("false", 12), ("undetermined", 33)]
 GATE_NAMES = ["train_min_s", "coverage_min", "dominant_speaker_share_min", "items_min"]

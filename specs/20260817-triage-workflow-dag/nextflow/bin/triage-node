@@ -846,7 +846,7 @@ def node_speech(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) ->
                       author)
         Segment("SPEECH", a.recording_id, author).write(a.out)
         # No transcript marker, so REDACT does not run and `verdict.md` gives release =
-        # not_assessed — which is explicitly NOT releasable.
+        # not_assessed — which releases neither artefact.
         return 0
 
     # ---- step 2: speech spans from word timings ---------------------------------------
@@ -963,7 +963,7 @@ def node_speech(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) ->
 
     # The marker is a PRODUCT, not an outcome: it says a transcript exists to redact. REDACT joins
     # on it, so REDACT does not run on a recording with no speech and `verdict.md` gives
-    # release = not_assessed rather than a `releasable` that examined nothing.
+    # release = not_assessed rather than a release value over audio nothing examined.
     with open(os.path.join(a.out, "marker.transcript.json"), "w") as fh:
         json.dump({"transcript_present": True, "scanned_by": verdict["pii"]["scanned_by"],
                    "note": "no ids, no text; presence only"}, fh, indent=2)
@@ -1258,8 +1258,8 @@ def node_verdict(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -
     red = verdicts.get("REDACT")
     if red is None:
         release, release_why = "not_assessed", (
-            "REDACT did not run. NOT releasable: with no transcript there was no PII scan, and the "
-            "audio was never examined for content a transcript could not carry")
+            "REDACT did not run. Neither artefact is released: with no transcript there was no PII "
+            "scan, and the audio was never examined for content a transcript could not carry")
     elif red["outcome"] == "fail":
         release, release_why = "withheld", "a finding survived REDACT's verification"
     else:
@@ -1273,8 +1273,9 @@ def node_verdict(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -
         "kinds": resolved,
         "kinds_as_screened": screened,
         "contradictions": contradictions,
-        "release_scope": "REDACT artifacts only. `releasable` never applies to the store, which "
-                         "holds the unredacted transcript by design and is append-only.",
+        "release_scope": "the recording's artefacts — the original and REDACT's redacted copy. No "
+                         "release value applies to the store, which holds the unredacted transcript "
+                         "by design and is append-only.",
         "view": seg.view,
         "folded": sorted(verdicts.keys()),
         "author": author.of(),

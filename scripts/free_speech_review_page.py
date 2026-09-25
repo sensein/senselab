@@ -1792,9 +1792,6 @@ document.getElementById('file').addEventListener('change',e=>{
 let WHY=null;
 try{WHY=JSON.parse(document.getElementById('whydata').textContent);}catch(e){WHY=null;}
 const whyBox=document.getElementById('why');
-const GROUNDS={
- 'the scan ran over the transcript and found nothing to redact':'scan found nothing',
- 'every lexical word is in the task\\u2019s own stimulus, so the scan was declined':'all in stimulus'};
 function esc(s){const d=document.createElement('div');d.textContent=String(s);return d.innerHTML;}
 function P(i){return WHY&&WHY.pool[i];}
 function scrimOn(){

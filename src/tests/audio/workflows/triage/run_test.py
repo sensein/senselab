@@ -553,7 +553,7 @@ class TestHappyPath:
     def test_the_release_axis_follows_redact(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A passing REDACT clears its own pair, so the fold reads ``releasable``."""
+        """A passing REDACT clears its own pair and not the original, so the fold reads with-redaction."""
         graph()
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None

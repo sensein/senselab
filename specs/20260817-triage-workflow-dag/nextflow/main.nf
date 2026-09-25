@@ -150,7 +150,7 @@ workflow TRIAGE {
     // REDACT is joined on SPEECH's transcript marker, which is a PRODUCT rather than an outcome:
     // it exists iff at least one recognizer returned a word. A recording with no speech therefore
     // never reaches REDACT, and `verdict.md` gives release = `not_assessed` — which it is careful
-    // to say is NOT `releasable`, because the audio was never examined for content the transcript
+    // to say releases neither artefact, because the audio was never examined for content the transcript
     // could not carry. Reading SPEECH's `outcome` to decide this instead would put a verdict in
     // the control flow, which is the thing that breaks resumability.
     ch_redact_in = ch_after_speech.join(SPEECH.out.marker)
