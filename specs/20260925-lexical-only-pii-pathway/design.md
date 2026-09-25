@@ -57,8 +57,11 @@ Non-lexical, for every family (`is_non_lexical`):
 - vocalisations and fillers (`uh`, `umm`, `hmm`, `mm-hmm`, `ahh`, `aaah`, `oh`, `ooh`);
 - single-character Chinese interjections (`啊 嗯 呼 哈 …`);
 - truncated fragments of at most two letters (`wa-`);
-- in a vocal task only, any token whose letters are vowels plus `h m w y` (`e`, `hee`, `ha ha`).
-  `my` falls in this class; the rest of a disclosure still reaches the scan.
+- in a vocal task only, a vocalisation run: one vowel letter repeated, or a run of `m`, with
+  optional `h` (`aaah`, `ahh-ahh`, `hee`, `eee`, `uhhh`, `mmm`, `hmm`, `ha ha`). Two distinct vowel
+  letters, or a `y` or `w`, make a word, so `Amy`, `Emma`, `Mia`, `May`, `Hawaii` and `my` are
+  lexical. No word or name list is needed: the rule is on the letter shape. The first version took
+  any token of vowels plus `h m w y`, which dropped exactly those names (owner, 2026-09-25).
 
 Task content, by method (`residue_method`):
 
@@ -66,7 +69,9 @@ Task content, by method (`residue_method`):
 |---|---|---|
 | `syllable_train` | the ten `diadochokinesis-*` | A token spelled only from the template's consonants and their voicing/flap letters (`p→pb`, `t→tdr`, `k→kcgqx`, `er→r`) plus vowels (`aeiouyw`) and non-initial `h`. A non-Latin token of at most 4 characters. A token periodic in a unit of ≤4 characters. A token recurring `train_repetitions_min` times. |
 | `vocal_task` | VOICE and AIRWAY families, and loudness / loudness-v2 | The expectation row's literal `tokens`, aligned (`hey`; `one two three`), and every vocalisation. |
-| `stimulus_alignment` | read tasks with a stimulus text; also any undeclared family whose hint carries a prompt | The transcript is aligned to the prompt tokens with `align_pair`. A matched word is the task. A substitution or insertion is the task when it is a *variant* of a stimulus word in a window of `insertion_window` words either side: a near match, a similarity ≥ `variant_similarity_min`, a prefix fragment, the same Soundex-class consonant skeleton (≥2 classes, the homophone test: consul/council, game/gain, spilt/spilled), a clitic base (`it's` → `it`), a compound join or split, or a variant of the joined pair (`heart stump` ↔ `hearts jump`). An inserted word equal to any stimulus word is the task (a re-read sentence). A word in the row's declared `vocabulary` (Stroop colours, new) or `expected_names` is the task in any position. |
+| `stimulus_alignment` | read tasks with a stimulus text; also any undeclared family whose hint carries a prompt | The transcript is aligned to the prompt tokens with `align_pair`. A matched word is the task. A substitution or insertion is the task when it is a *variant* of a stimulus word in a window of `insertion_window` words either side: a near match, a similarity ≥ `variant_similarity_min`, a prefix fragment, the same Soundex-class consonant skeleton (≥2 classes, the homophone test: consul/council, game/gain, spilt/spilled), a clitic base (`it's` → `it`), a compound join or split, or a variant of the joined pair (`heart stump` ↔ `hearts jump`) for a word of at least `near_match.exact_below` letters. A shorter word
+is not excused by pairing it with a neighbour: `heymy` against `heyhey` scores 0.67, and that is
+how `My` beside `hey` was set aside. An inserted word equal to any stimulus word is the task (a re-read sentence). A word in the row's declared `vocabulary` (Stroop colours, new) or `expected_names` is the task in any position. |
 | `free_response` | free response, item lists | Nothing: every lexical word is residue. |
 
 The invariant: a disclosure over any take is residue. `pa pa pa my name is Alice Smith pa pa` gives
@@ -107,17 +112,25 @@ more DDK scanned (/ka/ 70 against 52 at R=3).
 
 ## Replay: recordings reaching the detectors, old → new
 
-| class | recordings | old | new |
-|---|---|---|---|
-| DDK | 7,984 | 7,306 | 497 |
-| sustained / airway | 21,314 | 2,246 | 645 |
-| loudness | 1,601 | 1,584 | 47 |
-| read-aloud | 19,258 | 4,992 | 1,512 |
-| free response | 12,362 | 12,091 | 12,061 |
-| **total** | 62,519 | 28,219 | 14,762 |
+`new` is the first version of the residue; `new'` is the current one, with the vocal-task rule
+narrowed and the short-word pair rule removed.
 
-Read-aloud per family: harvard 3,054 → 725; caterpillar 588 → 219; rainbow 485 → 165; word-color
-stroop 407 → 271; cape-v 322 → 101; cape-v-v2 136 → 31.
+| class | recordings | old | new | new' |
+|---|---|---|---|---|
+| DDK | 7,984 | 7,306 | 497 | 497 |
+| sustained / airway | 21,314 | 2,246 | 645 | 663 |
+| loudness | 1,601 | 1,584 | 47 | 48 |
+| read-aloud | 19,258 | 4,992 | 1,512 | 1,944 |
+| free response | 12,362 | 12,091 | 12,061 | 12,061 |
+| **total** | 62,519 | 28,219 | 14,762 | 15,213 |
+
+Read-aloud per family, old → new': harvard 3,054 → 991; caterpillar 588 → 262; rainbow 485 → 203;
+word-color stroop 407 → 278; cape-v 322 → 159; cape-v-v2 136 → 51.
+
+The narrowed vocal rule adds words to 203 sustained/airway recordings and 7 loudness recordings.
+They are glide-spelled words it used to drop: `you`, `me`, `we`, `my`, `yeah`, `yay`, `meu`. The
+pair rule's removal adds words to 836 read-aloud recordings, all short misreadings or asides:
+`tea`, `Mac.`, `pier pier`, `Rows pays`, `What's mom on eggs,`.
 
 What still reaches the pathway is off-target by construction:
 

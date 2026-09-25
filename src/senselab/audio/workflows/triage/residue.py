@@ -67,8 +67,8 @@ _INTERJECTIONS = frozenset("啊哦嗯呃哈呼诶哎嘿咦耶唉哼噢喔呀嘻�
 
 _BRACKETED = re.compile(r"[\[(<][^\])>]*[\])>]")
 
-_CONSONANTS_OF_A_VOCAL_TASK = frozenset("hmwy")
-"""Letters a vocalisation may carry beside its vowels in a task whose production is a sound."""
+_VOCAL_RUN = re.compile(r"h*([aeiou])\1*h*|h*m+h*")
+"""A vocal task's own sound: one vowel letter repeated, or a hum, with optional ``h`` (``aaah``, ``hee``, ``mmm``)."""
 
 FUNCTION_WORDS = frozenset(
     """
@@ -232,8 +232,9 @@ def is_non_lexical(text: str, *, vocal_task: bool = False) -> bool:
 
     Args:
         text: The token as the recognizer wrote it.
-        vocal_task: Whether the task's production is a sound, in which case any token whose letters
-            are vowels and ``h``, ``m``, ``w`` or ``y`` alone is a vocalisation.
+        vocal_task: Whether the task's production is a sound, in which case a run of one repeated
+            vowel letter or of ``m``, with optional ``h``, is a vocalisation too. Two distinct vowel
+            letters, or a ``y`` or ``w``, make a word: ``Amy``, ``Emma``, ``Mia``, ``my``.
 
     Returns:
         True when the token is a bracketed marker; a single interjection character; a fragment of at
@@ -253,10 +254,7 @@ def is_non_lexical(text: str, *, vocal_task: bool = False) -> bool:
         return True
     if all(_VOCALISATION.fullmatch(piece) for piece in pieces):
         return True
-    return vocal_task and all(
-        piece.isalpha() and all(ch in _VOWEL_LETTERS or ch in _CONSONANTS_OF_A_VOCAL_TASK for ch in piece)
-        for piece in pieces
-    )
+    return vocal_task and all(_VOCAL_RUN.fullmatch(piece) for piece in pieces)
 
 
 def _syllable_letters(sequence: Sequence[str]) -> frozenset[str]:
@@ -366,6 +364,8 @@ def _accounted(word: str, window: Sequence[str], before: str, after: str, rule: 
         return True
     if (before and before + word in window) or (after and word + after in window):
         return True
+    if len(word) < rule.near.exact_below:
+        return False
     return any(
         _variant(pair, candidate, rule) for pair in (before + word, word + after) if pair for candidate in joined
     )
