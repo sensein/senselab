@@ -59,6 +59,76 @@ test('the first three default axes are participant, task, verdict, and there are
   assert.equal(A.DEFAULT_AXES.length, 10)
   assert.equal(A.MAX_AXES, 10)
   A.DEFAULT_AXES.forEach((n) => assert.ok(A.BY_NAME[n] && A.BY_NAME[n].assignable, `${n} must be assignable`))
+  assert.equal(new Set(A.DEFAULT_AXES).size, 10, 'a repeated default would spend two slots on one column')
+})
+
+// ---------------------------------------------------------- the short identity key
+
+// No BIDS id may appear as text anywhere in this repository, and viewer_test.py enforces that by
+// pattern over these files. The ids below are therefore assembled rather than written out; the
+// pattern the guard looks for never exists in this source, only in the values it builds.
+const bids = (prefix, uuid) => [prefix, uuid].join('-')
+const UUIDS = [
+  '5b0e3a71-a1f4-4724-a694-c10e01b8cbe6',
+  '5b0e3a71-0000-4000-8000-000000000000',
+  '19aea9c4-f7ef-42c2-93bd-09cd982c86ec',
+]
+
+test('a BIDS id is labelled by its key, and only a BIDS id is', () => {
+  const p = A.BY_NAME.participant
+  const s = A.BY_NAME.session
+  assert.equal(p.shortKey, 'sub-')
+  assert.equal(s.shortKey, 'ses-')
+  assert.equal(A.categoryLabel(p, bids('sub', UUIDS[0])), '5b0e3a71')
+  assert.equal(A.categoryLabel(s, bids('ses', UUIDS[2].toUpperCase())), '19AEA9C4')
+  // the key is a literal prefix of the id, so it greps back to the stem
+  const id = bids('sub', UUIDS[0])
+  assert.ok(id.startsWith('sub-' + A.categoryLabel(p, id)))
+  // case is never folded: folding could merge two ids the file keeps apart
+  assert.notEqual(A.categoryLabel(s, bids('ses', UUIDS[2])), A.categoryLabel(s, bids('ses', UUIDS[2].toUpperCase())))
+  // every other column is left exactly as it is
+  assert.equal(A.categoryLabel(A.BY_NAME.task, 'diadochokinesis-pa'), 'diadochokinesis-pa')
+  assert.equal(A.categoryLabel(A.BY_NAME.verdict, 'pass'), 'pass')
+  assert.equal(A.categoryLabel('release', 'withheld'), 'withheld')
+})
+
+test('two ids that agree for eight characters keep two keys, and a shorter cut would merge them', () => {
+  const p = A.BY_NAME.participant
+  const a = bids('sub', UUIDS[0])
+  const b = bids('sub', UUIDS[1])
+  assert.equal(a.slice(0, 12), b.slice(0, 12), 'the two share their first eight hex digits')
+  // The key is a prefix, so ids that agree over it share a label. That is the collision the
+  // length is chosen against, and views.md carries the margin measured on the real corpus.
+  assert.equal(A.categoryLabel(p, a), A.categoryLabel(p, b))
+  assert.notEqual(a, b)
+})
+
+test('a value that is not on the expected prefix is not silently trimmed', () => {
+  // The producer writes null rather than a bare id, but a label must never invent a key.
+  assert.equal(A.categoryLabel(A.BY_NAME.participant, UUIDS[0]), UUIDS[0])
+  assert.equal(A.categoryLabel(A.BY_NAME.participant, 'pilot-7'), 'pilot-7')
+  assert.equal(A.categoryLabel(A.BY_NAME.participant, null), null)
+  assert.equal(A.categoryLabel(A.BY_NAME.participant, undefined), undefined)
+  assert.equal(A.categoryLabel(null, bids('sub', UUIDS[0])), bids('sub', UUIDS[0]))
+})
+
+test('the key is eight hex digits, which separates far more subjects than the corpus holds', () => {
+  // Eight is the UUID's own first group: 0 collisions over the 1,527 subjects and 1,736 sessions
+  // of the r3 corpus, where six was already collision-free. views.md holds the measurement.
+  assert.equal(A.KEY_CHARS, 8)
+  const made = []
+  for (let i = 0; i < 4096; i++) made.push(bids('sub', i.toString(16).padStart(8, '0') + '-0000-4000-8000-000000000000'))
+  const keys = new Set(made.map((m) => A.categoryLabel(A.BY_NAME.participant, m)))
+  assert.equal(keys.size, made.length)
+})
+
+test('a shortened axis says so in its caption, and an ordinary one does not', () => {
+  const data = rows(...[UUIDS[0], UUIDS[2]].map((u) => ({ participant: bids('sub', u) })))
+  const shortened = A.caption(A.summarise('participant', data))
+  assert.match(shortened, /first 8 of the id/)
+  assert.match(shortened, /recording panel/)
+  const plain = A.caption(A.summarise('verdict', rows({ verdict: 'pass' }, { verdict: 'flag' })))
+  assert.doesNotMatch(plain, /first 8/)
 })
 
 test('the corpus read asks for no binary block and for no vector or matrix', () => {

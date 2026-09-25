@@ -872,14 +872,36 @@ var SchemaAxes = (function () {
       boundColumn: spec.boundColumn || null,
       op: spec.op || null,
       gate: spec.gate || null,
+      shortKey: spec.shortKey || null,
     };
   }
 
+  // A BIDS id is a prefix and a UUID: 40 characters, of which the axis needs only enough to name
+  // one subject. `shortKey` is the prefix the label drops; KEY_CHARS is what it keeps after it.
+  // Display only: the column still carries the whole id, and every panel that names a recording
+  // shows it whole. specs/20260922-compact-recording-vectors/views.md holds the collision margin.
+  var KEY_CHARS = 8;
+
+  /** The label an axis tick, legend swatch or brush chip carries for one categorical value. */
+  function categoryLabel(col, value) {
+    if (value == null) return value;
+    var s = String(value);
+    var c = typeof col === 'string' ? BY_NAME[col] : col;
+    if (!c || !c.shortKey || s.indexOf(c.shortKey) !== 0) return s;
+    return s.slice(c.shortKey.length, c.shortKey.length + KEY_CHARS);
+  }
+
   var IDENTITY = [
-    column({ name: 'participant', kind: 'categorical', group: 'identity', nullMeans: 'the stem carries no sub-' }),
+    column({
+      name: 'participant', kind: 'categorical', group: 'identity', shortKey: 'sub-',
+      nullMeans: 'the stem carries no sub-',
+    }),
     column({ name: 'task', kind: 'categorical', group: 'identity', nullMeans: 'the stem carries no task-' }),
     column({ name: 'verdict', kind: 'categorical', group: 'decision', nullMeans: 'never null' }),
-    column({ name: 'session', kind: 'categorical', group: 'identity', nullMeans: 'the stem carries no ses-' }),
+    column({
+      name: 'session', kind: 'categorical', group: 'identity', shortKey: 'ses-',
+      nullMeans: 'the stem carries no ses-',
+    }),
     column({ name: 'declared_family', kind: 'categorical', group: 'identity', nullMeans: 'nothing was declared' }),
     column({ name: 'release', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote none' }),
     column({ name: 'release_ground', kind: 'categorical', group: 'decision', nullMeans: 'REDACT itself decided' }),
@@ -1077,19 +1099,21 @@ var SchemaAxes = (function () {
   var BY_NAME = {};
   CATALOGUE.forEach(function (c) { BY_NAME[c.name] = c; });
 
-  // Owner-directed: participant, task, verdict first. Then the columns that actually
-  // discriminate over this corpus — see specs/20260922-compact-recording-vectors/views.md.
+  // Owner-directed: participant, task, verdict first. The remaining seven are ranked by
+  // discrimination — separation times decision-relevance, under a redundancy cut and a
+  // resolution floor — over the r3 corpus. specs/20260922-compact-recording-vectors/views.md
+  // holds the statistic, the ranking over all 175 assignable columns and what each slot beat.
   var DEFAULT_AXES = [
     'participant',
     'task',
     'verdict',
-    'duration_s',
-    'conformance_airway',
-    'conformance_speech',
-    'gate_failed_n',
-    'flags_n',
-    'pii_findings_n',
+    'declared_family',
     'release',
+    'flags_n',
+    'gate_applied_n',
+    'route_speech',
+    'duration_s',
+    'enhanced_over_residual_rms_db',
   ];
   var MAX_AXES = 10;
 
@@ -1239,6 +1263,9 @@ var SchemaAxes = (function () {
         (summary.scale === 'log' ? ' · log10 scale' : ''));
     } else {
       bits.push(summary.categories.length + ' ordered categories');
+      if (summary.col.shortKey) {
+        bits.push('labelled by the first ' + KEY_CHARS + ' of the id · the recording panel carries it whole');
+      }
     }
     if (summary.col.reduction === 'mean') {
       bits.push(
@@ -1267,6 +1294,8 @@ var SchemaAxes = (function () {
     BY_NAME: BY_NAME,
     DEFAULT_AXES: DEFAULT_AXES,
     MAX_AXES: MAX_AXES,
+    KEY_CHARS: KEY_CHARS,
+    categoryLabel: categoryLabel,
     corpusColumns: corpusColumns,
     readValue: readValue,
     summarise: summarise,
@@ -2109,7 +2138,7 @@ var CorpusView = (function () {
         var every = Math.max(1, Math.ceil(13 / Math.max(step, 1)));
         for (var ci = 0; ci < cats.length; ci += every) {
           var yy = g.bandTop + ci * step;
-          ctx.fillText(truncate(cats[ci], 16), x - 6, yy);
+          ctx.fillText(truncate(SchemaAxes.categoryLabel(s.col, cats[ci]), 16), x - 6, yy);
           ctx.strokeStyle = '#3a4150';
           ctx.beginPath(); ctx.moveTo(x - 4, yy); ctx.lineTo(x, yy); ctx.stroke();
         }
@@ -3037,7 +3066,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RecordingV
         (b.absent === 'include' ? ' + absent' : '');
     }
     if (b.terms && b.terms.length) {
-      return b.terms.length === 1 ? String(b.terms[0]) : b.terms.length + ' categories';
+      return b.terms.length === 1
+        ? String(SchemaAxes.categoryLabel(s.col, b.terms[0]))
+        : b.terms.length + ' categories';
     }
     return b.absent === 'include' ? 'absent included' : 'brushed';
   }
@@ -3072,7 +3103,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RecordingV
         var s = el('span', 'swatch');
         s.style.background = cm.map[c];
         var w = el('span', 'legend-item');
-        w.appendChild(s); w.appendChild(document.createTextNode(CorpusView.truncate(c, 22)));
+        w.appendChild(s);
+        w.appendChild(document.createTextNode(CorpusView.truncate(SchemaAxes.categoryLabel(cm.summary.col, c), 22)));
+        w.title = String(c);
         box.appendChild(w);
       });
       if (cm.summary.categories.length > CorpusView.PALETTE.length) {
@@ -3277,6 +3310,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RecordingV
     dl.appendChild(dd);
   }
 
+  /** A BIDS id, whole, with the key the axis drew it under so the two can be matched up. */
+  function identity(dl, key, value) {
+    var short = SchemaAxes.categoryLabel(key, value);
+    field(dl, key, value == null || short === value ? value : value + '   (on the axis: ' + short + ')');
+  }
+
   function renderDecision(row, ms) {
     var dl = $('rec-decision');
     dl.innerHTML = '';
@@ -3291,8 +3330,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RecordingV
       field(dl, 'conformance_' + b, row['conformance_' + b]);
     });
     ['airway', 'speech', 'voice'].forEach(function (b) { field(dl, 'route_' + b, row['route_' + b]); });
-    field(dl, 'participant', row.participant);
-    field(dl, 'session', row.session);
+    identity(dl, 'participant', row.participant);
+    identity(dl, 'session', row.session);
     field(dl, 'task', row.task);
     field(dl, 'declared_family', row.declared_family);
     field(dl, 'run_dir', row.run_dir);
