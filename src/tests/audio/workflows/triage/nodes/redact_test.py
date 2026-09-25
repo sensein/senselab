@@ -7,6 +7,7 @@ only two authors REDACT reads.
 
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import replace
 from datetime import datetime
@@ -1670,21 +1671,62 @@ class TestTheLlmCheckIsOffUnlessAskedFor:
         assert _annotation(store)["status"] == "disabled"
         assert _reviews(store) == []
 
-    def test_it_is_not_run_when_the_detectors_found_nothing(
+    def test_a_scanned_clean_recording_is_read_back_too(
         self,
         store: ProvStore,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """No finding is the one state with nothing to review; the reviewer is told so, not skipped."""
+        """The miss direction: a detector that marked nothing is exactly what wants a second reader."""
         config = _override(tmp_path, LLM_ON)
         _seed_redact_store(store, tmp_path, words=["hello", "world"], findings=[])
+        _stub_pii(monkeypatch, findings=[])
+        seen = _stub_review(monkeypatch, [_clean()])
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.PASS
+        assert seen == ["hello world"]
+        assert _annotation(store)["status"] == "clean"
+
+    def test_nothing_to_read_is_an_empty_transcript_and_only_that(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The one honest residue of "nothing to review" once a clean scan is no longer one."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=[], findings=[])
         _stub_pii(monkeypatch, findings=[])
         seen = _stub_review(monkeypatch, [])
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.PASS
         assert seen == []
-        assert _annotation(store)["status"] == "not_run"
+        assert _annotation(store)["status"] == "nothing_to_read"
+
+    def test_the_retired_state_is_gone_from_the_vocabulary(self) -> None:
+        """``not_run`` meant "the detectors marked nothing", which is now a reviewed population."""
+        source = inspect.getsource(redact_module)
+        assert '"not_run"' not in source
+
+    def test_the_annotation_says_how_many_findings_the_reading_was_taken_beside(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A flag beside zero findings is a contradicted clean scan; beside some, a second opinion."""
+        config = _override(tmp_path, LLM_ON)
+        _seed_redact_store(store, tmp_path, words=["hello", "world"], findings=[])
+        _stub_pii(monkeypatch, findings=[])
+        _stub_review(
+            monkeypatch,
+            [_flags(ReviewFinding(text="world", category="LOCATION", why="a place")), _clean()],
+        )
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        annotation = _annotation(store)
+        assert annotation["status"] == "flagged"
+        assert annotation["detector_findings_n"] == 0
+        assert annotation["detector_outcome"] == "pass"
 
 
 class TestTheReviewerSeesEveryRecordingTheDetectorsTouched:
@@ -1984,7 +2026,7 @@ class TestTheWeightsAreReleasedUnlessTheRunSaysOtherwise:
         monkeypatch.setattr(redact_module, "_llm_rounds", _boom)
         settings = dict(_llm_settings(_override(tmp_path, LLM_ON)))
         with pytest.raises(RuntimeError):
-            redact_module._llm_check("text", settings, detector_outcome="pass")
+            redact_module._llm_check("text", settings, detector_outcome="pass", detector_findings_n=1)
         assert released == [False]
 
 
