@@ -29,6 +29,8 @@ from senselab.audio.workflows.triage.nodes.preprocess import preprocess
 from senselab.audio.workflows.triage.nodes.quality import quality
 from senselab.audio.workflows.triage.nodes.redact import redact
 from senselab.audio.workflows.triage.nodes.report import report
+from senselab.audio.workflows.triage.nodes.review import NODE as REVIEW_NODE
+from senselab.audio.workflows.triage.nodes.review import ReviewOutcome, review
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.speech import speech
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
@@ -67,7 +69,7 @@ _ENTITY_ORDER = ("sub-", "ses-")
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
 
-_R = TypeVar("_R", bound="NodeResult | BranchResult")
+_R = TypeVar("_R", bound="NodeResult | BranchResult | ReviewOutcome")
 
 
 @dataclass(frozen=True)
@@ -353,9 +355,12 @@ def drive_decisions(
                 task_family=declared_task_family(store, hint),
             ),
         )
-        return dict(redacted.artifacts) if redacted is not None else {}
-    outcomes["REDACT"] = NodeOutcome(node="REDACT", state=RunState.SKIPPED)
-    return {}
+        artifacts = dict(redacted.artifacts) if redacted is not None else {}
+    else:
+        outcomes["REDACT"] = NodeOutcome(node="REDACT", state=RunState.SKIPPED)
+        artifacts = {}
+    _attempt(outcomes, REVIEW_NODE, lambda: review(store, config, hint))
+    return artifacts
 
 
 def _attempt_artifacts(
