@@ -37,9 +37,15 @@ report and every other node's verdict stands, which is what separates this from 
 is to collect readings.
 
 Resumability is the store's, as in the other adding drivers: a recording whose store already holds
-a live ``redaction_llm_annotation`` written under this configuration is ``present`` and is not read
-again, so a preempted array task is resumed by resubmitting it. ``--force`` reads again and retires
-what stood only where the re-reading actually differs.
+a live ``redaction_llm_annotation`` **that a REVIEW activity generated** is ``present`` and is not
+read again, so a preempted array task is resumed by resubmitting it. ``--force`` reads again and
+retires what stood only where the re-reading actually differs.
+
+The node is the whole of that test. A corpus replayed before the reviewer became its own node
+carries a live annotation from REDACT's ``llm_check`` step, and over the r4 corpus every one of
+them reads ``disabled``, because the packaged config leaves the reviewer off. Counting those as
+standing readings turns the entire pass into a no-op that reports ``present`` on every row and
+exits 0.
 
 Nothing is written outside the recording's own run: ``run/store.jsonl`` is replaced atomically and
 ``prov/`` is re-exported. ``--out-root`` mirrors each run root under a directory of its own first,
@@ -94,7 +100,7 @@ from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED
 from senselab.audio.workflows.triage.nodes.review import NODE, apply_proposal, review
 from senselab.audio.workflows.triage.run import REPORT_NODE, SUMMARY_SUBDIR
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION
-from senselab.utils.prov_store import ProvStore
+from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
 STREAM_SUFFIX = ".flac"
@@ -180,17 +186,32 @@ def mirror_run_root(run_root: Path, out_root: Path) -> Path:
     return mirror
 
 
-def standing(store: ProvStore) -> str | None:
-    """The status of the annotation this store already holds, if any.
+def standing(store: ProvStore) -> Entity | None:
+    """The reading REVIEW has already left here, if any.
+
+    An annotation is this pass's work only where a ``REVIEW`` activity generated it. A store
+    replayed before the reviewer became its own node carries a live annotation from REDACT's
+    ``llm_check`` step -- ``disabled`` over the whole r4 corpus, because the packaged config leaves
+    the reviewer off -- and counting that as a standing reading makes the whole pass a silent no-op
+    that reports ``present`` on every row.
 
     Args:
         store: The run's store.
 
     Returns:
-        The status, or None where no live annotation stands.
+        The annotation entity, or None where REVIEW has left none.
     """
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
-    return None if annotation is None else str(annotation.attributes.get("status") or "")
+    if annotation is None:
+        return None
+    activity_id = store.generated_by(annotation.id)
+    if activity_id is None:
+        return None
+    try:
+        node = store.get_activity(activity_id).node
+    except KeyError:
+        return None
+    return annotation if node == NODE else None
 
 
 def review_one(store: ProvStore, config: TriageConfig, *, run_dir: Path, apply: bool, held: str | None) -> str:
@@ -261,7 +282,7 @@ def extend_one(
         store = read_store(run_root)
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
-    held = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    held = standing(store)
     if held is not None and not force:
         return {"status": PRESENT, NODE: str(held.attributes.get("status") or "")}
     before = store.fingerprint()
