@@ -65,16 +65,26 @@ manifest and the same finished-corpus sources r3 replayed —
 
 240 slices in three disjoint ranges, one array per partition:
 
-| array | partition | slices |
-| --- | --- | --- |
-| `23709700` | `pi_satra` | 0-39 |
-| `23709701` | `ou_bcs_normal --qos=normal` | 40-139 |
-| `23709702` | `mit_preemptable` | 140-239 |
+| array | partition | slices | cpus |
+| --- | --- | --- | ---: |
+| `23709700` | `pi_satra` | 0-21 (running) | 8 |
+| `23709701` | `ou_bcs_normal --qos=normal` | 40-54 (running) | 8 |
+| `23711702` | `pi_satra` | 22-39, 55-103 | 4 |
+| `23711703` | `ou_bcs_normal --qos=normal` | 104-170 | 4 |
+| `23711704` | `mit_preemptable` | 171-239 | 4 |
+
+**The ask halved, because r3 measured it.** `seff 23604010_0` on an r3 slice: 3 h 38 m of CPU over a
+1 h 15 m wall clock on 8 cores — 2.9 cores used, 36% efficiency — and 10.85 GB of 24. Asking 8 cores
+and 24 GB for work that takes 3 and 11 buys nothing and backfills half as readily, so the 203 slices
+that had not started were resubmitted at 4 cores and 14 GB. The 37 already running keep their
+allocation; the ranges stay disjoint, because two concurrent tasks in one slice would write the same
+store.
 
 Two earlier submissions were cancelled before doing work and are recorded because the reason is
 operational and will recur: `23707723` on `ou_bcs_normal` ran 14 of a 160-throttle array for twelve
-minutes against another user holding 230 jobs there, and `23709702`'s predecessor `23709076` on
-`mit_preemptable` scheduled none of 240 in five minutes behind 1,496 other pending jobs. A first
+minutes against another user holding 230 jobs there, and `23709076` on `mit_preemptable`
+scheduled none of 240 in five minutes behind 1,496 other pending jobs; `23709702` on the same
+partition then scheduled none of its 100 in fifteen. A first
 submission of 400 slices was refused outright: the `ou_bcs_normal` **partition** QOS caps submitted
 jobs per user at 256 whatever `--qos` names, and every array task counts.
 
