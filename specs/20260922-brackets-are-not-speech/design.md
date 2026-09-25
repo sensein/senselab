@@ -99,3 +99,35 @@ nothing. After it, the bracket is released intact and the same detector flags it
 bracketed word records dropped, leaving the redaction placeholders and every lexical surface. The
 released `transcript.txt` and `consensus.json` are unchanged: dropping a token from a scan is not
 dropping it from the transcript.
+
+## The reviewer reads the same string, from 2026-09-25
+
+When this was written the rule had one consumer: REDACT's re-scan, which drops bracketed tokens
+before handing the redacted text back to the detectors. REVIEW then became its own node reading
+every transcript, and it read `transcript_texts`, which did **not** apply the rule. So the reviewer
+and the detectors read two different strings, which is exactly the drift the shared renderer exists
+to prevent.
+
+Owner, 2026-09-25: *"drop the bracketed tokens for the reviewer too."*
+
+Both texts `transcript_texts` returns now go through `_verification_text`, the same filter the
+re-scan uses, and `review._word_spans` skips bracketed words so the locator searches the string the
+reviewer actually read. That second half is load-bearing: `my [UH] name` reads as `my name`, and a
+proposal quoting `my name` against the unfiltered join would not be found, would be recorded as
+unplaced, and an unplaceable removal keeps everything — a dropped redaction that reports as success.
+
+### What it is and is not for
+
+Measured on r4 before the change: 85.2% of the non-lexical tasks' transcripts are nothing but
+markers — `[breath]` 1,596, `[UH]` 600, `[cough]` 195, `[laughter]` 195, `[yawn]` 68 in a 4,000
+sample — and 15,871 recordings sat at `not_assessed` carrying only that.
+
+A GPU probe over 20 of them, run before the change, read **all 20 clean**. So this is *not* a fix
+for a model that brackets fool, and the 4,228-finding precedent that motivated the original rule
+does not transfer to the reviewer. What it buys:
+
+- one string for the reviewer and the detectors, so a quote cannot mean two things;
+- a marker-only transcript renders empty, so REVIEW records `nothing_to_read` — an honest silence,
+  rather than a reading that says a card was spent confirming `[breath]` is not a name;
+- about 34 GPU-hours over the corpus, at the ~7.7 s those trivial transcripts measured, not the
+  ~90 first estimated from the 25.3 s corpus median.
