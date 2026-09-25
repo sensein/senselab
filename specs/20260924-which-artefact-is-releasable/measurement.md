@@ -63,6 +63,11 @@ manifest and the same finished-corpus sources r3 replayed —
 <design>/scope` — into a fresh `--out-root` at
 `/orcd/scratch/bcs/002/satra/triage_r4_20260924/out`.
 
+The pin is the commit that changed the graph. Everything committed after it on this branch
+touches the viewer bundle, the review page, the specs and the tests — a diff of `src/senselab`
+between the pin and the tip names four viewer files and nothing the replay executes — so the
+pass is reproducible from the branch tip as well as from the pin.
+
 240 slices in three disjoint ranges, one array per partition:
 
 | array | partition | slices | cpus |
