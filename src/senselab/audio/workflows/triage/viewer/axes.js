@@ -179,6 +179,43 @@ var SchemaAxes = (function () {
       sizeOf: 'flag_nodes',
     }),
     column({ name: 'flag_nodes.size', kind: 'count', group: 'decision', label: 'flag_nodes · size', sizeOf: 'flag_nodes' }),
+
+    // REVIEW's reading. It decides nothing itself, but VERDICT weights both axes by it, so a row
+    // that cannot show what the reviewer read cannot explain the verdict beside it.
+    column({ name: 'llm_status', kind: 'categorical', group: 'review', nullMeans: 'REVIEW left no annotation' }),
+    column({ name: 'llm_speakers', kind: 'categorical', group: 'review', nullMeans: 'the reader answered none' }),
+    column({
+      name: 'llm_original_judgment', kind: 'categorical', group: 'review',
+      label: 'llm · original carries pii', nullMeans: 'the reader answered none',
+    }),
+    column({
+      name: 'llm_redaction_judgment', kind: 'categorical', group: 'review',
+      label: 'llm · redaction removed it', nullMeans: 'the reader answered none',
+    }),
+    column({ name: 'llm_detector_outcome', kind: 'categorical', group: 'review', nullMeans: 'REDACT wrote no verdict' }),
+    column({ name: 'llm_iterations', kind: 'count', group: 'review', nullMeans: 'REVIEW left no annotation' }),
+    column({ name: 'llm_flagged_n', kind: 'count', group: 'review', nullMeans: 'never null' }),
+    column({ name: 'llm_proposal_redact_n', kind: 'count', group: 'review', nullMeans: 'the reader proposed none' }),
+    column({ name: 'llm_proposal_release_n', kind: 'count', group: 'review', nullMeans: 'the reader proposed none' }),
+    column({ name: 'llm_read_redacted', kind: 'categorical', group: 'review', nullMeans: 'REVIEW left no annotation' }),
+    column({ name: 'llm_failed', kind: 'categorical', group: 'review', nullMeans: 'REVIEW left no annotation' }),
+    column({
+      name: 'llm_model_id', kind: 'categorical', group: 'review', assignable: false,
+      reason: 'one value over the corpus — provenance, not a separation',
+    }),
+    column({
+      name: 'llm_revision', kind: 'categorical', group: 'review', assignable: false,
+      reason: 'one value over the corpus — provenance, not a separation',
+    }),
+    column({
+      name: 'llm_flagged_categories', kind: 'set', group: 'review', assignable: false,
+      reason: 'a set of category names, not a value — put its size on the axis, or filter by a term',
+      sizeOf: 'llm_flagged_categories',
+    }),
+    column({
+      name: 'llm_flagged_categories.size', kind: 'count', group: 'review',
+      label: 'llm_flagged_categories · size', sizeOf: 'llm_flagged_categories',
+    }),
   ];
 
   function measurementColumns() {

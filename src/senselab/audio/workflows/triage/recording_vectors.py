@@ -21,12 +21,12 @@ import re
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 import numpy as np
 import pyarrow as pa
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -670,6 +670,40 @@ def _number(value: Any) -> float | None:  # noqa: ANN401 -- a stored reading is 
     return float(value) if math.isfinite(float(value)) else None
 
 
+def _reviewer_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
+    """REVIEW's reading, as the columns a viewer can facet on.
+
+    The reviewer decides nothing by itself, but VERDICT weights both axes by it, so a row that
+    cannot show what it read cannot explain the verdict beside it. Categorical throughout: the
+    judgments, their counts and the model's identity, never a proposal's text.
+
+    Args:
+        decision: The fold's record.
+
+    Returns:
+        The ``llm_*`` columns. Every one is None where the fold carries no annotation.
+
+    """
+    annotation = decision.get("llm_redaction") or {}
+    flagged = annotation.get("flagged") or []
+    return {
+        "llm_status": annotation.get("status"),
+        "llm_iterations": int(annotation["iterations"]) if annotation.get("iterations") is not None else None,
+        "llm_redaction_judgment": annotation.get("redaction") or None,
+        "llm_original_judgment": annotation.get("original") or None,
+        "llm_speakers": annotation.get("speakers") or None,
+        "llm_flagged_categories": [str(name) for name in flagged],
+        "llm_flagged_n": len(flagged),
+        "llm_proposal_redact_n": annotation.get("proposal_redact_n"),
+        "llm_proposal_release_n": annotation.get("proposal_release_n"),
+        "llm_read_redacted": annotation.get("read_redacted"),
+        "llm_detector_outcome": annotation.get("detector_outcome") or None,
+        "llm_model_id": annotation.get("model_id") or None,
+        "llm_revision": annotation.get("revision") or None,
+        "llm_failed": bool(annotation.get("failure")) if annotation else None,
+    }
+
+
 def _gate_columns(decision: dict[str, Any]) -> dict[str, Any]:
     """Every gate VERDICT resolved, as one column group per gate plus the fold's own summary.
 
@@ -842,6 +876,7 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
     for branch in ROUTED_BRANCHES:
         row[f"route_{branch.lower()}"] = routes.get(branch)
     row.update(_gate_columns(decision))
+    row.update(_reviewer_columns(decision))
     row.update(_residual_levels(view))
 
     speech_report = view.last("branch_report", node="SPEECH")
@@ -1022,6 +1057,20 @@ def schema() -> pa.Schema:
         pa.field("gate_undetermined_n", pa.int32()),
         pa.field("gate_failed_names", pa.list_(pa.string())),
         pa.field("gate_flagged_names", pa.list_(pa.string())),
+        pa.field("llm_status", pa.string()),
+        pa.field("llm_iterations", pa.int32()),
+        pa.field("llm_redaction_judgment", pa.string()),
+        pa.field("llm_original_judgment", pa.string()),
+        pa.field("llm_speakers", pa.string()),
+        pa.field("llm_flagged_categories", pa.list_(pa.string())),
+        pa.field("llm_flagged_n", pa.int32()),
+        pa.field("llm_proposal_redact_n", pa.int32()),
+        pa.field("llm_proposal_release_n", pa.int32()),
+        pa.field("llm_read_redacted", pa.bool_()),
+        pa.field("llm_detector_outcome", pa.string()),
+        pa.field("llm_model_id", pa.string()),
+        pa.field("llm_revision", pa.string()),
+        pa.field("llm_failed", pa.bool_()),
         *[
             field
             for name in GATE_NAMES
