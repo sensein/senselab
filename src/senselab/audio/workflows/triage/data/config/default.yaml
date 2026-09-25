@@ -147,6 +147,10 @@ stimulus:
   near_match:                          # how far a transcript token may be from a stimulus token and still be it
     exact_below: 5                     # a normalised token shorter than this must match the stimulus exactly
     two_edits_from: 8                  # this long or longer may differ by two edits; between the two, by one
+  residue:                             # which transcript words reach the PII pathway; see specs/20260925-lexical-only-pii-pathway/
+    variant_similarity_min: 0.66       # least 1 - edits/longer length at which a word is a reading of a stimulus word
+    insertion_window: 3                # stimulus words either side an inserted word may repeat, restart or split
+    train_repetitions_min: 3           # recurrences that make a token a syllable train in a syllable task
 
 # The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
 # read off the recording's own BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`
