@@ -15,7 +15,10 @@ from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     CRITICAL_ABSENCE,
     DECLINED,
+    NO_LEXICAL_ITEM_PRODUCED,
+    NO_LEXICAL_WORD,
     NO_TRANSCRIPT,
+    NON_LEXICAL_TASK,
     REDACTION_OWED,
     RELEASE_UNKNOWN_GROUNDS,
     RELEASE_WITHOUT_REDACTION_GROUNDS,
@@ -131,19 +134,23 @@ def _with_redact(redact: Outcome, *, speech: bool | None = None, speech_route: s
     )
 
 
-def _without_redact(evidence: RedactionEvidence, *, speech: RunState) -> FileVerdict:
+def _without_redact(
+    evidence: RedactionEvidence, *, speech: RunState, speech_route: str = ROUTED
+) -> FileVerdict:
     """A fold REDACT left no verdict on, over one state of the redaction evidence.
 
     Args:
         evidence: What the store says about whether anything was redactable.
         speech: Whether SPEECH ran.
+        speech_route: What the ruleset made of SPEECH. ``DECLINED`` is a task that asks for no
+            words, which the release axis reads as a clearance rather than as an absence.
 
     Returns:
         The folded file verdict.
     """
     return fold_file_verdict(
         [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
-        branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+        branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=speech_route, VOICE=DECLINED),
         ran={"SPEECH": speech},
         hint_claims={},
         route_state=ROUTED,
@@ -803,12 +810,13 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
         assert folded.release is Release.NOT_ASSESSED
         assert folded.release_ground == NO_TRANSCRIPT
 
-    def test_the_three_cleared_grounds_name_the_same_state(self) -> None:
-        """One state, three grounds: a reading that cleared the recording is not three answers."""
+    def test_the_four_cleared_grounds_name_the_same_state(self) -> None:
+        """One state, four grounds: a reading that cleared the recording is not four answers."""
         cleared = [
             _without_redact(RedactionEvidence(lexical_words_n=42, scanned=True), speech=RunState.COMPLETED),
             _without_redact(RedactionEvidence(lexical_words_n=9, scanned=False), speech=RunState.COMPLETED),
             _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED),
+            _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=DECLINED),
         ]
         assert {folded.release for folded in cleared} == {Release.WITHOUT_REDACTION}
         assert {folded.release_ground for folded in cleared} == set(RELEASE_WITHOUT_REDACTION_GROUNDS)
@@ -890,8 +898,11 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
         parameter defaults to reading nothing.
         """
         parameters = inspect.signature(_release_from).parameters
-        assert set(parameters) == {"node_verdicts", "evidence", "ran", "reviewer_withholds"}
+        assert set(parameters) == {"node_verdicts", "evidence", "ran", "reviewer_withholds", "speech_declined"}
         assert parameters["reviewer_withholds"].default is False
+        assert parameters["speech_declined"].default is False
+        # Exactly one of them is a reviewer input; the rest are the store's own evidence.
+        assert [name for name in parameters if "review" in name] == ["reviewer_withholds"]
 
     def test_the_reviewer_may_tighten_the_axis_and_never_loosen_it(self) -> None:
         """The one direction that cannot leak. ``design.md`` §5."""
@@ -903,6 +914,63 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
         assert _release_from(passed, evidence, ran, reviewer_withholds=True)[0] is Release.WITHHELD
         assert _release_from(failed, evidence, ran, reviewer_withholds=False)[0] is Release.WITHHELD
         assert _release_from(failed, evidence, ran, reviewer_withholds=True)[0] is Release.WITHHELD
+
+
+class TestANonLexicalTaskIsClearedRatherThanHeld:
+    """Owner, 2026-09-25: a task that asks for no words is not a recording the graph cannot judge.
+
+    19,097 recordings -- breath, cough, sustained vowels, glides -- reached ``NO_TRANSCRIPT`` and
+    answered ``not_assessed`` because the ruleset had declined SPEECH. The ruleset's own decision is
+    the reading: there is nothing a redaction could remove from a task that never asked for a word.
+    """
+
+    def test_a_declined_speech_branch_clears_the_recording(self) -> None:
+        """The ruleset declining SPEECH is evidence, not the absence of it."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=DECLINED)
+        assert folded.release is Release.WITHOUT_REDACTION
+        assert folded.release_ground == NON_LEXICAL_TASK
+
+    def test_a_routed_speech_branch_that_never_ran_is_still_unassessed(self) -> None:
+        """Routing asked for SPEECH and got nothing back: that is a gap, not a clearance."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=ROUTED)
+        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release_ground == NO_TRANSCRIPT
+
+    def test_clearing_a_non_lexical_task_raises_no_flag(self) -> None:
+        """A cough that reads as a cough is not a finding."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=DECLINED)
+        assert folded.triage is Triage.PASS
+
+
+class TestASpeechTaskThatProducedNoWordIsFlagged:
+    """The other half of the same instruction: cleared is not the same as unremarkable.
+
+    A task the ruleset routed to SPEECH is a task that asks for words. SPEECH running over it and
+    reading none is the task not having happened, and the release axis calling it releasable is
+    true without being the whole of it.
+    """
+
+    def test_a_routed_speech_task_with_no_lexical_item_flags(self) -> None:
+        """What the owner asked to see: the task asked for words and none came."""
+        folded = _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED)
+        assert folded.triage is Triage.FLAG
+        assert any(NO_LEXICAL_ITEM_PRODUCED in reason.why for reason in folded.reasons)
+
+    def test_it_is_still_releasable(self) -> None:
+        """Flagging it does not withhold it: there is nothing in it to redact."""
+        folded = _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED)
+        assert folded.release is Release.WITHOUT_REDACTION
+        assert folded.release_ground == NO_LEXICAL_WORD
+
+    def test_a_declined_branch_with_no_words_does_not_flag(self) -> None:
+        """A task that asks for no words may produce none without it meaning anything."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=DECLINED)
+        assert not any(NO_LEXICAL_ITEM_PRODUCED in reason.why for reason in folded.reasons)
+
+    def test_a_task_that_produced_words_does_not_flag(self) -> None:
+        """The obvious control."""
+        folded = _without_redact(RedactionEvidence(lexical_words_n=42, scanned=True), speech=RunState.COMPLETED)
+        assert not any(NO_LEXICAL_ITEM_PRODUCED in reason.why for reason in folded.reasons)
 
 
 class TestARedactNonPassIsVisibleWithoutFlippingTriage:
