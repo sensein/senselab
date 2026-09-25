@@ -1513,6 +1513,30 @@ def test_the_page_reports_the_reviewers_other_two_readings() -> None:
     assert "A reading of the transcript, not of the audio." in page._SCRIPT
 
 
+def test_the_page_script_is_valid_javascript() -> None:
+    r"""The guard 112 assertions on this page did not have: does the script actually parse?
+
+    ``_SCRIPT`` is a plain triple-quoted Python string, so a ``\\'`` written for JavaScript
+    collapses to a bare apostrophe, closes the string it sits in and takes the rest of the file
+    with it. Two of those shipped, and every keydown handler on the page stopped binding: the
+    owner found it by pressing a key, because substring assertions cannot see a parse error.
+
+    Skipped where node is not installed, so the suite still runs on a host without it.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; the javascript cannot be parsed here")
+    with tempfile.TemporaryDirectory() as directory:
+        script = Path(directory) / "script.js"
+        script.write_text(page._SCRIPT, encoding="utf-8")
+        result = subprocess.run([node, "--check", str(script)], capture_output=True, text=True)
+    assert result.returncode == 0, f"the page script does not parse:\n{result.stderr}"
+
+
 def test_a_flagged_reading_names_the_ground_that_fired() -> None:
     """A flagged reading with no categories used to render as "It flagged 0" and say nothing.
 

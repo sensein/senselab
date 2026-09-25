@@ -1853,7 +1853,7 @@ function buildWhy(stem,card){
     ?' It was taken beside a detector <b>'+esc(llm.detector_outcome)+'</b>.':'';
   const DETECTORS={scanned:'the detectors read this transcript',
     declined:'the detectors never read this transcript: the scan was declined because every '
-      +'lexical word is in the task\'s own stimulus',
+      +'lexical word is in the task\\'s own stimulus',
     unscanned:'no detector ever reached this transcript'};
   const reached=DETECTORS[llm.detector_state]
     ?'<p class="note">Detectors: '+esc(DETECTORS[llm.detector_state])+'.</p>':'';
@@ -1864,7 +1864,7 @@ function buildWhy(stem,card){
       +'one. This is not a verdict about the recording.</div>');
   }else if(st==='nothing_to_read'){
     out.push('<div class="warn"><b>There was no text to read.</b> The reviewer is enabled, and '
-      +'this recording\'s transcript carries no words, so there was nothing to read back. '
+      +'this recording\\'s transcript carries no words, so there was nothing to read back. '
       +'It reached no conclusion about this recording.</div>');
   }else if(st==='absent'){
     out.push('<div class="warn"><b>It tried and could not load.</b> That is not the same as '
