@@ -68,76 +68,252 @@ should become opt-in rather than opt-out.
 
 ---
 
+## The subject axis draws a key, not the id
+
+A BIDS subject id is `sub-` and a UUID: **40 characters**. On a categorical axis the tick labels
+are right-aligned against the axis line and truncated at 16, so the subject column spent about
+96 px of a ~140 px gap on a label the reader could not finish and could not tell from its
+neighbour. The owner's word for it was *swamps the column*.
+
+The axis now draws the **first eight hex digits of the UUID** — the UUID's own first group, with
+the `sub-` dropped. `session` gets the same treatment against `ses-`. Everything else
+is drawn exactly as the column carries it.
+
+### The margin, measured on the r3 corpus
+
+`specs/20260922-compact-recording-vectors/axis-discrimination.py` over the 62,548-row file:
+1,527 distinct participants and 1,736 distinct sessions, every one 40 characters, every one on
+its prefix.
+
+| key length | participant: colliding keys / ids | session: colliding keys / ids | birthday expectation, 1,527 ids |
+| ---: | ---: | ---: | ---: |
+| 4 | 25 / 51 | 28 / 56 | 17.8 |
+| 5 | 2 / 4 | 1 / 2 | 1.11 |
+| **6** | **0 / 0** | **0 / 0** | 0.069 |
+| 7 | 0 / 0 | 0 / 0 | 0.0043 |
+| **8 — shipped** | **0 / 0** | **0 / 0** | **0.00027** |
+
+Six is already collision-free on both columns. Eight is shipped because it is two hex digits —
+**256×** — of headroom over the shortest length that happens to work on today's corpus, it is the
+UUID's own first group rather than an arbitrary cut, and it holds as the corpus grows: the
+birthday expectation is 0.012 collisions at 10,000 subjects and 1.16 at 100,000. Below six the
+key is not safe on this corpus, so the margin the page relies on is real rather than assumed.
+
+The observed collisions track the birthday expectation at every length, which is the check that
+these UUIDs are random in their leading digits rather than sequential — a sequential id would
+collide catastrophically at a prefix and the table would not look like this.
+
+### Display, not a column
+
+The shortening is a **transform in the page**, not a `participant_key` column in the parquet.
+
+- The key's length is a **rendering** decision — how many monospace characters fit beside a canvas
+  tick at a given axis spacing. A column would freeze a presentation choice inside a data
+  contract, and the next reader with a wider screen could not change it without a rebuild.
+- A second identity column is a parallel field: two things that name the same subject and can
+  drift. Pre-alpha, this repository renames and replaces rather than adding aliases.
+- It is free either way for recoverability, because the full id never leaves the row. A reader
+  who wants the recording on disk already has it.
+- A rebuild is the expensive half and buys nothing a `str.slice` does not: any pandas or duckdb
+  reader can cut the same eight characters, and the parquet stays on schema 4 with no bump.
+
+`SchemaAxes.categoryLabel(col, value)` is the whole of it: the column spec carries `shortKey`
+(`'sub-'`, `'ses-'`) and `KEY_CHARS` is 8. Three call sites use it — the axis ticks, the colour
+legend and a single-term brush chip. A value that does not start with the declared prefix is
+returned untouched, so a label can never invent a key out of something that is not an id.
+
+### Where the whole id survives
+
+Four places, and the page says so rather than leaving the reader to find out:
+
+- the **recording panel** prints it in full, with the key beside it —
+  `sub-<uuid>   (on the axis: <its first 8 hex digits>)` — so the axis and the panel can be
+  matched up without counting characters;
+- the **hover line** under the plot carries the whole `stem`, which contains both ids;
+- the **legend swatch** carries the full value as its `title`;
+- the **row data** is untouched: `row.participant` is the id, and every filter, facet and brush
+  works on the id, not on the key.
+
+And the axis **caption** says what it did: *`1,527 ordered categories · first 8 of the id ·
+whole in the panel`*. A silently shortened label would be the wrong
+failure — the reader would have no way to know the axis was not showing them everything.
+
+`session` gets the same treatment for the same reason and at the same margin. It is not a default
+axis (it is not a fact about the recording that the fold decided on), but it is one `selectOption`
+away, it has the same 40-character shape, and an axis that behaved differently from its twin would
+be a trap.
+
+---
+
 ## The axis defaults, and the numbers behind them
 
-Owner-directed, the first three are `participant`, `task`, `verdict`. The remaining seven were
-chosen against the distributions over this corpus, not from the candidate list alone.
+Owner-directed, the first three are `participant`, `task`, `verdict`. The remaining **seven are
+chosen by a measured statistic over all 175 assignable columns** of the r3 corpus, not from a
+candidate list. `axis-discrimination.py` reproduces every number here.
 
-| axis | non-null | what it separates |
-| --- | ---: | --- |
-| `participant` | 100% | 1,527 levels; the only axis that shows a participant's whole session as a bundle |
-| `task` | 100% | 796 levels; the dominant covariate of everything else |
-| `verdict` | 100% | pass 51,698 / flag 10,761 / discard 29 |
-| `duration_s` | 100% | p5 2.7 s, p50 7.3 s, p95 57.1 s, 16,140 distinct — the highest-resolution numeric in the file |
-| `conformance_airway` | 38.6% | true 9,942 / undetermined 11,252 / false 2,907 |
-| `conformance_speech` | 69.5% | true 36,683 / false 4,014 / undetermined 2,717 |
-| `gate_failed_n` | 100% | never null; the count of VERDICT's gates that refused this recording |
-| `flags_n` | 100% | 0–4; 10,761 recordings carry at least one |
-| `pii_findings_n` | 69.5% | 89 distinct; **and 30.5% null, which is the axis the null rule exists for** |
-| `release` | 100% | not_assessed 44,526 / releasable 13,555 / withheld 4,407 |
+### What discrimination is, and why it is not spread
 
-Rejected for a default slot, with reasons:
+An axis earns a slot when a random pair of drawn recordings is **placed and separated** by it, and
+when that separation **carries the fold's decision** rather than merely varying.
 
-- **`conformance_quality`** — 99.9% non-null but only two values, 84.5% `undetermined`. It
-  separates almost nothing. `release` takes the slot, and it is also what `pii_findings_n` explains.
-- **Every `m_<name>`** — the best-covered numeric measurement,
-  `expected_sequence_repeat_fraction`, is present on 29.1%; the median one is present on **7.5%**,
-  and `sweep_extent` on 5 recordings out of 62,488. A measurement default would be an axis that is
-  absent for nine lines in ten. They are one click away in the picker, which is where a
-  measurement belongs when it is a per-family reading in a corpus of 48 families.
-- **`route_airway` / `route_speech` / `route_voice`** — 99.9% non-null, and they are exactly the
-  *explanation* of the conformance nulls (`declined` ⟺ no branch report). Genuinely useful, but
-  paired with the conformance axes they would spend six of ten slots on three facts.
+> **separation**  `sep(X) = c² · (1 − Σ_b p_b²)`
+>
+> the chance that both members of a random pair carry a value on X *and* fall in different
+> resolvable bands. `c` is coverage, so a column absent on most rows is punished **quadratically**
+> — a 7.5%-covered measurement cannot exceed 0.0056 however beautifully it varies. `p_b` are the
+> shares among the present rows over **64 bands**: the value band is about 446 px at 62vh, so 64
+> puts them 7 px apart, comfortably above a 1 px line and short of pretending a 1,527-category
+> axis resolves all 1,527. A numeric is banded linearly over its range, because linear is what the
+> axis opens as; a categorical merges adjacent categories in its own axis order once there are
+> more than 64.
+>
+> **relevance**  `rel(X) = I(X ; D) / H(D)`,  `D = (verdict, release)`
+>
+> the share of the fold's published decision that the axis resolves. `H(D) = 1.1872` nats over
+> eight joint levels on this corpus. A column that spreads perfectly and is independent of what
+> the fold concluded scores ~0 and is decoration on a triage page.
+>
+> **discrimination**  `disc(X) = sep(X) · rel(X)`
 
-### Schema 3 traded `conformance_voice` for `gate_failed_n`
+This **betters** the coverage-plus-spread standard the schema-3 defaults were chosen by rather than
+abandoning it: coverage and spread are both inside `sep`, and `rel` is the third property that
+standard had no measurement for. That it is needed is not a matter of taste. Ranking by `sep`
+alone and applying the same redundancy filter gives
 
-The owner asked for VERDICT's decision gates to be visible. With ten slots and twenty-two gates,
-no per-gate reading can be a default without displacing something measured; and the picker alone
-would mean the page opens showing no gate at all. One slot therefore goes to the fold's own
-summary of what its gates did.
+> `participant, task, verdict, session, enhanced_over_residual_rms_fitted_db, residual_rms_dbfs,
+> residual_peak_dbfs, wave_peak, enhanced_rms_dbfs, floor_dbfs`
 
-`conformance_voice` gave up the slot because it is the weakest of the ten on the criterion the
-others were chosen by: 36.2% non-null, only two values in practice (true 4,615 / undetermined
-17,995, no `false` at all), and VOICE answers on only **55.6%** of the 8,294 recordings it owns.
-It separates less than any other default and is one `selectOption` away in the picker.
-`gate_failed_n` is never null.
+— Σsep 6.75 against the schema-3 set's 2.19, **three times the separation and not one axis that
+says anything about the fold**. A page that opened on six dBFS columns would be a level dashboard
+wearing a triage viewer's chrome.
 
-### Why no gate *reading* is a default
+`verdict` and `release` are components of `D` and score high on `rel` by construction. They are
+marked as such in the ranking; neither was *selected* by it — `verdict` is owner-directed and
+`release` is the fold's second published outcome.
 
-Gate coverage was predicted from the 09-22 corpus by resolving every `declared_family` through
-`declared_expectation` to its `Pattern` and asking `load_gate_bounds` which gates that group
-names. 48 of 49 families resolve; the 49th is the 29 recordings that declare nothing.
+### Two constraints on the walk
 
-Only two of the twenty-two gates clear both bars at once:
+**Redundancy.** Walking the ranking, a candidate is skipped when its symmetric NMI with an
+already-chosen axis reaches **0.70**: it is saying something the page already says. This is what
+removes `gate_family` (NMI 1.000 with `declared_family`), `flag_nodes.size` (1.000 with
+`flags_n`), `duration_conditioned_s` and `time_scale_s` (1.000 with `duration_s` — §1's latent
+divergence is still latent), `gate_group` (0.724 with `declared_family`) and `gate_failed_n`
+(0.717 with `verdict`). The cut is not tuned: **0.60 and 0.70 select the same seven**, and only at
+0.80 does the set change.
 
-| gate | resolvable | reading | why it is not a default |
-| --- | ---: | --- | --- |
-| `dominant_speaker_share_min` | 65.9% | `extent_dominant_speaker_share`, a bounded `[0,1]` fraction | best candidate by far, and the only high-coverage gate immune to VOICE's report ceiling because a flag gate runs whether or not the branch reported in family — **but its spread is unmeasured**, and if diarization returns one speaker on most single-target recordings it piles at 1.0 and the axis is degenerate |
-| `coverage_min` | 18.7% resolvable, 2.5% as a conformance term | `source_content_coverage` | the best-behaved reading measured — 1,547 non-null, 152 distinct values, sd 0.169, 79.5% below its 0.5 bound — but a default blank on 97.5% of lines is worse than no axis. **The gate was withdrawn on 2026-09-24** (`specs/20260924-recall-conformance-is-production/design.md`); the reading it names is still a measurement axis |
+**Resolution, as a floor rather than an objective.** A set of ten three-band axes draws at most a
+few thousand distinct polylines whatever each one measures, and 62,548 recordings collapsed onto
+a few hundred paths is a picture in which the reader cannot tell 200 recordings from one. The
+floor is the set being replaced: **a new default set may not draw a coarser picture than the old
+one** — at least 21,119 distinct polylines, largest bundle no worse than 124.
 
-Seven of the twenty-two — `repeat_overlap_min`, `echo_overlap_max`, `verbatim_overlap_max`,
-`gap_off_task_min_s`, `interval_max_s`, `score_min`, `train_min_s`, `rate_prominence_min` —
-carry `reading: None`. They are applied where their finding is located, inside the reporting
-node, so they have no per-recording scalar and **cannot be a value axis at all**, whatever their
-coverage. `gap_off_task_min_s` is the coverage leader at 73.9% and is one of them.
+The greedy walk on `disc` alone lands on 17,923 polylines, below the floor. The repair considers
+**every single swap** that clears it and takes the one with the best total discrimination:
+`−gate_node +enhanced_over_residual_rms_db`, which costs 0.0017 of Σdisc and buys 32,337
+polylines.
 
+### The seven, and what each beat
+
+| slot | axis | non-null | bands | sep | rel | disc | why it is here |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | `participant` | 100% | 64 | 0.982 | 0.011 | 0.011 | owner-directed; 1,527 levels, the only axis that shows a subject's session as a bundle |
+| 2 | `task` | 100% | 62 | 0.873 | 0.082 | 0.072 | owner-directed; 796 levels |
+| 3 | `verdict` | 100% | 3 | 0.275 | 0.379 | 0.104 | owner-directed; pass 52,255 / flag 10,264 / discard 29 |
+| 4 | `declared_family` | 100% | 48 | 0.930 | 0.334 | **0.311** | **the strongest column in the file.** 48 families, never null, and the unit the gates actually resolve against — harvard-sentences-list 13,700 / respiration-and-cough-fivebreaths 3,572 / free-speech 3,073 … |
+| 5 | `release` | 100% | 4 | 0.420 | 0.622 | **0.261** | the fold's second published outcome, and independent of `verdict` (NMI 0.00): nothing_to_redact 45,854 / releasable 12,046 / withheld 4,647 / not_assessed 1 |
+| 6 | `flags_n` | 100% | 5 | 0.375 | 0.488 | **0.183** | 0–4; 48,125 recordings carry none. Never null |
+| 7 | `gate_applied_n` | 100% | 4 | 0.626 | 0.094 | 0.059 | how many of VERDICT's gates were applied at all — the scrutiny the recording got. Never null |
+| 8 | `route_speech` | 100% | 3 | 0.446 | 0.130 | 0.058 | routed 41,565 / declined 20,954 / unavailable 29 |
+| 9 | `duration_s` | 100% | 62 | 0.778 | 0.073 | 0.057 | p5 2.69 s, p50 7.32 s, p95 57.1 s, 16,159 distinct |
+| 10 | `enhanced_over_residual_rms_db` | 100% | 60 | 0.975 | 0.054 | 0.053 | the exact RMS difference in dB between the enhanced and residual streams (§8) — 62,518 distinct, near-uniform over 60 bands, p5 −35.8, p50 28.3, p95 56.4. The resolution slot |
+
+Σdisc **0.981** against the schema-3 set's 0.650, Σsep **4.55** against 2.19.
+
+### What the schema-3 defaults lost, and why
+
+| dropped | sep | rel | disc | why |
+| --- | ---: | ---: | ---: | --- |
+| `conformance_airway` | 0.077 | 0.110 | 0.009 | **38.6% non-null**: nearly two lines in three break there, and `sep` charges that quadratically. What it was showing — AIRWAY declined — is a value on `route_airway`, not an absence |
+| `conformance_speech` | 0.132 | 0.250 | 0.033 | same, at 69.5%. `route_speech` carries the same fact (NMI 0.682) at 100% coverage and beats it 0.058 to 0.033, so the branch structure is shown *better*, not hidden |
+| `gate_failed_n` | 0.245 | 0.281 | 0.069 | NMI **0.717** with `verdict`, which is on slot 3. Two slots on one fact |
+| `pii_findings_n` | 0.161 | 0.240 | 0.039 | 30.5% null, and NMI 0.273 with `release`, which explains it at full coverage |
+| `release_ground` | 0.361 | 0.542 | 0.196 | see below — it ranks 4th and is excluded anyway |
+
+The consequence worth naming: **every one of the ten is 100% non-null, so 62,518 of 62,548 lines
+are drawn whole** where the schema-3 set drew only 8,425 (13.5%). That is not the earlier design
+hiding absence. Absence is still a first-class value — the absent rail, the `absent N` chip and
+the facet panel's `(absent)` are all unchanged, and every axis that has nulls still shows them.
+What has changed is that the page no longer *opens* on a picture that is 86% broken lines, and
+absence becomes something the reader goes and looks at rather than the first thing the plot is.
+
+### `release_ground` ranks 4th and is excluded, on three measured grounds
+
+It would take a slot on `disc` 0.196. It does not, for three reasons, each of which is a number:
+
+1. **Its labels are sentences.** The grounds `vocabulary.py` declares are prose by design —
+   *"SPEECH did not run, so no transcript exists for a redaction to read"* is 67 characters, and
+   **three of the five start with `SPEECH `**, so at the axis's 16-character truncation three of
+   five are indistinguishable. That is the very complaint the subject key was shortened to fix.
+2. **Its rel is circular.** `D` contains `release`, and `release_ground` is `release`'s own
+   explanation. Measured against `verdict` alone its rel is 0.143 and its disc 0.052 — rank ~15,
+   not rank 4. Nothing else in the top ten has that property.
+3. **It pairs with `release` at NMI 0.531**, which is two of seven slots on one fact — the
+   objection `views.md` already raised against pairing `route_*` with `conformance_*`.
+
+It is one `selectOption` away. **Promotion is one mechanism away**: a label rule that shows a long
+categorical from its point of divergence rather than from its first character would unlock it, and
+it is the strongest thing such a rule would unlock.
+
+### Eligibility: a default is a fact about the recording, not about the artefact
+
+Ranked with everything else and then refused a slot, because an axis that measures the encoding
+would be a slot spent on our own bookkeeping:
+
+- **`spans_unrowed_n`** — rank 8 on `disc` 0.169, and the closest call in the whole exercise. It
+  counts spans the figure *does not draw*; its relevance is a back door onto `release` (NMI
+  **0.674**, just under the redundancy cut). Recorded here because it is the one exclusion a
+  reader might reasonably dispute.
+- **every `m_<name>_n` and `_width`** — how many readings the store held is a fact about how the
+  graph ran. The best of them, `m_extent_speaker_count_n`, reaches `disc` 0.049.
+- **every `gate_<name>_bound`** — the threshold, not the recording. All thirteen that exist are
+  constant over this corpus and score `sep` 0.0000 anyway; the bound already reaches the page as a
+  dashed reference line on its reading's axis.
+- **`schema_version`, `malformed_store_lines`** — one value each.
+
+### Every `m_<name>` is still one click away, and the numbers say why
+
+The best-covered numeric measurement, `m_expected_sequence_repeat_fraction`, is present on
+**29.0%** and scores `disc` 0.006; the median one is present on 7.5%. A measurement default would
+be an axis absent for nine lines in ten. They belong in the picker, which is where a per-family
+reading belongs in a corpus of 48 families.
+
+### `dominant_speaker_share_min` is degenerate — the prediction, now measured
+
+Schema 3 named it *"the strongest gate candidate by far"* and said its spread was unmeasured, with
+the warning that *"if diarization returns one speaker on most single-target recordings it piles at
+1.0 and the axis is degenerate"*. Over the r3 corpus it does:
+
+| | |
+| --- | ---: |
+| `gate_dominant_speaker_share_min` present | 38,990 of 62,548 (62.3%) |
+| distinct values | 2,034 |
+| exactly 1.0 | **36,944 — 94.8% of the present readings** |
+| ≥ 0.99 | 37,499 (96.2%) |
+| below 0.95 | 860 (2.2%) |
+| p1 / p5 / p50 | 0.815 / 0.998 / 1.000 |
+| Simpson over 64 bands, among present | 0.0764 → **1.08 effective bands** |
+| `sep` / `rel` / `disc` | 0.030 / 0.132 / 0.0039 |
+
+An axis on which 95% of the drawn lines sit on one tick is not an axis. It is not a default and
+should not be proposed as one again without a corpus on which it moves. `extent_dominant_speaker_share_min`
+and `m_extent_dominant_speaker_share` are the same numbers (NMI 1.000 with it, all three).
+
+Of the other gates, nothing changed: eight of the 21 carry `reading: None` and have no
+per-recording scalar at all, so they cannot be a value axis whatever their coverage;
 `expected_tokens_matched_min` and `omissions_max` reach 33.4% each but are integer counts whose
-range is the stimulus length, so they are not comparable across `harvard-sentences-list` and
-`word-color-stroop` on one axis without normalising.
-
-**Promotion is one measurement away.** When the 09-23 parquet lands, the thing to check first is
-`gate_dominant_speaker_share_min`'s spread. If it is not degenerate it should take a slot, and
-the row above should be replaced with its measured distribution rather than this prediction.
+range is the stimulus length and are not comparable across `harvard-sentences-list` and
+`word-color-stroop` on one axis; and `coverage_min` was withdrawn on 2026-09-24
+(`specs/20260924-recall-conformance-is-production/design.md`).
 
 ### How a gate reaches the page
 
@@ -158,6 +334,7 @@ rather than as a constant in the page. A future `by_family` layer changes the pi
 changing the page.
 
 ### `duration_s` needed a second scale
+
 
 `duration_s` is the strongest numeric axis and also the worst-behaved one: p5 2.7 s, p50 7.3 s,
 p95 57.1 s, **max 333 s**. On a linear axis that puts the median at 1.4% of the band and 95% of
@@ -352,7 +529,7 @@ A fifth, cosmetic: the Python test the schema cites,
 ## Testing
 
 The decoders and the axis model are pure JavaScript with no DOM, and are tested by `node --test`:
-**58 tests** in `src/tests/audio/workflows/triage/viewer/{decode,axes}.test.mjs`. They cover the
+**81 tests** in `src/tests/audio/workflows/triage/viewer/{decode,axes,facets}.test.mjs`. They cover the
 worked example byte-for-byte (including a big-endian read producing a *different* answer, which a
 round trip cannot see), full scale being 65535 and not 65536, the fixed widths as literals, every
 declared range, null-vs-empty for every block, the `255` sentinel not collapsing to the first term,
@@ -379,11 +556,36 @@ carries no timestamp), that it references no `http(s)` origin and calls no `fetc
 `XMLHttpRequest`, that every default axis is an assignable column the producer actually writes, and
 that the app's block list covers every `binary` column in the producer's schema.
 
-### What is not tested
+### Headless Chromium, since 2026-09-24
 
-Canvas pixels. No Chromium is installed on this host, so the page was driven in **jsdom** with a
-recording 2-D stub: that exercises the whole data path, every DOM panel, the axis rail, the list,
-brushing and the recording view's lane plan against the real 62,488-row file, and it checks *what*
-the canvas was asked to draw — but it cannot say the result is legible at 1400 px. First paint and
-selection latency in a real browser are also unmeasured; the numbers above are the node and jsdom
-costs of everything except rasterisation.
+Chromium is now installed, and `npx playwright test` drives the shipped page over `file://` at
+1600 × 1000: **21 tests** in `{viewer,facets}.e2e.spec.mjs`, `workers: 1`, against a synthetic
+240-row fixture `scripts/triage_viewer_fixture.py` writes. Every test fails the run if the page
+raises or if it requests anything over the network, which is how the no-fetch property is checked
+in the browser rather than only by pattern.
+
+The two changes of 2026-09-24 are held there:
+
+- **the short key** — the subject axis's labels are all `KEY_CHARS` long where the ids are all 40,
+  the labels are unique across the drawn subjects, a 4-character key would merge a pair the
+  fixture deliberately contains, each key is a literal prefix of its id, the caption says the
+  labels are short, and the recording panel carries the id whole beside the key;
+- **the defaults** — the rail's ten selects are `DEFAULT_AXES` in order, every one of the ten
+  places at least one recording, and the ten together resolve more than half the corpus into
+  distinct polylines rather than a handful of ribbons;
+- **and a genuine `0.0` is still a value** — on `gate_train_min_s` every exact zero owns a real
+  vertex with a finite `y`, every null is on the rail and nothing else is, and the `absent N` chip
+  counts the nulls and not the zeros.
+
+The fixture had drifted: four assertions were written as literals against schema 3, 22 gates and
+an older generator, and are now computed from the file the generator wrote. The generator itself
+now writes 40-character BIDS ids, the residual levels, an `undetermined` gate outcome and one span
+block, so the page has something real to draw in each of those places.
+
+### What is still not tested
+
+Canvas *pixels*. Playwright captures screenshots to `artifacts/viewer_e2e/` and they are inspected
+by eye, but nothing asserts legibility — a test can say the label is eight characters, not that
+eight characters fit. First paint and selection latency in a real browser against the full 62,548
+rows are also unmeasured; the numbers above are the node and jsdom costs of everything except
+rasterisation.

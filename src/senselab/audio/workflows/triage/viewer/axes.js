@@ -503,7 +503,7 @@ var SchemaAxes = (function () {
     } else {
       bits.push(summary.categories.length + ' ordered categories');
       if (summary.col.shortKey) {
-        bits.push('labelled by the first ' + KEY_CHARS + ' of the id · the recording panel carries it whole');
+        bits.push('first ' + KEY_CHARS + ' of the id · whole in the panel');
       }
     }
     if (summary.col.reduction === 'mean') {
