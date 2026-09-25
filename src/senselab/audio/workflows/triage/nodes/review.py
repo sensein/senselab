@@ -41,7 +41,12 @@ from senselab.audio.workflows.triage.nodes.common import (
     word_hull,
     write_stream,
 )
-from senselab.audio.workflows.triage.nodes.redact import REDACTION_SPAN, planned_extents, transcript_texts
+from senselab.audio.workflows.triage.nodes.redact import (
+    REDACTION_SPAN,
+    planned_extents,
+    residue_words,
+    transcript_texts,
+)
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED
 from senselab.text.tasks.pii_detection.redaction_review import (
@@ -535,14 +540,11 @@ class RefinedPlan:
 
 
 def _word_spans(words: Sequence[Any]) -> tuple[str, list[tuple[int, int, Any]]]:
-    """The transcript as one string, with each word's character range in it.
+    """The residue as one string, with each word's character range in it.
 
     Args:
-        words: PREPROCESS's consensus words, in stream order.
-
-    Bracketed words are skipped, because ``transcript_texts`` drops them: the join has to be the
-    string the reviewer read, or a quote spanning where a ``[UH]`` used to sit would not be found
-    and the redaction it asked for would be silently dropped as unplaced.
+        words: The residue words, :func:`~senselab.audio.workflows.triage.nodes.redact.residue_words`,
+            in stream order. Bracketed words are skipped, as ``transcript_texts`` skips them.
 
     Returns:
         ``(text, spans)``, each span ``(start_char, end_char, word)``. The join is the one
@@ -604,8 +606,7 @@ def refine_plan(store: ProvStore, *, padding_ms: int) -> RefinedPlan:
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
     proposal = list(annotation.attributes.get("proposal") or ()) if annotation is not None else []
     detector = planned_extents(store)
-    words = consensus_words(store)
-    text, spans = _word_spans(words)
+    text, spans = _word_spans(residue_words(store))
 
     keep = list(detector)
     added: list[RedactionExtent] = []

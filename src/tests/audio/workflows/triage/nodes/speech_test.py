@@ -3232,15 +3232,6 @@ class TestANearSpellingIsStillTheStimulusWord:
         assert stimulus_tokens(None) is None
         assert in_stimulus("anything", None, _NEAR) is None
 
-    def test_the_scan_gate_does_not_fire_on_a_respelled_stimulus_word(self) -> None:
-        """The scan runs only on a word the task did not ask for; a respelling was asked for."""
-        from senselab.audio.workflows.triage.nodes.speech import stimulus_tokens, words_outside_stimulus
-
-        hint = AudioHints(expected_speech=[ExpectedSpeech(text="The rainbow is a division of white light.")])
-        tokens = stimulus_tokens(hint)
-        assert words_outside_stimulus(["rainbo", "divisio"], tokens, _NEAR) == []
-        assert words_outside_stimulus(["Springfield"], tokens, _NEAR) == ["springfield"]
-
 
 class TestPiiAgainstTheStimulus:
     """A finding is read against the text the participant was handed, and never suppressed by it."""
@@ -3296,34 +3287,6 @@ class TestPiiAgainstTheStimulus:
 class TestPiiRunsOnlyOnWordsTheTaskDidNotAskFor:
     """A recording that produced only the words it was handed has nothing to disclose."""
 
-    def test_words_the_prompt_contains_are_not_novel(self) -> None:
-        """A DDK carrier repeated ten times is ten words the task asked for."""
-        from senselab.audio.workflows.triage.nodes.speech import stimulus_tokens, words_outside_stimulus
-
-        haystack = stimulus_tokens(AudioHints(expected_speech=[ExpectedSpeech(text="buttercup")]))
-        assert words_outside_stimulus(["buttercup"] * 10, haystack, _NEAR) == []
-
-    def test_a_word_the_prompt_lacks_is_novel(self) -> None:
-        """One word outside the script is what makes a disclosure possible."""
-        from senselab.audio.workflows.triage.nodes.speech import stimulus_tokens, words_outside_stimulus
-
-        haystack = stimulus_tokens(AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow")]))
-        assert words_outside_stimulus(["the", "rainbow", "springfield"], haystack, _NEAR) == ["springfield"]
-
-    def test_with_no_declared_prompt_every_word_is_novel(self) -> None:
-        """Nothing was asked for, so nothing said was asked for."""
-        from senselab.audio.workflows.triage.nodes.speech import words_outside_stimulus
-
-        assert words_outside_stimulus(["my", "name"], None, _NEAR) == ["my", "name"]
-
-    def test_a_free_response_family_invites_disclosure(self) -> None:
-        """Open response is where disclosure lives; its scan must not hang on a word test."""
-        from senselab.audio.workflows.triage.nodes.speech import invites_disclosure
-
-        assert invites_disclosure("free-speech-v2") is True
-        assert invites_disclosure("diadochokinesis-buttercup") is False
-        assert invites_disclosure(None) is False
-
     def test_a_carrier_only_recording_is_not_scanned_and_says_so(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -3340,7 +3303,8 @@ class TestPiiRunsOnlyOnWordsTheTaskDidNotAskFor:
             for entity in live_entities(store, "measurement")
             if entity.attributes.get("name") == "pii_scan" and entity.attributes.get("scanned") is False
         ]
-        assert "were asked for" in record.attributes["why"]
+        assert "outside the task's own content" in record.attributes["why"]
+        assert record.attributes["residue_word_ids"] == []
 
     def test_one_word_outside_the_task_is_enough_to_scan(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

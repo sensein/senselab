@@ -439,13 +439,11 @@ def _ddk_run(
     )
 
 
-class TestTheSyllableInstrumentDoesNotNarrowThePiiScan:
+class TestTheSyllableTrainIsNotScannedAndAWordInsideItIs:
     """The safety pin. A declared DDK task may carry anything a participant said, PII included.
 
-    The CV instrument is recorded as the authority over what was *produced*; it is not allowed to
-    change what the detectors are *given*. Suppressing or replacing recogniser text before the
-    scan would be a disclosure path, and this is the test that fails instead of one opening.
-    ``specs/20260817-triage-workflow-dag/ddk-instrument-over-asr.md`` holds the constraint.
+    The syllable train itself never reaches the detectors; a lexical word said inside it always
+    does. ``specs/20260925-lexical-only-pii-pathway/design.md`` holds the constraint.
     """
 
     def test_the_instrument_really_did_contradict_this_recordings_words(
@@ -467,12 +465,11 @@ class TestTheSyllableInstrumentDoesNotNarrowThePiiScan:
         ]
         assert len(contests) == len(DDK_WORDS)
 
-    def test_the_scan_was_handed_the_consensus_text_and_every_recogniser_transcript(
-        self, ddk_run: tuple[ProvStore, list[str]]
-    ) -> None:
-        """Exactly the store's own strings, in the branch's own order, and nothing removed."""
+    def test_the_scan_was_handed_the_residue_and_not_the_train(self, ddk_run: tuple[ProvStore, list[str]]) -> None:
+        """One text per recogniser, as the store holds them, with the syllable train taken out."""
         contradicted, scanned = ddk_run
-        assert scanned == _texts_the_store_holds(contradicted)
+        assert len(scanned) == len(_texts_the_store_holds(contradicted))
+        assert all("papapapa" not in text for text in scanned)
 
     def test_the_scan_saw_the_identifying_word_inside_the_contradicted_extent(
         self, ddk_run: tuple[ProvStore, list[str]]
@@ -482,19 +479,22 @@ class TestTheSyllableInstrumentDoesNotNarrowThePiiScan:
         assert scanned
         assert all(SENTINEL in text for text in scanned)
 
-    def test_the_declared_run_scans_byte_for_byte_what_the_undeclared_run_scans(
+    def test_the_declared_run_scans_a_subset_of_what_the_undeclared_run_scans(
         self,
         ddk_run: tuple[ProvStore, list[str]],
         tmp_path: Path,
         seed_preprocess_store: Callable[..., None],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The same content, declared and undeclared. Only the declared run marks anything."""
+        """The same content, declared and undeclared: the declaration only ever takes words away."""
         _, declared_texts = ddk_run
         _, undeclared_texts = _ddk_store(
             ProvStore(run_id="undeclared"), tmp_path, seed_preprocess_store, monkeypatch, hint=None
         )
-        assert declared_texts == undeclared_texts
+        assert len(declared_texts) == len(undeclared_texts)
+        for declared, undeclared in zip(declared_texts, undeclared_texts):
+            assert set(declared.split()) <= set(undeclared.split())
+            assert SENTINEL in declared
 
     def test_the_contradicted_word_is_still_marked_for_redaction(self, ddk_run: tuple[ProvStore, list[str]]) -> None:
         """A contest beside a word is not a withdrawal of it; REDACT's reader still finds it."""

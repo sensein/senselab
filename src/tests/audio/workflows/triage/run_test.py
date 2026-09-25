@@ -276,7 +276,13 @@ def _fakes(
         measurement = store.entity(
             prov_type="measurement",
             extent=None,
-            attributes={"name": "pii_scan", "signal": "consensus_transcript", "scanned_by": ["rules"], "failed": []},
+            attributes={
+                "name": "pii_scan",
+                "signal": "consensus_transcript",
+                "scanned_by": ["rules"],
+                "failed": [],
+                "residue_word_ids": [],
+            },
         )
         store.was_generated_by(measurement, scan)
         if pii:

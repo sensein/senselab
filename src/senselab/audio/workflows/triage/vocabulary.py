@@ -123,7 +123,7 @@ class Release(Enum):
 
 
 NO_LEXICAL_WORD = "SPEECH ran and the consensus transcript carries no lexical word"
-NOTHING_BEYOND_STIMULUS = "every lexical word is in the task's own stimulus, so the scan was declined"
+NOTHING_BEYOND_STIMULUS = "no lexical word lies outside what the task asked for, so the scan was declined"
 SCAN_FOUND_NOTHING = "the scan ran over the transcript and found nothing to redact"
 NON_LEXICAL_TASK = "the ruleset declined SPEECH because the task carries no lexical content"
 
