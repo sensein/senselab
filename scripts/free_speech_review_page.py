@@ -57,16 +57,25 @@ MEASUREMENT_MARKER = '"prov_type": "measurement"'
 KEPT_MEASUREMENTS = (PII_SCAN, REDACTION_EXEMPTIONS)
 KEPT_MEASUREMENT_MARKERS = tuple(f'"name": "{name}"' for name in KEPT_MEASUREMENTS)
 
-RELEASE_ORDER = ("releasable", "withheld", "nothing_to_redact", "not_assessed", "unrecorded")
+RELEASE_ORDER = (
+    "release_without_redaction",
+    "release_with_redaction",
+    "withheld",
+    "not_assessed",
+    "unrecorded",
+)
+"""The graph's own release axis, most permissive first, plus the page's own ``unrecorded``."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 3
-"""3 is the first version read from a graph whose reviewer ladder is disabled -> not_run -> run.
+EXTRACT_VERSION = 4
+"""4 is the first version read from a graph whose release axis names which artefact may be handed on.
 
-The page's sentence for ``not_run`` says the detectors marked nothing, which is what that state
-means from ``7edcfcf2`` onward. Before it, ``not_run`` meant the recording was already withheld, and
-the same sentence would be a false statement about the run. The version is what lets the page refuse
-to say it over an older extract.
+A version-3 row's ``rel`` is the old vocabulary, in which ``releasable`` means what
+``release_with_redaction`` now means and ``nothing_to_redact`` spans both
+``release_without_redaction`` and ``not_assessed``. The chips, the facet and the determination panel
+would all describe the wrong artefact. 3 was the first version read from a graph whose reviewer
+ladder is disabled -> not_run -> run; before it ``not_run`` meant the recording was already
+withheld. The version is what lets the page refuse to speak over an older extract.
 """
 
 
@@ -441,8 +450,8 @@ def tristate(value: Any) -> int:  # noqa: ANN401 -- a store attribute is any typ
 def _redact_detail(redact: Entity | None) -> dict[str, Any]:
     """What REDACT itself concluded.
 
-    ``release_ground`` is None exactly when REDACT decided, so for a releasable or a withheld
-    recording this ``why`` is the only account of the decision there is.
+    ``release_ground`` is None exactly when REDACT decided, so on the two states REDACT decides —
+    ``release_with_redaction`` and ``withheld`` — this ``why`` is the only account there is.
 
     Args:
         redact: REDACT's verdict entity, or None when it wrote none.
@@ -915,7 +924,7 @@ def recording_html(row: dict[str, Any]) -> str:
         f"&middot; findings: {summary}</span></header>"
         f"{ground_html}{why_html}"
         f'<p class="text">{body}</p>'
-        f'<div class="whyrow">{_triage_controls(stem)}'
+        f'<div class="whyrow">{_triage_controls(stem)}{_release_controls(stem)}'
         f'<button type="button" class="whybtn" data-stem="{html.escape(stem)}">'
         f"what determined this status</button></div>"
         f'<div class="recnote"><label>note on this recording '
@@ -942,6 +951,40 @@ _TRIAGE_GROUP = (
     + "</span>"
 )
 """The control group, identical on every card; the card's own ``data-stem`` names the row."""
+
+
+RELEASE_DECISIONS = (
+    ("release_without_redaction", "o", "without"),
+    ("release_with_redaction", "d", "with"),
+)
+"""The two releases a reviewer can say a recording warrants, each with its key and its class slug.
+
+The values are the graph's own ``Release`` member values, so an exported decision joins to a verdict
+without a mapping between them. ``specs/20260924-which-artefact-is-releasable/design.md``.
+"""
+
+_DECISION_GROUP = (
+    '<span class="decgroup">'
+    + "".join(
+        f'<button class="dec d-{slug}" data-v="{html.escape(value)}">'
+        f"{html.escape(slug)} redaction<kbd>{html.escape(key)}</kbd></button>"
+        for value, key, slug in RELEASE_DECISIONS
+    )
+    + "</span>"
+)
+"""The release-decision group, identical on every card; the card's own ``data-stem`` names the row."""
+
+
+def _release_controls(stem: str) -> str:
+    """The per-recording release-decision buttons.
+
+    Args:
+        stem: The recording's BIDS stem, carried by the enclosing card rather than repeated.
+
+    Returns:
+        The control group's HTML.
+    """
+    return _DECISION_GROUP
 
 
 def _triage_controls(stem: str) -> str:
@@ -1054,8 +1097,9 @@ def render(corpus: Corpus, title: str) -> str:
     if corpus.version < EXTRACT_VERSION:
         errors += (
             f'<p class="errors">This extract is version {corpus.version}, written before the '
-            f"reviewer ladder changed. What the page says about the LLM reviewer does not describe "
-            f"the run that produced it. Re-extract before reading that section.</p>"
+            f"release axis and the reviewer ladder changed. What the page says about which artefact "
+            f"may be handed on, and about the LLM reviewer, does not describe the run that produced "
+            f"it. Re-extract before reading either.</p>"
         )
     pool = ValuePool()
     rows: dict[str, Any] = {}
@@ -1173,9 +1217,9 @@ mark.pii .cat{font-size:9.5px;letter-spacing:.06em;color:var(--catfg);background
 border-radius:3px;padding:0 3px;margin-right:4px;vertical-align:.18em;
 font-family:ui-monospace,Menlo,monospace}
 .chip{font-size:10.5px;letter-spacing:.04em;padding:1px 7px;border-radius:9px;border:1px solid}
-.r-releasable{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
+.r-release_without_redaction{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
 .r-withheld{background:#fbe6e4;border-color:#d08e86;color:#8a2f24}
-.r-nothing_to_redact{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
+.r-release_with_redaction{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
 .r-not_assessed,.r-unrecorded{background:#f1efe9;border-color:#bdb7a8;color:#6b6350}
 .cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
 border-radius:9px;padding:1px 7px;margin:0 3px 3px 0}
@@ -1243,6 +1287,16 @@ background:var(--bg);color:var(--mut);cursor:pointer;display:inline-flex;gap:4px
 .rec[data-t="-1"]{border-left:3px solid #8a2f24}
 .rec[data-t="flag"]{border-left:3px solid #c98a2b}
 
+.decgroup{display:inline-flex;gap:4px;margin-right:8px}
+.dec{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
+border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
+.dec kbd{font-size:9.5px;opacity:.6;margin-left:5px}
+.dec:hover{color:var(--fg);border-color:var(--acc)}
+.dec.on{color:#fff;border-color:transparent}
+.d-without.on{background:#2c5c2c}
+.d-with.on{background:#2f4670}
+.rec[data-dec="release_without_redaction"]{border-right:3px solid #2c5c2c}
+.rec[data-dec="release_with_redaction"]{border-right:3px solid #2f4670}
 .whybtn{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
 border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
 .whybtn:hover{color:var(--fg);border-color:var(--acc)}
@@ -1296,17 +1350,21 @@ main{padding:12px 10px 120px}
 #status{pointer-events:none}
 /* A pointer that cannot hover gets larger hit targets. */
 @media (hover:none){
-.tri,.whybtn,.verdict{padding:6px 10px}
+.tri,.dec,.whybtn,.verdict{padding:6px 10px}
 mark.pii{padding:1px 3px}
 }
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto !important}}
 @media (prefers-color-scheme:dark){
 :root{--bg:#171614;--fg:#eceae5;--mut:#9a958c;--line:#33312d;--card:#1f1e1b;--acc:#d9a45f;
 --pii:#4a3413;--piib:#c08a38;--brk:#a09b91;--brkbg:#2a2825;--catbg:#5f4418;--catfg:#f0d7a8;}
-.r-releasable{background:#1d2e1d;border-color:#4f7a4f;color:#a8d3a8}
+.r-release_without_redaction{background:#1d2e1d;border-color:#4f7a4f;color:#a8d3a8}
 .r-withheld{background:#331e1b;border-color:#8a4b42;color:#e8a89e}
-.r-nothing_to_redact{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
+.r-release_with_redaction{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
 .r-not_assessed,.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
+.rec[data-dec="release_without_redaction"]{border-right-color:#4f7a4f}
+.rec[data-dec="release_with_redaction"]{border-right-color:#4a5c86}
+.d-without.on{background:#3a6b3a}
+.d-with.on{background:#3d5687}
 .errors{color:#e8a89e}
 #why .ok{color:#a8d3a8}
 #why .bad{color:#e8a89e}
@@ -1338,14 +1396,14 @@ const panel=document.getElementById('panel');
 const progress=document.getElementById('progress');
 
 /* ---- store: localStorage is a convenience, the export is the record ---- */
-let store={findings:{},recordings:{},triage:{}};
+let store={findings:{},recordings:{},triage:{},release:{}};
 function load(){
   try{
     const raw=localStorage.getItem(KEY);
     if(raw){const parsed=JSON.parse(raw);
       store={findings:parsed.findings||{},recordings:parsed.recordings||{},
-             triage:parsed.triage||{}};}
-  }catch(e){store={findings:{},recordings:{},triage:{}};}
+             triage:parsed.triage||{},release:parsed.release||{}};}
+  }catch(e){store={findings:{},recordings:{},triage:{},release:{}};}
 }
 function save(){
   try{localStorage.setItem(KEY,JSON.stringify(store));}
@@ -1357,8 +1415,16 @@ const byKey=new Map();
 for(const m of marks)byKey.set(m.dataset.k,m);
 const cardOf=new Map();
 for(const m of marks)cardOf.set(m,m.closest('.rec'));
+/* what a search reads: the recording, never the controls beside it. A button labelled in the
+   page's own vocabulary would otherwise match every card. */
+function haystackOf(card){
+  const parts=[card.closest('.participant').dataset.p];
+  for(const selector of ['header','.ground','.why','.text'])
+    {const el=card.querySelector(selector); if(el)parts.push(el.textContent);}
+  return parts.join(' ').toLowerCase();
+}
 const haystack=new Map();
-for(const r of cards)haystack.set(r,(r.textContent+' '+r.closest('.participant').dataset.p).toLowerCase());
+for(const r of cards)haystack.set(r,haystackOf(r));
 const marksIn=new Map();
 for(const r of cards)marksIn.set(r,[...r.querySelectorAll('mark.pii')]);
 
@@ -1395,6 +1461,24 @@ function setRow(card,value){
   save();paintRow(card);tally();outline();
   if(triSel.value!=='any')apply();
 }
+/* ---- the release decision: which artefact this reviewer would hand on ---- */
+const decSel=document.getElementById('dec');
+const DECKEYS={'o':'release_without_redaction','O':'release_without_redaction',
+               'd':'release_with_redaction','D':'release_with_redaction'};
+function paintDecision(card){
+  const rec=store.release[card.dataset.stem];
+  const value=rec&&rec.v;
+  if(value)card.dataset.dec=value; else card.removeAttribute('data-dec');
+  for(const b of card.querySelectorAll('.dec'))b.classList.toggle('on',b.dataset.v===value);
+}
+function setDecision(card,value){
+  const stem=card.dataset.stem;
+  const held=(store.release[stem]||{}).v;
+  if(held===value)delete store.release[stem];
+  else store.release[stem]={v:value,t:new Date().toISOString()};
+  save();paintDecision(card);tally();
+  if(decSel.value!=='any')apply();
+}
 let activeCard=null;
 let pointerOwns=true;
 function markActive(card,scroll){
@@ -1408,10 +1492,13 @@ function markActive(card,scroll){
 document.addEventListener('mousemove',()=>{pointerOwns=true;},{passive:true});
 for(const card of cards){
   paintRow(card);
+  paintDecision(card);
   card.addEventListener('mouseenter',()=>{if(pointerOwns)markActive(card,false);});
   card.addEventListener('focusin',()=>markActive(card,false));
   for(const b of card.querySelectorAll('.tri'))
     b.addEventListener('click',()=>{markActive(card,false);setRow(card,b.dataset.v);});
+  for(const b of card.querySelectorAll('.dec'))
+    b.addEventListener('click',()=>{markActive(card,false);setDecision(card,b.dataset.v);});
 }
 
 /* ---- moving between samples, following the filters ---- */
@@ -1460,6 +1547,15 @@ document.addEventListener('keydown',e=>{
   const card=activeCard||(e.target.closest&&e.target.closest('.rec'));
   if(!card)return;
   e.preventDefault();setRow(card,value);
+});
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  const value=DECKEYS[e.key];
+  if(!value)return;
+  const card=activeCard||(e.target.closest&&e.target.closest('.rec'));
+  if(!card)return;
+  e.preventDefault();setDecision(card,value);
 });
 
 /* ---- the outline ---- */
@@ -1527,7 +1623,7 @@ function apply(){
   const fams=checked('fam-f'), rels=checked('rel-f');
   const cats=checked('cat-f'), dets=checked('det-f');
   const fired=firedSel.value, brk=brkSel.value, tx=txSel.value, rev=revSel.value;
-  const tri=triSel.value, llmWant=llmSel.value;
+  const tri=triSel.value, llmWant=llmSel.value, dec=decSel.value;
   const nf=+minNf.value||0;
   const lo=+minNt.value||1, hi=+maxNt.value||9999;
   const narrowed=!allChecked('cat-f')||!allChecked('det-f')||brk!=='any'||tx!=='any'
@@ -1540,6 +1636,10 @@ function apply(){
       if(ok&&tri!=='any'){
         const held=r.dataset.t||'';
         ok=tri==='marked'?!!held:tri==='unmarked'?!held:held===tri;
+      }
+      if(ok&&dec!=='any'){
+        const said=r.dataset.dec||'';
+        ok=dec==='decided'?!!said:dec==='undecided'?!said:said===dec;
       }
       if(ok&&llmWant!=='any'){
         const st=r.dataset.llm||'';
@@ -1576,10 +1676,18 @@ function apply(){
 function tally(){
   let done=0;
   for(const m of marks)if((store.findings[m.dataset.k]||{}).v)done++;
-  const notes=Object.keys(store.recordings).length;
-  const rows=Object.keys(store.triage).length;
+  /* every term counts the cards on this page. One localStorage namespace spans every shard, so
+     counting the store's own keys can report more decisions than there are rows. */
+  let notes=0, rows=0, said=0;
+  for(const c of cards){
+    const stem=c.dataset.stem;
+    if((store.recordings[stem]||{}).n)notes++;
+    if((store.triage[stem]||{}).v)rows++;
+    if((store.release[stem]||{}).v)said++;
+  }
   progress.textContent=done+' of '+marks.length+' findings judged \\u00b7 '+rows+' of '
-    +cards.length+' rows marked \\u00b7 '+notes+' recording notes';
+    +cards.length+' rows marked \\u00b7 '+said+' of '+cards.length
+    +' rows given a release decision \\u00b7 '+notes+' recording notes';
 }
 
 /* ---- review panel ---- */
@@ -1640,9 +1748,9 @@ document.addEventListener('keydown',e=>{
 
 /* ---- export and import: the durable artefact ---- */
 function payload(){
-  return JSON.stringify({schema:'senselab.fsreview',version:2,
+  return JSON.stringify({schema:'senselab.fsreview',version:3,
     exported:new Date().toISOString(),findings:store.findings,recordings:store.recordings,
-    triage:store.triage},null,1);
+    triage:store.triage,release:store.release},null,1);
 }
 document.getElementById('export').addEventListener('click',()=>{
   const text=payload();
@@ -1662,10 +1770,11 @@ document.getElementById('import').addEventListener('click',()=>{
     const parsed=JSON.parse(text);
     store={findings:Object.assign({},store.findings,parsed.findings||{}),
            recordings:Object.assign({},store.recordings,parsed.recordings||{}),
-           triage:Object.assign({},store.triage,parsed.triage||{})};
+           triage:Object.assign({},store.triage,parsed.triage||{}),
+           release:Object.assign({},store.release,parsed.release||{})};
     save();
     for(const m of marks)paint(m);
-    for(const card of cards)paintRow(card);
+    for(const card of cards){paintRow(card);paintDecision(card);}
     for(const t of document.querySelectorAll('.rnote')){
       const rec=store.recordings[t.dataset.stem]; if(rec&&rec.n)t.value=rec.n;}
     apply();
@@ -1683,9 +1792,6 @@ document.getElementById('file').addEventListener('change',e=>{
 let WHY=null;
 try{WHY=JSON.parse(document.getElementById('whydata').textContent);}catch(e){WHY=null;}
 const whyBox=document.getElementById('why');
-const GROUNDS={
- 'the scan ran over the transcript and found nothing to redact':'scan found nothing',
- 'every lexical word is in the task\\u2019s own stimulus, so the scan was declined':'all in stimulus'};
 function esc(s){const d=document.createElement('div');d.textContent=String(s);return d.innerHTML;}
 function P(i){return WHY&&WHY.pool[i];}
 function scrimOn(){
@@ -1882,7 +1988,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!whyBox.hidden)clos
 
 for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))
   el.addEventListener('change',apply);
-for(const el of [firedSel,brkSel,txSel,revSel,triSel,llmSel,minNf,minNt,maxNt])
+for(const el of [firedSel,brkSel,txSel,revSel,triSel,decSel,llmSel,minNf,minNt,maxNt])
   el.addEventListener('change',apply);
 let timer;q.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(apply,140);});
 for(const [id,cls] of [['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],['nodet','det-f']])
@@ -1893,7 +1999,7 @@ document.getElementById('all').addEventListener('click',e=>{
   e.preventDefault();
   for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))el.checked=true;
   firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';triSel.value='any';
-  llmSel.value='any';
+  decSel.value='any';llmSel.value='any';
   minNf.value='';minNt.value='';maxNt.value='';q.value='';apply();});
 const rail=document.getElementById('rail');
 const railToggle=document.getElementById('railtoggle');
@@ -1923,10 +2029,11 @@ _DOCUMENT = """<!doctype html>
 <dt>j / k</dt><dd>next / previous sample</dd>
 <dt>J / K</dt><dd>next / previous participant</dd>
 <dt>+ or = / - / f</dt><dd>mark the row +1 / -1 / flag</dd>
+<dt>o / d</dt><dd>release this recording without / with redaction</dd>
 <dt>1 &ndash; 4</dt><dd>judge the selected finding</dd>
 <dt>Esc</dt><dd>close a panel</dd>
-</dl><p class="note">Movement follows the filters, and the card it lands on is what the mark keys
-act on.</p></details>
+</dl><p class="note">Movement follows the filters, and the card it lands on is what the row-mark
+and release keys act on.</p></details>
 <input type="search" id="q" placeholder="search transcripts, tasks, ids">
 <fieldset><legend>recording</legend>
 <select id="fired"><option value="any">redaction fired or not</option>
@@ -1966,6 +2073,11 @@ placeholder="max"> tokens</div>
 <select id="tri"><option value="any">row mark, any</option>
 <option value="marked">marked</option><option value="unmarked">unmarked</option>
 <option value="+1">+1</option><option value="-1">-1</option><option value="flag">flag</option>
+</select>
+<select id="dec"><option value="any">release decision, any</option>
+<option value="decided">decided</option><option value="undecided">undecided</option>
+<option value="release_without_redaction">release without redaction</option>
+<option value="release_with_redaction">release with redaction</option>
 </select>
 <select id="rev"><option value="any">judged or not</option>
 <option value="unreviewed">unjudged only</option><option value="reviewed">judged only</option>

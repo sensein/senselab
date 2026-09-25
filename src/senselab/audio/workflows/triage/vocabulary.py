@@ -107,31 +107,33 @@ class RunState(Enum):
 
 
 class Release(Enum):
-    """Whether a redacted artifact may be handed on.
+    """Which artefact of this recording may be handed on.
 
-    Four states, because a recording that needed no redaction is a determination and not an
-    absence of one. ``specs/20260817-triage-workflow-dag/verdict.md`` holds the fold.
+    Four values over one question, total and exclusive: the recording as recorded, only REDACT's
+    redacted copy, neither, or the graph cannot say.
+    ``specs/20260924-which-artefact-is-releasable/design.md`` holds the vocabulary and what each
+    value permits; ``specs/20260817-triage-workflow-dag/verdict.md`` holds the fold.
     """
 
-    RELEASABLE = "releasable"
+    WITHOUT_REDACTION = "release_without_redaction"
+    WITH_REDACTION = "release_with_redaction"
     WITHHELD = "withheld"
-    NOTHING_TO_REDACT = "nothing_to_redact"
     NOT_ASSESSED = "not_assessed"
 
 
-NO_TRANSCRIPT = "SPEECH did not run, so no transcript exists for a redaction to read"
 NO_LEXICAL_WORD = "SPEECH ran and the consensus transcript carries no lexical word"
 NOTHING_BEYOND_STIMULUS = "every lexical word is in the task's own stimulus, so the scan was declined"
 SCAN_FOUND_NOTHING = "the scan ran over the transcript and found nothing to redact"
 
-RELEASE_DETERMINED_GROUNDS = (NO_TRANSCRIPT, NO_LEXICAL_WORD, NOTHING_BEYOND_STIMULUS, SCAN_FOUND_NOTHING)
-"""Why nothing was redactable. One of these stands behind every :attr:`Release.NOTHING_TO_REDACT`."""
+RELEASE_WITHOUT_REDACTION_GROUNDS = (NO_LEXICAL_WORD, NOTHING_BEYOND_STIMULUS, SCAN_FOUND_NOTHING)
+"""Which reading cleared the recording. One stands behind every :attr:`Release.WITHOUT_REDACTION`."""
 
+NO_TRANSCRIPT = "SPEECH did not run, so nothing read the recording for content a redaction would remove"
 SPEECH_UNREAD = "SPEECH left no lexical count, so whether the recording carries redactable content is unknown"
 REDACTION_OWED = "the scan found content to redact and REDACT left no verdict over it"
 SCAN_UNRECORDED = "SPEECH read lexical words and recorded no scan either way"
 
-RELEASE_UNKNOWN_GROUNDS = (SPEECH_UNREAD, REDACTION_OWED, SCAN_UNRECORDED)
+RELEASE_UNKNOWN_GROUNDS = (NO_TRANSCRIPT, SPEECH_UNREAD, REDACTION_OWED, SCAN_UNRECORDED)
 """Why the graph could not tell. One of these stands behind every :attr:`Release.NOT_ASSESSED`."""
 
 
@@ -392,10 +394,11 @@ class FileVerdict:
 
     Attributes:
         triage: What should happen to the recording.
-        release: Whether REDACT's artifacts may be handed on. Never describes the store.
+        release: Which artefact of the recording may be handed on. Never describes the store.
         release_ground: Why the release axis reads as it does, in controlled vocabulary, for the
-            two states REDACT left no verdict behind — one of :data:`RELEASE_DETERMINED_GROUNDS`
-            or :data:`RELEASE_UNKNOWN_GROUNDS`. None wherever REDACT itself decided.
+            two states REDACT left no verdict behind — one of
+            :data:`RELEASE_WITHOUT_REDACTION_GROUNDS` or :data:`RELEASE_UNKNOWN_GROUNDS`. None
+            wherever REDACT itself decided.
         discard_ground: ``"unmeasurable"``, ``"acoustically_empty"`` or None.
         findings: What each branch found, as a :class:`KindState` value, read off the spans it
             proposed in its own family. ``uncertain`` where it left no report at all.
@@ -521,10 +524,11 @@ def _release_from(
     evidence: RedactionEvidence,
     ran: Mapping[str, RunState],
 ) -> tuple[Release, str | None]:
-    """The release axis, decided from the evidence rather than from whether REDACT left a verdict.
+    """Which artefact may be handed on, decided from the evidence and from nothing a reviewer said.
 
     REDACT runs only where a scan found something, so its absence is the ordinary case and carries
-    no implication of its own. The table is in ``specs/20260817-triage-workflow-dag/verdict.md``.
+    no implication of its own. The table is in ``specs/20260817-triage-workflow-dag/verdict.md``;
+    the vocabulary is in ``specs/20260924-which-artefact-is-releasable/design.md``.
 
     Args:
         node_verdicts: Every node verdict the fold was given.
@@ -532,13 +536,13 @@ def _release_from(
         ran: Whether each node ran.
 
     Returns:
-        The state, for REDACT's artifacts only and never for anything in the store, and the ground
-        behind it. Only a REDACT ``pass`` clears an artifact; the ground is None wherever REDACT
-        itself decided, and one of the controlled grounds otherwise.
+        Which artefact may be handed on, never anything about the store, and the ground behind it.
+        A REDACT ``pass`` clears the redacted copy and not the original; the ground is None wherever
+        REDACT itself decided, and one of the controlled grounds otherwise.
     """
     redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
     if redact is not None:
-        return (Release.RELEASABLE if redact.outcome is Outcome.PASS else Release.WITHHELD), None
+        return (Release.WITH_REDACTION if redact.outcome is Outcome.PASS else Release.WITHHELD), None
     if evidence.findings_n > 0:
         return Release.NOT_ASSESSED, REDACTION_OWED
     speech = ran.get(_SPEECH)
@@ -547,13 +551,13 @@ def _release_from(
     if evidence.lexical_words_n is None:
         if speech is RunState.COMPLETED:
             return Release.NOT_ASSESSED, SPEECH_UNREAD
-        return Release.NOTHING_TO_REDACT, NO_TRANSCRIPT
+        return Release.NOT_ASSESSED, NO_TRANSCRIPT
     if evidence.lexical_words_n == 0:
-        return Release.NOTHING_TO_REDACT, NO_LEXICAL_WORD
+        return Release.WITHOUT_REDACTION, NO_LEXICAL_WORD
     if evidence.scanned is False:
-        return Release.NOTHING_TO_REDACT, NOTHING_BEYOND_STIMULUS
+        return Release.WITHOUT_REDACTION, NOTHING_BEYOND_STIMULUS
     if evidence.scanned is True:
-        return Release.NOTHING_TO_REDACT, SCAN_FOUND_NOTHING
+        return Release.WITHOUT_REDACTION, SCAN_FOUND_NOTHING
     return Release.NOT_ASSESSED, SCAN_UNRECORDED
 
 

@@ -232,10 +232,10 @@ with itself it says so rather than resolving the disagreement by precedence.
 | axis | question | values |
 | --- | --- | --- |
 | `triage` | what should happen to this recording | `pass` \| `flag` \| `discard` |
-| `release` | is a redacted artifact safe to hand on | `releasable` \| `withheld` \| `nothing_to_redact` \| `not_assessed` |
+| `release` | which artefact of this recording may be handed on | `release_without_redaction` \| `release_with_redaction` \| `withheld` \| `not_assessed` |
 
 Collapsing them would make a recording with clean measurements and surviving PII look like a
-measurement problem, and a recording with an empty transcript and no PII look releasable.
+measurement problem, and a recording with an empty transcript and no PII look released.
 
 ## `discard` is a narrow outcome
 
@@ -423,15 +423,15 @@ Read in order; the first row that matches wins.
 
 | condition | `release` | `release_ground` |
 | --- | --- | --- |
-| REDACT left a verdict, `pass` | `releasable`, for **its artifacts only** | — |
+| REDACT left a verdict, `pass` | `release_with_redaction`, for **the redacted copy only** | — |
 | REDACT left a verdict, `flag` or `fail` | `withheld`; unresolved is not cleared | — |
 | live `pii` findings and no REDACT verdict | `not_assessed` | `REDACTION_OWED` |
 | SPEECH errored | `not_assessed` | `SPEECH_UNREAD` |
-| SPEECH left no lexical count and did not complete | `nothing_to_redact` | `NO_TRANSCRIPT` |
+| SPEECH left no lexical count and did not complete | `not_assessed` | `NO_TRANSCRIPT` |
 | SPEECH completed and left no lexical count | `not_assessed` | `SPEECH_UNREAD` |
-| SPEECH read no lexical word | `nothing_to_redact` | `NO_LEXICAL_WORD` |
-| the scan was declined — every word is in the stimulus | `nothing_to_redact` | `NOTHING_BEYOND_STIMULUS` |
-| the scan ran and found nothing | `nothing_to_redact` | `SCAN_FOUND_NOTHING` |
+| SPEECH read no lexical word | `release_without_redaction` | `NO_LEXICAL_WORD` |
+| the scan was declined — every word is in the stimulus | `release_without_redaction` | `NOTHING_BEYOND_STIMULUS` |
+| the scan ran and found nothing | `release_without_redaction` | `SCAN_FOUND_NOTHING` |
 | SPEECH read lexical words and recorded no scan | `not_assessed` | `SCAN_UNRECORDED` |
 
 The table is total: the last row is the fall-through.
@@ -446,24 +446,32 @@ require joining them. One axis with the states enumerated over the evidence answ
 `release_ground` carries the decomposition without a second axis, exactly as `discard_ground`
 already does for triage.
 
-**`nothing_to_redact` is not `releasable`.** There is no artifact, so nothing was cleared. Folding
-the two together would assert a clearance for a file that does not exist. This is the old
-"`not_assessed` is not `releasable`" warning, kept and narrowed: a recording with no speech, or with
-speech and no PII, was never redacted and must not be read as cleared of content a transcript could
-not carry.
+**The axis names which artefact, and that is what decides where `NO_TRANSCRIPT` sits.** Until
+2026-09-24 the values were `releasable | withheld | nothing_to_redact | not_assessed`, and this
+paragraph argued that `nothing_to_redact` is not `releasable` because there is no artifact to clear.
+Both halves of that sentence were about REDACT's output, because the axis was. It now names which
+artefact of the recording may be handed on, so `releasable` — reached on a REDACT `pass`, which
+means findings were found and removed — is `release_with_redaction`, and the three
+`nothing_to_redact` grounds where a reading actually cleared the recording are
+`release_without_redaction`. `NO_TRANSCRIPT`, where nothing read the recording at all, is
+`not_assessed`. The vocabulary, the argument on both sides, and the corpus split are in
+`specs/20260924-which-artefact-is-releasable/design.md`.
 
-**`not_assessed` now means only what it says.** Three grounds reach it, and all three are cases
-where the graph genuinely could not tell: SPEECH errored, SPEECH reached lexical content and left no
-scan record, or a scan found something and no redaction verdict stands over it. The third is a
-safety-relevant gap and used to be indistinguishable from the 44,622 recordings that were simply
-clean.
+**`not_assessed` now means only what it says.** Four grounds reach it, and all four are cases where
+the graph genuinely could not tell: SPEECH never ran, SPEECH errored, SPEECH reached lexical
+content and left no scan record, or a scan found something and no redaction verdict stands over
+it. The last is a safety-relevant gap and used to be indistinguishable from the recordings that
+were simply clean; the first joined them on 2026-09-24, when the axis began describing the
+original recording and not only REDACT's copy of it.
 
-**A SPEECH withheld by a critical failure reads `NO_TRANSCRIPT`, not `not_assessed`.** The graph
-wanted to run SPEECH and could not, so what the recording carries is genuinely unknown — but there
-is no artifact and no transcript either way, so the release axis has nothing to withhold. That
-circumstance is already a `CRITICAL_ABSENCE` flag on the **triage** axis, which is the axis that
-asks whether a human must look. Keeping it off the release axis is what stops one circumstance from
-being counted twice.
+**A SPEECH withheld by a critical failure reads `NO_TRANSCRIPT`, which is now a `not_assessed`
+ground.** Until 2026-09-24 it was a determination, on the argument that there is no artifact and no
+transcript either way so the release axis has nothing to withhold — true while the axis described
+REDACT's artifacts, and void now that it describes the original. The graph wanted to run SPEECH and
+could not, so what the recording carries is genuinely unknown, and the axis says so. That
+circumstance remains a `CRITICAL_ABSENCE` flag on the **triage** axis, which is the axis that asks
+whether a human must look; the two are still not counted twice, because the release axis is now
+reporting an unknown rather than a clearance.
 
 **Nothing an annotating detector concluded reaches this axis.** REDACT's optional LLM re-read of the
 redacted transcript used to downgrade REDACT's own outcome from `pass` to `flag`, which this table
@@ -472,8 +480,14 @@ instruction ("the llm is part of a branch, so it can only annotate (with provena
 annotation now reaches the triage axis and only the triage axis; see
 [`llm-check.md`](llm-check.md).
 
-**`releasable` never applies to the store.** The store holds the unredacted consensus transcript by
-design and is append-only. `release` describes REDACT's artifacts and nothing else.
+**No release value ever applies to the store.** The store holds the unredacted consensus transcript
+by design and is append-only. `release` describes the recording's artefacts — the original and
+REDACT's redacted copy — and nothing else.
+
+**Nothing a reviewer concluded reaches this axis either.** `_release_from`'s three parameters are
+the whole input to it: the node verdicts, the redaction evidence and `ran`. The free-speech review
+page's release decision is a human record in its own export, and the fold has no parameter for it.
+A reviewer calling a withheld recording clean is a reading someone may act on; it is not the act.
 
 **The goal on this axis is to minimise `withheld`**: a withhold is a file no consumer can use, and
 every withhold that rests on a scan of text nobody uttered is one the graph created.
@@ -493,6 +507,10 @@ joined to `ran["SPEECH"]`, and *contains lexical words* is `lexical_words_n > 0`
 separates the two ways a transcript with words can carry nothing.
 
 ### What the old rule was reporting
+
+**Both tables below are in the pre-2026-09-24 vocabulary**, which is what the run they measure
+recorded. `releasable` there is `release_with_redaction`; `nothing_to_redact` is
+`release_without_redaction` on its last three grounds and `not_assessed` on `NO_TRANSCRIPT`.
 
 Measured 2026-09-22 over every store under `triage_replay_20260922/out/` — 62,548 recordings, read
 directly rather than through the differential's aggregate, with the "after" generation recovered
@@ -561,7 +579,7 @@ record and cannot mistake one for the other.
 
 ```
 triage:   pass | flag | discard
-release:  releasable | withheld | nothing_to_redact | not_assessed
+release:  release_without_redaction | release_with_redaction | withheld | not_assessed
 discard_ground: "unmeasurable" | "acoustically_empty" | null
 release_ground: one of the seven controlled grounds | null   # null wherever REDACT itself decided
 llm_redaction: { status, iterations, flagged, model_id, revision, failure }   # {} when REDACT wrote none

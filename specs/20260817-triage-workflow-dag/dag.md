@@ -287,7 +287,7 @@ carrying `FileVerdict.record()`. It is the graph's only decision about the recor
 | axis | values | decided from |
 | --- | --- | --- |
 | `triage` | `pass`, `flag`, `discard` | every contributing ground below |
-| `release` | `releasable`, `withheld`, `not_assessed` | REDACT's own outcome, and nothing else |
+| `release` | `release_without_redaction`, `release_with_redaction`, `withheld`, `not_assessed` | REDACT's outcome where it left one, the redaction evidence otherwise |
 
 Resolution order: ADMIT `FAIL` → `discard` on ground `unmeasurable`; else any flag ground → `flag`;
 else file route state `empty` → `discard` on ground `acoustically_empty`; else `pass`. The two
@@ -323,7 +323,7 @@ store. Detail: [`verdict.md`](verdict.md), `config-derivations.md` § verdict.
 ### REPORT — render only
 
 Writes two products into `summary/` and no store elements: `summary.json` (schema
-`triage-summary/v8`) and `summary.{png,pdf}`. JSON first, so a drawing failure still leaves a
+`triage-summary/v9`) and `summary.{png,pdf}`. JSON first, so a drawing failure still leaves a
 complete product. It writes no verdict — a rendering is not evidence — and its own failure changes no
 decision, because the store was already persisted. Detail: [`report.md`](report.md),
 [`summary-is-the-figure.md`](summary-is-the-figure.md), [`branch-figure.md`](branch-figure.md).

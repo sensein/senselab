@@ -70,6 +70,11 @@ Per family, matching `expected-patterns.md` row for row: `free-speech` 3,074, `p
 `picture-description-option1` 373, `picture-description-option2` 329, `cinderella-story` 258,
 `open-response-questions` 199.
 
+> **The release values below are the pre-2026-09-24 vocabulary**, which is what the run they
+> record used. `releasable` is now `release_with_redaction`; `nothing_to_redact` is now
+> `release_without_redaction` on its last three grounds and `not_assessed` on `NO_TRANSCRIPT`.
+> See `specs/20260924-which-artefact-is-releasable/design.md`.
+
 Release: `nothing_to_redact` 5,009, `releasable` 3,719, `withheld` 2,972, `not_assessed` 1.
 
 One page was viable, so no sharding was used. 2.9 MB of text became a 12.2 MB document because the

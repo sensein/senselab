@@ -268,11 +268,11 @@ class TestDecisionMovement:
             _replayed(
                 tmp_path,
                 {"fold": _fold(Triage.FLAG)},
-                {"fold": FileVerdict(triage=Triage.PASS, release=Release.RELEASABLE, declared_family="syllable")},
+                {"fold": FileVerdict(triage=Triage.PASS, release=Release.WITH_REDACTION, declared_family="syllable")},
             )
         )
         assert row["transitions"]["triage"] == "flag->pass"
-        assert row["transitions"]["release"] == "not_assessed->releasable"
+        assert row["transitions"]["release"] == "not_assessed->release_with_redaction"
         assert row["identical"] is False
 
     def test_a_store_predating_release_ground_still_compares(self, tmp_path: Path) -> None:
@@ -288,14 +288,14 @@ class TestDecisionMovement:
                 {
                     "fold": FileVerdict(
                         triage=Triage.PASS,
-                        release=Release.NOTHING_TO_REDACT,
+                        release=Release.WITHOUT_REDACTION,
                         release_ground=SCAN_FOUND_NOTHING,
                         declared_family="syllable",
                     )
                 },
             )
         )
-        assert row["transitions"]["release"] == "not_assessed->nothing_to_redact"
+        assert row["transitions"]["release"] == "not_assessed->release_without_redaction"
         assert row["transitions"]["release_ground"] == f"None->{SCAN_FOUND_NOTHING}"
         assert row["new_keys"] == ["release_ground"]
 

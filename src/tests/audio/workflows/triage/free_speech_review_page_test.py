@@ -223,7 +223,9 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
         _word(1, "[UH]", bracketed=True),
         _word(2, "moved"),
         _entity(
-            "verdict-old", "verdict", {"node": "VERDICT", "release": "releasable", "declared_family": "free-speech"}
+            "verdict-old",
+            "verdict",
+            {"node": "VERDICT", "release": "release_with_redaction", "declared_family": "free-speech"},
         ),
         {"record": "relation", "relation": "wasInvalidatedBy", "source": "verdict-old", "target": "act-replay"},
         _verdict("withheld"),
@@ -243,7 +245,7 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
 def test_recording_record_skips_a_family_outside_the_pattern(tmp_path: Path) -> None:
     """An item-list task under the same tree is not a free response."""
     run_root = _store(
-        tmp_path, "sub-aaa_ses-bbb_task-animal-fluency", [_verdict("releasable", family="animal-fluency")]
+        tmp_path, "sub-aaa_ses-bbb_task-animal-fluency", [_verdict("release_with_redaction", family="animal-fluency")]
     )
     assert page.recording_record(run_root, page.free_response_families()) is None
 
@@ -341,13 +343,15 @@ def test_finding_key_is_stable_and_position_independent() -> None:
 
 def test_extract_writes_one_line_per_recording(tmp_path: Path) -> None:
     """The sweep keeps the free-response recordings and reports its counts."""
-    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("releasable")])
+    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("release_with_redaction")])
     _store(
         tmp_path,
         "sub-ccc_ses-ddd_task-cinderella-story",
-        [_word(0, "two"), _verdict("nothing_to_redact", "x", "cinderella-story")],
+        [_word(0, "two"), _verdict("release_without_redaction", "x", "cinderella-story")],
     )
-    _store(tmp_path, "sub-eee_ses-fff_task-animal-fluency", [_verdict("releasable", family="animal-fluency")])
+    _store(
+        tmp_path, "sub-eee_ses-fff_task-animal-fluency", [_verdict("release_with_redaction", family="animal-fluency")]
+    )
     report = page.extract(tmp_path, tmp_path / "out.jsonl", workers=1)
     assert report["candidates"] == 2
     assert report["participants"] == 2
@@ -462,7 +466,7 @@ def _row(participant: str, **rest: Any) -> dict[str, Any]:  # noqa: ANN401 -- mi
         "task": "free-speech-1",
         "stem": f"{participant}_ses-b_task-free-speech-1",
         "fam": "free-speech",
-        "rel": "releasable",
+        "rel": "release_with_redaction",
         "rg": None,
         "tri": "pass",
         "why": "",
@@ -501,7 +505,7 @@ def test_render_is_self_contained_and_groups_by_participant(tmp_path: Path) -> N
                     "sub-ccc",
                     task="cinderella-story",
                     fam="cinderella-story",
-                    rel="nothing_to_redact",
+                    rel="release_without_redaction",
                     rg="the scan ran over the transcript and found nothing to redact",
                     w=[["two", 0, -1]],
                     ch=3,
@@ -595,7 +599,7 @@ def test_a_recording_note_refreshes_the_progress_line() -> None:
 def test_the_store_reads_and_writes_are_guarded() -> None:
     """Storage throws outright in some contexts, so the page must render without it."""
     assert page._SCRIPT.count("try{") >= 2
-    assert "catch(e){store={findings:{},recordings:{},triage:{}};}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},triage:{},release:{}};}" in page._SCRIPT
 
 
 def test_in_stimulus_keeps_none_apart_from_false() -> None:
@@ -916,13 +920,13 @@ def test_the_row_mark_is_a_separate_collection_from_the_finding_verdicts() -> No
     """Two records in the export, distinguishable, neither shadowing the other."""
     assert "triage:store.triage" in page._SCRIPT
     assert "findings:store.findings" in page._SCRIPT
-    assert "version:2" in page._SCRIPT
+    assert "version:3" in page._SCRIPT
 
 
 def test_the_row_mark_persists_and_degrades_like_the_finding_verdicts() -> None:
     """Same namespace, same guarded access, same three collections restored on load."""
     assert "triage:parsed.triage||{}" in page._SCRIPT
-    assert "catch(e){store={findings:{},recordings:{},triage:{}};}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},triage:{},release:{}};}" in page._SCRIPT
 
 
 def test_re_pressing_a_row_mark_clears_it() -> None:
@@ -939,6 +943,127 @@ def test_the_row_mark_reaches_the_filters_and_the_progress_line() -> None:
     for value in ("marked", "unmarked", "+1", "-1", "flag"):
         assert f'<option value="{value}">' in document
     assert "rows marked" in page._SCRIPT
+
+
+def test_the_release_decision_is_the_axis_own_vocabulary() -> None:
+    """A reviewer's decision joins to a verdict without a mapping table between them.
+
+    ``specs/20260924-which-artefact-is-releasable/design.md`` §6.
+    """
+    assert [value for value, _, _ in page.RELEASE_DECISIONS] == [
+        "release_without_redaction",
+        "release_with_redaction",
+    ]
+    assert set(value for value, _, _ in page.RELEASE_DECISIONS) <= set(page.RELEASE_ORDER)
+
+
+def test_the_release_decision_keys_collide_with_nothing_else_on_the_page() -> None:
+    """Four key families now share one page; a keystroke must mean exactly one thing."""
+    decision = {key for _, key, _ in page.RELEASE_DECISIONS}
+    row = {key for _, key, _ in page.ROW_TRIAGE}
+    finding = {key for _, key, _ in page.VERDICTS}
+    movement = {"j", "k", "J", "K"}
+    assert not decision & row
+    assert not decision & finding
+    assert not decision & movement
+
+
+def test_a_card_carries_the_release_decision_controls() -> None:
+    """A human reading the recording says which release it warrants, on the card itself."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert document.count('class="decgroup"') == 1
+    for value, key, slug in page.RELEASE_DECISIONS:
+        assert f'class="dec d-{slug}" data-v="{value}"' in document
+        assert f"<kbd>{key}</kbd>" in document
+
+
+def test_the_release_decision_markup_does_not_repeat_the_stem() -> None:
+    """Same argument as the row controls: the enclosing card already names the row."""
+    assert "data-stem" not in page._DECISION_GROUP
+
+
+def test_the_release_decision_is_its_own_collection() -> None:
+    """A row mark says how the row reads; a release decision says which artefact may be handed on."""
+    assert "release:store.release" in page._SCRIPT
+    assert "triage:store.triage" in page._SCRIPT
+    assert "version:3" in page._SCRIPT
+
+
+def test_the_release_decision_persists_and_degrades_like_the_others() -> None:
+    """The same localStorage namespace, the same guarded access, four collections restored."""
+    assert "release:parsed.release||{}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},triage:{},release:{}};}" in page._SCRIPT
+
+
+def test_re_pressing_a_release_decision_clears_it() -> None:
+    """Un-deciding is how a reviewer withdraws one, matching every other control on the page."""
+    assert "if(held===value)delete store.release[stem];" in page._SCRIPT
+
+
+def test_the_release_decision_reaches_the_filters_and_the_progress_line() -> None:
+    """A reviewer must be able to sweep what they have not yet decided."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert 'id="dec"' in document
+    for value in ("decided", "undecided", "release_without_redaction", "release_with_redaction"):
+        assert f'<option value="{value}">' in document
+    assert "rows given a release decision" in page._SCRIPT
+
+
+def test_the_release_decision_does_not_overwrite_the_graphs_own() -> None:
+    """The card shows both: what the graph concluded, and what the reviewer says it warrants."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    assert 'data-rel="' in document
+    assert "card.dataset.dec" in page._SCRIPT
+    assert "rels.has(r.dataset.rel)" in page._SCRIPT
+
+
+def test_the_release_decision_keys_are_discoverable() -> None:
+    """A control nobody can find is a control nobody uses."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a"))
+    document = page.render(corpus, "Review")
+    for _, key, _ in page.RELEASE_DECISIONS:
+        assert f"<kbd>{key}</kbd>" in document
+
+
+def test_reset_clears_the_release_decision_filter_too() -> None:
+    """A reset that leaves one facet set shows a narrowed page while claiming to show everything."""
+    reset = page._SCRIPT.split("getElementById('all')")[1].split("});")[0]
+    for control in ("firedSel", "brkSel", "txSel", "revSel", "triSel", "decSel", "llmSel"):
+        assert f"{control}.value='any'" in reset, control
+
+
+def test_the_reviewer_controls_are_not_searchable_text() -> None:
+    """A control labelled in the page's own vocabulary would match every card in the search box.
+
+    The row marks read ``+1``/``-1``/``flag``, which nobody searches for. A release decision reads
+    ``without redaction``, which is exactly what a reviewer would type to find one.
+    """
+    assert "haystack.set(r,(r.textContent" not in page._SCRIPT
+    assert "function haystackOf(card)" in page._SCRIPT
+
+
+def test_every_progress_term_counts_the_cards_on_this_page() -> None:
+    """One ``localStorage`` namespace spans every shard; ``cards`` is this shard only.
+
+    Counting the store's keys against this page's cards can report more decisions than rows.
+    """
+    for collection in ("triage", "release", "recordings"):
+        assert f"Object.keys(store.{collection}).length" not in page._SCRIPT
+    assert "rows given a release decision" in page._SCRIPT
+
+
+def test_the_decided_row_stripe_is_legible_in_both_themes() -> None:
+    """A 3px stripe at the light theme's value is all but invisible on the dark card."""
+    dark = page._STYLE.split("@media (prefers-color-scheme:dark)")[1]
+    for value in ("release_without_redaction", "release_with_redaction"):
+        assert f'.rec[data-dec="{value}"]' in dark, value
 
 
 def test_the_row_keys_are_inert_while_typing() -> None:
@@ -1206,7 +1331,7 @@ def test_census_counts_what_a_rebuild_is_judged_by(tmp_path: Path) -> None:
                     f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1, brk=1)],
                     d={"llm": {"status": "disabled"}},
                 ),
-                _census_row("sub-b", rel="releasable", d={"llm": {"status": "clean"}}),
+                _census_row("sub-b", rel="release_with_redaction", d={"llm": {"status": "clean"}}),
             ]
         )
         + "\n"
@@ -1241,7 +1366,7 @@ def test_compare_reports_each_count_in_both_with_its_delta(tmp_path: Path) -> No
 
 def test_an_extract_carries_its_schema_version(tmp_path: Path) -> None:
     """The header is what lets the page know which graph the rows came from."""
-    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("releasable")])
+    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("release_with_redaction")])
     out = tmp_path / "out.jsonl"
     report = page.extract(tmp_path, out, workers=1)
     assert report["version"] == page.EXTRACT_VERSION
@@ -1266,7 +1391,7 @@ def test_the_page_refuses_to_describe_a_reviewer_it_cannot_vouch_for(tmp_path: P
     data = tmp_path / "old.jsonl"
     data.write_text(json.dumps(_row("sub-a")) + "\n")
     document = page.render(page.load(data), "Review")
-    assert "written before the reviewer ladder changed" in document
+    assert "written before the release axis and the reviewer ladder changed" in document
     fresh = page.Corpus()
     fresh.version = page.EXTRACT_VERSION
     fresh.add(_row("sub-a"))
@@ -1338,7 +1463,7 @@ def test_a_mark_matched_by_the_stimulus_reads_as_matched(tmp_path: Path) -> None
             [0, 1],
         ),
         *_label("assertion-1", "NAME", "word-0"),
-        _verdict("releasable", family="cinderella-story"),
+        _verdict("release_with_redaction", family="cinderella-story"),
     ]
     run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
     row = page.recording_record(run_root, page.free_response_families())
