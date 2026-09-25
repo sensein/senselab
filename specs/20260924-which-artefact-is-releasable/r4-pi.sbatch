@@ -1,17 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=triage-r4
-#SBATCH --partition=ou_bcs_normal
-#SBATCH --qos=normal
+#SBATCH --job-name=triage-r4-pi
+#SBATCH --partition=pi_satra
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
 #SBATCH --time=6:00:00
 #SBATCH --requeue
-#SBATCH --array=0-239%160
+#SBATCH --array=0-39%35
 #SBATCH --output=/orcd/scratch/bcs/002/satra/triage_r4_20260924/logs/%x-%A_%a.out
 #SBATCH --chdir=/orcd/scratch/bcs/002/satra/triage_r4_20260924
 # 62,548 recordings over 240 slices of ~261, the same manifest and the same sources r3 replayed.
-# 240 and not the 400 r3 used: the ou_bcs_normal partition QOS caps submits at 256 whatever --qos says,
-# and an array task counts against it.
+# 240 and not the 400 r3 used: the first submission went to ou_bcs_normal, whose partition QOS caps
+# submits at 256 whatever --qos says. That partition then ran 14 of 160 for twelve minutes against
+# another user holding 230 jobs, so the array moved here, where r3 itself ran. %128 is the real
+# ceiling: mit_preemptable MaxTRESPU is cpu=1024 and a task asks 8.
 # The driver skips a store already carrying this configuration's replay marker, so a preempted
 # slice is resumable by resubmission over the same roots.
 set -euo pipefail
