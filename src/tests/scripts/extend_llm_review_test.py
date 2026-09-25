@@ -303,6 +303,60 @@ class TestTheDecisionIsTakenAgainOverTheReading:
         second = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
         assert [entity.id for entity in second.entities("verdict") if not second.is_invalidated(entity.id)] == settled
 
+    def test_a_mirrored_run_root_takes_its_source_from_the_manifest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A replayed corpus carries no ``run.json``, so deriving the source from the run root fails.
+
+        Found by a smoke test over the r4 tree: a mirror holds ``store.jsonl``, ``streams/`` and a
+        ``derivatives`` symlink and nothing else, so every row errored on a missing run log before
+        a single transcript was read.
+        """
+        run_root = _finished_run(tmp_path / "corpus")
+        _seed_verdicts(run_root)
+        (run_root / "run" / LOG_FILE).unlink()  # what a mirrored run root looks like
+        manifest = tmp_path / "mirrored.jsonl"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "stem": run_root.name,
+                    "enhanced": str(run_root / "run" / "streams" / "enhanced.flac"),
+                    "source": str(run_root / "run" / "streams" / "recording.flac"),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        _stub(monkeypatch)
+        summary = cli.run_slice(
+            manifest,
+            slice_index=0,
+            slice_count=1,
+            config=_config(tmp_path),
+            log_dir=tmp_path,
+            hints=_hints(tmp_path, run_root),
+        )
+        assert summary["counts"] == {"ok": 1}
+        assert list(summary["refolds"]) == ["flag/not_assessed"]
+
+    def test_a_run_root_with_no_log_and_no_named_source_is_an_error_not_a_blind_refold(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The failure must stay loud: a missing declaration may not become an unflagged guess."""
+        run_root = _finished_run(tmp_path / "corpus")
+        _seed_verdicts(run_root)
+        (run_root / "run" / LOG_FILE).unlink()
+        _stub(monkeypatch)
+        summary = cli.run_slice(
+            _manifest(tmp_path, run_root),
+            slice_index=0,
+            slice_count=1,
+            config=_config(tmp_path),
+            log_dir=tmp_path,
+            hints=_hints(tmp_path, run_root),
+        )
+        assert summary["counts"] == {"error": 1}
+
     def test_the_cli_refuses_to_run_blind_rather_than_flagging_the_corpus(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
