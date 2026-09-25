@@ -108,6 +108,27 @@ print(sum(c.values()), dict(c))'
 must read **62,548**. Any slice missing is resubmitted over the same roots: the driver skips a store
 already carrying this configuration's replay marker, so a re-run costs nothing on what is done.
 
-TO BE FILLED once the arrays drain: the row count, the r3-against-r4 census, and the in-store
-differential (`r4-diff.sbatch`, whose baseline is the original corpus decision and therefore spans
-more than these two changes — it is the cross-check, not the measurement).
+**The count and the comparison are chained off the replay, not watched.** Two dependent jobs run
+themselves when the five arrays drain, `afterany` so a failed slice does not strand them:
+
+| job | what it does |
+| --- | --- |
+| `23712098` | [`r4_census.sbatch`](r4_census.sbatch) — the axes census over `<r4>/out`, 32 tasks |
+| `23712099` | [`r4_report.sbatch`](r4_report.sbatch) — the row count and `compare_census.py` r3 against r4 |
+
+`23712099` writes `/orcd/scratch/bcs/002/satra/triage_r4_20260924/REPORT.txt`, whose first section
+prints `COMPLETE` only when the rows read 62,548 **and** the distinct run roots do too — the second
+condition is what would have caught the 156 and 60 rows two earlier passes lost, since a slice that
+died mid-stride writes fewer rows rather than none.
+
+Still to run after that, deliberately not chained because its baseline is different: the in-store
+differential, [`r4-diff.sbatch`](r4-diff.sbatch). A replayed store carries the decision it replaced,
+but that decision is the **original corpus** run's, not r3's, so the differential's matrices span
+every change since the corpus was built. It is the cross-check on the mechanism — that an old store
+and a new one still compare across a vocabulary change — and not the measurement of this one.
+
+## What is still open
+
+The numbers this document exists for: the r4 row count, the release table after, and the
+conformance movement on `story-recall` and `story-recall-v2`, whose conformance ran at 93.6%
+`false` before the recall change and should now be governed by production alone.
