@@ -1010,7 +1010,7 @@ def test_the_release_decision_reaches_the_filters_and_the_progress_line() -> Non
     assert 'id="dec"' in document
     for value in ("decided", "undecided", "release_without_redaction", "release_with_redaction"):
         assert f'<option value="{value}">' in document
-    assert "release decisions" in page._SCRIPT
+    assert "rows given a release decision" in page._SCRIPT
 
 
 def test_the_release_decision_does_not_overwrite_the_graphs_own() -> None:
@@ -1030,6 +1030,40 @@ def test_the_release_decision_keys_are_discoverable() -> None:
     document = page.render(corpus, "Review")
     for _, key, _ in page.RELEASE_DECISIONS:
         assert f"<kbd>{key}</kbd>" in document
+
+
+def test_reset_clears_the_release_decision_filter_too() -> None:
+    """A reset that leaves one facet set shows a narrowed page while claiming to show everything."""
+    reset = page._SCRIPT.split("getElementById('all')")[1].split("});")[0]
+    for control in ("firedSel", "brkSel", "txSel", "revSel", "triSel", "decSel", "llmSel"):
+        assert f"{control}.value='any'" in reset, control
+
+
+def test_the_reviewer_controls_are_not_searchable_text() -> None:
+    """A control labelled in the page's own vocabulary would match every card in the search box.
+
+    The row marks read ``+1``/``-1``/``flag``, which nobody searches for. A release decision reads
+    ``without redaction``, which is exactly what a reviewer would type to find one.
+    """
+    assert "haystack.set(r,(r.textContent" not in page._SCRIPT
+    assert "function haystackOf(card)" in page._SCRIPT
+
+
+def test_every_progress_term_counts_the_cards_on_this_page() -> None:
+    """One ``localStorage`` namespace spans every shard; ``cards`` is this shard only.
+
+    Counting the store's keys against this page's cards can report more decisions than rows.
+    """
+    for collection in ("triage", "release", "recordings"):
+        assert f"Object.keys(store.{collection}).length" not in page._SCRIPT
+    assert "rows given a release decision" in page._SCRIPT
+
+
+def test_the_decided_row_stripe_is_legible_in_both_themes() -> None:
+    """A 3px stripe at the light theme's value is all but invisible on the dark card."""
+    dark = page._STYLE.split("@media (prefers-color-scheme:dark)")[1]
+    for value in ("release_without_redaction", "release_with_redaction"):
+        assert f'.rec[data-dec="{value}"]' in dark, value
 
 
 def test_the_row_keys_are_inert_while_typing() -> None:

@@ -1361,6 +1361,10 @@ mark.pii{padding:1px 3px}
 .r-withheld{background:#331e1b;border-color:#8a4b42;color:#e8a89e}
 .r-release_with_redaction{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
 .r-not_assessed,.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
+.rec[data-dec="release_without_redaction"]{border-right-color:#4f7a4f}
+.rec[data-dec="release_with_redaction"]{border-right-color:#4a5c86}
+.d-without.on{background:#3a6b3a}
+.d-with.on{background:#3d5687}
 .errors{color:#e8a89e}
 #why .ok{color:#a8d3a8}
 #why .bad{color:#e8a89e}
@@ -1411,8 +1415,16 @@ const byKey=new Map();
 for(const m of marks)byKey.set(m.dataset.k,m);
 const cardOf=new Map();
 for(const m of marks)cardOf.set(m,m.closest('.rec'));
+/* what a search reads: the recording, never the controls beside it. A button labelled in the
+   page's own vocabulary would otherwise match every card. */
+function haystackOf(card){
+  const parts=[card.closest('.participant').dataset.p];
+  for(const selector of ['header','.ground','.why','.text'])
+    {const el=card.querySelector(selector); if(el)parts.push(el.textContent);}
+  return parts.join(' ').toLowerCase();
+}
 const haystack=new Map();
-for(const r of cards)haystack.set(r,(r.textContent+' '+r.closest('.participant').dataset.p).toLowerCase());
+for(const r of cards)haystack.set(r,haystackOf(r));
 const marksIn=new Map();
 for(const r of cards)marksIn.set(r,[...r.querySelectorAll('mark.pii')]);
 
@@ -1664,12 +1676,18 @@ function apply(){
 function tally(){
   let done=0;
   for(const m of marks)if((store.findings[m.dataset.k]||{}).v)done++;
-  const notes=Object.keys(store.recordings).length;
-  const rows=Object.keys(store.triage).length;
-  const said=Object.keys(store.release).length;
+  /* every term counts the cards on this page. One localStorage namespace spans every shard, so
+     counting the store's own keys can report more decisions than there are rows. */
+  let notes=0, rows=0, said=0;
+  for(const c of cards){
+    const stem=c.dataset.stem;
+    if((store.recordings[stem]||{}).n)notes++;
+    if((store.triage[stem]||{}).v)rows++;
+    if((store.release[stem]||{}).v)said++;
+  }
   progress.textContent=done+' of '+marks.length+' findings judged \\u00b7 '+rows+' of '
-    +cards.length+' rows marked \\u00b7 '+said+' release decisions \\u00b7 '
-    +notes+' recording notes';
+    +cards.length+' rows marked \\u00b7 '+said+' of '+cards.length
+    +' rows given a release decision \\u00b7 '+notes+' recording notes';
 }
 
 /* ---- review panel ---- */
@@ -1984,7 +2002,7 @@ document.getElementById('all').addEventListener('click',e=>{
   e.preventDefault();
   for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))el.checked=true;
   firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';triSel.value='any';
-  llmSel.value='any';
+  decSel.value='any';llmSel.value='any';
   minNf.value='';minNt.value='';maxNt.value='';q.value='';apply();});
 const rail=document.getElementById('rail');
 const railToggle=document.getElementById('railtoggle');
