@@ -1508,5 +1508,18 @@ def test_the_page_says_when_a_flag_lands_on_a_transcript_no_detector_read() -> N
 def test_the_page_reports_the_reviewers_other_two_readings() -> None:
     """Over-redaction and a second speaker are separate judgments and are rendered separately."""
     assert "would stop removing" in page._SCRIPT
-    assert "more than one person speaking in" in page._SCRIPT
+    assert "It would remove " in page._SCRIPT, "the proposal's other direction is a judgment too"
+    assert "more than one person speaking" in page._SCRIPT
     assert "A reading of the transcript, not of the audio." in page._SCRIPT
+
+
+def test_the_speaker_reading_is_rendered_outside_the_pii_ladder() -> None:
+    """Whether a second voice is in the words is not a question about pii, and a clean reading has one.
+
+    It used to be rendered only inside the ``flagged`` branch, so a reading that found no pii and
+    did notice a second speaker said nothing about it -- the one case the note exists for. The
+    ladder's own last branch is the marker: the note must come after it.
+    """
+    ladder_ends = page._SCRIPT.index("No annotation was recorded.")
+    speakers = page._SCRIPT.index("more than one person speaking")
+    assert speakers > ladder_ends, "the speaker reading must not sit inside a pii-status branch"
