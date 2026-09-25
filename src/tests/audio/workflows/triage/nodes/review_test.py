@@ -521,3 +521,53 @@ class TestTheReviewerDegradesHonestly:
         assert annotation["status"] == "flagged"
         assert annotation["flagged"] == ["PERSON"]
         assert annotation["failure"] == "the worker would not start"
+
+
+class TestTheBracketedTokensAreNotSpeech:
+    """The reviewer reads the string the detectors read, which is the one without the markers.
+
+    Measured on the r4 corpus: 85.2% of the non-lexical tasks' transcripts are nothing but
+    ``[breath]``, ``[UH]``, ``[cough]``, ``[laughter]``. A probe over 20 of them read all 20 clean,
+    so this is not about the model being fooled -- it is about the reviewer and the detectors
+    reading one string, and about not spending a card to be told that ``[breath]`` is not a name.
+    """
+
+    def test_a_transcript_of_only_markers_is_nothing_to_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It renders empty, so the node records the silence rather than contacting a model."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["[breath]", "[cough]"])
+        seen = _stub(monkeypatch, [])
+        review(store, _config(tmp_path))
+        assert seen == [], "no model may be contacted for a transcript of markers"
+        assert _annotation(store)["status"] == "nothing_to_read"
+
+    def test_a_marker_between_two_words_leaves_the_words_joined(self, tmp_path: Path) -> None:
+        """What the reviewer is shown, and therefore what its quotes are taken from."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["my", "[UH]", "name"])
+        original, redacted = transcript_texts(store)
+        assert original == "my name"
+        assert redacted is None
+
+    def test_a_quote_spanning_a_dropped_marker_still_locates_its_words(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The locator must search the string the reviewer read, or the redaction is lost silently.
+
+        ``my [UH] name`` reads as ``my name``, so a proposal quoting ``my name`` has to resolve to
+        the two real words. Searching the unfiltered join would not find it, and an unplaceable
+        removal keeps everything -- a dropped redaction that reports as success.
+        """
+        store = ProvStore(run_id="r")
+        _seed(store, words=["my", "[UH]", "name"])
+        _annotate(store, [{"text": "my name", "action": "redact", "category": "PERSON", "why": "a name"}])
+        plan = refine_plan(store, padding_ms=0)
+        assert tuple(plan.unplaced) == ()
+        assert plan.added_n == 1
+        # The extent is the time hull of the two real words, so it spans the marker that sits
+        # between them. That is right: the marker is dropped from the *text*, and redacting the
+        # audio under a breath between two redacted words takes nothing away.
+        assert plan.extents[0].start == pytest.approx(0.0)
+        assert plan.extents[0].end == pytest.approx(2.5)

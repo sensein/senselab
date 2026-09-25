@@ -962,15 +962,25 @@ def transcript_texts(store: ProvStore) -> tuple[str, str | None]:
     Args:
         store: The provenance store.
 
+    Both texts drop the bracketed consensus tokens, which is the rule the re-scan already applies:
+    a bracket is a marker PREPROCESS emitted, not something the speaker said. Handing them to the
+    reviewer put it in front of the input class that produced 4,228 spurious detector findings, and
+    over this corpus 85% of the non-lexical tasks' transcripts are nothing else -- ``[breath]``,
+    ``[UH]``, ``[cough]``. Dropping them also renders those transcripts empty, so the reviewer
+    records ``nothing_to_read`` instead of spending a card on them.
+
+    See ``specs/20260922-brackets-are-not-speech/design.md``.
+
     Returns:
         ``(original, redacted)``. ``redacted`` is None where no redaction was planned: that is the
         13,810 the scan declined and every recording REDACT never reached, and it is an absence to
         state rather than an empty string to misread.
     """
     words = consensus_words(store)
-    _, original, _ = _render(words, [])
+    records, _, _ = _render(words, [])
+    original = _verification_text(records)
     planned = planned_extents(store)
     if not planned:
         return original, None
-    _, redacted, _ = _render(words, planned)
-    return original, redacted
+    redacted_records, _, _ = _render(words, planned)
+    return original, _verification_text(redacted_records)

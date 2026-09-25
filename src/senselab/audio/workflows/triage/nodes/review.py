@@ -515,6 +515,10 @@ def _word_spans(words: Sequence[Any]) -> tuple[str, list[tuple[int, int, Any]]]:
     Args:
         words: PREPROCESS's consensus words, in stream order.
 
+    Bracketed words are skipped, because ``transcript_texts`` drops them: the join has to be the
+    string the reviewer read, or a quote spanning where a ``[UH]`` used to sit would not be found
+    and the redaction it asked for would be silently dropped as unplaced.
+
     Returns:
         ``(text, spans)``, each span ``(start_char, end_char, word)``. The join is the one
         :func:`~senselab.audio.workflows.triage.nodes.redact.transcript_texts` produces, so an
@@ -524,6 +528,8 @@ def _word_spans(words: Sequence[Any]) -> tuple[str, list[tuple[int, int, Any]]]:
     spans: list[tuple[int, int, Any]] = []
     cursor = 0
     for word in words:
+        if word.attributes.get("bracketed"):
+            continue
         surface = str(word.attributes.get("text") or "")
         if parts:
             cursor += 1
