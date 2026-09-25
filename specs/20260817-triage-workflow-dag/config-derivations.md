@@ -660,6 +660,11 @@ in `transcript-alignment.md`. They were designed for exactly the reference-again
 this derivative is, which is a weaker assumption than the ASR-against-ASR case they are already
 serving.
 
+stimulus.residue.variant_similarity_min `0.66`, stimulus.residue.insertion_window `3` and
+stimulus.residue.train_repetitions_min `3` -- which transcript words reach the PII pathway. Swept
+over the 43,450 SPEECH-routed r4 recordings; the sweep tables, the replay and what still reaches the
+detectors are in `specs/20260925-lexical-only-pii-pathway/design.md`.
+
 stimulus.near_match.exact_below `5` and stimulus.near_match.two_edits_from `8` -- how far one
 normalised transcript token may be from one normalised stimulus token and still be a spelling of
 it. Below 5 characters it must match exactly; 5 to 7 may differ by one edit; 8 or more by two. The

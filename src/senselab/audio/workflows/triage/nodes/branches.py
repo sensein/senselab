@@ -654,6 +654,9 @@ class Expectation:
             and sorted. A declaration about the instruction, like ``tokens`` and ``sequence``
             beside it, not a fit; empty on every family whose stimulus is declared per recording
             and on every family whose content the participant chooses.
+        vocabulary: The words a faithful performance draws from in any order, normalised. A
+            declaration about the instruction, like ``expected_names``; empty wherever the
+            instruction names no closed set.
         unviable: ``(measurement, why)`` pairs the design states no viable approach for.
     """
 
@@ -680,6 +683,7 @@ class Expectation:
     anti_pattern: str | None = None
     connected: bool = False
     expected_names: tuple[str, ...] = ()
+    vocabulary: tuple[str, ...] = ()
     unviable: tuple[tuple[str, str], ...] = ()
 
     def as_mapping(self) -> dict[str, Any]:
@@ -723,6 +727,8 @@ class Expectation:
             values["sequence"] = tuple(str(phoneme) for phoneme in values["sequence"])
         if values.get("expected_names") is not None:
             values["expected_names"] = tuple(str(name) for name in values["expected_names"])
+        if values.get("vocabulary") is not None:
+            values["vocabulary"] = tuple(str(word) for word in values["vocabulary"])
         if values.get("unviable") is not None:
             values["unviable"] = tuple((str(pair[0]), str(pair[1])) for pair in values["unviable"])
         return cls(**values)
@@ -792,6 +798,56 @@ mouth. The measurement that says this family needs one is in
 ``specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md``.
 """
 
+STROOP_COLOURS: tuple[str, ...] = (
+    "amarillo",
+    "azul",
+    "beige",
+    "black",
+    "blanco",
+    "blue",
+    "brown",
+    "burgundy",
+    "color",
+    "colour",
+    "cyan",
+    "fuchsia",
+    "gold",
+    "gray",
+    "green",
+    "grey",
+    "gris",
+    "indigo",
+    "lavender",
+    "lime",
+    "magenta",
+    "maroon",
+    "morado",
+    "naranja",
+    "navy",
+    "negro",
+    "olive",
+    "orange",
+    "peach",
+    "pink",
+    "purple",
+    "red",
+    "rojo",
+    "rosa",
+    "silver",
+    "tan",
+    "teal",
+    "turquoise",
+    "verde",
+    "violet",
+    "white",
+    "yellow",
+)
+"""The colour names a Stroop response is drawn from: the ink is named, not the word read.
+
+Task metadata, not corpus-derived. The measurement that says this family needs one is in
+``specs/20260925-lexical-only-pii-pathway/design.md``.
+"""
+
 
 SPEECH_EXPECTATIONS: dict[str, Expectation] = {
     "harvard-sentences-list": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text"),
@@ -800,7 +856,11 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
     "rainbow-passage": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text", connected=True),
     "caterpillar-passage": Expectation(pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text", connected=True),
     "word-color-stroop": Expectation(
-        pattern=Pattern.ORDERED_TOKENS, token_source="stimulus_text", declared_duration_s=75.0, emit_filler=False
+        pattern=Pattern.ORDERED_TOKENS,
+        token_source="stimulus_text",
+        declared_duration_s=75.0,
+        emit_filler=False,
+        vocabulary=STROOP_COLOURS,
     ),
     "loudness": Expectation(
         pattern=Pattern.ORDERED_TOKENS, tokens=("hey", "hey", "hey"), required_count=RequiredCount(3, CountUnit.TOKENS)
