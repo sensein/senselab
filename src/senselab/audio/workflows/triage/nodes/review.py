@@ -24,17 +24,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
+from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family, expected_names
 from senselab.audio.workflows.triage.nodes.common import (
+    consensus_words,
     find_measurement,
     find_verdict,
+    path_attributes,
+    resolve_stream,
     software_agent,
+    word_hull,
+    write_stream,
 )
-from senselab.audio.workflows.triage.nodes.redact import transcript_texts
+from senselab.audio.workflows.triage.nodes.redact import REDACTION_SPAN, planned_extents, transcript_texts
+from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED
 from senselab.text.tasks.pii_detection.redaction_review import (
     REDACT,
@@ -478,3 +486,230 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
     store.was_attributed_to(annotation_id, software)
     view.append(annotation_id)
     return ReviewOutcome(status=reading.status, annotation_id=annotation_id, view=tuple(view))
+
+
+@dataclass(frozen=True)
+class RefinedPlan:
+    """The span set the reviewer's proposal asks for, over the detectors' own.
+
+    Attributes:
+        extents: What to remove, padded and merged; the applied set.
+        added_n: How many extents the reviewer added that the detectors did not have.
+        released_n: How many detector extents the reviewer's proposal dropped.
+        unplaced: The proposal texts that could not be located in the transcript, verbatim quotes
+            of the model's own words. A removal it could not place keeps everything and a release
+            it could not place changes nothing, so an unplaceable entry can only fail closed.
+        reasons: Category to the reviewer's one-sentence reason, for every entry it placed.
+    """
+
+    extents: list[RedactionExtent]
+    added_n: int
+    released_n: int
+    unplaced: tuple[str, ...]
+    reasons: dict[str, str]
+
+
+def _word_spans(words: Sequence[Any]) -> tuple[str, list[tuple[int, int, Any]]]:
+    """The transcript as one string, with each word's character range in it.
+
+    Args:
+        words: PREPROCESS's consensus words, in stream order.
+
+    Returns:
+        ``(text, spans)``, each span ``(start_char, end_char, word)``. The join is the one
+        :func:`~senselab.audio.workflows.triage.nodes.redact.transcript_texts` produces, so an
+        offset found here indexes the text the reviewer was actually shown.
+    """
+    parts: list[str] = []
+    spans: list[tuple[int, int, Any]] = []
+    cursor = 0
+    for word in words:
+        surface = str(word.attributes.get("text") or "")
+        if parts:
+            cursor += 1
+        parts.append(surface)
+        spans.append((cursor, cursor + len(surface), word))
+        cursor += len(surface)
+    return " ".join(parts), spans
+
+
+def _covered(text: str, spans: Sequence[tuple[int, int, Any]], quoted: str) -> list[Any]:
+    """The words a quoted substring covers.
+
+    Args:
+        text: The transcript as one string.
+        spans: Each word's character range in it.
+        quoted: The substring the reviewer named.
+
+    Returns:
+        The words it overlaps, in order. Empty where the substring is not in the text, which is the
+        one case that must not be guessed at: a finding nothing could place was once widened to the
+        whole transcript, and a 9.1 s span over a sustained vowel is what that produced.
+    """
+    lowered, needle = text.lower(), quoted.strip().lower()
+    if not needle:
+        return []
+    at = lowered.find(needle)
+    if at == -1:
+        return []
+    end = at + len(needle)
+    return [word for start, stop, word in spans if start < end and stop > at]
+
+
+def refine_plan(store: ProvStore, *, padding_ms: int) -> RefinedPlan:
+    """The redaction the reviewer's proposal asks for, as extents over this recording.
+
+    The proposal is about text and an extent is about time, so the consensus words' own timings are
+    the join. A proposal entry naming text the transcript does not contain is recorded and
+    otherwise ignored.
+
+    Args:
+        store: The provenance store, carrying the annotation and the detectors' own spans.
+        padding_ms: The redaction margin, as ``redaction.padding_ms``.
+
+    Returns:
+        The refined plan.
+    """
+    annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    proposal = list(annotation.attributes.get("proposal") or ()) if annotation is not None else []
+    detector = planned_extents(store)
+    words = consensus_words(store)
+    text, spans = _word_spans(words)
+
+    keep = list(detector)
+    added: list[RedactionExtent] = []
+    unplaced: list[str] = []
+    reasons: dict[str, str] = {}
+    released = 0
+    for entry in proposal:
+        quoted = str(entry.get("text") or "")
+        action = str(entry.get("action") or REDACT)
+        covered = _covered(text, spans, quoted)
+        if not covered:
+            unplaced.append(quoted)
+            continue
+        hulls = [word_hull(word) for word in covered if word.extent is not None]
+        if not hulls:
+            unplaced.append(quoted)
+            continue
+        category = str(entry.get("category") or "OTHER").upper()
+        reasons[category] = str(entry.get("why") or "")
+        bounds = (min(hull[0] for hull in hulls), max(hull[1] for hull in hulls))
+        if action == REDACT:
+            added.append(RedactionExtent(start=bounds[0], end=bounds[1], category=category))
+        else:
+            before = len(keep)
+            keep = [extent for extent in keep if not (extent.start < bounds[1] and extent.end > bounds[0])]
+            released += before - len(keep)
+
+    combined = plan_redactions([*keep, *added], padding_ms=padding_ms) if (keep or added) else []
+    return RefinedPlan(
+        extents=combined,
+        added_n=len(added),
+        released_n=released,
+        unplaced=tuple(unplaced),
+        reasons=reasons,
+    )
+
+
+def apply_proposal(store: ProvStore, config: TriageConfig, *, run_dir: Path, source: str) -> str | None:
+    """Write this recording's redacted stream from the refined span set.
+
+    One artefact: the detectors' own version is not kept beside it. What says which span set the
+    audio came from is the store -- every applied span is generated by this node's ``apply``
+    activity, carries the reviewer's reason where the reviewer placed it, and the spans the
+    proposal released are invalidated rather than deleted, so a reader can ask why a span is no
+    longer cut and get an answer.
+
+    Args:
+        store: The provenance store.
+        config: The triage configuration.
+        run_dir: The run directory whose ``streams/`` the audio is written into.
+        source: The stream the redaction is applied to.
+
+    Returns:
+        The written stream's entity id, or None where the reviewer proposed nothing and the
+        detectors' own stream therefore already is the refined one.
+    """
+    annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    if annotation is None or not (annotation.attributes.get("proposal") or ()):
+        return None
+    padding_ms = int(config.require("redaction.padding_ms"))
+    fill = str(config.require("redaction.fill"))
+    refined = refine_plan(store, padding_ms=padding_ms)
+
+    software = software_agent(store)
+    activity = store.activity(
+        node=NODE,
+        step="apply",
+        parameters={
+            "redactions_n": len(refined.extents),
+            "added_n": refined.added_n,
+            "released_n": refined.released_n,
+            "unplaced_n": len(refined.unplaced),
+            "fill": fill,
+            "padding_ms": padding_ms,
+        },
+    )
+    store.was_associated_with(activity, software)
+    store.used(activity, annotation.id)
+    for stale in planned_extents_ids(store):
+        store.was_invalidated_by(stale, activity)
+
+    span_ids: list[str] = []
+    for extent in refined.extents:
+        span_id = store.entity(
+            prov_type="span",
+            extent=(extent.start, extent.end),
+            attributes={
+                "name": REDACTION_SPAN,
+                "category": extent.category,
+                "why": refined.reasons.get(extent.category, ""),
+            },
+        )
+        store.was_generated_by(span_id, activity)
+        store.was_attributed_to(span_id, software)
+        store.was_derived_from(span_id, annotation.id)
+        span_ids.append(span_id)
+
+    stream_id, recording = resolve_stream(store, run_dir, source)
+    redacted = apply_redactions(recording, refined.extents, fill=fill, bleep_hz=config.get("redaction.bleep_hz"))
+    (run_dir / "streams").mkdir(parents=True, exist_ok=True)
+    relative, report = write_stream(redacted, run_dir, REDACTED_STREAM)
+    written = store.entity(
+        prov_type="stream",
+        extent=(0.0, float(redacted.waveform.shape[-1]) / float(redacted.sampling_rate)),
+        attributes={
+            "name": REDACTED_STREAM,
+            **path_attributes(relative, run_dir),
+            "sampling_rate": int(redacted.sampling_rate),
+            "channels": int(redacted.waveform.shape[0]),
+            "write_gain": report.gain,
+            "fill": fill,
+            "from_proposal": True,
+        },
+    )
+    store.was_generated_by(written, activity)
+    store.was_attributed_to(written, software)
+    store.was_derived_from(written, stream_id)
+    for span_id in span_ids:
+        store.was_derived_from(written, span_id)
+    return written
+
+
+def planned_extents_ids(store: ProvStore) -> list[str]:
+    """The ids of the live redaction spans, for a refinement to retire.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The ids.
+    """
+    from senselab.audio.workflows.triage.nodes.common import live_entities
+
+    return [
+        span.id
+        for span in live_entities(store, "span")
+        if span.attributes.get("name") == REDACTION_SPAN and span.extent is not None
+    ]
