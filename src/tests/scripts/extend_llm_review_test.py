@@ -238,9 +238,7 @@ class TestTheDecisionIsTakenAgainOverTheReading:
         live = [entity for entity in store.entities("verdict") if not store.is_invalidated(entity.id)]
         assert [entity.attributes["node"] for entity in live].count("VERDICT") == 1
 
-    def test_only_verdicts_own_conclusion_is_retired(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_only_verdicts_own_conclusion_is_retired(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """What separates this from the replay driver: every other node's verdict stands."""
         run_root = _finished_run(tmp_path / "corpus")
         held = _seed_verdicts(run_root)
@@ -414,6 +412,18 @@ class TestItIsResumableTheWayTheFamilyIs:
         )
         assert summary["counts"] == {"ok": 1}, "REDACT's leftover must not stand in for a reading"
         assert summary["readings"] == {"clean": 1}
+        # ...and it must not survive beside the new one either. Every reader takes the latest, so
+        # the stale one changes no decision today; what this pins is that a correct read does not
+        # depend on write order, and that a find_measurements consumer cannot double-count.
+        after = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        live = [
+            e
+            for e in after.entities("measurement")
+            if e.attributes.get("name") == REDACTION_LLM_ANNOTATION and not after.is_invalidated(e.id)
+        ]
+        assert len(live) == 1, "exactly one annotation may stand"
+        assert live[0].attributes["status"] == "clean"
+        assert after.is_invalidated(stale)
 
     def test_force_re_reads_and_never_stacks_a_second_live_reading(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
