@@ -771,9 +771,43 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         """Favouring the reviewer over the detectors, in the one direction that cannot leak."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
-        _annotate(store, status="flagged", redaction="incomplete", original="carries_pii", flagged=["PERSON"])
+        _annotate(
+            store,
+            status="flagged",
+            redaction="incomplete",
+            original="carries_pii",
+            flagged=["PERSON"],
+            proposal=[{"text": "alice", "action": "redact", "category": "PERSON", "why": "a name"}],
+        )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.release is Release.WITHHELD
+
+    def test_a_release_only_proposal_withholds_nothing(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """A reviewer saying the detectors hid too much has found nothing left to hide."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
+        _annotate(
+            store,
+            status="flagged",
+            redaction="incomplete",
+            original="carries_pii",
+            flagged=["PERSON"],
+            proposal=[{"text": "pataka", "action": "release", "category": "PERSON", "why": "a syllable"}],
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.WITH_REDACTION
+
+    def test_an_empty_proposal_withholds_nothing(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """A flag that names nothing to hide is not residue."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
+        _annotate(store, status="flagged", redaction="incomplete", original="carries_pii", flagged=[], proposal=[])
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.WITH_REDACTION
 
     def test_the_weighting_never_releases_a_withheld_recording(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
