@@ -40,7 +40,10 @@ test('the page loads the parquet from disk and reports what it read', async ({ p
   await expect(page.locator('#status')).not.toHaveClass(/bad/)
   const info = await page.locator('#file-info').innerText()
   expect(info).toContain(ROWS.toLocaleString('en-US') + ' rows')
-  expect(info).toContain('schema_version 5')
+  // The version the page reports must be the version it decodes. Read it from the page rather than
+  // repeating the number here, so a schema bump moves one constant and not this assertion too.
+  const decodes = await page.evaluate(() => SchemaDecode.SCHEMA_VERSION)
+  expect(info).toContain('schema_version ' + decodes)
   const rows = await page.evaluate(() => window.__viewerState.rows.length)
   expect(rows).toBe(ROWS)
   expect(problems, 'the page raised no error and fetched nothing').toEqual([])

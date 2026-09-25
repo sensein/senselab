@@ -548,3 +548,37 @@ The file grows 6.6%, on a private local artefact.
 can seek within a chunk instead of decompressing from its start. It costs nothing measurable in
 file size and is what makes a narrow read narrow at page granularity rather than row-group
 granularity.
+
+## Schema 6: what the reviewer read
+
+Added 2026-09-25, with REVIEW.
+
+Schema 5 carried the verdict on both axes and nothing about the reading behind it. That was right
+while the reviewer only annotated the triage axis from inside REDACT. It stopped being right when
+REVIEW became its own node over every transcript and VERDICT began weighting **both** axes by it:
+a row that shows `withheld` without showing what the reader said cannot explain itself, and the
+whole point of the page is that a verdict is legible backwards.
+
+Fourteen columns, all read off `verdict.llm_redaction`, which already carried the annotation whole,
+so nothing new is read from the store:
+
+| column | what it is |
+|---|---|
+| `llm_status` | `clean` / `flagged` / `absent` / `disabled` / `nothing_to_read` |
+| `llm_speakers` | whether the words show more than one person speaking |
+| `llm_original_judgment` | whether the recording's own words carry anything identifying |
+| `llm_redaction_judgment` | whether an applied redaction removed what identifies the speaker |
+| `llm_detector_outcome` | what REDACT concluded, as the reading was taken against it |
+| `llm_iterations` | how many review / mask / re-review rounds ran |
+| `llm_flagged_categories`, `llm_flagged_n` | the categories the reader would remove |
+| `llm_proposal_redact_n`, `llm_proposal_release_n` | the proposal's two directions |
+| `llm_read_redacted` | whether a redacted text existed to be read beside the original |
+| `llm_failed` | whether the reading carries a failure |
+| `llm_model_id`, `llm_revision` | provenance; not assignable to an axis, one value over the corpus |
+
+Categorical and counted throughout. The proposal's own text is never a column: it quotes the
+transcript, and the transcript has one home in this file already.
+
+`llm_model_id` and `llm_revision` are marked unassignable for the same reason `participant` is —
+a column with one value over the corpus separates nothing, and an axis that cannot separate is a
+wasted slot. They stay readable on the recording panel.
