@@ -156,6 +156,16 @@ def _annotate(store: ProvStore, proposal: list[dict[str, str]]) -> None:
     store.was_generated_by(entity, activity)
 
 
+def _rounds_in(store: ProvStore) -> list[dict[str, Any]]:
+    """Every per-round record the reading left, in order.
+
+    Returns:
+        One mapping per round.
+    """
+    found = [e for e in store.entities("measurement") if e.attributes.get("name") == "redaction_llm_review"]
+    return [dict(entity.attributes) for entity in found]
+
+
 def _annotation(store: ProvStore) -> dict[str, Any]:
     """The reading's summary, as VERDICT reads it."""
     found = [e for e in store.entities("measurement") if e.attributes.get("name") == REDACTION_LLM_ANNOTATION]
@@ -368,3 +378,146 @@ class TestTheProposalBecomesTheAppliedRedaction:
         _annotate(store, [{"text": "alicia", "action": "redact", "category": "PERSON", "why": "a name"}])
         applied = refine_plan(store, padding_ms=0)
         assert applied.reasons == {"PERSON": "a name"}
+
+
+class TestTheLoopIsBoundedAndReReadsTheMaskedText:
+    """Carried over from the REDACT step the reviewer used to be. The loop moved; the bound did not.
+
+    These are the guards the move to REVIEW dropped along with ``redact_test.py``'s LLM block. Each
+    one is about behaviour that survived the move intact, so losing it lost only the check.
+    """
+
+    def test_the_loop_is_bounded_by_the_config_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A reviewer that flags forever stops at ``max_iterations`` and says so."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        proposal = ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name")
+        seen = _stub(monkeypatch, [_flags(proposal), _flags(proposal)])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 2\n"))
+        annotation = _annotation(store)
+        assert len(seen) == 2
+        assert annotation["iterations"] == 2
+        assert annotation["status"] == "flagged"
+
+    def test_a_flagged_round_reviews_again_on_the_masked_text(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The second round must not be handed the text the first round objected to."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        proposal = ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name")
+        seen = _stub(monkeypatch, [_flags(proposal), _clean()])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert "alicia" in seen[0]
+        assert "alicia" not in seen[1]
+
+    def test_a_clean_first_round_stops_there(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The bound is a ceiling, not a count."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "world"])
+        seen = _stub(monkeypatch, [_clean()])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert len(seen) == 1
+        assert _annotation(store)["iterations"] == 1
+
+
+class TestTheWeightsAreReleasedUnlessTheRunSaysOtherwise:
+    """A resident worker amortises the load; a run that did not ask for one must not leak it."""
+
+    def test_the_check_releases_the_worker_when_it_ends(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The default. One recording's review must not hold a card after it concludes."""
+        released: list[bool] = []
+        monkeypatch.setattr(
+            review_module, "shutdown_review_worker", lambda **kw: released.append(kw.get("forget_failure"))
+        )
+        store = ProvStore(run_id="r")
+        _seed(store)
+        _stub(monkeypatch, [_clean()])
+        review(store, _config(tmp_path))
+        assert released == [False]
+
+    def test_a_run_that_asks_for_residency_keeps_them(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """What makes a corpus pass affordable: the weights survive one recording."""
+        released: list[bool] = []
+        monkeypatch.setattr(
+            review_module, "shutdown_review_worker", lambda **kw: released.append(kw.get("forget_failure"))
+        )
+        store = ProvStore(run_id="r")
+        _seed(store)
+        _stub(monkeypatch, [_clean()])
+        review(store, _config(tmp_path, LLM_ON + "    keep_worker_resident: true\n"))
+        assert released == []
+
+    def test_a_review_that_raised_still_releases(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A raise must not be the path that leaks the card."""
+        released: list[bool] = []
+        monkeypatch.setattr(
+            review_module, "shutdown_review_worker", lambda **kw: released.append(kw.get("forget_failure"))
+        )
+
+        def _boom(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise RuntimeError("the worker died mid-read")
+
+        monkeypatch.setattr(review_module, "review_transcript", _boom)
+        store = ProvStore(run_id="r")
+        _seed(store)
+        with pytest.raises(RuntimeError):
+            review(store, _config(tmp_path))
+        assert released == [False]
+
+
+class TestTheRoundsReachTheStoreAndTheSummaryStaysClean:
+    """The chain of thought and the cost are per-round records; the annotation is the summary."""
+
+    def test_every_round_reaches_the_store_with_its_reasoning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """What the reader said, verbatim, once per round, which is what the step exists for."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        proposal = ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name")
+        _stub(monkeypatch, [_flags(proposal), _clean()])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        rounds = _rounds_in(store)
+        assert [entry["iteration"] for entry in rounds] == [1, 2]
+        assert [entry["reasoning"] for entry in rounds] == ["A name survives.", "Nothing here identifies the speaker."]
+
+    def test_each_round_records_its_clock_and_how_much_of_it_was_the_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A store answers what the pass cost without a stopwatch outside the graph."""
+        store = ProvStore(run_id="r")
+        _seed(store)
+        _stub(monkeypatch, [_clean()])
+        review(store, _config(tmp_path))
+        recorded = _rounds_in(store)[0]
+        assert {"elapsed_s", "load_s"} <= set(recorded)
+
+    def test_no_timing_reaches_the_annotation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VERDICT reads the summary, and how long a card was busy decides nothing about a recording."""
+        store = ProvStore(run_id="r")
+        _seed(store)
+        _stub(monkeypatch, [_clean()])
+        review(store, _config(tmp_path))
+        annotation = _annotation(store)
+        assert {"elapsed_s", "load_s"} <= set(_rounds_in(store)[0]), "the rounds must still carry them"
+        assert not [key for key in annotation if key.endswith(("_s", "_mib"))]
+
+
+class TestTheReviewerDegradesHonestly:
+    """A model that will not load is a gap in the record, never a clean reading."""
+
+    def test_a_model_lost_after_it_already_flagged_keeps_the_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reading that already happened is not undone by the round that could not."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        proposal = ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name")
+        lost = ReviewResult(available=False, model_id="s/m", failure="the worker would not start")
+        _stub(monkeypatch, [_flags(proposal), lost])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        annotation = _annotation(store)
+        assert annotation["status"] == "flagged"
+        assert annotation["flagged"] == ["PERSON"]
+        assert annotation["failure"] == "the worker would not start"
