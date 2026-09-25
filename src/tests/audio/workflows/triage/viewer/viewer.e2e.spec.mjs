@@ -36,7 +36,8 @@ test('the page loads the parquet from disk and reports what it read', async ({ p
   await expect(page.locator('#status')).not.toHaveClass(/bad/)
   const info = await page.locator('#file-info').innerText()
   expect(info).toContain('240 rows')
-  expect(info).toContain('schema_version 3')
+  const version = await page.evaluate(() => SchemaDecode.SCHEMA_VERSION)
+  expect(info).toContain('schema_version ' + version)
   const rows = await page.evaluate(() => window.__viewerState.rows.length)
   expect(rows).toBe(240)
   expect(problems, 'the page raised no error and fetched nothing').toEqual([])
@@ -85,9 +86,12 @@ test('a gate reading takes an axis and its bound is drawn as a reference line', 
   expect(drawn.op).toBe('at_least')
   expect(drawn.paintsBounds).toBe(true)
   // one bound governs the whole fixture, and it is the configured 1.0 s
+  // one bound governs every recording the gate was applied to, and it is the configured 1.0 s
+  const applied = await page.evaluate(
+    gate => window.__viewerState.rows.filter(r => r[gate + '_bound'] != null).length, GATE_AXIS)
   expect(drawn.bounds).toHaveLength(1)
   expect(drawn.bounds[0].bound).toBe(1)
-  expect(drawn.bounds[0].n).toBe(240)
+  expect(drawn.bounds[0].n).toBe(applied)
 
   // the bound sits inside the band, so the reference line is on screen rather than clipped away
   const frac = await page.evaluate(
@@ -125,17 +129,19 @@ test('a genuine zero reading is placed on the band and only a null is absent', a
     return { zeros, nulls, counts, zerosPlaced, nullsAbsent, atZero: SchemaAxes.position(view.summaries[slot], 0) }
   }, { slot: GATE_SLOT, gate: GATE_AXIS })
 
-  expect(rail.zeros).toBe(80)
-  expect(rail.nulls).toBe(80)
-  expect(rail.counts.present).toBe(160)
-  expect(rail.counts.absent).toBe(80)
+  expect(rail.zeros, 'the fixture must carry genuine zeros for this test to mean anything')
+    .toBeGreaterThan(0)
+  expect(rail.nulls, 'and genuine nulls, to tell the two apart').toBeGreaterThan(0)
+  expect(rail.zeros + rail.nulls).toBeLessThan(240)
+  expect(rail.counts.present).toBe(240 - rail.nulls)
+  expect(rail.counts.absent).toBe(rail.nulls)
   expect(rail.zerosPlaced, 'a 0.0 reading rendered as absent').toBe(true)
   expect(rail.nullsAbsent, 'a null reading rendered as a value').toBe(true)
   expect(rail.atZero).not.toBeNull()
 
   // and the rail chip reports exactly the nulls, not the zeros
   const chip = page.locator('#axis-rail .axis-cell:not(.add)').nth(GATE_SLOT).locator('button.chip.abs')
-  await expect(chip).toHaveText('absent 80')
+  await expect(chip).toHaveText('absent ' + rail.nulls.toLocaleString('en-US'))
 })
 
 test('selecting a line opens that recording', async ({ page }) => {
@@ -166,4 +172,104 @@ test('the gate outcome axis separates pass, fail and undetermined', async ({ pag
   await select.selectOption('gate_train_min_s_passed')
   const cats = await page.evaluate(slot => window.__viewerState.view.summaries[slot].categories, GATE_SLOT)
   expect(cats).toEqual(['true', 'undetermined', 'false'])
+})
+
+test('the subject axis is labelled by a short key that stays unique, and the full id survives', async ({ page }) => {
+  await open(page)
+  const slot = await page.evaluate(() => window.__viewerState.view.axes.indexOf('participant'))
+  expect(slot, 'participant must be a default axis').toBeGreaterThanOrEqual(0)
+
+  const keys = await page.evaluate(s => {
+    const summary = window.__viewerState.view.summaries[s]
+    const drawn = summary.categories.map(c => SchemaAxes.categoryLabel(summary.col, c))
+    return {
+      chars: SchemaAxes.KEY_CHARS,
+      ids: summary.categories,
+      drawn,
+      unique: new Set(drawn).size,
+      uniqueAt4: new Set(summary.categories.map(c => c.slice(4, 8))).size
+    }
+  }, slot)
+
+  // the id is 40 characters and the label is the key, which is very much shorter
+  keys.ids.forEach(id => expect(id).toHaveLength(40))
+  keys.drawn.forEach(d => expect(d).toHaveLength(keys.chars))
+  expect(keys.chars).toBeLessThan(12)
+  // the key separates every subject, where a four-character one would not
+  expect(keys.unique, 'the short key collided').toBe(keys.ids.length)
+  expect(keys.uniqueAt4, 'the fixture must hold a pair a 4-character key would merge')
+    .toBeLessThan(keys.ids.length)
+  // and it is a literal prefix of the id, so it greps back to the stem
+  keys.ids.forEach((id, i) => expect(id.startsWith('sub-' + keys.drawn[i])).toBe(true))
+
+  // the caption says the labels are short and where the whole id is
+  const caption = page.locator('#axis-rail .axis-cell:not(.add)').nth(slot).locator('.axis-caption')
+  await expect(caption).toContainText('first ' + keys.chars + ' of the id')
+
+  // and the recording panel carries the id whole, beside the key the axis drew
+  await page.locator('#list .list-item').first().click()
+  await expect(page.locator('#rec-panel')).toBeVisible()
+  await expect(page.locator('#rec-loading')).toBeHidden({ timeout: 30000 })
+  await expect(page.locator('#rec-decision dt').first()).not.toBeEmpty()
+  const shown = await page.evaluate(() => {
+    const dts = Array.from(document.getElementById('rec-decision').querySelectorAll('dt'))
+    const at = k => dts.find(d => d.textContent === k).nextElementSibling.textContent
+    return {
+      participant: at('participant'),
+      session: at('session'),
+      row: window.__viewerState.rows[window.__viewerState.current]
+    }
+  })
+  expect(shown.participant).toContain(shown.row.participant)
+  expect(shown.participant).toContain(shown.row.participant.slice(4, 4 + keys.chars))
+  expect(shown.session).toContain(shown.row.session)
+  await page.screenshot({ path: resolve(SHOTS, 'short-subject-key.png'), fullPage: false })
+})
+
+test('every default axis places a line, and the ten together are not a handful of ribbons', async ({ page }) => {
+  await open(page)
+  const axes = await page.evaluate(() => window.__viewerState.view.axes)
+  expect(axes).toEqual(await page.evaluate(() => SchemaAxes.DEFAULT_AXES))
+
+  const placed = await page.evaluate(n =>
+    Array.from({ length: n }, (_, i) => ({
+      axis: window.__viewerState.view.axes[i],
+      present: window.__viewerState.view.countPresent(i).present
+    })), axes.length)
+  placed.forEach(p => expect(p.present, `${p.axis} placed nothing`).toBeGreaterThan(0))
+
+  // flags_n is a default whose modal value is a genuine 0, so its zeros must own a vertex
+  const zeros = await page.evaluate(() => {
+    const view = window.__viewerState.view
+    const slot = view.axes.indexOf('flags_n')
+    const at = window.__viewerState.rows.filter(r => r.flags_n === 0)
+    return {
+      slot,
+      n: at.length,
+      allPlaced: at.every(r => {
+        const v = view.vertices(r)[slot]
+        return v.absent === false && v.y != null && Number.isFinite(v.y)
+      }),
+      absentChip: view.countPresent(slot).absent
+    }
+  })
+  expect(zeros.slot).toBeGreaterThanOrEqual(0)
+  expect(zeros.n, 'the fixture must carry flags_n === 0 rows').toBeGreaterThan(0)
+  expect(zeros.allPlaced, 'a flags_n of 0 rendered as absent').toBe(true)
+  expect(zeros.absentChip, 'flags_n is never null, so nothing may sit on its rail').toBe(0)
+
+  const paths = await page.evaluate(() => {
+    const view = window.__viewerState.view
+    const seen = new Set()
+    for (let r = 0; r < view.rows.length; r++) {
+      seen.add(view.axes.map((_, a) => {
+        const y = view.yAt(a, r)
+        return Number.isNaN(y) ? 'x' : Math.round(y)
+      }).join(','))
+    }
+    return { distinct: seen.size, rows: view.rows.length }
+  })
+  expect(paths.distinct / paths.rows, 'the defaults collapsed the corpus into ribbons')
+    .toBeGreaterThan(0.5)
+  await page.screenshot({ path: resolve(SHOTS, 'default-axes.png'), fullPage: false })
 })

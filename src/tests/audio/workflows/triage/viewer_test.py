@@ -24,6 +24,7 @@ DECODE_JS = (VIEWER_DIR / "decode.js").read_text(encoding="utf-8")
 AXES_JS = (VIEWER_DIR / "axes.js").read_text(encoding="utf-8")
 FACETS_JS = (VIEWER_DIR / "facets.js").read_text(encoding="utf-8")
 JS_TESTS = Path(__file__).parent / "viewer"
+SPEC_DIR = Path(__file__).resolve().parents[5] / "specs" / "20260922-compact-recording-vectors"
 
 
 def _js_array(source: str, name: str) -> list[str]:
@@ -226,6 +227,26 @@ class TestTheAxisDefaultsAreTheOnesTheSpecDerives:
         for name in _js_array(AXES_JS, "DEFAULT_AXES"):
             base = name.split(".")[0]
             assert base in written, f"{name} is not a column recording_vectors.py writes"
+
+    def test_every_default_is_a_row_of_the_spec_table(self) -> None:
+        """The defaults are a measured claim, so the measurement must name each one."""
+        views = (SPEC_DIR / "views.md").read_text(encoding="utf-8")
+        table = views.split("### The seven, and what each beat", 1)[1].split("###", 1)[0]
+        for name in _js_array(AXES_JS, "DEFAULT_AXES"):
+            assert f"`{name}`" in table, f"{name} is a default but the spec's table does not rank it"
+
+    def test_the_short_identity_key_is_measured_in_the_spec(self) -> None:
+        """A key that shortens an id is only safe at a length something measured."""
+        views = (SPEC_DIR / "views.md").read_text(encoding="utf-8")
+        chars = int(_js_number(AXES_JS, "KEY_CHARS"))
+        assert "## The subject axis draws a key, not the id" in views
+        assert f"| **{chars} — shipped** |" in views, f"the collision table does not mark {chars} as shipped"
+        assert (SPEC_DIR / "axis-discrimination.py").exists()
+
+    def test_only_a_bids_id_column_declares_a_short_key(self) -> None:
+        """Shortening anything else would hide a value the reader cannot recover."""
+        declared = dict(re.findall(r"name: '(?P<name>[a-z_]+)'[^}]*?shortKey: '(?P<key>[a-z]+-)'", AXES_JS))
+        assert declared == {"participant": "sub-", "session": "ses-"}
 
     def test_the_corpus_read_never_names_a_binary_column(self) -> None:
         """First paint must not pay for the blocks; the block list is the app's, not the axes'."""
