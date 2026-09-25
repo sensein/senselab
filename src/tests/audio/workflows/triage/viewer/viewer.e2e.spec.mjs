@@ -238,6 +238,26 @@ test('every default axis places a line, and the ten together are not a handful o
     })), axes.length)
   placed.forEach(p => expect(p.present, `${p.axis} placed nothing`).toBeGreaterThan(0))
 
+  // flags_n is a default whose modal value is a genuine 0, so its zeros must own a vertex
+  const zeros = await page.evaluate(() => {
+    const view = window.__viewerState.view
+    const slot = view.axes.indexOf('flags_n')
+    const at = window.__viewerState.rows.filter(r => r.flags_n === 0)
+    return {
+      slot,
+      n: at.length,
+      allPlaced: at.every(r => {
+        const v = view.vertices(r)[slot]
+        return v.absent === false && v.y != null && Number.isFinite(v.y)
+      }),
+      absentChip: view.countPresent(slot).absent
+    }
+  })
+  expect(zeros.slot).toBeGreaterThanOrEqual(0)
+  expect(zeros.n, 'the fixture must carry flags_n === 0 rows').toBeGreaterThan(0)
+  expect(zeros.allPlaced, 'a flags_n of 0 rendered as absent').toBe(true)
+  expect(zeros.absentChip, 'flags_n is never null, so nothing may sit on its rail').toBe(0)
+
   const paths = await page.evaluate(() => {
     const view = window.__viewerState.view
     const seen = new Set()
