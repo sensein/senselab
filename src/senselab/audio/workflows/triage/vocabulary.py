@@ -23,9 +23,10 @@ GRAPH_ORDER = (
     "VOICE",
     "QUALITY",
     "REDACT",
+    "REVIEW",
     "VERDICT",
 )
-"""The nodes the runner drives, in the order it drives them. VERDICT folds the nine before it."""
+"""The nodes the runner drives, in the order it drives them. VERDICT folds the ten before it."""
 
 QUALITY = "QUALITY"
 """The terminal node every recording reaches, whatever routed. A graph edge, never a branch."""
