@@ -1887,16 +1887,25 @@ function buildWhy(stem,card){
       out.push('<p class="note">It flagged a transcript no detector read. That is a reading about '
         +'the scan gate rather than about the detectors, and it is the only check on that gate.</p>');
     out.push(reached);
+    if(llm.proposal_redact_n)
+      out.push('<p class="note">It would remove '+esc(llm.proposal_redact_n)
+        +' the detectors left in place.</p>');
     if(llm.proposal_release_n)
       out.push('<p class="note">It would stop removing '+esc(llm.proposal_release_n)
         +' of what is currently removed.</p>');
-    if(llm.speakers==='more_than_one')
-      out.push('<p class="note">It reads the words as showing more than one person speaking in '
-        +'this recording. A reading of the transcript, not of the audio.</p>');
   }else{
     out.push('<div class="warn"><b>No annotation was recorded.</b> REVIEW left no reviewer '
       +'measurement, so nothing is known about whether a review happened.</div>');
   }
+  /* Speakers is a third question, answered independently of the two about pii. It used to be
+     rendered only inside the flagged branch, so a clean reading that had noticed a second voice
+     said nothing about it — which is the one case the note exists for. */
+  if(llm.speakers==='more_than_one')
+    out.push('<p class="note"><b>It reads the words as showing more than one person speaking</b> in '
+      +'this recording. A reading of the transcript, not of the audio.</p>');
+  else if(llm.speakers==='unclear')
+    out.push('<p class="note">It could not tell from the words whether more than one person '
+      +'speaks here.</p>');
 
   /* gates: evaluated, and declared-but-never-evaluated */
   const evaluated=r.g||[], profile=P(r.b)||{bounds:{},layers:{}};
