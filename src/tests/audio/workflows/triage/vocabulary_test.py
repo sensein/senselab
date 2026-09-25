@@ -134,9 +134,7 @@ def _with_redact(redact: Outcome, *, speech: bool | None = None, speech_route: s
     )
 
 
-def _without_redact(
-    evidence: RedactionEvidence, *, speech: RunState, speech_route: str = ROUTED
-) -> FileVerdict:
+def _without_redact(evidence: RedactionEvidence, *, speech: RunState, speech_route: str = ROUTED) -> FileVerdict:
     """A fold REDACT left no verdict on, over one state of the redaction evidence.
 
     Args:
