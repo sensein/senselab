@@ -2017,8 +2017,8 @@ _DOCUMENT = """<!doctype html>
 <dt>o / d</dt><dd>release this recording without / with redaction</dd>
 <dt>1 &ndash; 4</dt><dd>judge the selected finding</dd>
 <dt>Esc</dt><dd>close a panel</dd>
-</dl><p class="note">Movement follows the filters, and the card it lands on is what the mark keys
-act on.</p></details>
+</dl><p class="note">Movement follows the filters, and the card it lands on is what the row-mark
+and release keys act on.</p></details>
 <input type="search" id="q" placeholder="search transcripts, tasks, ids">
 <fieldset><legend>recording</legend>
 <select id="fired"><option value="any">redaction fired or not</option>
