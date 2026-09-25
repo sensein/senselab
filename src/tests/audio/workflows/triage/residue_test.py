@@ -124,9 +124,32 @@ class TestAVocalTaskIsItsSoundAndItsDeclaredWords:
         assert not _scanned(text, family, rule)
 
     def test_a_disclosure_during_a_vocal_task_is_the_residue(self, rule: ResidueRule) -> None:
-        """Speech the task did not ask for is scanned; a vowel-and-glide word like "my" may fall away."""
+        """Speech the task did not ask for is scanned, all of it."""
         residue = _residue("Hey. Hey. My name is Alice Smith. Hey.", "loudness", rule)
-        assert residue[-4:] == ["name", "is", "Alice", "Smith."]
+        assert residue == ["My", "name", "is", "Alice", "Smith."]
+
+    @pytest.mark.parametrize("family", ["prolonged-vowel", "loudness"])
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("Amy", ["Amy"]),
+            ("aaah my name is Emma aaah", ["my", "name", "is", "Emma"]),
+            ("Mia", ["Mia"]),
+            ("May", ["May"]),
+            ("Hawaii", ["Hawaii"]),
+        ],
+    )
+    def test_a_name_spelled_from_vowels_and_glides_is_the_residue(
+        self, family: str, text: str, expected: list[str], rule: ResidueRule
+    ) -> None:
+        """A vowel-and-glide word is a word, not the task's sound."""
+        assert _residue(text, family, rule) == expected
+
+    @pytest.mark.parametrize("family", ["prolonged-vowel", "loudness"])
+    @pytest.mark.parametrize("text", ["aaaah", "ahh-ahh", "mmm", "hmm", "eee", "ooh", "uhhh"])
+    def test_a_vocalisation_run_is_not_the_residue(self, family: str, text: str, rule: ResidueRule) -> None:
+        """One vowel repeated, or a hum, is the production itself."""
+        assert _residue(text, family, rule) == []
 
 
 class TestAReadTaskIsAlignedToItsStimulus:
