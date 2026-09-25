@@ -12,7 +12,8 @@ import { existsSync } from 'node:fs'
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = resolve(here, '../../../../../..')
 const PAGE = resolve(repo, 'src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html')
-const PARQUET = resolve(repo, 'artifacts/viewer_e2e/recording_vectors.parquet')
+const PARQUET = resolve(repo, 'artifacts/viewer_e2e/facets_fixture.parquet')
+const ROWS = 2400
 const SHOTS = resolve(repo, 'artifacts/viewer_e2e')
 
 const GATE_AXIS = 'gate_train_min_s'
@@ -20,7 +21,10 @@ const GATE_SLOT = 3
 
 /** Open the page and load the fixture, leaving the corpus painted. */
 async function open (page) {
-  expect(existsSync(PARQUET), `fixture missing: ${PARQUET} — run make_fixture first`).toBe(true)
+  expect(
+    existsSync(PARQUET),
+    `fixture missing: ${PARQUET} - run "uv run python scripts/triage_viewer_fixture.py --out artifacts/viewer_e2e"`
+  ).toBe(true)
   const problems = []
   page.on('pageerror', e => problems.push(String(e)))
   page.on('requestfailed', r => problems.push('requestfailed ' + r.url()))
@@ -35,10 +39,10 @@ test('the page loads the parquet from disk and reports what it read', async ({ p
   const problems = await open(page)
   await expect(page.locator('#status')).not.toHaveClass(/bad/)
   const info = await page.locator('#file-info').innerText()
-  expect(info).toContain('240 rows')
+  expect(info).toContain(ROWS.toLocaleString('en-US') + ' rows')
   expect(info).toContain('schema_version 5')
   const rows = await page.evaluate(() => window.__viewerState.rows.length)
-  expect(rows).toBe(240)
+  expect(rows).toBe(ROWS)
   expect(problems, 'the page raised no error and fetched nothing').toEqual([])
   await page.screenshot({ path: resolve(SHOTS, 'loaded.png'), fullPage: false })
 })
@@ -87,7 +91,15 @@ test('a gate reading takes an axis and its bound is drawn as a reference line', 
   // one bound governs the whole fixture, and it is the configured 1.0 s
   expect(drawn.bounds).toHaveLength(1)
   expect(drawn.bounds[0].bound).toBe(1)
-  expect(drawn.bounds[0].n).toBe(240)
+  // Every recording the gate was applied to shares the one bound, whatever the fixture's size, and
+  // the count is over the bound column rather than the reading: an UNDETERMINED gate carries a
+  // bound and no reading, and it is still governed by that bound.
+  const governed = await page.evaluate(
+    gate => window.__viewerState.rows.filter(r => r[gate + '_bound'] != null).length,
+    GATE_AXIS
+  )
+  expect(governed).toBeGreaterThan(0)
+  expect(drawn.bounds[0].n).toBe(governed)
 
   // the bound sits inside the band, so the reference line is on screen rather than clipped away
   const frac = await page.evaluate(
@@ -125,17 +137,19 @@ test('a genuine zero reading is placed on the band and only a null is absent', a
     return { zeros, nulls, counts, zerosPlaced, nullsAbsent, atZero: SchemaAxes.position(view.summaries[slot], 0) }
   }, { slot: GATE_SLOT, gate: GATE_AXIS })
 
-  expect(rail.zeros).toBe(80)
-  expect(rail.nulls).toBe(80)
-  expect(rail.counts.present).toBe(160)
-  expect(rail.counts.absent).toBe(80)
+  // The numbers are the fixture's; the properties are the page's. Both zeros and nulls must occur,
+  // or the test would pass over a column that exercises neither case.
+  expect(rail.zeros).toBeGreaterThan(0)
+  expect(rail.nulls).toBeGreaterThan(0)
+  expect(rail.counts.present).toBe(ROWS - rail.nulls)
+  expect(rail.counts.absent).toBe(rail.nulls)
   expect(rail.zerosPlaced, 'a 0.0 reading rendered as absent').toBe(true)
   expect(rail.nullsAbsent, 'a null reading rendered as a value').toBe(true)
   expect(rail.atZero).not.toBeNull()
 
   // and the rail chip reports exactly the nulls, not the zeros
   const chip = page.locator('#axis-rail .axis-cell:not(.add)').nth(GATE_SLOT).locator('button.chip.abs')
-  await expect(chip).toHaveText('absent 80')
+  await expect(chip).toHaveText(`absent ${rail.nulls}`)
 })
 
 test('selecting a line opens that recording', async ({ page }) => {

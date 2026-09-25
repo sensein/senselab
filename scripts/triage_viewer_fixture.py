@@ -9,6 +9,11 @@ No byte of it comes from a recording: there is no transcript, no PII extent and 
 The distributions are chosen so the facet panel has something to separate -- a long-tailed task
 vocabulary, a three-term verdict, gates that pass, fail and stay undetermined, and columns whose
 nulls are a large share of the corpus. The counts a test asserts are printed as JSON beside it.
+
+**Every default axis must be populated here, or the page has a column it cannot paint.** The one
+file serves both browser specs: ``facets.e2e`` over the panel and ``viewer.e2e`` over the rail and
+the recording panel. They asserted against two fixtures until 2026-09-25, and the second one's
+writer did not exist, so six of its checks could not run from a clean tree at all.
 """
 
 from __future__ import annotations
@@ -24,7 +29,14 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from senselab.audio.workflows.triage.recording_vectors import SCHEMA_VERSION, to_table
+from senselab.audio.workflows.triage.recording_vectors import (
+    SCHEMA_VERSION,
+    SPAN_ROWS,
+    SPANS_LAYOUT,
+    encode_records,
+    quantise_time,
+    to_table,
+)
 from senselab.audio.workflows.triage.vocabulary import (
     NO_TRANSCRIPT,
     NOTHING_BEYOND_STIMULUS,
@@ -124,6 +136,9 @@ def rows(seed: int = SEED, participants: int = PARTICIPANTS) -> list[dict[str, o
                 "conformance_voice": None if rng.random() < 0.64 else _pick(rng, CONFORMANCE),
                 "conformance_quality": _pick(rng, [("undetermined", 85), ("true", 15)]),
                 "duration_s": round(rng.lognormvariate(2.0, 0.9), 3),
+                # A default axis, so it must be populated or the page has a column it cannot paint.
+                # Null on the share of recordings enhancement left nothing to compare against.
+                "enhanced_over_residual_rms_db": None if rng.random() < 0.12 else round(rng.gauss(9.0, 4.5), 3),
                 "flags_n": 0 if verdict == "pass" else rng.randint(1, 4),
                 "pii_findings_n": None if rng.random() < 0.30 else rng.choice([0, 0, 0, 1, 2, 5]),
                 "schema_version": SCHEMA_VERSION,
@@ -134,6 +149,7 @@ def rows(seed: int = SEED, participants: int = PARTICIPANTS) -> list[dict[str, o
             row["flag_nodes"] = [] if verdict == "pass" else rng.sample(FLAG_NODES, rng.randint(1, 2))
 
             failed: list[str] = []
+            undetermined: list[str] = []
             for gate in GATE_NAMES:
                 applied = rng.random() < 0.72
                 if not applied:
@@ -141,12 +157,19 @@ def rows(seed: int = SEED, participants: int = PARTICIPANTS) -> list[dict[str, o
                 bound = {"train_min_s": 1.0, "coverage_min": 0.5, "dominant_speaker_share_min": 0.8, "items_min": 3.0}[
                     gate
                 ]
+                row[f"gate_{gate}_bound"] = bound
+                # An applied gate whose reading nobody took answers UNDETERMINED: the bound stands,
+                # the reading is absent, and the outcome is neither pass nor fail. The page must
+                # carry all three terms, so the fixture has to produce all three.
+                if rng.random() < 0.18:
+                    row[f"gate_{gate}_passed"] = "undetermined"
+                    undetermined.append(gate)
+                    continue
                 # A third of the applied readings are a genuine 0.0, which is the value the page
                 # must place on the band rather than on the absent rail.
                 reading = 0.0 if rng.random() < 0.33 else round(rng.uniform(0.0, 2.0 * bound), 4)
                 passed = "true" if reading >= bound else "false"
                 row[f"gate_{gate}"] = reading
-                row[f"gate_{gate}_bound"] = bound
                 row[f"gate_{gate}_passed"] = passed
                 if passed == "false":
                     failed.append(gate)
@@ -156,11 +179,36 @@ def rows(seed: int = SEED, participants: int = PARTICIPANTS) -> list[dict[str, o
             row["gate_applied_n"] = sum(1 for g in GATE_NAMES if f"gate_{g}_passed" in row)
             row["gate_flagging_n"] = 0
             row["gate_failed_n"] = len(failed)
-            row["gate_undetermined_n"] = 0
+            row["gate_undetermined_n"] = len(undetermined)
             row["gate_failed_names"] = sorted(failed)
             row["gate_flagged_names"] = []
+            row["spans"], row["spans_unrowed_n"] = _spans(rng, row["duration_s"])
             out.append(row)
     return out
+
+
+def _spans(rng: random.Random, duration_s: float) -> tuple[bytes, int]:
+    """A synthetic span block, so the recording panel has lanes to draw and hits to report.
+
+    The block is written through the producer's own encoder against the producer's own row codes,
+    so it decodes under the shipped reader or it does not decode at all. The extents are generated,
+    not measured: no byte of this comes from a recording.
+
+    Args:
+        rng: The generator's source of randomness.
+        duration_s: The recording's length, which times quantise against.
+
+    Returns:
+        The packed block and how many spans carry no row code.
+    """
+    records: list[tuple[int, int, int]] = []
+    for row_index in range(len(SPAN_ROWS)):
+        for _ in range(rng.randint(1, 3)):
+            start = rng.uniform(0.0, max(0.1, duration_s * 0.9))
+            end = min(duration_s, start + rng.uniform(0.05, duration_s * 0.2))
+            records.append((row_index, quantise_time(start, duration_s), quantise_time(end, duration_s)))
+    records.sort(key=lambda record: (record[0], record[1]))
+    return encode_records(records, SPANS_LAYOUT), rng.choice([0, 0, 0, 1])
 
 
 def counts(built: list[dict[str, object]]) -> dict[str, object]:
