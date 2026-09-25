@@ -644,7 +644,13 @@ def _determined_store(tmp_path: Path) -> Path:
             "release_ground": None,
             "declared_family": "cinderella-story",
             "why": "folded the node verdicts",
-            "llm_redaction": {"status": "not_run", "iterations": 0, "model_id": "", "flagged": [], "failure": "none"},
+            "llm_redaction": {
+                "status": "nothing_to_read",
+                "iterations": 0,
+                "model_id": "",
+                "flagged": [],
+                "failure": "none",
+            },
             "ran": {"REDACT": "completed", "SPEECH": "completed", "VOICE": "skipped"},
             "critical_absences": {},
             "reasons": [
@@ -692,7 +698,7 @@ def test_determination_records_who_decided_and_what_never_ran(tmp_path: Path) ->
     determination = row["d"]
     assert determination["redact"]["outcome"] == "fail"
     assert determination["redact"]["why"] == "pii survived"
-    assert determination["llm"]["status"] == "not_run"
+    assert determination["llm"]["status"] == "nothing_to_read"
     assert determination["ran"]["VOICE"] == "skipped"
     assert [gate["gate"] for gate in determination["gates"]["applied"]] == ["response_min_s"]
     assert set(determination["gates"]["bounds"]) == {"response_min_s", "verbatim_overlap_max", "echo_overlap_max"}
@@ -734,7 +740,7 @@ def test_pooled_determination_keeps_the_per_recording_gate_reading() -> None:
     determination = {
         "redact": {"outcome": "fail", "why": "pii survived"},
         "nodes": [{"node": "REDACT", "outcome": "fail", "why": "pii survived"}],
-        "llm": {"status": "not_run"},
+        "llm": {"status": "nothing_to_read"},
         "gates": {
             "applied": [
                 {
@@ -771,7 +777,7 @@ def test_pooled_determination_keeps_the_per_recording_gate_reading() -> None:
 def test_the_page_keeps_the_three_non_readings_apart() -> None:
     """Switched off, nothing to review, and could-not-load are three different silences."""
     assert "Switched off." in page._SCRIPT
-    assert "Nothing was marked for it to review." in page._SCRIPT
+    assert "There was no text to read." in page._SCRIPT
     assert "It tried and could not load." in page._SCRIPT
     assert "It reached no conclusion about this recording." in page._SCRIPT
 
@@ -798,7 +804,7 @@ def test_render_carries_the_determination_payload() -> None:
             d={
                 "redact": {"outcome": "fail", "why": "pii survived"},
                 "nodes": [{"node": "REDACT", "outcome": "fail", "why": "pii survived"}],
-                "llm": {"status": "not_run"},
+                "llm": {"status": "nothing_to_read"},
                 "gates": {"applied": [], "flagging": [], "bounds": {}, "layers": {}, "group": ""},
                 "ran": {"REDACT": "completed"},
                 "absences": [],
@@ -852,15 +858,17 @@ def test_the_page_separates_every_reviewer_state() -> None:
     assert "It ran and flagged nothing" in page._SCRIPT
     assert "It flagged " in page._SCRIPT
     assert "No annotation was recorded." in page._SCRIPT
-    assert page.LLM_STATES == ("disabled", "not_run", "absent", "clean", "flagged")
+    assert page.LLM_STATES == ("disabled", "nothing_to_read", "absent", "clean", "flagged")
     assert page.LLM_RAN == ("absent", "clean", "flagged")
 
 
-def test_not_run_now_means_the_detectors_marked_nothing() -> None:
-    """The short-circuit on a withheld recording is gone; the old wording would now be wrong."""
+def test_nothing_to_read_means_an_empty_transcript_and_the_old_sentence_is_gone() -> None:
+    """The reviewer no longer comes through the detectors, so its old sentence is false twice over."""
     assert "could not have run" not in page._SCRIPT
     assert "REDACT withholds before the reviewer is reached" not in page._SCRIPT
-    assert "the detectors found nothing, so there was no redacted text to read back" in page._SCRIPT
+    assert "the detectors found nothing, so there was no redacted text to read back" not in page._SCRIPT
+    assert "not_run" not in page.LLM_STATES
+    assert "transcript carries no words, so there was nothing to read back" in page._SCRIPT
 
 
 def test_a_clean_reading_beside_a_failure_is_named_a_disagreement() -> None:
@@ -1363,3 +1371,17 @@ def test_the_panel_names_all_three_stimulus_states_on_a_mark() -> None:
     """The finding panel must not leave "not asked" looking like "asked and no"."""
     assert "checked, not in the stimulus" in page._SCRIPT
     assert "no stimulus to check against" in page._SCRIPT
+
+
+def test_the_page_says_when_a_flag_lands_on_a_transcript_no_detector_read() -> None:
+    """The 13,810 the scan declined: a flag there is a reading about the gate, not the detectors."""
+    assert "declined" in page._SCRIPT
+    assert "It flagged a transcript no detector read." in page._SCRIPT
+    assert "the only check on that gate" in page._SCRIPT
+
+
+def test_the_page_reports_the_reviewers_other_two_readings() -> None:
+    """Over-redaction and a second speaker are separate judgments and are rendered separately."""
+    assert "would stop removing" in page._SCRIPT
+    assert "more than one person speaking in" in page._SCRIPT
+    assert "A reading of the transcript, not of the audio." in page._SCRIPT
