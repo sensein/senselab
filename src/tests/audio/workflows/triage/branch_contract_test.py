@@ -37,6 +37,7 @@ from senselab.audio.workflows.triage.nodes.gates import GROUP_LAYER, GateBounds,
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
     DECLINED,
+    NO_TRANSCRIPT,
     ROUTED,
     STORE_ASSERTIONS,
     TASK,
@@ -463,12 +464,18 @@ class TestTheRedactInterlockIsUntouched:
         """REDACT keeps its ``Outcome``; the split reached the branches and not it."""
         releasable = _fold(node_verdicts=[NodeVerdict("REDACT", Outcome.PASS, None, "scanned")])
         withheld = _fold(node_verdicts=[NodeVerdict("REDACT", Outcome.FAIL, None, "a finding survived")])
-        assert releasable.release is Release.RELEASABLE
+        assert releasable.release is Release.WITH_REDACTION
         assert withheld.release is Release.WITHHELD
 
     def test_redacts_absence_decides_nothing(self) -> None:
-        """REDACT runs only where a scan found something; VERDICT owns every other release state."""
-        assert _fold().release is not Release.NOT_ASSESSED
+        """REDACT runs only where a scan found something, so its silence is the ordinary case.
+
+        With no redaction evidence either way the fold names a controlled ground of its own rather
+        than reading REDACT's absence as a verdict.
+        """
+        folded = _fold()
+        assert folded.release_ground == NO_TRANSCRIPT
+        assert not any(reason.node == "REDACT" for reason in folded.reasons)
 
     def test_no_branch_report_can_move_the_release_axis(self) -> None:
         """A branch has no say in it, which is what keeps the interlock a REDACT question."""
@@ -477,7 +484,7 @@ class TestTheRedactInterlockIsUntouched:
             spans={"SPEECH": 1},
             node_verdicts=[NodeVerdict("REDACT", Outcome.PASS, None, "scanned")],
         )
-        assert folded.release is Release.RELEASABLE
+        assert folded.release is Release.WITH_REDACTION
 
     def test_redact_is_still_gated_on_pii_entities_not_on_speechs_report(self) -> None:
         """``run._speech_found_pii`` reads ``pii`` entities; nothing in this change touched it."""

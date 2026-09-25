@@ -1,4 +1,4 @@
-// Decoders for the binary blocks of recording_vectors.parquet, schema_version 1.
+// Decoders for the binary blocks of recording_vectors.parquet, schema_version 5.
 // Byte layouts and enumerations mirror senselab.audio.workflows.triage.recording_vectors;
 // specs/20260922-compact-recording-vectors/schema.md is the contract.
 //
@@ -10,7 +10,7 @@
 'use strict';
 
 var SchemaDecode = (function () {
-  var SCHEMA_VERSION = 4;
+  var SCHEMA_VERSION = 5;
   var TIME_SCALE = 65535;
   var TRACE_POINTS = 256;
   var UNKNOWN_CODE = 255;

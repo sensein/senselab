@@ -9,8 +9,9 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `4`; any
-change to a column or a byte layout bumps it and changes this file with it. The same number is in
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `5`; any
+change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
+changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
 reader can check it before decoding a byte.
 
@@ -22,6 +23,7 @@ What each bump added:
 | **2** | `release_ground` beside `release`, and with it the release vocabulary's fourth state, `nothing_to_redact` — a recording that needed no redaction is a determination, not an absence of one |
 | **3** | VERDICT's gates (§6), the multi-speaker instrument (§7), the enhanced/residual levels (§8), and four measurement names |
 | **4** | removed the three `coverage_min` gate columns; the `source_content_coverage` measurement column is unchanged. See `specs/20260924-recall-conformance-is-production/design.md` |
+| **5** | no column change: the `release` vocabulary now names which artefact may be handed on — `release_without_redaction` \| `release_with_redaction` \| `withheld` \| `not_assessed`. See `specs/20260924-which-artefact-is-releasable/design.md` |
 
 ---
 
@@ -81,15 +83,15 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `stem` | string | the BIDS stem, the run directory's name minus its `_YYYYmmdd-HHMMSS` suffix | never |
 | `run_dir` | string | the run directory, relative to the scan root | never |
 | `declared_family` | string | the declared task family, e.g. `story-recall-v2` | nothing was declared |
-| `release` | string | `releasable` \| `withheld` \| `nothing_to_redact` \| `not_assessed` | the fold wrote none |
-| `release_ground` | string | why the release axis reads as it does — one of the seven controlled grounds `vocabulary.py` declares: four behind `nothing_to_redact`, three behind `not_assessed` | **REDACT itself decided**, so the state stands on its own verdict and needs no ground |
+| `release` | string | `release_without_redaction` \| `release_with_redaction` \| `withheld` \| `not_assessed` | the fold wrote none |
+| `release_ground` | string | why the release axis reads as it does — one of the seven controlled grounds `vocabulary.py` declares: three behind `release_without_redaction`, four behind `not_assessed` | **REDACT itself decided**, so the state stands on its own verdict and needs no ground |
 | `grounds` | string | VERDICT's `discard_ground` | **nothing was discarded** — the common case |
 | `route_state` | string | e.g. `routed`, `declined` | the fold wrote none |
 | `duration_s` | double | seconds, the **source** recording | ADMIT's `recording` stream entity is absent |
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `4` | never |
+| `schema_version` | int32 | `5` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -293,7 +295,7 @@ The block is the five bytes `02 00 40 00 80`. Decoding: `0x4000 / 65535 × 4.0 =
 
 ## 6. The gates
 
-`schema_version` 4 carries every gate VERDICT resolved. A **gate** says what reading is good
+`schema_version` 5 carries every gate VERDICT resolved. A **gate** says what reading is good
 enough. Its bound resolves **family → group → default**, most specific first and key by key, so
 two rows of the same corpus can be judged against different bounds for the same gate — which is
 why the bound is stored per row rather than looked up from the config at read time.

@@ -7,6 +7,7 @@ what it *claims* is its conformance. ``node_verdicts`` now carries only the node
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import replace
 from typing import Sequence
 
@@ -14,7 +15,10 @@ from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     CRITICAL_ABSENCE,
     DECLINED,
+    NO_TRANSCRIPT,
     REDACTION_OWED,
+    RELEASE_UNKNOWN_GROUNDS,
+    RELEASE_WITHOUT_REDACTION_GROUNDS,
     ROUTED,
     SCAN_UNRECORDED,
     SPEECH_UNREAD,
@@ -36,6 +40,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Release,
     RunState,
     Triage,
+    _release_from,
     fold_file_verdict,
 )
 
@@ -787,21 +792,26 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
         )
         assert folded.release is not Release.NOT_ASSESSED
 
-    def test_a_recording_speech_never_ran_on_is_not_unassessed(self) -> None:
-        """No ASR exists, so by the owner's rule there is nothing redaction could act on."""
-        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED)
-        assert folded.release is not Release.NOT_ASSESSED
+    def test_a_recording_speech_never_ran_on_is_unassessed(self) -> None:
+        """Nothing read its lexical content, so the axis cannot say the original may be handed on.
 
-    def test_the_four_determined_states_name_the_same_state(self) -> None:
-        """One state, four grounds: a determination is not four different answers."""
-        determined = [
+        ``specs/20260924-which-artefact-is-releasable/design.md`` §3: the 2026-09-22 rule put this
+        row beside the three a reading cleared, on the premise that the axis described REDACT's
+        artifacts only. The axis now describes the original too, and that premise is void.
+        """
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED)
+        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release_ground == NO_TRANSCRIPT
+
+    def test_the_three_cleared_grounds_name_the_same_state(self) -> None:
+        """One state, three grounds: a reading that cleared the recording is not three answers."""
+        cleared = [
             _without_redact(RedactionEvidence(lexical_words_n=42, scanned=True), speech=RunState.COMPLETED),
             _without_redact(RedactionEvidence(lexical_words_n=9, scanned=False), speech=RunState.COMPLETED),
             _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED),
-            _without_redact(RedactionEvidence(), speech=RunState.SKIPPED),
         ]
-        assert {folded.release for folded in determined} == {Release.NOTHING_TO_REDACT}
-        assert len({folded.release_ground for folded in determined}) == 4
+        assert {folded.release for folded in cleared} == {Release.WITHOUT_REDACTION}
+        assert {folded.release_ground for folded in cleared} == set(RELEASE_WITHOUT_REDACTION_GROUNDS)
 
     def test_a_speech_that_errored_is_unassessed(self) -> None:
         """The one genuine unknown: nothing can say whether the recording carried anything."""
@@ -825,19 +835,31 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
         assert folded.release is Release.NOT_ASSESSED
         assert folded.release_ground == SCAN_UNRECORDED
 
-    def test_nothing_to_redact_is_not_releasable(self) -> None:
-        """There is no artifact, so nothing was cleared; the old warning survives the new state."""
+    def test_a_cleared_recording_does_not_read_as_a_redacted_one(self) -> None:
+        """Nothing was redacted, so there is no redacted artifact for the axis to be about."""
         folded = _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED)
-        assert folded.release is not Release.RELEASABLE
+        assert folded.release is not Release.WITH_REDACTION
 
     def test_a_redact_verdict_still_decides_where_one_stands(self) -> None:
         """Evidence never overrides the node that actually ran."""
-        assert _with_redact(Outcome.PASS).release is Release.RELEASABLE
+        assert _with_redact(Outcome.PASS).release is Release.WITH_REDACTION
         assert _with_redact(Outcome.PASS).release_ground is None
 
 
-class TestTheReleaseAxis:
-    """Only a REDACT pass clears an artifact, and a determination is not a clearance."""
+class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
+    """Four values over one question: which artefact of this recording may I hand on?
+
+    ``specs/20260924-which-artefact-is-releasable/design.md``.
+    """
+
+    def test_the_axis_offers_exactly_the_four_answers(self) -> None:
+        """Total and exclusive: the original, only the redacted copy, neither, or unknown."""
+        assert {member.value for member in Release} == {
+            "release_without_redaction",
+            "release_with_redaction",
+            "withheld",
+            "not_assessed",
+        }
 
     def test_a_redact_flag_withholds(self) -> None:
         """Unresolved is not cleared."""
@@ -848,9 +870,26 @@ class TestTheReleaseAxis:
         """A finding survived verification."""
         assert _with_redact(Outcome.FAIL).release is Release.WITHHELD
 
-    def test_a_redact_pass_is_releasable(self) -> None:
-        """For its artifacts only; never for the store."""
-        assert _with_redact(Outcome.PASS).release is Release.RELEASABLE
+    def test_a_redact_pass_releases_only_the_redacted_artefact(self) -> None:
+        """REDACT passes on having removed findings the original still carries."""
+        assert _with_redact(Outcome.PASS).release is Release.WITH_REDACTION
+
+    def test_only_a_reading_that_ran_releases_the_original(self) -> None:
+        """Every ground behind the permissive value is one where something read the recording."""
+        assert NO_TRANSCRIPT not in RELEASE_WITHOUT_REDACTION_GROUNDS
+        assert NO_TRANSCRIPT in RELEASE_UNKNOWN_GROUNDS
+
+    def test_no_ground_stands_behind_two_states(self) -> None:
+        """A reader must be able to go from the ground back to the state without the table."""
+        assert not set(RELEASE_WITHOUT_REDACTION_GROUNDS) & set(RELEASE_UNKNOWN_GROUNDS)
+
+    def test_the_fold_reads_no_reviewer_record(self) -> None:
+        """A reviewer's reading is never the act; nothing but the store's evidence reaches the axis.
+
+        ``design.md`` §5. ``_release_from``'s parameters are the whole input to the axis.
+        """
+        parameters = set(inspect.signature(_release_from).parameters)
+        assert parameters == {"node_verdicts", "evidence", "ran"}
 
 
 class TestARedactNonPassIsVisibleWithoutFlippingTriage:

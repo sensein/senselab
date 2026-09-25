@@ -5,6 +5,11 @@ same 11,701 free-response recordings. Counts only; no detected string appears he
 
 ## Totals
 
+> **The release values below are the pre-2026-09-24 vocabulary**, which is what the run they
+> record used. `releasable` is now `release_with_redaction`; `nothing_to_redact` is now
+> `release_without_redaction` on its last three grounds and `not_assessed` on `NO_TRANSCRIPT`.
+> See `specs/20260924-which-artefact-is-releasable/design.md`.
+
 | | r2 | r3 | |
 | --- | ---: | ---: | ---: |
 | recordings | 11,701 | 11,701 | — |

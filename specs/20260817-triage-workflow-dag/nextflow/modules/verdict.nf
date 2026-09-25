@@ -4,7 +4,7 @@
  * `verdict.md`: two axes that never collapse into one.
  *
  *   triage   pass | flag | fail          does this recording need a human, and is it measurable
- *   release  releasable | withheld | not_assessed
+ *   release  release_without_redaction | release_with_redaction | withheld | not_assessed
  *
  * A BRANCH FAIL IS NOT A FILE FAIL. This is the rule everything else depends on, and it is why no
  * branch fail in this pipeline is ever an exit status. A cough recording has no speech, so SPEECH

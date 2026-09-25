@@ -81,6 +81,11 @@ are manifest lines, not run directories — the tree holds exactly one run direc
 | `m_sweep_extent` | 62,483 | the rarest measurement in the corpus, 5 readings |
 
 Verdicts: 51,698 `pass`, 10,761 `flag`, 29 `discard`.
+> **The release values below are the pre-2026-09-24 vocabulary**, which is what the run they
+> record used. `releasable` is now `release_with_redaction`; `nothing_to_redact` is now
+> `release_without_redaction` on its last three grounds and `not_assessed` on `NO_TRANSCRIPT`.
+> See `specs/20260924-which-artefact-is-releasable/design.md`.
+
 Release: 44,526 `not_assessed`, 13,555 `releasable`, 4,407 `withheld`.
 
 ## The reductions, and why each is what it is
