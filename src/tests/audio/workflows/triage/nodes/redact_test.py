@@ -213,7 +213,12 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
         scan_id = store.entity(
             prov_type="measurement",
             extent=None,
-            attributes={"name": "pii_scan", "scanned_by": list(scanned_by), "failed": list(scan_failed)},
+            attributes={
+                "name": "pii_scan",
+                "scanned_by": list(scanned_by),
+                "failed": list(scan_failed),
+                "residue_word_ids": list(word_ids),
+            },
         )
         store.was_generated_by(scan_id, pii_act)
 

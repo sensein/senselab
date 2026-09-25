@@ -51,7 +51,7 @@ def _config(tmp_path: Path, text: str = LLM_ON) -> Any:  # noqa: ANN401 — Tria
 
 
 def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> Path:
-    """One finished run in miniature: a store with consensus words, and the streams beside it."""
+    """One finished run in miniature: a store with consensus words, SPEECH's scan of them, and the streams."""
     run_root = root / "sub-a_task-free-speech_20260924-000000"
     streams = run_root / "run" / "streams"
     streams.mkdir(parents=True, exist_ok=True)
@@ -89,6 +89,20 @@ def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> 
         },
     )
     store.was_generated_by(transcript, activity)
+    scan = store.activity(node="SPEECH", step="pii", parameters={})
+    store.was_associated_with(scan, software)
+    scanned = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={
+            "name": "pii_scan",
+            "signal": "consensus_transcript",
+            "scanned_by": ["rules"],
+            "failed": [],
+            "residue_word_ids": word_ids,
+        },
+    )
+    store.was_generated_by(scanned, scan)
     store.write_jsonl(run_root / "run" / "store.jsonl")
     return run_root
 

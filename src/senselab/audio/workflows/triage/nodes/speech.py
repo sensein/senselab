@@ -109,6 +109,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     read_ddk,
     syllable_detail,
 )
+from senselab.audio.workflows.triage.residue import residue_rule, task_residue
 from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.stimulus import (
     LexicalWord,
@@ -968,6 +969,22 @@ def stimulus_tokens(hint: AudioHints | None) -> tuple[str, ...] | None:
     return tuple(tokens) or None
 
 
+def prompt_tokens(hint: AudioHints | None) -> list[str]:
+    """The recording's own declared prompts, verbatim, one entry per whitespace-separated token.
+
+    Args:
+        hint: What the recording was declared to contain.
+
+    Returns:
+        The tokens in declared order; empty when the recording declares no prompt text.
+    """
+    if hint is None:
+        return []
+    return [
+        token for prompt in hint.expected_speech if getattr(prompt, "text", None) for token in str(prompt.text).split()
+    ]
+
+
 def in_stimulus(surface: str, haystack: Sequence[str] | None, near: NearMatch) -> bool | None:
     """Whether a detected surface is text the participant was handed rather than text they chose.
 
@@ -1008,37 +1025,6 @@ def declared_content(hint: AudioHints | None, task_family: str | None) -> tuple[
         tokens.append(normalise_token(carrier))
     tokens.extend(key for key in (normalise_token(name) for name in expected_names(task_family)) if key)
     return tuple(tokens) or None
-
-
-def invites_disclosure(task_family: str | None) -> bool:
-    """Whether the instruction itself asks the participant to speak freely.
-
-    Args:
-        task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
-
-    Returns:
-        True for a family whose expected pattern is a free response.
-    """
-    expectation = SPEECH_EXPECTATIONS.get(str(task_family))
-    return expectation is not None and expectation.pattern is Pattern.FREE_RESPONSE
-
-
-def words_outside_stimulus(texts: Iterable[str], haystack: Sequence[str] | None, near: NearMatch) -> list[str]:
-    """The transcript words the task did not ask for.
-
-    Args:
-        texts: The lexical words' texts, bracketed tokens already excluded.
-        haystack: :func:`stimulus_tokens`' result, or None when the recording declares no prompt.
-        near: How far a transcript token may be from a stimulus token and still be that token.
-
-    Returns:
-        The words that are not in the declared prompts, in order, with repeats kept; every word when
-        the recording declares no prompt.
-    """
-    present = [key for key in (normalise_token(str(text)) for text in texts) if key]
-    if haystack is None:
-        return present
-    return [word for word in present if near.run_offset(haystack, [word]) is None]
 
 
 def _consensus_id(store: ProvStore) -> str | None:
@@ -2326,15 +2312,21 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     span_ids = propose_spans(store, corroborate, software, run_proposals)
     view.extend(span_ids)
 
-    # Step 7 — PII: one scan over the consensus transcript and each recognizer's own transcript,
-    # each carrying its lexical tokens only.
+    # Step 7 — PII: one scan over the lexical residue of the consensus transcript and of each
+    # recognizer's own transcript: the words that are neither non-lexical nor what the task asked for.
+    # See specs/20260925-lexical-only-pii-pathway/design.md.
+    near = near_match(config)
+    declared_tokens = declared_content(hint, declared_family)
+    lexical_texts = [word_text(word) for word in lexical]
+    residue = task_residue(lexical_texts, declared_family, prompt_tokens(hint), residue_rule(config))
+    residue_positions = {lexical_index[position] for position in residue.positions}
     haystacks: list[tuple[str, str, list[int], list[str]]] = []
     for name in ("consensus", *source_names):
-        contributing = (
-            list(range(len(words)))
-            if name == "consensus"
-            else [position for position, word in enumerate(words) if name in word.attributes["readings"]]
-        )
+        contributing = [
+            position
+            for position, word in enumerate(words)
+            if position in residue_positions and (name == "consensus" or name in word.attributes["readings"])
+        ]
         kept, scanned_tokens = _scan_tokens(words, contributing, name)
         haystacks.append((name, " ".join(scanned_tokens), kept, scanned_tokens))
     pii_act = store.activity(
@@ -2344,16 +2336,17 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     store.used(pii_act, consensus.id)
     for name in source_names:
         store.used(pii_act, hypotheses[name].id)
-    # The scan runs only where the participant said something the task did not ask for, and the
-    # mark it writes reads against the same declaration.
-    # See specs/20260919-pii-against-the-stimulus/design.md and
-    # specs/20260923-pii-near-match-and-expected-names/near-match-and-expected-names.md.
-    near = near_match(config)
-    declared_tokens = declared_content(hint, declared_family)
-    novel_words = words_outside_stimulus((word_text(word) for word in lexical), declared_tokens, near)
-    open_response = invites_disclosure(declared_family)
+    scanning = bool(residue_positions) and residue.content
+    residue_attributes = {
+        "residue_method": residue.method,
+        "residue_word_ids": [words[position].id for position in sorted(residue_positions)] if scanning else [],
+        "residue_words_n": len(residue_positions),
+        "residue_content": residue.content,
+        "non_lexical_words_n": residue.non_lexical_n,
+        "task_words_n": residue.task_n,
+    }
     scans: list[PiiScan] = []
-    if novel_words or open_response:
+    if scanning:
         raw_scans = scan_for_pii([text for _, text, _, _ in haystacks])
         scans = raw_scans if isinstance(raw_scans, list) else [raw_scans]
     else:
@@ -2366,14 +2359,15 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                 signal="consensus",
                 attributes={
                     "scanned": False,
-                    "why": "every lexical word is in the task's own stimulus or carrier; all were asked for",
+                    "why": "no lexical word outside the task's own content, or none but closed-class words",
                     "lexical_words_n": len(lexical),
                     "task_family": declared_family,
+                    **residue_attributes,
                 },
                 derived_from=(consensus.id,),
             )
         )
-        notes.append("pii not scanned: the recording produced no word the task did not ask for")
+        notes.append("pii not scanned: the recording carries no lexical residue")
     failures: dict[str, str] = {}
     scanned_by: set[str] = set()
     findings: list[dict[str, Any]] = []
@@ -2446,6 +2440,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "scanned_by": sorted(scanned_by),
             "failed": sorted(failures),
             "missing": missing,
+            **residue_attributes,
         },
     )
     store.was_generated_by(scan_id, pii_act)

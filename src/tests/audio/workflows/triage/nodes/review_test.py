@@ -1,12 +1,6 @@
-"""REVIEW: the reviewer reads every transcript that could be released, however it got there.
+"""REVIEW: the reviewer reads the lexical residue the detectors read, and what it concludes stays a reading.
 
-The population the reviewer exists for is the one the detectors never saw. 13,810 of the r3 corpus
-carry lexical speech and were never scanned, because SPEECH declined the scan where every lexical
-word sits in the task's own stimulus; a further 11,526 were scanned and marked nothing. A reviewer
-reached only through REDACT can second-guess neither. These pin that REVIEW is reached from the
-transcript rather than from the scan, and that what it concludes stays a reading.
-
-``specs/20260924-reviewer-over-every-transcript/design.md`` holds the reasoning.
+``specs/20260925-lexical-only-pii-pathway/design.md`` holds the reasoning.
 """
 
 from __future__ import annotations
@@ -49,11 +43,14 @@ def _seed(
     redacted: Sequence[tuple[float, float]] = (),
     redact_outcome: Outcome | None = None,
     findings_n: int = 0,
+    residue: Sequence[int] | None = None,
 ) -> None:
     """The store SPEECH and REDACT leave behind, in the four shapes REVIEW must tell apart.
 
     ``scan`` is ``"ran"``, ``"declined"`` or None for a store carrying no scan measurement at all.
-    ``redacted`` are the planned extents REDACT left as ``redaction`` spans.
+    ``redacted`` are the planned extents REDACT left as ``redaction`` spans. ``residue`` are the
+    positions of the words SPEECH's scan read; every word by default where the scan ran, none where
+    it was declined.
     """
     software = store.agent(agent_type="software", version="senselab test-seed")
     consensus = store.activity(node="PREPROCESS", step="consensus", parameters={})
@@ -79,7 +76,13 @@ def _seed(
     )
     store.was_generated_by(transcript, consensus)
     if scan is not None:
-        attributes: dict[str, Any] = {"name": PII_SCAN, "signal": "consensus_transcript", "findings_n": findings_n}
+        read = (range(len(words)) if scan == "ran" else ()) if residue is None else residue
+        attributes: dict[str, Any] = {
+            "name": PII_SCAN,
+            "signal": "consensus_transcript",
+            "findings_n": findings_n,
+            "residue_word_ids": [word_ids[position] for position in read],
+        }
         if scan == "declined":
             attributes[SCANNED] = False
         scan_id = store.entity(prov_type="measurement", extent=None, attributes=attributes)
@@ -173,30 +176,34 @@ def _annotation(store: ProvStore) -> dict[str, Any]:
     return dict(found[0].attributes)
 
 
-class TestTheReviewerIsReachedFromTheTranscriptNotFromTheScan:
-    """The 13,810 were never scanned; a reviewer behind the scan gate cannot check the gate."""
+class TestTheReviewerReadsTheResidue:
+    """The reviewer reads exactly the string SPEECH's scan read, and nothing where it read nothing."""
 
-    def test_a_declined_scan_is_still_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """SPEECH declined because every word is in the stimulus; near-match widened that twice."""
+    def test_a_declined_scan_is_nothing_to_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SPEECH declined because nothing lexical lay outside the task: no model is contacted."""
         store = ProvStore(run_id="review-test")
         _seed(store, words=["buttercup", "meadow"], scan="declined")
         seen = _stub(monkeypatch, [_clean()])
         review(store, _config(tmp_path))
-        assert seen == ["buttercup meadow"]
-        annotation = _annotation(store)
-        assert annotation["status"] == "clean"
-        assert annotation["detector_state"] == "declined"
+        assert seen == []
+        assert _annotation(store)["status"] == "nothing_to_read"
 
-    def test_a_transcript_no_detector_ever_saw_is_still_read(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """No scan measurement at all is the third detector state, and not a reason to skip."""
+    def test_a_store_with_no_scan_is_nothing_to_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SPEECH never ran, so no residue was computed and nothing reaches the pathway."""
         store = ProvStore(run_id="review-test")
         _seed(store, scan=None)
         seen = _stub(monkeypatch, [_clean()])
         review(store, _config(tmp_path))
-        assert seen == ["hello world"]
+        assert seen == []
         assert _annotation(store)["detector_state"] == "unscanned"
+
+    def test_only_the_residue_is_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A syllable train around a disclosure: the reviewer reads the disclosure alone."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["pa", "pa", "my", "name", "is", "alice", "pa"], scan="ran", residue=[2, 3, 4, 5])
+        seen = _stub(monkeypatch, [_clean()])
+        review(store, _config(tmp_path))
+        assert seen == ["my name is alice"]
 
     def test_a_scanned_clean_transcript_is_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The miss direction: the detectors marked nothing, which is what wants a second reader."""
@@ -271,22 +278,6 @@ class TestTheReadingIsARecordAndNeverAnAct:
         review(store, _config(tmp_path))
         assert [e for e in store.entities("verdict") if e.attributes["node"] == NODE] == []
 
-    def test_a_flag_on_a_never_scanned_transcript_is_legible_as_exactly_that(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The gate let something through: flagged beside declined is the one reading that says so."""
-        store = ProvStore(run_id="review-test")
-        _seed(store, words=["hello", "alicia"], scan="declined")
-        _stub(
-            monkeypatch,
-            [_flags(ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name")), _clean()],
-        )
-        review(store, _config(tmp_path))
-        annotation = _annotation(store)
-        assert annotation["status"] == "flagged"
-        assert annotation["detector_state"] == "declined"
-        assert annotation["detector_findings_n"] == 0
-
     def test_the_annotation_names_redacts_outcome_where_there_was_one(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -314,7 +305,7 @@ class TestTheTextIsWhatWouldBeReleased:
     def test_an_unredacted_transcript_renders_as_its_words(self) -> None:
         """No redaction span means the released text is the transcript itself."""
         store = ProvStore(run_id="review-test")
-        _seed(store, words=["one", "two", "three"], scan="declined")
+        _seed(store, words=["one", "two", "three"], scan="ran")
         assert transcript_texts(store) == ("one two three", None)
 
     def test_a_redaction_span_renders_as_its_placeholder(self) -> None:
@@ -337,7 +328,7 @@ class TestTheProposalBecomesTheAppliedRedaction:
     def test_a_proposed_removal_is_added_to_the_applied_set(self) -> None:
         """The reviewer found what the detectors missed; the audio must lose it."""
         store = ProvStore(run_id="review-test")
-        _seed(store, words=["hello", "alicia"], scan="declined")
+        _seed(store, words=["hello", "alicia"], scan="ran")
         _annotate(store, [{"text": "alicia", "action": "redact", "category": "PERSON", "why": "a name"}])
         applied = refine_plan(store, padding_ms=0)
         assert [(round(e.start, 3), round(e.end, 3), e.category) for e in applied.extents] == [(1.0, 1.5, "PERSON")]
@@ -374,7 +365,7 @@ class TestTheProposalBecomesTheAppliedRedaction:
     def test_every_applied_span_carries_the_reason_it_is_there(self) -> None:
         """The audit trail the discarded second artefact would otherwise have been."""
         store = ProvStore(run_id="review-test")
-        _seed(store, words=["hello", "alicia"], scan="declined")
+        _seed(store, words=["hello", "alicia"], scan="ran")
         _annotate(store, [{"text": "alicia", "action": "redact", "category": "PERSON", "why": "a name"}])
         applied = refine_plan(store, padding_ms=0)
         assert applied.reasons == {"PERSON": "a name"}

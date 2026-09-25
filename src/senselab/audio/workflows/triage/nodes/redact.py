@@ -1,9 +1,9 @@
 """The REDACT node: every PII finding padded, merged, masked with the declared fill, and verified.
 
-The last step of the SPEECH branch, run only where SPEECH found PII -- and the scan it plans from
-runs only where the participant said something the task did not ask for, SPEECH gating it on a
-lexical word outside the stimulus or a family that invites disclosure (``nodes/speech.py``, step 7).
-A store carrying findings but no scan measurement is refused rather than concluded over.
+The last step of the SPEECH branch, run only where SPEECH found PII. The scan it plans from reads the
+recording's lexical residue only -- the words that are neither non-lexical nor what the task asked
+for (``residue.py``, and ``nodes/speech.py`` step 7) -- and runs only where that residue is not
+empty. A store carrying findings but no scan measurement is refused rather than concluded over.
 
 Every non-invalidated ``pii`` entity is redacted regardless of speaker, except one the declared
 stimulus accounts for (:func:`_expected_exemptions`, recorded as an ``exempt``/``expected_speech``
@@ -11,15 +11,14 @@ assertion). Extents are padded by ``redaction.padding_ms`` and merged by ``plan_
 filled with ``redaction.fill`` at ``redaction.bleep_hz`` when that is a bleep. A word carries its
 PII marking through a live ``assertion`` whose ``verb`` is ``"label"`` and ``label`` is ``"pii"``.
 
-No recognizer runs here: verification is a re-scan of the redacted consensus text, its bracketed
-tokens dropped, with the same detectors, judged complete by ``pii.required_detectors``. A
+No recognizer runs here: verification is a re-scan of the redacted residue, :func:`residue_words`,
+with the same detectors, judged complete by ``pii.required_detectors``. A
 surviving finding is a fail, an incomplete re-scan is a flag, and a finding the verifier still
 sees is re-planned exactly once, what survives that being ``unremediable``; ``audio_check`` is
 the constant ``"bounded"`` on every path.
-The LLM reviewer is not here. It reads every transcript that could be released, including the
-ones SPEECH declined to scan and the ones REDACT never reached, so it is its own node: see
-``nodes/review.py``. :func:`transcript_texts` is what it reads, rendered by the same renderer that
-writes the released pair.
+The LLM reviewer is not here. It reads the same residue, whether or not REDACT was reached, so it is
+its own node: see ``nodes/review.py``. :func:`transcript_texts` is what it reads, rendered by the
+same renderer that writes the released pair.
 
 A pass releases three artifacts under ``artifacts_dir``: the masked audio, the flat redacted
 transcript, and the redacted consensus stream as ``consensus.json``, whose records carry each
@@ -719,6 +718,7 @@ def redact(
     scan_incomplete = bool(scan_failed) or bool(scan_missing) or not scanned_by
     findings = _findings(store)
     words = consensus_words(store)
+    residue = residue_words(store)
     units = _expected_units(hint, task_family, terminators=str(config.require(_TERMINATORS_KEY)))
     exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise, near_match(config))
     exempt_findings = {exemption.finding_id for exemption in exemptions}
@@ -731,11 +731,11 @@ def redact(
     planned = plan_redactions(extents, padding_ms=padding_ms)
     records, transcript_text, unplaced_n = _render(words, planned)
     checked = (
-        _verify(_verification_text(records), required_detectors)
+        _verify(_verification_text(_render(residue, planned)[0]), required_detectors)
         if not scan_incomplete
         else _Verification(verified=False, survived=[], scan_ran=False, failed=[], missing=[])
     )
-    attributed = _expected_survivors(checked.survived, words, marked, planned, exempt_word_ids)
+    attributed = _expected_survivors(checked.survived, residue, marked, planned, exempt_word_ids)
     outstanding = [category for category in checked.survived if category not in attributed]
     replanned_n = 0
     unremediable: list[str] = []
@@ -743,7 +743,7 @@ def redact(
     if checked.scan_ran and outstanding:
         replanned_n = 1
         for category in outstanding:
-            for word in words:
+            for word in residue:
                 marks = marked.get(word.id, {})
                 if word.id in exempt_word_ids or word.extent is None:
                     continue
@@ -754,8 +754,8 @@ def redact(
                 widened.append((hull, marks[category]))
         planned = plan_redactions(extents, padding_ms=padding_ms)
         records, transcript_text, unplaced_n = _render(words, planned)
-        checked = _verify(_verification_text(records), required_detectors)
-        attributed = _expected_survivors(checked.survived, words, marked, planned, exempt_word_ids)
+        checked = _verify(_verification_text(_render(residue, planned)[0]), required_detectors)
+        attributed = _expected_survivors(checked.survived, residue, marked, planned, exempt_word_ids)
         outstanding = [category for category in checked.survived if category not in attributed]
         unremediable = list(outstanding)
 
@@ -954,29 +954,45 @@ def planned_extents(store: ProvStore) -> list[RedactionExtent]:
     return sorted(extents, key=lambda extent: (extent.start, extent.end))
 
 
-def transcript_texts(store: ProvStore) -> tuple[str, str | None]:
-    """The recording's words, and the text an applied redaction produced.
-
-    One renderer serves both, so what a reviewer reads and what a release carries cannot drift.
+def residue_words(store: ProvStore) -> list[Entity]:
+    """The consensus words SPEECH's scan read: the recording's lexical residue, in stream order.
 
     Args:
         store: The provenance store.
 
-    Both texts drop the bracketed consensus tokens, which is the rule the re-scan already applies:
-    a bracket is a marker PREPROCESS emitted, not something the speaker said. Handing them to the
-    reviewer put it in front of the input class that produced 4,228 spurious detector findings, and
-    over this corpus 85% of the non-lexical tasks' transcripts are nothing else -- ``[breath]``,
-    ``[UH]``, ``[cough]``. Dropping them also renders those transcripts empty, so the reviewer
-    records ``nothing_to_read`` instead of spending a card on them.
+    Returns:
+        The words the live ``pii_scan`` measurement names. Empty where SPEECH recorded no scan, or
+        where the residue is empty.
 
-    See ``specs/20260922-brackets-are-not-speech/design.md``.
+    Raises:
+        ValueError: If the live ``pii_scan`` measurement names no residue, which a store written
+            before the residue existed does not.
+    """
+    scan = find_measurement(store, "pii_scan")
+    if scan is None:
+        return []
+    ids = scan.attributes.get("residue_word_ids")
+    if ids is None:
+        raise ValueError("the pii_scan measurement names no residue; the store predates the lexical residue")
+    wanted = {str(word_id) for word_id in ids}
+    return [word for word in consensus_words(store) if word.id in wanted]
+
+
+def transcript_texts(store: ProvStore) -> tuple[str, str | None]:
+    """The recording's lexical residue, and the text an applied redaction made of it.
+
+    One renderer serves both, and the words are the ones SPEECH's scan read, so what a reviewer
+    reads, what the detectors read and what the re-scan verifies cannot drift. See
+    ``specs/20260925-lexical-only-pii-pathway/design.md``.
+
+    Args:
+        store: The provenance store.
 
     Returns:
-        ``(original, redacted)``. ``redacted`` is None where no redaction was planned: that is the
-        13,810 the scan declined and every recording REDACT never reached, and it is an absence to
-        state rather than an empty string to misread.
+        ``(original, redacted)``. ``original`` is empty where the recording has no residue.
+        ``redacted`` is None where no redaction was planned.
     """
-    words = consensus_words(store)
+    words = residue_words(store)
     records, _, _ = _render(words, [])
     original = _verification_text(records)
     planned = planned_extents(store)
