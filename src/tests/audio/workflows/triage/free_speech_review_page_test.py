@@ -1513,6 +1513,26 @@ def test_the_page_reports_the_reviewers_other_two_readings() -> None:
     assert "A reading of the transcript, not of the audio." in page._SCRIPT
 
 
+def test_a_flagged_reading_names_the_ground_that_fired() -> None:
+    """A flagged reading with no categories used to render as "It flagged 0" and say nothing.
+
+    ``_is_flag`` is true on any of three grounds -- the redaction judged incomplete, the words
+    judged to carry pii, or a proposal asking for a removal -- but the category list is populated
+    only from the proposal's removal entries. On the running corpus 118 of the first 128 flagged
+    readings carried no category, so the page has to name the grounds rather than count them.
+    """
+    assert "the words themselves carry something identifying" in page._SCRIPT
+    assert "the applied redaction did not remove what identifies the speaker" in page._SCRIPT
+    assert "it proposes " in page._SCRIPT
+    assert "It flagged 0" not in page._SCRIPT
+
+
+def test_a_flagged_reading_with_no_stated_ground_is_called_a_gap() -> None:
+    """Flagged with nothing behind it is a hole in the record, and must not read as a clean pass."""
+    assert "none of the three readings says why" in page._SCRIPT
+    assert "That is a gap in the record, not a clean result." in page._SCRIPT
+
+
 def test_the_speaker_reading_is_rendered_outside_the_pii_ladder() -> None:
     """Whether a second voice is in the words is not a question about pii, and a clean reading has one.
 

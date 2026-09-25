@@ -1879,10 +1879,25 @@ function buildWhy(stem,card){
         +'saw.</p>');
     out.push(reached);
   }else if(st==='flagged'){
-    out.push('<p><b>It flagged '+esc((llm.flagged||[]).length)+'</b>: '
-      +esc((llm.flagged||[]).join(', '))+' \\u2014 over '+esc(llm.iterations||0)+' iteration(s)'
+    /* A reading is flagged on any of three grounds, and only one of them names categories: the
+       category list comes from the proposal's removal entries. A reading that judges the words to
+       carry pii without proposing a span is flagged with an empty list, and rendering a bare
+       count of it says nothing about why. Name the grounds that actually fired. */
+    const cats=llm.flagged||[];
+    const why=[];
+    if(llm.original==='carries_pii')why.push('the words themselves carry something identifying');
+    if(llm.redaction==='incomplete')why.push('the applied redaction did not remove what identifies the speaker');
+    if(llm.proposal_redact_n)why.push('it proposes '+esc(llm.proposal_redact_n)+' further removal(s)');
+    out.push('<p><b>It flagged this recording</b>'
+      +(cats.length?' on '+esc(cats.length)+': '+esc(cats.join(', ')):'')
+      +' \\u2014 over '+esc(llm.iterations||0)+' iteration(s)'
       +(llm.model_id?', model '+esc(llm.model_id):'')+'.'+beside
       +(llm.failure?' '+esc(llm.failure):'')+'</p>');
+    if(why.length)
+      out.push('<p class="note">Why: '+why.join('; ')+'.</p>');
+    else
+      out.push('<p class="warn">It is flagged, and none of the three readings says why. '
+        +'That is a gap in the record, not a clean result.</p>');
     if(llm.detector_state==='declined'||llm.detector_state==='unscanned')
       out.push('<p class="note">It flagged a transcript no detector read. That is a reading about '
         +'the scan gate rather than about the detectors, and it is the only check on that gate.</p>');
