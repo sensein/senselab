@@ -151,6 +151,16 @@ reach it.
 If a reviewer record is ever to reach the axis, it arrives as a declared input with provenance and
 its own row in the table above, and that is a separate decision with its own derivation.
 
+**That decision was taken on 2026-09-24, in one direction only.** Owner: *"verdict still decides,
+and we can weigh the verdict towards the LLM reviewer."* REVIEW's `redaction_llm_annotation` is a
+measurement with provenance, and `fold_file_verdict` reads it onto this axis through exactly one
+declared parameter, `_release_from(..., reviewer_withholds=...)`, resolved from
+`verdict.llm_redaction_withholds` and defaulting to False. It may only **tighten**: a reviewer that
+read residue turns a REDACT `pass` into `withheld`, and no reading of any kind moves a recording out
+of `withheld`. The section's title is therefore still exact — nothing moves a recording *toward*
+release without a human — and `vocabulary_test.py` asserts both halves: the parameter set is closed,
+and the movement is one-directional.
+
 ## 6. The reviewer action on the free-speech page
 
 `scripts/free_speech_review_page.py`. The page already carries three reviewer collections — the

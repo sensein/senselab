@@ -70,9 +70,10 @@ GRAPH = (
     "VOICE",
     "QUALITY",
     "REDACT",
+    "REVIEW",
     "VERDICT",
 )
-"""Every node the runner drives. QUALITY and routing run for real here; the rest are faked."""
+"""Every node the runner drives. QUALITY, routing and REVIEW run for real here; the rest are faked."""
 
 _MISSING = object()
 
@@ -343,17 +344,22 @@ def graph(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[str]]:
         )
         for name, fake in _fakes(calls, **kwargs).items():
             monkeypatch.setattr(run_module, name, fake)
-        real_quality, real_verdict = run_module.quality, run_module.verdict
+        real_quality, real_verdict, real_review = run_module.quality, run_module.verdict, run_module.review
 
         def _quality(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             calls.append("QUALITY")
             return real_quality(*args, **kwargs)
+
+        def _review(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls.append("REVIEW")
+            return real_review(*args, **kwargs)
 
         def _verdict(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             calls.append("VERDICT")
             return real_verdict(*args, **kwargs)
 
         monkeypatch.setattr(run_module, "quality", _quality)
+        monkeypatch.setattr(run_module, "review", _review)
         monkeypatch.setattr(run_module, "verdict", _verdict)
         return calls
 
@@ -576,7 +582,7 @@ class TestHappyPath:
             "quality",
             "redact",
             "verdict",
-        ):
+        ):  # REVIEW takes the hint too, but as its third positional, so it is spied separately
             original = getattr(run_module, name)
 
             def _spy(*args: Any, _original: Any = original, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -586,7 +592,7 @@ class TestHappyPath:
             monkeypatch.setattr(run_module, name, _spy)
         hint = AudioHints(may_contain=["cough"])
         run_triage(tmp_path / "recording.wav", tmp_path / "out", config, hint=hint)
-        assert seen == [hint] * len(GRAPH)
+        assert seen == [hint] * 10, "every hint-taking node in GRAPH but REVIEW, whose hint is positional 3"
 
 
 class TestConditionalExecution:
@@ -708,7 +714,7 @@ class TestConditionalExecution:
         """Branches do not run without ROUTING's decisions; QUALITY, which reads none, still does."""
         calls = graph(routing_outcome=routing_outcome)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
-        assert tuple(calls) == ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "QUALITY", "VERDICT")
+        assert tuple(calls) == ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "QUALITY", "REVIEW", "VERDICT")
         assert result.ran["routing"] is RunState.ERRORED
         assert all(result.ran[branch] is RunState.SKIPPED for branch in ("AIRWAY", "SPEECH", "VOICE", "REDACT"))
         assert result.file_verdict is not None

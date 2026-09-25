@@ -1,13 +1,16 @@
-"""An instruction-tuned LLM reading a redacted transcript back, in its own isolated venv.
+"""An instruction-tuned LLM reading one recording's transcript, in its own isolated venv.
 
-The fifth PII engine, and the only one that is asked to *explain* rather than to mark. It runs after
-the detector cascade has already planned and applied its redactions, over the text those redactions
-produced, and it is off unless a run turns it on.
+The fifth PII engine, and the only one asked to *explain* rather than to mark. It reads the original
+words and, where one exists, the text an applied redaction produced; it does not depend on the
+detectors having run, which is what lets it read the population they never saw. It is off unless a
+run turns it on.
 
-Its product is a chain of thought and a list of concerns, not a set of spans: what it can do that the
-detectors cannot is say *why* a residue is identifying — a date plus a street plus an employer that
-no single detector flags. It therefore never edits a released artifact and never widens a redaction;
-a caller uses it to withhold.
+Its product is a chain of thought, three independent judgments — whether an applied redaction
+removed what identifies the speaker, whether the original words carry anything identifying at all,
+and whether the words show more than one person speaking in the recording — and a proposal: the
+redaction it would apply instead, as text spans, in either direction. What it can do that the
+detectors cannot is say *why*: a date plus a street plus an employer that no single detector flags,
+a duration that identifies nobody, a diagnosis nothing here looks for.
 
 The loop is the caller's, not the model's: one review per call, and a caller that wants the model to
 see the effect of its own concerns masks them and calls again. See
@@ -34,7 +37,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
@@ -54,33 +57,100 @@ REVIEW_REQUIREMENTS = [
 DEFAULT_MODEL = "google/gemma-4-31B-it-qat-w4a16-ct"
 DEFAULT_REF = "main"
 _REASONING_HEADING = "REASONING:"
-_FINDINGS_HEADING = "FINDINGS:"
+_PROPOSAL_HEADING = "PROPOSAL:"
+_REDACTION_HEADING = "REDACTION:"
+_ORIGINAL_HEADING = "ORIGINAL:"
+_SPEAKERS_HEADING = "SPEAKERS:"
+
+REDACTION_STATES = ("complete", "incomplete", "not_applicable")
+"""Whether the redaction, where one was applied, removed the identifying content."""
+
+ORIGINAL_STATES = ("clean", "carries_pii")
+"""Whether the recording's own words carry identifying content, redaction aside."""
+
+SPEAKER_STATES = ("one", "more_than_one", "unclear")
+"""How many people the transcript's own words show speaking in the recording."""
+
+REDACT = "redact"
+RELEASE = "release"
+PROPOSAL_ACTIONS = (REDACT, RELEASE)
+"""What a proposal entry asks for: remove this text, or stop removing text already removed."""
 
 _PROMPT = (
-    "You are auditing a transcript that has already been automatically redacted. Every [CATEGORY] "
-    "token marks text that was removed. Your job is to find anything still present that could "
-    "identify the speaker, alone or in combination with the rest of the text.\n\n"
-    "Answer in exactly two parts.\n"
-    "First, a section headed REASONING: your full reasoning, in prose, including what you "
-    "considered and rejected.\n"
-    "Second, a section headed FINDINGS: a JSON array. Each element is an object with keys "
-    '"text" (the exact substring that concerns you), "category" (one of PERSON, LOCATION, '
-    'DATE_TIME, ORGANIZATION, ID, CONTACT, OTHER) and "why" (one sentence). Return [] if nothing '
-    "remains.\n\nTRANSCRIPT:\n"
+    "You are auditing one recording's transcript before it is released. You are given the "
+    "ORIGINAL words as transcribed, and where an automatic redaction has already been applied, "
+    "the RELEASED text it produced, in which every [CATEGORY] token marks removed text. Where no "
+    "redaction was applied the RELEASED section says so, and nothing has been removed.\n\n"
+    "Judge four things independently.\n"
+    "1. Whether the redaction, where one was applied, actually removed what identifies the "
+    "speaker.\n"
+    "2. Whether the ORIGINAL words carry anything identifying at all, which is a separate "
+    "question and the one no automatic detector here has asked.\n"
+    "3. Whether the redaction removed more than it needed to. A time expression with no calendar "
+    "anchor -- a duration, a bare time-of-day noun, a relative reference -- usually identifies "
+    "nobody. A specific diagnosis, a rare condition or a named procedure often does, and "
+    "detectors here do not look for one.\n"
+    "4. Whether more than one person is speaking in this recording, judged from the words alone: "
+    "turn-taking, instructions given, questions asked and answered.\n\n"
+    "Answer in exactly five parts, each on its own line or block.\n"
+    "REASONING: your full reasoning, in prose, including what you considered and rejected.\n"
+    "REDACTION: one of complete, incomplete, not_applicable (use not_applicable when no "
+    "redaction was applied).\n"
+    "ORIGINAL: one of clean, carries_pii.\n"
+    "SPEAKERS: one of one, more_than_one, unclear.\n"
+    "PROPOSAL: a JSON array giving the redaction you would apply instead. Each element is an "
+    'object with keys "text" (the exact substring, quoted from the ORIGINAL), "action" (redact to '
+    "remove it, release to stop removing text the current redaction removes unnecessarily), "
+    '"category" (one of PERSON, LOCATION, DATE_TIME, ORGANIZATION, ID, CONTACT, CONDITION, OTHER) '
+    'and "why" (one sentence). Return [] to leave the current redaction exactly as it is.\n\n'
 )
 
 
+def _compose(original: str, redacted: str | None, context: Mapping[str, Any] | None = None) -> str:
+    """The task's own facts and the two transcripts, as one request body.
+
+    Args:
+        original: The transcript as the recording's words were read.
+        redacted: The text an applied redaction produced, or None where none was applied.
+        context: What the recording declares about itself -- ``task``, ``asked_to_say`` and
+            ``declared_names``. Any key absent or empty is omitted rather than sent empty.
+
+    Returns:
+        The body the prompt is prefixed to.
+    """
+    lines: list[str] = []
+    facts = dict(context or {})
+    if facts.get("task"):
+        lines.append(f"TASK: {facts['task']}")
+    if facts.get("asked_to_say"):
+        lines.append(f"ASKED TO SAY: {facts['asked_to_say']}")
+    names = facts.get("declared_names") or ()
+    if names:
+        lines.append(f"NAMES THE TASK'S OWN MATERIALS CONTAIN: {', '.join(str(name) for name in names)}")
+    if lines:
+        lines.append(
+            "Those lines are facts about what was asked for. They are not a conclusion about what "
+            "is in the transcript, and neither matching them nor departing from them settles any "
+            "of the four questions on its own."
+        )
+        lines.append("")
+    released = redacted if redacted is not None else "(no redaction was applied to this recording)"
+    return "\n".join(lines) + f"ORIGINAL:\n{original}\n\nRELEASED:\n{released}\n"
+
+
 @dataclass
-class ReviewFinding:
-    """One residue the model believes is still identifying.
+class ReviewProposal:
+    """One change the model would make to what is removed from the recording.
 
     Attributes:
-        text: The substring it named.
+        text: The substring it named, quoted from the original.
+        action: :data:`REDACT` to remove it, :data:`RELEASE` to stop removing it.
         category: Its category, uppercased.
         why: Its one-sentence reason.
     """
 
     text: str
+    action: str
     category: str
     why: str
 
@@ -94,7 +164,14 @@ class ReviewResult:
             honest answer when it did not — an empty ``findings`` under ``available=False`` reads
             identically to "the model found nothing", which is the one wrong answer here.
         reasoning: The model's chain of thought, verbatim. The point of the step.
-        findings: What it flagged.
+        redaction: One of :data:`REDACTION_STATES`, or the empty string where it answered nothing
+            parsable. Whether the applied redaction removed what identifies the speaker.
+        original: One of :data:`ORIGINAL_STATES`, or the empty string. Whether the recording's own
+            words carry identifying content, which is a separate question from the redaction's.
+        speakers: One of :data:`SPEAKER_STATES`, or the empty string. How many people the words
+            show speaking in the recording. A reading about the recording's content, never about
+            the processing run.
+        proposal: The redaction it would apply instead, as text spans.
         failure: ``None`` on success; otherwise why the reviewer did not run.
         model_id: The repo the review was asked of.
         revision: The resolved 40-hex commit it loaded, or ``None``.
@@ -102,6 +179,9 @@ class ReviewResult:
         elapsed_s: Wall-clock seconds this call took, a load it paid for included.
         load_s: How many of those seconds went on starting the worker and loading the weights.
             ``0.0`` when an already-running worker served the call.
+        input_tokens: How many tokens the prompt and the two transcripts came to, or ``None`` when
+            the model did not answer. Reported beside ``output_tokens`` because the contract reads
+            two texts and the input side is what grew.
         output_tokens: How many tokens the model generated, or ``None`` when it did not answer.
         peak_reserved_mib: Device memory the worker's allocator held at the end of the generation,
             before it was emptied. ``0`` on a CPU worker and on a call that did not answer.
@@ -111,13 +191,17 @@ class ReviewResult:
 
     available: bool
     reasoning: str = ""
-    findings: list[ReviewFinding] = field(default_factory=list)
+    redaction: str = ""
+    original: str = ""
+    speakers: str = ""
+    proposal: list[ReviewProposal] = field(default_factory=list)
     failure: Optional[str] = None
     model_id: str = ""
     revision: Optional[str] = None
     raw: str = ""
     elapsed_s: float = 0.0
     load_s: float = 0.0
+    input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     peak_reserved_mib: int = 0
     resident_mib: int = 0
@@ -212,6 +296,7 @@ def main():
         answer = generated[0][inputs["input_ids"].shape[-1]:]
         completion = tokenizer.decode(answer, skip_special_tokens=True)
         tokens = int(answer.shape[-1])
+        prompt_tokens = int(inputs["input_ids"].shape[-1])
         generate_s = round(time.monotonic() - began, 3)
         peak, resident = 0, 0
         if torch.cuda.is_available():
@@ -223,6 +308,7 @@ def main():
             {
                 "completion": completion,
                 "generate_s": generate_s,
+                "input_tokens": prompt_tokens,
                 "output_tokens": tokens,
                 "peak_reserved_mib": peak,
                 "resident_mib": resident,
@@ -261,52 +347,118 @@ def _staged_snapshot(repo_id: str, revision: str) -> Optional[str]:
     return str(snapshot)
 
 
-def parse_completion(completion: str) -> tuple[str, list[ReviewFinding]]:
-    """Split the model's answer into its reasoning and its findings.
+@dataclass(frozen=True)
+class ParsedCompletion:
+    """The model's answer, split into its five parts.
 
-    The findings array is looked for after the last ``FINDINGS:`` heading rather than at the first
+    Attributes:
+        reasoning: The chain of thought, verbatim.
+        redaction: One of :data:`REDACTION_STATES`, or the empty string where none was stated.
+        original: One of :data:`ORIGINAL_STATES`, or the empty string.
+        speakers: One of :data:`SPEAKER_STATES`, or the empty string.
+        proposal: The parsed proposal array; empty where it was missing or malformed.
+    """
+
+    reasoning: str
+    redaction: str = ""
+    original: str = ""
+    speakers: str = ""
+    proposal: list[ReviewProposal] = field(default_factory=list)
+
+
+def _labelled(completion: str, heading: str, allowed: Sequence[str]) -> str:
+    """The one-word answer under a heading, where it is one of the allowed words.
+
+    Args:
+        completion: The model's raw text.
+        heading: The heading to read, including its colon.
+        allowed: The words this heading accepts.
+
+    Returns:
+        The word, lowercased, or the empty string where the heading is missing or the word is not
+        one of ``allowed``. An unrecognised word is not guessed at: the empty string says the model
+        did not answer this question, which is different from any of the answers it could give.
+    """
+    marker = completion.rfind(heading)
+    if marker == -1:
+        return ""
+    line = completion[marker + len(heading) :].splitlines()[0] if completion[marker:].splitlines() else ""
+    word = line.strip().strip(".").strip().lower()
+    return word if word in allowed else ""
+
+
+def parse_completion(completion: str) -> ParsedCompletion:
+    """Split the model's answer into its reasoning, its three judgments and its proposal.
+
+    The proposal array is looked for after the last ``PROPOSAL:`` heading rather than at the first
     ``[`` in the whole completion, because the reasoning routinely quotes the transcript's own
     ``[CATEGORY]`` placeholders and splitting on those would truncate it at the first quotation.
+    The reasoning ends at the first judgment heading, so a one-word answer never reads as prose.
 
     Args:
         completion: The model's raw text.
 
     Returns:
-        ``(reasoning, findings)``. The reasoning is returned even when the array is missing or
+        The five parts. The reasoning is returned even when everything else is missing or
         unparsable, because the reasoning is what the step exists to capture. A malformed array
-        yields no findings rather than raising — a caller reads ``available`` to tell that from a
-        clean pass.
+        yields no proposal rather than raising — a caller reads ``available`` to tell that from a
+        reviewer that read the text and would change nothing.
     """
-    marker = completion.rfind(_FINDINGS_HEADING)
+    marker = completion.rfind(_PROPOSAL_HEADING)
     head = completion if marker == -1 else completion[:marker]
-    tail = completion if marker == -1 else completion[marker + len(_FINDINGS_HEADING) :]
+    tail = completion if marker == -1 else completion[marker + len(_PROPOSAL_HEADING) :]
     start, end = tail.find("["), tail.rfind("]")
     if marker == -1 and start != -1:
         head = completion[:start]
-    reasoning = head.replace(_REASONING_HEADING, " ").replace(_FINDINGS_HEADING, " ").strip()
+    cuts = [head.find(heading) for heading in (_REDACTION_HEADING, _ORIGINAL_HEADING, _SPEAKERS_HEADING)]
+    first = min((cut for cut in cuts if cut != -1), default=-1)
+    reasoning = (head if first == -1 else head[:first]).replace(_REASONING_HEADING, " ")
+    redaction = _labelled(completion, _REDACTION_HEADING, REDACTION_STATES)
+    original = _labelled(completion, _ORIGINAL_HEADING, ORIGINAL_STATES)
+    speakers = _labelled(completion, _SPEAKERS_HEADING, SPEAKER_STATES)
+
+    def _answered(proposal: list[ReviewProposal]) -> ParsedCompletion:
+        """The three judgments and this proposal, as one parsed answer.
+
+        Args:
+            proposal: The parsed proposal array, empty where there was none.
+
+        Returns:
+            The answer.
+        """
+        return ParsedCompletion(
+            reasoning=reasoning.strip(),
+            redaction=redaction,
+            original=original,
+            speakers=speakers,
+            proposal=proposal,
+        )
+
     if start == -1 or end < start:
-        return reasoning, []
+        return _answered([])
     try:
         parsed = json.loads(tail[start : end + 1])
     except ValueError:
-        return reasoning, []
+        return _answered([])
     if not isinstance(parsed, list):
-        return reasoning, []
-    findings = []
+        return _answered([])
+    proposal = []
     for item in parsed:
         if not isinstance(item, dict):
             continue
         text = item.get("text")
-        if not isinstance(text, str) or not text.strip():
+        action = str(item.get("action") or REDACT).strip().lower()
+        if not isinstance(text, str) or not text.strip() or action not in PROPOSAL_ACTIONS:
             continue
-        findings.append(
-            ReviewFinding(
+        proposal.append(
+            ReviewProposal(
                 text=text,
+                action=action,
                 category=str(item.get("category") or "OTHER").upper(),
                 why=str(item.get("why") or ""),
             )
         )
-    return reasoning, findings
+    return _answered(proposal)
 
 
 class ReviewWorkerError(RuntimeError):
@@ -504,7 +656,7 @@ _WORKER_REFUSED: Optional[str] = None
 def shutdown_review_worker(*, forget_failure: bool = True) -> None:
     """End the process's review worker, releasing its weights.
 
-    A later :func:`review_redacted_text` starts a new one. Registered to run at interpreter exit, so
+    A later :func:`review_transcript` starts a new one. Registered to run at interpreter exit, so
     a caller only needs this to hand the memory back earlier than that, or to retry a load that
     failed.
 
@@ -561,15 +713,17 @@ def _worker_for(model_id: str, revision: str, timeout_s: int) -> tuple[_ReviewWo
     return worker, worker.load_s
 
 
-def review_redacted_text(
-    text: str,
+def review_transcript(
+    original: str,
     *,
+    redacted: str | None = None,
+    context: Mapping[str, Any] | None = None,
     model_id: str = DEFAULT_MODEL,
     ref: str = DEFAULT_REF,
     max_new_tokens: int = 1024,
     timeout_s: int = 1800,
 ) -> ReviewResult:
-    """Ask the reviewer to read one redacted transcript back, reporting failure rather than raising.
+    """Ask the reviewer to read one recording's transcript, reporting failure rather than raising.
 
     The ref is resolved to a commit SHA before the worker starts and only the SHA reaches it, so a
     load can never go back through a pointer that may have moved. The worker outlives the call: the
@@ -579,7 +733,9 @@ def review_redacted_text(
     Calls are serialised — one worker holds one copy of the weights — so a concurrent caller waits.
 
     Args:
-        text: The redacted transcript.
+        original: The transcript as the recording's words were read.
+        redacted: The text an applied redaction produced, or None where none was applied.
+        context: What the recording declares about itself; see :func:`_compose`.
         model_id: The HuggingFace repo. Defaults to the QAT w4a16 Gemma-4 31B checkpoint, which is
             the variant that fits one ordinary GPU; see
             ``specs/20260817-triage-workflow-dag/config-derivations.md``.
@@ -590,7 +746,7 @@ def review_redacted_text(
     Returns:
         The review. ``available`` is ``True`` only when the worker answered; every other path —
         venv build failure, missing weights, out of memory, timeout, a worker that raised — returns
-        ``available=False`` with a populated ``failure`` and no findings. A worker that could not be
+        ``available=False`` with a populated ``failure`` and no proposal. A worker that could not be
         started is recorded once and reported without a retry for the rest of the process, so a host
         with no reachable GPU costs one load attempt rather than one per recording.
     """
@@ -610,7 +766,7 @@ def review_redacted_text(
     with _WORKER_LOCK:
         try:
             worker, load_s = _worker_for(model_id, revision, timeout_s)
-            output = worker.review(text, max_new_tokens, timeout_s)
+            output = worker.review(_compose(original, redacted, context), max_new_tokens, timeout_s)
         except Exception as exc:  # noqa: BLE001 — every failure mode becomes a recorded absence
             return ReviewResult(
                 available=False,
@@ -622,16 +778,20 @@ def review_redacted_text(
         loaded_revision = worker.revision
 
     completion = str(output.get("completion") or "")
-    reasoning, findings = parse_completion(completion)
+    parsed = parse_completion(completion)
     return ReviewResult(
         available=True,
-        reasoning=reasoning,
-        findings=findings,
+        reasoning=parsed.reasoning,
+        redaction=parsed.redaction,
+        original=parsed.original,
+        speakers=parsed.speakers,
+        proposal=parsed.proposal,
         model_id=model_id,
         revision=loaded_revision or revision,
-        raw="" if reasoning else completion,
+        raw="" if parsed.reasoning else completion,
         elapsed_s=round(time.monotonic() - began, 3),
         load_s=load_s,
+        input_tokens=output.get("input_tokens"),
         output_tokens=output.get("output_tokens"),
         peak_reserved_mib=int(output.get("peak_reserved_mib") or 0),
         resident_mib=int(output.get("resident_mib") or 0),
@@ -653,14 +813,19 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
     return {
         "available": result.available,
         "reasoning": result.reasoning,
-        "findings": [
-            {"text": finding.text, "category": finding.category, "why": finding.why} for finding in result.findings
+        "redaction": result.redaction,
+        "original": result.original,
+        "speakers": result.speakers,
+        "proposal": [
+            {"text": entry.text, "action": entry.action, "category": entry.category, "why": entry.why}
+            for entry in result.proposal
         ],
         "failure": result.failure,
         "model_id": result.model_id,
         "revision": result.revision,
         "elapsed_s": result.elapsed_s,
         "load_s": result.load_s,
+        "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
         "peak_reserved_mib": result.peak_reserved_mib,
         "resident_mib": result.resident_mib,

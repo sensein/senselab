@@ -67,15 +67,22 @@ RELEASE_ORDER = (
 """The graph's own release axis, most permissive first, plus the page's own ``unrecorded``."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 4
-"""4 is the first version read from a graph whose release axis names which artefact may be handed on.
+EXTRACT_VERSION = 5
+"""5 is the first version read from a graph that has both the release split and REVIEW.
 
-A version-3 row's ``rel`` is the old vocabulary, in which ``releasable`` means what
-``release_with_redaction`` now means and ``nothing_to_redact`` spans both
-``release_without_redaction`` and ``not_assessed``. The chips, the facet and the determination panel
-would all describe the wrong artefact. 3 was the first version read from a graph whose reviewer
-ladder is disabled -> not_run -> run; before it ``not_run`` meant the recording was already
-withheld. The version is what lets the page refuse to speak over an older extract.
+Two changes landed between 3 and here, and each alone would make an older extract describe the
+wrong thing. The release axis now names which artefact may be handed on: a version-3 row's ``rel``
+is the old vocabulary, in which ``releasable`` means what ``release_with_redaction`` now means and
+``nothing_to_redact`` spans both ``release_without_redaction`` and ``not_assessed``, so the chips,
+the facet and the determination panel would all name the wrong artefact. And the reviewer is now
+REVIEW rather than a step inside REDACT: under 3 it was reached only through REDACT, so it read the
+recordings the detectors marked and no others, and ``not_run`` was its state for a transcript the
+detectors marked nothing in. REVIEW reads every transcript, so that state is gone and its sentence
+would be false twice over -- about which recordings were read, and about why one was not.
+
+Both sides of the merge that brought them together had independently called themselves 4, so 4
+names two different graphs and vouches for neither. The version is what lets the page refuse to
+speak over an extract whose graph it cannot vouch for.
 """
 
 
@@ -999,11 +1006,13 @@ def _triage_controls(stem: str) -> str:
     return _TRIAGE_GROUP
 
 
-LLM_STATES = ("disabled", "not_run", "absent", "clean", "flagged")
-"""Every state the optional reviewer records, in the order the ladder reaches them.
+LLM_STATES = ("disabled", "nothing_to_read", "absent", "clean", "flagged")
+"""Every state the reviewer records, in the order the ladder reaches them.
 
-``disabled`` is the config leaving it off; ``not_run`` is the detectors having marked nothing, so
-there was nothing to review; the last three are readings it actually took.
+``disabled`` is the config leaving it off; ``nothing_to_read`` is a transcript with no words in it;
+the last three are readings it actually took. ``not_run`` retired when the reviewer stopped being
+reached through the detectors: it meant "the detectors marked nothing", which is now a population
+that gets read rather than one that gets skipped.
 """
 
 LLM_RAN = ("absent", "clean", "flagged")
@@ -1842,14 +1851,20 @@ function buildWhy(stem,card){
   const st=llm.status||'';
   const beside=llm.detector_outcome
     ?' It was taken beside a detector <b>'+esc(llm.detector_outcome)+'</b>.':'';
+  const DETECTORS={scanned:'the detectors read this transcript',
+    declined:'the detectors never read this transcript: the scan was declined because every '
+      +'lexical word is in the task\'s own stimulus',
+    unscanned:'no detector ever reached this transcript'};
+  const reached=DETECTORS[llm.detector_state]
+    ?'<p class="note">Detectors: '+esc(DETECTORS[llm.detector_state])+'.</p>':'';
   out.push('<h4>the LLM reviewer</h4>');
   if(st==='disabled'){
     out.push('<div class="warn"><b>Switched off.</b> The reviewer is disabled in the '
       +'configuration, so no review was attempted and none of what follows was corroborated by '
       +'one. This is not a verdict about the recording.</div>');
-  }else if(st==='not_run'){
-    out.push('<div class="warn"><b>Nothing was marked for it to review.</b> The reviewer is '
-      +'enabled, and the detectors found nothing, so there was no redacted text to read back. '
+  }else if(st==='nothing_to_read'){
+    out.push('<div class="warn"><b>There was no text to read.</b> The reviewer is enabled, and '
+      +'this recording\'s transcript carries no words, so there was nothing to read back. '
       +'It reached no conclusion about this recording.</div>');
   }else if(st==='absent'){
     out.push('<div class="warn"><b>It tried and could not load.</b> That is not the same as '
@@ -1862,13 +1877,24 @@ function buildWhy(stem,card){
       out.push('<p class="note">A clean reading beside a detector failure is a disagreement, not a '
         +'confirmation: the reviewer read the redacted text and saw nothing the detectors still '
         +'saw.</p>');
+    out.push(reached);
   }else if(st==='flagged'){
     out.push('<p><b>It flagged '+esc((llm.flagged||[]).length)+'</b>: '
       +esc((llm.flagged||[]).join(', '))+' \\u2014 over '+esc(llm.iterations||0)+' iteration(s)'
       +(llm.model_id?', model '+esc(llm.model_id):'')+'.'+beside
       +(llm.failure?' '+esc(llm.failure):'')+'</p>');
+    if(llm.detector_state==='declined'||llm.detector_state==='unscanned')
+      out.push('<p class="note">It flagged a transcript no detector read. That is a reading about '
+        +'the scan gate rather than about the detectors, and it is the only check on that gate.</p>');
+    out.push(reached);
+    if(llm.proposal_release_n)
+      out.push('<p class="note">It would stop removing '+esc(llm.proposal_release_n)
+        +' of what is currently removed.</p>');
+    if(llm.speakers==='more_than_one')
+      out.push('<p class="note">It reads the words as showing more than one person speaking in '
+        +'this recording. A reading of the transcript, not of the audio.</p>');
   }else{
-    out.push('<div class="warn"><b>No annotation was recorded.</b> REDACT left no reviewer '
+    out.push('<div class="warn"><b>No annotation was recorded.</b> REVIEW left no reviewer '
       +'measurement, so nothing is known about whether a review happened.</div>');
   }
 
@@ -2067,7 +2093,7 @@ placeholder="max"> tokens</div>
 <option value="flagged">it flagged something</option>
 <option value="clean">it ran and flagged nothing</option>
 <option value="absent">it could not load</option>
-<option value="not_run">nothing was marked to review</option>
+<option value="nothing_to_read">there was no text to read</option>
 <option value="disabled">switched off</option>
 </select>
 <select id="tri"><option value="any">row mark, any</option>
