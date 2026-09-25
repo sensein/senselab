@@ -69,9 +69,9 @@ test('the first three default axes are participant, task, verdict, and there are
 // pattern the guard looks for never exists in this source, only in the values it builds.
 const bids = (prefix, uuid) => [prefix, uuid].join('-')
 const UUIDS = [
-  '5b0e3a71-a1f4-4724-a694-c10e01b8cbe6',
+  '5b0e3a71-1111-4222-8333-444455556666',
   '5b0e3a71-0000-4000-8000-000000000000',
-  '19aea9c4-f7ef-42c2-93bd-09cd982c86ec',
+  '7c2d9f04-1111-4222-8333-444455556666',
 ]
 
 test('a BIDS id is labelled by its key, and only a BIDS id is', () => {
@@ -80,7 +80,7 @@ test('a BIDS id is labelled by its key, and only a BIDS id is', () => {
   assert.equal(p.shortKey, 'sub-')
   assert.equal(s.shortKey, 'ses-')
   assert.equal(A.categoryLabel(p, bids('sub', UUIDS[0])), '5b0e3a71')
-  assert.equal(A.categoryLabel(s, bids('ses', UUIDS[2].toUpperCase())), '19AEA9C4')
+  assert.equal(A.categoryLabel(s, bids('ses', UUIDS[2].toUpperCase())), '7C2D9F04')
   // the key is a literal prefix of the id, so it greps back to the stem
   const id = bids('sub', UUIDS[0])
   assert.ok(id.startsWith('sub-' + A.categoryLabel(p, id)))
@@ -126,7 +126,7 @@ test('a shortened axis says so in its caption, and an ordinary one does not', ()
   const data = rows(...[UUIDS[0], UUIDS[2]].map((u) => ({ participant: bids('sub', u) })))
   const shortened = A.caption(A.summarise('participant', data))
   assert.match(shortened, /first 8 of the id/)
-  assert.match(shortened, /recording panel/)
+  assert.match(shortened, /whole in the panel/)
   const plain = A.caption(A.summarise('verdict', rows({ verdict: 'pass' }, { verdict: 'flag' })))
   assert.doesNotMatch(plain, /first 8/)
 })
