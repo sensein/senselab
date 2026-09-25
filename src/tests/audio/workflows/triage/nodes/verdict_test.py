@@ -693,6 +693,23 @@ class TestTheReleaseAxis:
         assert [r.outcome for r in result.file_verdict.reasons if r.node == "REDACT"] == [Outcome.PASS]
 
 
+def _policy_config(tmp_path: Path, yaml_text: str) -> TriageConfig:
+    """The packaged config with a partial verdict policy deep-merged over it.
+
+    Args:
+        tmp_path: Where the override is written.
+        yaml_text: The partial YAML.
+
+    Returns:
+        The merged configuration.
+    """
+    from senselab.audio.workflows.triage.config import load_triage_config
+
+    path = tmp_path / "policy.yaml"
+    path.write_text(yaml_text, encoding="utf-8")
+    return load_triage_config(path)
+
+
 def _annotate(store: ProvStore, **attributes: Any) -> str:  # noqa: ANN401 — the re-read's own fields
     """Seed the annotation REDACT's LLM re-read writes, exactly as REDACT writes it.
 
@@ -741,6 +758,42 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.release is Release.RELEASABLE
         assert _file_verdict_entity(store).attributes["release"] == "releasable"
+
+    def test_the_weighting_key_ships_off_and_unfitted(self) -> None:
+        """132 recordings and 41 disagreements is not a fit; the shipped default changes nothing."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+
+        assert load_triage_config().require("verdict.llm_redaction_withholds") is False
+
+    def test_the_weighting_may_withhold_a_recording_redact_passed(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """Favouring the reviewer over the detectors, in the one direction that cannot leak."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
+        _annotate(store, status="flagged", redaction="incomplete", original="carries_pii", flagged=["PERSON"])
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.WITHHELD
+
+    def test_the_weighting_never_releases_a_withheld_recording(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """The floor. Only a person moves a withholding, whatever the reviewer read."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.FAIL, None)], routed=ROUTED_PAIR, pii_n=1)
+        _annotate(store, status="clean", redaction="complete", original="clean", flagged=[])
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.WITHHELD
+
+    def test_a_reviewer_that_could_not_load_withholds_nothing(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """A GPU queue is not a reading, so it may not move the release axis in either direction."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
+        _annotate(store, status="absent", redaction="", original="", flagged=[], failure="timeout")
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.RELEASABLE
 
     def test_a_flagged_re_read_raises_the_triage_axis_under_the_shipped_key(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path

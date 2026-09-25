@@ -331,8 +331,12 @@ class FoldPolicy:
             wanted is.
         conformance_flags_by_family: Declared task family to whether a non-conformance on it flags,
             overriding ``conformance_flags``. This is what makes the fold task-aware.
-        llm_redaction_flags: Whether REDACT's LLM re-read flagging residue is a flag ground on the
-            **triage** axis. It reaches no other axis.
+        llm_redaction_flags: Whether REVIEW's reading flagging residue is a flag ground on the
+            **triage** axis.
+        llm_redaction_withholds: Whether that reading also withholds a recording REDACT passed. The
+            one direction in which a weighting toward the reviewer may move the release axis:
+            tightening. Nothing here releases anything, whatever the reading says -- a withheld
+            recording becomes releasable only by a person.
     """
 
     conformance_flags: bool = True
@@ -340,6 +344,7 @@ class FoldPolicy:
     deviation_flags: bool = False
     unmeasured_points_flag: bool = True
     llm_redaction_flags: bool = True
+    llm_redaction_withholds: bool = False
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -360,6 +365,7 @@ class FoldPolicy:
             deviation_flags=bool(config.get(f"{_SECTION}.deviation_flags", False)),
             unmeasured_points_flag=bool(config.get(f"{_SECTION}.unmeasured_points_flag", True)),
             llm_redaction_flags=bool(config.get(f"{_SECTION}.llm_redaction_flags", True)),
+            llm_redaction_withholds=bool(config.get(f"{_SECTION}.llm_redaction_withholds", False)),
             conformance_flags_by_family={
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
@@ -517,10 +523,27 @@ def _silence(state: RunState | None) -> str:
     return "never ran"
 
 
+def _reviewer_found_residue(llm_redaction: Mapping[str, Any] | None) -> bool:
+    """Whether the reading says something identifying is still in what would be released.
+
+    Args:
+        llm_redaction: REVIEW's annotation, or None where it wrote none.
+
+    Returns:
+        True only where the reviewer actually read the text and concluded so. ``absent``,
+        ``disabled`` and ``nothing_to_read`` are not readings and conclude nothing.
+    """
+    annotation = dict(llm_redaction or {})
+    if annotation.get("status") != "flagged":
+        return False
+    return annotation.get("redaction") == "incomplete" or annotation.get("original") == "carries_pii"
+
+
 def _release_from(
     node_verdicts: Sequence[NodeVerdict],
     evidence: RedactionEvidence,
     ran: Mapping[str, RunState],
+    reviewer_withholds: bool = False,
 ) -> tuple[Release, str | None]:
     """The release axis, decided from the evidence rather than from whether REDACT left a verdict.
 
@@ -531,6 +554,8 @@ def _release_from(
         node_verdicts: Every node verdict the fold was given.
         evidence: What the store says about whether anything was redactable.
         ran: Whether each node ran.
+        reviewer_withholds: Whether the reviewer read residue and the policy lets that withhold.
+            It may only tighten: it turns a pass into a withholding and never the reverse.
 
     Returns:
         The state, for REDACT's artifacts only and never for anything in the store, and the ground
@@ -539,6 +564,8 @@ def _release_from(
     """
     redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
     if redact is not None:
+        if redact.outcome is Outcome.PASS and reviewer_withholds:
+            return Release.WITHHELD, None
         return (Release.RELEASABLE if redact.outcome is Outcome.PASS else Release.WITHHELD), None
     if evidence.findings_n > 0:
         return Release.NOT_ASSESSED, REDACTION_OWED
@@ -794,7 +821,8 @@ def fold_file_verdict(
     else:
         triage = Triage.PASS
 
-    release, release_ground = _release_from(node_verdicts, redaction or RedactionEvidence(), ran)
+    withholds = rules.llm_redaction_withholds and _reviewer_found_residue(llm_redaction)
+    release, release_ground = _release_from(node_verdicts, redaction or RedactionEvidence(), ran, withholds)
 
     return FileVerdict(
         triage=triage,

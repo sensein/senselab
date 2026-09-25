@@ -20,7 +20,7 @@ import pytest
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import review as review_module
 from senselab.audio.workflows.triage.nodes.redact import transcript_texts
-from senselab.audio.workflows.triage.nodes.review import NODE, review
+from senselab.audio.workflows.triage.nodes.review import NODE, refine_plan, review
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED, Outcome
 from senselab.text.tasks.pii_detection.redaction_review import ReviewProposal, ReviewResult
 from senselab.utils.prov_store import ProvStore
@@ -141,6 +141,19 @@ def _flags(*proposal: ReviewProposal, original: str = "carries_pii") -> ReviewRe
         model_id="s/m",
         revision="a" * 40,
     )
+
+
+def _annotate(store: ProvStore, proposal: list[dict[str, str]]) -> None:
+    """Write the annotation a completed REVIEW would have left, carrying this proposal."""
+    software = store.agent(agent_type="software", version="senselab test-seed")
+    activity = store.activity(node=NODE, step="llm_check", parameters={})
+    store.was_associated_with(activity, software)
+    entity = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": REDACTION_LLM_ANNOTATION, "signal": "consensus_transcript", "proposal": proposal},
+    )
+    store.was_generated_by(entity, activity)
 
 
 def _annotation(store: ProvStore) -> dict[str, Any]:
@@ -306,3 +319,52 @@ class TestTheTextIsWhatWouldBeReleased:
 
         assert "has already been automatically redacted" not in redaction_review._PROMPT
         assert "where an automatic redaction has already been applied" in redaction_review._PROMPT
+
+
+class TestTheProposalBecomesTheAppliedRedaction:
+    """One artefact, cut from the span set that was reasoned about. The owner, 2026-09-24."""
+
+    def test_a_proposed_removal_is_added_to_the_applied_set(self) -> None:
+        """The reviewer found what the detectors missed; the audio must lose it."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["hello", "alicia"], scan="declined")
+        _annotate(store, [{"text": "alicia", "action": "redact", "category": "PERSON", "why": "a name"}])
+        applied = refine_plan(store, padding_ms=0)
+        assert [(round(e.start, 3), round(e.end, 3), e.category) for e in applied.extents] == [(1.0, 1.5, "PERSON")]
+        assert applied.unplaced == ()
+
+    def test_a_proposed_release_drops_a_detector_span(self) -> None:
+        """96.5% of DATE_TIME marks carry no calendar anchor; this is how one stops being cut."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["hello", "world"], scan="ran", findings_n=1, redacted=[(1.0, 1.5)])
+        _annotate(store, [{"text": "world", "action": "release", "category": "DATE_TIME", "why": "no anchor"}])
+        applied = refine_plan(store, padding_ms=0)
+        assert applied.extents == []
+        assert applied.released_n == 1
+
+    def test_an_unlocatable_removal_keeps_every_detector_span_and_is_recorded(self) -> None:
+        """An unplaceable finding once widened to the whole transcript; it may only fail closed."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["hello", "world"], scan="ran", findings_n=1, redacted=[(1.0, 1.5)])
+        _annotate(store, [{"text": "nowhere in this text", "action": "redact", "category": "ID", "why": "an id"}])
+        applied = refine_plan(store, padding_ms=0)
+        assert [(round(e.start, 3), round(e.end, 3)) for e in applied.extents] == [(1.0, 1.5)]
+        assert applied.unplaced == ("nowhere in this text",)
+
+    def test_an_unlocatable_release_is_refused(self) -> None:
+        """A release it cannot place must never widen what is handed on."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["hello", "world"], scan="ran", findings_n=1, redacted=[(1.0, 1.5)])
+        _annotate(store, [{"text": "not here", "action": "release", "category": "DATE_TIME", "why": "no anchor"}])
+        applied = refine_plan(store, padding_ms=0)
+        assert [(round(e.start, 3), round(e.end, 3)) for e in applied.extents] == [(1.0, 1.5)]
+        assert applied.released_n == 0
+        assert applied.unplaced == ("not here",)
+
+    def test_every_applied_span_carries_the_reason_it_is_there(self) -> None:
+        """The audit trail the discarded second artefact would otherwise have been."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["hello", "alicia"], scan="declined")
+        _annotate(store, [{"text": "alicia", "action": "redact", "category": "PERSON", "why": "a name"}])
+        applied = refine_plan(store, padding_ms=0)
+        assert applied.reasons == {"PERSON": "a name"}
