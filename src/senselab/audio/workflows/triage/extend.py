@@ -718,15 +718,29 @@ def refold_verdict(
         What the re-fold did, including the marker it wrote last.
     """
     software = software_agent(store)
-    retired = retire_decisions(store, live_decisions(store, nodes=(VERDICT_NODE,)), software=software)
+    held = live_decisions(store, nodes=(VERDICT_NODE,))
     outcomes: dict[str, NodeOutcome] = {}
     _attempt(outcomes, VERDICT_NODE, lambda: verdict(store, None, config, hint, run_dir=run_dir))
-    summary = _attempt_artifacts(outcomes, REPORT_NODE, lambda: report(store, summary_dir, config, run_dir=run_dir))
     folded = find_verdict(store, VERDICT_NODE)
+    # Fold first, then retire, and only what the new decision did not itself take. The store is
+    # content-addressed, so a fold that concludes what already stands mints the *same* entity:
+    # retiring first invalidates it and the re-fold hands it straight back, leaving the recording
+    # with no live verdict at all. Measured -- a second pass over one run left 0 live and 2 retired
+    # -- and a preempted slice is re-run by definition, so this is the ordinary path, not an edge.
+    retired = retire_decisions(
+        store,
+        [entity_id for entity_id in held if folded is None or entity_id != folded.id],
+        software=software,
+    )
+    summary = _attempt_artifacts(outcomes, REPORT_NODE, lambda: report(store, summary_dir, config, run_dir=run_dir))
+    # The marker says which configuration and commit folded this store, and deliberately not how
+    # many entities this particular invocation retired: that count is 1 on a fold that moved and 0
+    # on one that did not, so carrying it would mint a different activity for two equivalent folds
+    # and no store would ever settle. The retirements are on the store's own edges either way.
     marker = store.activity(
         node=REFOLD_NODE,
         step=REFOLD_MARKER_STEP,
-        parameters={"config_hash": config.config_hash, "commit": commit, "retired": len(retired)},
+        parameters={"config_hash": config.config_hash, "commit": commit},
     )
     store.was_associated_with(marker, software)
     return RefoldOutcome(
