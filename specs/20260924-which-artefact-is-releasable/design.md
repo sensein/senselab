@@ -203,3 +203,40 @@ A reviewer's decision changes nothing the graph concluded, and the card goes on 
 
 [`measurement.md`](measurement.md) — the r3 baseline, the prediction this design makes from it, and
 the differential over the replay that tests the prediction.
+
+## 7. A non-lexical task is cleared, not held
+
+Added 2026-09-25, after the first corpus measurement of the split.
+
+The split put **19,097 recordings** at `not_assessed` on one ground — `NO_TRANSCRIPT`, "SPEECH did
+not run". Every one is a task the ruleset declined SPEECH for because it carries no lexical content:
+respiration and cough (7,512), maximum phonation (2,880), glides (2,616), prolonged vowels. Under
+the pre-split vocabulary they read `nothing_to_redact`; the rename moved them to "the graph cannot
+say", which is 27% of the corpus parked behind a word that asks a person to look.
+
+Owner, 2026-09-25: *"if it's non-lexical then they should not be held back by not_assessed, they
+should be passed through as cleared as non-lexical, or flagged for not containing lexical items if
+they were routed to the speech branch for a speech task."*
+
+Two changes, and they are deliberately not the same change.
+
+**Cleared.** `NON_LEXICAL_TASK` joins `RELEASE_WITHOUT_REDACTION_GROUNDS`. `_release_from` takes
+`speech_declined`, read from `routes[SPEECH] == declined`, and a recording whose branch the ruleset
+declined is releasable without redaction. The ruleset's decision *is* the reading: there is nothing
+a redaction could remove from a task that never asked for a word. A branch that was **routed** and
+still left no count keeps `NO_TRANSCRIPT` and `not_assessed` — that is a gap in the record, and the
+distinction between "nothing was asked for" and "something was asked for and did not arrive" is the
+whole of this section.
+
+**Flagged.** A task the ruleset routed to SPEECH is a task that asks for words. SPEECH running over
+it and reading none is the task not having happened, and the release axis calling it releasable is
+true without being the whole of it. `NO_LEXICAL_ITEM_PRODUCED` is a flag ground on exactly that
+shape: `lexical_words_n == 0`, SPEECH completed, SPEECH routed. It does not withhold — there is
+nothing in the recording to redact — it makes the silence visible on the triage axis where a person
+looks.
+
+### What it moves
+
+About 19,097 recordings from `not_assessed` to `release_without_redaction`, and about 1,421 gain a
+triage flag they did not carry. Both are pure fold: no reading changes, no audio is touched, and the
+corpus is brought to it by a re-fold pass rather than a replay.

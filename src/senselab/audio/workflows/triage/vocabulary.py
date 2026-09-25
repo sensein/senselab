@@ -125,8 +125,14 @@ class Release(Enum):
 NO_LEXICAL_WORD = "SPEECH ran and the consensus transcript carries no lexical word"
 NOTHING_BEYOND_STIMULUS = "every lexical word is in the task's own stimulus, so the scan was declined"
 SCAN_FOUND_NOTHING = "the scan ran over the transcript and found nothing to redact"
+NON_LEXICAL_TASK = "the ruleset declined SPEECH because the task carries no lexical content"
 
-RELEASE_WITHOUT_REDACTION_GROUNDS = (NO_LEXICAL_WORD, NOTHING_BEYOND_STIMULUS, SCAN_FOUND_NOTHING)
+RELEASE_WITHOUT_REDACTION_GROUNDS = (
+    NO_LEXICAL_WORD,
+    NOTHING_BEYOND_STIMULUS,
+    SCAN_FOUND_NOTHING,
+    NON_LEXICAL_TASK,
+)
 """Which reading cleared the recording. One stands behind every :attr:`Release.WITHOUT_REDACTION`."""
 
 NO_TRANSCRIPT = "SPEECH did not run, so nothing read the recording for content a redaction would remove"
@@ -214,6 +220,7 @@ UNREAD_DECLARATION = (
 )
 
 CRITICAL_ABSENCE = "a critical measurement is absent, so no gate of at least one branch could be read"
+NO_LEXICAL_ITEM_PRODUCED = "SPEECH ran over a task that asks for words and read no lexical item"
 """The flag ground a critical failure contributes, with the branch, gate and recorded absence appended.
 
 Never a discard ground. See ``specs/20260817-triage-workflow-dag/critical-failure.md``.
@@ -547,6 +554,7 @@ def _release_from(
     evidence: RedactionEvidence,
     ran: Mapping[str, RunState],
     reviewer_withholds: bool = False,
+    speech_declined: bool = False,
 ) -> tuple[Release, str | None]:
     """Which artefact may be handed on, decided from the evidence and from nothing a reviewer said.
 
@@ -560,6 +568,11 @@ def _release_from(
         ran: Whether each node ran.
         reviewer_withholds: Whether the reviewer read residue and the policy lets that withhold.
             It may only tighten: it turns a pass into a withholding and never the reverse.
+        speech_declined: Whether the ruleset declined SPEECH. A task that carries no lexical content
+            by construction -- a breath, a cough, a sustained vowel -- has nothing a redaction could
+            remove, and the ruleset's own decision is the reading that says so. Without this the
+            fold reached :data:`NO_TRANSCRIPT` and answered "cannot say" for 19,097 recordings whose
+            task never asked for a word.
 
     Returns:
         Which artefact may be handed on, never anything about the store, and the ground behind it.
@@ -579,6 +592,8 @@ def _release_from(
     if evidence.lexical_words_n is None:
         if speech is RunState.COMPLETED:
             return Release.NOT_ASSESSED, SPEECH_UNREAD
+        if speech_declined:
+            return Release.WITHOUT_REDACTION, NON_LEXICAL_TASK
         return Release.NOT_ASSESSED, NO_TRANSCRIPT
     if evidence.lexical_words_n == 0:
         return Release.WITHOUT_REDACTION, NO_LEXICAL_WORD
@@ -749,6 +764,16 @@ def fold_file_verdict(
             for branch, gates in sorted(absences.items())
         )
         reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{CRITICAL_ABSENCE}: {named}"))
+    # A task the ruleset routed to SPEECH is a task that asks for words. SPEECH running over it and
+    # reading none is the task not having happened, and it must be visible as that rather than as a
+    # quiet clearance: the release axis calls it releasable, which is true and is not the whole of
+    # it. Owner, 2026-09-25.
+    if (
+        (redaction or RedactionEvidence()).lexical_words_n == 0
+        and ran.get(_SPEECH) is RunState.COMPLETED
+        and routes.get(_SPEECH) == ROUTED
+    ):
+        reasons.append(NodeVerdict(_SPEECH, Outcome.FLAG, None, NO_LEXICAL_ITEM_PRODUCED))
     annotation = dict(llm_redaction or {})
     if annotation.get("status") == "flagged" and rules.llm_redaction_flags:
         named = ", ".join(str(category) for category in annotation.get("flagged") or ())
@@ -826,7 +851,13 @@ def fold_file_verdict(
         triage = Triage.PASS
 
     withholds = rules.llm_redaction_withholds and _reviewer_found_residue(llm_redaction)
-    release, release_ground = _release_from(node_verdicts, redaction or RedactionEvidence(), ran, withholds)
+    release, release_ground = _release_from(
+        node_verdicts,
+        redaction or RedactionEvidence(),
+        ran,
+        withholds,
+        speech_declined=routes.get(_SPEECH) == DECLINED,
+    )
 
     return FileVerdict(
         triage=triage,
