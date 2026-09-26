@@ -168,8 +168,22 @@ where the reviewer read the original as `clean` and proposed nothing to hide. Th
 `REVIEWER_CLEARED_RESCAN`. It moves nothing else: a scan that did not complete, a `flag`, a
 `not_assessed`, and every reading that proposes a redaction or finds the original carrying PII stay
 where they were. So the title above no longer holds in full: exactly one kind of withholding is now
-cleared by the reviewer rather than by a person. `vocabulary_test.py` asserts the parameter set is
-closed at these two, and `specs/20260926-redact-rescan-survival/design.md` has the measurement.
+cleared by the reviewer rather than by a person. `specs/20260926-redact-rescan-survival/design.md`
+has the measurement.
+
+**The same day the owner let the reviewer thin a released copy.** Owner: *"released with redaction ->
+only if the reviewer considers resetting the redaction to the original prose is not fine, otherwise
+release without redaction or partial redaction."* A third declared parameter, `reviewer_resets`,
+resolved from `verdict.llm_reset_redactions`, reads the reading's `release` entries as masks to reset
+to the original words. Where the copy is released with redaction: no mask reset keeps it; some
+reset releases a **partial** redaction, still `release_with_redaction`, under
+`REVIEWER_RESET_SOME_MASKS`; every mask reset releases the **original**, `release_without_redaction`,
+under `REVIEWER_RESET_EVERY_MASK`. The axis keeps its four values: it answers which artefact may be
+handed on, and a partial redaction is still the redacted copy, with its own mask set named by the
+ground. A reading that proposes a `redact` resets nothing, one that read the original as carrying PII
+never releases it whole, and no reset moves `withheld` or `not_assessed`. `vocabulary_test.py`
+asserts the parameter set is closed at these three; `specs/20260926-reviewer-reset-redaction/design.md`
+has the mapping and the measurement.
 
 ## 6. The reviewer action on the free-speech page
 
