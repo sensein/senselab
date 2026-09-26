@@ -316,7 +316,7 @@ verdict:
   unmeasured_points_flag: true         # a reporting node that could not read an operating point it wanted flags
   # REVIEW's reading annotates; these decide what the annotation means. The floor is that nothing
   # here moves a withheld recording to released -- only a person does that.
-  llm_redaction_flags: true            # a flagged reading is a triage flag ground
+  llm_redaction_flags: true            # a reading proposing a redaction is a triage flag ground
   llm_redaction_withholds: false       # UNFITTED. a reading of residue withholds a recording REDACT passed
   # The branches for which finding the subject IS evaluating the task, so an out-of-family result
   # is a covariate on the detector rather than a reading of the recording. DDK only: a rapid

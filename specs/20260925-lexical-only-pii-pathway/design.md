@@ -165,3 +165,18 @@ fillers.
   whichever release it gave, recording `REVIEWER_PROPOSED_REDACTION` as the ground (new, in
   `RELEASE_WITHHELD_GROUNDS`). That ground also marks the REDACT-pass case, which used to carry `None`
   and so read the same as a withholding REDACT made itself.
+
+## The triage axis reads residue the same way (2026-09-26)
+
+The release axis was corrected in `b21b1754` and `431705af` to treat a reading as residue only
+where the reviewer proposes at least one `redact`. The triage axis kept the older test: every
+`flagged` reading contributed `LLM_REDACTION_RESIDUE`. Over the settled r5 corpus that raised
+triage flags from the pre-review baseline's 8,915 to 15,650; the reviewer ground was the only
+ground on 6,550 recordings, of which 830 proposed a redaction, 5,048 proposed only releases and
+672 proposed nothing. Free-response families moved 25–70 points on that ground alone.
+
+Both axes now call `_reviewer_found_residue`, so there is one definition of residue. The triage
+ground stays under `verdict.llm_redaction_flags`, independent of `llm_redaction_withholds`, and
+names only the categories of the proposed redactions. A release-only proposal still carries its
+information — the detectors hid too much — in the stored annotation; it is no longer a flag.
+Expected effect on r5: reviewer-only triage flags 6,550 → about 830.
