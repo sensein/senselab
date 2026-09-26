@@ -1643,6 +1643,17 @@ verdict.llm_redaction_flags: true
   the file verdict's `llm_redaction` and in the report. An operator who wants absence to flag is
   asking for a different rule and needs its own key with its own derivation.
 
+verdict.llm_rescan_clears: true
+  Whether a REVIEW reading of the original as `clean`, proposing no `redact`, releases the redacted
+  copy of a recording REDACT failed only because its re-scan still read a finding after the one
+  re-plan (`unremediable` non-empty). Owner, 2026-09-26: "isn't it the reviewer's call", then
+  "diagnose, then reviewer rule, but the reviewer is already assessing these date time ones".
+  True on that instruction. It is not fitted: no false-negative rate for the reviewer on this corpus
+  exists, so the argument is the owner's, not a measurement. It never clears an incomplete scan or
+  re-scan (no survivor is named there), never releases the original, and has no effect while the
+  reviewer is off (`redaction.llm_check.enabled: false`), because a disabled reading clears nothing.
+  The measurement of what it moves is in `specs/20260926-redact-rescan-survival/design.md`.
+
 verdict.conformance_flags_by_family: {}
   Declared task family -> whether a non-conformance on it flags, overriding `conformance_flags`.
   **This is what makes the fold task-aware** (owner: "verdict has to evaluate based on all branches

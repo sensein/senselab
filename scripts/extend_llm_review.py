@@ -98,7 +98,7 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.nodes.review import DISABLED, NODE, apply_proposal, review
-from senselab.audio.workflows.triage.run import REPORT_NODE, SUMMARY_SUBDIR
+from senselab.audio.workflows.triage.run import RELEASE_SUBDIR, REPORT_NODE, SUMMARY_SUBDIR
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION
 from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
@@ -369,6 +369,7 @@ def _refold(
             config,
             hint,
             run_dir=run_root / RUN_SUBDIR,
+            artifacts_dir=run_root / RELEASE_SUBDIR,
             summary_dir=run_root / SUMMARY_SUBDIR,
             commit=commit,
         )

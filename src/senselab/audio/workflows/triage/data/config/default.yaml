@@ -314,10 +314,10 @@ verdict:
   undetermined_flags: false            # an unanswered conformance is not; detect_* answers UNDETERMINED by construction
   deviation_flags: false               # a deviation is recorded and never a flag ground, until ground truth exists
   unmeasured_points_flag: true         # a reporting node that could not read an operating point it wanted flags
-  # REVIEW's reading annotates; these decide what the annotation means. The floor is that nothing
-  # here moves a withheld recording to released -- only a person does that.
+  # REVIEW's reading annotates; these decide what the annotation means.
   llm_redaction_flags: true            # a reading proposing a redaction is a triage flag ground
   llm_redaction_withholds: false       # UNFITTED. a reading of residue withholds a recording REDACT passed
+  llm_rescan_clears: true              # a clean reading releases the redacted copy of a REDACT re-scan fail
   # The branches for which finding the subject IS evaluating the task, so an out-of-family result
   # is a covariate on the detector rather than a reading of the recording. DDK only: a rapid
   # alternating train does not occur incidentally, where breath, phonation and lexical content all do.

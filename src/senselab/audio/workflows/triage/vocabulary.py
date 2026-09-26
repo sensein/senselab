@@ -148,6 +148,13 @@ REVIEWER_PROPOSED_REDACTION = "the redaction reviewer proposed hiding more and t
 RELEASE_WITHHELD_GROUNDS = (REVIEWER_PROPOSED_REDACTION,)
 """Why a recording is withheld where REDACT itself did not withhold it."""
 
+REVIEWER_CLEARED_RESCAN = (
+    "REDACT's re-scan still read a finding, and the reviewer read the original as clean and proposed nothing to hide"
+)
+
+RELEASE_WITH_REDACTION_GROUNDS = (REVIEWER_CLEARED_RESCAN,)
+"""Why a redacted copy is released where REDACT itself did not pass it."""
+
 
 @dataclass(frozen=True)
 class RedactionEvidence:
@@ -159,11 +166,14 @@ class RedactionEvidence:
         scanned: True where SPEECH scanned the transcript, False where it declined to, and None
             where it recorded no scan either way.
         findings_n: How many live ``pii`` findings the store holds.
+        rescan_survivors: The categories REDACT's re-scan still read after its one re-plan, its
+            ``unremediable``. Empty where REDACT did not run, passed, or could not complete a scan.
     """
 
     lexical_words_n: int | None = None
     scanned: bool | None = None
     findings_n: int = 0
+    rescan_survivors: tuple[str, ...] = ()
 
 
 UNMEASURABLE = "unmeasurable"
@@ -352,8 +362,10 @@ class FoldPolicy:
         llm_redaction_withholds: Whether a reading that proposes hiding more also withholds a
             recording the evidence would release, with or without REDACT having run. The
             one direction in which a weighting toward the reviewer may move the release axis:
-            tightening. Nothing here releases anything, whatever the reading says -- a withheld
-            recording becomes releasable only by a person.
+            tightening.
+        llm_rescan_clears: Whether a reading of the original as clean, proposing nothing to hide,
+            releases the redacted copy of a recording REDACT withheld only because its re-scan still
+            read a finding. An incomplete scan or re-scan is never cleared.
     """
 
     conformance_flags: bool = True
@@ -362,6 +374,7 @@ class FoldPolicy:
     unmeasured_points_flag: bool = True
     llm_redaction_flags: bool = True
     llm_redaction_withholds: bool = False
+    llm_rescan_clears: bool = False
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -383,6 +396,7 @@ class FoldPolicy:
             unmeasured_points_flag=bool(config.get(f"{_SECTION}.unmeasured_points_flag", True)),
             llm_redaction_flags=bool(config.get(f"{_SECTION}.llm_redaction_flags", True)),
             llm_redaction_withholds=bool(config.get(f"{_SECTION}.llm_redaction_withholds", False)),
+            llm_rescan_clears=bool(config.get(f"{_SECTION}.llm_rescan_clears", False)),
             conformance_flags_by_family={
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
@@ -419,8 +433,8 @@ class FileVerdict:
         release: Which artefact of the recording may be handed on. Never describes the store.
         release_ground: Why the release axis reads as it does, in controlled vocabulary, wherever
             REDACT did not decide it — one of :data:`RELEASE_WITHOUT_REDACTION_GROUNDS`,
-            :data:`RELEASE_UNKNOWN_GROUNDS` or :data:`RELEASE_WITHHELD_GROUNDS`. None wherever
-            REDACT itself decided.
+            :data:`RELEASE_UNKNOWN_GROUNDS`, :data:`RELEASE_WITHHELD_GROUNDS` or
+            :data:`RELEASE_WITH_REDACTION_GROUNDS`. None wherever REDACT itself decided.
         discard_ground: ``"unmeasurable"``, ``"acoustically_empty"`` or None.
         findings: What each branch found, as a :class:`KindState` value, read off the spans it
             proposed in its own family. ``uncertain`` where it left no report at all.
@@ -559,14 +573,33 @@ def _reviewer_found_residue(llm_redaction: Mapping[str, Any] | None) -> bool:
     return any(str(entry.get("action")) == "redact" for entry in annotation.get("proposal") or ())
 
 
+def _reviewer_cleared(llm_redaction: Mapping[str, Any] | None) -> bool:
+    """Whether the reading says the original carries nothing identifying and asks to hide nothing.
+
+    Args:
+        llm_redaction: REVIEW's annotation, or None where it wrote none.
+
+    Returns:
+        True only where the reviewer read the text (``clean`` or ``flagged``), judged the original
+        ``clean``, and proposed no ``redact`` entry.
+    """
+    annotation = dict(llm_redaction or {})
+    if annotation.get("status") not in ("clean", "flagged"):
+        return False
+    if annotation.get("original") != "clean":
+        return False
+    return not any(str(entry.get("action")) == "redact" for entry in annotation.get("proposal") or ())
+
+
 def _release_from(
     node_verdicts: Sequence[NodeVerdict],
     evidence: RedactionEvidence,
     ran: Mapping[str, RunState],
     reviewer_withholds: bool = False,
     speech_declined: bool = False,
+    reviewer_clears: bool = False,
 ) -> tuple[Release, str | None]:
-    """Which artefact may be handed on, decided from the evidence and from nothing a reviewer said.
+    """Which artefact may be handed on: the evidence's answer, then the reviewer's one move each way.
 
     REDACT runs only where a scan found something, so its absence is the ordinary case and carries
     no implication of its own. The table is in ``specs/20260817-triage-workflow-dag/verdict.md``;
@@ -579,11 +612,11 @@ def _release_from(
         reviewer_withholds: Whether the reviewer read residue and the policy lets that withhold.
             It may only tighten: it turns either release into a withholding, whether or not REDACT
             ran, and never touches a withholding or a ``not_assessed``.
-        speech_declined: Whether the ruleset declined SPEECH. A task that carries no lexical content
-            by construction -- a breath, a cough, a sustained vowel -- has nothing a redaction could
-            remove, and the ruleset's own decision is the reading that says so. Without this the
-            fold reached :data:`NO_TRANSCRIPT` and answered "cannot say" for 19,097 recordings whose
-            task never asked for a word.
+        speech_declined: Whether the ruleset declined SPEECH, in which case a task that carries no
+            lexical content by construction is released without redaction.
+        reviewer_clears: Whether the reviewer read the original as clean, proposed nothing to hide,
+            and the policy lets that release. It moves only a REDACT ``fail`` whose re-scan still read
+            a finding, and only to the redacted copy.
 
     Returns:
         Which artefact may be handed on, never anything about the store, and the ground behind it.
@@ -593,6 +626,16 @@ def _release_from(
     release, ground = _release_from_evidence(node_verdicts, evidence, ran, speech_declined)
     if reviewer_withholds and release in (Release.WITH_REDACTION, Release.WITHOUT_REDACTION):
         return Release.WITHHELD, REVIEWER_PROPOSED_REDACTION
+    redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
+    if (
+        reviewer_clears
+        and release is Release.WITHHELD
+        and ground is None
+        and redact is not None
+        and redact.outcome is Outcome.FAIL
+        and evidence.rescan_survivors
+    ):
+        return Release.WITH_REDACTION, REVIEWER_CLEARED_RESCAN
     return release, ground
 
 
@@ -892,12 +935,14 @@ def fold_file_verdict(
         triage = Triage.PASS
 
     withholds = rules.llm_redaction_withholds and _reviewer_found_residue(llm_redaction)
+    clears = rules.llm_rescan_clears and _reviewer_cleared(llm_redaction)
     release, release_ground = _release_from(
         node_verdicts,
         redaction or RedactionEvidence(),
         ran,
         withholds,
         speech_declined=routes.get(_SPEECH) == DECLINED,
+        reviewer_clears=clears,
     )
 
     return FileVerdict(
