@@ -1654,6 +1654,17 @@ verdict.llm_rescan_clears: true
   reviewer is off (`redaction.llm_check.enabled: false`), because a disabled reading clears nothing.
   The measurement of what it moves is in `specs/20260926-redact-rescan-survival/design.md`.
 
+verdict.llm_reset_redactions: true
+  Whether a REVIEW reading's `release` entries reset the masks they name, so that a copy released
+  with redaction keeps only the rest, or the original is released where every mask was reset.
+  Owner, 2026-09-26: "released with redaction -> only if the reviewer considers resetting the
+  redaction to the original prose is not fine, otherwise release without redaction or partial
+  redaction." True on that instruction, and not fitted: no false-release rate for the reviewer on
+  this corpus exists. A reading proposing any `redact` resets nothing; an original read as
+  `carries_pii` is never released whole; it never moves `withheld` or `not_assessed`, and has no
+  effect while the reviewer is off, because a disabled reading resets nothing. The mapping from a
+  quote to a mask is in `specs/20260926-reviewer-reset-redaction/design.md`.
+
 verdict.conformance_flags_by_family: {}
   Declared task family -> whether a non-conformance on it flags, overriding `conformance_flags`.
   **This is what makes the fold task-aware** (owner: "verdict has to evaluate based on all branches

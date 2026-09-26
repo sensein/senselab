@@ -450,6 +450,17 @@ ground `REVIEWER_CLEARED_RESCAN`, where the reviewer read the original as `clean
 survivor and is never cleared; `flag`, `not_assessed` and every other row are untouched. See
 `specs/20260926-redact-rescan-survival/design.md`.
 
+**And the reviewer's resets, last.** With `verdict.llm_reset_redactions` on, a recording the steps
+above release **with redaction** has its masks thinned by the reading's `release` entries
+(`reviewer_reset` in `nodes/redact.py`): none reset leaves the answer as it is; some reset keeps
+`release_with_redaction` under ground `REVIEWER_RESET_SOME_MASKS`, and the release directory then
+holds the source re-masked with the kept masks alone; every mask reset gives
+`release_without_redaction` under `REVIEWER_RESET_EVERY_MASK`, and the directory is emptied. A reading
+that proposes any `redact` resets nothing, and one that read the original as `carries_pii` never
+reaches the whole reset. A reset only thins a released copy: it never moves `withheld` or
+`not_assessed`. The mapping and its measurement are in
+`specs/20260926-reviewer-reset-redaction/design.md`.
+
 **Why one axis and not two.** "Was there anything to redact" and "did redaction succeed" are
 different questions, and collapsing them is what produced the defect — so the split was considered
 and rejected. The reason is that the second question does not exist wherever the first answers *no*:
