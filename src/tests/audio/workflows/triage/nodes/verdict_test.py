@@ -888,18 +888,67 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
     ) -> None:
         """The safety signal survives the split: a human should look, and the ground names why."""
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
-        _annotate(store, status="flagged", iterations=2, flagged=["LOCATION"], model_id="stub/model", revision="a" * 40)
+        _annotate(
+            store,
+            status="flagged",
+            iterations=2,
+            flagged=["LOCATION", "PERSON"],
+            proposal=[
+                {"text": "Brooklyn", "action": "redact", "category": "LOCATION", "why": "a place"},
+                {"text": "pataka", "action": "release", "category": "PERSON", "why": "a syllable"},
+            ],
+            model_id="stub/model",
+            revision="a" * 40,
+        )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.FLAG
         ground = next(reason for reason in result.file_verdict.reasons if LLM_REDACTION_RESIDUE in reason.why)
-        assert ground.node == "VERDICT" and ground.why.endswith("LOCATION")
+        assert ground.node == "VERDICT" and ground.why.endswith(": LOCATION"), "only redacted categories"
+
+    @pytest.mark.parametrize(
+        "proposal",
+        [
+            [{"text": "pataka", "action": "release", "category": "PERSON", "why": "a syllable"}],
+            [],
+        ],
+        ids=["release-only", "empty"],
+    )
+    def test_a_flag_that_hides_nothing_more_raises_no_triage_ground(
+        self,
+        make_verdict_store: Callable[..., ProvStore],
+        config: TriageConfig,
+        tmp_path: Path,
+        proposal: list[dict[str, str]],
+    ) -> None:
+        """A reading that only releases, or proposes nothing, is not residue on either axis."""
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
+        _annotate(
+            store,
+            status="flagged",
+            iterations=1,
+            flagged=["PERSON"],
+            proposal=proposal,
+            model_id="stub/model",
+            revision="a" * 40,
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert not [reason for reason in result.file_verdict.reasons if LLM_REDACTION_RESIDUE in reason.why]
+        assert result.file_verdict.triage is Triage.PASS
 
     def test_the_key_flipped_off_leaves_the_triage_axis_alone(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
         """The switch is what makes turning the ground off a visible decision rather than a silence."""
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
-        _annotate(store, status="flagged", iterations=2, flagged=["LOCATION"], model_id="stub/model", revision="a" * 40)
+        _annotate(
+            store,
+            status="flagged",
+            iterations=2,
+            flagged=["LOCATION"],
+            proposal=[{"text": "Brooklyn", "action": "redact", "category": "LOCATION", "why": "a place"}],
+            model_id="stub/model",
+            revision="a" * 40,
+        )
         result = verdict_module.verdict(store, None, _llm_off(tmp_path), run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.PASS
         assert not [reason for reason in result.file_verdict.reasons if LLM_REDACTION_RESIDUE in reason.why]

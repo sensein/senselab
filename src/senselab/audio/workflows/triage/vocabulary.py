@@ -232,10 +232,12 @@ Never a discard ground. See ``specs/20260817-triage-workflow-dag/critical-failur
 """
 
 LLM_REDACTION_RESIDUE = "the redaction reviewer flagged residue on the redacted transcript"
-"""The flag ground an LLM redaction annotation of ``flagged`` contributes to the triage axis.
+"""The flag ground a reviewer reading that proposes hiding more contributes to the triage axis.
 
-Controlled vocabulary, with the reviewer's categories appended; the substrings and the reasoning
-stay in the store's ``redaction_llm_review`` measurements.
+The same test as the release axis, :func:`_reviewer_found_residue`: a reading that only releases or
+proposes nothing contributes no ground. Controlled vocabulary, with the categories of the proposed
+redactions appended; the substrings and the reasoning stay in the store's ``redaction_llm_review``
+measurements.
 """
 
 EXTRA_SPEAKER_IN_EXTENT = "another speaker holds part of the task extent"
@@ -345,8 +347,8 @@ class FoldPolicy:
             wanted is.
         conformance_flags_by_family: Declared task family to whether a non-conformance on it flags,
             overriding ``conformance_flags``. This is what makes the fold task-aware.
-        llm_redaction_flags: Whether REVIEW's reading flagging residue is a flag ground on the
-            **triage** axis.
+        llm_redaction_flags: Whether a REVIEW reading that proposes hiding more is a flag ground on
+            the **triage** axis.
         llm_redaction_withholds: Whether a reading that proposes hiding more also withholds a
             recording the evidence would release, with or without REDACT having run. The
             one direction in which a weighting toward the reviewer may move the release axis:
@@ -717,8 +719,9 @@ def fold_file_verdict(
         redaction: What the store says about whether this recording carried anything redactable —
             SPEECH's lexical count, its scan record and the live findings. None is the same as
             :class:`RedactionEvidence` with nothing in it.
-        llm_redaction: REDACT's LLM re-read annotation, or None where the node wrote none. Reaches
-            the **triage** axis under ``policy.llm_redaction_flags`` and the release axis never.
+        llm_redaction: REVIEW's annotation, or None where it wrote none. A reading that proposes
+            hiding more reaches the **triage** axis under ``policy.llm_redaction_flags`` and the
+            release axis under ``policy.llm_redaction_withholds``; any other reading reaches neither.
         critical_absences: Per branch not one of whose gates could be read, each gate and the
             recorded absence behind it, as ``routing`` wrote them. Non-empty flags, never discards.
         gates: The task group's gates and the ones this fold's caller applied to the declared
@@ -805,8 +808,16 @@ def fold_file_verdict(
     ):
         reasons.append(NodeVerdict(_SPEECH, Outcome.FLAG, None, NO_LEXICAL_ITEM_PRODUCED))
     annotation = dict(llm_redaction or {})
-    if annotation.get("status") == "flagged" and rules.llm_redaction_flags:
-        named = ", ".join(str(category) for category in annotation.get("flagged") or ())
+    if rules.llm_redaction_flags and _reviewer_found_residue(annotation):
+        named = ", ".join(
+            sorted(
+                {
+                    str(entry.get("category"))
+                    for entry in annotation.get("proposal") or ()
+                    if str(entry.get("action")) == "redact" and entry.get("category")
+                }
+            )
+        )
         reasons.append(
             NodeVerdict(
                 _VERDICT, Outcome.FLAG, None, f"{LLM_REDACTION_RESIDUE}: {named}" if named else LLM_REDACTION_RESIDUE

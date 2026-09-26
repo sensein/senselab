@@ -42,7 +42,7 @@ conformance `UNDETERMINED`, because a refusal is a decision. A misspelled key st
 | the route | `agreement`, against the spans | a `mismatch` flags |
 | deviations | recorded in `deviations`, per node | **no** — see the ground-truth rule below |
 | `unmeasured` | recorded per node | yes, under `verdict.unmeasured_points_flag` |
-| REDACT's LLM re-read | `llm_redaction`, the annotation whole | `flagged` only, under `verdict.llm_redaction_flags`, and only on the **triage** axis |
+| REVIEW's reading | `llm_redaction`, the annotation whole | `flagged` with at least one `redact` in the proposal, under `verdict.llm_redaction_flags` on the **triage** axis and `verdict.llm_redaction_withholds` on the release axis; a release-only or empty proposal is no ground on either |
 | the declared task family | the key every conformance ground is read against | — |
 
 **Deviations are recorded and are not folded into the flag column until ground truth exists.**
