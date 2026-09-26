@@ -433,6 +433,75 @@ class TestRemediationHappensExactlyOnce:
         assert _verdict_entity(store, "REDACT").attributes["replanned_n"] == 0
 
 
+class TestAPlaceholderIsNotASurvivor:
+    """A detector that reads the placeholder the plan wrote has found the redaction, not a survivor."""
+
+    @pytest.mark.parametrize("echo", ["[PERSON]", "PERSON", "[PERSON].", " [PERSON] "])
+    def test_a_placeholder_echoed_back_passes_without_a_replan(
+        self,
+        echo: str,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With or without its brackets, the placeholder alone is the mask."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", echo)])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.PASS
+        assert scanned == ["hello [PERSON]"]
+        assert _verdict_entity(store, "REDACT").attributes["replanned_n"] == 0
+
+    @pytest.mark.parametrize("echo", ["[NAME+PERSON]", "NAME+PERSON", "NAME", "PERSON"])
+    def test_a_merged_placeholder_and_each_category_it_joins_are_the_mask(
+        self,
+        echo: str,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Two findings on one word merge into one placeholder, and either category may come back."""
+        _seed_redact_store(
+            store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0)), ("NAME", (1.0, 2.0))]
+        )
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", echo)])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert len(scanned) == 1
+        assert "+" in scanned[0]
+        assert result.verdict.outcome is Outcome.PASS
+
+    def test_a_span_that_reaches_past_the_placeholder_still_survives(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Words the recording said, beside the placeholder, are still read as a finding."""
+        _seed_redact_store(
+            store, tmp_path, words=["he", "walks", "daily", "twice"], findings=[("DATE_TIME", (2.0, 3.0))]
+        )
+        _stub_pii(monkeypatch, findings=[("DATE_TIME", "[DATE_TIME] twice")])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.FAIL
+        assert _verdict_entity(store, "REDACT").attributes["unremediable"] == ["DATE_TIME"]
+
+    def test_the_word_a_placeholder_replaced_still_survives(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The control: a surviving surface is not a placeholder, whatever the scanner was handed."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.FAIL
+
+
 class TestTheFillIsDeclared:
     """A run declares the fill it used, and the verdict records it."""
 
