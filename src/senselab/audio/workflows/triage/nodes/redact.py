@@ -214,24 +214,63 @@ def _verification_text(records: list[dict[str, Any]]) -> str:
     return " ".join(token for token in (_token(record) for record in kept) if token)
 
 
-def _verify(transcript_text: str, required: list[str]) -> _Verification:
-    """Re-scan the redacted consensus text with the same detectors; no recognizer runs.
+def _mask_tokens(records: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Every placeholder the rendered text carries, as a detector may echo it back.
 
     Args:
-        transcript_text: The redacted consensus transcript.
+        records: :func:`_render`'s records.
+
+    Returns:
+        Each placeholder with and without its brackets, and each category a merged placeholder
+        joins, longest first.
+    """
+    tokens: set[str] = set()
+    for record in records:
+        if record["kind"] == "word":
+            continue
+        token = str(record["token"])
+        bare = token.strip("[]")
+        tokens.update({token, bare, *bare.split(_RESERVED_CATEGORY_CHAR)})
+    return tuple(sorted((token for token in tokens if token), key=len, reverse=True))
+
+
+def _is_mask(text: str, masks: Sequence[str]) -> bool:
+    """Whether a re-scan span is a placeholder and nothing the recording said.
+
+    Args:
+        text: The span's text.
+        masks: :func:`_mask_tokens`' output for the scanned text.
+
+    Returns:
+        True when no word character remains once every placeholder is removed.
+    """
+    rest = text
+    for mask in masks:
+        rest = rest.replace(mask, " ")
+    return not any(ch.isalnum() for ch in rest)
+
+
+def _verify(records: list[dict[str, Any]], required: list[str]) -> _Verification:
+    """Re-scan the redacted residue with the same detectors; no recognizer runs.
+
+    A span that is a placeholder the plan wrote is the redaction itself and does not survive.
+
+    Args:
+        records: :func:`_render`'s records over the residue, under the plan being verified.
         required: The detector set ``pii.required_detectors`` names.
 
     Returns:
         What the re-scan established. A re-scan that skipped a required detector counts as not
         having run.
     """
-    scan = scan_for_pii(transcript_text)
+    scan = scan_for_pii(_verification_text(records))
     scan = scan[0] if isinstance(scan, list) else scan
     missing = sorted(set(required) - set(scan.detectors_used) - set(scan.failures))
     failed = sorted(scan.failures)
     if failed or not scan.detectors_used or missing:
         return _Verification(verified=False, survived=[], scan_ran=False, failed=failed, missing=missing)
-    survived = sorted({span.category for span in scan.spans})
+    masks = _mask_tokens(records)
+    survived = sorted({span.category for span in scan.spans if not _is_mask(str(span.text or ""), masks)})
     return _Verification(verified=not survived, survived=survived, scan_ran=True, failed=[], missing=[])
 
 
@@ -731,7 +770,7 @@ def redact(
     planned = plan_redactions(extents, padding_ms=padding_ms)
     records, transcript_text, unplaced_n = _render(words, planned)
     checked = (
-        _verify(_verification_text(_render(residue, planned)[0]), required_detectors)
+        _verify(_render(residue, planned)[0], required_detectors)
         if not scan_incomplete
         else _Verification(verified=False, survived=[], scan_ran=False, failed=[], missing=[])
     )
@@ -754,7 +793,7 @@ def redact(
                 widened.append((hull, marks[category]))
         planned = plan_redactions(extents, padding_ms=padding_ms)
         records, transcript_text, unplaced_n = _render(words, planned)
-        checked = _verify(_verification_text(_render(residue, planned)[0]), required_detectors)
+        checked = _verify(_render(residue, planned)[0], required_detectors)
         attributed = _expected_survivors(checked.survived, residue, marked, planned, exempt_word_ids)
         outstanding = [category for category in checked.survived if category not in attributed]
         unremediable = list(outstanding)
