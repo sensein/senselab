@@ -26,7 +26,7 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 import numpy as np
 import pyarrow as pa
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -670,6 +670,36 @@ def _number(value: Any) -> float | None:  # noqa: ANN401 -- a stored reading is 
     return float(value) if math.isfinite(float(value)) else None
 
 
+def _residue_columns(view: StoreView) -> dict[str, Any]:
+    """What SPEECH's latest live ``pii_scan`` says the detectors were given.
+
+    Args:
+        view: The store.
+
+    Returns:
+        ``residue_words_n``, ``residue_method``, ``residue_content``, ``scan_ran`` and
+        ``scanned_by``. All null where the store carries no ``pii_scan``; the three residue columns
+        are null where it carries one written before the residue existed.
+    """
+    scan: Mapping[str, Any] | None = None
+    for entity in view.live("measurement"):
+        if entity.attributes.get("name") == "pii_scan":
+            scan = entity.attributes
+    if scan is None:
+        return dict.fromkeys(("residue_words_n", "residue_method", "residue_content", "scan_ran", "scanned_by"))
+    detectors = [str(name) for name in scan.get("scanned_by") or ()]
+    words_n = scan.get("residue_words_n")
+    content = scan.get("residue_content")
+    method = scan.get("residue_method")
+    return {
+        "residue_words_n": None if words_n is None else int(words_n),
+        "residue_method": None if method is None else str(method),
+        "residue_content": None if content is None else bool(content),
+        "scan_ran": bool(detectors),
+        "scanned_by": detectors,
+    }
+
+
 def _reviewer_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
     """REVIEW's reading, as the columns a viewer can facet on.
 
@@ -879,8 +909,9 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
     row.update(_reviewer_columns(decision))
     row.update(_residual_levels(view))
 
-    speech_report = view.last("branch_report", node="SPEECH")
-    scanned = bool(speech_report and isinstance(speech_report.attributes.get("pii"), dict))
+    residue = _residue_columns(view)
+    row.update(residue)
+    scanned = bool(residue["scan_ran"])
     pii_entities = [e for e in view.live("pii") if e.extent is not None]
     row["pii_findings_n"] = len(pii_entities) if scanned else None
 
@@ -1048,6 +1079,11 @@ def schema() -> pa.Schema:
         *[pa.field(f"conformance_{node.lower()}", pa.string()) for node in BRANCH_NODES],
         *[pa.field(f"route_{branch.lower()}", pa.string()) for branch in ROUTED_BRANCHES],
         pa.field("pii_findings_n", pa.int32()),
+        pa.field("residue_words_n", pa.int32()),
+        pa.field("residue_method", pa.string()),
+        pa.field("residue_content", pa.bool_()),
+        pa.field("scan_ran", pa.bool_()),
+        pa.field("scanned_by", pa.list_(pa.string())),
         pa.field("gate_node", pa.string()),
         pa.field("gate_group", pa.string()),
         pa.field("gate_family", pa.string()),

@@ -249,6 +249,20 @@ def build_recording(
             **({"pii": pii_block} if pii_block is not None else {}),
         )
     )
+    if with_pii_scan:
+        lines.append(
+            _entity(
+                "measurement-pii-scan",
+                "measurement",
+                None,
+                name="pii_scan",
+                scanned_by=["presidio"],
+                residue_method="free_response",
+                residue_words_n=2,
+                residue_content=True,
+                residue_word_ids=["word-0", "word-1"],
+            )
+        )
     for index in range(pii_findings if with_pii_scan else 0):
         lines.append(_entity(f"pii-{index}", "pii", [1.0, 1.4], category="PERSON", source="presidio"))
 
@@ -593,6 +607,54 @@ def test_a_recording_scanned_and_found_clean_is_zero_not_null(tmp_path: Path) ->
     assert row["pii_findings_n"] == 0
     assert row["pii_marks"] == b""
     assert row["pii_category"] == []
+
+
+def test_the_residue_columns_say_what_the_detectors_were_given(tmp_path: Path) -> None:
+    """The pii_scan record's residue and detectors are columns of their own."""
+    run_root = build_recording(tmp_path, with_pii_scan=True, pii_findings=1)
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert row["residue_words_n"] == 2
+    assert row["residue_method"] == "free_response"
+    assert row["residue_content"] is True
+    assert row["scan_ran"] is True
+    assert row["scanned_by"] == ["presidio"]
+
+
+def test_a_declined_scan_is_null_findings_not_a_clean_scan(tmp_path: Path) -> None:
+    """A pii_scan in which no detector ran carries its residue, and no findings count."""
+    run_root = build_recording(tmp_path, with_pii_scan=False, pii_findings=0)
+    store = run_root / "run" / "store.jsonl"
+    with store.open("a") as handle:
+        handle.write(
+            _entity(
+                "measurement-pii-scan",
+                "measurement",
+                None,
+                name="pii_scan",
+                scanned_by=[],
+                residue_method="stimulus_alignment",
+                residue_words_n=1,
+                residue_content=False,
+                residue_word_ids=[],
+            )
+            + "\n"
+        )
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert row["scan_ran"] is False and row["scanned_by"] == []
+    assert row["residue_words_n"] == 1 and row["residue_content"] is False
+    assert row["pii_findings_n"] is None
+    assert row["pii_marks"] is None
+
+
+def test_no_pii_scan_leaves_every_residue_column_null(tmp_path: Path) -> None:
+    """A store without the record says nothing about the residue."""
+    run_root = build_recording(tmp_path, with_pii_scan=False, pii_findings=0)
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    for column in ("residue_words_n", "residue_method", "residue_content", "scan_ran", "scanned_by"):
+        assert row[column] is None
 
 
 def test_a_block_whose_producer_did_not_run_is_null_not_empty(tmp_path: Path) -> None:
