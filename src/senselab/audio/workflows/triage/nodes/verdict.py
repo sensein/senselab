@@ -55,6 +55,7 @@ from senselab.audio.workflows.triage.nodes.gates import (
     conformance_gate_names,
     load_gate_bounds,
 )
+from senselab.audio.workflows.triage.nodes.redact import reviewer_reset
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
     PII_SCAN,
@@ -314,11 +315,14 @@ def _redaction_evidence(store: ProvStore, reports: Sequence[tuple[Entity, Branch
     scans = [measurement.attributes for measurement in find_measurements(store, PII_SCAN)]
     redact = find_verdict(store, _REDACT_NODE)
     survivors = () if redact is None else tuple(str(c) for c in redact.attributes.get("unremediable") or ())
+    reset = reviewer_reset(store)
     return RedactionEvidence(
         lexical_words_n=None if words is None else int(words),
         scanned=None if not scans else not any(scan.get(SCANNED) is False for scan in scans),
         findings_n=len([finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)]),
         rescan_survivors=survivors,
+        masks_n=len(reset.planned),
+        masks_reset_n=reset.reset_n,
     )
 
 

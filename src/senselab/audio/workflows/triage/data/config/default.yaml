@@ -318,6 +318,7 @@ verdict:
   llm_redaction_flags: true            # a reading proposing a redaction is a triage flag ground
   llm_redaction_withholds: false       # UNFITTED. a reading of residue withholds a recording REDACT passed
   llm_rescan_clears: true              # a clean reading releases the redacted copy of a REDACT re-scan fail
+  llm_reset_redactions: true           # owner, 2026-09-26: a reading's release entries reset the masks they name; every mask reset releases the original
   # The branches for which finding the subject IS evaluating the task, so an out-of-family result
   # is a covariate on the detector rather than a reading of the recording. DDK only: a rapid
   # alternating train does not occur incidentally, where breath, phonation and lexical content all do.

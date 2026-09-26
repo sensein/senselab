@@ -686,17 +686,26 @@ class RefoldOutcome:
     marker: str
 
 
-def _settle(store: ProvStore, *, run_dir: Path, artifacts_dir: Path) -> None:
+def _settle(store: ProvStore, config: TriageConfig, *, run_dir: Path, artifacts_dir: Path) -> None:
     """Bring the release directory in line with the live fold, where one stands.
 
     Args:
         store: The provenance store, after VERDICT.
+        config: The triage configuration, for ``redaction.bleep_hz``.
         run_dir: The run directory sidecar paths resolve against.
         artifacts_dir: The release directory.
     """
     folded = find_verdict(store, VERDICT_NODE)
     if folded is not None:
-        settle_release(store, str(folded.attributes.get("release") or ""), run_dir=run_dir, artifacts_dir=artifacts_dir)
+        ground = folded.attributes.get("release_ground")
+        settle_release(
+            store,
+            str(folded.attributes.get("release") or ""),
+            None if ground is None else str(ground),
+            run_dir=run_dir,
+            artifacts_dir=artifacts_dir,
+            bleep_hz=config.get("redaction.bleep_hz"),
+        )
 
 
 def refold_verdict(
@@ -748,7 +757,7 @@ def refold_verdict(
         [entity_id for entity_id in held if folded is None or entity_id != folded.id],
         software=software,
     )
-    _settle(store, run_dir=run_dir, artifacts_dir=artifacts_dir)
+    _settle(store, config, run_dir=run_dir, artifacts_dir=artifacts_dir)
     summary = _attempt_artifacts(outcomes, REPORT_NODE, lambda: report(store, summary_dir, config, run_dir=run_dir))
     # The marker says which configuration and commit folded this store, and deliberately not how
     # many entities this particular invocation retired: that count is 1 on a fold that moved and 0
@@ -819,7 +828,7 @@ def replay_decisions(
         )
         ran = {node: outcome.state for node, outcome in outcomes.items()}
         _attempt(outcomes, "VERDICT", lambda: verdict(store, None, config, hint, run_dir=run_dir, ran=ran))
-    _settle(store, run_dir=run_dir, artifacts_dir=artifacts_dir)
+    _settle(store, config, run_dir=run_dir, artifacts_dir=artifacts_dir)
     capture_environments(store, used_venvs)
     summary = _attempt_artifacts(outcomes, REPORT_NODE, lambda: report(store, summary_dir, config, run_dir=run_dir))
     marker = store.activity(

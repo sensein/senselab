@@ -476,8 +476,10 @@ def run_triage(
                 **settle_release(
                     store,
                     folded.file_verdict.release.value,
+                    folded.file_verdict.release_ground,
                     run_dir=layout.run_dir,
                     artifacts_dir=layout.artifacts_dir,
+                    bleep_hz=config.get("redaction.bleep_hz"),
                 ),
             }
 

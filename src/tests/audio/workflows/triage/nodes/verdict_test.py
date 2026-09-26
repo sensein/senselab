@@ -26,6 +26,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_OWED,
     REVIEWER_CLEARED_RESCAN,
     REVIEWER_PROPOSED_REDACTION,
+    REVIEWER_RESET_EVERY_MASK,
+    REVIEWER_RESET_SOME_MASKS,
     SCAN_FOUND_NOTHING,
     TASK,
     UNDETERMINED,
@@ -38,6 +40,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
 )
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 BASE: tuple[tuple[str, Outcome, str | None], ...] = (
     ("ADMIT", Outcome.PASS, None),
@@ -821,6 +824,61 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         _annotate(store, status="clean", redaction="complete", original="clean", flagged=[])
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.release is Release.WITHHELD
+
+    def test_the_reset_key_ships_on(self) -> None:
+        """Owner, 2026-09-26: a reading's release entries reset the masks they name."""
+        assert load_triage_config().require("verdict.llm_reset_redactions") is True
+        assert FoldPolicy.from_config(load_triage_config()).llm_reset_redactions is True
+
+    @staticmethod
+    def _mask(store: ProvStore, words: Sequence[str], masked: Sequence[int]) -> None:
+        """Consensus words, SPEECH's residue over all of them, and one REDACT mask per ``masked`` word."""
+        agent = software_agent(store)
+        activity = store.activity(node="SPEECH", step="residue-seed", parameters={})
+        store.was_associated_with(activity, agent)
+        word_ids = []
+        for index, text in enumerate(words):
+            extent = (float(index), float(index) + 0.5)
+            word_id = store.entity(
+                prov_type="word", extent=extent, attributes=word_attributes(text, extent, index=index)
+            )
+            store.was_generated_by(word_id, activity)
+            word_ids.append(word_id)
+        scan = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={"name": "pii_scan", "scanned_by": ["rules"], "failed": [], "residue_word_ids": word_ids},
+        )
+        store.was_generated_by(scan, activity)
+        for index in masked:
+            span = store.entity(
+                prov_type="span",
+                extent=(float(index) - 0.05, float(index) + 0.55),
+                attributes={"name": "redaction", "category": "PERSON"},
+            )
+            store.was_generated_by(span, activity)
+
+    def test_the_verdict_resets_masks_from_the_store(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """The masks and the quotes are read off the store; some reset is partial, every one is the original."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n  llm_reset_redactions: true\n")
+        for released, expected in (
+            (["alice"], (Release.WITH_REDACTION, REVIEWER_RESET_SOME_MASKS)),
+            (["alice", "brooklyn"], (Release.WITHOUT_REDACTION, REVIEWER_RESET_EVERY_MASK)),
+            ([], (Release.WITH_REDACTION, None)),
+        ):
+            store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2)
+            self._mask(store, ["i", "met", "alice", "in", "brooklyn"], [2, 4])
+            _annotate(
+                store,
+                status="flagged",
+                redaction="incomplete",
+                original="clean",
+                proposal=[{"text": text, "action": "release", "category": "PERSON"} for text in released],
+            )
+            result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+            assert (result.file_verdict.release, result.file_verdict.release_ground) == expected
 
     def test_the_clearing_key_ships_on(self) -> None:
         """Owner, 2026-09-26: the reviewer, which already read these, decides a re-scan fail."""
