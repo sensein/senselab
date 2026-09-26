@@ -458,7 +458,8 @@ def _redact_detail(redact: Entity | None) -> dict[str, Any]:
     """What REDACT itself concluded.
 
     ``release_ground`` is None exactly when REDACT decided, so on the two states REDACT decides —
-    ``release_with_redaction`` and ``withheld`` — this ``why`` is the only account there is.
+    ``release_with_redaction`` and ``withheld`` — this ``why`` is the only account there is. A
+    withholding the reviewer made carries its own ground instead.
 
     Args:
         redact: REDACT's verdict entity, or None when it wrote none.

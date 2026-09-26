@@ -143,6 +143,11 @@ SCAN_UNRECORDED = "SPEECH read lexical words and recorded no scan either way"
 RELEASE_UNKNOWN_GROUNDS = (NO_TRANSCRIPT, SPEECH_UNREAD, REDACTION_OWED, SCAN_UNRECORDED)
 """Why the graph could not tell. One of these stands behind every :attr:`Release.NOT_ASSESSED`."""
 
+REVIEWER_PROPOSED_REDACTION = "the redaction reviewer proposed hiding more and the policy lets that withhold"
+
+RELEASE_WITHHELD_GROUNDS = (REVIEWER_PROPOSED_REDACTION,)
+"""Why a recording is withheld where REDACT itself did not withhold it."""
+
 
 @dataclass(frozen=True)
 class RedactionEvidence:
@@ -342,7 +347,8 @@ class FoldPolicy:
             overriding ``conformance_flags``. This is what makes the fold task-aware.
         llm_redaction_flags: Whether REVIEW's reading flagging residue is a flag ground on the
             **triage** axis.
-        llm_redaction_withholds: Whether that reading also withholds a recording REDACT passed. The
+        llm_redaction_withholds: Whether a reading that proposes hiding more also withholds a
+            recording the evidence would release, with or without REDACT having run. The
             one direction in which a weighting toward the reviewer may move the release axis:
             tightening. Nothing here releases anything, whatever the reading says -- a withheld
             recording becomes releasable only by a person.
@@ -409,10 +415,10 @@ class FileVerdict:
     Attributes:
         triage: What should happen to the recording.
         release: Which artefact of the recording may be handed on. Never describes the store.
-        release_ground: Why the release axis reads as it does, in controlled vocabulary, for the
-            two states REDACT left no verdict behind — one of
-            :data:`RELEASE_WITHOUT_REDACTION_GROUNDS` or :data:`RELEASE_UNKNOWN_GROUNDS`. None
-            wherever REDACT itself decided.
+        release_ground: Why the release axis reads as it does, in controlled vocabulary, wherever
+            REDACT did not decide it — one of :data:`RELEASE_WITHOUT_REDACTION_GROUNDS`,
+            :data:`RELEASE_UNKNOWN_GROUNDS` or :data:`RELEASE_WITHHELD_GROUNDS`. None wherever
+            REDACT itself decided.
         discard_ground: ``"unmeasurable"``, ``"acoustically_empty"`` or None.
         findings: What each branch found, as a :class:`KindState` value, read off the spans it
             proposed in its own family. ``uncertain`` where it left no report at all.
@@ -569,7 +575,8 @@ def _release_from(
         evidence: What the store says about whether anything was redactable.
         ran: Whether each node ran.
         reviewer_withholds: Whether the reviewer read residue and the policy lets that withhold.
-            It may only tighten: it turns a pass into a withholding and never the reverse.
+            It may only tighten: it turns either release into a withholding, whether or not REDACT
+            ran, and never touches a withholding or a ``not_assessed``.
         speech_declined: Whether the ruleset declined SPEECH. A task that carries no lexical content
             by construction -- a breath, a cough, a sustained vowel -- has nothing a redaction could
             remove, and the ruleset's own decision is the reading that says so. Without this the
@@ -581,10 +588,31 @@ def _release_from(
         A REDACT ``pass`` clears the redacted copy and not the original; the ground is None wherever
         REDACT itself decided, and one of the controlled grounds otherwise.
     """
+    release, ground = _release_from_evidence(node_verdicts, evidence, ran, speech_declined)
+    if reviewer_withholds and release in (Release.WITH_REDACTION, Release.WITHOUT_REDACTION):
+        return Release.WITHHELD, REVIEWER_PROPOSED_REDACTION
+    return release, ground
+
+
+def _release_from_evidence(
+    node_verdicts: Sequence[NodeVerdict],
+    evidence: RedactionEvidence,
+    ran: Mapping[str, RunState],
+    speech_declined: bool,
+) -> tuple[Release, str | None]:
+    """Which artefact the store's own evidence lets be handed on, before any reviewer reading.
+
+    Args:
+        node_verdicts: Every node verdict the fold was given.
+        evidence: What the store says about whether anything was redactable.
+        ran: Whether each node ran.
+        speech_declined: Whether the ruleset declined SPEECH.
+
+    Returns:
+        The release and its ground, as :func:`_release_from` describes them.
+    """
     redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
     if redact is not None:
-        if redact.outcome is Outcome.PASS and reviewer_withholds:
-            return Release.WITHHELD, None
         return (Release.WITH_REDACTION if redact.outcome is Outcome.PASS else Release.WITHHELD), None
     if evidence.findings_n > 0:
         return Release.NOT_ASSESSED, REDACTION_OWED

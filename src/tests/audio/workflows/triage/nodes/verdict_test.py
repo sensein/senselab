@@ -24,6 +24,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     NOTHING_BEYOND_STIMULUS,
     REDACTION_LLM_ANNOTATION,
     REDACTION_OWED,
+    REVIEWER_PROPOSED_REDACTION,
     SCAN_FOUND_NOTHING,
     TASK,
     UNDETERMINED,
@@ -828,6 +829,59 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         _annotate(store, status="absent", redaction="", original="", flagged=[], failure="timeout")
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.release is Release.WITH_REDACTION
+
+    def test_a_redact_proposal_withholds_a_recording_redact_never_ran_on(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """The scan found nothing, so REDACT never ran; the reviewer's proposal still withholds."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=42, scanned=True)
+        _annotate(
+            store,
+            status="flagged",
+            redaction="incomplete",
+            original="carries_pii",
+            flagged=["LOCATION"],
+            proposal=[{"text": "brooklyn", "action": "redact", "category": "LOCATION", "why": "a place"}],
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.WITHHELD
+        assert result.file_verdict.release_ground == REVIEWER_PROPOSED_REDACTION
+
+    def test_without_the_policy_that_proposal_releases_as_before(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """The shipped key is off: the same reading leaves the release axis where the evidence put it."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: false\n")
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=42, scanned=True)
+        _annotate(
+            store,
+            status="flagged",
+            redaction="incomplete",
+            original="carries_pii",
+            flagged=["LOCATION"],
+            proposal=[{"text": "brooklyn", "action": "redact", "category": "LOCATION", "why": "a place"}],
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.WITHOUT_REDACTION
+        assert result.file_verdict.release_ground == SCAN_FOUND_NOTHING
+
+    def test_a_release_only_proposal_leaves_an_unredacted_release_alone(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """Nothing to hide was named, so the no-REDACT release stands."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=42, scanned=True)
+        _annotate(
+            store,
+            status="flagged",
+            redaction="incomplete",
+            original="carries_pii",
+            flagged=["PERSON"],
+            proposal=[{"text": "pataka", "action": "release", "category": "PERSON", "why": "a syllable"}],
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release is Release.WITHOUT_REDACTION
 
     def test_a_flagged_re_read_raises_the_triage_axis_under_the_shipped_key(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
