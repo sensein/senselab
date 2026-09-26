@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `5`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `7`; any
 change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
 changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
@@ -91,13 +91,18 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `5` | never |
+| `schema_version` | int32 | `7` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
 | `conformance_airway` \| `_speech` \| `_voice` \| `_quality` | string | `true` \| `false` \| `undetermined` | **that node wrote no branch report** — it did not run |
 | `route_airway` \| `_speech` \| `_voice` | string | e.g. `routed`, `declined` | routing wrote no state for it |
-| `pii_findings_n` | int32 | how many `pii` entities the store holds | **the PII scan did not run.** A recording never scanned is null, not `0`. `0` means scanned and clean |
+| `pii_findings_n` | int32 | how many `pii` entities the store holds | **no detector ran** (`scan_ran` false or null). A recording never scanned is null, not `0`. `0` means scanned and clean |
+| `residue_words_n` | int32 | words in the lexical residue SPEECH's `pii_scan` recorded: what the detectors and the reviewer were given | no `pii_scan`, or one written before the residue existed |
+| `residue_method` | string | how the non-residue words were set aside: `syllable_train`, `vocal_task`, `stimulus_alignment`, `free_response` | as `residue_words_n` |
+| `residue_content` | bool | whether any residue word is outside the closed-class list, which is what lets the scan run | as `residue_words_n` |
+| `scan_ran` | bool | whether any detector ran (`scanned_by` non-empty) | no `pii_scan` |
+| `scanned_by` | list\<string\> | the detectors that ran | no `pii_scan` |
 | `wave_peak` | double | amplitude; the scale `wave_minmax` is encoded against | no stream decoded |
 | `floor_dbfs` | double | dBFS; the noise floor, a **scalar** — see §9 | `energy_envelope` is absent |
 | `spans_unrowed_n` | int32 | general spans with no five-row code, left out of `spans` — see §9 | PREPROCESS did not run |
